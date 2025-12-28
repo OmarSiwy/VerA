@@ -1,6 +1,7 @@
-// §5.9 loops. `for` and `while` run in the ANALOG block, so their trip count
-// must be a compile-time property — the body is unrolled into straight-line MIR.
-// A wrong unroll shows up immediately as a wrong sum.
+// §5.9 loops. `for` and `while` in the ANALOG block lower to a real CFG loop —
+// header, back edge and phis — NOT to straight-line MIR. Only the §6.6.1 genvar
+// `for` is unrolled at elaboration (lower.zig `tryUnroll`), and the counter here
+// is an `integer`. A wrong loop shows up immediately as a wrong sum.
 //
 //! print none
 `include "check.vh"

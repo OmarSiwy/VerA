@@ -1,0 +1,33 @@
+=== 104_loop_two_units ===
+--- point 0 ---
+  x[p] = 5.000000e-1
+  x[n] = 0.000000e0
+  x[c] = 4.000000e-1
+loop-carried constant a is 1+2+3+4+5 got=15 want=15 ok=1
+loop-carried x-dependent b is V(c)*H(5) got=0.9133333333333333 want=0.9133333333333333 ok=1
+the counter leaves the loop one past the bound got=6 want=6 ok=1
+  res[p] = 2.295667e-2
+    d res[p]/d x[p] = 4.591333e-2
+    d res[p]/d x[n] = -4.500000e-2
+    d res[p]/d x[c] = 1.141667e-3
+  res[n] = -2.250000e-2
+    d res[n]/d x[p] = -4.500000e-2
+    d res[n]/d x[n] = 4.500000e-2
+  res[c] = 4.000000e-7
+    d res[c]/d x[c] = 1.000000e-6
+--- point 1 ---
+  x[p] = 1.500000e0
+  x[n] = 0.000000e0
+  x[c] = 4.000000e-1
+loop-carried constant a is 1+2+3+4+5 got=15 want=15 ok=1
+loop-carried x-dependent b is V(c)*H(5) got=0.9133333333333333 want=0.9133333333333333 ok=1
+the counter leaves the loop one past the bound got=6 want=6 ok=1
+  res[p] = 6.887000e-2
+    d res[p]/d x[p] = 4.591333e-2
+    d res[p]/d x[n] = -4.500000e-2
+    d res[p]/d x[c] = 3.425000e-3
+  res[n] = -6.750000e-2
+    d res[n]/d x[p] = -4.500000e-2
+    d res[n]/d x[n] = 4.500000e-2
+  res[c] = 4.000000e-7
+    d res[c]/d x[c] = 1.000000e-6
