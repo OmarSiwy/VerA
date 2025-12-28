@@ -1400,7 +1400,7 @@ fn renderOne(
     if (opts.explain_hint) {
         const gop = try explained.getOrPut(scratch, e.code);
         if (!gop.found_existing) {
-            try w.print("{s}{s} ={s} {s}help{s}: run `fastvaf --explain {s}` for a detailed explanation\n", .{
+            try w.print("{s}{s} ={s} {s}help{s}: run `vera --explain {s}` for a detailed explanation\n", .{
                 spaces(width), p.gutter, p.reset, p.help, p.reset, e.code.name(),
             });
         }

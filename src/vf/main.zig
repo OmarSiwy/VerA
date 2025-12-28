@@ -1,9 +1,9 @@
-//! The fastvf CLI: Verilog / SystemVerilog / VHDL → a contract-shaped Zig
+//! The Verilog-family half of `vera`: Verilog / SystemVerilog / VHDL → a contract-shaped Zig
 //! device. Deliberately mirrors `fastvaf`'s flags, because `modules/devices`
 //! drives both from one build loop and the two generators have to be
 //! interchangeable at the call site.
 //!
-//! usage: fastvf [-o OUT.zig] [--expect-module=NAME] FILE.{v,sv,vhd,vhdl}
+//! usage: vera [-o OUT.zig] [--expect-module=NAME] FILE.{v,sv,vhd,vhdl}
 //!
 //! Front end is picked from the extension: `.sv` goes through sv2v, `.vhd` /
 //! `.vhdl` through `ghdl synth`, everything else straight to verilator.
@@ -11,10 +11,10 @@
 //! Exits 2 on a usage error, 1 on a translation failure.
 
 const std = @import("std");
-const zvf = @import("zvf");
+const zvf = @import("root.zig");
 
 const usage_text =
-    \\usage: fastvf [options] FILE.{v,sv,vhd,vhdl}
+    \\usage: vera [options] FILE.{v,sv,vhd,vhdl}
     \\
     \\options:
     \\  -o PATH                 write the generated device to PATH (default: stdout)
@@ -23,7 +23,7 @@ const usage_text =
     \\
 ;
 
-pub fn main(init: std.process.Init) !u8 {
+pub fn run(init: std.process.Init) !u8 {
     const gpa = init.gpa;
     const io = init.io;
 
@@ -78,7 +78,7 @@ pub fn main(init: std.process.Init) !u8 {
         // rather than surface as a bare `error.FileNotFound`.
         try err.print("error: {s}: {t}\n", .{ in_path, e });
         if (e == error.FileNotFound)
-            try err.writeAll("note: fastvf shells out to `verilator` (and `sv2v` / `ghdl` for .sv / .vhd) — is it on PATH?\n");
+            try err.writeAll("note: vera shells out to `verilator` (and `sv2v` / `ghdl` for .sv / .vhd) — is it on PATH?\n");
         return 1;
     };
     defer gpa.free(generated);
