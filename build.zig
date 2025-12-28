@@ -1,12 +1,13 @@
 const std = @import("std");
 
-/// VerA builds one binary and exposes two modules.
+/// VerA builds one binary and exposes three modules.
 ///
 /// The binary is `vera`: both frontends behind an extension check (src/main.zig).
 /// The modules are for an embedder — a simulator that wants to compile Verilog-A
 /// in-process rather than shell out:
 ///
-///   vera       the engine (src/root.zig) — `.va`/`.v` in, device Zig out
+///   va         the Verilog-A engine — `.va` in, device Zig out
+///   vf         the Verilog family — shells out to verilator/sv2v/ghdl
 ///   contract   the ABI that generated device code imports
 ///
 /// `contract` is public as a MODULE and reachable as a PATH
@@ -22,8 +23,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    _ = b.addModule("vera", .{
-        .root_source_file = b.path("src/root.zig"),
+    // Public so an embedder can compile Verilog-A in-process instead of
+    // shelling out to the binary. No aggregate facade over the two: every
+    // consumer so far wants one frontend or the other, never both.
+    const va_mod = b.addModule("va", .{
+        .root_source_file = b.path("src/va/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const vf_mod = b.addModule("vf", .{
+        .root_source_file = b.path("src/vf/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -58,16 +67,6 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run every test suite");
 
-    const va_mod = b.createModule(.{
-        .root_source_file = b.path("src/va/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const vf_mod = b.createModule(.{
-        .root_source_file = b.path("src/vf/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
 
     for ([_]struct { name: []const u8, desc: []const u8, mod: *std.Build.Module }{
         .{ .name = "test-va", .desc = "Run the Verilog-A engine tests", .mod = va_mod },
