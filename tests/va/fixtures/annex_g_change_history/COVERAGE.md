@@ -1,6 +1,6 @@
 # Annex G coverage
 
-Source: `modules/FastVAF/docs/annex-g-changes.html`. This annex is
+Source: `docs/VAMS-LRM/annex-g-changes.html`. This annex is
 informative. Its revision tables point to normative rules tested in their
 own chapter folders; they do not create duplicate language rules.
 

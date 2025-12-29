@@ -1,6 +1,6 @@
 # Annex E — SPICE compatibility
 
-Source: docs/annex-e-spice.html. Every HTML section id is listed literally.
+Source: docs/VAMS-LRM/annex-e-spice.html. Every HTML section id is listed literally.
 
 Boundary disclosure: every Table E.1 row now contains executable named-port and named-
 parameter syntax, but FastVAF rejects hierarchy at `module instantiation is not

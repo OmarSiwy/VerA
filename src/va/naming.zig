@@ -1,6 +1,5 @@
 //! Codegen support — stable declaration naming + the source-unit tracker.
-//! This is the ONE Zig-like algorithm FastVAF owns (see docs/architecture/
-//! 03-codegen.html#naming and 02-incremental.html). No LRM section; it exists to
+//! This is the ONE Zig-like algorithm FastVAF owns. No LRM section; it exists to
 //! make the external `zig -fincremental` skip unchanged units.
 //!
 //! Why it matters: `zig` re-analyzes at per-declaration granularity and tracks
@@ -12,7 +11,7 @@
 //! DOD: names are built into a reused scratch buffer; no per-call allocation
 //! beyond the returned owned slice.
 //!
-//! ABSOLUTE RULE (docs/architecture/03-codegen.html#canonicalization): nothing
+//! ABSOLUTE RULE: nothing
 //! that feeds a name may be a MIR index. Not `@intFromEnum(Mir.Value)`, not
 //! `Mir.Inst`, not a `node_order` index. Only stable leaf identities — module
 //! name, node NAMES, source identifiers — plus, where two units genuinely
@@ -57,7 +56,7 @@ pub const Role = enum {
     display,
     /// Not a source unit: the declaration codegen hoists the subexpressions
     /// SHARED by several units into, so the common core is emitted once instead
-    /// of once per unit (docs/architecture/03-codegen.html#hoisting). It is
+    /// of once per unit. It is
     /// deliberately NOT produced by `enumerateUnits` — `proof.Verdict`'s
     /// `unit_modes` is indexed by the canonical unit order below, and a phantom
     /// entry there would desynchronize the two. codegen builds its name
@@ -344,7 +343,7 @@ fn assignDisambig(units: []Unit) void {
 // contribution would shrink the groups, but lower.zig does not record which
 // contribution a call belongs to; add that link there first.
 
-// DEFERRED (optional upgrade, docs/architecture/03-codegen.html#naming): a full
+// DEFERRED (optional upgrade): a full
 // Zig-style TrackedInst matcher that retains the previous unit list and maps
 // new→old by structural similarity, surviving arbitrary reorders. Only build it
 // if profiling shows same-target reordering is a real hotspot. The structural

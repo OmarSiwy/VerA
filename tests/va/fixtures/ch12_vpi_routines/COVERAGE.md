@@ -1,6 +1,6 @@
 # Chapter 12 coverage
 
-Source: `modules/FastVAF/docs/ch12-vpi-routines.html`. Every routine in this
+Source: `docs/VAMS-LRM/ch12-vpi-routines.html`. Every routine in this
 chapter is a C function exported by a simulator's VPI host. FastVAF compiles a
 Verilog-A device into Zig and has no C VPI ABI, handles, iterators, callbacks,
 or `vpi_user.h` structures. Therefore each section is inventoried below as

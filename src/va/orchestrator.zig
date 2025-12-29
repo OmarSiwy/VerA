@@ -1,6 +1,5 @@
 //! Build orchestration & artifact contract. LRM §8.3 device-side ABI only; the
-//! rest is engine machinery (no LRM section). See docs/architecture/
-//! 02-incremental.html and 05-build-artifact.html.
+//! rest is engine machinery (no LRM section).
 //!
 //! Transformation: device.zig → lib<name>.so (+ GPU kernels) + layout hash +
 //! rebuilt signal.
@@ -66,7 +65,7 @@ pub const Options = struct {
     /// Support modules. MUST contain `contract` (device.zig imports it) and
     /// `dyn`, whose root must expose
     /// `pub fn exportDevice(comptime D: type, comptime name: []const u8) void`
-    /// — in this repo that is `modules/devices/src/engine.zig`. Order is
+    /// — in the ARPice host that is `src/devices/engine.zig`. Order is
     /// load-bearing: it is hashed into `layout_hash` and fixes argv order.
     modules: []const Module,
     zig_exe: []const u8 = "zig",
@@ -83,8 +82,8 @@ pub const Artifact = struct {
     /// produced new code this round.
     cache_hit: bool = false,
     /// Present only for ReleaseFast (SPIR-V/PTX/AMDGCN). Host loads/launches.
-    /// ponytail: always empty. GPU emission already lives in
-    /// modules/devices/build.zig (gompute), and eval_batch.zig has no kernel
+    /// ponytail: always empty. GPU emission already lives in the host's own
+    /// build (gompute), and eval_batch.zig has no kernel
     /// entry point yet — wiring a second `build-lib` per GPU target here would
     /// be dead code. Upgrade path: one extra `runCompiler` call per GPU target
     /// with `-target spirv64-vulkan`/`nvptx64-cuda`/`amdgcn-amdhsa`, appended
@@ -193,7 +192,7 @@ fn writeIfChanged(
 /// only thing crossing a file boundary is a name `naming.zig` already guarantees
 /// is insert-tolerant.
 ///
-/// Since the merge (docs/architecture/OUTPUT-VOLUME.md) that is usually TWO
+/// Since the merge that is usually TWO
 /// files, not ~105: `u/<model>__common__core.zig` holding the whole model, plus
 /// one `u/<key>__sec.zig` per §4.5.11/§4.5.12 filter and one for the §9.4
 /// display unit when they exist. The split is worth much less than it was — an

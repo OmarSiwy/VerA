@@ -1,6 +1,6 @@
 # Chapter 6 — hierarchical structures
 
-Source: docs/ch6-hierarchy.html. Every HTML section id is listed literally below.
+Source: docs/VAMS-LRM/ch6-hierarchy.html. Every HTML section id is listed literally below.
 
 Boundary disclosure: FastVAF currently lowers `$mfactor` to the constant `1.0` and
 emits no instance multiplicity field or automatic flow/probe/noise scaling. The five

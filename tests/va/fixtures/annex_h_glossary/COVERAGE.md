@@ -1,6 +1,6 @@
 # Annex H coverage
 
-Source: `modules/FastVAF/docs/annex-h-glossary.html`. The glossary is
+Source: `docs/VAMS-LRM/annex-h-glossary.html`. The glossary is
 informative, so definitions are demonstrated with compact representative
 models rather than treated as independent grammar productions.
 

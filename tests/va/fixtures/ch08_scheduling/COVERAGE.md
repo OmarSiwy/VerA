@@ -1,6 +1,6 @@
 # Chapter 8 — scheduling semantics
 
-Source: docs/ch8-scheduling.html. Every HTML section id is listed literally. Device dumps cover equations and event metadata; global queues, engine arbitration and time advancement belong to the simulator host.
+Source: docs/VAMS-LRM/ch8-scheduling.html. Every HTML section id is listed literally. Device dumps cover equations and event metadata; global queues, engine arbitration and time advancement belong to the simulator host.
 
 Parser-boundary disclosure: FastVAF rejects digital `initial`/`always` module items
 before entering their statement bodies. Consequently the blocking-timing,

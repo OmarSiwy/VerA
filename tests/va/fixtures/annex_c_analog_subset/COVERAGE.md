@@ -1,6 +1,6 @@
 # Annex C coverage
 
-Source: `docs/annex-c-veriloga.html`, read in full.
+Source: `docs/VAMS-LRM/annex-c-veriloga.html`, read in full.
 
 HTML section-ID audit: `sC-1` `sC-2` `sC-3` `sC-4` `sC-5` `sC-6` `sC-7` `sC-8` `sC-9` `sC-10` `sC-11` `sC-12` `sC-13` `sC-14` `sC-15` `sC-16` `sC-17` `sC-18` `sC-19` `sC-20`.
 

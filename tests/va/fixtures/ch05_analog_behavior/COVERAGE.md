@@ -1,6 +1,6 @@
 # Chapter 5 — analog behavior
 
-Source: docs/ch5-analog.html. Every valid .va is paired with an exact .expected.zig dump; diagnostic cases use .expected-error.txt.
+Source: docs/VAMS-LRM/ch5-analog.html. Every valid .va is paired with an exact .expected.zig dump; diagnostic cases use .expected-error.txt.
 
 Parser-boundary disclosure: `analog_initial_digital_access_rejected.va` stops at the
 unsupported digital `initial` item before FastVAF can check the analog-initial read.

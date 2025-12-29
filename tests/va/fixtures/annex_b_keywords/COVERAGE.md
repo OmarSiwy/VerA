@@ -1,6 +1,6 @@
 # Annex B coverage
 
-Source: `docs/annex-b-keywords.html`, including both halves of Table B.1.
+Source: `docs/VAMS-LRM/annex-b-keywords.html`, including both halves of Table B.1.
 
 The normative rules are directly covered: keywords are lowercase, predefined, nonescaped identifiers (`03_reserved_module_rejected.va`, `04_reserved_if_rejected.va`); an escaped spelling is an identifier (`01_escaped_keyword.va`); and differently-cased spellings are ordinary identifiers (`02_keyword_case.va`).
 
