@@ -58,8 +58,8 @@
 //! 2 on a usage error.
 
 const std = @import("std");
-const fastvaf = @import("root.zig");
-const diag = fastvaf.diag;
+const vera = @import("root.zig");
+const diag = vera.diag;
 const Io = std.Io;
 
 const usage_text =
@@ -109,7 +109,7 @@ pub fn main(init: std.process.Init) !u8 {
     defer include_dirs.deinit(gpa);
 
     var path: ?[]const u8 = null;
-    var target: fastvaf.Target = .lint;
+    var target: vera.Target = .lint;
     var emit_zig = false;
     var json = false;
     var color: enum { auto, always, never } = .auto;
@@ -121,7 +121,7 @@ pub fn main(init: std.process.Init) !u8 {
     var emit_so = false;
     var emit_exe = false;
     var run_exe = false;
-    var display: fastvaf.codegen.Display = .drop;
+    var display: vera.codegen.Display = .drop;
     var contract_path: ?[]const u8 = null;
     var dyn_path: ?[]const u8 = null;
     var work_dir: ?[]const u8 = null;
@@ -279,7 +279,7 @@ pub fn main(init: std.process.Init) !u8 {
         .auto => (stderr.file.isTty(io) catch false),
     };
 
-    var result = fastvaf.compileSourceOpts(gpa, source, target, .{
+    var result = vera.compileSourceOpts(gpa, source, target, .{
         .file_name = in_path,
         .include_dirs = include_dirs.items,
         .std_defs = std_defs,
@@ -318,7 +318,7 @@ pub fn main(init: std.process.Init) !u8 {
     // caught here rather than three cache steps downstream.
     //
     // NOTE: a vendored file declaring several modules (VBIC ships 4T/5T in one
-    // file) trips this — FastVAF lowers one of them, not necessarily the one
+    // file) trips this — VerA lowers one of them, not necessarily the one
     // the file is named after. A module selector is the fix.
     if (expect_module) |want| {
         if (!std.mem.eql(u8, result.mir.name, want)) {
@@ -372,17 +372,17 @@ pub fn main(init: std.process.Init) !u8 {
             );
             return 2;
         };
-        const wd = work_dir orelse ".zig-cache/fastvaf-tb";
+        const wd = work_dir orelse ".zig-cache/vera-tb";
         // The directive tables and the runner text are a web of small slices
         // with one lifetime; an arena is the whole memory management here.
         var tb_arena: std.heap.ArenaAllocator = .init(gpa);
         defer tb_arena.deinit();
-        const d = fastvaf.tb.parse(tb_arena.allocator(), source) catch |e| {
+        const d = vera.tb.parse(tb_arena.allocator(), source) catch |e| {
             try err.print("error: {s}: `//!` directive: {t}\n", .{ in_path, e });
             return 2;
         };
-        const runner = try fastvaf.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), d);
-        const built = fastvaf.tb.buildExe(gpa, io, device, runner, .{
+        const runner = try vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), d);
+        const built = vera.tb.buildExe(gpa, io, device, runner, .{
             .work_dir = wd,
             .contract = contract,
             .name = result.mir.name,
@@ -428,11 +428,11 @@ pub fn main(init: std.process.Init) !u8 {
             try err.writeAll("error: --emit-so needs --dyn PATH\n");
             return 2;
         };
-        const modules = [_]fastvaf.orchestrator.Module{
+        const modules = [_]vera.orchestrator.Module{
             .{ .name = "contract", .root = contract_path.? },
             .{ .name = "dyn", .root = dyn, .deps = &.{"contract"} },
         };
-        var r = fastvaf.buildArtifact(gpa, io, &result, .{
+        var r = vera.buildArtifact(gpa, io, &result, .{
             .work_dir = wd,
             .name = result.mir.name,
             .optimize = .ReleaseFast,
@@ -487,8 +487,8 @@ fn typeCheck(
     in_path: []const u8,
 ) !?u8 {
     const cwd = Io.Dir.cwd();
-    try cwd.createDirPath(io, ".zig-cache/fastvaf-check");
-    var tmp = try cwd.openDir(io, ".zig-cache/fastvaf-check", .{});
+    try cwd.createDirPath(io, ".zig-cache/vera-check");
+    var tmp = try cwd.openDir(io, ".zig-cache/vera-check", .{});
     defer tmp.close(io);
 
     const stem = std.fs.path.stem(in_path);
@@ -496,7 +496,7 @@ fn typeCheck(
     defer gpa.free(dev_name);
     try tmp.writeFile(io, .{ .sub_path = dev_name, .data = device_zig });
 
-    const dev_path = try std.fmt.allocPrint(gpa, ".zig-cache/fastvaf-check/{s}", .{dev_name});
+    const dev_path = try std.fmt.allocPrint(gpa, ".zig-cache/vera-check/{s}", .{dev_name});
     defer gpa.free(dev_path);
     const contract_arg = try std.fmt.allocPrint(gpa, "-Mcontract={s}", .{contract});
     defer gpa.free(contract_arg);

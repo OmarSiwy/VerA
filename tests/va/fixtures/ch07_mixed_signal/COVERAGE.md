@@ -1,6 +1,6 @@
 # Chapter 7 — mixed signal
 
-Source: docs/VAMS-LRM/ch7-mixed-signal.html. Every HTML section id is inventoried literally. FastVAF's Verilog-A backend intentionally has no digital scheduler or hierarchy elaborator, so those normative rules are represented by focused diagnostics or marked host-only.
+Source: docs/VAMS-LRM/ch7-mixed-signal.html. Every HTML section id is inventoried literally. VerA's Verilog-A backend intentionally has no digital scheduler or hierarchy elaborator, so those normative rules are represented by focused diagnostics or marked host-only.
 
 Parser-boundary disclosure: `discrete_real_from_analog_unsupported.va` stops at its
 digital `initial` item, and all three bus-width fixtures stop at vector declarations;

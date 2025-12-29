@@ -111,7 +111,7 @@ pub const Output = struct {
 /// does not compile at all for SPIR-V/PTX. So a device NEVER prints, and a
 /// source that asked to is told so (W0850) rather than silently obeyed.
 ///
-/// `.emit` is the other product FastVAF makes out of the same .va: a runnable
+/// `.emit` is the other product VerA makes out of the same .va: a runnable
 /// testbench, where the whole point is the text. See `--emit-exe` and src/tb.zig.
 pub const Display = enum { drop, emit };
 
@@ -230,7 +230,7 @@ const Gen = struct {
     uses_x: bool = false,
     uses_model: bool = false,
     uses_inst: bool = false,
-    /// Set when the unit needs something FastVAF deliberately does not
+    /// Set when the unit needs something VerA deliberately does not
     /// implement (§4.5.11 filters, §9.13 $random, …). The whole body collapses
     /// to one `@compileError` — a substitute value would corrupt the physics,
     /// and a per-statement error would bury the reason in a cascade.
@@ -1591,13 +1591,13 @@ const Gen = struct {
         for (self.lower.contributions.items, 0..) |c, i| {
             const mode = self.unitMode(i);
             // §3.6.2.2: a signal-flow discipline binds ONE nature, so its nets
-            // carry a value, not a conserved pair. FastVAF's artifact is a
+            // carry a value, not a conserved pair. VerA's artifact is a
             // nodal/KCL device (§8.3): stamping `<+` on such a net would
             // silently invent the missing half of the branch, so the unit
             // collapses to `@compileError` like any other deliberate gap.
             const pf: ?[]const u8 = if (self.signalFlowNet(c)) |net| try std.fmt.allocPrint(
                 self.arena,
-                "FastVAF does not implement contributions to the signal-flow port " ++
+                "VerA does not implement contributions to the signal-flow port " ++
                     "`{s}` (LRM 1.3.4/3.6.2.2); only a conservative discipline has " ++
                     "the potential/flow pair a nodal device stamps",
                 .{net},
@@ -3371,14 +3371,14 @@ const Gen = struct {
         // there is no `ac_gens` export to carry it, so a silent zero would
         // hand the host a device that is simply missing its AC drive.
         if (std.mem.eql(u8, name, "ac_stim")) return self.abort(
-            "FastVAF does not implement ac_stim() (LRM 4.6.3); the generated " ++
+            "VerA does not implement ac_stim() (LRM 4.6.3); the generated " ++
                 "device exports no AC stimulus table",
             .{},
         );
 
         if (name.len != 0 and name[0] == '$') return self.emitSysCall(name, d.args);
 
-        return self.abort("FastVAF: unhandled call `{s}`", .{name});
+        return self.abort("VerA: unhandled call `{s}`", .{name});
     }
 
     fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
@@ -3452,7 +3452,7 @@ const Gen = struct {
             return self.b("S.con(inst.mfactor)", .{});
         }
         // §9.18 Table 9-29 hierarchical system parameters. Their value is the
-        // top-level value combined down the instantiation hierarchy; FastVAF
+        // top-level value combined down the instantiation hierarchy; VerA
         // elaborates exactly ONE flat module, so the device IS the top level
         // and the table's "Top-Level Value" column is exact — not a substitute.
         // ($mfactor is the exception above: the host scales the whole stamp by
@@ -3463,7 +3463,7 @@ const Gen = struct {
             return self.b("S.con(0.0)", .{}); // 0 degrees
         if (eq(u8, name, "$hflip") or eq(u8, name, "$vflip"))
             return self.b("S.con(1.0)", .{}); // +1
-        // §9.15 $simparam(name, fallback) — FastVAF answers with the fallback
+        // §9.15 $simparam(name, fallback) — VerA answers with the fallback
         // (or a spec-neutral default), which is exactly what the LRM licenses
         // for a simulator that does not expose that parameter.
         if (eq(u8, name, "$simparam")) {
@@ -3495,7 +3495,7 @@ const Gen = struct {
         if (eq(u8, name, "$test$plusargs") or eq(u8, name, "$value$plusargs"))
             return self.b("@as(i64, 0)", .{});
         // §9.22 Tables 9-19/9-20 connectmodule driver & receiver access. These
-        // are `connectmodule`-only in the LRM; FastVAF compiles a flat analog
+        // are `connectmodule`-only in the LRM; VerA compiles a flat analog
         // device, which HAS no digital drivers or receivers, so the count is
         // exactly 0 and no driver index is in range. Zero is the true answer
         // here, not a substitute — but the call site is nonconforming, hence
@@ -3570,7 +3570,7 @@ const Gen = struct {
 
         // §9.13 $random and the distributions, §9.21 $table_model, §9.16
         // $simprobe: a silent zero would corrupt the physics, so say so loudly.
-        return self.abort("FastVAF does not implement `{s}` (ch9); " ++
+        return self.abort("VerA does not implement `{s}` (ch9); " ++
             "a substitute value would corrupt the model", .{name});
     }
 
@@ -4043,11 +4043,11 @@ const Gen = struct {
             // abruptly at t0 = 0. A silent τ would be a different waveform, so
             // it is rejected instead of ignored.
             if (dv.next + 1 < args.len) return planErr(
-                "FastVAF does not implement the optional τ / t0 arguments of a zi_* filter (LRM 4.5.12)",
+                "VerA does not implement the optional τ / t0 arguments of a zi_* filter (LRM 4.5.12)",
             );
         }
         // §4.5.11 the optional ε argument only "deriv[es] an absolute
-        // tolerance (if needed)"; FastVAF has no per-signal tolerance table, so
+        // tolerance (if needed)"; VerA has no per-signal tolerance table, so
         // dropping it changes no value the device computes.
         return p;
     }
@@ -4875,7 +4875,7 @@ fn opNeedsInput(k: OpKind) bool {
 // ===========================================================================
 
 const header_txt =
-    \\// GENERATED BY FastVAF — DO NOT EDIT.
+    \\// GENERATED BY VerA — DO NOT EDIT.
     \\// The model is ONE declaration; its name is the structural key from
     \\// naming.zig, so an unchanged model is byte-identical across rebuilds and
     \\// `zig -fincremental` skips it.
@@ -5104,7 +5104,7 @@ const hist_txt =
 // emitted helper is aliased into the unit prologue" fails otherwise.
 
 const helpers_head_txt =
-    \\// GENERATED BY FastVAF — DO NOT EDIT.
+    \\// GENERATED BY VerA — DO NOT EDIT.
     \\// The §4.3/§4.5 kernels, public so `u/<key>.zig` can alias them. device.zig
     \\// carries the same text privately: it must stay a valid stand-alone device.
     \\const std = @import("std");
@@ -5113,7 +5113,7 @@ const helpers_head_txt =
 ;
 
 const prelude_head_txt =
-    \\// GENERATED BY FastVAF — DO NOT EDIT.
+    \\// GENERATED BY VerA — DO NOT EDIT.
     \\const std = @import("std");
     \\const contract = @import("contract");
     \\const dev = @import("../device.zig");

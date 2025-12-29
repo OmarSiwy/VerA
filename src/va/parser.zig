@@ -359,7 +359,7 @@ pub const Parser = struct {
             // Verilog-A subset — §5.10 lists them as one of the three kinds of
             // ANALOG event and §5.10.4's own example triggers and detects one
             // entirely inside an `analog` block; annex C.7 excludes only DIGITAL
-            // behavior and events. FastVAF does not implement them yet, and says
+            // behavior and events. VerA does not implement them yet, and says
             // so here rather than accepting the declaration and turning `@(ev)`
             // into a guard that is silently never true.
             .kw_event => return self.failAt(self.pos, .E0203, "", .{}),

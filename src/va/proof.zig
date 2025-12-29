@@ -14,7 +14,7 @@
 //!     file reads a target.
 //!   - NO runtime domain checks are emitted anywhere. Proof-or-error only. This
 //!     is what keeps the Release eval branch-free and vectorizable (eval_batch).
-//!   - FastVAF is SPEC-FAITHFUL: `exp` (domain "All x", §4.3.2) is NEVER
+//!   - VerA is SPEC-FAITHFUL: `exp` (domain "All x", §4.3.2) is NEVER
 //!     rejected — the LRM permits inf and makes `limexp` (§4.5.13) optional.
 //!     Unprovable-finite units simply get `.strict` (below), not a rejection.
 //!   - The engine NEVER inserts a clamp, a floor or a `limexp`.
@@ -1317,7 +1317,7 @@ const Prover = struct {
     ///                                  `.strict`, where NaN/inf are IEEE-defined
     ///
     /// This is the identical treatment `exp` already gets (SPEC-FAITHFUL, see
-    /// the file header) and it is what keeps FastVAF's accepted set equal to the
+    /// the file header) and it is what keeps VerA's accepted set equal to the
     /// LRM's. Interval arithmetic provably cannot decide the common
     /// `x = V/(1+abs(V))` idiom (it needs to correlate two occurrences of V), so
     /// a stronger abstract domain would not rescue the rejected-but-legal cases.
@@ -2199,7 +2199,7 @@ test "proof: `/` by a possibly-zero divisor is ACCEPTED and forced .strict (LRM 
     // second argument to the MODULUS operator" — division by zero is not an
     // error, it is an exact IEEE +-inf. This is the plain resistor `V/r`, the
     // most common statement in all of Verilog-A; rejecting it would make
-    // FastVAF stricter than the LRM.
+    // VerA stricter than the LRM.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module d(p, n);

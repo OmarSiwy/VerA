@@ -7,7 +7,7 @@ HTML section-ID audit: `s3-1` `s3-2` `s3-2-1` `s3-3` `s3-4` `s3-4-1` `s3-4-2` `s
 | LRM section/rule | Fixture or disposition |
 |---|---|
 | 3.1 integer, genvar, real, realtime, time, parameter, string, net-discipline types | `01_integer_real_variables.va`, `03_string_variables.va`, `04_parameter_types.va`, `09_genvar.va`, `10_nature_declarations.va`, `11_discipline_declarations.va`, `29_time_realtime_parameters.va` |
-| 3.2 integer/real declarations, initialization, arrays, multidimensional arrays | `01_integer_real_variables.va`, `02_variable_arrays.va`; FastVAF scalarizes one-dimensional arrays and does not yet parse multidimensional dimensions |
+| 3.2 integer/real declarations, initialization, arrays, multidimensional arrays | `01_integer_real_variables.va`, `02_variable_arrays.va`; VerA scalarizes one-dimensional arrays and does not yet parse multidimensional dimensions |
 | 3.2.1 module-scope output-variable attributes | Chapter 2 `11_attributes.va`; reporting/plot exposure is runtime simulator behavior |
 | 3.3 string declaration/default/assignment, arrays, NUL removal, operators | `03_string_variables.va`, `17_string_parameter_range.va`, and the atomic string suite `23_string_arrays.va` through `28_string_replication.va`; unsupported multidimensional/replication grammar is diagnostic-pinned |
 | 3.4, 3.4.1 typed scalar parameters and coercion | `04_parameter_types.va` |
@@ -17,12 +17,12 @@ HTML section-ID audit: `s3-1` `s3-2` `s3-2-1` `s3-3` `s3-4` `s3-4-1` `s3-4-2` `s
 | 3.4.4 typed parameter arrays and exact-size initializer | `08_parameter_array.va` |
 | 3.4.5 local parameters derive from overridable parameters | `06_local_parameter.va` |
 | 3.4.6 string parameters | `03_string_variables.va`; the transistor example's numeric portion is covered by Chapter 4 function/operator fixtures |
-| 3.4.7 parameter aliases | `07_parameter_alias.va`; hierarchical override conflict checks require module instantiation, which FastVAF explicitly rejects |
+| 3.4.7 parameter aliases | `07_parameter_alias.va`; hierarchical override conflict checks require module instantiation, which VerA explicitly rejects |
 | 3.4.8 multidimensional parameters/assignment patterns | one-dimensional executable subset in `08_parameter_array.va`; `18_multidimensional_array_rejected.va` records the parser diagnostic |
 | 3.5 genvar static loop | `09_genvar.va` |
 | 3.6–3.6.1 base/derived natures, predefined and user attributes | `10_nature_declarations.va`, `35_base_nature_required_attributes.va`, `36_derived_nature_inheritance.va`, `37_derived_units_immutable.va`, `38_derived_access_immutable.va`; accepted invalid cases explicitly pin missing semantic validation |
 | 3.6.2 conservative and potential-/flow-only disciplines; continuous domain | `11_discipline_declarations.va`; discipline declarations are parsed, while custom-discipline equation typing/resolution is not yet lowered |
-| 3.6.2.2 discrete domain | Annex C makes `discrete` an error in Verilog-A; FastVAF currently lacks that semantic diagnostic |
+| 3.6.2.2 discrete domain | Annex C makes `discrete` an error in Verilog-A; VerA currently lacks that semantic diagnostic |
 | 3.6.2.3 natureless/domainless disciplines | direct declarations in `30_natureless_discipline.va` and `31_domainless_discipline.va`; connectivity resolution remains a hierarchy concern |
 | 3.6.2.4 undeclared/discrete nets | `34_implicit_nets.va` directly preserves the implicit structural-net form and pins hierarchy rejection |
 | 3.6.2.5 discipline nature-attribute override | `19_discipline_override.va` records the accepted declaration and current lack of downstream effect |

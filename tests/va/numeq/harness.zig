@@ -1,4 +1,4 @@
-//! Numeric-equivalence gate for the shared-core hoist (FastVAF item 2.2).
+//! Numeric-equivalence gate for the shared-core hoist (VerA item 2.2).
 //! Evaluates the SAME model compiled by the old and the new codegen over a
 //! deterministic sweep of solver unknowns and compares the residuals BITWISE.
 const std = @import("std");

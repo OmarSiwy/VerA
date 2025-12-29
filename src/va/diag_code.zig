@@ -49,7 +49,7 @@ pub const Info = struct {
     explain: []const u8,
 };
 
-/// Every diagnosable condition FastVAF can report. See the class ranges above.
+/// Every diagnosable condition VerA can report. See the class ranges above.
 pub const Code = enum(u16) {
     // ---------------------------------------------------------------- class 1
     // Preprocessing directives (LRM 10) — preprocessor.zig.
@@ -388,7 +388,7 @@ pub fn info(c: Code) Info {
             .title = "unsupported compiler directive",
             .lrm = "10.7",
             .explain =
-            \\FastVAF implements the directives that affect the text of a
+            \\VerA implements the directives that affect the text of a
             \\compiled module: `define, `undef, `ifdef/`ifndef/`elsif/`else/
             \\`endif, `include, `begin_keywords/`end_keywords, and the
             \\predefined macros of LRM 10.
@@ -589,7 +589,7 @@ pub fn info(c: Code) Info {
             .lrm = "10.2",
             .explain =
             \\`begin_keywords takes a quoted version specifier naming the
-            \\keyword set to make active. FastVAF recognises the Verilog-AMS
+            \\keyword set to make active. VerA recognises the Verilog-AMS
             \\and IEEE 1364 sets listed in LRM annex B; an unknown specifier
             \\would silently change which identifiers are reserved.
             ,
@@ -638,7 +638,7 @@ pub fn info(c: Code) Info {
             .title = "construct is not in the supported subset",
             .lrm = "C",
             .explain =
-            \\FastVAF compiles the Verilog-A analog subset of annex C. This
+            \\VerA compiles the Verilog-A analog subset of annex C. This
             \\construct belongs to full Verilog-AMS or to IEEE 1364 digital
             \\Verilog, both of which need a discrete-event kernel that a
             \\compiled analog device artifact does not contain.
@@ -660,7 +660,7 @@ pub fn info(c: Code) Info {
             .explain =
             \\Named events (A.2.1.3 event_declaration, triggered with `->` and
             \\awaited with `@`) are a discrete-event feature. The analog kernel
-            \\FastVAF targets schedules on the LRM 5.10 analog events —
+            \\VerA targets schedules on the LRM 5.10 analog events —
             \\initial_step, final_step, cross, above, timer — which are
             \\supported.
             ,
@@ -669,7 +669,7 @@ pub fn info(c: Code) Info {
             .title = "module instantiation is not supported",
             .lrm = "6.2.2",
             .explain =
-            \\FastVAF compiles ONE flat module into one device artifact, so
+            \\VerA compiles ONE flat module into one device artifact, so
             \\there is no elaboration step to bind a child instance's ports or
             \\to flatten its equations into the parent's system.
             \\
@@ -885,7 +885,7 @@ pub fn info(c: Code) Info {
             .title = "multi-dimensional arrays are not supported",
             .lrm = "3.2.2",
             .explain =
-            \\FastVAF scalarizes one-dimensional arrays at compile time. A
+            \\VerA scalarizes one-dimensional arrays at compile time. A
             \\second dimension would need an index-flattening pass that the
             \\engine does not run.
             ,
@@ -1552,7 +1552,7 @@ pub fn info(c: Code) Info {
             \\`absdelay`, the rise/fall times of `transition`, the slew rates of
             \\`slew`, the initial condition of `idt`/`idtmod`, the period of a
             \\`zi_*` filter — are evaluated by the HOST, outside the derivative
-            \\domain the residual is computed in. FastVAF renders them as plain
+            \\domain the residual is computed in. VerA renders them as plain
             \\f64 expressions over `Model`, so they may be built from literals
             \\and parameters and from +, -, *, /, abs, sqrt, min, max and pow
             \\over those. Anything else has no value at that point.
@@ -1570,7 +1570,7 @@ pub fn info(c: Code) Info {
             \\merges two different values on two arms of a runtime `if` is not.
             \\
             \\NOTE on §4.5.7: a time-VARYING `absdelay` delay is legal in the
-            \\LRM when a `maxdelay` argument is given. FastVAF does not
+            \\LRM when a `maxdelay` argument is given. VerA does not
             \\implement it; without `maxdelay` the LRM freezes td at its first
             \\evaluation, which is exactly the constant this code requires.
             ,
@@ -1587,7 +1587,7 @@ pub fn info(c: Code) Info {
             \\generated code would execute illegal behaviour.
             \\
             \\Note that REAL division by zero is NOT an error here — x/0.0 is a
-            \\well-defined IEEE infinity, so FastVAF accepts it and the unit
+            \\well-defined IEEE infinity, so VerA accepts it and the unit
             \\forfeits its finiteness proof instead (see W0650). That is what
             \\lets `I <+ V/r` compile for an unranged parameter r.
             \\
@@ -1608,7 +1608,7 @@ pub fn info(c: Code) Info {
             \\"Input values outside of the valid range for the operator shall
             \\report an error."
             \\
-            \\FastVAF proves this by interval analysis and reports only when
+            \\VerA proves this by interval analysis and reports only when
             \\the argument is provably outside the domain — an argument it
             \\cannot decide is accepted and costs the unit its finiteness
             \\proof (W0650), never a rejection.
@@ -1690,7 +1690,7 @@ pub fn info(c: Code) Info {
             \\model is legal, it compiles, and it will simulate correctly. It
             \\reports what the model COSTS.
             \\
-            \\FastVAF proves, per source unit (one `<+` target: an access
+            \\VerA proves, per source unit (one `<+` target: an access
             \\function plus a node pair), whether every value in that unit's
             \\backward slice is a finite IEEE double. A unit that is proven
             \\finite compiles with @setFloatMode(.optimized), which asserts
@@ -1702,7 +1702,7 @@ pub fn info(c: Code) Info {
             \\
             \\LRM 4.3.2 makes exp's domain "All x", and LRM 4.5.13 makes
             \\`limexp` optional, so a model that can overflow to infinity is
-            \\CONFORMANT. FastVAF never rejects one and never inserts a clamp
+            \\CONFORMANT. VerA never rejects one and never inserts a clamp
             \\or a limexp behind your back. It tells you instead.
             \\
             \\The attached notes name the value that broke the proof — a
@@ -1911,7 +1911,7 @@ pub fn info(c: Code) Info {
             .title = "display task dropped: a device does not print",
             .lrm = "9.4",
             .explain =
-            \\FastVAF makes two artifacts out of one .va, and this one is the
+            \\VerA makes two artifacts out of one .va, and this one is the
             \\DEVICE: a residual function the solver calls inside its Newton
             \\loop, on a batch of instances, possibly on a GPU.
             \\
@@ -1924,8 +1924,8 @@ pub fn info(c: Code) Info {
             \\The model is CONFORMANT; nothing is wrong with it. If the text
             \\is what you wanted, build the other artifact:
             \\
-            \\    fastvaf --emit-exe FILE.va       # a runnable testbench
-            \\    fastvaf --display=emit ...       # or just the codegen knob
+            \\    vera --emit-exe FILE.va       # a runnable testbench
+            \\    vera --display=emit ...       # or just the codegen knob
             \\
             \\which lowers the same tasks to `std.debug.print` and gives the
             \\device a `display()` entry point that runs them.
@@ -1947,7 +1947,7 @@ pub fn info(c: Code) Info {
             \\LRM 9.4.6 makes emission a property of the SOLVE — text appears
             \\on accepted iterations — and a compiled device has no accepted
             \\iteration to consult. Rather than print unconditionally and be
-            \\wrong, FastVAF drops the task and says so.
+            \\wrong, VerA drops the task and says so.
             \\
             \\Rewrite the condition as a value instead of a branch:
             \\
@@ -1966,7 +1966,7 @@ pub fn info(c: Code) Info {
             .lrm = "6.8",
             .explain =
             \\A dotted name reaches into another scope in the instance tree.
-            \\FastVAF compiles one flat module with no children (see E0204), so
+            \\VerA compiles one flat module with no children (see E0204), so
             \\there is no tree to walk.
             ,
         },
@@ -1980,7 +1980,7 @@ pub fn info(c: Code) Info {
             \\file holds only `discipline`, `nature` or `` `define `` items, it
             \\is a header — include it from a module instead of compiling it.
             \\
-            \\If the file DOES contain a design element, it is one FastVAF does
+            \\If the file DOES contain a design element, it is one VerA does
             \\not compile: `connectmodule`, `connectrules`, `macromodule`,
             \\`primitive`, `library` and `paramset` are all outside annex C.
             \\The earlier diagnostics name which one.

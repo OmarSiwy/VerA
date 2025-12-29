@@ -6,7 +6,7 @@ const std = @import("std");
 /// The modules are for an embedder — a simulator that wants to compile Verilog-A
 /// in-process rather than shell out:
 ///
-///   va         the Verilog-A engine — `.va` in, device Zig out
+///   vera       the Verilog-A engine — `.va` in, device Zig out
 ///   contract   the ABI that generated device code imports
 ///
 /// `contract` is public as a MODULE and reachable as a PATH
@@ -29,7 +29,7 @@ pub fn build(b: *std.Build) void {
     });
     // Public so an embedder can compile Verilog-A in-process instead of
     // shelling out to the binary.
-    const va_mod = b.addModule("va", .{
+    const vera_mod = b.addModule("vera", .{
         .root_source_file = b.path("src/va/root.zig"),
         .target = target,
         .optimize = optimize,
@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run every test suite");
 
-    const run_va_test = b.addRunArtifact(b.addTest(.{ .root_module = va_mod }));
+    const run_va_test = b.addRunArtifact(b.addTest(.{ .root_module = vera_mod }));
     b.step("test-va", "Run the Verilog-A engine tests").dependOn(&run_va_test.step);
     test_step.dependOn(&run_va_test.step);
 
@@ -86,7 +86,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/va/conformance.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "fastvaf", .module = va_mod }},
+        .imports = &.{.{ .name = "vera", .module = vera_mod }},
     });
     va_conf_mod.addOptions("conformance_options", va_conf_opts);
     const run_va_conf = b.addRunArtifact(b.addExecutable(.{
@@ -120,7 +120,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("tests/va/exhaustive.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "fastvaf", .module = va_mod }},
+        .imports = &.{.{ .name = "vera", .module = vera_mod }},
     });
     exh_mod.addOptions("exhaustive_options", exh_opts);
     const run_exh = b.addRunArtifact(b.addExecutable(.{

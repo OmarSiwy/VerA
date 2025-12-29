@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Numeric-equivalence oracle: does a codegen change alter what the device COMPUTES?
 #
-#   tests/va/numeq.sh <old-fastvaf-binary> [model ...]
+#   tests/va/numeq.sh <old-vera-binary> [model ...]
 #
 # `tests/va/baseline.sh` compares generated TEXT and `zig build conformance` compares
 # diagnostics; neither can see a change that emits different-but-plausible
@@ -15,7 +15,7 @@
 # join guard. Neither changes any diagnostic and both change the physics.
 #
 # Getting a reference binary (any commit or any saved tree):
-#   zig build-exe -OReleaseFast -Mroot=src/va/main.zig -femit-bin=/tmp/fastvaf-ref
+#   zig build-exe -OReleaseFast -Mroot=src/va/main.zig -femit-bin=/tmp/vera-ref
 #
 # A model that fails to compile under EITHER binary is skipped, not failed —
 # `bsim4va` and `hicumL2_va` are expected to fail (see TODO.md), and several
@@ -23,13 +23,13 @@
 set -uo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-old="${1:?usage: numeq.sh <old-fastvaf-binary> [model ...]}"; shift
+old="${1:?usage: numeq.sh <old-vera-binary> [model ...]}"; shift
 contract="$here/tools/contract.zig"
 models="${VERA_MODELS:-$here/../ARPice/src/devices/models}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
-new="$work/fastvaf-new"
+new="$work/vera-new"
 zig build-exe -OReleaseFast -Mroot="$here/src/va/main.zig" -femit-bin="$new" >/dev/null || exit 1
 
 list=("$@"); [ ${#list[@]} -eq 0 ] && { list=(); for f in "$models"/*.va; do list+=("$(basename "$f" .va)"); done; }

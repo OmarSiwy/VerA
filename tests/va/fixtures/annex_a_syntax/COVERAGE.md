@@ -8,7 +8,7 @@ HTML section-ID audit: `a-1` `a-1-1` `a-1-2` `a-1-3` `a-1-4` `a-1-5` `a-1-6` `a-
 |---|---|
 | A.1 source text, nature, discipline, modules | `01_source_text.va` |
 | A.1 module parameter/port lists and module items | `02_module_ports.va`, `03_declarations.va`, `13_parameter_port_list.va` |
-| A.1 connectrules/config/library | mixed-signal compilation-unit constructs, outside Annex C's analog subset and FastVAF device codegen |
+| A.1 connectrules/config/library | mixed-signal compilation-unit constructs, outside Annex C's analog subset and VerA device codegen |
 | A.1 paramset | `10_paramset_rejected.va` verifies deliberate loud rejection |
 | A.2 parameters, ports, net/variable/branch declarations, lists, assignments, ranges | `03_declarations.va` |
 | A.2 analog function and block declarations | `04_analog_function.va`, `05_behavioral_statements.va` |
@@ -34,4 +34,4 @@ HTML section-ID audit: `a-1` `a-1-1` `a-1-2` `a-1-3` `a-1-4` `a-1-5` `a-1-6` `a-
 - A.6 indirect contribution and attributed/null statements: `21_indirect_contribution.va` and `22_null_attributed_statements.va`.
 - A.8 primary/call/probe/index families and composite concatenation/replication/unary/binary/conditional families: `23_expression_primaries.va` and `24_expression_composites.va`.
 
-These source-expressible grammar families are no longer disposition-only. Where FastVAF rejects a normative form, the precise current failure class is paired instead of claiming generated support.
+These source-expressible grammar families are no longer disposition-only. Where VerA rejects a normative form, the precise current failure class is paired instead of claiming generated support.

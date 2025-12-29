@@ -1,12 +1,12 @@
-//! FastVAF engine — module index & pipeline driver.
+//! VerA engine — module index & pipeline driver.
 //!
 //! Each file owns one engine "class" (a group of Verilog-AMS LRM sections).
 //! This file is the facade: it re-exports every stage and owns the drivers that
 //! sequence them, plus the ownership root (`CompileResult`) that every arena in
 //! the engine hangs off.
 //!
-//! Architecture: a Verilog-A source becomes a
-//! loadable device through a fixed, index-based, cache-friendly pipeline.
+//! Architecture: a Verilog-A source becomes a loadable device through a
+//! fixed, index-based, cache-friendly pipeline.
 //! Frontend is shared by all targets; only the backend differs.
 //!
 //!   .va text
@@ -447,7 +447,7 @@ fn compileInArena(
 // Stages 6–8 — codegen + hand-off to the orchestrator
 // ---------------------------------------------------------------------------
 
-/// Stage 6 then 7–8. FastVAF's responsibility ends at the artifact: the host
+/// Stage 6 then 7–8. VerA's responsibility ends at the artifact: the host
 /// owns dlopen/dlclose and simulation state.
 ///
 /// `resident` is the session-scoped `zig build --listen=-` child required by

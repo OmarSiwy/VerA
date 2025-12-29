@@ -13,7 +13,7 @@
 //! builds one native binary, runs it, and compares the transcript byte for byte.
 //!
 //! WHY THIS IS AN ORACLE AND A SNAPSHOT IS NOT. The deleted `.expected.zig`
-//! files were FastVAF's own output fed back to it: any wrong answer was frozen
+//! files were VerA's own output fed back to it: any wrong answer was frozen
 //! as correct. A transcript is different in kind, because the fixture states its
 //! OWN expectation in Verilog-A and prints the residual:
 //!
@@ -21,7 +21,7 @@
 //!             abs(y - 0.46211715726000974));
 //!
 //! The golden line reads `err=0`. The constant is independently derived (LRM
-//! §4.3.2 defines the function; the value comes from anywhere but FastVAF), a
+//! §4.3.2 defines the function; the value comes from anywhere but VerA), a
 //! reviewer can check it without running anything, and a regression turns `err=0`
 //! into a visible number rather than into a silently re-blessed byte.
 //!
@@ -32,7 +32,7 @@
 //! so no reassociation, and every number printed at fixed precision.
 
 const std = @import("std");
-const fastvaf = @import("fastvaf");
+const vera = @import("vera");
 const options = @import("exhaustive_options");
 
 const Io = std.Io;
@@ -143,14 +143,14 @@ fn run(
     // Stage 1-6 with §9.4 display ON. W0650 is about speed, and every fixture
     // that probes a node trips it; allowing it here keeps the transcript about
     // the model rather than about float modes.
-    var diags: fastvaf.diag.Bag = .init(gpa);
+    var diags: vera.diag.Bag = .init(gpa);
     defer diags.deinit(gpa);
-    var levels: fastvaf.diag.Levels = .empty;
+    var levels: vera.diag.Levels = .empty;
     defer levels.deinit(gpa);
     try levels.set(gpa, .W0650, .allow);
 
     const dir = std.fs.path.dirname(f.path) orelse ".";
-    var result = fastvaf.compileSourceOpts(gpa, source, .release_fast, .{
+    var result = vera.compileSourceOpts(gpa, source, .release_fast, .{
         .file_name = f.path,
         .include_dirs = &.{dir},
         .diags = &diags,
@@ -158,7 +158,7 @@ fn run(
         .display = .emit,
     }) catch |err| {
         try w.print("FAIL {s}: did not compile: {t}\n", .{ f.stem, err });
-        fastvaf.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
+        vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
         return .fail;
     };
     defer result.deinit();
@@ -174,16 +174,16 @@ fn run(
 
     // The `//!` lines are read from the RAW source: the preprocessor deletes
     // comments (§2.4), so by the time `result` exists they are gone.
-    const d = fastvaf.tb.parse(arena, source) catch |err| {
+    const d = vera.tb.parse(arena, source) catch |err| {
         try w.print("FAIL {s}: `//!` directive: {t}\n", .{ f.stem, err });
         return .fail;
     };
-    const runner = try fastvaf.tb.renderRunner(arena, f.stem, d);
+    const runner = try vera.tb.renderRunner(arena, f.stem, d);
 
     // One work directory per fixture: two fixtures may declare the same module
     // name, and a shared scratch would race them onto one `device.zig`.
     const work = try std.fs.path.join(arena, &.{ options.work_root, f.stem });
-    const built = fastvaf.tb.buildExe(gpa, io, device, runner, .{
+    const built = vera.tb.buildExe(gpa, io, device, runner, .{
         .work_dir = work,
         .contract = options.contract,
         .name = result.mir.name,

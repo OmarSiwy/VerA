@@ -3,14 +3,14 @@
 Source: docs/VAMS-LRM/annex-e-spice.html. Every HTML section id is listed literally.
 
 Boundary disclosure: every Table E.1 row now contains executable named-port and named-
-parameter syntax, but FastVAF rejects hierarchy at `module instantiation is not
+parameter syntax, but VerA rejects hierarchy at `module instantiation is not
 supported`; the diagnostics therefore prove source/parser coverage, not primitive-schema
 validation or SPICE elaboration. CCCS/CCVS sources name a concrete `vsine` controlling
 instance, but instance-name passing cannot be semantically checked past that boundary.
 
 | HTML id | Normative area | Fixtures / disposition |
 |---|---|---|
-| `sE-1` | purpose and optional SPICE compatibility | all fixtures make the FastVAF boundary explicit |
+| `sE-1` | purpose and optional SPICE compatibility | all fixtures make the VerA boundary explicit |
 | `sE-1-1` | compatible SPICE objects may be instantiated | `spice_model_unsupported.va`, `spice_subcircuit_unsupported.va` |
 | `sE-1-2` | dialect, primitive, naming and mathematical incompatibilities | diagnostics retain implementation-dependent boundary |
 | `sE-2` | SPICE primitive/model/subcircuit objects behave as definitions | `spice_model_unsupported.va`, `spice_subcircuit_unsupported.va`, `spice_passive_primitives_unsupported.va` |

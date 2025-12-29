@@ -3,12 +3,12 @@
 Source: docs/VAMS-LRM/ch5-analog.html. Every valid .va is paired with an exact .expected.zig dump; diagnostic cases use .expected-error.txt.
 
 Parser-boundary disclosure: `analog_initial_digital_access_rejected.va` stops at the
-unsupported digital `initial` item before FastVAF can check the analog-initial read.
+unsupported digital `initial` item before VerA can check the analog-initial read.
 `vector_access.va` and `analog_genvar_loop.va` stop at vector declarations before
 selection/elaboration semantics. `hierarchical_contribution_unsupported.va` contains
 the hierarchical contribution, but its asserted diagnostic is the later unsupported
 module instance. These fixtures preserve the required source syntax; they do not claim
-that FastVAF validates those masked semantic rules.
+that VerA validates those masked semantic rules.
 
 | LRM section | Rule exercised | Fixtures / disposition |
 |---|---|---|

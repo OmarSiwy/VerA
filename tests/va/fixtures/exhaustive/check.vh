@@ -14,14 +14,14 @@
 // `ok=0` and the runner fails on the diff.
 //
 // WHY THE VERDICT IS A NUMBER AND NOT A BRANCH. `if (ok) $strobe("PASS")` is the
-// obvious shape and it does not work here: FastVAF hoists a module's display
+// obvious shape and it does not work here: VerA hoists a module's display
 // tasks into one straight-line unit, so a task under a conditional is dropped
 // with W0851 (LRM §9.4.6 makes emission a property of the solve, which compiled
 // device code has no way to consult). A comparison is an integer in Verilog-A
 // (§4.2.5), so making the verdict an OPERAND keeps everything unconditional.
 
-`ifndef FASTVAF_CHECK_VH
-`define FASTVAF_CHECK_VH
+`ifndef VERA_CHECK_VH
+`define VERA_CHECK_VH
 
 // Absolute tolerance. Use for values near or at zero.
 `define CHECK(NAME, GOT, WANT, TOL) \

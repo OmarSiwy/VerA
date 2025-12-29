@@ -353,7 +353,7 @@ const Counts = packed struct(u32) {
 ///
 /// WHAT THIS CARRIES THAT ZIG'S `ErrorMessage` DOES NOT. Zig's row is
 /// `{msg, count, src_loc, notes_len}` (ErrorBundle.zig:70) — a string and a
-/// place. FastVAF also needs the `Code` (the catalogue key that `--explain`,
+/// place. VerA also needs the `Code` (the catalogue key that `--explain`,
 /// the lint levels and 809 fixtures all pin), the `Severity` (Zig's renderer
 /// hardcodes "error"), the `Stage`, the `point` text drawn beside the primary
 /// caret, and a count of secondary `Label`s. Every one of them is another
