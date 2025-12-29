@@ -1,38 +1,36 @@
 const std = @import("std");
 
-/// VerA builds one binary and exposes three modules.
+/// VerA builds one binary and exposes two modules.
 ///
-/// The binary is `vera`: both frontends behind an extension check (src/main.zig).
+/// The binary is `vera`: the Verilog-A compiler (src/va/main.zig).
 /// The modules are for an embedder — a simulator that wants to compile Verilog-A
 /// in-process rather than shell out:
 ///
 ///   va         the Verilog-A engine — `.va` in, device Zig out
-///   vf         the Verilog family — shells out to verilator/sv2v/ghdl
 ///   contract   the ABI that generated device code imports
 ///
 /// `contract` is public as a MODULE and reachable as a PATH
-/// (`dep.path("src/contract.zig")`), because the CLI hands it to `zig build-obj`
-/// on the command line while an embedder imports it. Same file both ways, which
-/// is the point of it living here.
+/// (`dep.path("tools/contract.zig")`), because the CLI hands it to
+/// `zig build-obj` on the command line while an embedder imports it. Same file
+/// both ways, which is the point of it living here.
+///
+/// It sits in `tools/` and not in `src/` because nothing in the compiler imports
+/// it: every reference is either a string inside generated code or a path handed
+/// to a child `zig`. It is a shipped artifact compiled into DEVICES, never into
+/// `vera`.
 pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
     _ = b.addModule("contract", .{
-        .root_source_file = b.path("src/contract.zig"),
+        .root_source_file = b.path("tools/contract.zig"),
         .target = target,
         .optimize = optimize,
     });
     // Public so an embedder can compile Verilog-A in-process instead of
-    // shelling out to the binary. No aggregate facade over the two: every
-    // consumer so far wants one frontend or the other, never both.
+    // shelling out to the binary.
     const va_mod = b.addModule("va", .{
         .root_source_file = b.path("src/va/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const vf_mod = b.addModule("vf", .{
-        .root_source_file = b.path("src/vf/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -41,10 +39,10 @@ pub fn build(b: *std.Build) void {
     // The binary
     // =======================================================================
 
-    // src/main.zig reaches both frontends with relative `@import`s, so the whole
-    // CLI is one module and there is nothing to wire.
+    // The CLI reaches the engine with relative `@import`s, so the whole thing is
+    // one module and there is nothing to wire.
     const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
+        .root_source_file = b.path("src/va/main.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -61,41 +59,17 @@ pub fn build(b: *std.Build) void {
     //
     // One root PER MODULE: `zig test` collects tests only from the root module's
     // own file set, so a cross-module `_ = @import(...)` silently contributes
-    // zero tests. Each root.zig ends in a `test { _ = <sibling>; }` aggregator,
-    // which is what pulls a whole frontend in from one root.
+    // zero tests. `src/va/root.zig` ends in a `test { _ = <sibling>; }`
+    // aggregator, which is what pulls the whole engine in from one root.
+    //
+    // The CLI module carries no tests of its own, so it gets no step.
     // =======================================================================
 
     const test_step = b.step("test", "Run every test suite");
 
-
-    for ([_]struct { name: []const u8, desc: []const u8, mod: *std.Build.Module }{
-        .{ .name = "test-va", .desc = "Run the Verilog-A engine tests", .mod = va_mod },
-        .{ .name = "test-vf", .desc = "Run the Verilog frontend tests", .mod = vf_mod },
-        // The CLI carries its own tests (argv routing, module-name readback) and
-        // is not reachable from either frontend root.
-        .{ .name = "test-cli", .desc = "Run the vera CLI tests", .mod = cli_mod },
-    }) |suite| {
-        const run = b.addRunArtifact(b.addTest(.{ .root_module = suite.mod }));
-        b.step(suite.name, suite.desc).dependOn(&run.step);
-        test_step.dependOn(&run.step);
-    }
-
-    // Verilog conformance: translate each fixture, compile it against the real
-    // contract, then EXECUTE it against hand-written truth-table vectors. A
-    // static shape check would happily accept an `and2` that emits `a | b`.
-    const vf_conf_opts = b.addOptions();
-    vf_conf_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
-    vf_conf_opts.addOption([]const u8, "contract_path", b.pathFromRoot("src/contract.zig"));
-    const vf_conf_mod = b.createModule(.{
-        .root_source_file = b.path("tests/vf/test_all.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "zvf", .module = vf_mod }},
-    });
-    vf_conf_mod.addOptions("conf_opts", vf_conf_opts);
-    const run_vf_conf = b.addRunArtifact(b.addTest(.{ .root_module = vf_conf_mod }));
-    b.step("conformance-vf", "Run the Verilog fixture conformance suite").dependOn(&run_vf_conf.step);
-    test_step.dependOn(&run_vf_conf.step);
+    const run_va_test = b.addRunArtifact(b.addTest(.{ .root_module = va_mod }));
+    b.step("test-va", "Run the Verilog-A engine tests").dependOn(&run_va_test.step);
+    test_step.dependOn(&run_va_test.step);
 
     // =======================================================================
     // Verilog-A oracles
@@ -136,7 +110,7 @@ pub fn build(b: *std.Build) void {
         []const u8,
         "contract",
         "Root of the `contract` module the generated devices import",
-    ) orelse b.pathFromRoot("src/contract.zig");
+    ) orelse b.pathFromRoot("tools/contract.zig");
     const exh_opts = b.addOptions();
     exh_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/va/fixtures/exhaustive"));
     exh_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-tb"));
