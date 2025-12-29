@@ -1,23 +1,33 @@
 #!/usr/bin/env bash
 # Byte-identity oracle for codegen refactors.
 #
-# Most of the work in PERF.md's "Known-good next moves" is meant to change the
+# Most performance work on this compiler is meant to change the
 # compiler's SPEED, not its OUTPUT. `zig build conformance` proves the small
 # fixtures still behave; this proves the 38 real foundry models still produce
 # the identical byte stream — which is the only thing that catches a reordered
 # emit, a lost back-patch, or a nondeterministic thread interleaving.
 #
-#   tests/baseline.sh gen           # record  -> /tmp/fastvaf-baseline/
-#   tests/baseline.sh check         # compare against the recording
-#   tests/baseline.sh check 20      # compare 20x (races show 1-in-N, not 1-in-1)
+#   tests/va/baseline.sh gen           # record  -> /tmp/fastvaf-baseline/
+#   tests/va/baseline.sh check         # compare against the recording
+#   tests/va/baseline.sh check 20      # compare 20x (races show 1-in-N, not 1-in-1)
 #
-# The CLI is rebuilt ReleaseFast each run: a Debug build is ~10x slower and the
-# timings in PERF.md are all ReleaseFast.
+# The CLI is rebuilt ReleaseFast each run: a Debug build is ~10x slower, and
+# ReleaseFast is what any recorded timing was measured in.
 set -euo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-models="$here/../devices/models"
+# Repo root. `/..` from tests/va was right when this lived at
+# modules/FastVAF/tests/; 436cf42 promoted the tree, so it needs one more level.
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+# The 38 foundry models live in the HOST repo, not this one — this is the only
+# oracle here with an external input. Overridable, and SKIPPED rather than failed
+# when the host is not checked out beside us, the way the old Verilog suite
+# skipped on a missing verilator.
+models="${VERA_MODELS:-$here/../ARPice/src/devices/models}"
 out="${BASELINE_DIR:-/tmp/fastvaf-baseline}"
+if [ ! -d "$models" ]; then
+    echo "baseline.sh: no models at $models — set VERA_MODELS. Skipping."
+    exit 0
+fi
 # Per-invocation, so two agents/shells checking concurrently do not overwrite
 # each other's binary mid-run.
 exe="$(mktemp -u /tmp/fastvaf-oracle.XXXXXX)"
@@ -29,18 +39,23 @@ trap 'rm -rf "$exe" "$exe.o" "$scratch"' EXIT
 mode="${1:-check}"
 runs="${2:-1}"
 
-zig build-exe -OReleaseFast -Mroot="$here/src/main.zig" -femit-bin="$exe" >/dev/null
+zig build-exe -OReleaseFast -Mroot="$here/src/va/main.zig" -femit-bin="$exe" >/dev/null
 
 # A model that FAILS to compile is recorded as an empty `NAME.fail` marker
 # rather than skipped, so the comparison catches a change that silently starts
-# or stops rejecting a model. Two currently fail and both are expected:
-#   hicumL2_va — uses `HSa` at :1758, declared nowhere in the file. Correct
-#                rejection; the source is broken, not the compiler.
-#   bsim4va    — `\`-continuation inside a string literal at :3658. Correct
-#                rejection (E0138): LRM 2.7 requires a literal be "contained
-#                on a single line" and Table 2-2 lists no \<newline> escape.
-#                The continuation is SystemVerilog (IEEE 1800 5.9), which
-#                Verilog-AMS never inherited from IEEE 1364-2005.
+# or stops rejecting a model. All 38 currently compile.
+#
+# Two used to be expected failures. Both were fixed in the MODELS, not here, so a
+# `.fail` marker reappearing for either is an upstream regression and not a
+# compiler one. The reasoning is kept because it is what makes the rejection
+# correct in the first place:
+#   hicumL2_va — used `HSa`, declared nowhere in the file. Since restored
+#                upstream; the model now cites VA-Models hicumL2V2p4p0.va:903.
+#   bsim4va    — `\`-continuation inside a string literal. Correct rejection
+#                (E0138): LRM 2.7 requires a literal be "contained on a single
+#                line" and Table 2-2 lists no \<newline> escape. That form is
+#                SystemVerilog (IEEE 1800 5.9), which Verilog-AMS never
+#                inherited from IEEE 1364-2005.
 emit() { # emit <dest-dir>
     mkdir -p "$1"
     for va in "$models"/*.va; do

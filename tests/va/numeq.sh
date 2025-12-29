@@ -1,36 +1,36 @@
 #!/usr/bin/env bash
 # Numeric-equivalence oracle: does a codegen change alter what the device COMPUTES?
 #
-#   tests/numeq.sh <old-fastvaf-binary> [model ...]
+#   tests/va/numeq.sh <old-fastvaf-binary> [model ...]
 #
-# `tests/baseline.sh` compares generated TEXT and `zig build conformance` compares
+# `tests/va/baseline.sh` compares generated TEXT and `zig build conformance` compares
 # diagnostics; neither can see a change that emits different-but-plausible
 # arithmetic. This compiles each model through the reference binary and through
 # the working tree, links both into one program, and compares residuals BITWISE
 # over 2 000 deterministic operating points.
 #
-# It earns its keep: during the shared-core hoist (PERF.md fix 16) it caught two
+# It earns its keep: during the shared-core hoist it caught two
 # unsound prunes that 843 conformance fixtures AND the byte oracle both missed —
 # an empty block skipped inside a LRM 5.9 loop, and a cached phi clearing the SSA
 # join guard. Neither changes any diagnostic and both change the physics.
 #
 # Getting a reference binary (any commit or any saved tree):
-#   zig build-exe -OReleaseFast -Mroot=src/main.zig -femit-bin=/tmp/fastvaf-ref
+#   zig build-exe -OReleaseFast -Mroot=src/va/main.zig -femit-bin=/tmp/fastvaf-ref
 #
 # A model that fails to compile under EITHER binary is skipped, not failed —
 # `bsim4va` and `hicumL2_va` are expected to fail (see TODO.md), and several
 # large models do not link a Debug harness in reasonable time.
 set -uo pipefail
 
-here="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 old="${1:?usage: numeq.sh <old-fastvaf-binary> [model ...]}"; shift
-contract="$here/../devices/src/contract.zig"
-models="$here/../devices/models"
+contract="$here/tools/contract.zig"
+models="${VERA_MODELS:-$here/../ARPice/src/devices/models}"
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
 
 new="$work/fastvaf-new"
-zig build-exe -OReleaseFast -Mroot="$here/src/main.zig" -femit-bin="$new" >/dev/null || exit 1
+zig build-exe -OReleaseFast -Mroot="$here/src/va/main.zig" -femit-bin="$new" >/dev/null || exit 1
 
 list=("$@"); [ ${#list[@]} -eq 0 ] && { list=(); for f in "$models"/*.va; do list+=("$(basename "$f" .va)"); done; }
 
@@ -43,7 +43,7 @@ for m in "${list[@]}"; do
     # An optimiser is free to reassociate, which would mask exactly the class of
     # bug this is looking for.
     if ! timeout 1800 zig build-exe -ODebug \
-            --dep contract --dep old --dep new -Mroot="$here/tests/numeq/harness.zig" \
+            --dep contract --dep old --dep new -Mroot="$here/tests/va/numeq/harness.zig" \
             --dep contract -Mold="$work/old.zig" \
             --dep contract -Mnew="$work/new.zig" \
             -Mcontract="$contract" -femit-bin="$work/eq" >"$work/build-$m.log" 2>&1; then

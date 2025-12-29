@@ -298,7 +298,7 @@ pub const SsaBuilder = struct {
     /// frame per block on the first read of a place, so ~10⁵ sequential `if`s in
     /// one module would blow the stack. All 36 foundry models are far under it.
     /// The fix is an explicit stack with a resume state, since the ≥2-preds arm
-    /// has real post-recursion work; see PERF.md "Known-good next moves".
+    /// has real post-recursion work.
     fn readVariableRecursive(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         const b = try self.ensureState(block);
 
