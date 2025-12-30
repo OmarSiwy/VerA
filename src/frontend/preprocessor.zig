@@ -26,7 +26,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const diag = @import("diag.zig");
+const diag = @import("../diag.zig");
 
 pub const Options = struct {
     /// Searched in order for `include, before the built-in annex D files.

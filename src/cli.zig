@@ -29,7 +29,7 @@
 //!                          Same frontend and the same device.zig; ch9 display
 //!                          tasks become real prints, and a generated runner
 //!                          drives the module over the operating points the
-//!                          source's `//!` lines declare (src/tb.zig). Prints
+//!                          source's `//!` lines declare (backend/tb.zig). Prints
 //!                          the binary's path.
 //!   --run                  --emit-exe, then execute it and forward its status
 //!   --display=drop|emit    ch9 display handling on its own. `drop` (the

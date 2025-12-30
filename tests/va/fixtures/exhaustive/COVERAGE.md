@@ -48,7 +48,7 @@ Two independent claims per fixture, and neither is a snapshot of the compiler:
 `//! print none` drops the second when a fixture is about the language rather
 than about a device.
 
-## Directives (src/tb.zig)
+## Directives (src/backend/tb.zig)
 
 | Line | Effect |
 |---|---|
@@ -69,7 +69,7 @@ than about a device.
 |---|---|---|
 | `010_display_formats` | §9.4.2–9.4.4 | every conversion, width, precision, escape, `%m`, `$write`'s missing newline |
 | `011_severity_tasks` | §9.7.3 | `$info`/`$warning`/`$error`/`$fatal` carry their level; `$finish`/`$stop` stay void |
-| `012_directives` | src/tb.zig | every `//!` line is observable in the transcript |
+| `012_directives` | src/backend/tb.zig | every `//!` line is observable in the transcript |
 | `020_real_arithmetic` | §4.1, §4.2.4 | precedence, associativity, `**` right-associativity, `%` sign rule |
 | `021_integer_arithmetic` | §3.2, §4.2.4 | truncation toward zero, `%` sign, abs/min/max |
 | `022_comparison_logic` | §4.2.5–4.2.7 | relational/equality/logical, all yielding integer 0/1 |

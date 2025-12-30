@@ -97,10 +97,10 @@
 //!      functions) is non-finite. It costs `.strict`, never a wrong `.optimized`.
 
 const std = @import("std");
-const Ast = @import("ast.zig");
+const Ast = @import("../frontend/ast.zig");
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
-const diag = @import("diag.zig");
+const diag = @import("../diag.zig");
 const assert = std.debug.assert;
 const math = std.math;
 
@@ -1840,9 +1840,9 @@ fn mCeil(x: f64) f64 {
 // Tests
 // ---------------------------------------------------------------------------
 
-const Preprocessor = @import("preprocessor.zig");
-const Lexer = @import("lexer.zig");
-const Parser = @import("parser.zig");
+const Preprocessor = @import("../frontend/preprocessor.zig");
+const Lexer = @import("../frontend/lexer.zig");
+const Parser = @import("../frontend/parser.zig");
 
 const Harness = struct {
     arena_state: std.heap.ArenaAllocator,

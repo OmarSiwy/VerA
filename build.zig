@@ -2,7 +2,7 @@ const std = @import("std");
 
 /// VerA builds one binary and exposes two modules.
 ///
-/// The binary is `vera`: the Verilog-A compiler (src/va/main.zig).
+/// The binary is `vera`: the Verilog-A compiler (src/cli.zig).
 /// The modules are for an embedder — a simulator that wants to compile Verilog-A
 /// in-process rather than shell out:
 ///
@@ -30,7 +30,7 @@ pub fn build(b: *std.Build) void {
     // Public so an embedder can compile Verilog-A in-process instead of
     // shelling out to the binary.
     const vera_mod = b.addModule("vera", .{
-        .root_source_file = b.path("src/va/root.zig"),
+        .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -42,7 +42,7 @@ pub fn build(b: *std.Build) void {
     // The CLI reaches the engine with relative `@import`s, so the whole thing is
     // one module and there is nothing to wire.
     const cli_mod = b.createModule(.{
-        .root_source_file = b.path("src/va/main.zig"),
+        .root_source_file = b.path("src/cli.zig"),
         .target = target,
         .optimize = optimize,
     });
@@ -59,7 +59,7 @@ pub fn build(b: *std.Build) void {
     //
     // One root PER MODULE: `zig test` collects tests only from the root module's
     // own file set, so a cross-module `_ = @import(...)` silently contributes
-    // zero tests. `src/va/root.zig` ends in a `test { _ = <sibling>; }`
+    // zero tests. `src/root.zig` ends in a `test { _ = <sibling>; }`
     // aggregator, which is what pulls the whole engine in from one root.
     //
     // The CLI module carries no tests of its own, so it gets no step.

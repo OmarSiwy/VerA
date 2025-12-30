@@ -24,7 +24,7 @@
 //! the namespace (`Mir.Value`, `Mir.Opcode`) and the value type (`mir: *Mir`).
 
 const std = @import("std");
-const Ast = @import("ast.zig");
+const Ast = @import("../frontend/ast.zig");
 const assert = std.debug.assert;
 
 pub const Mir = @This(); // so `Mir.Mir` also resolves for callers that spell it out

@@ -19,9 +19,9 @@
 //! downstream declaration re-Semas. Do not reintroduce it.
 
 const std = @import("std");
-const Mir = @import("mir.zig");
-const Lower = @import("lower.zig");
-const token = @import("token.zig");
+const Mir = @import("../ir/mir.zig");
+const Lower = @import("../ir/lower.zig");
+const token = @import("../frontend/token.zig");
 
 /// Identifies one emitted source unit. LRM units: §5.6 contribution,
 /// §4.7 user function, §5.3.2 named block, §4.5 analog operator.
@@ -351,8 +351,8 @@ fn assignDisambig(units: []Unit) void {
 // Tests
 // ---------------------------------------------------------------------------
 
-const Ast = @import("ast.zig");
-const diag = @import("diag.zig");
+const Ast = @import("../frontend/ast.zig");
+const diag = @import("../diag.zig");
 
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,

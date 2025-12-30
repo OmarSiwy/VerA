@@ -31,7 +31,7 @@ transcript, and a human accepts it by reading the `ok=` column.
 
 ## Open: what the suite does not reach yet
 
-- ~~**Stateful analog operators**~~ — DONE. `src/tb.zig` allocates `D.State`,
+- ~~**Stateful analog operators**~~ — DONE. `src/backend/tb.zig` allocates `D.State`,
   calls `D.initState` per sweep point and `D.updateState` after every `//! time`
   step, and `//! wave` drives a per-timepoint input, so the check is against an
   analytic step response rather than against zero history. Covered: `062` idt,
@@ -64,7 +64,7 @@ transcript, and a human accepts it by reading the `ok=` column.
   `undefined` on the not-taken arm — undefined behavior in the generated device,
   and the reason the history was garbage rather than merely zero. It now returns
   the type's zero (`codegen.emitUnitBody`), pinned by a unit test in
-  `src/codegen.zig`.
+  `src/backend/codegen.zig`.
 - **Noise (§4.6.4) and `ac_stim` (§4.6.3)** contribute nothing to a DC residual,
   so a transcript cannot observe them. They need the `noise_gens`/`noisePsd`
   surface printed instead of the residual.
