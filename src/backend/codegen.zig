@@ -37,6 +37,7 @@
 
 const std = @import("std");
 const Mir = @import("../ir/mir.zig");
+const Analysis = @import("../ir/analysis.zig");
 const Lower = @import("../ir/lower.zig");
 const proof = @import("../ir/proof.zig");
 const diag = @import("../diag.zig");
@@ -162,8 +163,10 @@ pub fn generate(
     // with `num_ports == 0` and an empty `U`, which the host simply never
     // stamps; that is a host-side triviality, not a source-language error.
 
+    const an = try Analysis.build(arena, mir, lower);
     var g: Gen = .{
         .gpa = gpa,
+        .an = &an,
         .arena = arena,
         .mir = mir,
         .lower = lower,
@@ -193,7 +196,8 @@ pub fn generate(
 // that does not compile.
 // ===========================================================================
 
-const VTy = enum(u8) { real, int, str };
+/// The value-type lattice lives with the analysis that computes it.
+const VTy = Analysis.VTy;
 
 /// Zero-sized context for `Gen.f64_cache`. The key is an f64's bit pattern,
 /// which is already in a register; `AutoContext` would run
@@ -215,6 +219,11 @@ const F64Context = struct {
 const Gen = struct {
     /// Owns `out` and nothing else — see `generate`.
     gpa: std.mem.Allocator,
+    /// The derived facts this emitter reads and never writes: CFG, dominators,
+    /// loops, block pools, instruction columns, value types, aliases
+    /// (ir/analysis.zig). Everything policy-shaped — what to name a unit, what
+    /// to hoist into the core, what to inline — stays in the fields below.
+    an: *const Analysis,
     arena: std.mem.Allocator,
     mir: *const Mir,
     lower: *const Lower,
@@ -312,77 +321,10 @@ const Gen = struct {
     /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
     p_given: []bool = &.{},
 
-    // ---- CFG, computed once and shared by every unit ----
-    nb: u32 = 0,
-    rpo_num: []u32 = &.{},
-    rpo: []u32 = &.{},
-    idom: []u32 = &.{},
-    preds: [][]u32 = &.{},
-    succs: [][]u32 = &.{},
-    dom_kids: [][]u32 = &.{},
-    /// Euler-tour numbering of the dominator tree, so `dominates` is O(1)
-    /// instead of an idom walk (`none_u32` = block not in the tree).
-    dom_in: []u32 = &.{},
-    dom_out: []u32 = &.{},
-    is_merge: []bool = &.{},
-    is_loop: []bool = &.{},
-    /// The OUTERMOST loop header whose natural loop contains this block, or
-    /// `none_u32`. Outermost, not innermost, so a whole nest is one unit of
-    /// decision in `planCommon` — see `loop_blocked`.
-    loop_of: []u32 = &.{},
     /// PER UNIT, indexed by loop header: does the unit being analyzed run this
     /// loop itself, so its values must be recomputed rather than read from the
     /// core? Reset and refilled by `analyzeUnit`.
     loop_recompute: []bool = &.{},
-    /// EVERY instruction of block `b`, in emission order:
-    /// `inst_pool[inst_off[b]..inst_off[b + 1]]`. `prepare` used to walk the
-    /// MIR's intrusive `next` chain six separate times (terminators, phi/stmt
-    /// count, phi/stmt fill, `def_block`, `op_unit`, `$param_given`), and each
-    /// `it.next()` is a dependent load — six latency-bound traversals of the
-    /// whole model. AIR never has a chain at all: a block body is a `[]u32`
-    /// window reinterpreted in place. Built by two walks, read by five.
-    inst_pool: []Mir.Inst = &.{},
-    inst_off: []u32 = &.{},
-    /// Non-aliased phis of block `b`, in emission order:
-    /// `phi_pool[phi_off[b]..phi_off[b + 1]]`. `emitPhiCopies` runs once per CFG
-    /// edge, so re-walking the block's instruction chain there is quadratic in
-    /// the block's in-degree. Flat pool + offsets, not `[][]Inst`: one
-    /// allocation, 4 bytes per phi, nothing derivable stored.
-    phi_pool: []Mir.Inst = &.{},
-    phi_off: []u32 = &.{},
-    /// Same shape, for the instructions a unit body can emit: everything except
-    /// phis, terminators, and values aliased away. `emitBlockInsts` runs once
-    /// per block PER UNIT, and the MIR's intrusive `next` chain makes that a
-    /// pointer chase over the whole model each time.
-    stmt_pool: []Mir.Inst = &.{},
-    stmt_off: []u32 = &.{},
-    /// Merge-block dominator children of `b`: `mk_pool[mk_off[b]..mk_off[b+1]]`.
-    /// `emitCode` runs per block per unit and used to rebuild this list into a
-    /// fresh arena allocation every time; the CFG does not change between units.
-    mk_pool: []u32 = &.{},
-    mk_off: []u32 = &.{},
-    /// MIR instruction columns, hoisted once. `mir.instOp`/`instResult` each
-    /// re-derive the MultiArrayList base pointers per call.
-    i_op: []const Mir.Opcode = &.{},
-    i_res: []const Mir.Value = &.{},
-    term: []Mir.Inst = &.{},
-    /// Block a Value is defined in (`none_u32` for constants/params/probes).
-    def_block: []u32 = &.{},
-
-    // ---- per-value tables ----
-    nv: u32 = 0,
-    vty: []VTy = &.{},
-    /// `mir.resolveAlias` evaluated once for every Value. `rv` is on the render
-    /// path of every unit (`renderVal`, `renderOp`, `livePhi`, `liveStmt`,
-    /// `mark`, `emitUnits`), and `resolveAlias` is declared `*const` but WRITES:
-    /// it path-compresses through the slice. Reading a snapshot instead makes
-    /// `rv` one array load and makes the whole render path genuinely read-only,
-    /// which is what per-unit parallelism will need. Costs `nv * 4` bytes.
-    ///
-    /// INVARIANT: nothing calls `Mir.setAlias` after `prepare`. Its only caller
-    /// is `ssa.tryRemoveTrivialPhi`, which runs inside lowering — codegen and
-    /// proof are read-only passes over a finished Mir.
-    alias: []Mir.Value = &.{},
 
     // ---- per-unit scratch ----
     needed: []bool = &.{},
@@ -436,12 +378,29 @@ const Gen = struct {
         // guess up front beats a dozen doublings even on a gpa, where a regrow
         // can at least remap in place.
         try self.out.ensureTotalCapacity(self.gpa, self.mir.insts.len * 24 + 4096);
-        // Before `buildCfg`: its `livePhi`/`liveStmt` already call `rv`. `nv`
-        // derives only from `mir.defs.len`, so it is knowable this early.
-        self.nv = @intCast(self.mir.defs.len + Mir.Value.first_dynamic);
-        try self.buildAlias();
-        try self.buildCfg();
-        try self.buildValueTypes();
+        // Per-unit scratch, sized from the analysis. These used to be allocated
+        // by `buildValueTypes` and `buildCfg` purely because those knew `nv` and
+        // `nb`; a typing pass allocating eight scheduling tables was the kind of
+        // side job the ir/backend split exists to make visible.
+        const a = self.arena;
+        self.loop_recompute = try a.alloc(bool, self.an.nb);
+        @memset(self.loop_recompute, false);
+        // Cleared here once; every later unit clears only its own live set.
+        self.needed = try a.alloc(bool, self.an.nv);
+        self.eager_use = try a.alloc(u32, self.an.nv);
+        self.arm_use = try a.alloc(u32, self.an.nv);
+        self.inlined = try a.alloc(bool, self.an.nv);
+        self.slot = try a.alloc(u32, self.an.nv);
+        @memset(self.needed, false);
+        @memset(self.eager_use, 0);
+        @memset(self.arm_use, 0);
+        @memset(self.inlined, false);
+        @memset(self.slot, none_u32);
+        // Per-BLOCK, not per-value: a whole `@memset` of these per unit is a few
+        // KB, nothing like the `0..nv` per-unit sweeps that were deleted.
+        self.blk_work = try a.alloc(bool, self.an.nb);
+        self.blk_phi = try a.alloc(bool, self.an.nb);
+        self.dead_branch = try a.alloc(bool, self.an.nb);
         try self.buildUnits();
         try self.buildNames();
         try self.buildJobs();
@@ -508,7 +467,7 @@ const Gen = struct {
     /// them.
     fn planCommon(self: *Gen) Error!void {
         const a = self.arena;
-        self.lo_idx = try a.alloc(u32, self.nv);
+        self.lo_idx = try a.alloc(u32, self.an.nv);
         @memset(self.lo_idx, none_u32);
 
         var vals: std.ArrayList(Mir.Value) = .empty;
@@ -520,7 +479,7 @@ const Gen = struct {
             // reads the core like the units used to.
             if (job.is_display) continue;
             mode = .strictest(mode, job.mode);
-            const v = self.rv(job.target);
+            const v = self.an.rv(job.target);
             if (v == .f_zero) continue; // an operator with no input; rendered inline
             if (self.lo_idx[@intFromEnum(v)] != none_u32) continue;
             self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
@@ -533,7 +492,7 @@ const Gen = struct {
         // `lo_idx` is only meaningful once every job has been folded in.
         self.held_idx = try a.alloc(u32, self.lower.held_vars.items.len);
         for (self.lower.held_vars.items, 0..) |h, i| {
-            const v = self.rv(h.final);
+            const v = self.an.rv(h.final);
             self.held_idx[i] = if (v == .f_zero) none_u32 else self.lo_idx[@intFromEnum(v)];
         }
         if (self.lo_vals.len == 0) return;
@@ -549,10 +508,6 @@ const Gen = struct {
         self.common_name = try a.dupe(u8, n);
     }
 
-    /// Is this block inside some loop's natural body?
-    fn inLoop(self: *const Gen, block: u32) bool {
-        return self.loop_of[block] != none_u32;
-    }
 
     /// Is this Value read out of the common declaration's cache HERE?
     /// False inside the common declaration itself, where it is computed.
@@ -560,9 +515,9 @@ const Gen = struct {
         if (self.emitting_common or self.lo_idx[@intFromEnum(v)] == none_u32) return false;
         // §5.9 A unit that re-materializes a loop must not read that loop's
         // values out of the cache — see `analyzeUnit`'s fixpoint.
-        const blk = self.def_block[@intFromEnum(v)];
+        const blk = self.an.def_block[@intFromEnum(v)];
         if (blk != none_u32) {
-            const l = self.loop_of[blk];
+            const l = self.an.loop_of[blk];
             if (l != none_u32 and self.loop_recompute[l]) return false;
         }
         return true;
@@ -586,407 +541,8 @@ const Gen = struct {
         try self.out.appendNTimes(self.gpa, ' ', n * 4);
     }
 
-    /// Snapshot the whole alias forest, root-first, so `rv` never touches the
-    /// Mir again. Values below `first_dynamic` are their own root by definition.
-    fn buildAlias(self: *Gen) Error!void {
-        self.alias = try self.arena.alloc(Mir.Value, self.nv);
-        for (self.alias, 0..) |*p, v| p.* = self.mir.resolveAlias(@enumFromInt(@as(u32, @intCast(v))));
-    }
 
-    fn rv(self: *const Gen, v: Mir.Value) Mir.Value {
-        return self.alias[@intFromEnum(v)];
-    }
 
-    /// Block `bi`'s instructions as a contiguous window — see `inst_pool`.
-    inline fn blockInstsFlat(self: *const Gen, bi: u32) []const Mir.Inst {
-        return self.inst_pool[self.inst_off[bi]..self.inst_off[bi + 1]];
-    }
-
-    // ---------------------------------------------------------------- CFG ----
-
-    fn buildCfg(self: *Gen) Error!void {
-        const a = self.arena;
-        const nb = self.mir.blockCount();
-        self.nb = nb;
-        self.i_op = self.mir.insts.items(.op);
-        self.i_res = self.mir.insts.items(.result);
-        self.term = try a.alloc(Mir.Inst, nb);
-        self.succs = try a.alloc([]u32, nb);
-        self.preds = try a.alloc([]u32, nb);
-        self.rpo_num = try a.alloc(u32, nb);
-        self.idom = try a.alloc(u32, nb);
-        self.is_merge = try a.alloc(bool, nb);
-        self.is_loop = try a.alloc(bool, nb);
-        self.loop_of = try a.alloc(u32, nb);
-        self.loop_recompute = try a.alloc(bool, nb);
-        @memset(self.rpo_num, none_u32);
-        @memset(self.idom, none_u32);
-        @memset(self.is_merge, false);
-        @memset(self.is_loop, false);
-        @memset(self.loop_of, none_u32);
-        @memset(self.loop_recompute, false);
-
-        // Flatten the intrusive `next` chain ONCE (count, then fill — the same
-        // two-pass shape as `dom_kids`, so the pool never grows). Every later
-        // walk in `prepare` reads `blockInstsFlat` instead. Order is the chain
-        // order, which is emission order and therefore load-bearing.
-        self.inst_off = try a.alloc(u32, nb + 1);
-        var n_insts: u32 = 0;
-        for (0..nb) |bi| {
-            self.inst_off[bi] = n_insts;
-            var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
-            while (it.next()) |_| n_insts += 1;
-        }
-        self.inst_off[nb] = n_insts;
-        self.inst_pool = try a.alloc(Mir.Inst, n_insts);
-        var ki: u32 = 0;
-        for (0..nb) |bi| {
-            var it = self.mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
-            while (it.next()) |inst| {
-                self.inst_pool[ki] = inst;
-                ki += 1;
-            }
-        }
-
-        // Terminator + successors. ssa.zig warns that a phi may sit ANYWHERE in
-        // the chain (created on demand), so the terminator is found by opcode,
-        // not by position.
-        var pred_count = try a.alloc(u32, nb);
-        @memset(pred_count, 0);
-        for (0..nb) |bi| {
-            self.term[bi] = .none;
-            var s: [2]u32 = undefined;
-            var ns: usize = 0;
-            for (self.blockInstsFlat(@intCast(bi))) |inst| switch (self.mir.instOp(inst)) {
-                .branch => {
-                    const d = self.mir.instData(inst).branch;
-                    self.term[bi] = inst;
-                    s[0] = @intFromEnum(d.then_block);
-                    s[1] = @intFromEnum(d.else_block);
-                    ns = 2;
-                },
-                .jump => {
-                    self.term[bi] = inst;
-                    s[0] = @intFromEnum(self.mir.instData(inst).jump.target);
-                    ns = 1;
-                },
-                else => {},
-            };
-            self.succs[bi] = try a.dupe(u32, s[0..ns]);
-        }
-
-        // Reachability + postorder (iterative DFS, successor order = branch
-        // order ⇒ deterministic).
-        var post = try a.alloc(u32, nb);
-        var n_post: u32 = 0;
-        {
-            var seen = try a.alloc(bool, nb);
-            @memset(seen, false);
-            const Frame = struct { b: u32, i: u32 };
-            var stack: std.ArrayList(Frame) = .empty;
-            defer stack.deinit(a);
-            try stack.append(a, .{ .b = 0, .i = 0 });
-            seen[0] = true;
-            while (stack.items.len != 0) {
-                const top = &stack.items[stack.items.len - 1];
-                if (top.i < self.succs[top.b].len) {
-                    const s = self.succs[top.b][top.i];
-                    top.i += 1;
-                    if (!seen[s]) {
-                        seen[s] = true;
-                        try stack.append(a, .{ .b = s, .i = 0 });
-                    }
-                } else {
-                    post[n_post] = top.b;
-                    n_post += 1;
-                    _ = stack.pop();
-                }
-            }
-        }
-        for (post[0..n_post], 0..) |bi, i| self.rpo_num[bi] = n_post - 1 - @as(u32, @intCast(i));
-        self.rpo = try a.alloc(u32, n_post);
-        for (post[0..n_post], 0..) |bi, i| self.rpo[n_post - 1 - i] = bi;
-
-        // Predecessors (reachable only).
-        for (0..nb) |bi| {
-            if (self.rpo_num[bi] == none_u32) continue;
-            for (self.succs[bi]) |s| pred_count[s] += 1;
-        }
-        for (0..nb) |bi| self.preds[bi] = try a.alloc(u32, pred_count[bi]);
-        @memset(pred_count, 0);
-        for (self.rpo) |bi| {
-            for (self.succs[bi]) |s| {
-                self.preds[s][pred_count[s]] = bi;
-                pred_count[s] += 1;
-            }
-        }
-        for (0..nb) |bi| self.is_merge[bi] = self.preds[bi].len > 1;
-        self.is_merge[0] = false; // entry is never re-entered
-
-        // Cooper/Harvey/Kennedy iterative dominators over reverse postorder.
-        self.idom[0] = 0;
-        var changed = true;
-        while (changed) {
-            changed = false;
-            for (self.rpo[1..]) |bi| {
-                var new: u32 = none_u32;
-                for (self.preds[bi]) |p| {
-                    if (self.idom[p] == none_u32 and p != 0) continue;
-                    new = if (new == none_u32) p else self.intersect(new, p);
-                }
-                if (new != none_u32 and self.idom[bi] != new) {
-                    self.idom[bi] = new;
-                    changed = true;
-                }
-            }
-        }
-
-        // Dominator children, in RPO order (deterministic emission order).
-        var kid_count = try a.alloc(u32, nb);
-        @memset(kid_count, 0);
-        for (self.rpo[1..]) |bi| kid_count[self.idom[bi]] += 1;
-        self.dom_kids = try a.alloc([]u32, nb);
-        for (0..nb) |bi| self.dom_kids[bi] = try a.alloc(u32, kid_count[bi]);
-        @memset(kid_count, 0);
-        for (self.rpo[1..]) |bi| {
-            const p = self.idom[bi];
-            self.dom_kids[p][kid_count[p]] = bi;
-            kid_count[p] += 1;
-        }
-
-        // Merge-block dominator children, flattened in the same order the
-        // per-unit rebuild produced.
-        self.mk_off = try a.alloc(u32, nb + 1);
-        var n_mk: u32 = 0;
-        for (0..nb) |bi| {
-            self.mk_off[bi] = n_mk;
-            for (self.dom_kids[bi]) |k| {
-                if (self.is_merge[k]) n_mk += 1;
-            }
-        }
-        self.mk_off[nb] = n_mk;
-        self.mk_pool = try a.alloc(u32, n_mk);
-        var mk: u32 = 0;
-        for (0..nb) |bi| {
-            for (self.dom_kids[bi]) |k| {
-                if (self.is_merge[k]) {
-                    self.mk_pool[mk] = k;
-                    mk += 1;
-                }
-            }
-        }
-
-        // Euler tour of the dominator tree (explicit stack: 600 K-line models
-        // nest deeply enough to blow a recursive walk).
-        self.dom_in = try a.alloc(u32, nb);
-        self.dom_out = try a.alloc(u32, nb);
-        @memset(self.dom_in, none_u32);
-        @memset(self.dom_out, none_u32);
-        const Frame = struct { node: u32, kid: u32 };
-        const stack = try a.alloc(Frame, nb);
-        var sp: usize = 1;
-        var clock: u32 = 0;
-        stack[0] = .{ .node = 0, .kid = 0 };
-        self.dom_in[0] = clock;
-        clock += 1;
-        while (sp > 0) {
-            const f = &stack[sp - 1];
-            const kids = self.dom_kids[f.node];
-            if (f.kid < kids.len) {
-                const k = kids[f.kid];
-                f.kid += 1;
-                self.dom_in[k] = clock;
-                clock += 1;
-                stack[sp] = .{ .node = k, .kid = 0 };
-                sp += 1;
-            } else {
-                self.dom_out[f.node] = clock;
-                clock += 1;
-                sp -= 1;
-            }
-        }
-
-        // Per-block phi and statement pools, counted then filled (same two-pass
-        // shape as `dom_kids`, so neither pool needs to grow).
-        self.phi_off = try a.alloc(u32, nb + 1);
-        self.stmt_off = try a.alloc(u32, nb + 1);
-        var n_phis: u32 = 0;
-        var n_stmts: u32 = 0;
-        for (0..nb) |bi| {
-            self.phi_off[bi] = n_phis;
-            self.stmt_off[bi] = n_stmts;
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
-                if (self.livePhi(inst)) n_phis += 1;
-                if (self.liveStmt(inst)) n_stmts += 1;
-            }
-        }
-        self.phi_off[nb] = n_phis;
-        self.stmt_off[nb] = n_stmts;
-        self.phi_pool = try a.alloc(Mir.Inst, n_phis);
-        self.stmt_pool = try a.alloc(Mir.Inst, n_stmts);
-        var kp: u32 = 0;
-        var ks: u32 = 0;
-        for (0..nb) |bi| {
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
-                if (self.livePhi(inst)) {
-                    self.phi_pool[kp] = inst;
-                    kp += 1;
-                }
-                if (self.liveStmt(inst)) {
-                    self.stmt_pool[ks] = inst;
-                    ks += 1;
-                }
-            }
-        }
-
-        // A loop header dominates at least one of its predecessors (back edge).
-        for (self.rpo) |bi| {
-            for (self.preds[bi]) |p| {
-                if (self.dominates(bi, p)) self.is_loop[bi] = true;
-            }
-        }
-
-        // The NATURAL LOOP BODY of every header, for the §5.9 `loop_recompute`
-        // fixpoint and for `edgeAct`'s `inLoop` guard. Standard construction:
-        // walk predecessors backwards from each back edge, stopping at the
-        // header; every block reached is inside that loop.
-        //
-        // NOT "everything the header dominates": that also covers the region
-        // past the loop's exit, so a model whose analog block opens with a `for`
-        // would lose hoisting for its entire body — which is the 182 MB output
-        // the shared core exists to prevent.
-        //
-        // `rpo` visits an outer header before an inner one, and the first write
-        // wins, so `loop_of` ends up naming the OUTERMOST nest. That is what
-        // makes a nest one decision: re-materializing an inner loop needs the
-        // outer loop's structure too, so they stand or fall together.
-        var body: std.ArrayList(u32) = .empty;
-        defer body.deinit(self.arena);
-        for (self.rpo) |h| {
-            if (!self.is_loop[h]) continue;
-            if (self.loop_of[h] == none_u32) self.loop_of[h] = h;
-            for (self.preds[h]) |p| {
-                if (!self.dominates(h, p)) continue; // not a back edge
-                if (self.loop_of[p] != none_u32 and p != h) continue;
-                if (p != h) {
-                    self.loop_of[p] = self.loop_of[h];
-                    try body.append(self.arena, p);
-                }
-                while (body.pop()) |cur| {
-                    for (self.preds[cur]) |q| {
-                        if (self.loop_of[q] != none_u32) continue;
-                        self.loop_of[q] = self.loop_of[h];
-                        try body.append(self.arena, q);
-                    }
-                }
-            }
-        }
-    }
-
-    fn intersect(self: *const Gen, x0: u32, y0: u32) u32 {
-        var x = x0;
-        var y = y0;
-        while (x != y) {
-            while (self.rpo_num[x] > self.rpo_num[y]) x = self.idom[x];
-            while (self.rpo_num[y] > self.rpo_num[x]) y = self.idom[y];
-        }
-        return x;
-    }
-
-    /// `a` dominates `x` iff `x` sits inside `a`'s Euler-tour interval. Blocks
-    /// outside the dominator tree (unreachable) dominate only themselves.
-    fn dominates(self: *const Gen, a: u32, x: u32) bool {
-        const ia = self.dom_in[a];
-        const ix = self.dom_in[x];
-        if (ia == none_u32 or ix == none_u32) return a == x;
-        return ia <= ix and self.dom_out[x] <= self.dom_out[a];
-    }
-
-    // -------------------------------------------------------------- values ----
-
-    fn buildValueTypes(self: *Gen) Error!void {
-        const a = self.arena;
-        self.vty = try a.alloc(VTy, self.nv); // `nv` was set in `prepare`
-        self.def_block = try a.alloc(u32, self.nv);
-        @memset(self.def_block, none_u32);
-        for (self.vty) |*t| t.* = .real;
-
-        for (0..self.nb) |bi| {
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
-                const r = self.mir.instResult(inst);
-                if (r == .undef) continue;
-                self.def_block[@intFromEnum(r)] = @intCast(bi);
-            }
-        }
-
-        // Base pass: constants and opcodes decide themselves.
-        var v: u32 = 0;
-        while (v < self.nv) : (v += 1) {
-            const val: Mir.Value = @enumFromInt(v);
-            self.vty[v] = switch (self.mir.valueDef(val)) {
-                .undef => .real,
-                .float_const => .real,
-                .int_const => .int,
-                .str_const => .str,
-                .param_ref => |p| tyOfParam(self.lower.params.items[p].ty),
-                .block_param => .real,
-                .inst_result => |inst| blk: {
-                    const op = self.mir.instOp(inst);
-                    if (op == .call) break :blk callTy(self.mir.instData(inst).call.name);
-                    if (op == .phi or op == .select) break :blk .real; // refined below
-                    break :blk if (Mir.opIsInteger(op)) .int else .real;
-                },
-            };
-        }
-        // Refine `select` and `phi` from their operands. Two sweeps in value
-        // order settle every acyclic chain; a loop-carried phi keeps `.real`,
-        // and a wrong guess only costs a redundant §4.2.1 conversion.
-        var round: u32 = 0;
-        while (round < 2) : (round += 1) {
-            v = Mir.Value.first_dynamic;
-            while (v < self.nv) : (v += 1) {
-                const val: Mir.Value = @enumFromInt(v);
-                const def = self.mir.valueDef(val);
-                if (def != .inst_result) continue;
-                const inst = def.inst_result;
-                switch (self.mir.instOp(inst)) {
-                    .select => {
-                        const d = self.mir.instData(inst).ternary;
-                        self.vty[v] = self.vty[@intFromEnum(self.rv(d.then_val))];
-                    },
-                    .phi => {
-                        const d = self.mir.instData(inst).phi;
-                        if (d.count == 0) continue;
-                        const first = self.rv(self.mir.phiPair(inst, 0).value);
-                        if (first == .undef) continue;
-                        self.vty[v] = self.vty[@intFromEnum(first)];
-                    },
-                    else => {},
-                }
-            }
-        }
-
-        // Cleared here once; every later unit clears only its own live set.
-        self.needed = try a.alloc(bool, self.nv);
-        self.eager_use = try a.alloc(u32, self.nv);
-        self.arm_use = try a.alloc(u32, self.nv);
-        self.inlined = try a.alloc(bool, self.nv);
-        self.slot = try a.alloc(u32, self.nv);
-        @memset(self.needed, false);
-        @memset(self.eager_use, 0);
-        @memset(self.arm_use, 0);
-        @memset(self.inlined, false);
-        @memset(self.slot, none_u32);
-        // Per-BLOCK, not per-value: a whole `@memset` of these per unit is a few
-        // KB, nothing like the `0..nv` per-unit sweeps that were deleted.
-        self.blk_work = try a.alloc(bool, self.nb);
-        self.blk_phi = try a.alloc(bool, self.nb);
-        self.dead_branch = try a.alloc(bool, self.nb);
-    }
-
-    fn tyOf(self: *const Gen, v: Mir.Value) VTy {
-        return self.vty[@intFromEnum(v)];
-    }
 
     // --------------------------------------------------------------- units ----
 
@@ -1007,8 +563,8 @@ const Gen = struct {
         self.op_unit = try a.alloc(u32, self.mir.insts.len);
         @memset(self.op_unit, none_u32);
         var next = self.lower.contributions.items.len;
-        for (0..self.nb) |bi| {
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
+        for (0..self.an.nb) |bi| {
+            for (self.an.blockInstsFlat(@intCast(bi))) |inst| {
                 if (self.mir.instOp(inst) != .call) continue;
                 if (opKind(self.mir.instData(inst).call.name) == .none) continue;
                 assert(next < self.units.len);
@@ -1120,13 +676,13 @@ const Gen = struct {
         @memset(self.p_given, false);
         // §9.19 $param_given(p): the flag lives in Model, but only for the
         // parameters actually asked about.
-        for (0..self.nb) |bi| {
-            for (self.blockInstsFlat(@intCast(bi))) |inst| {
+        for (0..self.an.nb) |bi| {
+            for (self.an.blockInstsFlat(@intCast(bi))) |inst| {
                 if (self.mir.instOp(inst) != .call) continue;
                 const d = self.mir.instData(inst).call;
                 if (!std.mem.eql(u8, d.name, "$param_given")) continue;
                 if (d.args.len == 0) continue;
-                const def = self.mir.valueDef(self.rv(d.args[0]));
+                const def = self.mir.valueDef(self.an.rv(d.args[0]));
                 if (def == .param_ref) self.p_given[def.param_ref] = true;
             }
         }
@@ -1343,12 +899,12 @@ const Gen = struct {
     fn emitModel(self: *Gen) Error!void {
         try self.w("/// §3.4 module parameters (spec defaults folded at compile time).\npub const Model = struct {{\n", .{});
         for (self.lower.params.items, 0..) |p, i| {
-            const ty: []const u8 = switch (tyOfParam(p.ty)) {
+            const ty: []const u8 = switch (Analysis.tyOfParam(p.ty)) {
                 .real => "f64",
                 .int => "i64",
                 .str => "[]const u8",
             };
-            try self.w("    {s}: {s} = {s},\n", .{ self.p_names[i], ty, try self.paramDefault(p, tyOfParam(p.ty)) });
+            try self.w("    {s}: {s} = {s},\n", .{ self.p_names[i], ty, try self.paramDefault(p, Analysis.tyOfParam(p.ty)) });
             if (self.p_given[i]) {
                 try self.w("    {s}__given: bool = false, // §9.19 $param_given\n", .{self.p_names[i]});
             }
@@ -1365,7 +921,7 @@ const Gen = struct {
             .real => try self.fmtF64(if (c) |k| k.f else 0.0),
             .int => try std.fmt.allocPrint(self.arena, "{d}", .{if (c) |k| @as(i64, @intFromFloat(@round(k.f))) else 0}),
             .str => blk: {
-                const def = self.mir.valueDef(self.rv(p.default));
+                const def = self.mir.valueDef(self.an.rv(p.default));
                 break :blk if (def == .str_const)
                     try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(def.str_const)})
                 else
@@ -1381,7 +937,7 @@ const Gen = struct {
     /// arguments. Anything touching an unknown or a call is not constant.
     fn foldConst(self: *const Gen, v0: Mir.Value, depth: u32, resolve_params: bool) ?Folded {
         if (depth > 32) return null;
-        const v = self.rv(v0);
+        const v = self.an.rv(v0);
         switch (self.mir.valueDef(v)) {
             .float_const => |x| return .{ .f = x },
             .int_const => |x| return .{ .f = @floatFromInt(x) },
@@ -1537,7 +1093,7 @@ const Gen = struct {
             // (`f64Expr`/`argF64`), because a struct field default is a comptime
             // value and a model card is not. Upgrade path: write it in
             // `initState`, which already takes a mutable `*Instance`.
-            const init = self.foldConst(self.rv(h.init), 0, true);
+            const init = self.foldConst(self.an.rv(h.init), 0, true);
             const v: f64 = if (init) |c| c.f else 0.0;
             if (h.ty == .integer) {
                 try self.w("    {s}: i64 = {d}, // §5.10 held across evaluations\n", .{
@@ -1602,8 +1158,8 @@ const Gen = struct {
                     "the potential/flow pair a nodal device stamps",
                 .{net},
             ) else null;
-            const resist = self.rv(c.resist_val);
-            const react = self.rv(c.react_val);
+            const resist = self.an.rv(c.resist_val);
+            const react = self.an.rv(c.react_val);
             if (resist != .f_zero) try jobs.append(self.arena, .{
                 .name = self.unit_names[i],
                 .target = resist,
@@ -1626,7 +1182,7 @@ const Gen = struct {
             const k = opKind(u.target);
             try jobs.append(self.arena, .{
                 .name = self.unit_names[i],
-                .target = if (args.len == 0) Mir.Value.f_zero else self.rv(args[0]),
+                .target = if (args.len == 0) Mir.Value.f_zero else self.an.rv(args[0]),
                 .mode = self.unitMode(i),
                 .comment = switch (k) {
                     .bound_step, .discontinuity => "§9.17 analog kernel control request",
@@ -1644,7 +1200,7 @@ const Gen = struct {
         for (self.lower.held_vars.items, 0..) |h, i| {
             try jobs.append(self.arena, .{
                 .name = self.held_names[i],
-                .target = self.rv(h.final),
+                .target = self.an.rv(h.final),
                 .mode = .strict,
                 .comment = "§5.10 event-assigned variable, held across evaluations",
             });
@@ -1656,7 +1212,7 @@ const Gen = struct {
         // `.strict` unconditionally: proof.zig rates contributions only, a print
         // is not on the residual path, so there is nothing here for `.optimized`
         // to speed up and no verdict that would justify claiming it.
-        const root = self.rv(self.lower.display_root);
+        const root = self.an.rv(self.lower.display_root);
         if (self.display == .emit and root != .f_zero) {
             var buf: [naming.max_name_len]u8 = undefined;
             const n = naming.unitName(&buf, self.mir.name, .{
@@ -1760,7 +1316,7 @@ const Gen = struct {
         const at_inst = self.out.items.len;
         try self.w("inst: *const Instance) struct {{\n", .{});
         for (self.lo_vals, 0..) |v, k| {
-            try self.w("    f{d}: {s},\n", .{ k, zigTy(self.vty[@intFromEnum(v)]) });
+            try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
         }
         try self.w("}} {{\n", .{});
         // §4.3: the STRICTEST mode of every consumer — `proof.FloatMode.strictest`
@@ -1804,7 +1360,7 @@ const Gen = struct {
     fn opInputIdx(self: *const Gen, i: u32) u32 {
         const args = self.opArgs(i);
         if (args.len == 0) return none_u32;
-        return self.lo_idx[@intFromEnum(self.rv(args[0]))];
+        return self.lo_idx[@intFromEnum(self.an.rv(args[0]))];
     }
 
     /// Emit one source-unit function. LRM §5.6/§4.7/§5.3.
@@ -1893,9 +1449,9 @@ const Gen = struct {
         for (self.live.items) |lv| {
             const v = @intFromEnum(lv);
             if (self.cached(lv)) continue; // computed by the core, not here
-            const blk = self.def_block[v];
+            const blk = self.an.def_block[v];
             if (blk == none_u32) continue;
-            const l = self.loop_of[blk];
+            const l = self.an.loop_of[blk];
             if (l == none_u32 or self.loop_recompute[l]) continue;
             self.loop_recompute[l] = true;
             grew = true;
@@ -1955,12 +1511,12 @@ const Gen = struct {
             while (true) {
                 self.planDeadBranches();
                 var grew = false;
-                for (self.rpo) |bi| {
-                    const t = self.term[bi];
+                for (self.an.rpo) |bi| {
+                    const t = self.an.term[bi];
                     if (t == .none) continue;
                     if (self.mir.instOp(t) != .branch) continue;
                     if (self.dead_branch[bi]) continue;
-                    const cond = self.rv(self.mir.instData(t).branch.cond);
+                    const cond = self.an.rv(self.mir.instData(t).branch.cond);
                     if (self.needed[@intFromEnum(cond)]) continue;
                     try self.mark(&work, cond);
                     grew = true;
@@ -2023,7 +1579,7 @@ const Gen = struct {
             // (the one unit not folded into the core) emits `c.f1` with no `c`.
             const d = self.mir.instData(def.inst_result);
             if (d == .call and opNeedsInput(opKind(d.call.name)) and d.call.args.len != 0 and
-                self.cached(self.rv(d.call.args[0]))) self.uses_cache = true;
+                self.cached(self.an.rv(d.call.args[0]))) self.uses_cache = true;
             self.slot[v] = self.n_slots;
             self.n_slots += 1;
         }
@@ -2043,7 +1599,7 @@ const Gen = struct {
         for (self.live.items) |lv| {
             const v = @intFromEnum(lv);
             if (v < Mir.Value.first_dynamic) continue;
-            const db = self.def_block[v];
+            const db = self.an.def_block[v];
             if (db == none_u32) continue;
             // A phi marks its block EVEN WHEN CACHED. `blk_phi` means "the two
             // arms disagree at this SSA join", which is a property of the CFG
@@ -2051,14 +1607,14 @@ const Gen = struct {
             // result out of the cache. Measured: with a `cached` skip here,
             // `hisimhv_va` moved 4 000 of 128 000 residual entries.
             const def = self.mir.valueDef(lv);
-            if (def == .inst_result and self.i_op[@intFromEnum(def.inst_result)] == .phi)
+            if (def == .inst_result and self.an.i_op[@intFromEnum(def.inst_result)] == .phi)
                 self.blk_phi[db] = true;
             if (self.cached(lv)) continue; // a cache read has no block of its own
             self.blk_work[db] = true;
         }
         @memset(self.dead_branch, false);
-        for (self.rpo) |bi| {
-            const t = self.term[bi];
+        for (self.an.rpo) |bi| {
+            const t = self.an.term[bi];
             if (t == .none or self.mir.instOp(t) != .branch) continue;
             const d = self.mir.instData(t).branch;
             const a = self.edgeAct(bi, @intFromEnum(d.then_block)) orelse continue;
@@ -2076,12 +1632,12 @@ const Gen = struct {
         var from = from0;
         var to = to0;
         var hops: u32 = 0;
-        while (hops <= self.nb) : (hops += 1) {
+        while (hops <= self.an.nb) : (hops += 1) {
             // A phi in `to` means `emitEdge` copies a value on this edge, which
             // is the one thing the two arms cannot share.
             if (self.blk_phi[to]) return null;
-            if (self.is_loop[to] and self.dominates(to, from)) return .{ .cont = to };
-            if (self.is_merge[to]) return .{ .brk = to };
+            if (self.an.is_loop[to] and self.an.dominates(to, from)) return .{ .cont = to };
+            if (self.an.is_merge[to]) return .{ .brk = to };
             // Otherwise `to` is emitted INLINE here, so it has to be empty and
             // end in a plain jump for the two arms to stay indistinguishable.
             //
@@ -2093,9 +1649,9 @@ const Gen = struct {
             // NOT interchangeable. It is the same hazard `markRecomputedLoops`
             // re-materializes a loop for. Measured: without this clause,
             // `hisimhv_va` moved 4 000 of 128 000 residual entries.
-            if (self.is_loop[to] or self.inLoop(to) or self.blk_work[to]) return null;
-            if (self.mk_off[to + 1] != self.mk_off[to]) return null; // opens labels
-            const t = self.term[to];
+            if (self.an.is_loop[to] or self.an.inLoop(to) or self.blk_work[to]) return null;
+            if (self.an.mk_off[to + 1] != self.an.mk_off[to]) return null; // opens labels
+            const t = self.an.term[to];
             if (t == .none or self.mir.instOp(t) != .jump) return null;
             from = to;
             to = @intFromEnum(self.mir.instData(t).jump.target);
@@ -2116,7 +1672,7 @@ const Gen = struct {
     }
 
     fn mark(self: *Gen, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!void {
-        const v = self.rv(v0);
+        const v = self.an.rv(v0);
         if (self.needed[@intFromEnum(v)]) return;
         self.needed[@intFromEnum(v)] = true;
         try self.live.append(self.arena, v);
@@ -2155,7 +1711,7 @@ const Gen = struct {
         if (self.emitting_common) {
             for (self.lo_vals) |v| self.eager_use[@intFromEnum(v)] += 1;
         } else {
-            self.eager_use[@intFromEnum(self.rv(target))] += 1;
+            self.eager_use[@intFromEnum(self.an.rv(target))] += 1;
         }
         for (self.live.items) |lv| {
             if (self.cached(lv)) continue; // a leaf: its operands are not here
@@ -2164,15 +1720,15 @@ const Gen = struct {
             self.addUses(def.inst_result, false);
         }
         if (self.straight) return;
-        for (self.rpo) |bi| {
-            const t = self.term[bi];
+        for (self.an.rpo) |bi| {
+            const t = self.an.term[bi];
             if (t == .none) continue;
             if (self.mir.instOp(t) != .branch) continue;
             // A dead branch emits no `if`, so its condition has no use here. It
             // must not be counted, or the value would be slotted and assigned
             // with nothing reading it — which Zig rejects.
             if (self.dead_branch[bi]) continue;
-            self.eager_use[@intFromEnum(self.rv(self.mir.instData(t).branch.cond))] += 1;
+            self.eager_use[@intFromEnum(self.an.rv(self.mir.instData(t).branch.cond))] += 1;
         }
     }
 
@@ -2181,7 +1737,7 @@ const Gen = struct {
     fn addUses(self: *Gen, inst: Mir.Inst, undo: bool) void {
         const bump = struct {
             fn f(g: *Gen, v: Mir.Value, arm: bool, un: bool) void {
-                const i = @intFromEnum(g.rv(v));
+                const i = @intFromEnum(g.an.rv(v));
                 if (!g.needed[i]) return;
                 if (un) {
                     if (arm) return; // already an arm use
@@ -2242,11 +1798,11 @@ const Gen = struct {
     /// So this must NOT call `reattribute`: the operands stay eager because the
     /// expression is still evaluated exactly once, eagerly, one statement later.
     fn fuseSingleUse(self: *Gen) void {
-        for (0..self.nb) |bi| {
-            const stmts = self.stmt_pool[self.stmt_off[bi]..self.stmt_off[bi + 1]];
+        for (0..self.an.nb) |bi| {
+            const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
             if (stmts.len < 2) continue;
             for (stmts[0 .. stmts.len - 1], stmts[1..]) |inst, next| {
-                const v = @intFromEnum(self.rv(self.i_res[@intFromEnum(inst)]));
+                const v = @intFromEnum(self.an.rv(self.an.i_res[@intFromEnum(inst)]));
                 if (v < Mir.Value.first_dynamic) continue;
                 if (!self.needed[v] or self.inlined[v]) continue;
                 if (self.eager_use[v] != 1 or self.arm_use[v] != 0) continue;
@@ -2272,12 +1828,12 @@ const Gen = struct {
     /// arms are lazy positions, which is `arm_use`, not this.
     fn eagerlyUses(self: *const Gen, inst: Mir.Inst, v: Mir.Value) bool {
         return switch (self.mir.instData(inst)) {
-            .unary => |d| self.rv(d.operand) == v,
-            .binary => |d| self.rv(d.lhs) == v or
-                (!self.foldedExponent(d) and self.rv(d.rhs) == v),
-            .ternary => |d| self.rv(d.cond) == v,
+            .unary => |d| self.an.rv(d.operand) == v,
+            .binary => |d| self.an.rv(d.lhs) == v or
+                (!self.foldedExponent(d) and self.an.rv(d.rhs) == v),
+            .ternary => |d| self.an.rv(d.cond) == v,
             .call => |d| for (d.args, 0..) |a, i| {
-                if (callArgIsValue(d.name, i, self.display) and self.rv(a) == v) break true;
+                if (callArgIsValue(d.name, i, self.display) and self.an.rv(a) == v) break true;
             } else false,
             else => false,
         };
@@ -2318,7 +1874,7 @@ const Gen = struct {
         const s = self.slot[i];
         const h = if (s < self.hoist_idx.items.len) self.hoist_idx.items[s] else none_u32;
         if (h == none_u32) return self.b("t{d}", .{s});
-        return self.b("{s}[{d}]", .{ hoistArray(self.vty[i]), h });
+        return self.b("{s}[{d}]", .{ hoistArray(self.an.vty[i]), h });
     }
 
     fn zeroOf(t: VTy) []const u8 {
@@ -2344,7 +1900,7 @@ const Gen = struct {
             // has no block of its own — which is what collapses most units to a
             // flat body once the shared core is hoisted out of them.
             if (self.cached(lv)) continue;
-            const db = self.def_block[v];
+            const db = self.an.def_block[v];
             if (db != none_u32 and db != 0) return false;
             const def = self.mir.valueDef(lv);
             if (def == .inst_result and self.mir.instOp(def.inst_result) == .phi) return false;
@@ -2501,7 +2057,7 @@ const Gen = struct {
         // contribution accumulator with `.f_zero`.
         // Pinned by tests/fixtures/exhaustive/069_conditional_operator_state.va.
         try self.probeBody(target);
-        const ret = self.rv(target);
+        const ret = self.an.rv(target);
 
         // One array per type instead of one `var` per slot. Two passes: assign
         // every survivor its index first, so the array lengths are known before
@@ -2523,7 +2079,7 @@ const Gen = struct {
             // the emitted tree reaches neither end of it. Declaring it would be
             // an unused local.
             if (p.defs == 0 and p.uses == 0) continue;
-            const ty = @intFromEnum(self.vty[v]);
+            const ty = @intFromEnum(self.an.vty[v]);
             self.hoist_idx.items[self.slot[v]] = n_hoist[ty];
             n_hoist[ty] += 1;
             const returned = if (self.emitting_common) self.lo_idx[v] != none_u32 else lv == ret;
@@ -2539,7 +2095,7 @@ const Gen = struct {
             const v = @intFromEnum(lv);
             try self.ind(1);
             try self.writeSlotRef(v);
-            try self.b(" = {s};\n", .{zeroOf(self.vty[v])});
+            try self.b(" = {s};\n", .{zeroOf(self.an.vty[v])});
         }
         try self.emitTree(0, 1, target);
     }
@@ -2559,7 +2115,7 @@ const Gen = struct {
         for (self.lo_vals, 0..) |v, k| {
             try self.ind(depth + 1);
             try self.b(".f{d} = ", .{k});
-            try self.renderVal(v, self.vty[@intFromEnum(v)]);
+            try self.renderVal(v, self.an.vty[@intFromEnum(v)]);
             try self.b(",\n", .{});
         }
         try self.ind(depth);
@@ -2567,8 +2123,8 @@ const Gen = struct {
     }
 
     fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Error!void {
-        for (self.stmt_pool[self.stmt_off[bi]..self.stmt_off[bi + 1]]) |inst| {
-            const i = @intFromEnum(self.i_res[@intFromEnum(inst)]);
+        for (self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]]) |inst| {
+            const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
             if (!self.needed[i] or self.slot[i] == none_u32) continue;
             self.probeDef(self.slot[i], true);
             // `or` short-circuits, so the straight-line path (`decl`, which runs
@@ -2576,7 +2132,7 @@ const Gen = struct {
             const at_def = decl or self.place.items[self.slot[i]].at_def;
             try self.ind(depth);
             if (at_def) {
-                try self.b("const t{d}: {s} = ", .{ self.slot[i], zigTy(self.vty[i]) });
+                try self.b("const t{d}: {s} = ", .{ self.slot[i], zigTy(self.an.vty[i]) });
             } else {
                 try self.writeSlotRef(i);
                 try self.b(" = ", .{});
@@ -2587,7 +2143,7 @@ const Gen = struct {
     }
 
     fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
-        if (self.is_loop[bi]) {
+        if (self.an.is_loop[bi]) {
             try self.ind(depth);
             try self.b("L{d}: while (true) {{\n", .{bi});
             try self.scopeOpen();
@@ -2601,7 +2157,7 @@ const Gen = struct {
     }
 
     fn emitCode(self: *Gen, bi: u32, depth0: u32, target: Mir.Value) Error!void {
-        const mc = self.mk_pool[self.mk_off[bi]..self.mk_off[bi + 1]];
+        const mc = self.an.mk_pool[self.an.mk_off[bi]..self.an.mk_off[bi + 1]];
         var depth = depth0;
         // Where the INNERMOST label (`mc[0]`, opened last) begins — the peephole
         // below rewinds to it.
@@ -2659,7 +2215,7 @@ const Gen = struct {
     }
 
     fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
-        const t = self.term[bi];
+        const t = self.an.term[bi];
         if (t == .none) {
             // The block lowering ended in: the contribution accumulators are
             // read here (§5.6.1.3).
@@ -2693,8 +2249,8 @@ const Gen = struct {
     }
 
     fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
-        const v = self.rv(cond);
-        if (self.tyOf(v) == .int) {
+        const v = self.an.rv(cond);
+        if (self.an.tyOf(v) == .int) {
             try self.renderVal(v, .int);
             try self.b(" != 0", .{});
         } else {
@@ -2706,10 +2262,10 @@ const Gen = struct {
 
     fn emitEdge(self: *Gen, from: u32, to: u32, depth: u32, target: Mir.Value) Error!void {
         try self.emitPhiCopies(from, to, depth);
-        if (self.is_loop[to] and self.dominates(to, from)) {
+        if (self.an.is_loop[to] and self.an.dominates(to, from)) {
             try self.ind(depth);
             try self.b("continue :L{d};\n", .{to});
-        } else if (self.is_merge[to]) {
+        } else if (self.an.is_merge[to]) {
             try self.ind(depth);
             try self.b("break :B{d};\n", .{to});
         } else {
@@ -2721,7 +2277,7 @@ const Gen = struct {
     /// `to` has more than one live phi, so a phi reading another phi of the same
     /// block (the swap idiom) cannot lose a copy.
     fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
-        const phis = self.phi_pool[self.phi_off[to]..self.phi_off[to + 1]];
+        const phis = self.an.phi_pool[self.an.phi_off[to]..self.an.phi_off[to + 1]];
         var n: u32 = 0;
         for (phis) |inst| {
             if (self.slotted(inst)) n += 1;
@@ -2736,16 +2292,16 @@ const Gen = struct {
         var k: u32 = 0;
         for (phis) |inst| {
             if (!self.slotted(inst)) continue;
-            const i = @intFromEnum(self.i_res[@intFromEnum(inst)]);
+            const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
             try self.ind(d2);
             if (par) {
-                try self.b("const c{d}: {s} = ", .{ k, zigTy(self.vty[i]) });
+                try self.b("const c{d}: {s} = ", .{ k, zigTy(self.an.vty[i]) });
             } else {
                 self.probeDef(self.slot[i], false);
                 try self.writeSlotRef(i);
                 try self.b(" = ", .{});
             }
-            try self.renderVal(self.phiIn(inst, from), self.vty[i]);
+            try self.renderVal(self.an.phiIn(inst, from), self.an.vty[i]);
             try self.b(";\n", .{});
             k += 1;
         }
@@ -2754,8 +2310,8 @@ const Gen = struct {
         for (phis) |inst| {
             if (!self.slotted(inst)) continue;
             try self.ind(d2);
-            self.probeDef(self.slot[@intFromEnum(self.i_res[@intFromEnum(inst)])], false);
-            try self.writeSlotRef(@intFromEnum(self.i_res[@intFromEnum(inst)]));
+            self.probeDef(self.slot[@intFromEnum(self.an.i_res[@intFromEnum(inst)])], false);
+            try self.writeSlotRef(@intFromEnum(self.an.i_res[@intFromEnum(inst)]));
             try self.b(" = c{d};\n", .{k});
             k += 1;
         }
@@ -2763,40 +2319,14 @@ const Gen = struct {
         try self.b("}}\n", .{});
     }
 
-    /// A phi whose result survives aliasing — the `phi_pool` filter, CFG-wide.
-    fn livePhi(self: *const Gen, inst: Mir.Inst) bool {
-        if (self.i_op[@intFromEnum(inst)] != .phi) return false;
-        const r = self.i_res[@intFromEnum(inst)];
-        return self.rv(r) == r;
-    }
 
-    /// The `stmt_pool` filter: everything a unit body may emit as a statement.
-    /// Phis are block headers, terminators are `emitTerm`'s, and an aliased
-    /// result was rewritten away by ssa.zig.
-    fn liveStmt(self: *const Gen, inst: Mir.Inst) bool {
-        switch (self.i_op[@intFromEnum(inst)]) {
-            .phi, .branch, .jump => return false,
-            else => {},
-        }
-        const r = self.i_res[@intFromEnum(inst)];
-        return r != .undef and self.rv(r) == r;
-    }
 
     /// A pooled phi this unit actually materializes into a local slot.
     fn slotted(self: *const Gen, inst: Mir.Inst) bool {
-        const i = @intFromEnum(self.i_res[@intFromEnum(inst)]);
+        const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
         return self.needed[i] and self.slot[i] != none_u32;
     }
 
-    fn phiIn(self: *const Gen, inst: Mir.Inst, from: u32) Mir.Value {
-        const d = self.mir.instData(inst).phi;
-        var i: u32 = 0;
-        while (i < d.count) : (i += 1) {
-            const p = self.mir.phiPair(inst, i);
-            if (@intFromEnum(p.block) == from) return p.value;
-        }
-        return .undef;
-    }
 
     // ---- value / instruction rendering --------------------------------------
 
@@ -2821,7 +2351,7 @@ const Gen = struct {
     }
 
     fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
-        const v = self.rv(v0);
+        const v = self.an.rv(v0);
         const def = self.mir.valueDef(v);
         if (def == .undef) {
             try self.b("{s}", .{switch (want) {
@@ -2831,7 +2361,7 @@ const Gen = struct {
             }});
             return;
         }
-        if (self.tyOf(v) == want) return self.renderValueRef(v);
+        if (self.an.tyOf(v) == want) return self.renderValueRef(v);
         switch (want) {
             .real => {
                 if (def == .int_const) {
@@ -2851,7 +2381,7 @@ const Gen = struct {
                 }
                 // A string has no numeric value (§3.3); only its relations are
                 // defined, and `renderOp` handles those before getting here.
-                if (self.tyOf(v) == .str) return self.b("@as(i64, 0)", .{});
+                if (self.an.tyOf(v) == .str) return self.b("@as(i64, 0)", .{});
                 try self.b("@as(i64, @intFromFloat(@round((", .{});
                 try self.renderValueRef(v);
                 try self.b(").val())))", .{});
@@ -2867,8 +2397,8 @@ const Gen = struct {
         const i = @intFromEnum(v);
         // Hoisted: computed once by the common declaration, read here out of the
         // cache the body opened with (03-codegen.html#hoisting).
-        if (i < self.nv and self.cached(v)) return self.b("c.f{d}", .{self.lo_idx[i]});
-        if (i < self.nv and self.slot[i] != none_u32) {
+        if (i < self.an.nv and self.cached(v)) return self.b("c.f{d}", .{self.lo_idx[i]});
+        if (i < self.an.nv and self.slot[i] != none_u32) {
             self.probeUse(self.slot[i]);
             try self.writeSlotRef(i);
             return;
@@ -2880,7 +2410,7 @@ const Gen = struct {
             .str_const => |s| try self.b("\"{f}\"", .{std.zig.fmtString(s)}),
             .param_ref => |p| {
                 self.uses_model = true;
-                switch (tyOfParam(self.lower.params.items[p].ty)) {
+                switch (Analysis.tyOfParam(self.lower.params.items[p].ty)) {
                     .real => try self.b("S.con(model.{s})", .{self.p_names[p]}),
                     .int, .str => try self.b("model.{s}", .{self.p_names[p]}),
                 }
@@ -2909,7 +2439,7 @@ const Gen = struct {
         // UB under @setFloatMode(.optimized). Do not "simplify" this to a
         // select of two pre-computed values.
         if (op == .select) {
-            const want = self.vty[@intFromEnum(self.mir.instResult(inst))];
+            const want = self.an.vty[@intFromEnum(self.mir.instResult(inst))];
             try self.b("(if (", .{});
             try self.renderCond(a);
             try self.b(") ", .{});
@@ -2919,7 +2449,7 @@ const Gen = struct {
             try self.b(")", .{});
             return;
         }
-        return self.renderOp(op, a, b2, self.vty[@intFromEnum(self.mir.instResult(inst))]);
+        return self.renderOp(op, a, b2, self.an.vty[@intFromEnum(self.mir.instResult(inst))]);
     }
 
     /// One opcode, rendered. Shared with the `$`-prefixed spellings of the same
@@ -2927,7 +2457,7 @@ const Gen = struct {
     fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty: VTy) Error!void {
         // §3.3.1 string relations: lowering types both operands `.string` and
         // picks the integer comparison opcodes for them.
-        if (self.tyOf(self.rv(a)) == .str or self.tyOf(self.rv(b2)) == .str) {
+        if (self.an.tyOf(self.an.rv(a)) == .str or self.an.tyOf(self.an.rv(b2)) == .str) {
             const rel: ?[]const u8 = switch (op) {
                 .ieq, .feq => "== 0",
                 .ine, .fne => "!= 0",
@@ -3194,11 +2724,11 @@ const Gen = struct {
     fn f64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         if (depth > 32) return null;
         if (self.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
-        const v = self.rv(v0);
+        const v = self.an.rv(v0);
         switch (self.mir.valueDef(v)) {
             .param_ref => |p| {
                 self.uses_model = true;
-                return switch (tyOfParam(self.lower.params.items[p].ty)) {
+                return switch (Analysis.tyOfParam(self.lower.params.items[p].ty)) {
                     .real => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]}),
                     .int => try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(model.{s}))", .{self.p_names[p]}),
                     .str => "0.0",
@@ -3261,7 +2791,7 @@ const Gen = struct {
         // The argument's own defining expression is the thing to point at; the
         // operator call is the fallback for a leaf with no instruction of its
         // own (a node probe, a phi), which is the common case here.
-        const v = self.rv(v0);
+        const v = self.an.rv(v0);
         const def = self.mir.valueDef(v);
         const tok = if (def == .inst_result) self.mir.instTok(def.inst_result) else Mir.no_tok;
         if (self.diags) |bag| try bag.add(
@@ -3391,7 +2921,7 @@ const Gen = struct {
     fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
         var first = true;
         for (args) |a| {
-            const def = self.mir.valueDef(self.rv(a));
+            const def = self.mir.valueDef(self.an.rv(a));
             if (def != .str_const) continue;
             if (!first) try self.b(" or ", .{});
             first = false;
@@ -3475,7 +3005,7 @@ const Gen = struct {
         if (eq(u8, name, "$simparam$str")) return self.b("\"\"", .{});
         // §9.19 $param_given / $port_connected.
         if (eq(u8, name, "$param_given")) {
-            const def = if (args.len > 0) self.mir.valueDef(self.rv(args[0])) else Mir.Def.undef;
+            const def = if (args.len > 0) self.mir.valueDef(self.an.rv(args[0])) else Mir.Def.undef;
             if (def == .param_ref) {
                 self.uses_model = true;
                 return self.b("@as(i64, @intFromBool(model.{s}__given))", .{self.p_names[def.param_ref]});
@@ -3576,7 +3106,7 @@ const Gen = struct {
 
     fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
         if (i >= args.len) return null;
-        const def = self.mir.valueDef(self.rv(args[i]));
+        const def = self.mir.valueDef(self.an.rv(args[i]));
         return if (def == .str_const) def.str_const else null;
     }
 
@@ -3762,7 +3292,7 @@ const Gen = struct {
         spec: []const u8,
     ) Error!void {
         const a = self.arena;
-        const ty = self.tyOf(self.rv(v));
+        const ty = self.an.tyOf(self.an.rv(v));
         // The Zig verb. `%f` is C's fixed-point default of six decimals; `%g`
         // and `%r` are shortest-round-trip, which is what `{d}` on a float is.
         // §9.4.3's engineering-notation `%r` scale suffix is NOT reproduced.
@@ -4059,7 +3589,7 @@ const Gen = struct {
     /// anything else means this argument was never a vector.
     fn readVec(self: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
         if (i >= args.len) return null;
-        const def = self.mir.valueDef(self.rv(args[i]));
+        const def = self.mir.valueDef(self.an.rv(args[i]));
         if (def != .int_const or def.int_const < 0) return null;
         const n: usize = @intCast(def.int_const);
         if (i + 1 + n > args.len) return null;
@@ -4234,7 +3764,7 @@ const Gen = struct {
         try self.emitResidual(false);
         var any_q = false;
         for (self.lower.contributions.items) |c| {
-            if (self.rv(c.react_val) != .f_zero) any_q = true;
+            if (self.an.rv(c.react_val) != .f_zero) any_q = true;
         }
         if (any_q) try self.emitResidual(true);
         try self.emitDisplay();
@@ -4288,7 +3818,7 @@ const Gen = struct {
         var opened = false;
 
         for (self.lower.contributions.items, 0..) |c, i| {
-            const val = if (react) self.rv(c.react_val) else self.rv(c.resist_val);
+            const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
             if (val == .f_zero) continue;
             self.uses_x = true;
             self.uses_model = true;
@@ -4755,44 +4285,6 @@ fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
         .flow => "§5.6 flow contribution — current into `hi`, out of `lo` (§1.3.1.2)",
         .potential => "§5.6 potential contribution — the branch constitutive relation",
     };
-}
-
-fn tyOfParam(t: @import("../frontend/ast.zig").Type) VTy {
-    return switch (t) {
-        .real, .unspecified => .real,
-        .integer => .int,
-        .string => .str,
-    };
-}
-
-/// ch9 return types — mirrors `Lower.sysFuncTy` (§9.11/§9.12/§9.19/§9.22).
-/// Everything else, including every §4.5 operator and §4.6 event, is real:
-/// lowering compares an event guard against `0.0`, so it must stay real.
-/// MUST agree with `Lower.sysFuncTy`: the two type the same call from opposite
-/// sides of the MIR, and a disagreement puts an `S` expression in an `i64` slot,
-/// which does not compile.
-///
-/// §9.11 Table 9-8: `$realtobits` yields the bit PATTERN (an integer),
-/// `$bitstoreal` yields the real that pattern stands for. Only the first belongs
-/// here — see tests/fixtures/exhaustive/122_bit_conversions.va.
-fn callTy(name: []const u8) VTy {
-    const ints = [_][]const u8{
-        "$param_given",       "$port_connected",
-        "$test$plusargs",     "$value$plusargs",
-        "$rtoi",              "$clog2",
-        "$realtobits",        "$driver_count",
-        "$receiver_count",    "$driver_state",
-        "$driver_strength",   "$driver_delay",
-        "$driver_next_state", "$driver_next_strength",
-        "$driver_type",
-    };
-    for (ints) |i| if (std.mem.eql(u8, name, i)) return .int;
-    if (std.mem.eql(u8, name, "$simparam$str")) return .str;
-    // §5.10 `Lower.holdSlot`'s synthetic seed. Not a ch9 task and not in
-    // `Lower.sysFuncTy`: the callee is chosen by the variable's declared type,
-    // so the name IS the type and the two sides agree by construction.
-    if (std.mem.eql(u8, name, "$held_int")) return .int;
-    return .real;
 }
 
 // ===========================================================================
