@@ -68,6 +68,8 @@ pub const diag_code = @import("diag_code.zig");
 pub const naming = @import("backend/naming.zig");
 pub const codegen = @import("backend/codegen.zig");
 pub const UnitPlan = @import("backend/unit_plan.zig");
+pub const cg_display = @import("backend/cg_display.zig");
+pub const cg_filters = @import("backend/cg_filters.zig");
 pub const eval_batch = @import("backend/eval_batch.zig");
 pub const orchestrator = @import("backend/orchestrator.zig");
 pub const tb = @import("backend/tb.zig");
@@ -749,6 +751,8 @@ test {
     _ = naming;
     _ = codegen;
     _ = UnitPlan;
+    _ = cg_display;
+    _ = cg_filters;
     _ = eval_batch;
     _ = orchestrator;
     _ = diag;
@@ -951,7 +955,7 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // every stage, so `zig build` (which depends on compiling the test roots) means
 // "the whole engine type-checks", not just "the files parse".
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Lower, proof, naming, codegen, UnitPlan, eval_batch, orchestrator }) |stage| {
+    inline for (.{ token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, eval_batch, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }

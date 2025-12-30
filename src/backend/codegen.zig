@@ -39,6 +39,8 @@ const std = @import("std");
 const Mir = @import("../ir/mir.zig");
 const Analysis = @import("../ir/analysis.zig");
 const UnitPlan = @import("unit_plan.zig");
+const cg_display = @import("cg_display.zig");
+const cg_filters = @import("cg_filters.zig");
 const Lower = @import("../ir/lower.zig");
 const proof = @import("../ir/proof.zig");
 const diag = @import("../diag.zig");
@@ -217,7 +219,7 @@ const F64Context = struct {
 // The generator
 // ===========================================================================
 
-const Gen = struct {
+pub const Gen = struct {
     /// Owns `out` and nothing else — see `generate`.
     gpa: std.mem.Allocator,
     /// Per-unit state: the slice, use counts, inline decisions and slots for the
@@ -469,14 +471,14 @@ const Gen = struct {
 
 
 
-    fn w(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
+    pub fn w(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
         try self.out.print(self.gpa, fmt, args);
     }
 
     /// Body text. Same destination as `w` since the signature is back-patched
     /// (see `emitUnit`); kept as a separate name because the call sites read as
     /// "body" vs "file scaffolding".
-    fn b(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
+    pub fn b(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
         try self.out.print(self.gpa, fmt, args);
     }
 
@@ -889,7 +891,7 @@ const Gen = struct {
     /// u64 is three multiplies and bijective, so it adds no collisions over the
     /// identity — the same trick as `ssa.zig`'s defs context, and as
     /// `InternPool.Index.Adapter.hash`.
-    fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
+    pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
         if (std.math.isNan(x)) return "std.math.nan(f64)";
         if (std.math.isInf(x)) return if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)";
         const gop = try self.f64_cache.getOrPut(self.arena, @bitCast(x));
@@ -956,7 +958,7 @@ const Gen = struct {
                 // is what keeps it a codegen-time constant even though every
                 // coefficient VALUE is a runtime read of Model.
                 .laplace, .zi => {
-                    const p = try self.filterPlan(self.opInstOf(@intCast(i)) orelse continue, self.opArgs(i));
+                    const p = try cg_filters.filterPlan(self, self.opInstOf(@intCast(i)) orelse continue, self.opArgs(i));
                     if (p.err != null) continue;
                     try self.w("    {s}__u: [{d}]f64 = @splat(0.0), // §4.5.{s}\n", .{
                         n, p.ns * p.deg, if (opKind(u.target) == .zi) "12" else "11",
@@ -1139,11 +1141,11 @@ const Gen = struct {
             const k = opKind(u.target);
             if (k != .laplace and k != .zi) continue;
             const inst = self.opInstOf(@intCast(i)) orelse continue;
-            const p = try self.filterPlan(inst, self.mir.instData(inst).call.args);
+            const p = try cg_filters.filterPlan(self, inst, self.mir.instData(inst).call.args);
             if (p.err != null) continue;
             const lo = self.out.items.len;
             const nm = try std.fmt.allocPrint(self.arena, "{s}__sec", .{self.unit_names[i]});
-            const at = try self.emitFilterSections(self.unit_names[i], p, k == .zi);
+            const at = try cg_filters.emitFilterSections(self, self.unit_names[i], p, k == .zi);
             try self.recordUnitFile(nm, lo, at);
         }
         for (self.jobs) |job| {
@@ -1818,7 +1820,7 @@ const Gen = struct {
         return s;
     }
 
-    fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
+    pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
         const v = self.an.rv(v0);
         const def = self.mir.valueDef(v);
         if (def == .undef) {
@@ -2189,7 +2191,7 @@ const Gen = struct {
     // that wants `exp`/`ln`/`atan2` gets a diagnostic, not silence; add the case
     // when a model asks. Ceiling: unlike `foldConst` this never looks through a
     // parameter's DEFAULT, because the host overrides parameters at run time.
-    fn f64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
+    pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         if (depth > 32) return null;
         if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
         const v = self.an.rv(v0);
@@ -2254,7 +2256,7 @@ const Gen = struct {
     /// unit — never an `@compileError` string pasted into the generated Zig,
     /// which surfaces as "unreachable code" at a line of generated code with
     /// nothing pointing back at the `.va`.
-    fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
+    pub fn f64Expr(self: *Gen, v0: Mir.Value) Error![]const u8 {
         if (try self.f64Const(v0, 0)) |s| return s;
         // The argument's own defining expression is the thing to point at; the
         // operator call is the fallback for a leaf with no instruction of its
@@ -2275,7 +2277,7 @@ const Gen = struct {
         return "0.0";
     }
 
-    fn argF64(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
+    pub fn argF64(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
         if (i >= args.len) return dflt;
         return self.f64Expr(args[i]);
     }
@@ -2379,7 +2381,7 @@ const Gen = struct {
         return self.abort("VerA: unhandled call `{s}`", .{name});
     }
 
-    fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
+    pub fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
         if (self.fatal == null) self.fatal = try std.fmt.allocPrint(self.arena, fmt, args);
         try self.b("S.con(0.0)", .{});
     }
@@ -2413,7 +2415,7 @@ const Gen = struct {
         // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In a
         // device they fall through to `void_tasks` below.
         if (self.display == .emit and Lower.isDisplayTask(name))
-            return self.emitDisplayTask(name, args);
+            return cg_display.emitDisplayTask(self, name, args);
         // §9.10 environment.
         if (eq(u8, name, "$temperature")) {
             self.uses_inst = true;
@@ -2572,251 +2574,10 @@ const Gen = struct {
             "a substitute value would corrupt the model", .{name});
     }
 
-    fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
+    pub fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
         if (i >= args.len) return null;
         const def = self.mir.valueDef(self.an.rv(args[i]));
         return if (def == .str_const) def.str_const else null;
-    }
-
-    // -------------------------------------------------------- §9.4 display ----
-    //
-    // A display task is a STATEMENT in the source and a void `call` in the MIR,
-    // and codegen renders values, not statements. Rather than grow a statement
-    // path for the one construct that needs it, the call renders as a labeled
-    // block EXPRESSION whose value is the same `S.con(0.0)` the dropped form
-    // produces — the print is the side effect on the way there. It reaches the
-    // output because `Lower.finishDisplays` chained it into a live root; see
-    // `buildJobs`.
-
-    /// One rendered `std.debug.print` operand: the value and the Zig type the
-    /// chosen conversion needs it in. `%h` on a real is a real→integer
-    /// conversion (§4.2.1.1), not a reinterpretation, so `want` is not always
-    /// the value's own type.
-    const PrintArg = struct {
-        v: Mir.Value,
-        want: VTy,
-        /// Render through `zPadInt` into a per-call stack buffer instead of
-        /// directly. See `emitDisplayTask` for the one reason this exists.
-        pad: bool = false,
-    };
-
-    /// Emit one §9.4.1/§9.7.3 task as `std.debug.print`.
-    ///
-    /// Output goes to stderr, which is where `std.debug.print` writes and where a
-    /// simulator's transcript belongs — stdout is for a host that pipes data.
-    fn emitDisplayTask(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
-        // §9.7.3 `$fatal(finish_number, "fmt", …)` puts a non-string first, and
-        // §9.4.1 allows `$display` with no format at all. Both fall out of
-        // "the format is the first string constant, if there is one".
-        var fmt_at: ?usize = null;
-        for (args, 0..) |_, i| {
-            if (self.strArg(args, i) != null) {
-                fmt_at = i;
-                break;
-            }
-        }
-
-        var fmt: std.ArrayList(u8) = .empty;
-        var ops: std.ArrayList(PrintArg) = .empty;
-        // §9.7.3: the severity is the message's whole reason for existing, and a
-        // reader cannot recover it from the text.
-        if (severityWord(name)) |word| {
-            try fmt.appendSlice(self.arena, word);
-            try fmt.appendSlice(self.arena, ": ");
-        }
-        if (fmt_at) |at| {
-            try self.translateFormat(self.strArg(args, at).?, args[at + 1 ..], &fmt, &ops);
-        } else {
-            // §9.4.3 no format string: each operand in its natural default,
-            // separated by a space — with §9.4.1's radix suffix applied.
-            const conv: u8 = switch (name[name.len - 1]) {
-                'b' => 'b',
-                'o' => 'o',
-                'h' => 'x',
-                else => 0,
-            };
-            for (args, 0..) |a, i| {
-                if (i != 0) try fmt.append(self.arena, ' ');
-                try self.appendConv(&fmt, &ops, a, conv, "");
-            }
-        }
-        // §9.4.1: `$write` is the family member that does NOT end the line.
-        if (!std.mem.startsWith(u8, name, "$write")) try fmt.append(self.arena, '\n');
-
-        // A width-padded integer is printed through `zPadInt` because Zig's
-        // `{d:>5}` writes `+42` where §9.4.3 (and C, and every other Verilog
-        // tool) writes ` 42` — std.fmt spells the sign explicitly once a width
-        // makes the field fixed. Padding the DECIMAL TEXT instead reproduces the
-        // documented behavior, and the scratch it needs is a stack array in the
-        // same block as the print.
-        try self.b("zd: {{ ", .{});
-        for (ops.items, 0..) |p, i| {
-            if (p.pad) try self.b("var zb{d}: [24]u8 = undefined; ", .{i});
-        }
-        try self.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
-        for (ops.items, 0..) |p, i| {
-            if (i != 0) try self.b(", ", .{});
-            try self.renderPrintArg(p, i);
-        }
-        try self.b("}}); break :zd S.con(0.0); }}", .{});
-    }
-
-    /// §9.7.3 severity tasks. Null for the §9.4.1 display family.
-    fn severityWord(name: []const u8) ?[]const u8 {
-        const eq = std.mem.eql;
-        if (eq(u8, name, "$fatal")) return "FATAL";
-        if (eq(u8, name, "$error")) return "ERROR";
-        if (eq(u8, name, "$warning")) return "WARNING";
-        if (eq(u8, name, "$info")) return "INFO";
-        return null;
-    }
-
-    /// §9.4.2/§9.4.3 format string → a Zig one, consuming an operand per
-    /// conversion. Literal text is copied through with `{`/`}` doubled, because
-    /// it is about to become a `std.fmt` template.
-    ///
-    /// Unmatched operands (more arguments than conversions) are appended
-    /// space-separated in their default form, which is what §9.4.3 says the
-    /// display tasks do.
-    fn translateFormat(
-        self: *Gen,
-        src: []const u8,
-        operands: []const Mir.Value,
-        fmt: *std.ArrayList(u8),
-        ops: *std.ArrayList(PrintArg),
-    ) Error!void {
-        const a = self.arena;
-        var next: usize = 0;
-        var i: usize = 0;
-        while (i < src.len) {
-            const c = src[i];
-            if (c == '{' or c == '}') { // std.fmt's own escape
-                try fmt.append(a, c);
-                try fmt.append(a, c);
-                i += 1;
-                continue;
-            }
-            if (c != '%') {
-                try fmt.append(a, c);
-                i += 1;
-                continue;
-            }
-            i += 1;
-            if (i >= src.len) break;
-            if (src[i] == '%') { // §9.4.3 `%%` is a literal percent
-                try fmt.append(a, '%');
-                i += 1;
-                continue;
-            }
-            // §9.4.3 `%[-0][width][.precision]conv` — the flags Verilog shares
-            // with C. Zig's spec is `[fill][align][width][.precision]`, and its
-            // fill/alignment are only meaningful WITH a width, so they are
-            // emitted only when one was given.
-            var spec: std.ArrayList(u8) = .empty;
-            var left = false;
-            var zero = false;
-            while (i < src.len and (src[i] == '-' or src[i] == '+' or src[i] == ' ' or src[i] == '0')) : (i += 1) {
-                if (src[i] == '-') left = true;
-                if (src[i] == '0') zero = true;
-            }
-            const width_at = i;
-            while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) {}
-            if (i > width_at) {
-                if (zero) try spec.append(a, '0');
-                try spec.append(a, if (left) '<' else '>');
-                try spec.appendSlice(a, src[width_at..i]);
-            }
-            if (i < src.len and src[i] == '.') {
-                try spec.append(a, '.');
-                i += 1;
-                while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) try spec.append(a, src[i]);
-            }
-            if (i >= src.len) break;
-            const conv = std.ascii.toLower(src[i]);
-            i += 1;
-            // §9.4.4 `%m` names the enclosing module and consumes no operand.
-            if (conv == 'm') {
-                try fmt.appendSlice(a, self.mir.name);
-                continue;
-            }
-            const operand = if (next < operands.len) operands[next] else Mir.Value.f_zero;
-            next += 1;
-            try self.appendConv(fmt, ops, operand, conv, spec.items);
-        }
-        while (next < operands.len) : (next += 1) {
-            try fmt.append(a, ' ');
-            try self.appendConv(fmt, ops, operands[next], 0, "");
-        }
-    }
-
-    /// One conversion: append its `{…}` to `fmt` and its operand to `ops`.
-    /// `conv == 0` means "the operand's natural form" (§9.4.3 default).
-    fn appendConv(
-        self: *Gen,
-        fmt: *std.ArrayList(u8),
-        ops: *std.ArrayList(PrintArg),
-        v: Mir.Value,
-        conv: u8,
-        spec: []const u8,
-    ) Error!void {
-        const a = self.arena;
-        const ty = self.an.tyOf(self.an.rv(v));
-        // The Zig verb. `%f` is C's fixed-point default of six decimals; `%g`
-        // and `%r` are shortest-round-trip, which is what `{d}` on a float is.
-        // §9.4.3's engineering-notation `%r` scale suffix is NOT reproduced.
-        const verb: []const u8 = switch (conv) {
-            'b' => "b",
-            'o' => "o",
-            'h', 'x' => "x",
-            'c' => "c",
-            's' => "s",
-            'e' => "e",
-            'd', 'f', 'g', 'r', 't', 'u', 'z', 'l', 'v' => "d",
-            else => if (ty == .str) "s" else "d",
-        };
-        // A float has no bit pattern to show in a radix conversion, and Zig's
-        // `{x}` on an f64 is a hex FLOAT — not what `%h` asks for. Round it,
-        // exactly like §4.2.1.1 does at any other real→integer boundary.
-        const as_int = ty != .str and (std.mem.eql(u8, verb, "b") or
-            std.mem.eql(u8, verb, "o") or std.mem.eql(u8, verb, "x") or
-            std.mem.eql(u8, verb, "c") or conv == 'd');
-        // A width (not a bare precision) is what makes std.fmt spell an
-        // integer's sign; only then is the detour through `zPadInt` needed, and
-        // only for the plain decimal conversion — a radix conversion has no
-        // sign to spell.
-        const pad = conv == 'd' and spec.len != 0 and spec[spec.len - 1] != '.' and
-            std.mem.indexOfAny(u8, spec, "<>") != null;
-        try fmt.append(a, '{');
-        try fmt.appendSlice(a, if (pad) "s" else verb);
-        // `%f`'s six decimals only apply when the source did not say otherwise.
-        const default_prec = conv == 'f' and std.mem.indexOfScalar(u8, spec, '.') == null;
-        if (spec.len > 0 or default_prec) {
-            try fmt.append(a, ':');
-            try fmt.appendSlice(a, spec);
-            if (default_prec) try fmt.appendSlice(a, ".6");
-        }
-        try fmt.append(a, '}');
-        try ops.append(a, .{ .v = v, .want = if (as_int) .int else ty, .pad = pad });
-    }
-
-    /// Render one operand of a `std.debug.print`. The `S` scalar is opaque, so a
-    /// real crosses into the format layer through `.val()`; an integer and a
-    /// string are already plain Zig values.
-    fn renderPrintArg(self: *Gen, p: PrintArg, i: usize) Error!void {
-        if (p.pad) {
-            try self.b("zPadInt(&zb{d}, ", .{i});
-            try self.renderVal(p.v, .int);
-            return self.b(")", .{});
-        }
-        switch (p.want) {
-            .real => {
-                try self.b("(", .{});
-                try self.renderVal(p.v, .real);
-                try self.b(").val()", .{});
-            },
-            .int => try self.renderVal(p.v, .int),
-            .str => try self.renderVal(p.v, .str),
-        }
     }
 
     /// §4.5 stateful analog operators. The operator's INPUT is a named unit of
@@ -2853,7 +2614,7 @@ const Gen = struct {
             // evaluation and is LINEAR in the current input, so the Jacobian
             // `b0/a0` it hands the solver is exact.
             .laplace => {
-                const p = try self.filterPlan(inst, args);
+                const p = try cg_filters.filterPlan(self, inst, args);
                 if (p.err) |m| return self.abort("{s}", .{m});
                 // `__sec` takes a `*const Model` whatever its coefficients read,
                 // so the call site is a use of `model` even when `filterPlan`
@@ -2869,7 +2630,7 @@ const Gen = struct {
             // current unknowns, so it enters the residual as a constant — the
             // same companion model `absdelay` uses.
             .zi => {
-                const p = try self.filterPlan(inst, args);
+                const p = try cg_filters.filterPlan(self, inst, args);
                 if (p.err) |m| return self.abort("{s}", .{m});
                 try self.b("S.con(inst.{s}__out)", .{n});
             },
@@ -2941,287 +2702,6 @@ const Gen = struct {
     fn slewRates(self: *Gen, args: []const Mir.Value) Error![2][]const u8 {
         const pos = try self.argF64(args, 1, "1e300");
         return .{ pos, try self.argF64(args, 2, pos) };
-    }
-
-    // =======================================================================
-    // §4.5.11 / §4.5.12 filters
-    // =======================================================================
-
-    /// One polynomial, ASCENDING powers of `s` (§4.5.11) or `z⁻¹` (§4.5.12),
-    /// as emitted expression text — a literal or `model.<p>`, so a model-card
-    /// override reaches the coefficient without a rebuild.
-    const Poly = []const []const u8;
-
-    /// A filter realised as a CASCADE of sections, `H = ∏ num[i]/den[i]`.
-    ///
-    /// The root forms (`*_zp`, `*_zd` zeros, `*_np`, `*_zp` poles) stay
-    /// FACTORED: one section per real root, one per conjugate pair, each
-    /// multiplied out as a REAL quadratic. Expanding ∏(1 − s/ρₖ) into a single
-    /// coefficient vector is the Wilkinson operation — for a 6th-order filter
-    /// the coefficients span decades and the roots move visibly on the way
-    /// back out — so it is never done. Only the coefficient forms (`*_nd`,
-    /// `*_zd` denominator, `*_np` numerator) arrive as a polynomial already,
-    /// and those stay one direct-form section at their full degree.
-    const FilterPlan = struct {
-        num: []const Poly = &.{},
-        den: []const Poly = &.{},
-        /// Sections = max(num.len, den.len); a missing side is the polynomial 1.
-        ns: usize = 0,
-        /// Highest degree over every section — the shape of the state arrays.
-        deg: usize = 0,
-        /// Do the coefficients read Model? Decides `__sec`'s parameter name.
-        uses_model: bool = false,
-        /// §4.5.12 sampling period T. Null for a laplace filter.
-        period: ?[]const u8 = null,
-        err: ?[]const u8 = null,
-
-        /// Section `i` of one side; a side that ran out of sections is the
-        /// polynomial 1, which is how a 3-zero / 1-pole filter still cascades.
-        fn poly(self: FilterPlan, numerator: bool, i: usize) Poly {
-            const list = if (numerator) self.num else self.den;
-            return if (i < list.len) list[i] else &.{"1.0"};
-        }
-    };
-
-    fn planErr(msg: []const u8) FilterPlan {
-        return .{ .err = msg };
-    }
-
-    /// Decode one `laplace_*`/`zi_*` call into its cascade. Lowering flattened
-    /// each vector argument as `<count>, e0, e1, …` (see `lower.appendVectorArg`),
-    /// so the argument list is self-describing.
-    fn filterPlan(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan {
-        const name = self.mir.instData(inst).call.name;
-        const z = std.mem.startsWith(u8, name, "zi_");
-        // `*_zp`/`*_zd` give the ZEROS as roots; `*_zp`/`*_np` give the POLES
-        // as roots. The two letters after the underscore say which.
-        const tail = name[if (z) 3 else 8..];
-        const num_roots = tail[0] == 'z';
-        const den_roots = tail[1] == 'p';
-
-        const saved = self.uses_model;
-        self.uses_model = false;
-        defer self.uses_model = saved;
-
-        const nv = self.readVec(args, 1) orelse
-            return planErr("LRM 4.5.11/4.5.12: the numerator argument of a filter must be a vector");
-        const dv = self.readVec(args, nv.next) orelse
-            return planErr("LRM 4.5.11/4.5.12: the denominator argument of a filter must be a vector");
-
-        var num: std.ArrayList(Poly) = .empty;
-        var den: std.ArrayList(Poly) = .empty;
-        if (try self.filterSide(&num, nv.elems, num_roots, z, false)) |m| return planErr(m);
-        if (try self.filterSide(&den, dv.elems, den_roots, z, true)) |m| return planErr(m);
-
-        var p: FilterPlan = .{
-            .num = num.items,
-            .den = den.items,
-            .ns = @max(num.items.len, den.items.len),
-            .uses_model = self.uses_model,
-        };
-        for (0..p.ns) |i| {
-            p.deg = @max(p.deg, @max(p.poly(true, i).len, p.poly(false, i).len) - 1);
-        }
-
-        if (z) {
-            // §4.5.12 "T specifies the period of the filter, is mandatory, and
-            // shall be positive."
-            if (dv.next >= args.len) return planErr(
-                "LRM 4.5.12: the sampling period T of a zi_* filter is mandatory",
-            );
-            if (self.an.foldConst(args[dv.next], 0, true)) |c| {
-                if (!(c.f > 0.0)) return planErr(
-                    "LRM 4.5.12: the sampling period T of a zi_* filter shall be positive",
-                );
-            }
-            p.period = try self.f64Expr(args[dv.next]);
-            p.uses_model = self.uses_model;
-            // §4.5.12 τ (transition time) and t0 (time of the first
-            // transition). Neither is implemented: the emitted output steps
-            // abruptly at t0 = 0. A silent τ would be a different waveform, so
-            // it is rejected instead of ignored.
-            if (dv.next + 1 < args.len) return planErr(
-                "VerA does not implement the optional τ / t0 arguments of a zi_* filter (LRM 4.5.12)",
-            );
-        }
-        // §4.5.11 the optional ε argument only "deriv[es] an absolute
-        // tolerance (if needed)"; VerA has no per-signal tolerance table, so
-        // dropping it changes no value the device computes.
-        return p;
-    }
-
-    const Vec = struct { elems: []const Mir.Value, next: usize };
-
-    /// Read one flattened vector argument: a literal count followed by that
-    /// many elements. The count is always an `int_const` (lowering emits it);
-    /// anything else means this argument was never a vector.
-    fn readVec(self: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
-        if (i >= args.len) return null;
-        const def = self.mir.valueDef(self.an.rv(args[i]));
-        if (def != .int_const or def.int_const < 0) return null;
-        const n: usize = @intCast(def.int_const);
-        if (i + 1 + n > args.len) return null;
-        return .{ .elems = args[i + 1 ..][0..n], .next = i + 1 + n };
-    }
-
-    /// Turn one side of a filter into its sections. `roots` selects the
-    /// root-vector reading (pairs of real/imaginary parts) over the
-    /// coefficient reading. Returns a diagnostic, or null on success.
-    fn filterSide(
-        self: *Gen,
-        out: *std.ArrayList(Poly),
-        elems: []const Mir.Value,
-        roots: bool,
-        z: bool,
-        is_den: bool,
-    ) Error!?[]const u8 {
-        if (elems.len == 0) {
-            // "The zeros argument may be represented as a null argument" — no
-            // zeros means the numerator polynomial 1. An empty DENOMINATOR has
-            // no such reading; it would be a division by nothing.
-            if (is_den) return "LRM 4.5.11/4.5.12: the denominator of a filter shall not be empty";
-            return null;
-        }
-        if (!roots) {
-            var poly = try self.arena.alloc([]const u8, elems.len);
-            var all_zero = true;
-            for (elems, 0..) |e, i| {
-                poly[i] = try self.f64Expr(e);
-                const c = self.an.foldConst(e, 0, true);
-                if (c == null or c.?.f != 0.0) all_zero = false;
-            }
-            if (is_den and all_zero)
-                return "LRM 4.5.11/4.5.12: the denominator coefficients of this filter are identically zero";
-            try out.append(self.arena, poly);
-            return null;
-        }
-        // §4.5.11.1 "ζ is a vector of M pairs of real numbers … the first
-        // number in the pair is the real part of the zero and the second is
-        // the imaginary part."
-        if (elems.len % 2 != 0)
-            return "LRM 4.5.11/4.5.12: a root vector is a list of (real, imaginary) PAIRS, so its length must be even";
-        const m = elems.len / 2;
-        const used = try self.arena.alloc(bool, m);
-        @memset(used, false);
-        for (0..m) |k| {
-            if (used[k]) continue;
-            used[k] = true;
-            // The conjugate PAIRING is structural — it decides how many
-            // sections exist and of what degree — so the imaginary part has to
-            // be known here. The real part may stay a runtime parameter.
-            const im = self.an.foldConst(elems[2 * k + 1], 0, true) orelse
-                return "LRM 4.5.11/4.5.12: the imaginary part of a filter root must be a constant expression " ++
-                    "(the conjugate pairing decides the section structure)";
-            const re = try self.f64Expr(elems[2 * k]);
-            const re_c = self.an.foldConst(elems[2 * k], 0, true);
-            if (im.f == 0.0) {
-                // "If a root is zero, then the term associated with it is
-                // implemented as s, rather than (1 − s/r)". In z⁻¹ the LRM's
-                // own wording says "z", which is a non-causal advance and
-                // contradicts its H(z) formula (which is written in z⁻¹
-                // throughout); the causal dual of `s` is the unit delay z⁻¹.
-                if (re_c != null and re_c.?.f == 0.0) {
-                    try out.append(self.arena, &.{ "0.0", "1.0" });
-                } else if (z) {
-                    // §4.5.12 (1 − z⁻¹ρ)
-                    try out.append(self.arena, try self.polyOf(&.{ "1.0", try self.neg(re) }));
-                } else {
-                    // §4.5.11 (1 − s/ρ). A model card that sets ρ to 0 at run
-                    // time divides by zero — the same class of defect as a
-                    // zero-valued resistance, and LRM 4.2.4 makes only `%` by
-                    // zero an error.
-                    try out.append(self.arena, try self.polyOf(&.{
-                        "1.0", try std.fmt.allocPrint(self.arena, "-1.0 / ({s})", .{re}),
-                    }));
-                }
-                continue;
-            }
-            // "If a root is complex, its conjugate shall also be present."
-            const j = self.conjugateOf(elems, used, re, im.f) orelse
-                return "LRM 4.5.11/4.5.12: a complex filter root has no conjugate partner " ++
-                    "(\"If a root is complex, its conjugate shall also be present\")";
-            used[j] = true;
-            // Multiplied out as a REAL quadratic — never through complex
-            // arithmetic, and never by expanding the whole product.
-            //   §4.5.11  (1 − s/ρ)(1 − s/ρ*) = 1 − 2a/(a²+b²)·s + 1/(a²+b²)·s²
-            //   §4.5.12  (1 − z⁻¹ρ)(1 − z⁻¹ρ*) = 1 − 2a·z⁻¹ + (a²+b²)·z⁻²
-            // ponytail: b ≠ 0 here, so a²+b² > 0 and the §4.5.11 divisions are
-            // safe for any real part, including a == 0 — which is a pole pair
-            // ON the imaginary axis, an UNDAMPED section that rings forever
-            // under the trapezoidal rule. That is the transfer function the
-            // model asked for, not a defect of this realisation.
-            const bb = try self.fmtF64(im.f * im.f);
-            const mag = try std.fmt.allocPrint(self.arena, "(({0s}) * ({0s}) + {1s})", .{ re, bb });
-            try out.append(self.arena, if (z) try self.polyOf(&.{
-                "1.0",
-                try std.fmt.allocPrint(self.arena, "-2.0 * ({s})", .{re}),
-                mag,
-            }) else try self.polyOf(&.{
-                "1.0",
-                try std.fmt.allocPrint(self.arena, "-2.0 * ({s}) / {s}", .{ re, mag }),
-                try std.fmt.allocPrint(self.arena, "1.0 / {s}", .{mag}),
-            }));
-        }
-        return null;
-    }
-
-    /// Index of the unused root that is the conjugate of (`re`, `im`): same
-    /// real part, negated imaginary part. Real parts are compared as EMITTED
-    /// TEXT, so `model.a` pairs with `model.a` without needing its value.
-    fn conjugateOf(self: *Gen, elems: []const Mir.Value, used: []const bool, re: []const u8, im: f64) ?usize {
-        for (used, 0..) |u, j| {
-            if (u) continue;
-            const jm = self.an.foldConst(elems[2 * j + 1], 0, true) orelse continue;
-            if (jm.f != -im) continue;
-            // `f64Const`, not `f64Expr`: this is a SPECULATIVE render used only
-            // to pair roots, so a root that does not resolve is "not the
-            // conjugate", not a diagnostic. The real render reports it.
-            const jre = (self.f64Const(elems[2 * j], 0) catch continue) orelse continue;
-            if (std.mem.eql(u8, jre, re)) return j;
-        }
-        return null;
-    }
-
-    fn polyOf(self: *Gen, items: []const []const u8) Error!Poly {
-        return self.arena.dupe([]const u8, items);
-    }
-
-    fn neg(self: *Gen, e: []const u8) Error![]const u8 {
-        return std.fmt.allocPrint(self.arena, "-({s})", .{e});
-    }
-
-    /// `<unit>__sec(model)` — the cascade's CONTINUOUS coefficients, rebuilt
-    /// from Model on every call so a model-card override lands without a
-    /// recompile. Public because it is also the exact transfer function: a host
-    /// doing `.ac`/`.noise` builds `H(jω) = ∏ num_i(jω)/den_i(jω)` from exactly
-    /// these numbers, which the real-valued residual cannot carry.
-    fn emitFilterSections(self: *Gen, n: []const u8, p: FilterPlan, z: bool) Error!usize {
-        const var_name = if (z) "z⁻¹" else "s";
-        try self.w(
-            "/// §4.5.{s} cascade sections of `{s}`: H = ∏ [i][0]({s}) / [i][1]({s}),\n" ++
-                "/// coefficients ascending. Read from Model on every evaluation.\n",
-            .{ if (z) "12" else "11", n, var_name, var_name },
-        );
-        const at_fn = self.out.items.len;
-        try self.w("pub fn {s}__sec({s}: *const Model) [{d}][2][{d}]f64 {{\n    return .{{\n", .{
-            n, if (p.uses_model) "model" else "_", p.ns, p.deg + 1,
-        });
-        for (0..p.ns) |i| {
-            try self.w("        .{{ ", .{});
-            for ([_]bool{ true, false }, 0..) |numerator, s| {
-                if (s == 1) try self.w(", ", .{});
-                try self.w(".{{ ", .{});
-                const poly = p.poly(numerator, i);
-                for (0..p.deg + 1) |c| {
-                    if (c != 0) try self.w(", ", .{});
-                    try self.w("{s}", .{if (c < poly.len) poly[c] else "0.0"});
-                }
-                try self.w(" }}", .{});
-            }
-            try self.w(" }},\n", .{});
-        }
-        try self.w("    }};\n}}\n\n", .{});
-        return at_fn;
     }
 
     // =======================================================================
@@ -3568,7 +3048,7 @@ const Gen = struct {
                 ),
                 // §4.5.11 advance the cascade on the accepted solution.
                 .laplace => {
-                    const p = try self.filterPlan(inst, args);
+                    const p = try cg_filters.filterPlan(self, inst, args);
                     if (p.err == null) try self.w(
                         "        zLaplaceStep({d}, {d}, in, {s}__sec(model), dt, &inst.{s}__u, &inst.{s}__y);\n",
                         .{ p.ns, p.deg, n, n, n },
@@ -3580,7 +3060,7 @@ const Gen = struct {
                 // the step bound is what keeps the solver from stepping over a
                 // sample and aliasing the filter.
                 .zi => {
-                    const p = try self.filterPlan(inst, args);
+                    const p = try cg_filters.filterPlan(self, inst, args);
                     if (p.err == null) try self.w(
                         \\        const period = {1s};
                         \\        if (inst.abstime >= inst.{0s}__next) {{
