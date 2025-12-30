@@ -599,3 +599,67 @@ pub fn callTy(name: []const u8) VTy {
     if (std.mem.eql(u8, name, "$held_int")) return .int;
     return .real;
 }
+
+// ---------------------------------------------------------------------------
+// Constant folding — a property of the MIR, so it lives with the facts. Both
+// the emitter (parameter defaults, §4.5 operator control arguments) and the
+// per-unit planner fold through this.
+// ---------------------------------------------------------------------------
+
+pub const Folded = struct { f: f64 };
+
+/// §4.2 constant expression folding over MIR, used for parameter defaults
+/// (`parameter real b = a*2;` — §6.3.4) and for §4.5 operator control
+/// arguments. Anything touching an unknown or a call is not constant.
+pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: bool) ?Folded {
+    if (depth > 32) return null;
+    const v = self.rv(v0);
+    switch (self.mir.valueDef(v)) {
+        .float_const => |x| return .{ .f = x },
+        .int_const => |x| return .{ .f = @floatFromInt(x) },
+        // Only a Model DEFAULT may look through a parameter: everywhere
+        // else the value is whatever the host overrode it with.
+        .param_ref => |p| return if (resolve_params)
+            self.foldConst(self.lower.params.items[p].default, depth + 1, true)
+        else
+            null,
+        .inst_result => |inst| {
+            const row = self.mir.instRow(inst);
+            switch (Mir.opClass(row.op)) {
+                .unary => {
+                    const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
+                    return switch (row.op) {
+                        .fneg, .ineg => .{ .f = -a.f },
+                        .fabs, .iabs => .{ .f = @abs(a.f) },
+                        .sqrt => .{ .f = @sqrt(a.f) },
+                        .exp => .{ .f = @exp(a.f) },
+                        .ln => .{ .f = @log(a.f) },
+                        .log10 => .{ .f = @log10(a.f) },
+                        .floor => .{ .f = @floor(a.f) },
+                        .ceil => .{ .f = @ceil(a.f) },
+                        .fi_cast => .{ .f = @round(a.f) },
+                        .if_cast, .opt_barrier => .{ .f = a.f },
+                        else => null,
+                    };
+                },
+                .binary => {
+                    const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
+                    const b2 = self.foldConst(@enumFromInt(row.b), depth + 1, resolve_params) orelse return null;
+                    return switch (row.op) {
+                        .fadd, .iadd => .{ .f = a.f + b2.f },
+                        .fsub, .isub => .{ .f = a.f - b2.f },
+                        .fmul, .imul => .{ .f = a.f * b2.f },
+                        .fdiv => .{ .f = a.f / b2.f },
+                        .idiv => .{ .f = @trunc(a.f / b2.f) },
+                        .pow => .{ .f = std.math.pow(f64, a.f, b2.f) },
+                        .fmin, .imin => .{ .f = @min(a.f, b2.f) },
+                        .fmax, .imax => .{ .f = @max(a.f, b2.f) },
+                        else => null,
+                    };
+                },
+                else => return null,
+            }
+        },
+        else => return null,
+    }
+}
