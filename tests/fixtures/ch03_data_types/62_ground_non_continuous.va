@@ -1,0 +1,33 @@
+// §3.6.4: "Each ground declaration is associated with an already declared net of
+// continuous discipline. The node associated with the net will be the global
+// reference node in the circuit. The net must be assigned a continuous
+// discipline to be declared ground."
+//
+// `ref_net` has discipline `ch3_ground_discrete`, whose `domain discrete`
+// binding is legal on its own — it is the LRM's own §3.6.2.2 example
+// `discipline ddiscrete; domain discrete; enddiscipline` — and which
+// §3.6.2.2 also makes natureless, so the net has no potential at all and there
+// is nothing for a global reference node to be the reference OF.
+//
+// 13_ground_declaration.va grounds an electrical net, i.e. the legal case.
+//
+// The pinned substring is only the phase label: VerA has no diagnostic for this
+// rule, so a code would pin the wrong one.
+//
+//! lrm 3.6.4
+//! reject DiagnosticsReported
+//! xfail VerA accepts `ground` on a net whose discipline has a discrete domain; lower.zig does not check the discipline domain of a ground declaration
+discipline ch3_ground_discrete;
+    domain discrete;
+enddiscipline
+
+module ch3_ground_non_continuous(p);
+    inout p;
+    electrical p;
+    ch3_ground_discrete ref_net;
+    ground ref_net;
+
+    analog begin
+        V(p) <+ 0.0;
+    end
+endmodule

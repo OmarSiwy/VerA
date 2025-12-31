@@ -7,6 +7,7 @@
 // i at 0.4 V, io at 0.3 V: V(i) = 0.4, V(io) = 0.3, V(i,io) = 0.1. Swap the
 // binding of any two ports and all three numbers move.
 //
+//! lrm 6.5.2.2
 //! bias V(i) = 0.4
 //! bias V(io) = 0.3
 `include "check.vh"

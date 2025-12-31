@@ -1,0 +1,33 @@
+// §10.2, the sentence with teeth: "In addition to `resetall, if this directive
+// is used without a discipline name, discipline resolution will not use a
+// default discipline for nets declared after this directive is encountered in
+// the text stream."
+//
+// 24 issues the bare form too, but then declares both nets `electrical`
+// explicitly, so all it can check is that the reset is not retroactive — its
+// own header says the reset "has no numeric consequence HERE, and deliberately
+// so". The consequence the LRM does fix is negative and needs an UNDECLARED
+// net to land on: after the bare directive, discipline resolution supplies
+// nothing, the net has no nature, and a nature's access function has nothing to
+// resolve against. So V() on it is not a value that comes out wrong — it is a
+// name that does not exist.
+//
+// The pairing is what makes this a test of the RESET and not of ports in
+// general: 01 is this same shape with `default_discipline electrical still in
+// force, where V(p,n) resolves and reads 0.5. Delete the bare directive from
+// this file and it must compile; leave it in and it must not.
+//
+// The expectation is a message substring rather than a code because VerA has no
+// diagnostic for an undisciplined net to name yet; any diagnostic about this
+// rule will say "discipline". When the check lands, replace this line with its
+// code.
+//
+//! lrm 10.2
+//! reject discipline
+//! xfail VerA discards `default_discipline (preprocessor.zig marks it .ignored) and never runs discipline resolution, so it neither supplies a default nor withholds one — V() resolves on a bare port regardless
+`default_discipline electrical
+`default_discipline
+module ch10_default_discipline_reset_leaves_no_default(p, n);
+  inout p, n;
+  analog I(p, n) <+ V(p, n);
+endmodule

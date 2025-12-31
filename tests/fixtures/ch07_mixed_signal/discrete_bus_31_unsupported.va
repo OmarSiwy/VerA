@@ -1,6 +1,30 @@
-//! reject identifier
-// EXPECT: error -- a 31-bit grouping is the largest legal analog integer access.
-module ch7_discrete_bus_31(p, d);
-  inout p; electrical p; input [0:30] d; wire [0:30] d;
-  analog I(p) <+ d;
+// §7.3.1 Table 7-1, the `bit` row, at the exact boundary: 31 bits is the widest
+// grouping that may be accessed from a continuous context ("access of discrete
+// bit groupings with greater than 31 bits is illegal"), and for it Table 7-1
+// fixes one more thing — "the sign bit (bit 31) of the integer is always set to
+// zero (0)".
+//
+// A 31-bit grouping of all ones is therefore +2147483647 (= 2^31 - 1), the
+// largest value the mapping can produce. A tool that let the top bit of a
+// 31-bit bus land on the integer's sign bit would read -1; one that treated 31
+// bits as over the limit would not compile this at all. Both are wrong, and
+// they are told apart from each other and from the >31 prohibition by the
+// verdict of this file against discrete_bus_over31_rejected.va.
+//
+// The driver is the LRM's own idiom: §7.3.2's `converter` example assigns its
+// discrete net from an `initial` block and reads it from `analog`. §7.2.2
+// permits it — `r` is assigned in the discrete context only, and the continuous
+// context merely READS it.
+//
+//! lrm 7.3.1
+//! xfail VerA has no vector nets: `reg [30:0] r` dies at E0208 in the parser, and an `initial` block is E0205
+`include "check.vh"
+module ch7_discrete_bus_31(p);
+  inout p; electrical p;
+  reg [30:0] r;
+  initial r = 31'h7fffffff;
+  analog begin
+    `CHECKI("31 bits is the widest legal grouping and bit 31 of the integer stays zero", r, 2147483647);
+    I(p) <+ V(p);
+  end
 endmodule

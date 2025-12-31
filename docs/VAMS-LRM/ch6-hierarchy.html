@@ -75,6 +75,7 @@ list_of_ports ::= ( port { , port } )
 
 list_of_port_declarations ::=
     ( port_declaration { , port_declaration } )
+  | ()
 
 port ::=
     [ port_expression ]
@@ -1321,7 +1322,7 @@ endmodule</code></pre>
 <!-- 6.9.1 -->
 <h3 id="s6.9.1">6.9.1 Concatenation of analog blocks</h3>
 
-<p>A module definition may have multiple analog blocks. The simulator shall internally combine them into a single analog block in the order they appear in the module description.</p>
+<p>A module definition may have multiple analog blocks. The simulator shall internally combine them into a single analog block in the order they appear in the module description. In other words, the analog blocks shall execute in the order that they are specified in the module.</p>
 
 <p>Concatenation of the analog blocks occurs after all generate constructs have been evaluated (after loop generate constructs have been unrolled and conditional generate constructs have been selected). If an analog block appears in a loop generate statement, the order in which the loop is unrolled during elaboration determines the concatenation order.</p>
 

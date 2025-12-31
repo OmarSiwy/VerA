@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_register_analog_systf
-// EXPECT: error
+//! reject `vpi_register_analog_systf`
 module ch12_atomic_register_analog_systf(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_register_analog_systf(0);

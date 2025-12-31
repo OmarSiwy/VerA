@@ -7,6 +7,7 @@
 // binary floating point (0.25 is a power of two), which is why the bias is 0.25
 // and the tolerance is zero.
 //
+//! lrm 5.9.2
 //! bias V(p) = 0.25
 `include "check.vh"
 module ch5_for(p);

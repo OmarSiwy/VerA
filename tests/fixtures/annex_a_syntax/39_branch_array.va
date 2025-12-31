@@ -1,0 +1,50 @@
+// A.2.3 `list_of_branch_identifiers ::= branch_identifier [ range ]
+//                                       { , branch_identifier [ range ] }`
+// and A.8.9 `branch_reference ::= hierarchical_branch_identifier
+//                               | hierarchical_branch_identifier [ constant_expression ] | ...`
+//
+// A branch declaration may carry a RANGE, and a branch reference may carry an
+// index. Both halves of that pair are legal Verilog-AMS and neither has a user
+// anywhere in the suite: every branch declared in all 859 fixtures is scalar.
+//
+// The declaration `branch (p, n) pair[0:1];` gives two branches over the same
+// node pair, so §5.5.1 makes V(pair[0]) and V(pair[1]) both the potential
+// difference V(p) - V(n) = 0.8 - 0.3 = 0.5, and their sum 1.0. Two elements
+// rather than one, because an implementation that collapsed the range to a
+// single branch, or resolved every index to element 0, still gets each
+// individual probe right — the pair has to be indexable independently for the
+// third check to hold when the flow is contributed to only one of them.
+//
+// The numbers are the ones to demand the day it parses; nothing about them is
+// VerA-specific. Neither 0.8 nor 0.3 is representable in binary but their
+// difference is exactly 0.5 (verified), and 0.5 + 0.5 is exactly 1.0, so all
+// three are `CHECKX`.
+//
+// This is written as a run fixture, not a `//! reject`: A.2.3 makes the source
+// legal, so demanding a diagnostic would invert it and only VerA would pass.
+//
+// Side note for whoever closes this: src/diag_code.zig carries E0305 "branch
+// arrays are not supported", which no fixture references and which this syntax
+// never reaches, because the parser errors on the `[` first.
+//
+//! lrm A.2.3
+//! lrm A.8.9
+//! lrm 5.5.1
+//! bias V(p) = 0.8
+//! bias V(n) = 0.3
+//! print none
+//! xfail VerA has no branch arrays: `branch (p, n) pair[0:1];` is E0207 "unexpected token: found `[`  expected `;`" in the branch declaration parser
+`include "check.vh"
+module annex_a_branch_array(p, n);
+    inout p, n;
+    electrical p, n;
+    branch (p, n) pair[0:1];
+
+    analog begin
+        `CHECKX("the first element of a branch array probes the declared pair", V(pair[0]), 0.5);
+        `CHECKX("the second element probes the same pair", V(pair[1]), 0.5);
+        `CHECKX("the two elements are separate branches over one node pair",
+                V(pair[0]) + V(pair[1]), 1.0);
+        I(pair[0]) <+ V(pair[0]);
+    end
+endmodule

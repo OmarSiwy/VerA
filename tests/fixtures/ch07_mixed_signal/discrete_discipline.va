@@ -1,7 +1,27 @@
+// §7.2.1 gives the discrete domain its meaning — a discipline whose `domain` is
+// `discrete` binds its nets to the digital solver — and §7.4.2 is where such a
+// net meets discipline resolution. Annex C.4 then removes the whole binding
+// from this dialect: "From 3.6.2.2, Domain binding: the domain binding type
+// discrete shall be an error in Verilog-A."
+//
+// The declaration below is therefore the error, on its own, before anything is
+// connected to it. Everything else in the file is deliberately ordinary and
+// legal — one electrical port, one contribution — so the only thing left for a
+// diagnostic to be about is `domain discrete`. VerA parses it, records the
+// flag and compiles the file clean, which is why this is marked.
+//
+// (It previously declared a port-less module and asserted nothing, so it landed
+// in CANNOT RUN — refused by the device contract for having zero terminals —
+// and proved nothing in either direction.)
+//
+//! lrm 7.2.1
+//! lrm C.4
+//! reject domain discrete
+//! xfail VerA accepts a user-declared `domain discrete` discipline (ir/lower.zig sets is_discrete and moves on)
 discipline ch7_discrete;
   domain discrete;
 enddiscipline
-module ch7_discrete_decl;
-  electrical p;
+module ch7_discrete_decl(p);
+  inout p; electrical p;
   analog I(p) <+ V(p);
 endmodule

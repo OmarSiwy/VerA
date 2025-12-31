@@ -1,0 +1,29 @@
+// §3.4.7's closing example, verbatim: an alias whose target is the hierarchical
+// parameter system function rather than a parameter of the module.
+//
+//     aliasparam m = $mfactor;
+//
+// Syntax 3-2 does not cover it — `aliasparam_declaration ::= aliasparam
+// parameter_identifier = parameter_identifier ;` has an identifier on the right
+// — which is why §3.4.7 spells the form out in prose. The alias is a second
+// NAME for the same storage (rule 2: "the equations in the module shall
+// reference the parameter by its original name, not the alias"), so the value
+// read through `$mfactor` is the one Table 9-29 fixes for a top-level instance
+// that nothing overrides: 1.0.
+//
+// ch06_hierarchy reads `$mfactor` directly and never aliases it.
+//
+//! lrm 3.4.7
+//! lrm 6.3.6
+//! xfail VerA's parser takes only a parameter_identifier after `aliasparam ... =`: the `$mfactor` token is E0208
+`include "check.vh"
+module ch03_aliasparam_mfactor(p, n);
+    inout p, n;
+    electrical p, n;
+    aliasparam m = $mfactor;
+
+    analog begin
+        `CHECKX("$mfactor is 1.0 for an un-overridden top-level instance", $mfactor, 1.0);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

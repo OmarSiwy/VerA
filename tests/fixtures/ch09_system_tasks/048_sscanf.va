@@ -13,6 +13,9 @@
 // one successful assignment, so code is 1 — not the character count (2), and not
 // the EOF the same paragraph reserves for input that ends "before the first
 // matching failure or conversion".
+//
+//! lrm 9.5.4.2
+//! xfail VerA has no string-scanning surface: codegen.zig `void_tasks` lowers $sscanf to the constant `S.con(0.0)`, so it returns 0 and never writes its output argument — `value` keeps its initial 0. Nothing here touches the filesystem, so this gap is the formatter alone, not the missing descriptor table
 `include "check.vh"
 module ch09_atomic_sscanf(p, n);
   inout p, n; electrical p, n;

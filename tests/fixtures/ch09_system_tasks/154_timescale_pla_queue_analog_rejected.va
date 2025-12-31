@@ -1,0 +1,48 @@
+// The three remaining analog-context "No" tables, and the two of them the LRM
+// backs with a flat prose sentence as well as a column.
+//
+// Table 9-3 (§9.6 Timescale System Tasks):
+//     $printtimescale  Yes  No
+//     $timeformat      Yes  No
+// Both report or set how a TICK COUNT is printed, and the analog kernel has no
+// tick — it advances by a continuously variable step. That is the same reason
+// Table 9-7 withdraws $time and $stime (149) and gives the analog context
+// $abstime in seconds instead (14_abstime.va).
+//
+// Table 9-5 (§9.8 PLA Modeling System Tasks), all sixteen $async/$sync array
+// and plane spellings, "No" in the analog context, and §9.8 in full:
+//     "Verilog AMS HDL does not extend the PLA modeling tasks defined in
+//      IEEE Std 1364 Verilog."
+//
+// Table 9-6 (§9.9 Stochastic Analysis System Tasks), $q_initialize, $q_remove,
+// $q_exam, $q_add and $q_full, "No" in the analog context, and §9.9 in full:
+//     "Verilog AMS HDL does not extend the stochastic analysis tasks defined in
+//      IEEE Std 1364 Verilog."
+//
+// "Does not extend" is the whole of §9.8 and §9.9 — there is no other sentence
+// in either subclause — so these two are the least ambiguous rows in the
+// chapter. Nothing in this directory tests them because there is no positive
+// side to test: unlike the display and file families, these tables have no
+// analog-context "Yes" row at all.
+//
+// One representative per table rather than twenty-three files. The first
+// diagnostic ends the compile; the rest name the coverage.
+//
+// A reject, so there is nothing to run and no `want` to write.
+//
+//! lrm 9.6
+//! lrm 9.8
+//! lrm 9.9
+//! reject analog context
+//! xfail VerA implements no Table 9-3/9-5/9-6 analog-context restriction; grep across src/ finds no analog-context check for any ch9 system task
+module ch09_timescale_pla_queue_analog_rejected(p, n);
+  inout p, n; electrical p, n;
+  integer in_array, out_array, status;
+  analog begin
+    $printtimescale;
+    $timeformat(-9, 2, " ns", 10);
+    $async$and$array(in_array, in_array, out_array);
+    status = $q_initialize(1, 1, 16);
+    I(p,n) <+ V(p,n) + status;
+  end
+endmodule

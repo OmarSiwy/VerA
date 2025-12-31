@@ -8,6 +8,8 @@
 // agreeing is what "solved" would mean here, but each is asserted against its own
 // literal so a wrong probe cannot hide behind a wrong source.
 //
+//! lrm 5.4.1
+//! lrm 5.6.1.1
 //! bias V(p) = 0.75
 //! sweep flowZ28pZ2cgndZ29 = 0.375
 `include "check.vh"

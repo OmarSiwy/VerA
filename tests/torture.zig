@@ -10,6 +10,15 @@
 //!   anything else              must compile, build a native testbench, RUN,
 //!                              and print `ok=1` for every assertion it makes
 //!
+//! Two further directives say something ABOUT the expectation without being one:
+//!
+//!   `//! lrm <section>`        the normative clause this fixture pins, e.g.
+//!                              `5.8` or `A.8.3`. No effect on the verdict; it
+//!                              makes a FAIL name the RULE and not just the
+//!                              file, and `--coverage` reports the cited set.
+//!   `//! xfail <reason>`       the rule is right and VerA is KNOWN not to meet
+//!                              it yet — see the `xfail` verdict below.
+//!
 //! WHY A TRANSCRIPT SNAPSHOT IS NOT AN ORACLE, and what replaces it. The
 //! deleted `.expected.zig` files were VerA's own output fed back to it: a wrong
 //! answer, once recorded, was frozen as correct forever. So the ASSERTION is not
@@ -40,12 +49,52 @@
 //! printed by name with the reason, and `--strict` fails on it — a limitation
 //! that costs nothing to carry is a limitation nobody ever fixes.
 //!
-//! Deterministic by construction: sorted walk, one binary per fixture, `-ODebug`
-//! so no reassociation, every number at fixed precision.
+//! `xfail` is the same shape of honesty pointed the other way: the fixture is
+//! correct, the LRM requirement it states is real, and VERA is the thing that
+//! does not meet it yet. Deleting such a fixture loses the requirement; leaving
+//! it FAILing buries the regressions. So it gets its own verdict, on the same
+//! terms as `refused` — not a pass, printed by name with the reason, `--strict`
+//! fails on it. And an XPASS is a hard FAIL: the day VerA does meet the rule,
+//! the `//! xfail` line is a lie about the compiler and must go.
 //!
-//!   zig build torture                 # every fixture
-//!   zig build torture -- ch04         # only paths matching `ch04`
-//!   zig build torture -- --strict     # unasserted and refused FAIL instead of warn
+//! It marks EITHER expectation, because the gap comes in both directions. On a
+//! `reject` fixture: the LRM says this is an error, VerA accepts it. On a run
+//! fixture: the LRM prints this as a legal worked example, so it must compile
+//! and print `ok=1`, and VerA cannot build it yet. The second is the commoner
+//! one, and the reason run-side xfail has to exist: written as `//! reject`
+//! instead — "VerA does not support it, so demand a diagnostic" — the fixture
+//! is INVERTED, and a conforming compiler is the only thing that fails it.
+//!
+//! DETERMINISTIC BY CONSTRUCTION, AND STILL PARALLEL. A fixture is a `zig
+//! build-exe`, so the run is minutes of compiler and fixtures share nothing —
+//! separate source, separate scratch directory, separate output slot. Workers
+//! therefore take from one queue and finish in whatever order they finish in,
+//! and NONE of them print. Each one buffers its whole report into the slot for
+//! its position in the sorted walk, and the report is emitted from those slots
+//! afterwards. The output of a parallel run is the output of `-j1`, byte for
+//! byte, or there is a bug. `-j1` keeps the fully sequential path, printing as
+//! it goes, because that is what shows which fixture a stuck run is stuck on.
+//!
+//! The rest is deterministic the same way it always was: sorted walk, one binary
+//! per fixture, every number at fixed precision.
+//!
+//! FIXTURE BINARIES ARE BUILT `-ODebug`, and not out of timidity about floats:
+//! Zig has no `-ffast-math`, so float arithmetic is strict IEEE in every
+//! optimize mode unless the code asks for `@setFloatMode(.optimized)`, which a
+//! generated device does not. The reasons are that a testbench compiles for
+//! seconds and runs for microseconds — compile time IS the run time, and
+//! ReleaseFast would make the whole suite slower, not faster — and that Debug
+//! keeps the safety checks on, so a codegen bug traps loudly instead of
+//! producing a plausible wrong number. `--fixture-opt=ReleaseFast` exists to
+//! ask the separate, real question "does this still pass under optimization?",
+//! deliberately and not by default.
+//!
+//!   zig build torture                     # every fixture
+//!   zig build torture -- ch04             # only paths matching `ch04`
+//!   zig build torture -- --strict         # unasserted, refused and xfail FAIL instead of warn
+//!   zig build torture -- --coverage       # every cited LRM section and who cites it
+//!   zig build torture -- -j1              # one at a time, streaming; the debugging path
+//!   zig build torture -- --fixture-opt=ReleaseFast
 
 const std = @import("std");
 const vera = @import("vera");
@@ -61,6 +110,14 @@ const Fixture = struct {
     stem: []const u8,
     /// `tests/fixtures/ch04_expressions`
     dir: []const u8,
+    /// `ch04_expressions_01_arithmetic` — the scratch directory name.
+    ///
+    /// NOT the stem: three stems (`analog_event`, `discrete_discipline`,
+    /// `multiple_analog_blocks`) appear in more than one chapter, and two
+    /// fixtures sharing a scratch directory overwrite each other's
+    /// `device.zig`. Sequentially that is merely wasteful; in parallel it is a
+    /// race that decides the verdict.
+    slug: []const u8,
 };
 
 /// Why a fixture failed to produce a device, in the vocabulary the `//! reject`
@@ -88,6 +145,10 @@ const Verdict = enum {
     /// fixture never got to state anything. Distinct from `fail` because the
     /// author cannot act on it: see `refusedByContract`.
     refused,
+    /// Did not behave as the fixture said — and the fixture said so in advance
+    /// with `//! xfail`. The rule is real, VerA does not meet it yet. Distinct
+    /// from `fail` for the same reason `refused` is, and not a pass either.
+    xfail,
 };
 
 /// Does this `zig build-exe` failure mean the ENGINE declined the device, rather
@@ -105,6 +166,88 @@ fn refusedByContract(build_output: []const u8) bool {
     return std.mem.indexOf(u8, build_output, "num_ports must be in 1..|U|") != null;
 }
 
+const Counts = struct {
+    passed: usize = 0,
+    failed: usize = 0,
+    unasserted: usize = 0,
+    refused: usize = 0,
+    xfail: usize = 0,
+
+    fn add(c: *Counts, v: Verdict) void {
+        switch (v) {
+            .pass => c.passed += 1,
+            .fail => c.failed += 1,
+            .unasserted => c.unasserted += 1,
+            .refused => c.refused += 1,
+            .xfail => c.xfail += 1,
+        }
+    }
+};
+
+/// One fixture's whole report, held rather than printed.
+const Slot = struct {
+    verdict: Verdict = .pass,
+    /// Everything the fixture printed, owned by `gpa`. Held as ONE block so a
+    /// FAIL keeps its diagnostics, its LRM cites and its transcript together
+    /// instead of being shredded across whatever else finished at the time.
+    output: []const u8 = "",
+};
+
+/// The work queue, shared by every worker.
+///
+/// The unit of work is one whole fixture — compile, `zig build-exe`, run — and
+/// fixtures share nothing: separate source, separate scratch directory
+/// (`Fixture.slug`), separate output slot. So the only synchronisation needed
+/// is which one to take next.
+const Job = struct {
+    gpa: std.mem.Allocator,
+    io: Io,
+    fixtures: []const Fixture,
+    slots: []Slot,
+    strict: bool,
+    fixture_opt: std.builtin.OptimizeMode,
+    next: std.atomic.Value(usize) = .init(0),
+
+    fn work(job: *Job) void {
+        // Per-worker, and reset per fixture: an arena is not threadsafe, and
+        // the shared one the sequential path uses would grow to the whole run.
+        var arena_state: std.heap.ArenaAllocator = .init(job.gpa);
+        defer arena_state.deinit();
+
+        while (true) {
+            const i = job.next.fetchAdd(1, .monotonic);
+            if (i >= job.fixtures.len) return;
+            _ = arena_state.reset(.retain_capacity);
+            const f = job.fixtures[i];
+
+            var aw: Io.Writer.Allocating = .init(job.gpa);
+            const verdict = runFixture(
+                job.gpa,
+                job.io,
+                arena_state.allocator(),
+                f,
+                job.strict,
+                job.fixture_opt,
+                &aw.writer,
+            ) catch |err| blk: {
+                aw.writer.print("FAIL {s}: the runner itself failed: {t}\n", .{ f.path, err }) catch {};
+                break :blk .fail;
+            };
+            var list = aw.toArrayList();
+            job.slots[i] = .{
+                .verdict = verdict,
+                .output = list.toOwnedSlice(job.gpa) catch "",
+            };
+        }
+    }
+};
+
+/// `-j8`, `--jobs=8`. Null when `a` is not that flag at all.
+fn numeric(a: []const u8, prefix: []const u8) ?usize {
+    if (!std.mem.startsWith(u8, a, prefix)) return null;
+    return std.fmt.parseInt(usize, a[prefix.len..], 10) catch null;
+}
+
 pub fn main(init: std.process.Init) !u8 {
     const gpa = init.gpa;
     const io = init.io;
@@ -114,11 +257,25 @@ pub fn main(init: std.process.Init) !u8 {
     const arena = arena_state.allocator();
 
     var strict = false;
+    var coverage = false;
     var filter: ?[]const u8 = null;
+    // One thread per core, because a fixture is a `zig build-exe` and that is
+    // where the whole runtime goes. `-j1` is the escape hatch, below.
+    var jobs: usize = std.Thread.getCpuCount() catch 1;
+    var fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, options.fixture_optimize).?;
     var args = init.minimal.args.iterate();
     _ = args.skip();
     while (args.next()) |a| {
-        if (std.mem.eql(u8, a, "--strict")) strict = true else filter = a;
+        if (std.mem.eql(u8, a, "--strict")) strict = true //
+        else if (std.mem.eql(u8, a, "--coverage")) coverage = true //
+        else if (numeric(a, "-j") orelse numeric(a, "--jobs=")) |n| jobs = @max(n, 1) //
+        else if (std.mem.startsWith(u8, a, "--fixture-opt=")) {
+            const name = a["--fixture-opt=".len..];
+            fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, name) orelse {
+                std.debug.print("torture: not an optimize mode: {s}\n", .{name});
+                return 1;
+            };
+        } else filter = a;
     }
 
     var stderr_buf: [4096]u8 = undefined;
@@ -132,19 +289,56 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     }
 
-    var passed: usize = 0;
-    var failed: usize = 0;
-    var unasserted: usize = 0;
-    var refused: usize = 0;
-    for (fixtures) |f| {
-        switch (try runFixture(gpa, io, arena, f, strict, w)) {
-            .pass => passed += 1,
-            .fail => failed += 1,
-            .unasserted => unasserted += 1,
-            .refused => refused += 1,
+    if (coverage) {
+        try reportCoverage(arena, io, fixtures, w);
+        try w.flush();
+        return 0;
+    }
+
+    var counts: Counts = .{};
+    if (jobs <= 1) {
+        // The sequential path, kept working on purpose: it prints as it goes,
+        // which is the only way to see WHICH fixture a run is stuck on.
+        for (fixtures) |f| {
+            counts.add(try runFixture(gpa, io, arena, f, strict, fixture_opt, w));
+            try w.flush();
+        }
+    } else {
+        const slots = try arena.alloc(Slot, fixtures.len);
+        var job: Job = .{
+            .gpa = gpa,
+            .io = io,
+            .fixtures = fixtures,
+            .slots = slots,
+            .strict = strict,
+            .fixture_opt = fixture_opt,
+        };
+        var group: Io.Group = .init;
+        var hands: usize = 0;
+        while (hands < jobs) : (hands += 1) {
+            // A narrower pool than asked for is fine — the queue does not care
+            // how many hands take from it. None at all is not, so this thread
+            // does the work itself.
+            group.concurrent(io, Job.work, .{&job}) catch break;
+        }
+        if (hands == 0) job.work();
+        try group.await(io);
+
+        // Emit in SLOT order, i.e. the sorted walk, whatever order the pool
+        // finished in. This is the whole reason the workers buffer.
+        for (slots) |s| {
+            counts.add(s.verdict);
+            try w.writeAll(s.output);
+            gpa.free(s.output);
         }
         try w.flush();
     }
+
+    const passed = counts.passed;
+    const failed = counts.failed;
+    const unasserted = counts.unasserted;
+    const refused = counts.refused;
+    const xfail = counts.xfail;
 
     try w.print("\ntorture: {d}/{d} fixtures behave as they say they do\n", .{ passed, fixtures.len });
     if (failed != 0) try w.print("  {d} FAILED\n", .{failed});
@@ -163,8 +357,77 @@ pub fn main(init: std.process.Init) !u8 {
             "  (`--strict` fails on these, so the limitation cannot be forgotten.)\n",
         .{refused},
     );
+    if (xfail != 0) try w.print(
+        "  {d} XFAIL — the fixture is right and VERA is not: it states a real LRM\n" ++
+            "  requirement that VerA is known not to meet yet, and said so on its\n" ++
+            "  `//! xfail` line (printed with the reason above). Not a pass — nothing\n" ++
+            "  was proved. The day VerA starts meeting it the run FAILs with an XPASS,\n" ++
+            "  so the marker cannot outlive the limitation and quietly hide a\n" ++
+            "  regression. (`--strict` fails on these.)\n",
+        .{xfail},
+    );
     try w.flush();
-    return if (failed == 0 and !(strict and (unasserted != 0 or refused != 0))) 0 else 1;
+    return if (failed == 0 and !(strict and (unasserted != 0 or refused != 0 or xfail != 0))) 0 else 1;
+}
+
+/// `--coverage`: every `//! lrm` cite in the run, sorted, with the fixtures
+/// citing it.
+///
+/// It cannot say a clause is UNcited — nothing here has the LRM's table of
+/// contents, and inventing one would be a second document to drift. What it
+/// does is make the cited set mechanical: greppable, diffable, and countable,
+/// which is the check a "we cover chapter 4" claim currently has no way to
+/// back up.
+fn reportCoverage(arena: std.mem.Allocator, io: Io, fixtures: []const Fixture, w: *Io.Writer) !void {
+    const Cite = struct { section: []const u8, path: []const u8 };
+    var cites: std.ArrayList(Cite) = .empty;
+    var citing: usize = 0;
+    for (fixtures) |f| {
+        const source = try Io.Dir.cwd().readFileAlloc(io, f.path, arena, .limited(1 << 20));
+        // A fixture whose directives do not parse is reported by the run
+        // proper; a coverage report is not the place to fail on it.
+        const d = vera.tb.parse(arena, source) catch continue;
+        if (d.lrm.len != 0) citing += 1;
+        for (d.lrm) |s| try cites.append(arena, .{ .section = s, .path = f.path });
+    }
+    std.mem.sort(Cite, cites.items, {}, struct {
+        fn lt(_: void, a: Cite, b: Cite) bool {
+            if (std.mem.eql(u8, a.section, b.section)) return std.mem.lessThan(u8, a.path, b.path);
+            return sectionLessThan(a.section, b.section);
+        }
+    }.lt);
+
+    var sections: usize = 0;
+    var prev: []const u8 = "";
+    for (cites.items) |c| {
+        if (!std.mem.eql(u8, c.section, prev)) {
+            try w.print("§{s}\n", .{c.section});
+            prev = c.section;
+            sections += 1;
+        }
+        try w.print("  {s}\n", .{c.path});
+    }
+    try w.print("\ntorture: {d} LRM section(s) cited by {d} of {d} fixtures\n", .{
+        sections, citing, fixtures.len,
+    });
+}
+
+/// Order cites the way the LRM's contents page does: numerically per component,
+/// so §10 follows §9 instead of §1, and chapters come before annexes.
+fn sectionLessThan(a: []const u8, b: []const u8) bool {
+    var ia = std.mem.splitScalar(u8, a, '.');
+    var ib = std.mem.splitScalar(u8, b, '.');
+    while (true) {
+        const pa = ia.next() orelse return ib.next() != null; // a prefix sorts first
+        const pb = ib.next() orelse return false;
+        if (std.mem.eql(u8, pa, pb)) continue;
+        const na = std.fmt.parseInt(u32, pa, 10) catch null;
+        const nb = std.fmt.parseInt(u32, pb, 10) catch null;
+        if (na != null and nb != null) return na.? < nb.?;
+        if (na != null) return true;
+        if (nb != null) return false;
+        return std.mem.lessThan(u8, pa, pb);
+    }
 }
 
 /// Sorted so the run is deterministic (`Dir.walk` order is explicitly undefined)
@@ -186,10 +449,13 @@ fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]const 
         const path = try std.fs.path.join(arena, &.{ root, entry.path });
         if (filter) |f| if (std.mem.indexOf(u8, path, f) == null) continue;
         const base = std.fs.path.basename(path);
+        const slug = try arena.dupe(u8, entry.path[0 .. entry.path.len - ".va".len]);
+        for (slug) |*c| if (c.* == '/' or c.* == '\\') { c.* = '_'; };
         try list.append(arena, .{
             .path = path,
             .stem = base[0 .. base.len - ".va".len],
             .dir = std.fs.path.dirname(path) orelse ".",
+            .slug = slug,
         });
     }
     std.mem.sort(Fixture, list.items, {}, struct {
@@ -206,6 +472,7 @@ fn runFixture(
     arena: std.mem.Allocator,
     f: Fixture,
     strict: bool,
+    fixture_opt: std.builtin.OptimizeMode,
     w: *Io.Writer,
 ) !Verdict {
     const source = try Io.Dir.cwd().readFileAlloc(io, f.path, arena, .limited(1 << 20));
@@ -217,8 +484,23 @@ fn runFixture(
         return .fail;
     };
 
-    if (d.reject.len != 0) return verifyRejected(gpa, arena, f, source, d.reject, w);
-    return verifyRuns(gpa, io, arena, f, source, d, strict, w);
+    const verdict = if (d.reject.len != 0)
+        try verifyRejected(gpa, f, source, d, w)
+    else
+        try verifyRuns(gpa, io, arena, f, source, d, strict, fixture_opt, w);
+
+    // A verdict that names only the file makes the reader go and find the rule.
+    // If the fixture said which clause it pins, say it here — for an xfail too,
+    // where the cite IS the requirement being carried unmet.
+    switch (verdict) {
+        .fail, .xfail => if (d.lrm.len != 0) {
+            try w.print("  LRM", .{});
+            for (d.lrm) |section| try w.print(" §{s}", .{section});
+            try w.print("\n", .{});
+        },
+        .pass, .unasserted, .refused => {},
+    }
+    return verdict;
 }
 
 // ---------------------------------------------------------------------------
@@ -227,13 +509,11 @@ fn runFixture(
 
 fn verifyRejected(
     gpa: std.mem.Allocator,
-    arena: std.mem.Allocator,
     f: Fixture,
     source: []const u8,
-    patterns: []const []const u8,
+    d: vera.tb.Directives,
     w: *Io.Writer,
 ) !Verdict {
-    _ = arena;
     var attempt = try compileFixture(gpa, f, source);
     defer switch (attempt) {
         .ok => {},
@@ -245,19 +525,44 @@ fn verifyRejected(
 
     const bad = switch (attempt) {
         .ok => {
+            if (d.xfail) |why| {
+                try w.print("XFAIL {s}: it compiled cleanly — known: {s}\n", .{ f.path, why });
+                return .xfail;
+            }
             try w.print("FAIL {s}: expected a diagnostic, but it compiled cleanly\n", .{f.path});
             return .fail;
         },
         .failed => |bad| bad,
     };
 
-    for (patterns) |pattern| {
+    for (d.reject) |pattern| {
         if (!failureContains(bad, pattern)) {
+            if (d.xfail) |why| {
+                try w.print(
+                    "XFAIL {s}: no diagnostic matched \"{s}\" — known: {s}\n",
+                    .{ f.path, pattern, why },
+                );
+                return .xfail;
+            }
             try w.print("FAIL {s}: diagnostic substring not found: \"{s}\"\n", .{ f.path, pattern });
             try w.print("  error: {s}\n", .{bad.error_name});
             try printDiags(bad, w);
             return .fail;
         }
+    }
+
+    // Every substring matched — which for an xfail fixture means the limitation
+    // it documents is GONE. That is good news and still a hard FAIL: a marker
+    // left on a rule VerA now enforces stops this fixture ever being reported
+    // again, so the next regression there is silent.
+    if (d.xfail != null) {
+        try w.print(
+            "FAIL {s}: XPASS — marked `//! xfail`, but VerA now rejects it exactly as\n" ++
+                "  the LRM says it must. Delete the `//! xfail` line: the limitation is\n" ++
+                "  fixed, and a marker outliving it hides the next regression.\n",
+            .{f.path},
+        );
+        return .fail;
     }
     return .pass;
 }
@@ -397,6 +702,20 @@ fn printDiags(f: Failure, w: *Io.Writer) !void {
 // The run half: the expected behavior is a transcript the model asserts itself
 // ---------------------------------------------------------------------------
 
+/// `//! xfail` on a RUN fixture points the marker the other way round from the
+/// reject side: the source is a legal worked example — the LRM prints it — so it
+/// must compile and print `ok=1`, and VerA is KNOWN not to manage that yet. That
+/// is the far commoner gap, and without it such a fixture gets written `//!
+/// reject`, which inverts the test: a CONFORMING compiler fails it and only VerA
+/// passes.
+///
+/// So ANY failure is the failure the fixture predicted — did not compile, codegen
+/// refused it, the testbench would not build, it exited nonzero, an `ok=0`. The
+/// detail is buffered rather than printed, because for an xfail it is not news:
+/// WHAT VerA does not do belongs on the `//! xfail` line, where it can be triaged
+/// without rerunning. Every other verdict emits the buffer verbatim, so `refused`
+/// keeps its own message AND its priority — a host limitation is not a compiler
+/// non-conformance, and reporting it as one loses which of the two it was.
 fn verifyRuns(
     gpa: std.mem.Allocator,
     io: Io,
@@ -405,6 +724,58 @@ fn verifyRuns(
     source: []const u8,
     d: vera.tb.Directives,
     strict: bool,
+    fixture_opt: std.builtin.OptimizeMode,
+    w: *Io.Writer,
+) !Verdict {
+    // A malformed assertion is the FIXTURE's defect, not VerA's gap, and the
+    // marker must not launder it — an xfail whose want is an expression would be
+    // carried forever and prove nothing on the day the gap closes.
+    // `checkAssertions` is pure and runs on raw source, so asking it twice costs
+    // nothing.
+    const why = switch (checkAssertions(source)) {
+        .tautology, .computed_want => null,
+        .ok, .none => d.xfail,
+    } orelse return runAndCheck(gpa, io, arena, f, source, d, strict, fixture_opt, w);
+
+    var aw: Io.Writer.Allocating = .init(gpa);
+    defer aw.deinit();
+    const verdict = try runAndCheck(gpa, io, arena, f, source, d, strict, fixture_opt, &aw.writer);
+    switch (verdict) {
+        .fail => {
+            try w.print("XFAIL {s}: it does not run green — known: {s}\n", .{ f.path, why });
+            return .xfail;
+        },
+        // Green, and the fixture said it would not be: the gap is closed. Same
+        // hard FAIL as an XPASS on the reject side, for the same reason — a
+        // marker that outlives its limitation silences the next regression.
+        .pass => {
+            try w.print(
+                "FAIL {s}: XPASS — marked `//! xfail`, but it compiled, ran, and printed\n" ++
+                    "  ok=1 for every assertion. Delete the `//! xfail` line: the limitation\n" ++
+                    "  is fixed, and a marker outliving it hides the next regression.\n",
+                .{f.path},
+            );
+            return .fail;
+        },
+        // `unasserted` proves nothing, so it cannot show the gap is closed;
+        // `refused` is the HOST's limitation and outranks VerA's. Neither is
+        // touched by the marker, and both keep their own report.
+        .unasserted, .refused, .xfail => {
+            try w.writeAll(aw.written());
+            return verdict;
+        },
+    }
+}
+
+fn runAndCheck(
+    gpa: std.mem.Allocator,
+    io: Io,
+    arena: std.mem.Allocator,
+    f: Fixture,
+    source: []const u8,
+    d: vera.tb.Directives,
+    strict: bool,
+    fixture_opt: std.builtin.OptimizeMode,
     w: *Io.Writer,
 ) !Verdict {
     // Refuse a fixture that cannot fail BEFORE spending a `zig build-exe` on it.
@@ -478,14 +849,16 @@ fn verifyRuns(
 
     const runner = try vera.tb.renderRunner(arena, f.stem, d);
 
-    // One work directory per fixture: two fixtures may declare the same module
-    // name, and a shared scratch would race them onto one `device.zig`.
-    const work = try std.fs.path.join(arena, &.{ options.work_root, f.stem });
+    // One work directory per fixture, keyed on the whole relative path: two
+    // fixtures may declare the same module name AND share a file name, and a
+    // shared scratch would race them onto one `device.zig`.
+    const work = try std.fs.path.join(arena, &.{ options.work_root, f.slug });
     const built = vera.tb.buildExe(gpa, io, device, runner, .{
         .work_dir = work,
         .contract = options.contract,
         .name = result.mir.name,
         .zig_exe = options.zig_exe,
+        .optimize = fixture_opt,
     }) catch |err| {
         try w.print("FAIL {s}: building the testbench: {t}\n", .{ f.path, err });
         return .fail;
@@ -803,6 +1176,16 @@ test "only the contract's refusal is excused; any other build error still fails"
     try std.testing.expect(!refusedByContract(
         \\tools/contract.zig:206:9: error: ex.U must be a dense enum(u8) with values 0..n-1
     ));
+}
+
+test "lrm cites sort like a contents page, not like strings" {
+    try std.testing.expect(sectionLessThan("9.4", "10.1")); // not lexicographic
+    try std.testing.expect(!sectionLessThan("10.1", "9.4"));
+    try std.testing.expect(sectionLessThan("4.5", "4.5.11"));
+    try std.testing.expect(sectionLessThan("4.5.2", "4.5.11"));
+    try std.testing.expect(sectionLessThan("12", "A.1")); // chapters before annexes
+    try std.testing.expect(sectionLessThan("A.1.2", "B"));
+    try std.testing.expect(!sectionLessThan("5.8", "5.8"));
 }
 
 test "verdicts are counted, and a malformed one is not a pass" {

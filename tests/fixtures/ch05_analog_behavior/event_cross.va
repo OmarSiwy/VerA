@@ -3,10 +3,11 @@
 // generate an event after simulation time has advanced from zero.
 //
 // So at this single dc point the event cannot fire, whatever V(c) is, and
-// `held` keeps the zero §3.2.1 gives a real variable. The bias is chosen so
+// `held` keeps the zero §3.2 gives a real variable. The bias is chosen so
 // that a firing would be visible: V(p)=0.4, and V(c) sits above the threshold
 // — exactly the case §5.10.3.2 says above() WOULD fire on and cross() must not.
 //
+//! lrm 5.10.3.1
 //! bias V(c) = 1.25, V(p) = 0.4
 `include "check.vh"
 module ch5_cross(p, c);

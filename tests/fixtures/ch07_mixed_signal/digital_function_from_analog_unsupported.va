@@ -1,7 +1,20 @@
-// annex C: digital (non-analog) function declarations are outside Verilog-A.
+// §7.3.7 function calls, first sentence: "Digital functions cannot be called
+// from within the analog context." The call on the last line is that violation:
+// `digital_scale` is declared `function` (not `analog function`), so it is a
+// digital function, and its only caller is the analog block.
+//
+// The rule is MASKED here, not exercised. C.7 removes digital behavior from
+// Verilog-A entirely, so a non-analog `function` declaration is already outside
+// the subset and dies as an unsupported module item (E0205) before any caller
+// is analysed. That verdict is conformance for this dialect — a Verilog-A tool
+// cannot reach §7.3.7 because it cannot have a digital function in the first
+// place — but it does mean the domain-crossing check itself never fires. Same
+// masking in the other direction: analog_function_from_digital_unsupported.va
+// and cross_domain_function_unsupported.va.
+//
+//! lrm 7.3.7
+//! lrm C.7
 //! reject E0205
-//! reject function
-// LRM 7.3.7 forbids this; the snapshot exposes the missing domain diagnostic.
 module ch7_digital_function_from_analog(p);
   inout p; electrical p;
   function real digital_scale;

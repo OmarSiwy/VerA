@@ -1,4 +1,9 @@
-//! reject unsupported module item
+// Annex C.7: "No digital behavior or events are supported in Verilog-A." The
+// nonblocking update needs the digital event queue's nonblocking region, and the
+// `always` process that would drive it is not a Verilog-A module item at all.
+//! lrm C.7
+//! reject E0205
+//! reject always
 // EXPECT: error -- nonblocking updates need region 3.
 module ch8_nonblocking;
   integer source, target;

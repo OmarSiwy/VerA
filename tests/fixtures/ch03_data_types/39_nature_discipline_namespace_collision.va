@@ -13,7 +13,9 @@
 // here, so with one name bound to both kinds those productions have no unique
 // reading.
 //
-//! reject DiagnosticsReported
+//! lrm 3.13.1
+//! lrm 3.6.1
+//! reject E0336
 nature ch3_collision; units="V"; access=CollisionV; abstol=1u; endnature
 discipline ch3_collision; domain continuous; enddiscipline
 module ch3_collision_user; endmodule

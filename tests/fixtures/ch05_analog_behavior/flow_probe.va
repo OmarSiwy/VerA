@@ -7,6 +7,7 @@
 // 2 * 0.02 = 0.04 V. (The unknown is spelled from the node pair with its
 // punctuation escaped by codegen — the named branch is an alias for (p,n).)
 //
+//! lrm 5.4.2
 //! sweep flowZ28pZ2cnZ29 = 0.02
 `include "check.vh"
 module ch5_flow_probe(p, n);

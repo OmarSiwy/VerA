@@ -2,6 +2,7 @@
 // potential access function."  A port access function reads the FLOW into the
 // port and nothing else.  (The .va comment cites 4.4.2, which gives the access
 // function grammar; 5.4.3 is where the prohibition itself is stated.)
+//! lrm 5.4.3
 //! reject E0507
 //! reject potential access function
 // EXPECT: error -- LRM 4.4.2: a port branch supports FLOW access only, so

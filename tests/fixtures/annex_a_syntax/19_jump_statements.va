@@ -1,4 +1,16 @@
-// LRM 5.9: "The return statement can only be used from within an analog
-// user-defined function."
+// A.6.5 `jump_statement ::= return [ expression ] ; | break ; | continue ;`
+// is an alternative of A.6.4 `analog_statement`, so all three parse here — but
+// §5.11 Jump statements scopes the last one: "The return statement can only be
+// used from within an analog user-defined function." The `continue` and the
+// `break` inside the for loop are legal and are only there to keep the rest of
+// the production covered; the bare `return;` in the analog block is the error.
+//
+// The citation used to read "LRM 5.9", which is Looping statements; the
+// sentence quoted above is in §5.11. Sibling 18_disable_statement.va already
+// documents the same mis-cite.
+//
+//! lrm A.6.4
+//! lrm A.6.5
+//! lrm 5.11
 //! reject E0403
 module annex_a_jumps(p); inout p; electrical p; integer i; analog begin for(i=0;i<3;i=i+1) begin if(i==1) continue; if(i==2) break; end return; I(p)<+V(p); end endmodule

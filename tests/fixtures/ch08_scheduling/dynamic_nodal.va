@@ -7,6 +7,8 @@
 // however hard the branch is biased. The first check pins the bias at 0.75 V so
 // the zero below is a statement about ddt and not about a dead branch.
 //
+//! lrm 8.3.1
+//! lrm 4.5.3
 //! bias V(p) = 1.0, V(n) = 0.25
 `include "check.vh"
 module ch8_dynamic(p, n);

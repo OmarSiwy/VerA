@@ -1,15 +1,16 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §7.3.6.1 analog event appearing in a digital event control: an `always` block
+// waits on `cross()`, and the statements under it "shall be scheduled in the
+// digital domain at the nearest digital time tick to the time of the analog
+// event".
 //
-// VAMS-7.3.6.1-01  (ch7-mixed-signal.html)
-// When it is determined the event has occurred in the analog domain, the statements under the event control shall be scheduled in the digital domain at
-// VAMS-7.3.6.1-02  (ch7-mixed-signal.html)
-// This event shall not be scheduled in the digital domain earlier than the last or current digital event, however it may appear to be in a delta cycle b
+// C.7 removes the digital half from this dialect — "No digital behavior or
+// events are supported in Verilog-A" — so the `always` block is an unsupported
+// module item and the rejection is conformance, not debt. Nothing in a
+// Verilog-A tool has a digital time tick for the event to be scheduled onto.
 //
-//! reject unsupported module item
-// EXPECT: error -- analog cross inside always requires both engines.
+//! lrm 7.3.6.1
+//! lrm C.7
+//! reject E0205
 module ch7_digital_cross(p);
   inout p; electrical p; integer d;
   always @(cross(V(p), +1)) d = 1;

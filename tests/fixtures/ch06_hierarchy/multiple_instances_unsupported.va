@@ -1,6 +1,39 @@
-//! reject module instantiation is not supported
-// EXPECT: error -- multiple instances in one statement require hierarchy elaboration.
+// §6.2.2: "One or more module instances (identical copies of a module definition)
+// can be specified in a single module instantiation statement" —
+// `module_instantiation ::= module_or_paramset_identifier [
+// parameter_value_assignment ] module_instance { , module_instance } ;`. Two
+// instances, one statement, one `#()` shared between them. Legal source, so this
+// is a run fixture and not the `//! reject` it used to be.
+//
+// The two instances are connected with OPPOSITE port order — `first(p, n)` and
+// `second(n, p)` — so each is a genuinely separate binding of the same
+// definition, not one instance counted twice. With p = 0.75 V and n = 0.25 V,
+// `first` sees V(a,b) = +0.5 and `second` sees -0.5.
+//
+// A `CHECK` name carries ONE want, and this analog block is elaborated once per
+// instance with different values, so the assertion is written on the square:
+// 0.5^2 = (-0.5)^2 = 0.25, exact in binary. That still discriminates — an
+// instance bound to the same net twice reads 0.0, and an unbound one reads 0.0 —
+// while the SIGN of the ordered binding is pinned separately, by
+// module_instantiation_unsupported.va. The shared `#(2.0)` is asserted directly:
+// one parameter_value_assignment applies to every instance in the statement.
+//
+//! lrm 6.2.2
+//! bias V(p) = 0.75, V(n) = 0.25
+//! xfail VerA compiles one flat module, so a module instantiation is refused outright at E0204 "module instantiation is not supported"
+`include "check.vh"
 module ch6_multiple_instances_parent(p, n);
   inout p, n; electrical p, n;
-  ch6_child first(p), second(n);
+  ch6_mult_child #(2.0) first(p, n), second(n, p);
+endmodule
+
+module ch6_mult_child(a, b);
+  inout a, b; electrical a, b;
+  parameter real gain = 1.0;
+  analog begin
+    `CHECKX("each instance in the statement got its own real binding", V(a, b) * V(a, b), 0.25);
+    `CHECKX("one #() applies to every instance in the statement", gain, 2.0);
+    `CHECKI("both ports of every instance are connected", $port_connected(a), 1);
+    I(a, b) <+ gain * V(a, b);
+  end
 endmodule

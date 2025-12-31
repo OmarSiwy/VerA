@@ -1,6 +1,7 @@
 // §9.5.4.2. Only the $sscanf call is assertable here: it reads from a string
 // literal, so its result does not depend on the filesystem, on the working
-// directory, or on whether "fixture.dat" exists.
+// directory, or on whether "ch09_10_missing.dat" exists (it is a name no
+// fixture in this directory ever creates, so it does not).
 //
 //   code = $sscanf("42", "%d", value);
 //
@@ -10,6 +11,10 @@
 // specification, one successful assignment. Neither digit depends on the two
 // preceding calls: whatever $fopen/$fgets/$fscanf did with a missing file, the
 // $sscanf that follows overwrites both `code` and `value`.
+//
+//! lrm 9.5.1
+//! lrm 9.5.4.2
+//! xfail VerA has no file or string reading surface: codegen.zig `void_tasks` lowers $fopen/$fgets/$fscanf/$sscanf to the constant `S.con(0.0)`, so every call returns 0 and none of them writes its output argument — `value` keeps its initial 0 even for the $sscanf that reads a string literal
 `include "check.vh"
 
 module ch09_file_read_scan(p, n);
@@ -17,7 +22,7 @@ module ch09_file_read_scan(p, n);
   integer fd, code, value;
   string line;
   analog begin
-    fd = $fopen("fixture.dat", "r");
+    fd = $fopen("ch09_10_missing.dat", "r");
     code = $fgets(line, fd);
     code = $fscanf(fd, "%d", value);
     code = $sscanf("42", "%d", value);

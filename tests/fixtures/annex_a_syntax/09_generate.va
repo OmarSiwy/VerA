@@ -1,21 +1,52 @@
-// Annex A.4.2 / A.6.2 loop generate: the body is UNROLLED, once per value the
-// genvar takes. `index` runs 0 then 1 and stops, so `index*index - index` is 0
-// on every unrolled copy and on no other integer — the transcript therefore
-// carries one ok=1 line per iteration, and an unroll that reached 2 (or -1)
-// would print ok=0.
+// Annex A.4.2 loop generate.
 //
+//   loop_generate_construct ::= for ( ... ) generate_block
+//   generate_block          ::= module_or_generate_item
+//                             | begin [ : id ] { module_or_generate_item } end
+//
+// and A.1.4 offers exactly one route from a module_or_generate_item to a
+// contribution: `analog_construct ::= analog analog_statement`. The `analog`
+// keyword is therefore NOT optional inside a generate block, and §6.6.1's own
+// worked example (the adc) writes it that way:
+//
+//     generate
+//         for (i=bits-1; i>=0; i=i-1)
+//             analog begin ... end
+//     endgenerate
+//
+// §6.2 fixes what the unrolled copies then mean: "multiple analog blocks ...
+// are concatenated in order that the analog blocks appear". So the three blocks
+// here run as init, unrolled bodies, check — and the trip count is readable as
+// a sum. The body runs for index 0, 1, 2 and stops, so
+//
+//     acc = 0 + 1 + 2 = 3
+//
+// One iteration short gives 1, one too many gives 6. The invariant this
+// replaced (`index*index - index == 0`) was true for 0 and for 1 alike and
+// nothing counts the ok= lines, so an under-unroll was invisible to it.
+//
+//! lrm A.4.2
+//! lrm 6.6.1
+//! lrm 6.2
 //! bias V(p) = 0.5
 //! print none
+//! xfail VerA rejects the `analog` keyword inside a generate block with E0209 "expected an expression: found analog" — the only Annex A route to a contribution in a generated block
 `include "check.vh"
 module annex_a_generate(p, n);
     inout p, n;
     electrical p, n;
     genvar index;
+    real acc;
+
+    analog acc = 0.0;
 
     generate
-        for (index = 0; index < 2; index = index + 1) begin
-            `CHECKI("generate unrolls with index 0 then 1", index * index - index, 0);
-            I(p, n) <+ index * V(p, n);
-        end
+        for (index = 0; index < 3; index = index + 1)
+            analog begin
+                acc = acc + index;
+                I(p, n) <+ index * V(p, n);
+            end
     endgenerate
+
+    analog `CHECKX("the generate loop unrolled once per index 0, 1, 2", acc, 3.0);
 endmodule

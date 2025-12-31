@@ -4,16 +4,30 @@
 // unreadable from the other side, nor `output` unprobeable.
 //
 // The body is a potential source, whose branch equation is V(driven) - V(sense)
-// = 0 (§1.3.1.2 associated reference directions). Probed away from its solution
-// at V(sense) = 0.7, V(driven) = 0.2 the mismatch is 0.2 - 0.7 = -0.5, which is
-// the residual a solver would drive to zero.
+// = 0 (§1.3.1.2 associated reference directions). The second check is NOT that
+// residual, despite the shape: both operands are `//! bias` values the runner
+// forced, so what it observes is that each analog port reads back the value it
+// was given and that the two subtract in the declared direction. Seeing a
+// solver drive the branch to zero would need the equation solved, which a dc
+// probe at a forced operating point does not do.
 //
+// The difference is written to the last bit rather than as -0.5, because -0.5
+// is not what binary64 computes: 0.2 and 0.7 are each inexact and their
+// difference rounds to -0.49999999999999994 (exactly
+// -0.499999999999999944488848768742172978818416595458984375), half an ulp shy
+// of -0.5. §4.2 makes real arithmetic IEEE-754 double, so that value is fixed
+// for every conforming compiler and the check is CHECKX. The old -0.5 passed
+// only because CHECK's 1e-15 tolerance was 18x the 5.551115123125783e-17 error
+// — the digits, not the tolerance, were the defect.
+//
+//! lrm 7.2.3
+//! lrm 4.2
 //! bias V(sense) = 0.7, V(driven) = 0.2
 `include "check.vh"
 module ch7_analog_port(input electrical sense, output electrical driven);
   analog begin
     `CHECK("the input analog port is readable", V(sense), 0.7, 1e-15);
-    `CHECK("potential-source mismatch V(driven) - V(sense)", V(driven) - V(sense), -0.5, 1e-15);
+    `CHECKX("both analog ports read back, V(driven) - V(sense)", V(driven) - V(sense), -0.49999999999999994);
     V(driven) <+ V(sense);
   end
 endmodule

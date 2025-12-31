@@ -1,5 +1,7 @@
 // annex C: the digital `initial` block is outside Verilog-A, so there is no
 // analog/digital initial ordering to schedule.
+//! lrm C.7
+//! lrm C.10
 //! reject E0205
 //! reject initial
 // EXPECT: error -- analog initial completes before time-zero digital initial.

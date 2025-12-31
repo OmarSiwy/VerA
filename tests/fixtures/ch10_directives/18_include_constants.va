@@ -18,6 +18,9 @@
 //   1.3806503e-23 * 2.99792458e8 = 4.139085470754374e-15
 //
 // (that is the correctly-rounded double product; verified in binary64.)
+//
+//! lrm 10.1
+//! lrm D.2
 `include "check.vh"
 `include "constants.vams"
 module ch10_include_constants(p, n);

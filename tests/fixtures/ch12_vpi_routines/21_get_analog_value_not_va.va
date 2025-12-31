@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_get_analog_value
-// EXPECT: error
+//! reject `vpi_get_analog_value`
 module ch12_atomic_get_analog_value(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_get_analog_value(0);

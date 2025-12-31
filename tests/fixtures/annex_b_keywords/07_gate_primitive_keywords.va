@@ -1,6 +1,26 @@
-//! reject ParseError
-module annex_b_gates(a,b,c,d);
-  buf g0(a,b); bufif0 g1(a,b,c); bufif1 g2(a,b,c); cmos g3(a,b,c,d);
-  nand g4(a,b,c);
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// The gate-primitive family of IEEE 1364-2005 A.3.1. A `gate_instantiation` is
+// legal source, so the reservedness of the gate names is the only Annex B claim
+// available here.
+//
+// This is a reservedness census, not a feature test: one declaration per line so
+// the parser resynchronises at each `;` and reports every spelling separately,
+// and one `//! reject` line per spelling so each keyword is proved individually
+// rather than the file passing on whichever token the parser tripped over first.
+//! lrm B
+//! reject E0208
+//! reject buf
+//! reject bufif0
+//! reject bufif1
+//! reject cmos
+//! reject nand
+module annex_b_reserved_gate_primitive_keywords;
+    real buf;
+    real bufif0;
+    real bufif1;
+    real cmos;
+    real nand;
 endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.

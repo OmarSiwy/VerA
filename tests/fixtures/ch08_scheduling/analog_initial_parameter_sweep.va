@@ -50,9 +50,12 @@
 // a way that matters: a model doing `analog initial` setup on a sweep gets zero,
 // not a slightly outdated number, and zero is much likelier to divide.
 //
+//! lrm 5.2.1
+//! lrm 8.2
 //! psweep gain = 1.0, 2.0, 4.0
 //! analysis dc
 //! print none
+//! xfail VerA lowers `analog initial` as its body guarded on a synthetic initial_step (src/ir/lower.zig), so it never re-executes per dc-sweep sub-task and `seeded` collapses to its declaration default 0.0
 `include "check.vh"
 module ch8_analog_initial_psweep(p);
   inout p;
@@ -63,15 +66,19 @@ module ch8_analog_initial_psweep(p);
     seeded = 10.0 * gain;
   end
   analog begin
-    // RELATIONAL because the value STEPS from one sub-task to the next and the
-    // claim is about re-execution across them. Both sides are digits — `gain`
-    // is the swept parameter itself, so `10.0 * gain` restates the seed the
-    // block is required to recompute, not anything VerA derived.
-    `CHECKEQ("analog initial re-runs for each sub-task of a parameter sweep",
-             seeded, 10.0 * gain, 1e-15);
-    // Row-INVARIANT, so the file does not rest on the relational line alone:
-    // whatever else is true, the seed can never be the first sub-task's value
-    // once `gain` has moved past 1.0.
+    // PRIMARY, and a LITERAL, because a row-invariant one exists: the three
+    // swept gains are powers of two, so `10.0 * gain` is exact in binary and
+    // `seeded / gain` is exactly 10.0 at every sub-task. No need for the
+    // weaker relational form to carry the claim — and under the defect
+    // documented above this line answers 0, not 10.0.
+    `CHECKX("analog initial re-runs for each sub-task, so the seed tracks the swept parameter",
+            seeded / gain, 10.0);
+    // (The relational `CHECKEQ(seeded, 10.0 * gain)` this file used to lead
+    // with is exactly equivalent to the line above and strictly weaker, so it
+    // is gone: seeded/gain == 10.0 iff seeded == 10.0*gain, and only one of
+    // the two lets VerA supply its own expectation.)
+    // Row-INVARIANT: whatever else is true, the seed can never still be the
+    // first sub-task's value once `gain` has moved past 1.0.
     `CHECKI("the seed is not frozen at the first sub-task", (gain > 1.5) ? (seeded > 15.0) : 1, 1);
     I(p) <+ 0.0;
   end

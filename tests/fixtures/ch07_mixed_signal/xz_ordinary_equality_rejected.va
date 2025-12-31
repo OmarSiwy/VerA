@@ -1,0 +1,31 @@
+// §7.3.2 accessing X and Z bits of a discrete net in a continuous context. The
+// chapter's `converter` example annotates this exact comparison as illegal:
+//
+//     if (dnet == 1'bx)     // error
+//        $display("Error to access x bit in continuous context");
+//
+// The ORDINARY equality operator is what makes it an error. §7.3.2 lists the
+// four features that may carry x and z through the analog context — `===`,
+// `!==`, the case/casex/casez statements, and x/z numeric constants — and `==`
+// is not among them: it returns x when an operand is x, and "it is an error if
+// these operands return x or z bit values when solved". The a2d example one
+// page earlier writes the legal form of the same test as `dnet === 1'bx`.
+//
+// So this is an error in Verilog-AMS HDL as well as outside the Verilog-A
+// subset (C.3: "support for x and z values is limited in the analog block to
+// the mixed signal context"), and the rejection is conformance in both
+// dialects. VerA lands on the literal rather than on the operator — E0130,
+// "x/z digit in a number literal" — which is the same verdict reached one step
+// earlier; the code is pinned because it is stable, and the clause cite is what
+// says which rule the file is about.
+//
+//! lrm 7.3.2
+//! lrm C.3
+//! reject E0130
+module ch7_xz_ordinary_equality(p, d);
+  inout p; electrical p; input d; wire d; real result;
+  analog begin
+    result = (d == 1'bx) ? 1.0 : 0.0;
+    I(p) <+ result;
+  end
+endmodule

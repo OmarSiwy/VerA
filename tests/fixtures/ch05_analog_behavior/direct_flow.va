@@ -3,6 +3,7 @@
 // 1m. At V(p)=2.0, V(n)=0.5 the branch potential is 1.5 V and the contributed
 // flow is 1m * 1.5 = 1.5 mA.
 //
+//! lrm 5.4.1
 //! bias V(p) = 2.0, V(n) = 0.5
 `include "check.vh"
 module ch5_direct_flow(p, n);

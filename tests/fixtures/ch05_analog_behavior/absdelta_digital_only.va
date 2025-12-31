@@ -1,18 +1,19 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §5.10.3.4 on absdelta(): "This function is only allowed in an initial or
+// always block of a Verilog-AMS module." An `analog` block is neither, so
+// rejecting this file is conformance, not a VerA limitation — the header this
+// file used to carry said the opposite.
 //
-// VAMS-5.10.3.4-01  (ch5-analog.html)
-// [absdelta] The mandatory expr and delta arguments are specified as an analog_expression and delta shall be non-negative.
-// VAMS-5.10.3.4-02  (ch5-analog.html)
-// [absdelta] Both the tolerances (time_tol and expr_tol) are specified as an analog_expression and shall be non-negative.
-// VAMS-5.10.3.4-04  (ch5-analog.html)
-// [absdelta] The enable argument is specified as an analog_expression and shall evaluate to an integer.
+// VerA's E0513 currently reads "absdelta() is not implemented", which is the
+// right verdict reached by the shorter route. Should VerA ever implement
+// absdelta in a digital initial/always block, this fixture must start matching
+// the §5.10.3.4 placement diagnostic instead, and it will say so by failing.
 //
+// The other §5.10.3.4 constraints — delta and the tolerances non-negative, the
+// enable argument an integer — are constraints on a legal call site and cannot
+// be pinned here; they belong with a fixture that has one.
+//
+//! lrm 5.10.3.4
 //! reject E0513
-//! reject absdelta
-// EXPECT: error -- absdelta is legal only in a digital initial/always block.
 module ch5_absdelta(p);
   inout p; electrical p; real x;
   analog @(absdelta(V(p), 1p)) x = V(p);

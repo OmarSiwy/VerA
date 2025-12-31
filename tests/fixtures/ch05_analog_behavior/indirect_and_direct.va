@@ -5,6 +5,7 @@
 // contributed to using the branch contribution operator <+."
 // The fixture indirectly assigns V(p,n) and then contributes I(p,n) <+ 1u
 // across that same pair, which the paragraph above forbids outright.
+//! lrm 5.6.7.2
 //! reject E0409
 //! reject indirectly assigned
 module ch5_indirect_direct(p,n,c); inout p,n,c; electrical p,n,c; analog begin V(p,n):V(c)==V(p,n); I(p,n)<+1u; end endmodule

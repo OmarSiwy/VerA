@@ -1,7 +1,0 @@
-//! reject E0512
-//! reject vpi_mcd_open
-// EXPECT: error
-module ch12_mcd_not_va(p, n);
-  inout p, n; electrical p, n;
-  analog I(p,n) <+ vpi_mcd_open(0);
-endmodule

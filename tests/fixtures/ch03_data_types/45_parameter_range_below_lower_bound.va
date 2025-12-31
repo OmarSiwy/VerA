@@ -1,0 +1,22 @@
+// §3.4.2: `from [0:inf)` admits 0 and everything above it, so -1 is below the
+// closed lower bound and the override must be diagnosed. This is the plain
+// out-of-`from` case, as opposed to the two `exclude` holes: a compiler could
+// implement the holes and still let a value fall off the bottom of the range,
+// which is why it is a fixture of its own.
+//
+// No code is pinned: VerA never consults the range. §3.4.2 puts the error at
+// simulation time and the reject side of this suite reads compile-time
+// diagnostics only.
+//
+//! param val3 = -1
+//! lrm 3.4.2
+//! reject DiagnosticsReported
+//! xfail VerA does not range-check a parameter override: `//! param val3 = -1` is written straight into the model card with no comparison against the declared `from` bounds
+`include "check.vh"
+module ch03_parameter_range_below_lower_bound(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real val3 = 0 from [0:inf) exclude (10:20) exclude (30:40];
+
+    analog I(p, n) <+ val3 * V(p, n);
+endmodule

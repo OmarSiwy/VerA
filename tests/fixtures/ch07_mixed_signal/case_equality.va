@@ -1,4 +1,6 @@
 // annex C: ===/!== are 4-state digital operators, outside Verilog-A.
+//! lrm 7.3.2
+//! lrm C.5
 //! reject E0323
 module ch7_case_equality(p);
   inout p; electrical p; integer state; real result;

@@ -1,0 +1,27 @@
+// §5.8.3: "The default statement is optional. Use of multiple default
+// statements in one case statement is illegal."
+//
+// Two default arms leave the fall-through arm ambiguous — nothing in §5.8.3
+// orders them — so the rule is a well-formedness rule, not a preference.
+// case_default_only.va and case_statement.va are the legal forms and must keep
+// compiling; the only difference here is the second `default:`.
+//
+// No VerA code exists for this, so the expectation is the phase label: the file
+// must not compile at all. A conforming compiler satisfies that with whatever
+// code it has.
+//
+//! lrm 5.8.3
+//! reject DiagnosticsReported
+//! xfail VerA does not check for a duplicate `default` arm; the case statement compiles and the second default is silently unreachable
+module ch5_case_duplicate_default(p);
+  inout p; electrical p; integer s; real x;
+  analog begin
+    s = 1;
+    case (s)
+      0:       x = 1.0;
+      default: x = 2.0;
+      default: x = 3.0;
+    endcase
+    I(p) <+ x;
+  end
+endmodule

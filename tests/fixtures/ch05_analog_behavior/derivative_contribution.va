@@ -9,6 +9,8 @@
 // implementation that let ddt() pass its argument through (or returned C*V)
 // would report 1.25 rather than 0.
 //
+//! lrm 5.4.1
+//! lrm 4.5.3
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"
 module ch5_derivative(p, n);

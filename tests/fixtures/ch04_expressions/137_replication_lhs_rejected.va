@@ -1,0 +1,23 @@
+// LRM 4.2.13, verbatim: "expressions containing replications shall not appear
+// on the left-hand side of an assignment".
+//
+// A replication builds a VALUE by repeating bits; it does not name storage, and
+// there is no rule that says which of the repeated copies an assignment would
+// have written to. src/diag_code.zig E0317 already quotes this exact sentence.
+//
+// 31_replication.va is the legal right-hand-side use.
+//
+//! lrm 4.2.13
+//! reject E0317
+//! xfail VerA's parser has no replication form at all: `{2{a}}` stops at E0207 "unexpected token: found `{`" before the LHS rule is reached, so E0317 never fires. Blocked behind the same parser gap 31_replication.va records
+module ch04_replication_lhs_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    integer a, b;
+
+    analog begin
+        b = 1;
+        {2{a}} = b;
+        I(p, n) <+ a;
+    end
+endmodule

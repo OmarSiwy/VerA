@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_compare_objects
-// EXPECT: error
+//! reject `vpi_compare_objects`
 module ch12_atomic_compare_objects(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_compare_objects(0);

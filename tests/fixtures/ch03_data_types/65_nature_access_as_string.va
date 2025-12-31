@@ -1,0 +1,22 @@
+// §3.6.1.2, access: "The access attribute identifies the name for the access
+// function. ... The constant expression assigned to it shall be an identifier
+// (by name, not as a string)."
+//
+// `access = "AccessStr";` writes the string, not the identifier. The LRM makes
+// the same point again two attributes down, in capitals of its own — "the
+// constant expression assigned to idt_nature shall be the name (not a string)
+// of a nature" — because the two forms are one character apart and mean
+// different things: an identifier introduces a callable name into the module,
+// a string is a value.
+//
+// Every other nature in the chapter writes `access=V;` correctly, so nothing
+// else provokes this.
+//
+// The pinned substring is only the phase label: VerA has no diagnostic for this
+// rule, so a code would pin the wrong one.
+//
+//! lrm 3.6.1.2
+//! reject DiagnosticsReported
+//! xfail VerA accepts a string literal as the `access` attribute of a nature; lower.zig does not type-check nature attribute values
+nature ch3_access_string; units="V"; access="AccessStr"; abstol=1u; endnature
+module ch3_nature_access_as_string; endmodule

@@ -147,10 +147,10 @@ nav a:hover { text-decoration: underline; }
 <table>
 <tr><th>Function name</th><th>Supported in digital context</th><th>Supported in analog context</th></tr>
 <tr><td><code>$bitstoreal</code></td><td>Yes</td><td>Yes</td></tr>
-<tr><td><code>$itor</code></td><td>Yes</td><td>Yes</td></tr>
+<tr><td><code>$itor</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$signed</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$realtobits</code></td><td>Yes</td><td>Yes</td></tr>
-<tr><td><code>$rtoi</code></td><td>Yes</td><td>Yes</td></tr>
+<tr><td><code>$rtoi</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$unsigned</code></td><td>Yes</td><td>No</td></tr>
 </table>
 
@@ -268,14 +268,13 @@ nav a:hover { text-decoration: underline; }
 <tr><td><code>$table_model</code></td><td>Yes</td><td>Yes</td></tr>
 </table>
 
-<h3>Table 9-19 &mdash; Connectmodule Driver and Receiver Access System Functions and Operator</h3>
+<h3>Table 9-19 &mdash; Connectmodule driver access system functions and operator</h3>
 <table>
 <tr><th>Function/operator name</th><th>Supported in digital context of connectmodule</th><th>Supported in analog context of connectmodule</th></tr>
 <tr><td><code>$driver_count</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$driver_state</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>$driver_strength</code></td><td>Yes</td><td>No</td></tr>
 <tr><td><code>@(driver_update)</code></td><td>Yes</td><td>No</td></tr>
-<tr><td><code>$receiver_count</code></td><td>Yes</td><td>Yes</td></tr>
 </table>
 
 <h3>Table 9-20 &mdash; Supplementary Connectmodule Driver Access System Functions</h3>
@@ -722,7 +721,7 @@ finish_number ::= 0 | 1 | 2</pre>
 
 <!-- 9.11 Conversion -->
 <h2 id="s9.11">9.11 Conversion System Functions</h2>
-<p>Verilog AMS HDL extends the conversion functions defined in IEEE Std 1364 Verilog so that <code>$bitstoreal</code> and <code>$realtobits</code>, <code>$rtoi</code> and <code>$itor</code> can be used in the analog context.</p>
+<p>Verilog AMS HDL extends the conversion functions defined in IEEE Std 1364-2005 Verilog HDL so that <code>$bitstoreal</code> and <code>$realtobits</code> can be used in the analog context.</p>
 
 
 <!-- 9.12 Command Line Input -->
@@ -1065,11 +1064,15 @@ endmodule</code></pre>
 
 <p>The <code>$limit()</code> function is a special-purpose system function whose purpose, like that of the <code>limexp()</code> function of <a href="ch4-expressions.html#s4-5-13">4.5.13</a>, is to improve convergence of the analog solver. While <code>limexp()</code> is specifically intended for the exponential function, <code>$limit()</code> may be used for the exponential as well as other nonlinear functions and provides a method to recommend a specific approach for improving the convergence. Syntax 9-12 shows the methods of using the <code>$limit()</code> function.</p>
 
+<p>Other nonlinearities besides the exponential are present in semiconductor device compact models. The <code>$limit()</code> function provides a method to indicate these nonlinearities to the simulator and, if necessary, recommend a function to use to limit the change of its output from iteration to iteration.</p>
+
 <pre class="syntax">limit_call ::=
     $limit ( access_function_reference )
   | $limit ( access_function_reference , string , arg_list )
   | $limit ( access_function_reference , analog_function_identifier , arg_list )</pre>
 <p><em>Syntax 9-12&mdash;Syntax for $limit()</em></p>
+
+<p>When the simulator has converged, the return value of the <code>$limit()</code> function is the value of the access function reference, within appropriate tolerances. For some analysis types or solution methods, such as damped Newton-Raphson, the return value of the <code>$limit()</code> function may depend on the value of the access function and internal state of the function.</p>
 
 <p>As with <code>limexp()</code>, the <code>$limit()</code> function has internal state containing information about the argument on previous iterations. It returns a real value that is derived from its first argument (the access function reference, such as a branch voltage), but it internally limits the change of the output from iteration to iteration in order to improve convergence. On any iteration where the output value is not the same as the value of the access function (within appropriate tolerances), the simulator is prevented from terminating the iteration. In all cases, the simulator is responsible for determining if limiting should be applied and what the return value is on a given iteration. In particular, the simulator may simply choose to have <code>$limit()</code> return the value of its first argument, if it has other methods for ensuring convergence.</p>
 
@@ -1615,25 +1618,23 @@ endmodule</code></pre>
 <p><em>Syntax 9-17&mdash;Syntax for $driver_count</em></p>
 <p>The drivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary drivers contributing to the signal value. For example, if this function returns a value 5 then the signal has five drivers numbered from 0 to 4.</p>
 
-<h3 id="s9.22.2">9.22.2 $receiver_count</h3>
-<p><code>$receiver_count</code> returns an integer representing the number of receivers associated with the signal in question. The syntax is shown in Syntax 9-18.</p>
+<div class="note">Non-normative: <code>$receiver_count</code> is not a subclause of 9.22 in Verilog-AMS 2.4. Where a simulator provides it, <code>$receiver_count</code> returns an integer representing the number of receivers associated with the signal in question.
 <pre class="syntax">receiver_count_function ::=
     $receiver_count ( signal_name )</pre>
-<p><em>Syntax 9-18&mdash;Syntax for $receiver_count</em></p>
-<p>The receivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary receivers being contributed by the signal value. For example, if this function returns a value 5 then the signal has five receivers numbered from 0 to 4.</p>
+The receivers are arbitrarily numbered from 0 to N-1, where N is the total number of ordinary receivers being contributed by the signal value. For example, if this function returns a value 5 then the signal has five receivers numbered from 0 to 4.</div>
 
-<h3 id="s9.22.3">9.22.3 $driver_state</h3>
-<p><code>driver_state</code> returns the current value contribution of a specific driver to the state of the signal. The syntax is shown in Syntax 9-19.</p>
+<h3 id="s9.22.2">9.22.2 $driver_state</h3>
+<p><code>driver_state</code> returns the current value contribution of a specific driver to the state of the signal. The syntax is shown in Syntax 9-18.</p>
 <pre class="syntax">driver_state_function ::=
     $driver_state ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-19&mdash;Syntax for $driver_state</em></p>
+<p><em>Syntax 9-18&mdash;Syntax for $driver_state</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The state value is returned as 0, 1, x, or z.</p>
 
-<h3 id="s9.22.4">9.22.4 $driver_strength</h3>
-<p><code>driver_strength</code> returns the current strength contribution of a specific driver to the strength of the signal. The syntax is shown in Syntax 9-20.</p>
+<h3 id="s9.22.3">9.22.3 $driver_strength</h3>
+<p><code>driver_strength</code> returns the current strength contribution of a specific driver to the strength of the signal. The syntax is shown in Syntax 9-19.</p>
 <pre class="syntax">driver_strength_function ::=
     $driver_strength ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-20&mdash;Syntax for $driver_strength</em></p>
+<p><em>Syntax 9-19&mdash;Syntax for $driver_strength</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The strength value is returned as two strengths, bits 5-3 for strength0 and bits 2-0 for strength1 (see IEEE Std 1364-2005 Verilog HDL, subclauses 7.10 and 7.11).</p>
 
 <p>If the value returned is 0 or 1, strength0 returns the high-end of the strength range and strength1 returns the low-end of the strength range. Otherwise, the strengths of both strength0 and strength1 is defined as shown in Figure 9-3 below.</p>
@@ -1646,24 +1647,24 @@ endmodule</code></pre>
 <tr><td>B3</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>0</td><td>1</td><td>B0</td></tr>
 </table>
 <h4>Figure 9-3: Strength value mapping</h4>
-<h3 id="s9.22.5">9.22.5 driver_update</h3>
+<h3 id="s9.22.4">9.22.4 driver_update</h3>
 <p>The status of drivers for a given signal can be monitored with the event detection keyword <code>driver_update</code>. It can be used in conjunction with the event detection operator <code>@</code> to detect updates to any of the drivers of the signal.</p>
 <pre><code>always @(driver_update clock)
     statement;</code></pre>
 <p>causes the <code>statement</code> to execute any time a driver of the signal <code>clock</code> is updated. Here, an update is defined as the addition of a new pending value to the driver. This is true whether or not there is a change in the resolved value of the signal.</p>
 
-<h3 id="s9.22.6">9.22.6 Receiver Net Resolution</h3>
+<h3 id="s9.22.5">9.22.5 Receiver Net Resolution</h3>
 <p>As a result of driver receiver segregation, the drivers and receivers are separated so that any analog connected to a mixed net has the opportunity to influence the value driving the digital receivers. Since a single digital port is used in the connect module, the user must specify the value that the receivers will see. By not specifying the receiver value directly in the connect module driver, receiver segregation will be ignored, which is the default case. This assignment of the receiver value is done via the <code>assign</code> statement in which the digital port will be used to read the driver values as well as to set the receiver value.</p>
 <ol>
 <li>The default is equivalent of <code>assign d_receivers = d_drivers;</code><br>
 Where the value passed to the receivers through driver receiver segregation is the value being driven without delay or any impact from analog connections to the net. This is essentially bypassing driver receiver segregation.</li>
 <li>Anything else is done explicitly, such as:
-<pre><code>reg out; // value of out determined in CM, see example in 9.22.7
+<pre><code>reg out; // value of out determined in CM, see example in 9.22.6
 assign d = out;</code></pre>
 In this case, the digital port of the connect module will drive the receivers with a value determined in the connect module. This value may potentially be different from the value of the drivers of the connect module digital port.</li>
 </ol>
 
-<h3 id="s9.22.7">9.22.7 Connect Module Example Using Driver Access Functions</h3>
+<h3 id="s9.22.6">9.22.6 Connect Module Example Using Driver Access Functions</h3>
 
 <p>Using the example shown in Figure 9-4, a connect module can be created using driver access functions to accurately model the effects of multiple drivers on an interface.</p>
 
@@ -1739,31 +1740,31 @@ endmodule</code></pre>
 <div class="note">NOTE&mdash;Because the scheduled digital events can be scheduled with an insufficient delay or canceled before they mature, be careful when using these functions.</div>
 
 <h3 id="s9.23.1">9.23.1 $driver_delay</h3>
-<p><code>$driver_delay</code> returns the delay, from current simulation time, after which the pending state or strength becomes active. If there is no pending value on a signal, it returns the value minus one (-1.0). The syntax is shown in Syntax 9-21.</p>
+<p><code>$driver_delay</code> returns the delay, from current simulation time, after which the pending state or strength becomes active. If there is no pending value on a signal, it returns the value minus one (-1.0). The syntax is shown in Syntax 9-20.</p>
 <pre class="syntax">driver_delay_function ::=
     $driver_delay ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-21&mdash;Syntax for $driver_delay</em></p>
+<p><em>Syntax 9-20&mdash;Syntax for $driver_delay</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The returned delay value is a real number, which is defined by the <code>`timescale</code> for that module where the call has been made. The fractional part arises from the possibility of a driver being updated by an A2D event off the digital timeticks.</p>
 
 <h3 id="s9.23.2">9.23.2 $driver_next_state</h3>
-<p><code>$driver_next_state</code> returns the pending state of the driver, if there is one. If there is no pending state, it returns the current state. The syntax is shown in Syntax 9-22.</p>
+<p><code>$driver_next_state</code> returns the pending state of the driver, if there is one. If there is no pending state, it returns the current state. The syntax is shown in Syntax 9-21.</p>
 <pre class="syntax">driver_next_state_function ::=
     $driver_next_state ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-22&mdash;Syntax for $driver_next_state</em></p>
+<p><em>Syntax 9-21&mdash;Syntax for $driver_next_state</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The pending state value is returned as <code>1'b0</code>, <code>1'b1</code>, <code>1'bx</code>, or <code>1'bz</code>.</p>
 
 <h3 id="s9.23.3">9.23.3 $driver_next_strength</h3>
-<p><code>$driver_next_strength</code> returns the strength associated with the pending state of the driver, if there is one. If there is no pending state, it returns the current strength. The syntax is shown in Syntax 9-23.</p>
+<p><code>$driver_next_strength</code> returns the strength associated with the pending state of the driver, if there is one. If there is no pending state, it returns the current strength. The syntax is shown in Syntax 9-22.</p>
 <pre class="syntax">driver_next_strength_function ::=
     $driver_next_strength ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-23&mdash;Syntax for $driver_next_strength</em></p>
+<p><em>Syntax 9-22&mdash;Syntax for $driver_next_strength</em></p>
 <p><code>driver_index</code> is an integer value between 0 and N-1, where N is the total number of drivers contributing to the signal value. The pending strength value is returned as an integer between <code>0</code> and <code>7</code>.</p>
 
 <h3 id="s9.23.4">9.23.4 $driver_type</h3>
-<p><code>$driver_type</code> returns an integer value with its bits set according to the system header file <code>"driver_access.vams"</code> (refer to Annex D for the header file) for the driver specified by the <code>signal_name</code> and the <code>driver_index</code>. Connect modules for digital to analog conversion can use the returned information to help minimize the difference between the digital event time and the analog crossover when the user swaps between coding styles and performs backannotation.<sup>1</sup> A simulator that cannot provide proper information for a given driver type should return 0 (<code>'DRIVER_UNKNOWN</code>). All drivers on <code>wor</code> and <code>wand</code> nets will have a bit set indicating such, and any extra drivers added by the kernel for pull-up or pull-down will be marked as belonging to the kernel. The syntax is shown in Syntax 9-24.</p>
+<p><code>$driver_type</code> returns an integer value with its bits set according to the system header file <code>"driver_access.vams"</code> (refer to Annex D for the header file) for the driver specified by the <code>signal_name</code> and the <code>driver_index</code>. Connect modules for digital to analog conversion can use the returned information to help minimize the difference between the digital event time and the analog crossover when the user swaps between coding styles and performs backannotation.<sup>1</sup> A simulator that cannot provide proper information for a given driver type should return 0 (<code>'DRIVER_UNKNOWN</code>). All drivers on <code>wor</code> and <code>wand</code> nets will have a bit set indicating such, and any extra drivers added by the kernel for pull-up or pull-down will be marked as belonging to the kernel. The syntax is shown in Syntax 9-23.</p>
 <pre class="syntax">driver_type_function ::=
     $driver_type ( signal_name , driver_index )</pre>
-<p><em>Syntax 9-24&mdash;Syntax for $driver_type</em></p>
+<p><em>Syntax 9-23&mdash;Syntax for $driver_type</em></p>
 
 <p>Digital primitives (like nand and nor gates) should always provide data about their scheduled output changes; i.e., a gate with a 5ns delay should provide 5ns of look-ahead. Behavioral code with blocking assigns cannot provide look-ahead, but non-blocking assigns with delays can. However, since the capability is implementation- and configuration-dependent, this function is provided so that the connect module can adapt for a particular instance.</p>
 

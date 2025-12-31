@@ -10,6 +10,9 @@
 // nothing. The parameter defaults also pin §2.6.2 Table 2-1: `1p` is 1e-12 and
 // `1n` is 1e-9.
 //
+//! lrm 5.6.1.2
+//! lrm 4.5.3
+//! lrm 4.5.4
 //! bias V(p) = 1.0, V(n) = 0.0
 `include "check.vh"
 module ch5_rlc(p, n);

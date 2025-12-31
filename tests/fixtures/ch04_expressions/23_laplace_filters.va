@@ -17,32 +17,48 @@
 //   laplace_nd(x, '{0,1}, '{1,2,1})         §4.5.11.4
 //     H(s) = s / (1 + 2s + s^2), so H(0) = 0/1 = 0.
 //
-// With V(p,n) = 1 V the outputs are therefore 1, 1, 0, 0. The two zeros are
-// what bites: a filter lowered as a pass-through, or one that read '{0,1} as a
-// pair of roots instead of coefficients, reads 1 there.
+//   laplace_zp(x, '{0,0}, '{-1,0})          §4.5.11.1, the root-at-the-origin
+//     special case, verbatim: "If a root is zero (0), then the term associated
+//     with it is implemented as s, rather than (1 - s/r) (where r is the
+//     root)." So the numerator is the bare factor s, not (1 - s/0), and
+//     H(s) = s / (1 - s/(-1)) = s/(1+s), giving H(0) = 0.
 //
+//     This is the one case the sentence exists FOR: (1 - s/0) divides by zero,
+//     so a lowering that applies the general formula to every root returns inf
+//     or NaN here rather than 0. The zeros vector '{-1,0} used above is a real
+//     root at MINUS ONE and never enters the case. The identical rule in
+//     4.5.12.1 is reached by 24_z_transform_filters.va.
+//
+// With V(p,n) = 1 V the outputs are therefore 1, 1, 0, 0, 0. The zeros are what
+// bite: a filter lowered as a pass-through, or one that read '{0,1} as a pair
+// of roots instead of coefficients, reads 1 there.
+//
+//! lrm 4.5.11
 //! bias V(p) = 1.0
 //! bias V(n) = 0.0
 `include "check.vh"
 module ch04_laplace_filters(p, n);
     inout p, n;
     electrical p, n;
-    real y_zp, y_zd, y_np, y_nd;
+    real y_zp, y_zd, y_np, y_nd, y_origin;
 
     analog begin
         y_zp = laplace_zp(V(p, n), '{-1.0, 0.0}, '{-1.0, -1.0, -1.0, 1.0});
         y_zd = laplace_zd(V(p, n), '{-1.0, 0.0}, '{1.0, 2.0});
         y_np = laplace_np(V(p, n), '{0.0, 1.0}, '{-1.0, 0.0});
         y_nd = laplace_nd(V(p, n), '{0.0, 1.0}, '{1.0, 2.0, 1.0});
+        y_origin = laplace_zp(V(p, n), '{0.0, 0.0}, '{-1.0, 0.0});
 
         `CHECK("laplace_zp DC gain is every root factor at s=0", y_zp, 1.0, 1e-12);
         `CHECK("laplace_zd DC gain is 1/d0", y_zd, 1.0, 1e-12);
         `CHECK("laplace_np DC gain is n0, which is zero here", y_np, 0.0, 1e-12);
         `CHECK("laplace_nd DC gain is n0/d0, and n0 is zero here", y_nd, 0.0, 1e-12);
+        `CHECK("a root at the origin is the factor s, not a division by zero", y_origin, 0.0, 1e-12);
 
         I(p, n) <+ y_zp;
         I(p, n) <+ y_zd;
         I(p, n) <+ y_np;
         I(p, n) <+ y_nd;
+        I(p, n) <+ y_origin;
     end
 endmodule

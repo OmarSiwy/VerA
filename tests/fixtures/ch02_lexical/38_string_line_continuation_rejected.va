@@ -7,6 +7,7 @@
 //! reject ParseError
 //! reject E0138
 //! reject a string literal may not span lines
+//! lrm 2.7
 module ch02_string_line_continuation_rejected;
     analog begin
         $strobe("Temperature effect has caused pbs to be less than 0.01. \

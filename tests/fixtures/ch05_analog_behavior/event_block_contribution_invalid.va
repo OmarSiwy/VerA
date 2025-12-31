@@ -1,0 +1,16 @@
+// §5.10: "Contribution statements cannot be used inside an event control block
+// because it can generate discontinuity in analog signals." A.6.4 backs it
+// grammatically — analog_event_statement has no contribution_statement
+// alternative.
+//
+// event_contribution_rejected.va reaches the same rule through a monitored
+// cross() event. This one uses the global initial_step event (§5.10.2), so the
+// file contains no construct VerA could refuse first: no named event, no
+// tolerance argument, nothing to mask the diagnostic.
+//
+//! lrm 5.10
+//! reject E0406
+module ch5_event_block_contribution(p);
+  inout p; electrical p;
+  analog @(initial_step) I(p) <+ 1m;
+endmodule

@@ -1,13 +1,21 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// DEBT -- but not the debt this file used to claim.
 //
-// VAMS-8.5.3.5-01  (ch8-scheduling.html)
-// Switch processing shall consider all the devices in a bidirectional switch-connected net before it can determine the appropriate value for any node on
+// Annex C.16 lists the keywords Verilog-A does not use (connect, connectmodule,
+// connectrules, driver_update, merged, net_resolution, resolvedto, split,
+// wreal) and `tran` is not among them, so unlike its two `always` siblings this
+// rejection is NOT excused by Annex C.7. VerA refuses it because it implements
+// no instance or primitive instantiation at all -- a flat single-module
+// compiler -- and that is a real gap in Clause 6 structure, chargeable.
 //
-//! reject unsupported module item
-// EXPECT: error -- tran switch networks need the digital switch solver.
+// It is NOT a gap in 8.5.3.5. Switch processing is part of the digital
+// simulation cycle, which Annex C.10 puts outside Verilog-A entirely ("The
+// mixed-signal simulation cycle from 8.2 is only applicable to Verilog-AMS
+// HDL"), so no amount of instantiation support would make this file cover that
+// clause. It stays here as the source-form inventory entry for `tran`.
+//
+//! lrm C.16
+//! reject E0205
+//! reject tran
 module ch8_switch(a, b);
   tran (a, b);
 endmodule

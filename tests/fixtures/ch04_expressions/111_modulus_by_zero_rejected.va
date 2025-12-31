@@ -1,0 +1,31 @@
+// LRM 4.2.4, verbatim and without qualification: "It shall be an error to pass
+// zero (0) as the second argument to the modulus operator."
+//
+// The sentence does not distinguish integer from real. 4.2.1's Table 4-2 lists
+// `%` among the operators legal on real operands, and 4.2.4 immediately goes on
+// to define the real case — "a % b = ((a/b) < 0) ? (a - ceil(a/b)*b) :
+// (a - floor(a/b)*b)" — which divides by b just as the integer case does. So
+// both spellings below are the same error, and both are written here: a
+// compiler that guarded only the integer path would otherwise pass.
+//
+// Note this is NOT the real-division rule. Real `x / 0.0` is a well-defined
+// IEEE infinity and 4.2.4 says nothing against it (VerA accepts it and forfeits
+// the unit's finiteness proof instead, W0650). Modulus is called out by name.
+//
+// Constant zeros, so the violation is decidable without running anything:
+// 45_modulo.va covers the legal `% 2.0` case with digits.
+//
+//! lrm 4.2.4
+//! reject E0601
+module ch04_modulus_by_zero_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    integer whole;
+    real fraction;
+
+    analog begin
+        whole = 11 % 0;
+        fraction = 5.5 % 0.0;
+        I(p, n) <+ whole + fraction;
+    end
+endmodule

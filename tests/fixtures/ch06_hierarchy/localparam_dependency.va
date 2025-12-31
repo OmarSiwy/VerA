@@ -8,6 +8,8 @@
 // binary). Freezing `doubled` at the 4.0 it folds to under base's DEFAULT is
 // the failure this pins, and it is invisible without an override.
 //
+//! lrm 6.3.4
+//! lrm 3.4.5
 //! param base = 3.0
 `include "check.vh"
 module ch6_localparam(p);

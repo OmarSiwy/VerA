@@ -6,7 +6,8 @@
 // attributes §3.6.1.2 requires of a base nature, so the override is the only
 // defect in the file.
 //
-//! reject DiagnosticsReported
+//! lrm 3.6.1.2
+//! reject E0333
 nature ch3_units_parent; units="V"; access=UnitsV; abstol=1u; endnature
 nature ch3_units_child:ch3_units_parent; units="A"; endnature
 module ch3_bad_units; endmodule

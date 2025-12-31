@@ -3,5 +3,20 @@
 // itself in its own body, which is the direct case, so the module is illegal
 // however the ?: guard is written -- the ban is on the call graph, not on
 // whether a base case exists.
+//
+// 105_function_indirect_recursion.va is the two-function cycle.
+//
+//! lrm 4.7.3
 //! reject E0510
-module ch4_fn_direct(p); inout p; electrical p; analog function real recurse; input x; real x; recurse=(x>0.0)?recurse(x-1.0):0.0; endfunction analog I(p)<+V(p); endmodule
+module ch04_function_direct_recursion(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog function real recurse;
+        input x;
+        real x;
+        recurse = (x > 0.0) ? recurse(x - 1.0) : 0.0;
+    endfunction
+
+    analog I(p, n) <+ V(p, n);
+endmodule

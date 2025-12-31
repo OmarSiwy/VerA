@@ -1,0 +1,56 @@
+// LRM 2.9.1, Syntax 2-8, puts a `{ attribute_instance }` slot in two places
+// that are plain Verilog-A and that nothing else in this chapter reaches:
+//
+//     function_port_list ::=                                    // from A.2.6
+//             { attribute_instance } tf_input_declaration
+//             { , { attribute_instance } tf_input_declaration }
+//
+//     block_item_declaration ::=                                // from A.2.8
+//             { attribute_instance } reg ... | { attribute_instance } integer ...
+//           | { attribute_instance } real ... | { attribute_instance } parameter_declaration ;
+//           | ... (every arm carries the slot)
+//
+// Every other 2.9 fixture here attaches an attribute at module, port, module-item
+// or expression level. These two are inside a named block and inside an analog
+// function header — the only two places in Syntax 2-8 an analog-only compiler
+// can be held to, and both are ordinary Verilog-A, not the connection/UDP forms
+// that belong to the digital side of the grammar.
+//
+// What is proved, per 2.9: an attribute "specif[ies] properties about objects,
+// statements and groups of statements ... that can be used by various tools",
+// so it must leave the thing it decorates alone. The wants are all exact
+// binary, so a decorated declaration losing its value shows up as a bit-level
+// miss rather than a rounding one:
+//
+//   the bias holds V(p,n) at 0.5, so the attributed block real `v` is 0.5
+//   the attributed block parameter `g` keeps its 3.0 default
+//   the attributed function input is passed through, so 2.0 * 0.5 = 1.0
+//   and the two together: g * v = 3.0 * 0.5 = 1.5
+//
+//! bias V(p) = 0.5
+//! lrm 2.9.1
+//! lrm A.2.6
+//! lrm A.2.8
+`include "check.vh"
+module ch02_attribute_block_item_and_function_port(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog function real scale_by_two;
+        (* desc = "argument", units = "V" *) input real x;
+        scale_by_two = 2.0 * x;
+    endfunction
+
+    analog begin : main
+        (* desc = "scratch" *) real v;
+        (* desc = "local gain", units = "S" *) parameter real g = 3.0;
+
+        v = V(p, n);
+        `CHECKX("an attributed block real holds the solved value", v, 0.5);
+        `CHECKX("an attributed block parameter keeps its default", g, 3.0);
+        `CHECKX("an attributed function port passes its argument through",
+                scale_by_two(v), 1.0);
+        `CHECKX("both attributed declarations still compose", g * v, 1.5);
+        I(p, n) <+ g * v;
+    end
+endmodule

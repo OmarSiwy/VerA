@@ -3,6 +3,7 @@
 // Held off that solution at V(p) = 1.0, V(n) = 0.5, the probed branch potential
 // is 0.5 and the source's residual is 0.5 - 1.25 = -0.75. Both exact in IEEE 754.
 //
+//! lrm 5.6.1.2
 //! bias V(p) = 1.0, V(n) = 0.5
 `include "check.vh"
 module ch5_potential_source(p, n);

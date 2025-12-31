@@ -1,0 +1,19 @@
+// §10.6, the other half of the pairing rule and the dangerous half: the
+// directive "affects all source code that follows the directive, even across
+// source code file boundaries, until the matching `end_keywords directive is
+// encountered." A `begin_keywords that is never closed therefore re-keywords
+// every file compiled after this one — silently, and with no line of source
+// left to blame it on.
+//
+// The specifier is a legal one ("1364-2005", §10.6) and the module is the same
+// one-resistor body as 16, so the only defect in the file is the missing
+// `end_keywords at the end of the stream.
+//
+//! lrm 10.6
+//! reject E0137
+`begin_keywords "1364-2005"
+module ch10_begin_keywords_unterminated(p, n);
+  inout p, n;
+  electrical p, n;
+  analog I(p, n) <+ V(p, n);
+endmodule

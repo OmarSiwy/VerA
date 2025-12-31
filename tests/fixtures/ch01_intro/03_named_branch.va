@@ -1,8 +1,23 @@
 // §1.3.1 "a branch is a path of flow between two nodes ... every branch has an
-// associated potential (the potential difference between the two nodes)".
-// Giving the pair a name changes nothing numeric: at V(a)=1.0, V(b)=0.5 the
-// branch potential is 0.5 V and 0.5/50 = 10 mA.
+// associated potential (the potential difference between the two nodes)", and
+// §1.3.1.2 fixes WHICH difference: "the branch potential is positive whenever
+// the potential of the port marked with a plus sign (A) is larger than the
+// potential of the port marked with a minus sign (B)". `branch (a, b)` puts the
+// plus on `a`, so naming the pair the other way round negates the value.
 //
+// That second assertion is what this file was missing. Nothing in ch01 asserted
+// the §1.3.1.2 polarity, though COVERAGE.md credited this file with it, so a
+// compiler that silently swapped + and - passed the whole chapter. The old
+// `V(path_ab)/50.0` line it replaces was arithmetic on the value read one line
+// above it and could not fail independently of it.
+//
+// At V(a)=1.0, V(b)=0.5 both differences are exact in binary64: 1.0-0.5 == 0.5
+// and 0.5-1.0 == -0.5, so CHECKX. The third line is the legitimate CHECKEQ
+// case — the LRM states it as an identity between two of the language's own
+// expressions, with no value of its own to write down.
+//
+//! lrm 1.3.1
+//! lrm 1.3.1.2
 //! bias V(a) = 1.0, V(b) = 0.5
 `include "check.vh"
 module ch01_named_branch(a, b);
@@ -11,8 +26,9 @@ module ch01_named_branch(a, b);
     branch (a, b) path_ab;
 
     analog begin
-        `CHECK("named branch potential", V(path_ab), 0.5, 1e-15);
-        `CHECK("named branch flow", V(path_ab) / 50.0, 1.0e-2, 1e-15);
+        `CHECKX("named branch potential", V(path_ab), 0.5);
+        `CHECKX("reversing the orientation negates the potential", V(b, a), -0.5);
+        `CHECKEQ("the named branch and its node pair agree", V(path_ab), V(a, b), 1e-15);
         I(path_ab) <+ V(path_ab) / 50.0;
     end
 endmodule

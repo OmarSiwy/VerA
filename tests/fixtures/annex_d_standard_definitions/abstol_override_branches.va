@@ -1,179 +1,56 @@
 // Annex D.1: "Default absolute tolerances may be overridden by setting the
-// appropriate _ABSTOL prior to including this file". Every nature below is the
-// standard `ifdef X / abstol = `X / `else / abstol = <default>` shape, with the
-// override defined first, so every one takes the `ifdef branch.
+// appropriate _ABSTOL prior to including this file" (annex-d-stddefs.html:68).
+// Every published nature carries the shape
+//   `ifdef X_ABSTOL / abstol = `X_ABSTOL; / `else / abstol = <default>; / `endif
+// and this fixture pins that shape end to end: the override is `defined first,
+// the `ifdef arm is the one taken, and the nature it produces is bound into a
+// discipline, put on a port, and read through its access function — so the arm
+// is actually elaborated into a device rather than merely preprocessed.
 //
-// `abstol` is not readable from the language, so the assertion mirrors the same
-// `ifdef and sums each override in units of the Annex D default it replaces:
-//   Current 2, Charge 2, Voltage 2, Flux 2, MMF 3, Temperature 2, Power 2,
-//   Position 2, Velocity 3, Acceleration 4, Impulse 5, Force 6, Angle 7,
-//   Angular_Velocity 8, Angular_Acceleration 9, Angular_Force 10 -> 69.
-// Any `ifdef that fell through to its default contributes 1 instead.
+// WHAT IS NOT ASSERTED, AND WHY. `abstol` is not readable from the language, so
+// no fixture can compare the selected tolerance against 2e-6. The previous
+// revision worked around that by summing the sixteen override macros it had
+// itself `defined and checking the total against 69.0 — arithmetic over the
+// fixture's own literals, which cannot fail for any Annex D reason. That check
+// and its `current_abstol` twin are gone. Nor can the override reach the
+// PRELUDE's natures: constants.vams and disciplines.vams are processed before
+// the user source, so every standard nature has already taken its `else arm by
+// the time a `define here is seen. Hence one local, non-shadowing nature.
+//
+// The want is the bias stored into the unknown vector and loaded straight back,
+// exact in binary64.
+//
+//! lrm D.1
+//! lrm 3.6.1.2
+//! bias p = 1.25
 `include "check.vh"
-`define CURRENT_ABSTOL 2e-12
-`define CHARGE_ABSTOL 2e-14
-`define VOLTAGE_ABSTOL 2e-6
-`define FLUX_ABSTOL 2e-9
-`define MAGNETO_MOTIVE_FORCE_ABSTOL 3e-12
-`define TEMPERATURE_ABSTOL 2e-4
-`define POWER_ABSTOL 2e-9
-`define POSITION_ABSTOL 2e-6
-`define VELOCITY_ABSTOL 3e-6
-`define ACCELERATION_ABSTOL 4e-6
-`define IMPULSE_ABSTOL 5e-6
-`define FORCE_ABSTOL 6e-6
-`define ANGLE_ABSTOL 7e-6
-`define ANGULAR_VELOCITY_ABSTOL 8e-6
-`define ANGULAR_ACCELERATION_ABSTOL 9e-6
-`define ANGULAR_FORCE_ABSTOL 10e-6
+`define ANNEX_D_OVR_ABSTOL 2e-6
+
+nature annex_d_override_voltage;
+  units = "V";
+  access = AnnexDOvr;
+`ifdef ANNEX_D_OVR_ABSTOL
+  abstol = `ANNEX_D_OVR_ABSTOL;
+`else
+  abstol = 1e-6;
+`endif
+endnature
 
 nature annex_d_override_current;
-  units="A"; access=AnnexDOverrideI;
-`ifdef CURRENT_ABSTOL
-  abstol=`CURRENT_ABSTOL;
-`else
-  abstol=1e-12;
-`endif
-endnature
-nature annex_d_override_charge;
-  units="coul"; access=AnnexDOverrideQ;
-`ifdef CHARGE_ABSTOL
-  abstol=`CHARGE_ABSTOL;
-`else
-  abstol=1e-14;
-`endif
-endnature
-nature annex_d_override_voltage;
-  units="V"; access=AnnexDOverrideV;
-`ifdef VOLTAGE_ABSTOL
-  abstol=`VOLTAGE_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_flux;
-  units="Wb"; access=AnnexDOverridePhi;
-`ifdef FLUX_ABSTOL
-  abstol=`FLUX_ABSTOL;
-`else
-  abstol=1e-9;
-`endif
-endnature
-nature annex_d_override_mmf;
-  units="A*turn"; access=AnnexDOverrideMMF;
-`ifdef MAGNETO_MOTIVE_FORCE_ABSTOL
-  abstol=`MAGNETO_MOTIVE_FORCE_ABSTOL;
-`else
-  abstol=1e-12;
-`endif
-endnature
-nature annex_d_override_temperature;
-  units="K"; access=AnnexDOverrideTemp;
-`ifdef TEMPERATURE_ABSTOL
-  abstol=`TEMPERATURE_ABSTOL;
-`else
-  abstol=1e-4;
-`endif
-endnature
-nature annex_d_override_power;
-  units="W"; access=AnnexDOverridePwr;
-`ifdef POWER_ABSTOL
-  abstol=`POWER_ABSTOL;
-`else
-  abstol=1e-9;
-`endif
-endnature
-nature annex_d_override_position;
-  units="m"; access=AnnexDOverridePos;
-`ifdef POSITION_ABSTOL
-  abstol=`POSITION_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_velocity;
-  units="m/s"; access=AnnexDOverrideVel;
-`ifdef VELOCITY_ABSTOL
-  abstol=`VELOCITY_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_acceleration;
-  units="m/s^2"; access=AnnexDOverrideAcc;
-`ifdef ACCELERATION_ABSTOL
-  abstol=`ACCELERATION_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_impulse;
-  units="m/s^3"; access=AnnexDOverrideImp;
-`ifdef IMPULSE_ABSTOL
-  abstol=`IMPULSE_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_force;
-  units="N"; access=AnnexDOverrideF;
-`ifdef FORCE_ABSTOL
-  abstol=`FORCE_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_angle;
-  units="rads"; access=AnnexDOverrideTheta;
-`ifdef ANGLE_ABSTOL
-  abstol=`ANGLE_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_angular_velocity;
-  units="rads/s"; access=AnnexDOverrideOmega;
-`ifdef ANGULAR_VELOCITY_ABSTOL
-  abstol=`ANGULAR_VELOCITY_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_angular_acceleration;
-  units="rads/s^2"; access=AnnexDOverrideAlpha;
-`ifdef ANGULAR_ACCELERATION_ABSTOL
-  abstol=`ANGULAR_ACCELERATION_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
-endnature
-nature annex_d_override_angular_force;
-  units="N*m"; access=AnnexDOverrideTau;
-`ifdef ANGULAR_FORCE_ABSTOL
-  abstol=`ANGULAR_FORCE_ABSTOL;
-`else
-  abstol=1e-6;
-`endif
+  units = "A";
+  access = AnnexDOvrFlow;
+  abstol = 1e-12;
 endnature
 
+discipline annex_d_override_disc;
+  potential annex_d_override_voltage;
+  flow annex_d_override_current;
+enddiscipline
+
 module annex_d_abstol_overrides(p);
-  inout p; electrical p;
-  real current_abstol;
+  inout p; annex_d_override_disc p;
   analog begin
-`ifdef CURRENT_ABSTOL
-    current_abstol = `CURRENT_ABSTOL;
-`else
-    current_abstol = 1e-12;
-`endif
-    `CHECK("the CURRENT_ABSTOL branch, not the 1e-12 default", current_abstol, 2e-12, 0.0);
-    `CHECK("all sixteen overrides, each in units of its Annex D default",
-           `CURRENT_ABSTOL/1e-12 + `CHARGE_ABSTOL/1e-14 + `VOLTAGE_ABSTOL/1e-6 +
-           `FLUX_ABSTOL/1e-9 + `MAGNETO_MOTIVE_FORCE_ABSTOL/1e-12 +
-           `TEMPERATURE_ABSTOL/1e-4 + `POWER_ABSTOL/1e-9 + `POSITION_ABSTOL/1e-6 +
-           `VELOCITY_ABSTOL/1e-6 + `ACCELERATION_ABSTOL/1e-6 + `IMPULSE_ABSTOL/1e-6 +
-           `FORCE_ABSTOL/1e-6 + `ANGLE_ABSTOL/1e-6 + `ANGULAR_VELOCITY_ABSTOL/1e-6 +
-           `ANGULAR_ACCELERATION_ABSTOL/1e-6 + `ANGULAR_FORCE_ABSTOL/1e-6,
-           69.0, 1e-9);
-    I(p) <+ V(p);
+    `CHECKX("AnnexDOvr is the potential access of the overridden nature", AnnexDOvr(p), 1.25);
+    AnnexDOvrFlow(p) <+ AnnexDOvr(p);
   end
 endmodule

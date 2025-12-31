@@ -1,0 +1,30 @@
+// §9.7.2, final sentence: "The $stop task shall not be used within an analog
+// initial block."
+//
+// This is a POSITIONAL rule, not a task-support rule — $stop is perfectly legal
+// in an ordinary analog block, which is what 056_stop.va and 12_finish_stop.va
+// already cover. §9.7.1 makes its sibling deliberately the opposite: "If
+// $finish is called from an analog initial block, the simulator shall exit
+// without performing the simulation", and "If $finish is called from within an
+// analog initial block, the simulator shall report that the call was made
+// during initialization in place of the simulation time." So $finish HAS a
+// defined meaning there and $stop is forbidden there, and it is that asymmetry
+// the fixture pins: a compiler that accepts both, or refuses both, is wrong.
+//
+// The reason is in the semantics: $stop "causes simulation to be suspended at a
+// converged time point", and initialization has not produced one yet.
+//
+// A reject, so there is nothing to run and no `want` to write.
+//
+//! lrm 9.7.2
+//! reject analog initial
+//! xfail VerA does not restrict $stop by block kind; it lowers $stop the same way in `analog initial` as in `analog`
+module ch09_stop_in_analog_initial_rejected(p, n);
+  inout p, n; electrical p, n;
+  analog initial begin
+    $stop;
+  end
+  analog begin
+    I(p,n) <+ V(p,n);
+  end
+endmodule

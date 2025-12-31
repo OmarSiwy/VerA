@@ -1,0 +1,27 @@
+// §9.10 / Table 9-7: `$realtime  Yes  No` — digital context only. This one row
+// the LRM states twice, and the second time in prose, with a note none of the
+// other three rows gets:
+//
+//   "NOTE — In previous versions of the Verilog-AMS LRM, $realtime was
+//    supported in the analog context and it had an additional argument. This
+//    version of the LRM deprecates using $realtime in the analog context."
+//
+// So this is not merely a table cell: $realtime in an analog block used to be
+// legal, model source in the wild still does it, and the LRM went out of its
+// way to withdraw it. §9.10 offers the replacement in the same paragraph —
+// "A new function is added called $abstime that can be used from the analog and
+// digital contexts" — and 14_abstime.va is the positive for it.
+//
+// A reject, so there is nothing to run and no `want` to write.
+//
+//! lrm 9.10
+//! reject analog context
+//! xfail VerA implements no Table 9-7 analog-context restriction; it answers $realtime in an analog block like any time query
+module ch09_realtime_analog_rejected(p, n);
+  inout p, n; electrical p, n;
+  real t;
+  analog begin
+    t = $realtime;
+    I(p,n) <+ V(p,n) + t;
+  end
+endmodule

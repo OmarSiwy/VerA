@@ -1,6 +1,21 @@
-// LRM 6.7.1: out-of-module references are not permitted in Verilog-A.
+// §6.7.1, last bullet: "It shall be an error to assign to an analog variable
+// using hierarchical notation." This is the write half of the prohibition whose
+// read half is oomr_variable_read_rejected.va, and like it the rejection is
+// correct conformance — no `//! xfail`. The first line of this file used to say
+// "out-of-module references are not permitted in Verilog-A", which is false:
+// §6.7.1 permits hierarchical access to branches, parameters and analog functions,
+// and Annex C.8 keeps all of Clause 6 in the Verilog-A subset. Only analog
+// VARIABLES are excluded.
+//
+// The diagnostic is a parse boundary and not the rule. E0214's own entry in
+// diag_code.zig is "expected '<+' or '='" with `.lrm = "5.6"` — a §5.6 contribution
+// statement syntax error reached because VerA's parser has no
+// `hierarchical_identifier` and so cannot see `device.local_value` as an lvalue at
+// all. The right verdict for the wrong reason; tighten it to a semantic code when
+// hierarchical references resolve.
+//
+//! lrm 6.7.1
 //! reject E0214
-// EXPECT: error -- LRM 6.7.1 forbids out-of-module references.
 module ch6_oomr_variable_assign(p);
   inout p; electrical p;
   analog begin

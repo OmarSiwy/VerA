@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_register_cb
-// EXPECT: error
+//! reject `vpi_register_cb`
 module ch12_atomic_register_cb(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_register_cb(0);

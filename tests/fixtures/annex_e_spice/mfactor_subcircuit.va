@@ -11,16 +11,20 @@
 // $mfactor that defaulted to 0 would silently stamp an open circuit, and one
 // that defaulted to 2 would double every current in the netlist.
 //
+// WHAT IS NOT PINNED. §6.3.6 rule 1 ("all contributions to a branch flow
+// quantity shall be multiplied by $mfactor") is deliberately NOT cited: the
+// scaling is applied to the stamp, outside the analog block, and nothing this
+// harness can assert observes it. A file that multiplied a probe by $mfactor
+// and called that flow scaling would only be restating the bias directive.
+//
+//! lrm E.4.1
+//! lrm 9.18
 //! bias V(p) = 2.0
 `include "check.vh"
 module annex_e_mfactor(p);
   inout p; electrical p;
   analog begin
     `CHECKX("$mfactor at the top of the hierarchy", $mfactor, 1.0);
-    // §6.3.6 rule 1: "All contributions to a branch flow quantity in the analog
-    // block shall be multiplied by $mfactor." One device in parallel with
-    // itself carries the whole 2 A, not a fraction or a multiple of it.
-    `CHECK("one device carries the unscaled flow", $mfactor * V(p), 2.0, 1e-15);
     I(p) <+ V(p) + 0.0 * $mfactor;
   end
 endmodule

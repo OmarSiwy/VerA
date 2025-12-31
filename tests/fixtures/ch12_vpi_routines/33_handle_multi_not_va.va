@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_handle_multi
-// EXPECT: error
+//! reject `vpi_handle_multi`
 module ch12_atomic_handle_multi(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_handle_multi(0);

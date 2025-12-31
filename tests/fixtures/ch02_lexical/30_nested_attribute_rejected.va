@@ -1,3 +1,19 @@
-//! reject DiagnosticsReported
-module ch2_nested_attr(p); inout p; electrical p; parameter real x = 1.0; analog I(p) <+ ((* outer = (1 + (* inner *) 2) *) x) * V(p); endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.
+// LRM 2.9: "Nesting of attribute instances is disallowed. It shall be illegal
+// to specify the value of an attribute with a constant expression that
+// contains an attribute instance." Below, the value of `outer` is the constant
+// expression `1 + (* inner *) 2`, which contains an attribute instance -- the
+// second sentence, exactly.
+//
+// The diagnostic arrives as E0209 because the inner `(*` shows up where the
+// constant expression wants an operand; that is where the rule bites, and the
+// code is the stable pin. The legal cases it bounds -- a value-less attribute
+// defaulting to 1, and several attribute instances in a row -- are in
+// 29_attribute_default_and_multiple.va.
+//! lrm 2.9
+//! reject E0209
+module ch2_nested_attr(p);
+    inout p;
+    electrical p;
+    parameter real x = 1.0;
+    analog I(p) <+ ((* outer = (1 + (* inner *) 2) *) x) * V(p);
+endmodule

@@ -1,0 +1,21 @@
+// `Temp` is a perfectly well-declared standard access function — Annex D.1
+// gives it to the Temperature nature and binds that nature into `thermal`. It
+// is simply not an access of `electrical`.
+//
+// §4.4: "The access function name shall match the discipline declaration for
+// the nets, ports, or branch given in the argument expression list." A compiler
+// that keeps one flat table of every access name in disciplines.vams accepts
+// this; the name must be looked up in the NET's discipline.
+//
+// The sibling unbound_nature_charge_rejected.va pins the other failure mode: an
+// access name whose nature is declared but bound into no discipline at all.
+// The two produce different diagnostics, so they are pinned apart.
+//
+//! lrm D.1
+//! lrm 4.4
+//! reject E0501
+module annex_d_unbound_nature_access(p);
+  inout p;
+  electrical p;
+  analog I(p) <+ Temp(p);
+endmodule

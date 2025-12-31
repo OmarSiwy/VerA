@@ -1,40 +1,51 @@
-// Annex E.3, Table E.1 reserves `resistor` with ports p, n and parameters
-// r, tc1, tc2 as the preferred name for the SPICE passive primitive. E.2 says
-// SPICE primitives are treated "in the same manner ... as built-in primitives",
-// and E.3.3 gives the tie-break outright: "a module or paramset defined in the
+// A module NAMED `resistor` — the Table E.1 primitive name — declaring its own
+// parameter with a §2.6.2 scaled default.
+//
+// WHAT IS ACTUALLY PINNED, and it is not E.3.3. Two things:
+//
+//   r == 1000 exactly. Table 2-1 of §2.6.2 gives `K, k` the value 1e3 and lists
+//   `7k` among the valid real constants, so the §3.4 default written `1k` is
+//   1000.0 — not 1.0, not 1024, and not a syntax error for want of a decimal
+//   point (§2.6.2's "one digit on each side" rule constrains only numbers that
+//   HAVE a decimal point).
+//
+//   V(p,n) == 1.0 at the biased operating point, i.e. the bias reaches the
+//   branch p-first and the ordering of the port list is the ordering of the
+//   potential difference.
+//
+// WHY THE E.3.3 CITE IS GONE. E.3.3 says "a module or paramset defined in the
 // Verilog-AMS will always be selected in favor of a SPICE primitive, model, or
-// subcircuit using exactly the same name", adding that for a primitive always
-// available in the simulator "a Verilog-AMS module or paramset whose name
-// exactly matches that of the primitive will be used in module instantiations".
-// E.2.1 only supplies the case-insensitive fallback, "if no exact match is
-// found". This module IS that exact match, so the behavior below is the
-// module's own, not Table E.1's.
+// subcircuit using exactly the same name". That is a rule about which of TWO
+// definitions elaboration picks, and this suite can supply only one: the torture
+// harness compiles a single .va and has no companion-SPICE-netlist input, so
+// there is no primitive named `resistor` here for the module to win against.
+// Declaring the module and observing that it behaves like itself does not
+// discriminate a tool that implements E.3.3 from one that has never heard of
+// SPICE. E.3.3 is therefore blocked on harness capability, and this file no
+// longer claims it. What survives is worth keeping on its own terms.
 //
-// WHAT IS PINNED, and why it can fail. Table E.1's resistor obeys
-// V = I*r*(1 + tc1*T + tc2*T^2) and declares no default for r; this module
-// declares r = 1k and obeys I = V/r with no temperature term at all. So:
+// TWO CLAIMS ALSO REMOVED, because they were unbacked:
+//   - a third CHECK asserting V(p,n)/r == 1e-3. Both operands are pinned by the
+//     two CHECKX lines above it, so 1.0/1000.0 is bit-identical to the literal
+//     and the assertion could not fail once they passed.
+//   - `//! temp 400`, and the paragraph arguing that a build "that kept a
+//     temperature coefficient in scope would drift off it at 400 K". This module
+//     declares no tc1/tc2 and no assertion reads $temperature, so there is no
+//     temperature term for a coefficient to live in and the directive reached
+//     nothing. Table E.1's V = I*r*(1 + tc1*T + tc2*T^2) is not modelled here.
 //
-//   r == 1000 exactly. §2.6: `k` is the scale factor 10^3 on an unsigned
-//   number, so the §3.4 default of `1k` is 1000.0 and not 1.0 or 1024.
-//
-//   I(p,n) == 1 mA at V(p,n) = 1 V and T = 400 K. Ohm's law gives 1/1000 A.
-//   A build that resolved `resistor` to the SPICE primitive instead would apply
-//   the tc1/tc2 form and could not produce this number from an r it was never
-//   given; one that kept a temperature coefficient in scope would drift off it
-//   at 400 K, ~100 K away from the 300.15 K default.
-//
+//! lrm 2.6.2
+//! lrm 3.4
 //! bias V(p) = 1.0, V(n) = 0.0
-//! temp 400
 `include "check.vh"
 module resistor(p, n);
   inout p, n; electrical p, n; parameter real r = 1k from (0:inf);
   analog begin
-    `CHECKX("r default is the 1k scaled literal of 2.6", r, 1000.0);
+    `CHECKX("r default is the 1k scaled literal of 2.6.2", r, 1000.0);
     // Written against the branch POTENTIAL rather than a flow probe of the same
     // branch: VerA answers `I(p,n)` with 0 on a branch it is itself sourcing,
     // whichever side of the contribution the read sits on.
     `CHECKX("the bias reaches the branch, p first", V(p, n), 1.0);
-    `CHECK("the module's own Ohm law, not Table E.1's", V(p, n) / r, 1e-3, 1e-15);
     I(p, n) <+ V(p, n) / r;
   end
 endmodule

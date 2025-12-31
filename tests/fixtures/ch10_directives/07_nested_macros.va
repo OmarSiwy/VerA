@@ -8,6 +8,7 @@
 // would give 0.25 and only the outer sum 1.0, so the digit pins that both
 // levels ran, in that order.
 //
+//! lrm 10.4
 //! bias V(p) = 0.5
 `define INNER(x) ((x)*(x))
 `define OUTER(x) (`INNER(x) + (x))

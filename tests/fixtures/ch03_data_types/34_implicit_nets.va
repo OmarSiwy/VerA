@@ -1,17 +1,43 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §3.6.2.4 undeclared nets: "It is possible for a module to have nets where
+// there are no discipline declarations. If such a net appears bound only to
+// ports in module instantiations, it may have no declaration at all". That is
+// exactly `implicit_link` below — it is written only as an actual on the child
+// instance and never in behavioral code, so the module is legal as written and
+// the net's discipline comes from resolution (§7.4, Annex F).
 //
-// VAMS-3.6.2-03  (ch3-datatypes.html)
-// It shall be an error to hierarchically override the discipline of a net that was explicitly declared unless it is a compatible discipline.
-// VAMS-3.6.2.4-01  (ch3-datatypes.html)
-// [Undeclared nets / nets whose discipline resolution yields nothing:] In these cases, the net shall be treated as having no discipline.
-// VAMS-3.6.2.4-02  (ch3-datatypes.html)
-// If the net is referenced in behavioral code, then it shall be treated as having no discipline with a domain binding of discrete [...]
-// VAMS-3.6.2.4-03  (ch3-datatypes.html)
-// [...] otherwise it shall be treated as having no discipline and no domain binding.
+// Annex C.8 keeps Clause 6 hierarchy inside the Verilog-A subset, so the
+// instance is legal too. This file used to carry `//! reject ParseError`, which
+// asserted a VerA limitation as if it were the rule and pinned only the PHASE,
+// so any unrelated parse error kept it green. The three §3.6.2.4 sentences it
+// also quoted (a net that resolves to nothing has no discipline, and gains a
+// discrete domain binding only if behavioral code touches it) are about
+// resolution across a hierarchy and belong with ch06/annex_f, not here.
 //
-//! reject ParseError
-module ch3_implicit_top(p); inout p; electrical p; child u(p, implicit_link); endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.
+// What one top-level module can observe is elaboration: the value on the
+// implicit net is decided by discipline resolution and the solve, and this
+// module cannot probe it without referencing it behaviorally — which is a
+// DIFFERENT clause. So the assertion is the parent's own biased port, and it
+// can only be reached if the module elaborated with the undeclared net in place.
+//
+//! bias V(p) = 1.5
+//! lrm 3.6.2.4
+//! lrm C.8
+//! xfail VerA does not implement module instantiation: the instance in the parent is rejected with E0204, so an undeclared net bound only to an instance port is never reached
+`include "check.vh"
+module ch3_implicit_child(a, b);
+    inout a, b;
+    electrical a, b;
+
+    analog I(a, b) <+ 0.001 * V(a, b);
+endmodule
+
+module ch3_implicit_top(p);
+    inout p;
+    electrical p;
+
+    ch3_implicit_child u(p, implicit_link);
+
+    analog begin
+        `CHECKX("the parent elaborates with an undeclared net bound only to an instance port", V(p), 1.5);
+    end
+endmodule

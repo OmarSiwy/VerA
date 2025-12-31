@@ -1,15 +1,16 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §7.3.6.3 analog primary appearing in a digital expression: `V(p)` read from an
+// `always` block "shall be evaluated using the analog value calculated for the
+// time corresponding to a real promotion of the digital time at which the
+// expression is evaluated".
 //
-// VAMS-7.3.6.3-01  (ch7-mixed-signal.html)
-// The expression shall be evaluated using the analog value calculated for the time corresponding to a real promotion of the digital time at which the ex
-// VAMS-7.3.6.5-01  (ch7-mixed-signal.html)
-// The expression shall be evaluated using the digital value calculated for the greatest digital time tick which is less than or equal to the analog time
+// C.7 removes the digital context that would do the evaluating — "No digital
+// behavior or events are supported in Verilog-A" — so the `always` block is an
+// unsupported module item and the rejection is conformance, not debt. There is
+// no digital time in this dialect to promote.
 //
-//! reject unsupported module item
-// EXPECT: error -- continuous probe in a digital process is not VA codegen.
+//! lrm 7.3.6.3
+//! lrm C.7
+//! reject E0205
 module ch7_digital_probe(p);
   inout p; electrical p; real sampled;
   always @(p) sampled = V(p);

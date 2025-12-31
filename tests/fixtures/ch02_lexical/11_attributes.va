@@ -4,6 +4,7 @@
 // declaration it decorates alone. The observable consequence is that
 // `conductance` still holds the §2.6.2 scaled literal `1m` = 1e-3 after four
 // attributes were attached to it, and the module still conducts.
+//! lrm 2.9
 `include "check.vh"
 (* optimize_power = 1 *)
 module ch02_attributes(p, n);

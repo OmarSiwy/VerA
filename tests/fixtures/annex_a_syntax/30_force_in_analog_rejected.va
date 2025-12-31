@@ -1,0 +1,21 @@
+// A.6.2 `procedural_continuous_assignments ::= assign ... | deassign ... |
+// force ... | release ...` is an alternative of the DIGITAL A.6.4 `statement`
+// only. The A.6.4 `analog_statement` list has eleven alternatives and none of
+// them is a procedural continuous assignment, so `force x = 1.0;` inside an
+// `analog` block derives from nothing.
+//
+// The suite's three existing force/release/deassign fixtures
+// (ch08_scheduling/procedural_*_unsupported.va) all wrap the construct in `reg`
+// + a digital `initial` block, so they are rejected for the `reg` or the
+// `initial` and say nothing about the analog position. This one puts the
+// construct where the grammar is the only thing that can refuse it.
+//
+// One file, not four: release/assign/deassign take the same parser path and the
+// same code. Split them the day that path diverges.
+//
+//! lrm A.6.4
+//! lrm A.6.2
+//! reject E0209
+module annex_a_force_in_analog(p); inout p; electrical p; real x;
+analog begin force x = 1.0; I(p) <+ V(p); end
+endmodule

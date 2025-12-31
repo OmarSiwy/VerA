@@ -3,6 +3,7 @@
 // V(p) it was given, and `i` keeps the 0 the initial assignment put there — one
 // pass would have left x = V(p) + 1 = 1.25 and i = 1.
 //
+//! lrm 5.9.2
 //! bias V(p) = 0.25
 `include "check.vh"
 module ch5_for_zero(p);

@@ -1,4 +1,5 @@
 // annex C: the digital continuous `assign` is outside Verilog-A.
+//! lrm C.7
 //! reject E0205
 //! reject assign
 // EXPECT: error -- continuous digital assignment uses the digital queue.

@@ -1,8 +1,25 @@
-// Annex H "block" (a level delimited by begin-end) and "control flow" (the
-// conditional statements selecting a section of the description). The if/else
-// computes |V(p,n)|, so at a bias of -0.4 V the guard must be false (§4.2.5: a
-// comparison is an integer, 0 here) and the else arm must leave 0.4 behind.
+// Annex H "block": "A level within the behavioral description of a module,
+// delimited by begin and end" (§5.3). Annex H "control flow": "The CONDITIONAL
+// AND ITERATIVE statements controlling the behavior of a module. These
+// statements evaluate arbitrary variables (counters, flags, and tokens) to
+// control the operation of different sections of a behavioral description."
 //
+// What this fixture pins: the conditional half (§5.8) inside a named begin-end
+// block (§5.3). The if/else computes |V(p,n)|, so at a bias of -0.4 V the guard
+// must be false (§4.2.5: a comparison is an integer, 0 here) and the else arm
+// must leave 0.4 behind, visible after the arms rejoin.
+//
+// What it does NOT pin, deliberately:
+//   - the iterative half of "control flow" (§5.9) — ch05_analog_behavior's
+//     for_loop.va, while_loop.va, repeat_loop.va and analog_genvar_loop.va;
+//   - the broader delimitation in Annex H "level"/"nesting level", which is "a
+//     pair of matching keywords SUCH AS begin-end OR discipline-enddiscipline".
+//     Only begin-end is exercised here; discipline-enddiscipline is §3.6/§7.
+//
+//! lrm H
+//! lrm 5.3
+//! lrm 5.8
+//! lrm 4.2.5
 //! bias V(p) = -0.4
 `include "check.vh"
 module glossary_block_control_flow(p, n);

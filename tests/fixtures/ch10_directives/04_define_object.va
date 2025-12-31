@@ -5,6 +5,7 @@
 // At V(p,n) = 0.5 the product is 1.5 — exact, since 3.0 and 0.5 and 1.5 are all
 // exact in binary. An empty or mis-captured macro text cannot produce it.
 //
+//! lrm 10.4
 //! bias V(p) = 0.5
 `define GAIN 3.0
 `include "check.vh"

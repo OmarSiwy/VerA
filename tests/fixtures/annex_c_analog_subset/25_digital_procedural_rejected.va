@@ -1,0 +1,38 @@
+// Annex C.7, bullet 1: "No digital behavior or events are supported in
+// Verilog-A." 13 and 14 cover the two digital procedural BLOCKS; this covers
+// two digital procedural STATEMENTS, both meaningless in an analog block
+// because both need a digital scheduler:
+//
+//   A.6.3  par_block ::= fork ... join      concurrent processes; the analog
+//                                           block is a single ordered process.
+//   A.6.5  wait_statement ::= wait ( expression ) statement_or_null
+//                                           blocks until a variable changes,
+//                                           which is a digital event.
+//
+// Both are in one file because the parser resynchronises at the next statement
+// and reports each keyword, and each is pinned as its own substring — dropping
+// one arm FAILs instead of passing on its neighbour's diagnostic. `wait` comes
+// first deliberately: placed directly after `join` it is swallowed by that
+// statement's recovery and never reported. `disable`, whose diagnostic comes
+// from a later stage that does not run at all once a parse error exists, is 27.
+//
+//! lrm C.7
+//! lrm A.6.3
+//! lrm A.6.5
+//! reject E0209
+//! reject fork
+//! reject join
+//! reject wait
+module annex_c_digital_procedural_rejected(p);
+    inout p;
+    electrical p;
+    integer state;
+
+    analog begin
+        wait (state) state = 0;
+        fork
+            state = 1;
+        join
+        I(p) <+ V(p);
+    end
+endmodule

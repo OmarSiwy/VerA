@@ -1,16 +1,20 @@
-// A branch may name the same net twice. LRM 4.4 / Table 4-16 makes V(a,b) the
-// potential DIFFERENCE between the two terminals, so a branch from p to p has a
-// potential of exactly zero no matter what p sits at, and the flow it carries
-// enters and leaves the same node — KCL at p is untouched by the 1 mA below.
-`include "check.vh"
-//! bias V(p) = 0.7
+// LRM 4.4, Table 4-16: `V(n1,n1)  Error` and `I(n1,n1)  Error`, and the prose
+// under the table is normative -- "If two net expressions are given as
+// arguments to a flow access function, they shall not evaluate to the same
+// signal." Annex G Table G.1 records why the spelling exists at all: `I(a,a)`
+// was the OVI Verilog-A v1.0 form of the port flow, replaced in v2.0 by
+// `I(<a>)`. A branch from p to p is not a branch with zero potential; it is
+// not a branch.
+//
+// The replacement spelling is covered by 34_port_access.va.
+//
+//! lrm 4.4
+//! lrm G.1
+//! reject E0315
+//! xfail VerA accepts I(n,n)/V(n,n) and folds the self-referential branch away instead of diagnosing the same-signal flow arguments (Table 4-16); E0315's explain text already claims the rule ("LRM 4.4 also forbids V(n1, n1)") but nothing raises it
 module ch4_same_flow(p);
   inout p; electrical p;
   analog begin
     I(p,p) <+ 1m;
-    // p is biased at 0.7 V, so this is not the trivial all-zeros answer.
-    `CHECKX("V(p) is the declared bias", V(p), 0.7);
-    // ...yet the difference of a net with itself is identically zero.
-    `CHECKX("V(p,p) = 0", V(p,p), 0.0);
   end
 endmodule

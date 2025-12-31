@@ -3,7 +3,7 @@
 // zero, the timer function schedules subsequent events at multiples of period."
 //
 // timer(0.0, 1n) therefore fires at t = 0, 1n, 2n, … and the body toggles
-// `state`, which §3.2.1 starts at 0.0. Statements in an analog block run in
+// `state`, which §3.2 starts at 0.0. Statements in an analog block run in
 // order at each timepoint, so a check placed AFTER the event control sees the
 // toggle that timepoint's event performed:
 //
@@ -23,6 +23,7 @@
 // state = 1 at t = 1n, the exact mirror of §5.10.3.3's "at that time point,
 // the event evaluates to True".
 //
+//! lrm 5.10.3.3
 //! analysis tran
 //! time 0, 1n
 `include "check.vh"

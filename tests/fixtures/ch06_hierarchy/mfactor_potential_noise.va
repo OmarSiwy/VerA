@@ -8,6 +8,9 @@
 // And §4.6.4: "The noise functions are only active in small-signal noise
 // analyses and return zero (0) otherwise." The default analysis is DC, so the
 // potential this source contributes is exactly zero.
+//
+//! lrm 6.3.6
+//! lrm 4.6.4
 `include "check.vh"
 module ch6_mfactor_potential_noise(p, n);
   inout p, n; electrical p, n;

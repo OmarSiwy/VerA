@@ -1,0 +1,22 @@
+// Annex C.9: "Clause 7 only applies to Verilog-AMS HDL." A connect rules block
+// is the Clause 7 construct that names which connect modules a mixed-signal
+// elaborator may insert (A.1.2 `connectrules_declaration ::= connectrules
+// connectrules_identifier ; { connectrules_item } endconnectrules`), so a
+// Verilog-A compiler must refuse the CONSTRUCT, not merely the keywords.
+//
+// C.16 lists connect, connectrules and endconnectrules among the keywords "not
+// used by Verilog-A"; 16_unused_ams_words_rejected.va covers those spellings as
+// identifiers, which is a different rule — a compiler could reserve every word
+// and still elaborate the block.
+//
+// The construct one level down, `connectmodule`, is 26: the parser does not
+// recover past this declaration, so a single file naming both would prove only
+// whichever came first.
+//
+//! lrm C.9
+//! lrm C.16
+//! reject E0201
+//! reject connectrules
+connectrules annex_c_connectrules_rejected;
+    connect a2d;
+endconnectrules

@@ -1,0 +1,16 @@
+// A.10 detail 2: "Embedded spaces are illegal." §2.6.2 gives the real_number
+// production — `unsigned_number [ . unsigned_number ] exp [ sign ]
+// unsigned_number` — as one lexical token, so the exponent marker cannot be
+// separated from the mantissa by white space. `1.5 e3` is two tokens: the real
+// 1.5, then an identifier `e3`.
+//
+// The hazard this pins is a lexer that glues the two back together and reads
+// 1500.0. ch02_lexical/36_based_number_digit_whitespace.va covers the same
+// detail for based numbers (`8'h Af`); the real_number half had no fixture.
+//
+//! lrm A.10
+//! lrm 2.6.2
+//! reject E0207
+module annex_a_real_embedded_space(p); inout p; electrical p; real x;
+analog begin x = 1.5 e3; I(p) <+ x * V(p); end
+endmodule

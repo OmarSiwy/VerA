@@ -1,39 +1,37 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §5.10.4 named events. §5.10 lists three kinds of analog event — global
+// (5.10.2), monitored (5.10.3) and named (5.10.4) — so the named event is part
+// of the analog language, not a digital-only construct: annex C.7's "No digital
+// behavior or events are supported in Verilog-A" excludes digital events, and
+// C.2 lists "a set of events to control when certain code is simulated" as a
+// Verilog-A feature.
 //
-// VAMS-5.10.4-01  (ch5-analog.html)
-// An event name shall be declared explicitly before it is used.
-// VAMS-5.10.4-02  (ch5-analog.html)
-// An event-controlled statement (for example, @trig rega = regb;) shall cause simulation of its containing procedure to wait until some other procedure
+// Syntax 5-20 `event_declaration ::= event list_of_event_identifiers ;` and
+// Syntax 5-21 `event_trigger ::= -> hierarchical_event_identifier ;`. §5.10.4:
+// "Named events can be triggered from always and initial blocks, or from an
+// analog event statement", and the clause's own example triggers ana_event from
+// `@(timer(1n))` and detects it with `@(ana_event)` in the SAME analog block.
+// That is the shape here, with initial_step (§5.10.2) in place of the timer so
+// the fixture is a one-timepoint dc run and does not also depend on the
+// separate timer-timing defect that event_timer.va records.
 //
-// LRM 5.10.4 named events. Two independent reasons this fixture cannot compile;
-// the parse-stage one below is the one reached first.
+// Statements in an analog block execute in order at each timepoint, so the
+// trigger on the line above has occurred by the time the detection statement
+// runs, and `seen` is 1.0. §3.2 starts it at 0.0, so a compiler that accepted
+// `@(tick)` as a guard that is silently never true reads 0.0 instead.
 //
-// (1) `event tick;` — A.2.1.3 event_declaration. Named events ARE in the
-// Verilog-A subset: 5.10 says "There are three types of analog events,
-// global events (5.10.2), monitored events (5.10.3), and named events
-// (5.10.4)", and 5.10.4's own example triggers and detects one entirely
-// inside an `analog` block. Annex C.7's "No digital behavior or events are
-// supported in Verilog-A" excludes DIGITAL events, not this one — C.2 lists
-// "a set of events to control when certain code is simulated" as a
-// Verilog-A feature. So the fixture's own header comment ("Named events need
-// the digital scheduler") is wrong; VerA simply does not implement them,
-// and says so rather than accepting `@(tick)` as a guard that is silently
-// never true.
+// A contribution may NOT appear inside an event control block (§5.10, A.6.4);
+// that rule is a separate fixture, event_contribution_rejected.va.
 //
-// (2) `@(tick) I(p) <+ ...` — a contribution in an event control block. 5.10:
-// "Contribution statements cannot be used inside an event control block
-// because it can generate discontinuity in analog signals", and A.6.4
-// `analog_event_statement` has no contribution_statement alternative. This
-// rule IS enforced (see lower.zig `eventContribMsg`); it is simply not the
-// first diagnostic here.
-//! reject ParseError
-//! reject E0203
-// Named events need the digital scheduler; this snapshots the missing diagnostic.
+//! lrm 5.10.4
+//! xfail VerA does not implement named events: `event tick;` is refused at E0203 and `@(tick)` at E0705
+`include "check.vh"
 module ch5_named_event(p);
-  inout p; electrical p;
+  inout p; electrical p; real seen;
   event tick;
-  analog @(tick) I(p) <+ 1m + 0.0*V(p);
+  analog begin
+    @(initial_step) -> tick;
+    @(tick) seen = 1.0;
+    `CHECKX("a named event triggered in the analog block is detected in it", seen, 1.0);
+    I(p) <+ 1m * seen;
+  end
 endmodule

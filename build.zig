@@ -79,9 +79,10 @@ pub fn build(b: *std.Build) void {
     // NOT in `test`: it spawns a `zig build-exe` per fixture, seconds rather
     // than milliseconds. Run it explicitly:
     //
-    //   zig build torture              # every fixture
+    //   zig build torture              # every fixture, one per core
     //   zig build torture -- ch04      # only paths matching `ch04`
     //   zig build torture -- --strict  # unasserted fixtures FAIL instead of warn
+    //   zig build torture -- -j1       # sequential and streaming; for debugging
     const contract_path = b.option(
         []const u8,
         "contract",
@@ -92,6 +93,20 @@ pub fn build(b: *std.Build) void {
     torture_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-tb"));
     torture_opts.addOption([]const u8, "contract", contract_path);
     torture_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
+    // `-Doptimize` builds the RUNNER; this builds the per-fixture testbench
+    // binaries the runner spawns a `zig build-exe` for. Two different programs,
+    // so two different knobs. Debug is right for the fixtures and stays the
+    // default — see the `//! fixture-opt` note in tests/torture.zig.
+    //
+    // Passed as the tag NAME, not the enum: `addOption` emits its own copy of
+    // any enum type, which is then a different type from `std.builtin.
+    // OptimizeMode` on the other side. The `b.option` call still validates the
+    // spelling here, at build time.
+    torture_opts.addOption([]const u8, "fixture_optimize", @tagName(b.option(
+        std.builtin.OptimizeMode,
+        "fixture-optimize",
+        "Optimize mode for the per-fixture testbench binaries (default Debug)",
+    ) orelse .Debug));
     const torture_mod = b.createModule(.{
         .root_source_file = b.path("tests/torture.zig"),
         .target = target,

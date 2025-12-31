@@ -1,0 +1,44 @@
+// Annex A.4.1 module_instantiation, and Annex C.8: "The hierarchical structure
+// defined in Clause 6 is applicable to both Verilog-AMS HDL and Verilog-A,
+// except support for real value ports is only applicable to Verilog-AMS HDL
+// and IEEE Std 1364 Verilog (see 6.5.3)." Instantiating a child is INSIDE the
+// Verilog-A subset — Clause 6 has exactly one carve-out and this is not it — so
+// this file must run green, not reject. It used to carry a bare
+// `//! reject E0204`, which asserted a VerA limitation as if it were the rule:
+// a conforming compiler failed it and only VerA passed.
+//
+// Two things are pinned, both fixed by the LRM and neither by the host:
+//   §5.4.1  the parent's two-argument probe is the potential across the pair,
+//           1.5 - 0.5 = 1.0 V from the biases below;
+//   §6.3.2  a named parameter value assignment on the instance overrides the
+//           child's declared default, so `gain` inside the child is 2.0 and not
+//           the 1.0 it declares.
+//
+//! bias V(p) = 1.5
+//! bias V(n) = 0.5
+//! lrm A.4.1
+//! lrm C.8
+//! lrm 6.3.2
+//! xfail VerA does not implement module instantiation — an instance in a module body is rejected with E0204
+`include "check.vh"
+module annex_a_child(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real gain = 1.0;
+
+    analog begin
+        `CHECKX("the instance's named override reaches the child", gain, 2.0);
+        I(p, n) <+ gain * V(p, n);
+    end
+endmodule
+
+module annex_a_module_instantiation(p, n);
+    inout p, n;
+    electrical p, n;
+
+    annex_a_child #(.gain(2.0)) child_instance(p, n);
+
+    analog begin
+        `CHECKX("the parent probes the potential across its own ports", V(p, n), 1.0);
+    end
+endmodule

@@ -1,0 +1,9 @@
+// Annex C.8 / §6.5.3, the `output` direction of the real value port. See
+// 15_real_value_port_rejected.va for why the three directions are three files.
+//
+//! lrm C.8
+//! lrm 6.5.3
+//! reject E0208
+module annex_c_real_value_output_port_rejected(p);
+    output real p;
+endmodule

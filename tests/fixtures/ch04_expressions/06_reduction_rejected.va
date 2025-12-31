@@ -1,0 +1,33 @@
+// LRM 4.2.10, the whole clause, verbatim: "The reduction operators can not be
+// used inside the analog block and only have meaning when used in the digital
+// context."
+//
+// There is no carve-out and no analog form: `&`, `|`, `~&` and `~|` are banned
+// here exactly as `^`, `~^` and `^~` are. The xor spellings are pinned
+// separately by 07_reduction_xor_rejected.va, which VerA already refuses at the
+// parser (E0215), so 06 and 07 together read as the one rule 4.2.10 states.
+//
+// This replaces a fixture that ASSERTED the four operators' IEEE 1364 values
+// inside `analog begin` and called the LRM ban a VerA extension. A conforming
+// compiler diagnoses that file and fails it; only VerA passed it. The suite
+// tests conformance, so the requirement is written the way the LRM writes it
+// and the gap is recorded on the xfail line.
+//
+//! lrm 4.2.10
+//! reject reduction
+//! reject analog block
+//! xfail VerA lowers unary &, |, ~& and ~| in the analog block as IEEE 1364 32-bit reductions instead of diagnosing them; src/diag_code.zig has E0319 and E0320 but no code for the 4.2.10 analog-block ban itself
+module ch04_reduction_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    integer bits, value;
+
+    analog begin
+        bits = 15;
+        value = (|bits);
+        value = value + (&bits);
+        value = value + (~|bits);
+        value = value + (~&bits);
+        I(p, n) <+ value;
+    end
+endmodule

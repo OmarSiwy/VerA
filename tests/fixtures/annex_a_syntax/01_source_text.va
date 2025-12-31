@@ -1,3 +1,36 @@
+// A.1.2 `description ::= module_declaration | udp_declaration | config_declaration
+//                      | paramset_declaration | nature_declaration
+//                      | discipline_declaration | connectrules_declaration`
+//
+// Three of those alternatives appear here, and the nature and the discipline are
+// not decoration: the nets of the second module are bound to the DECLARED
+// `annex_a_electrical`, not to the built-in `electrical`, so a compiler that
+// parsed the two declarations and discarded them cannot resolve `V(p, n)` at
+// all. §3.6.2.1 binds `annex_a_voltage` as the discipline's potential nature and
+// §3.13.2 makes that nature's `access = V` the function that reads it, so the
+// probe below runs through the user's own declarations end to end. Before this
+// the module bound its nets with the BUILT-IN `electrical` and asserted nothing,
+// so both declarations were dead text.
+//
+// V(p) - V(n) = 0.6 - 0.1. Neither operand is representable in binary, but
+// their difference is: the nearest doubles to 0.6 and 0.1 subtract to exactly
+// 0.5 (verified, not assumed), so this is `CHECKX` and not a tolerance.
+//
+// `module annex_a_first();` is the A.1.3 `list_of_port_declarations ::= ( )`
+// empty form — a module with no ports at all. It is legal, it is here for that
+// production alone, and it contributes no assertion; it must PARSE, nothing
+// more. It is written second on purpose: a device is elaborated from the FIRST
+// module in the file, and a module with zero terminals is the README's
+// CANNOT RUN case, which would swallow the whole fixture.
+//
+//! lrm A.1.2
+//! lrm A.1.3
+//! lrm 3.6.2.1
+//! lrm 3.13.2
+//! bias V(p) = 0.6
+//! bias V(n) = 0.1
+//! print none
+`include "check.vh"
 nature annex_a_voltage;
     units = "V";
     access = V;
@@ -9,11 +42,15 @@ discipline annex_a_electrical;
     potential annex_a_voltage;
 enddiscipline
 
-module annex_a_first;
-endmodule
-
 module annex_a_source_text(p, n);
     inout p, n;
-    electrical p, n;
-    analog I(p, n) <+ V(p, n);
+    annex_a_electrical p, n;
+    analog begin
+        `CHECKX("the user-declared nature's access function reaches the node pair",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule
+
+module annex_a_first();
 endmodule

@@ -1,0 +1,20 @@
+// Annex C.4, bullet 3: "From 3.8, Default discipline: the `default_discipline
+// compiler directive is not supported in Verilog-A. All Verilog-A modules shall
+// have a discipline defined for each module."
+//
+// The directive is the module's ONLY possible source of a discipline here —
+// there is deliberately no `electrical p, n` declaration, because with one the
+// §3.8 directive binds nothing (a net with its own declaration keeps it) and the
+// fixture would be satisfied by a compiler that implements the forbidden
+// directive and by one that refuses it alike. Nothing is asserted: every value
+// this module could produce is a value the subset says cannot exist.
+//
+//! lrm C.4
+//! lrm 3.8
+//! reject default_discipline
+//! xfail VerA implements `default_discipline as an ordinary Clause 10 directive and has no Verilog-A subset gate, so this module compiles clean (rc=0, no diagnostic)
+`default_discipline electrical
+module annex_c_default_discipline_rejected(p, n);
+    inout p, n;
+    analog I(p, n) <+ V(p, n);
+endmodule

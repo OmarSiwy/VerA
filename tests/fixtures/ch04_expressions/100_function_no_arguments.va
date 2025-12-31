@@ -1,14 +1,17 @@
-// LRM 4.7.2.1: an analog function declaration implicitly declares a variable of
-// the function's own name and type, initialized to 0 for a numeric type; "the
-// last value assigned to this variable will be the return value". `noargs`
-// assigns 1.0 to it, so the call returns 1.0 and not the 0.0 default -- which is
-// what makes the check restricting.
+// LRM 4.7.1 bullet list, verbatim: an analog user-defined function "shall have
+// at least one formal argument declared". `noargs` declares none, so the
+// DEFINITION is already the violation; A.8.2's `analog_function_call` says the
+// same thing from the call side, requiring at least one `analog_expression`
+// between the parentheses.
 //
-// NOTE for a reviewer: 4.7.1 also requires a function to "have at least one
-// formal argument declared", and A.8.2 `analog_function_call` requires at least
-// one actual, so a strict reading rejects this module rather than running it.
-// VerA accepts it; the assertion below pins what it then has to compute.
-`include "check.vh"
+// This previously carried no `reject` and asserted CHECKX(noargs(), 1.0) — the
+// 4.7.2.1 return-variable rule applied to a function 4.7.1 forbids declaring.
+// That rule is worth pinning and is pinned on a legal function by
+// 28_user_function.va, so demanding the diagnostic here loses nothing.
+//
+//! lrm 4.7.1
+//! reject formal argument
+//! xfail VerA accepts an analog function with an empty formal list and a call with an empty actual list; E0511 only checks that the two counts agree, so 0 == 0 passes. No diag code covers the 4.7.1 minimum of one formal
 module ch4_fn_noargs(p);
   inout p;
   electrical p;
@@ -16,7 +19,6 @@ module ch4_fn_noargs(p);
     noargs = 1.0;
   endfunction
   analog begin
-    `CHECKX("implicit return variable of a zero-argument function", noargs(), 1.0);
     I(p) <+ noargs();
   end
 endmodule

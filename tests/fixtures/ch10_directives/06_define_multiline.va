@@ -9,6 +9,7 @@
 // that stopped the body at the first newline would leave (0.5)*(0.5) = 0.25, so
 // the digit tells the joined body from the truncated one.
 //
+//! lrm 10.4
 //! bias V(p) = 0.5
 `define POLY(x) ((x)*(x) + \
                  2.0*(x) + 1.0)

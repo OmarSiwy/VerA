@@ -309,6 +309,7 @@ n$657</code></pre>
 <div class="syntax">analog_system_task_enable ::=                                              // from A.6.9
         analog_system_task_identifier [ ( [ analog_expression ] { , [ analog_expression ] } ) ] ;
 system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
+task_enable ::= hierarchical_task_identifier [ ( expression { , expression } ) ] ;
 analog_system_function_call ::=                                            // from A.8.2
         analog_system_function_identifier [ ( [ analog_expression ] { , [ analog_expression ] } ) ]
 system_function_call ::= system_function_identifier
@@ -329,7 +330,7 @@ system_task_identifier<sup>1</sup> ::= $ [ a-zA-Z0-9_$ ] { [ a-zA-Z0-9_$ ] }
 <li>Additional $<em>identifier</em> system tasks and functions defined by software implementations.</li>
 </ul>
 
-<p>Any valid identifier, including keywords already in use in contexts other than this construct, can be used as a system task or function name.</p>
+<p>Any valid identifier, including keywords already in use in contexts other than this construct, can be used as a system task or function name. The system tasks and functions described in Clause 17 and Clause 18 of IEEE Std 1364 Verilog are part of this standard.</p>
 
 <p>Examples:</p>
 
@@ -348,6 +349,8 @@ $finish;</code></pre>
 </ul>
 
 <p>Any valid identifier, including keywords already in use in contexts other than this construct, can be used as a compiler directive name.</p>
+
+<p>The compiler directives described in Clause 19 of IEEE Std 1364 Verilog are part of this standard.</p>
 
 <p>Example:</p>
 

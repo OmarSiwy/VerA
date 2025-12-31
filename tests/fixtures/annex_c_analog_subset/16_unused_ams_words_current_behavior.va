@@ -1,9 +1,0 @@
-// Annex B: connect/endconnectrules/wreal/... are reserved AMS keywords and
-// cannot be used as identifiers, even though connect modules are outside
-// the Verilog-A subset.
-//! reject E0208
-//! reject connect
-module annex_c_unused_ams_words_current_behavior;
-    real connect, connectmodule, connectrules, driver_update;
-    real endconnectrules, merged, resolveto, split, wreal;
-endmodule

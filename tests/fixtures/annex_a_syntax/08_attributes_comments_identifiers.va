@@ -1,4 +1,4 @@
-// LRM 2.7 escaped identifiers: `\punctuated+identifier ` is the single
+// §2.8.1 escaped identifiers: `\punctuated+identifier ` is the single
 // identifier `punctuated+identifier` — the backslash and the terminating
 // whitespace are not part of the name, and the `+` is not an operator. Both
 // mentions below must therefore resolve to ONE variable; a lexer that stopped
@@ -10,6 +10,12 @@
 // of an argument goes on to swallow the `)` that follows it. Anything after the
 // identifier restores the terminator.
 //
+// The header used to cite "LRM 2.7", which is String literals.
+//
+//! lrm A.9.1
+//! lrm A.9.2
+//! lrm A.9.3
+//! lrm 2.8.1
 //! print none
 `include "check.vh"
 (* annex = "A.9" *)

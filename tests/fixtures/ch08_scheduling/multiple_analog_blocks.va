@@ -11,6 +11,9 @@
 // Both blocks contribute to the same branch, and LRM 8.3.1 sums them into one
 // nodal row: 0.9 + ddt(...) = 0.9 A here, since LRM 4.5.3 makes ddt zero in dc.
 //
+//! lrm 6.2
+//! lrm 8.4.3.1
+//! lrm 8.3.1
 //! bias V(p) = 0.9
 `include "check.vh"
 module ch8_concurrent(p);

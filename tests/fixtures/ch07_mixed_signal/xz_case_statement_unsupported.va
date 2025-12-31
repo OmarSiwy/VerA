@@ -1,3 +1,5 @@
+//! lrm 7.3.2
+//! lrm C.3
 //! reject E0130
 // EXPECT: error -- ordinary case can translate explicit X/Z alternatives.
 module ch7_xz_case_statement(p, d);

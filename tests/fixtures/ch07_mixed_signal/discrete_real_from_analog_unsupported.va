@@ -1,6 +1,7 @@
 // annex C: the digital `initial` block is outside Verilog-A.
+//! lrm 7.3.1
+//! lrm C.7
 //! reject E0205
-//! reject initial
 // EXPECT: error -- a discrete-owned real is readable as real in analog context.
 module ch7_discrete_real_from_analog(p);
   inout p; electrical p; real digital_real;

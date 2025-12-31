@@ -1,0 +1,34 @@
+// §6.4 defines `paramset`, and Annex C.8 keeps it in Verilog-A: "The
+// hierarchical structure defined in Clause 6 is applicable to both
+// Verilog-AMS HDL and Verilog-A, except support for real value ports is only
+// applicable to Verilog-AMS HDL". Paramset is Clause 6 and is not excepted, so
+// a Verilog-A compiler may not refuse a compilation unit for containing one.
+// VerA does, at E0201 — that is a subset decision, not a conformance rule, and
+// this file records it as the debt it is instead of pinning it as correct.
+//
+// What is asserted here is only the part a single-module testbench can see:
+// the paramset is legal, it contains no behavioral code (§6.4), and the module
+// it is associated with still compiles and runs with its own §3.4 default. The
+// override taking effect is observable only through an instance, so it belongs
+// with the Clause 6 hierarchy fixtures, not here.
+//
+//! lrm 6.4
+//! lrm C.8
+//! bias V(p) = 1.0, V(n) = 0.0
+//! xfail VerA refuses the whole compilation unit at E0201 because it contains a paramset
+`include "check.vh"
+module ch03_paramset_target(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real gain = 1.0;
+
+    analog begin
+        `CHECKX("the module keeps its own default alongside a paramset", gain, 1.0);
+        `CHECKX("and still solves", V(p, n), 1.0);
+        I(p, n) <+ gain * V(p, n);
+    end
+endmodule
+
+paramset ch03_values ch03_paramset_target;
+    .gain = 2.0;
+endparamset

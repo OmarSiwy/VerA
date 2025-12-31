@@ -5,8 +5,9 @@
 // analyses, such as ac, dc, or noise analyses".
 //
 // So at V(p)=0.6 the sampled value would be 0.6, but no event occurs and `x`
-// keeps the zero §3.2.1 gives a real variable.
+// keeps the zero §3.2 gives a real variable.
 //
+//! lrm 5.10.3.1
 //! bias V(p) = 0.6
 `include "check.vh"
 module ch5_cross_any(p);

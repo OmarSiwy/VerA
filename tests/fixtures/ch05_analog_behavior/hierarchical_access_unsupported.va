@@ -1,7 +1,44 @@
-//! reject module instantiation is not supported
-// EXPECT: error -- hierarchy is outside FastVAF's compilation model.
+// §5.5.4 "An access function in a module can have one or more hierarchical net
+// references to nets in other module instances. In these cases, a new unnamed
+// branch is created in the module containing the access function call."
+//
+// This is the clause's signal_monitor example. Note what it does NOT contain:
+// there is no instantiation of `top` anywhere in it. A hierarchical net
+// reference is resolved at elaboration against the wider design, not against
+// anything the referencing module declares — so a fixture that adds a child
+// instance to provoke a diagnostic is testing §6.4, not this clause.
+//
+// What another instance's net is holding is a property of that design, so there
+// are no digits to write for V(top.drv.a); §5.5.4 fixes only that the reference
+// is legal and creates an unnamed branch in THIS module. The assertion pins the
+// consequence that is local and checkable: the three probe-only hierarchical
+// branches must not disturb the local source, so V(a) is still refv.
+//
+// The port `p` is here only because the runner refuses a device with zero
+// terminals (README, CANNOT RUN) and that verdict would outrank the xfail and
+// hide the gap. signal_monitor itself has no port list.
+//
+//! lrm 5.5.4
+//! xfail VerA has no hierarchical net references: the `.` in `V(top.drv.a)` dies at E0207 (expected `)`)
+`include "check.vh"
 module ch5_hier_access(p);
-  inout p; electrical p;
-  analog I(p) <+ V(u.internal);
-  child u(p);
+  parameter real refv = 2.3;
+  inout p;
+  electrical p, a;
+  analog begin
+    V(a) <+ refv;
+
+    // Creates an unnamed branch in this module between net top.drv.a and
+    // implicit ground.
+    $strobe("voltage at top.drv.a = %g volts", V(top.drv.a));
+
+    // Creates an unnamed branch between nets top.drv.a and top.drv.b.
+    $strobe("voltage diff in top.drv = %g volts", V(top.drv.a, top.drv.b));
+
+    // Creates an unnamed branch between local net a and top.drv.a.
+    $strobe("voltage diff from ref in top.drv = %g volts", V(a, top.drv.a));
+
+    `CHECK("a hierarchical probe does not disturb the local source", V(a), 2.3, 1e-12);
+    I(p) <+ 0.0;
+  end
 endmodule

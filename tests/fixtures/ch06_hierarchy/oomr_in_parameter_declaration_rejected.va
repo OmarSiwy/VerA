@@ -1,0 +1,31 @@
+// §6.7.1, third bullet, the RESTRICTION half: "Access of parameters can be done
+// hierarchically. HOWEVER, PARAMETER DECLARATION STATEMENTS SHALL NOT MAKE
+// OUT-OF-MODULE REFERENCES (e.g., for setting default values)."
+//
+// One sentence, two rules pointing opposite ways, and the chapter previously
+// tested neither. Its permitted half — a hierarchical parameter read from inside
+// an analog block — is oomr_parameter_unsupported.va, which is a run fixture
+// carrying an `//! xfail` because VerA cannot parse the reference yet. This file
+// is the forbidden half: the same reference, moved into a parameter DECLARATION,
+// where the LRM says it shall not appear.
+//
+// The reason is elaboration order (§6.9.4): parameter values are computed as part
+// of elaboration, and a default that reads another instance's parameter would need
+// the hierarchy to already be resolved in order to resolve the hierarchy. So the
+// rejection is correct conformance and there is no `//! xfail`.
+//
+// The diagnostic is a parse boundary and not the rule. VerA has no
+// `hierarchical_identifier`, so the `.` in `other.gain` is E0207 ("unexpected
+// token: found `.`") — the same code the permitted half dies on, which is exactly
+// why the two files have to exist together: today one diagnostic covers both, and
+// the day hierarchical names resolve this one must keep failing while its sibling
+// starts passing.
+//
+//! lrm 6.7.1
+//! lrm 6.9.4
+//! reject E0207
+module ch6_oomr_in_parameter_declaration(p);
+  inout p; electrical p;
+  parameter real g = other.gain;
+  analog I(p) <+ g * V(p);
+endmodule

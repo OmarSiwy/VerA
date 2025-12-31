@@ -7,9 +7,15 @@
 //                      no crossing exists and the statement must NOT run.
 //
 // `seen` exists only to give the first fact something to say: it is 3 before the
-// event and 5 after, so a dropped initial_step reads 3. `state` stays at the 0
-// initial_step wrote — a compiler that runs event bodies unconditionally reads 1.
+// event and 5 after, so a dropped initial_step reads 3. `state` is seeded to 7
+// for the same reason: 0 is also its §3.2.1 initial value, so checking 0 against
+// an unseeded variable passes in a compiler that drops both event bodies. Seeded,
+// a dropped initial_step reads 7, a spuriously fired cross reads 1, and only the
+// LRM's answer reads 0.
 //
+//! lrm C.2
+//! lrm 5.10.2
+//! lrm 5.10.3.1
 //! bias V(p) = 2.0
 `include "check.vh"
 module annex_c_analog_event(p, n);
@@ -20,6 +26,7 @@ module annex_c_analog_event(p, n);
 
     analog begin
         seen = 3;
+        state = 7;
         @(initial_step) state = 0;
         @(initial_step) seen = 5;
         @(cross(V(p, n), 1)) state = 1;

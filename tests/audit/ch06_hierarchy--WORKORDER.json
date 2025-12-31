@@ -1,0 +1,496 @@
+[
+  {
+    "id": "A1",
+    "section": "6 (harness)",
+    "action": "edit",
+    "path": "tests/torture.zig + src/backend/tb.zig",
+    "title": "`//! xfail` is legal only next to `//! reject`, so no fixture can say \"VerA is wrong\" about a RUN",
+    "detail": "tb.zig:200 returns error.XfailWithoutReject when `xfail` appears without `reject`, and torture.zig only consults `d.xfail` on the reject path. Two honesty verdicts are therefore unrepresentable: (a) a runnable fixture whose CHECK is right and whose ok=0 is VerA's fault - dependent_parameter_transcendental.va is that fixture today and it is a hard FAIL (see B1); (b) a reject fixture that pins a construct the LRM PERMITS - 22 ch6 files are in that shape (A5) and marking them xfail makes them XPASS, which torture.zig turns into a hard FAIL by design. Blocks A2, A3, A5, A6, B1, C2-C7, D2, D3. Everything else in this order is cheap; this is the one that unlocks the rest.",
+    "expected": "`//! xfail <reason>` accepted on a run fixture: any ok=0 becomes the `xfail` verdict with the reason printed, all-ok becomes XPASS/hard FAIL, --strict fails on it. Plus an inverted marker (e.g. `//! wrongly-rejects <reason>`) for a reject fixture VerA should not be rejecting.",
+    "severity": "high",
+    "sourceLenses": [
+      "weak",
+      "negatives"
+    ]
+  },
+  {
+    "id": "A2",
+    "section": "6.6",
+    "action": "rewrite",
+    "path": "tests/fixtures/ch06_hierarchy/generate_if.va, generate_if_true.va, generate_if_false.va, generate_direct_nesting.va, generate_implicit_localparam.va",
+    "title": "Five PASSING generate fixtures pin a VerA extension that \u00a76.6 forbids - a conforming compiler fails all five",
+    "detail": "ch6-hierarchy \u00a76.6: \"A generate block is a collection of one or more module items.\" All five put a bare procedural assignment (`arm = 1;`, `code = code*10 + (i+1);`) directly in the generate block; the LRM's own adc/nlres/nmosfet examples write `analog` there. VERIFIED the lenses' prescribed fix is WRONG: `generate if (1) begin analog begin ... end end` does not parse - parser.zig emits E0209 \"expected an expression: found `analog`\", because the in_generate arm at parser.zig:325 parses the body as an analog STATEMENT. So this is a frontend change (accept module items inside a generate block), not a comment tweak. The five wants (2, 1, 2, 2, 123) are all correct and do not move.",
+    "expected": "Each generate block holds `analog begin ... end`; same numeric wants; `//! lrm 6.6` on all five. Until the parser accepts it, the five stay as-is with a comment naming E0209 as the blocker.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak"
+    ]
+  },
+  {
+    "id": "A3",
+    "section": "6.3.6",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/mfactor_flow_contribution.va, mfactor_flow_probe.va, mfactor_flow_noise.va, mfactor_potential_noise.va + src/backend/tb.zig",
+    "title": "All four \u00a76.3.6 scaling fixtures run at $mfactor = 1.0, where the clause says the rules do not apply - a compiler with zero $mfactor support passes every one",
+    "detail": "\u00a76.3.6: \"If an instance of a module has a NON-UNITY value of $mfactor, the following rules are applied automatically.\" Each of the four asserts `$mfactor == 1.0` and then the UNSCALED value, so all four rules are identities. Root cause VERIFIED: tb.zig has no directive that writes inst.mfactor - but the field already exists (codegen.zig:991 `mfactor: f64 = 1.0`, contract.zig:649) and codegen.zig:2546 already reads it, so the directive is the whole fix on the harness side. CORRECTION to the uncovered lens: codegen.zig:2552 states VerA's position that \"the host scales the whole stamp\", so rules 1/3/4 are host-side and only the $mfactor READ (and arguably the flow-probe division) is device-visible. At m=2 the read is testable today; the scaled residuals need A1's run-fixture xfail.",
+    "expected": "A `//! mfactor 2` directive emitting `inst.mfactor = 2.0;`. Each fixture runs at m=2 and asserts `$mfactor == 2.0` (passes today). The scaling assertions land behind `//! xfail` until VerA or the harness applies them. mfactor.va keeps m=1 as the Table 9-15 default case.",
+    "severity": "high",
+    "sourceLenses": [
+      "uncovered",
+      "weak"
+    ]
+  },
+  {
+    "id": "A4",
+    "section": "6.3.5",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/param_given_absent.va",
+    "title": "$param_given is an always-true predicate across the whole tree: every fixture overrides the parameter first",
+    "detail": "\u00a79.19: \"one (1) if the parameter was overridden ... and zero (0) otherwise.\" param_given.va carries `//! param gain = 2.0` and asserts 1; nothing anywhere asserts the 0. A compiler returning constant 1 passes. VERIFIED RUNNABLE TODAY: I compiled and ran the zero case against tools/contract.zig and it printed `not given got=0 want=0 ok=1`. Zero blockers, ~10 lines.",
+    "expected": "Same module with no `//! param` line: `CHECKI(\"$param_given is 0 for a parameter left at its default\", $param_given(gain), 0)` plus a ternary whose not-given arm is the one taken. `//! lrm 6.3.5`.",
+    "severity": "high",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "A5",
+    "section": "6.2.2 / 6.3.1 / 6.4 / 6.6.1 / 6.6.2 / 6.7.1",
+    "action": "rewrite",
+    "path": "tests/fixtures/ch06_hierarchy/module_instantiation_unsupported.va (+9 instantiation siblings), paramset_unsupported.va, paramset_overload_unsupported.va, paramset_output_unsupported.va, defparam_unsupported.va, parameter_port_list.va, generate_case_unsupported.va, generate_loop.va, generate_loop_descending.va, generate_two_loops.va, oomr_branch_probe_unsupported.va, oomr_parameter_unsupported.va, oomr_function_unsupported.va, root_reference_unsupported.va, mfactor_propagation_unsupported.va",
+    "title": "22 reject fixtures demand rejection of constructs the LRM requires - a conforming compiler FAILS every one, and eight say so in their own headers",
+    "detail": "Annex C.8: \"The hierarchical structure defined in Clause 6 is applicable to both Verilog-AMS HDL and Verilog-A, except support for real value ports\" - which removes the usual Verilog-A escape for all of these. Groups: module instantiation (10 files), paramsets (3, Clause 6.4 defines them), defparam (1), ANSI parameter port list (1), case-generate (1, Syntax 6-8 defines it), loop-generate (3), OOMR probe/param/function/$root (4). Eight carry the verbatim header \"DEBT - this rejection is NOT conformance ... the suite stays green on it\". oomr_parameter_unsupported.va is the sharpest: \u00a76.7.1 line 1268 says \"Access of parameters can be done hierarchically\", and the fixture rejects exactly that. Sub-finding VERIFIED: generate_loop / generate_loop_descending / generate_two_loops pass for a THIRD reason - the reject substring is `identifier`, hit at `electrical [0:2] p`, i.e. the vector-port declaration, never reaching the loop-generate they claim to test. Blocked on A1's inverted marker.",
+    "expected": "Every one carries `//! lrm <clause>` and the inverted xfail marker from A1, so `--coverage` counts the rule as claimed-and-unmet rather than as a green pass. No source changes; the substrings stay as the record of current behaviour.",
+    "severity": "high",
+    "sourceLenses": [
+      "weak",
+      "negatives",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "A6",
+    "section": "6.5.2.2",
+    "action": "rewrite",
+    "path": "tests/fixtures/ch06_hierarchy/vector_ports.va",
+    "title": "vector_ports.va is labelled DEBT for a rejection that is correct conformance - its source violates the very rule its header quotes",
+    "detail": "The header quotes \u00a76.5.2.2 \"If a port is declared as a vector, the range specification between the two declarations shall be identical\" and then claims \"the LRM permits what VerA refuses here\". The source is `inout p; electrical [3:0] p;` - scalar direction, [3:0] type: not identical, so the LRM makes it an error and the rejection is RIGHT. Mislabelling a correct rejection as debt is worse than the reverse: `zig build ledger` counts a conformance win against VerA. Separately, the LRM's own literal example - `input [3:0] in; electrical [0:3] in; // error: MSB and LSB do not match` - is untested, as is the legal `[0:3]` vs `[0:4-1]` pair that proves the rule is EVALUATE-equal and not spell-equal. VERIFIED VerA cannot parse a ranged direction declaration at all (E0208 at `inout [0:2] p`), so the LRM's literal case reaches a parse token, not the rule.",
+    "expected": "Drop the DEBT header. `//! lrm 6.5.2.2` + `//! reject`, comment stating the rejection is correct and the token is a parse boundary. Add a sibling for the `[0:3]` vs `[0:4-1]` legal pair (reject + xfail while ranged directions do not parse).",
+    "severity": "high",
+    "sourceLenses": [
+      "weak",
+      "uncovered",
+      "negatives"
+    ]
+  },
+  {
+    "id": "B1",
+    "section": "6.3.4",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/dependent_parameter_transcendental.va",
+    "title": "FAILING TODAY: got 7.38905609893065 (=exp(2.0)), want 20.085536923187668 (=exp(3.0))",
+    "detail": "VERIFIED by running `zig build torture -- ch06`. The want is right (exp(3.0) is bit-exact at that double) and the fixture's own header diagnoses the cause: codegen.zig's `f64Const` renders only arithmetic, abs, sqrt, min, max and pow, so a default it cannot render gets NO derive line and stays folded against the DECLARED default of `a`. \u00a76.3.4 puts no restriction on the operators a dependent expression may use. This is the chapter's only genuinely failing number and the only real defect the literals lens's clean sweep did not reach. Root fix is codegen; the interim verdict needs A1.",
+    "expected": "Either f64Const grows the transcendentals (then the fixture goes green), or A1 lands and the fixture carries `//! xfail VerA drops the derive line for a default it cannot render`. Not a want change.",
+    "severity": "high",
+    "sourceLenses": [
+      "weak"
+    ]
+  },
+  {
+    "id": "B2",
+    "section": "6.6",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/generate_nonconstant_rejected.va, generate_nested_region_rejected.va",
+    "title": "FAILING TODAY: the chapter's two correct LRM prohibitions say \"KNOWN GAP\" in prose instead of `//! xfail`",
+    "detail": "VERIFIED by running the suite: both report \"expected a diagnostic, but it compiled cleanly\". Both state real \u00a76.6 rules (\"all expressions in generate schemes shall be constant expressions\"; \"Generate regions do not nest, and they may only occur directly within a module\") and both already admit in a comment that VerA accepts them silently. The `xfail` mechanism already handles exactly this shape on a reject fixture - no harness change needed, unlike B1. One line each.",
+    "expected": "`//! lrm 6.6` and `//! xfail VerA has no constant-condition check` / `... no non-nesting check`. Verdict becomes `xfail` (printed by name, --strict still fails) instead of FAIL.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "weak"
+    ]
+  },
+  {
+    "id": "B3",
+    "section": "6.1 / 6.2.1",
+    "action": "rewrite",
+    "path": "tests/fixtures/ch06_hierarchy/module_definition.va, top_level_module.va",
+    "title": "CANNOT RUN today, and they assert nothing - yet COVERAGE.md credits s6.1, s6.2 and s6.2.1 to them",
+    "detail": "VERIFIED by running the suite: both hit \"the device contract refuses this module - no port list (Annex A.1.2), so num_ports is 0 and there is nothing to stamp\". Neither carries a CHECK. Between them they are three COVERAGE.md rows' only evidence. torture.zig's own note says \"Do not add ports to make it run - that changes what it tests\", so the honest move is to decide what each is FOR: a portless module is legal, so the pair is either a `refused`-verdict pair with a comment saying so, or they are replaced by port-bearing fixtures that assert something about \u00a76.2 module items and \u00a76.2.1 top-level status.",
+    "expected": "Either an explicit comment naming the engine limitation and `//! lrm 6.2` / `//! lrm 6.2.1`, or a port and a real assertion. Not both files unasserted.",
+    "severity": "medium",
+    "sourceLenses": [
+      "weak"
+    ]
+  },
+  {
+    "id": "B4",
+    "section": "6.5.6 / 9.19",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/port_connected.va",
+    "title": "$port_connected == 1 is asserted for a module nothing instantiates - the number comes from the harness, not the LRM",
+    "detail": "\u00a79.19: \"one (1) if the port was connected to a net (by order or by name) WHEN THE MODULE WAS INSTANTIATED, and zero (0) otherwise.\" \u00a76.2.1 makes this a top-level module, so it was never instantiated. VERIFIED there is no top-level default for $port_connected the way Table 9-15/9-29 gives $mfactor 1.0 - I checked ch9 and the only $port_connected entry is Table 9-16 (analog-context support), which carries no value column. A literal reading of \"otherwise\" gives 0. The want is defensible as VerA's harness convention (the DUT's terminals are all bound or the residual could not be evaluated) but the fixture presents it as the LRM's. Uncovered lens also wants the 0 case; VERIFIED that is unwritable without instantiation, so it belongs behind A5.",
+    "expected": "Comment states the convention explicitly: \"the harness binds every terminal, so this is the connected case; the LRM gives no top-level value.\" `//! lrm 6.5.6`. Not a digit change.",
+    "severity": "medium",
+    "sourceLenses": [
+      "literals",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "B5",
+    "section": "6.3.4",
+    "action": "relax",
+    "path": "tests/fixtures/ch06_hierarchy/dependent_parameters.va",
+    "title": "RTOL 1e-12 on a 1-ulp product, four decades of unearned slack, next to its own 1e-15 line",
+    "detail": "VERIFIED: line 67 uses `CHECKR(width, 3e-6, 1e-15)`, lines 68-69 use 1e-12 for `area` and `conductance`. The header itself computes the doubles as 9.000000000000001e-12 and 9.000000000000002e-6 - relative error 1.8e-16 and 2.2e-16, i.e. 1-2 ulp. 1e-12 would swallow a real regression.",
+    "expected": "Both lines move to 1e-15, matching the neighbour. Wants unchanged.",
+    "severity": "low",
+    "sourceLenses": [
+      "literals",
+      "weak"
+    ]
+  },
+  {
+    "id": "B6",
+    "section": "4.5.3",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/multiple_analog_blocks.va",
+    "title": "CHECK with tol 1e-30 where \u00a74.5.3 fixes the value at exactly zero",
+    "detail": "VERIFIED line 125: `CHECK(\"ddt() at the dc operating point\", ddt(V(p)), 0.0, 1e-30)`. \u00a74.5.3: \"In DC analysis, ddt() returns zero (0)\" - exactly, not approximately. The sibling mfactor_flow_noise.va and mfactor_potential_noise.va already use CHECKX for the same shape of exact-zero claim. 1e-30 is a tolerance nobody can justify and it hides nothing it should hide.",
+    "expected": "`CHECKX(\"ddt() at the dc operating point\", ddt(V(p)), 0.0)`.",
+    "severity": "low",
+    "sourceLenses": [
+      "literals"
+    ]
+  },
+  {
+    "id": "B7",
+    "section": "6.3 / 6.8",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/three_dependent_parameters.va, local_scope_shadow.va",
+    "title": "Two fixtures cite a clause that does not contain their rule",
+    "detail": "VERIFIED. three_dependent_parameters.va cites \"6.5.3 makes an instance override replace the declared value\" - 6.5.3 is Real valued ports; the rule is \u00a76.3/\u00a76.3.2-3. local_scope_shadow.va cites \"LRM \u00a76.6 scope rules\" - 6.6 is generate constructs; the rule it exercises is \u00a76.8 line 1295 (\"the search continues upward until an item by that name is found or a module boundary is encountered\"). Both wants are correct. A wrong cite costs a reviewer the recompute path and poisons `--coverage`.",
+    "expected": "6.3 / 6.3.2 and 6.8 respectively, in prose and as `//! lrm`.",
+    "severity": "low",
+    "sourceLenses": [
+      "literals",
+      "weak"
+    ]
+  },
+  {
+    "id": "C1",
+    "section": "6.2 / 6.6.1",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/port_direction_not_a_port_rejected.va, generate_nonconstant_init_rejected.va, generate_nonconstant_condition_rejected.va, generate_nonterminating_rejected.va",
+    "title": "Four IMPLEMENTED diagnostics - E0206, E0417, E0418, E0420 - are exercised nowhere in all 859 fixtures",
+    "detail": "VERIFIED twice: grep across tests/fixtures finds no reference to any of the four, and I reproduced all four against the CLI with 4-line modules. E0206 \"identifier is not a port of this module\" (\u00a76.5.1/6.2) from `input q;` where q is not in the header. E0417 \"genvar loop bound is not a constant expression\" from `for (i = n; ...)`. E0418 same for the condition, from `i < n`. E0420 \"genvar loop did not terminate\" from `for (i=0; i<3; i=i-1)` (gave up after 4096 iterations). Plain `create`, no xfail, ~6 lines each, and each one pins a real \u00a76.6.1 \"It shall be an error\" bullet. Cheapest high-value work in the chapter.",
+    "expected": "Four reject fixtures, `//! reject E0206` / `E0417` / `E0418` / `E0420`, each with `//! lrm 6.2` or `//! lrm 6.6.1` and a one-line comment naming the bullet.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives"
+    ]
+  },
+  {
+    "id": "C2",
+    "section": "6.3.6",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/mfactor_double_scaling_rejected.va",
+    "title": "badres - the only line in ch6 the LRM prints with a literal `// ERROR` - is untested",
+    "detail": "\u00a76.3.6: \"The first example, badres, misuses the $mfactor such that the contributed current would be multiplied by $mfactor twice ... The simulator will generate an error for this module\", and the source carries `I(a,b) <+ V(a,b) / r * $mfactor; // ERROR`. VERIFIED VerA compiles badres verbatim with no diagnostic at all. Override-free, single-module, transcribable straight from the LRM.",
+    "expected": "The LRM's badres verbatim. `//! lrm 6.3.6`, `//! reject <code once one exists>`, `//! xfail VerA does not detect $mfactor double-scaling`.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "uncovered",
+      "weak"
+    ]
+  },
+  {
+    "id": "C3",
+    "section": "6.6",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/generate_parameter_declaration_rejected.va",
+    "title": "\"A generate block may not contain port declarations, parameter declarations, specify blocks, or specparam declarations\" - untested",
+    "detail": "\u00a76.6 line 871, verbatim. VERIFIED: `generate if (1) begin parameter real x = 1.0; end endgenerate` compiles silently with no diagnostic. The parameter case is the only one of the four that VerA's subset can even spell, so it is the whole fixture. Single module, no hierarchy.",
+    "expected": "`//! lrm 6.6`, `//! reject <code>`, `//! xfail VerA accepts a parameter declaration inside a generate block`.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "C4",
+    "section": "6.8",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/duplicate_declaration_rejected.va",
+    "title": "\u00a76.8's sole \"it is illegal\" - one identifier declares one item per scope - is untested",
+    "detail": "\u00a76.8 line 1293: \"An identifier shall be used to declare only one item within a scope. This means it is illegal to declare two or more variables with the same name...\" VERIFIED: `real v; real v;` in one module compiles silently. local_scope_shadow.va tests only the legal half of the same subclause. Two lines of source.",
+    "expected": "`//! lrm 6.8`, `//! reject <code>`, `//! xfail VerA accepts a duplicate declaration in one scope`.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "C5",
+    "section": "6.2",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/ansi_port_redeclared_rejected.va",
+    "title": "\"Ports declared in the list of port declarations shall not be redeclared within the body\" - untested",
+    "detail": "\u00a76.2 line 33, verbatim; \u00a76.5.2.2 repeats it. VERIFIED: `module w3(p); inout electrical p; inout electrical p; ... endmodule` compiles silently. output_port.va's own comment asserts this rule in prose and never tests it. E0206's explain text already quotes the reverse mistake, so the frontend author has half the message written.",
+    "expected": "`//! lrm 6.2`, `//! reject <code>`, `//! xfail VerA accepts an ANSI port redeclared in the body`.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "C6",
+    "section": "6.7.1",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/oomr_in_parameter_declaration_rejected.va",
+    "title": "The one OOMR \u00a76.7.1 actually forbids in a parameter context has no fixture, while the existing fixture pins the opposite",
+    "detail": "\u00a76.7.1 line 1268: \"Access of parameters can be done hierarchically. However, parameter declaration statements shall not make out-of-module references (e.g., for setting default values).\" oomr_parameter_unsupported.va rejects the permitted half (a hierarchical READ in a contribution) - see A5 - and nothing tests the prohibited half. VERIFIED: `parameter real g = other.gain;` currently reaches E0207 \"unexpected token: found `.`\", a parse boundary rather than the rule, which is worth recording in the comment.",
+    "expected": "`//! lrm 6.7.1`, `//! reject E0207` with a comment stating the substring is a parse boundary and the rule is the OOMR prohibition. No xfail - it does reject today.",
+    "severity": "high",
+    "sourceLenses": [
+      "negatives",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "C7",
+    "section": "6.5.2.1",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/untyped_port_behavioral_use_rejected.va",
+    "title": "\"If the type of a port is not declared, the port can only be used in a structural description\" - untested",
+    "detail": "\u00a76.5.2.1, verbatim. VERIFIED: `module u6(p, q); inout p, q; electrical p; analog I(p) <+ V(q); endmodule` - q has a direction but no discipline and is read in behavioral code - compiles silently. Single module, four lines. COVERAGE.md credits s6.5.2.1 to typed_ports.va, which declares a discipline on every port and so cannot reach this.",
+    "expected": "`//! lrm 6.5.2.1`, `//! reject <code>`, `//! xfail VerA accepts behavioral access to a discipline-less port`.",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "C8",
+    "section": "6.6.1",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/genvar_outside_loop_rejected.va, genvar_init_self_reference_rejected.va, generate_array_name_conflict_rejected.va, genvar_repeated_value_rejected.va",
+    "title": "The \u00a76.6.1 \"shall be an error\" bullets that C1 does not reach",
+    "detail": "\u00a76.6.1 lines 980-993: \"A genvar shall not be referenced anywhere other than in a loop generate scheme\" (980); \"The initialization assignment shall not reference the loop index variable on the right-hand side\" (985); \"It shall be an error if a generate block instance array name conflicts with any other declaration\" (991); \"It shall be an error if a genvar value is repeated during evaluation\" (993). None has a fixture. DROPPED from this group: line 994 \"any bit of the genvar is set to x or z\" - Annex C limits x and z to the mixed-signal context, so it is outside VerA's subset.",
+    "expected": "Four reject fixtures, `//! lrm 6.6.1`, xfail where VerA has no check.",
+    "severity": "medium",
+    "sourceLenses": [
+      "negatives",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "C9",
+    "section": "6.6.2",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/generate_block_name_collision_rejected.va, generate_block_shadows_declaration_rejected.va",
+    "title": "\u00a76.6.2's two name-collision prohibitions are untested while generate_direct_nesting.va tests only the permitting half of the same paragraph",
+    "detail": "\u00a76.6.2 lines 1079-1080: \"Named generate blocks may not have the same name as blocks in any other generate construct in the same scope, even if not selected for instantiation\" and \"... as any other declaration in the same scope\". generate_direct_nesting.va exercises the licensed case (three `: selected` blocks in ONE construct) and stops there, which is exactly the reading a broken elaborator would also pass. VERIFIED BLOCKED: the collision needs two generate constructs each holding a module item, and `analog` inside a generate block does not parse (E0209) - so this waits on A2's frontend change.",
+    "expected": "Two reject fixtures once A2 lands; `//! lrm 6.6.2`.",
+    "severity": "medium",
+    "sourceLenses": [
+      "negatives",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "C10",
+    "section": "6.3.1 / 6.4 / 6.4.1 / 6.4.2 / 6.5.5 / 6.5.7",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/(backlog - filenames when A5 lands)",
+    "title": "The ~18 prohibition fixtures that are unwritable while VerA rejects their construct outright",
+    "detail": "One item because they share one blocker. defparam (\u00a76.3.1, 4 bullets incl. the LRM's verbatim \"The following code is not allowed\" cross-instantiation example, the same-module RHS rule, the instance-array rule, the paramset-hierarchy rule) - all behind E0205. paramsets (\u00a76.4 chain not ending at a module; \u00a76.4 overriding a parameter the paramset does not declare; \u00a76.4.1 access function / contribution / event control / named block / non-local OOMR / variable assigning a module parameter; \u00a76.4.2 unresolvable ambiguity and out-of-module-range assignment) - all behind E0201. Instantiation-shaped ones (\u00a76.3.3 same parameter assigned twice by name; \u00a76.5.5 named connection whose port name is a bit/part select; \u00a76.5.5 mixing ordered and named connections; \u00a76.5.7 incompatible disciplines on one net; \u00a76.5.7.1 port/net size mismatch). Also the \u00a76.4.2 POSITIVE oracle: the LRM's m1..m4 selection table is a ready-made expected-value set and COVERAGE.md credits s6.4.2 to a file containing ONE paramset.",
+    "expected": "Sequenced after A5. Each gets `//! lrm` and the inverted marker until the construct parses.",
+    "severity": "medium",
+    "sourceLenses": [
+      "negatives",
+      "uncovered",
+      "weak"
+    ]
+  },
+  {
+    "id": "D1",
+    "section": "6.3.6",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/mfactor_conditional_only.va",
+    "title": "parares - the LRM's explicitly-legal companion to badres - has no fixture",
+    "detail": "\u00a76.3.6: \"In this second example, parares, $mfactor is used only in the conditional expression and does not scale the output. No error will be generated for this module.\" It is the negative control for C2: without it, a frontend that grows the badres check has nothing stopping it from over-rejecting. VERIFIED parares compiles verbatim today. At r=1.0 and $mfactor=1.0 the guard `r/$mfactor < 1.0e-3` is false, so the else branch stamps V(a,b)/r - a clean CHECKX. Pairs with A3's `//! mfactor` directive to also cover the true branch.",
+    "expected": "The LRM's parares verbatim plus a CHECKX on the branch taken. `//! lrm 6.3.6`. Runnable today, no xfail.",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "D2",
+    "section": "6.2",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/macromodule_unsupported.va",
+    "title": "\"The keyword macromodule can be used interchangeably with module\" has no ch6 fixture",
+    "detail": "\u00a76.2 line 39, and Syntax 6-1 `module_keyword ::= module | macromodule | connectmodule`. VERIFIED VerA rejects it: E0201 \"construct is not in the supported subset: `macromodule`\". CORRECTION to the uncovered lens, which credited annex_b_keywords/11_macromodule_keyword.va: that file is `macromodule annex_b_macro(input a, output b); assign b=a; endmodule` and rejects on the digital `assign`, so it never reaches the interchangeability rule.",
+    "expected": "An otherwise-ordinary analog module spelled `macromodule`. `//! lrm 6.2`, `//! reject E0201`, `//! xfail macromodule is interchangeable with module per 6.2`.",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "D3",
+    "section": "6.6",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/generate_implicit_region_unsupported.va",
+    "title": "\"Use of generate regions is optional\" has zero coverage, and VerA refuses the bare form",
+    "detail": "\u00a76.6 line 887: \"Use of generate regions is optional; there is no semantic difference in the module when a generate region is used\", and the LRM's own nmosfet example carries the comment `// \"generate\" and \"endgenerate\" keywords are not required.` VERIFIED: a bare `if (1) begin ... end` at module level gets E0205 \"unsupported module item: found `if`\", confirmed at parser.zig:325 where the for/if/begin arm is gated on `in_generate`. Every generate fixture in the chapter uses the keywords, so the optional form is untested and unimplemented.",
+    "expected": "The LRM's nmosfet shape without the keywords. `//! lrm 6.6`, `//! reject E0205`, `//! xfail generate/endgenerate are optional per 6.6`.",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "D4",
+    "section": "6.8",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/local_scope_declaration_shadow.va",
+    "title": "The actual shadow case is missing - local_scope_shadow.va only tests the upward search",
+    "detail": "\u00a76.8 line 1295: \"If declared locally, the local item shall be used; if not, the search continues upward.\" local_scope_shadow.va exercises only the second half (`local_value = value + V(p)` reading the outer `value`). The first half - an inner `begin : inner` that DECLARES its own `real value`, so the inner reads the inner and the outer survives the block unchanged - is untested, and it is the half a broken scope table gets wrong. Runnable today with no hierarchy: inner value 2.25, outer still 1.0 after the block.",
+    "expected": "New fixture: outer `value = 1.0`, inner `real value; value = 2.25;`, CHECKX the inner at 2.25 and the outer at 1.0 after `end`. `//! lrm 6.8`.",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "E1",
+    "section": "6 (COVERAGE)",
+    "action": "rewrite",
+    "path": "tests/fixtures/ch06_hierarchy/COVERAGE.md",
+    "title": "At least seven rows credit a rule to a fixture that cannot reach it, and the boundary disclosure is stale",
+    "detail": "VERIFIED row by row. s6.4.2 (overload selection/tie breaking) -> paramset_overload_unsupported.va, which contains ONE paramset and one empty module. s6.4.3 (output variables) -> paramset_output_unsupported.va, which uses `output real selected;` - a form \u00a76.4.3's grammar does not have (\u00a76.4.3 marks outputs with `(*desc=\"...\"*) real ft;`). s6.5.8 (inheriting port natures / abstol) -> typed_ports.va, which never mentions abstol. s6.5.7.1 (matching size) -> vector_ports.va, which has no instantiation. s6.9.4 (elaboration order) -> generate_loop.va, a reject fixture with no instantiation. s6.1 / s6.2 / s6.2.1 -> module_definition.va and top_level_module.va, which CANNOT RUN (B3). Stale disclosure: \"emits no instance multiplicity field\" is wrong - codegen.zig:991 and contract.zig:649 both carry `mfactor`; what is missing is a way to SET it (A3).",
+    "expected": "Each overclaimed row reads \"no fixture\" or names the blocker. Disclosure rewritten against the current codegen.",
+    "severity": "medium",
+    "sourceLenses": [
+      "uncovered",
+      "weak"
+    ]
+  },
+  {
+    "id": "E2",
+    "section": "6 (cites)",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/* (all 61 files)",
+    "title": "0 of 61 ch6 fixtures carry `//! lrm`, so the chapter contributes nothing to `--coverage`",
+    "detail": "VERIFIED. torture.zig documents `//! lrm <section>` as a first-class directive - \"it makes a FAIL name the RULE and not just the file, and `--coverage` reports the cited set\" - and ch6 uses it zero times, rejects included. Several fixtures already name their clause in prose (and two name the WRONG one, B7), so the content exists and only the directive line is missing. Subsumes the lens's separate complaints about generate_mismatched_genvar_rejected.va (correct reject, correct E0419, no cite) and the two OOMR rejects (E8).",
+    "expected": "One `//! lrm` line per fixture. `zig build torture -- ch06 --coverage` then lists the chapter's cited set.",
+    "severity": "medium",
+    "sourceLenses": [
+      "weak",
+      "negatives"
+    ]
+  },
+  {
+    "id": "E3",
+    "section": "6 (hygiene)",
+    "action": "delete",
+    "path": "tests/fixtures/ch06_hierarchy/*.expected-error.txt (30 files)",
+    "title": "30 forbidden sidecars survive, and two have already drifted from the source that owns them",
+    "detail": "tests/fixtures/README.md line 3: \"859 `.va` files. One runner, `tests/torture.zig`. No sidecar files.\" torture.zig's header spends a paragraph on why: \"THERE IS NO GOLDEN FILE. Not 'there is one and we also assert' - there is none, deliberately.\" VERIFIED count is 30 in ch06 (the weak lens said 31), and 301 tree-wide - so this is ch06's share of a tree-wide chore. Nothing reads them; drift is guaranteed and already started.",
+    "expected": "`git rm tests/fixtures/ch06_hierarchy/*.expected-error.txt`. No .va change - every substring already lives in a `//! reject` line.",
+    "severity": "low",
+    "sourceLenses": [
+      "weak"
+    ]
+  },
+  {
+    "id": "E4",
+    "section": "6.4.3",
+    "action": "rewrite",
+    "path": "tests/fixtures/ch06_hierarchy/paramset_output_unsupported.va",
+    "title": "The fixture uses `output real x;`, a form \u00a76.4.3's grammar does not have",
+    "detail": "\u00a76.4.3: \"Integer or real variables in the paramset declared WITH DESCRIPTIONS are considered output variables\", and the LRM's smnpn example writes `(*desc=\"cut-off frequency\"*) real ft;`. There is no `output` keyword in a paramset. So the fixture rejects a construct that is not the \u00a76.4.3 construct, and COVERAGE.md credits s6.4.3 to it. Also untested: the rule that a paramset variable WITHOUT a description hides the module output variable of the same name.",
+    "expected": "Source uses the `(*desc=...*) real` form. `//! lrm 6.4.3`. Behind A5 for the verdict.",
+    "severity": "low",
+    "sourceLenses": [
+      "uncovered"
+    ]
+  },
+  {
+    "id": "E5",
+    "section": "6.5.3 / C.8",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/real_port_unsupported.va",
+    "title": "The rejection is correct conformance for Verilog-A but the fixture cites the wrong construct",
+    "detail": "The source is `input real x;`. \u00a76.5.3 is about `wreal`: \"Ports may be declared as real-valued with a discrete-time discipline using the net type wreal\". Annex C.8 excepts real value ports from Verilog-A explicitly, and Annex C line 55 says \"the wreal data type is not supported in Verilog-A\" - so rejecting is RIGHT and this is one of the few reject fixtures in the chapter that is on solid ground. DROPPED from this item: the two lens requests to rewrite it around wreal and to add a wreal multiple-driver fixture - both are outside the Verilog-A subset by Annex C.",
+    "expected": "Comment names Annex C.8 as the authority; `//! lrm C.8`. No source change, no xfail.",
+    "severity": "low",
+    "sourceLenses": [
+      "weak"
+    ]
+  },
+  {
+    "id": "E6",
+    "section": "6.6",
+    "action": "rewrite",
+    "path": "tests/fixtures/ch06_hierarchy/generate_region.va",
+    "title": "Demands the single word `expression` with no comment and no cite",
+    "detail": "The whole fixture is `//! reject expression` over a `generate begin : generated analog I(p) <+ V(p); end endgenerate`. `expression` is a parser token that could come from anywhere; nothing states what LRM position is being pinned, and COVERAGE.md credits both s6.6 and the \"generate-region restrictions\" row to it. \u00a76.6 makes a named generate block containing an analog construct legal, so this is most likely another A5-shaped inversion - but the file does not say enough to tell.",
+    "expected": "A header stating the rule and whether the rejection is conformance; `//! lrm 6.6`; a substring narrower than one common word.",
+    "severity": "low",
+    "sourceLenses": [
+      "weak"
+    ]
+  },
+  {
+    "id": "E7",
+    "section": "6.6.3",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/external_genblk_reference_unsupported.va",
+    "title": "Pins a parenthesis parse error; its LRM position is unstated and the numbering rule it names is untested",
+    "detail": "The fixture is `//! reject expected `)`` on `V(genblk1.internal)`. \u00a76.6.3 line 1158 gives the actual rule - \"Each generate construct in a given scope is assigned a number ... All unnamed generate blocks are given the name genblk<n> ... If such a name would conflict with an explicitly declared name, leading zeroes are added\" - and the LRM's own `module top` walks a worked example producing genblk1, genblk02 (because `parameter genblk2` exists), genblk4 (a skipped number) and genblk5. That is a ready-made oracle and nothing pins any of it. Blocked on generate elaboration plus hierarchical names.",
+    "expected": "State the rule and the blocker; `//! lrm 6.6.3`. The numbering oracle becomes a fixture once generate elaboration produces names.",
+    "severity": "low",
+    "sourceLenses": [
+      "weak",
+      "uncovered"
+    ]
+  },
+  {
+    "id": "E8",
+    "section": "6.7.1",
+    "action": "edit",
+    "path": "tests/fixtures/ch06_hierarchy/oomr_variable_read_rejected.va, oomr_variable_assign_rejected.va",
+    "title": "The chapter's two correct OOMR rejects land on a parse path, not on the rule they cite",
+    "detail": "Both pin real \u00a76.7.1 rules - line 1270 \"It shall be an error to access analog variables hierarchically\" and line 1272 \"It shall be an error to assign to an analog variable using hierarchical notation\". But oomr_variable_read_rejected.va demands the substring ``expected `;``` and oomr_variable_assign_rejected.va demands E0214, whose diag_code.zig entry is `.title = \"expected '<+' or '='\"` with `.lrm = \"5.6\"` - a \u00a75.6 contribution-syntax error, not the \u00a76.7.1 rule the comment claims. The verdict is right for the wrong reason, which is fine as long as the file says so.",
+    "expected": "`//! lrm 6.7.1` plus one comment line: the rule is 6.7.1, the diagnostic is a parse boundary, tighten when a semantic OOMR check exists.",
+    "severity": "low",
+    "sourceLenses": [
+      "weak",
+      "negatives"
+    ]
+  },
+  {
+    "id": "E9",
+    "section": "6.2.1 / 6.9.2 / 6.9.4 / 6.3.6",
+    "action": "create",
+    "path": "tests/fixtures/ch06_hierarchy/(deferred - needs hierarchy)",
+    "title": "The remaining \u00a76 rules that are pure elaboration semantics, parked in one row",
+    "detail": "Grouped because none is writable without instantiation and none is worth its own line until A5 clears. \u00a76.2.1: a module instantiated only inside a NON-elaborated generate block is still not top-level; and a local hierarchical path takes precedence over the rooted path while $root forces the top. \u00a76.9.2: paramset selection happens AFTER the enclosing generate construct is evaluated. \u00a76.9.4: the four-step elaboration order - defparams resolve before the generate schemes they feed. \u00a76.3.6: system parameters are overridden with a leading period on the $-name (`.$mfactor(2)`), per the LRM's test_module/A1/B1/C1 example that computes 3*2*7=42. \u00a76.2.2: the port-connection parentheses are always required, and an expression may be supplied to an input port only if the port is digital.",
+    "expected": "Deferred. Listed so they are not rediscovered by the next audit.",
+    "severity": "low",
+    "sourceLenses": [
+      "uncovered",
+      "negatives"
+    ]
+  }
+]

@@ -1,0 +1,50 @@
+// §9.4.1 / Table 9-1. The display family is split down the middle by the analog
+// context column, and the split is by RADIX VARIANT, not by task:
+//
+//     $display                            Yes  Yes
+//     $displayb , $displayh , $displayo   Yes  No
+//     $strobe                             Yes  Yes
+//     $strobeb , $strobeh , $strobeo      Yes  No
+//     $write                              Yes  Yes
+//     $writeb , $writeh , $writeo         Yes  No
+//     $monitor                            Yes  Yes
+//     $monitorb , $monitorh , $monitoro   Yes  No
+//     $monitoron , $monitoroff            Yes  No
+//     $debug                              No   Yes
+//
+// The reason is in §9.4.3: the b/h/o suffix only sets a DEFAULT radix for
+// arguments given without a format specification, and a default radix is a
+// statement about bit vectors. An analog block's expressions are reals and
+// integers, and §9.4.3 already gives it the per-argument spelling — 06_display_-
+// formats.va prints `%b`, `%o` and `%h` from a perfectly legal $display. So the
+// suffixed spellings add nothing the analog context can use, and Table 9-1
+// withdraws them rather than defining what they would mean.
+//
+// One file per table, not one per name: the rule is the column, and the first
+// diagnostic ends the compile anyway. $monitoron/$monitoroff are here too —
+// they are the same column and the same reason, a control over a $monitor
+// mechanism §9.4.1 defines in terms of accepted digital steps.
+//
+// The positive side of every one of these rows is already covered:
+// 02_display_display.va, 01_display_strobe.va, 03_display_write.va,
+// 04_display_monitor.va, 05_display_debug.va.
+//
+// A reject, so there is nothing to run and no `want` to write.
+//
+//! lrm 9.4.1
+//! reject analog context
+//! xfail VerA implements no Table 9-1 analog-context restriction; grep across src/ finds no analog-context check for any ch9 system task
+module ch09_display_radix_variants_analog_rejected(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    $displayb(5);
+    $displayh(5);
+    $displayo(5);
+    $strobeb(5);
+    $writeh(5);
+    $monitorb(5);
+    $monitoron;
+    $monitoroff;
+    I(p,n) <+ V(p,n);
+  end
+endmodule

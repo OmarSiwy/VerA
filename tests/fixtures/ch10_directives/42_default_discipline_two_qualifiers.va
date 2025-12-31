@@ -1,0 +1,46 @@
+// Two §10.2 sentences that only bite together:
+//
+//   "more than one `default_discipline directive can be in force
+//    simultaneously, provided each differs in qualifier"
+//   "There is a precedence of compiler directives; the more specific directives
+//    have higher precedence over general directives."
+//
+// So the qualifier is not decoration on a single global default — it SELECTS
+// which nets a default claims, and two defaults with different qualifiers
+// coexist rather than superseding one another. Syntax 10-1 fixes the fifteen
+// legal qualifiers; `wire` and `reg` are two of them.
+//
+// 02 already writes a qualifier, but it picks `real` precisely because nothing
+// in the module is a real net, so all 02 can show is that the qualifier PARSES.
+// The discriminating arrangement needs a second directive that MUST NOT apply:
+// p and n are ports with no discipline declaration, hence nets of the default
+// nettype `wire` (IEEE Std 1364 §3.5), so the wire-qualified directive claims
+// them and the reg-qualified one does not. A tool that ignores qualifiers and
+// takes last-wins hands them ddiscrete, and V() — the potential access of the
+// electrical nature, §3.6.1 — has nothing to resolve against.
+//
+// The oracle is §1.3.1 again: 0.75 - 0.25 = 0.5 V, exact in binary64.
+//
+// No `reg` net is declared, deliberately. The rule under test is that the
+// reg-qualified default does NOT reach the wire nets, which needs no reg net to
+// exist; adding one would only make the file depend on a separate gap (VerA
+// rejects a `reg` module item with E0205, LRM annex A.1.4) that has nothing to
+// do with chapter 10.
+//
+// Same honest limit as 41: VerA discards both directives in the preprocessor
+// and never runs discipline resolution, so this file passes today whichever
+// qualifier rule a tool implements, including none. It is the spec record until
+// resolution lands, at which point it discriminates with no edit.
+//
+//! lrm 10.2
+//! bias V(p) = 0.75, V(n) = 0.25
+`default_discipline electrical wire
+`default_discipline ddiscrete reg
+`include "check.vh"
+module ch10_default_discipline_two_qualifiers(p, n);
+  inout p, n;
+  analog begin
+    `CHECKX("the wire-qualified default supplies electrical", V(p, n), 0.5);
+    I(p, n) <+ V(p, n);
+  end
+endmodule

@@ -1,0 +1,62 @@
+// §10.3, the supersession rule: "If another `default_transition directive is
+// encountered in the subsequent source description, the transition filters
+// following the newly encountered directive derive their default rise and fall
+// times from the transition time value of the newly encountered directive. In
+// other words, the default rise and fall times for a transition filter are
+// derived from the transition_time value of the directive which IMMEDIATELY
+// PRECEDES the transition filter."
+//
+// No fixture had two of them, so an implementation that latches the first value
+// and ignores every later one is invisible: 03 and 38 each issue exactly one
+// directive and pass either way. Here 8n is issued first and 4n second, so the
+// filter must answer 4n. Both directives sit outside the module, because §10.3
+// says the directive "can be used only outside of module definitions" — the
+// same paragraph's later "There are no scope restrictions for this directive"
+// contradicts it, and a fixture must not depend on which sentence a tool
+// followed.
+//
+// Two assertions:
+//
+// 1. The identity §10.3 states, for the directive in force. CHECKEQ at
+//    tolerance 0.0 rather than a digit, because the clause fixes an equality
+//    and no value — the ramp shape is §4.5.8's business and cancels, being the
+//    same kernel on both sides. A latched-first tool puts an 8n ramp on the
+//    left against a 4n ramp on the right and they differ at every interior
+//    sample.
+//
+// 2. A digit, so that the identity above cannot be satisfied trivially by a
+//    tool which ignores rise and fall arguments on BOTH sides. §4.5.8 makes the
+//    output "a piecewise linear function over time" traversing the full 0 -> 1
+//    excursion in the transition time, so with tr = 4n the slope is 1/4n and
+//    out(t) >= (t - 1n)/4n, the one-nanosecond slack being the sampling grid's
+//    own ambiguity about when a step falling in (0, 1n] is detected. At t = 4n
+//    that demands out >= 0.75, which the superseded 8n default cannot reach:
+//    it is at most 4n/8n = 0.5. The matching upper bound is 38's job.
+//
+// NOTE ON THE EXPECTED FAILURE, identical to 38's: VerA's preprocessor marks
+// `default_transition `.ignored` and discards both values, and codegen
+// implements transition() as a first-order lag rather than §4.5.8's linear
+// ramp. Fixing supersession alone leaves assertion 2 failing on the §4.5.8
+// residue, which is not a chapter-10 defect.
+//
+//! lrm 10.3
+//! bias V(n) = 0
+//! wave V(in) = 0, 1
+//! time 0, 1n, 2n, 3n, 4n
+//! analysis tran
+//! print none
+//! xfail VerA discards `default_transition (preprocessor marks it .ignored), so neither directive is retained and there is nothing to supersede
+`default_transition 8n
+`default_transition 4n
+`include "check.vh"
+module ch10_default_transition_supersedes(in, n);
+  inout in, n;
+  electrical in, n;
+  analog begin
+    `CHECKEQ("the immediately preceding directive supplies the default, not the first one",
+             transition(V(in, n)), transition(V(in, n), 0, 4n, 4n), 0.0);
+    `CHECKI("the superseded 8n default is not the one in force",
+            transition(V(in, n)) >= ($abstime - 1n)/4n, 1);
+    I(in, n) <+ 0.0;
+  end
+endmodule

@@ -1,6 +1,7 @@
+//! lrm 4.7
+//! lrm A.8.2
 //! reject E0512
-//! reject vpi_put_delays
-// EXPECT: error
+//! reject `vpi_put_delays`
 module ch12_atomic_put_delays(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_put_delays(0);

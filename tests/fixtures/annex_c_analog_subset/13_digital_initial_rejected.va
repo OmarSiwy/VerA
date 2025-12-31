@@ -1,7 +1,12 @@
-// annex C: the digital `initial` procedural block is outside Verilog-A.
+// Annex C.7, bullet 1: "No digital behavior or events are supported in
+// Verilog-A." A.6.2 `initial_construct ::= initial statement` is the digital
+// procedural block, and it is not the `analog initial` block of §5.2.1 — that
+// one is inside the analog block and stays in the subset.
+//
+//! lrm C.7
+//! lrm A.6.2
 //! reject E0205
 //! reject initial
-// EXPECT: error
 module annex_c_digital_initial_rejected;
     integer state;
     initial state = 1;

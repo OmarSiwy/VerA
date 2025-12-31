@@ -14,6 +14,8 @@
 // inherit ParentV (the module would not compile), and it fails if ParentV is
 // bound to anything but p's potential.
 //
+//! lrm 3.6.1.2
+//! lrm 3.6.1.1
 //! bias V(p) = 0.75
 `include "check.vh"
 nature ch3_parent_n; units="V"; access=ParentV; abstol=1u; endnature
@@ -23,7 +25,7 @@ module ch3_derived(p);
   inout p;
   ch3_child_d p;
   analog begin
-    `CHECK("inherited access function probes p", ParentV(p), 0.75, 1e-15);
+    `CHECKX("inherited access function probes p", ParentV(p), 0.75);
     ParentV(p) <+ 0.0;
   end
 endmodule

@@ -1,8 +1,11 @@
 // Annex H "parameter": a constant characterizing an INSTANCE, specifiable each
 // time the module is instantiated. So the value seen inside the analog block
 // must be the instance override (2.5), not the declaration's 3.0 default, and
-// the flow must follow it: 2.5 * 0.25 = 0.625.
+// the flow must follow it: 2.5 * 0.25 = 0.625. §3.4 is the normative home:
+// "This allows customization of module instances."
 //
+//! lrm H
+//! lrm 3.4
 //! param gain = 2.5
 //! bias V(p) = 0.25
 `include "check.vh"

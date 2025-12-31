@@ -1,0 +1,35 @@
+// Annex G Table G.1, last row: "$realtime | `$realtime` :timescale = 1 sec |
+// `$realtime` :timescale = `timescale def=1n, see $abstime | definition". That
+// row is a change of DEFINITION, not a rename: v1.0 pinned $realtime at one
+// second per unit, v2.0 moved it to whatever `timescale is in force (default
+// 1 ns), while §9.10 $abstime stays the absolute analog time IN SECONDS
+// whatever the timescale says. The two therefore disagree by the timescale, and
+// a compiler that treats them as synonyms is wrong for every timescale but 1 s.
+//
+// 01_abstime_replaced_realtime.va derives that difference in prose and then
+// asserts $abstime alone; this is the sibling that asserts the other half, so
+// 01's clean pass is not swallowed by the xfail below.
+//
+// Derivation, with `timescale 1ns/1ns in force and the solver at t = 1 us:
+//   $realtime = 1e-6 s / 1e-9 s per unit = 1000
+//   $abstime  = 1e-6 (seconds, unscaled)
+// The 1000 is a quotient the compiler computes, not a last-bit-defined literal,
+// so it gets CHECKR at ~4 ulp rather than CHECKX -- a conforming compiler that
+// divides in doubles must not be failed for the rounding. $abstime is a literal
+// round-trip and gets the same 1e-15 that 01 uses.
+//
+//! lrm G.1
+//! lrm 9.10
+//! time 1e-6
+//! print none
+//! xfail VerA aliases $realtime to $abstime (codegen.zig:2528 returns the same abstime for both) and ignores `timescale (preprocessor.zig:91 marks it .ignored), so $realtime reads 1e-6 seconds instead of 1000 timescale units
+`timescale 1ns/1ns
+`include "check.vh"
+module annex_g_realtime_timescale(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKR("$realtime is in timescale units", $realtime, 1000.0, 1e-15);
+    `CHECKR("$abstime is seconds regardless of timescale", $abstime, 1e-6, 1e-15);
+    I(p,n) <+ 0.0 * V(p,n);
+  end
+endmodule

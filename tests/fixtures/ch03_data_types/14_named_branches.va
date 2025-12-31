@@ -9,18 +9,35 @@
 // missing terminal `n`, or that aliased both declarations onto the same p-n
 // branch, reads 1.5 there and fails.
 //
+// §3.12 also fixes how many branches may exist over one pair: "There shall be
+// at most one unnamed branch between any two nets or between a net and implicit
+// ground (in addition to any number of named branches)." So `second_branch`
+// over the SAME pair as `differential_branch` is legal, and both coexist with
+// the single unnamed p-n branch that the bare `I(p, n)` contribution creates.
+// All three span the same pair of nets, so all three read 1.5 — and they are
+// three independent paths, so their flows add rather than collapsing into one.
+// The divisors are powers of two, so 1.5/2 + 1.5/4 + 1.5/8 = 1.3125 is exact in
+// binary and the want needs no tolerance.
+//
+//! lrm 3.12
 //! bias V(p) = 2.0, V(n) = 0.5
 `include "check.vh"
 module ch03_named_branches(p, n);
     inout p, n;
     electrical p, n;
     branch (p, n) differential_branch;
+    branch (p, n) second_branch;
     branch (p) ground_branch;
 
     analog begin
-        `CHECK("two-terminal branch potential is the difference", V(differential_branch), 1.5, 1e-12);
-        `CHECK("one-terminal branch defaults its second net to ground", V(ground_branch), 2.0, 1e-12);
-        I(differential_branch) <+ V(differential_branch) / 100.0;
-        I(ground_branch) <+ V(ground_branch) / 200.0;
+        `CHECKX("two-terminal branch potential is the difference", V(differential_branch), 1.5);
+        `CHECKX("a second named branch over the same pair reads the same potential", V(second_branch), 1.5);
+        `CHECKX("the one unnamed p-n branch reads that pair's potential too", V(p, n), 1.5);
+        `CHECKX("one-terminal branch defaults its second net to ground", V(ground_branch), 2.0);
+        `CHECKX("two named branches and the unnamed branch are three parallel paths", V(differential_branch) / 2.0 + V(second_branch) / 4.0 + V(p, n) / 8.0, 1.3125);
+        I(differential_branch) <+ V(differential_branch) / 2.0;
+        I(second_branch) <+ V(second_branch) / 4.0;
+        I(p, n) <+ V(p, n) / 8.0;
+        I(ground_branch) <+ V(ground_branch) / 16.0;
     end
 endmodule

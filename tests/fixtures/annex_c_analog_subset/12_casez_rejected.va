@@ -1,5 +1,18 @@
-//! reject expression
-// EXPECT: error
+// Annex C.7, bullet 2: "casex and casez are not supported in Verilog-A." Only
+// the plain `case` of §5.2.2 is in the subset; casez treats a z digit as a
+// don't-care, which is 4-state digital matching.
+//
+// The pinned code is E0209 (A.8.3, "expected an expression") rather than the
+// bare word "expression": VerA reaches the rule through parser recovery, since
+// `casez` is not a statement keyword it dispatches. src/diag_code.zig defines
+// E0416 "casex/casez are not in the analog subset" with .lrm = "C.7" for exactly
+// this rule, and it is unreachable today — when parseStmt starts dispatching
+// casez, repoint this cite at E0416.
+//
+//! lrm C.7
+//! lrm 5.2.2
+//! reject E0209
+//! reject casez
 module annex_c_casez_rejected;
     integer selector, result;
     analog begin

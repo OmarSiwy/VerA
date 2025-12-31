@@ -3,7 +3,7 @@
 // The clause says nothing about which operators the dependent expression is
 // allowed to use, so `exp(a)` tracks `a` exactly as `2.0*a` does.
 //
-// KNOWN GAP — this fails today, and the want is not in doubt.
+// KNOWN GAP — see the `//! xfail` below. The want is not in doubt.
 //
 // VerA emits a `derive(model: *Model)` seam that recomputes dependent
 // parameters from the CURRENT model values, which is what makes `scaled` below
@@ -24,7 +24,9 @@
 // Today VerA answers 6.0 and 7.38905609893065, the latter being exp(2.0) — the
 // value `curved` folded to before the override was applied.
 //
+//! lrm 6.3.4
 //! param a = 3.0
+//! xfail codegen's f64Const renders only arithmetic, abs, sqrt, min, max and pow, so `parameter real curved = exp(a)` gets no derive line and stays folded at exp(2.0)
 `include "check.vh"
 module ch6_dependent_transcendental(p);
   inout p;

@@ -1,0 +1,19 @@
+// Annex G Table G.1 ("Continuous waveform delay | delay() | absdelay() |
+// syntax"), restated as Table G.2 item 11 ("absdelay instead of delay"). The
+// v1.0 name was retired: §4.5.7 defines the operator as `absdelay`, `delay` is
+// absent from the Annex B.1 keyword list and from A.8.2's
+// analog_filter_function_call, so it names nothing.
+//
+// A compiler with no such name reports an undefined function -- that IS the
+// conforming outcome, so this is a regression guard against a front end that
+// quietly keeps both spellings, not a bug report. The current spelling is
+// covered by the absdelay fixtures.
+//
+//! lrm G.1
+//! lrm 4.5.7
+//! reject E0512
+//! reject delay
+module annex_g_delay_v1_spelling(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ delay(V(p,n), 1n);
+endmodule

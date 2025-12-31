@@ -1,0 +1,30 @@
+// LRM 4.5.8, verbatim: "td, rise_time, fall_time, and time_tol are optional,
+// but if specified shall be non-negative."
+//
+// Non-negative, so zero is allowed and 4.5.8 says what each zero means — "If
+// neither rise_time nor fall_time are specified or are equal to zero (0.0), the
+// rise and fall time default to the value defined by `default_transition", "If
+// a time_tol value of zero (0.0) is specified, the simulator shall apply a
+// suitable value". A NEGATIVE value has no such reading: it would place the end
+// of a ramp before its start.
+//
+// One violation per argument slot, all four in one file, because a guard
+// written for the rise/fall pair alone leaves td and time_tol open. Every value
+// is a constant. 20_transition.va is the legal side.
+//
+//! lrm 4.5.8
+//! reject non-negative
+//! xfail VerA validates none of 4.5.8's argument bounds: transition(x, -1n, 2n, 3n) and the rise_time/fall_time/time_tol variants all compile with only W0650, and src/diag_code.zig has no code for a negative transition time
+module ch04_transition_negative_time_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    real bad_td, bad_rise, bad_fall, bad_tol;
+
+    analog begin
+        bad_td   = transition(V(p, n), -1n, 2n, 3n, 1p);
+        bad_rise = transition(V(p, n), 1n, -2n, 3n, 1p);
+        bad_fall = transition(V(p, n), 1n, 2n, -3n, 1p);
+        bad_tol  = transition(V(p, n), 1n, 2n, 3n, -1p);
+        I(p, n) <+ bad_td + bad_rise + bad_fall + bad_tol;
+    end
+endmodule

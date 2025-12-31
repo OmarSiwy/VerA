@@ -1,0 +1,33 @@
+// §6.2, verbatim: "PORTS DECLARED IN THE LIST OF PORT DECLARATIONS SHALL NOT BE
+// REDECLARED WITHIN THE BODY OF THE MODULE."
+//
+// "List of port declarations" is the ANSI header form — Syntax 6-1 gives the
+// module header either a `list_of_ports` (bare identifiers, declared in the body)
+// or a `list_of_port_declarations` (direction and discipline in the header). This
+// module uses the second, so `inout electrical p` in the header is the ONE
+// declaration of `p` the LRM allows, and the body line repeats it.
+//
+// The two header forms are exclusive and that is what makes this a rule of its own
+// rather than an instance of §6.8's duplicate-declaration prohibition: the same
+// body line is REQUIRED after a bare `module m(p);` (nonansi_ports.va does exactly
+// that) and forbidden after this header. A compiler that merged the two forms into
+// one port table and tolerated a second write passes both and distinguishes
+// neither. output_port.va's header already asserts this rule in prose and has no
+// way to test it, being a legal module.
+//
+// The mirror-image mistake — a direction declaration naming an identifier that is
+// not a port at all — is port_direction_not_a_port_rejected.va, and VerA does
+// diagnose that one (E0206, whose explain text already quotes the sentence above).
+//
+// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to name.
+// `DiagnosticsReported` is the weakest form that still demands a rejection;
+// tighten it to the E-code the day one exists.
+//
+//! lrm 6.2
+//! lrm 6.5.2
+//! reject DiagnosticsReported
+//! xfail VerA accepts an ANSI-declared port redeclared in the module body; the second `inout electrical p;` is silently folded onto the first
+module ch6_ansi_port_redeclared(inout electrical p);
+  inout electrical p;
+  analog I(p) <+ V(p);
+endmodule

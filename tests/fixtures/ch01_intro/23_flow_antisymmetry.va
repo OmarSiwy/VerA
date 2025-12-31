@@ -1,0 +1,34 @@
+// §1.3.1.2 associated reference directions: "A positive flow enters a branch
+// through the port marked with the plus sign and exits the branch through the
+// port marked with the minus sign." Naming the terminals the other way round
+// therefore names the same physical flow with the opposite sign:
+// I(n,p) == -I(p,n). The potential half of the same clause, V(n,a) == -V(a,b),
+// is asserted across the suite; the flow half is asserted nowhere, so a
+// compiler that mints an independent unknown for the reversed pair goes unseen.
+//
+// The branch is a POTENTIAL source — `V(p,n) <+ 200.0*I(p,n)` — which is what
+// makes its flow a genuine unknown the harness can hold (§5.4.2.2); a flow
+// source retains its contributed value and there would be nothing to hold.
+// Held at 0.125 A, so I(p,n) is 0.125 and I(n,p) is -0.125. Both literals are
+// dyadic and IEEE-754 negation only flips the sign bit, so both are exact and
+// CHECKX is the right macro.
+//
+// (The branch-flow unknown is `flow(p,n)`, which codegen spells with its
+// punctuation escaped; `sweep` and not `bias` because a bias line splits its
+// bindings on commas. Same spelling as 05_potential_and_flow.va and
+// 10_flow_probe.va, so ch01-W23 can change all three in one edit.)
+//
+//! lrm 1.3.1.2
+//! sweep flowZ28pZ2cnZ29 = 0.125
+//! xfail VerA mints a SECOND unknown, `flowZ28nZ2cpZ29`, for the reversed terminal order instead of negating the branch flow, so I(n,p) reads 0 rather than -I(p,n)
+`include "check.vh"
+module ch01_flow_antisymmetry(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin
+        `CHECKX("flow from p to n", I(p, n), 0.125);
+        `CHECKX("reversing the terminals reverses the flow", I(n, p), -0.125);
+        V(p, n) <+ 200.0 * I(p, n);
+    end
+endmodule

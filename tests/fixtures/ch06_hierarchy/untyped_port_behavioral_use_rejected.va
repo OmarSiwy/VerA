@@ -1,0 +1,32 @@
+// §6.5.2.1, verbatim: "The type of a port is declared by giving its discipline, as
+// shown in Syntax 6-6. IF THE TYPE OF A PORT IS NOT DECLARED, THE PORT CAN ONLY BE
+// USED IN A STRUCTURAL DESCRIPTION. (It can be passed to instances of modules, but
+// CANNOT BE ACCESSED IN A BEHAVIORAL DESCRIPTION.)"
+//
+// `q` has a direction and no discipline. §6.5.2.1 makes the discipline the thing
+// that supplies the access functions, so `V(q)` in an analog block has no meaning:
+// there is no nature, no potential, and no abstol to solve it against. The
+// parenthesised sentence is explicit that a direction alone buys only the
+// structural use, i.e. being passed to an instance, which this module does not do.
+//
+// `p` is fully declared and carries the contribution, so the only defect in the
+// source is the one under test — a compiler that rejected this for a second reason
+// would not be pinning the rule.
+//
+// COVERAGE.md credits §6.5.2.1 to typed_ports.va, which declares a discipline on
+// every port and therefore cannot reach this rule at all: it tests that a declared
+// type WORKS, not that an undeclared one is refused. This is the other half.
+//
+// No `//! reject <code>`: VerA has no diagnostic here — it treats the
+// discipline-less port as an implicit net and probes it — so there is no code to
+// name. `DiagnosticsReported` is the weakest form that still demands a rejection;
+// tighten it to the E-code the day one exists.
+//
+//! lrm 6.5.2.1
+//! reject DiagnosticsReported
+//! xfail VerA accepts a behavioral probe of a port that has a direction but no discipline; V(q) compiles with no diagnostic
+module ch6_untyped_port_behavioral_use(p, q);
+  inout p, q;
+  electrical p;
+  analog I(p) <+ V(q);
+endmodule

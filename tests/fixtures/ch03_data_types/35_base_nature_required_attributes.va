@@ -7,7 +7,8 @@
 // discipline and module below are well-formed on purpose — the only defect in
 // the file is the missing attribute, so a rejection can only be about that.
 //
-//! reject DiagnosticsReported
+//! lrm 3.6.1.2
+//! reject E0332
 nature ch3_incomplete_nature; units="V"; access=IncompleteV; endnature
 discipline ch3_incomplete_disc; potential ch3_incomplete_nature; enddiscipline
 module ch3_incomplete(p); inout p; ch3_incomplete_disc p; analog IncompleteV(p)<+0.0; endmodule

@@ -1,6 +1,35 @@
-//! reject ParseError
-module annex_b_switches(a,b,c,d);
-  nmos g5(a,b,c); nor g6(a,b,c); notif0 g7(a,b,c); notif1 g8(a,b,c);
-  pmos g9(a,b,c); pulldown g10(a); pullup g11(a); rcmos g12(a,b,c,d); rnmos g13(a,b,c); rpmos g14(a,b,c);
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// The switch- and drive-primitive family of IEEE 1364-2005 A.3.1, same reasoning
+// as 07: the instantiations are legal source, the reservedness is the rule.
+//
+// This is a reservedness census, not a feature test: one declaration per line so
+// the parser resynchronises at each `;` and reports every spelling separately,
+// and one `//! reject` line per spelling so each keyword is proved individually
+// rather than the file passing on whichever token the parser tripped over first.
+//! lrm B
+//! reject E0208
+//! reject nmos
+//! reject nor
+//! reject notif0
+//! reject notif1
+//! reject pmos
+//! reject pulldown
+//! reject pullup
+//! reject rcmos
+//! reject rnmos
+//! reject rpmos
+module annex_b_reserved_switch_primitive_keywords;
+    real nmos;
+    real nor;
+    real notif0;
+    real notif1;
+    real pmos;
+    real pulldown;
+    real pullup;
+    real rcmos;
+    real rnmos;
+    real rpmos;
 endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.

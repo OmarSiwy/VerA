@@ -6,9 +6,18 @@
 // same as the value of the access function (within appropriate tolerances), the
 // simulator is prevented from terminating the iteration." So at a solved
 // operating point $limit() is TRANSPARENT — it returns its access function, and
-// the stamped current is V(p), not some damped fraction of it. A limiter that
+// the stamped current is V(mid), not some damped fraction of it. A limiter that
 // leaked its damping into the answer would change the circuit the netlist
 // describes, which is the one thing it may never do.
+//
+// WHY THE PROBE IS AN INTERNAL NET. A limiter corrects an unknown the device
+// owns. Probing the module PORT instead makes the correction a write to a node
+// the host imposes, and a simulator is entitled to decline it — VerA does,
+// silently — so a port-probing form of this fixture asserts the transparency of
+// the identity function and cannot fail. `mid` is private to the device, so the
+// clamp really is installed. The bias directive holds `mid` at 0.3 V, and the
+// branch to `p` is written in terms of the LIMITED value, so a clamp that fired
+// would move the stamped current as well as the assertion.
 //
 // The bias is chosen so the claim holds even for a simulator that really does
 // run SPICE's DEVfetlim on this evaluation: 0.3 V is below vth = 0.7 V, so the
@@ -16,13 +25,23 @@
 // its clamps — a step of vtsthi = |2*(vold-vth)|+2 >= 2 V going off, a ceiling
 // of vth+0.5 = 1.2 V going on — are slack by more than a volt at 0.3 V.
 //
-//! bias V(p) = 0.3
+// TOLERANCE. §9.17.3 fixes only "within appropriate tolerances", and adds that
+// "the simulator is responsible for determining ... what the return value is on
+// a given iteration". The only number the LRM supplies for a Voltage-natured
+// quantity is Annex D disciplines.vams `nature Voltage ... abstol = 1e-6`, so
+// that is the tolerance used. 1e-12 is the CURRENT abstol — six orders too tight
+// for a volt, and a simulator converging to its own vntol would fail on it.
+//
+//! lrm E.3.4
+//! lrm 9.17.3
+//! bias V(p) = 0.3, V(mid) = 0.3
 `include "check.vh"
 module annex_e_fetlim(p);
-  inout p; electrical p; real limited;
+  inout p; electrical p; electrical mid; real limited;
   analog begin
-    limited = $limit(V(p), "fetlim", 0.7);
-    I(p) <+ limited;
-    `CHECK("fetlim is transparent at the solution", limited, 0.3, 1e-12);
+    limited = $limit(V(mid), "fetlim", 0.7);
+    I(mid, p) <+ (limited - V(p)) / 1.0;
+    // 1e-6 is the Annex D `nature Voltage` abstol.
+    `CHECK("fetlim is transparent at the solution", limited, 0.3, 1e-6);
   end
 endmodule

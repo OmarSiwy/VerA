@@ -1,0 +1,56 @@
+// §9.17.3 Syntax 9-12 gives $limit three forms:
+//
+//     $limit ( access_function_reference )
+//   | $limit ( access_function_reference , string , arg_list )
+//   | $limit ( access_function_reference , analog_function_identifier , arg_list )
+//
+// 26_limit.va is the first and 27_limit_named.va is the second ("pnjlim").
+// This is the third — the only one that runs user code — and §9.17.3 fixes
+// exactly what the simulator hands that code:
+//
+//   "The first argument of the user-defined function shall be the value of the
+//    access function reference for the current iteration. The second argument
+//    shall be the appropriate internal state; generally, this is the value that
+//    was returned by the $limit() function on the previous iteration. If more
+//    than two arguments are given to the $limit() function, then the third and
+//    subsequent arguments are passed as the third and subsequent arguments of
+//    the user-defined function. The arguments of the user-defined function
+//    shall all be declared input."
+//
+// So `$limit(V(p,n), mylim, 0.7)` calls `mylim(vnew, vold, 0.7)`: the access
+// function value, the previous return, then the one extra argument. That is why
+// mylim below has THREE inputs for a two-argument $limit tail.
+//
+// The limiter is the identity, which makes the answer independent of the
+// iteration history — the same reasoning 27_limit_named.va uses for pnjlim
+// below vcrit, but here it holds unconditionally. §9.17.3's other rule about
+// user limiters, "the user-defined function shall call $discontinuity(-1) when
+// its return value is not sufficiently close to the value of its first
+// argument", therefore never fires: an identity is always exactly its first
+// argument. And "when the simulator has converged, the return value of the
+// $limit() function is the value of the access function reference", so at the
+// printed operating point the answer is the 0.3 V bias, exactly.
+//
+//! lrm 9.17.3
+//! bias V(p) = 0.3
+//! xfail VerA does not implement Syntax 9-12's third form: an analog_function_identifier as the second argument of $limit is E0314 `unknown identifier`, because the name is looked up as a value rather than as the limiter
+`include "check.vh"
+module ch09_limit_user_function(p, n);
+  inout p, n; electrical p, n;
+  real limited;
+  analog function real mylim;
+    input vnew, vold, vcrit;
+    real vnew, vold, vcrit;
+    begin
+      mylim = vnew;
+    end
+  endfunction
+  analog begin
+    limited = $limit(V(p,n), mylim, 0.7);
+    `CHECK("an identity limiter returns the access function itself",
+           limited, 0.3, 1e-15);
+    `CHECK("so the diode-like current is exp(0.3) - 1",
+           exp(limited) - 1.0, 0.3498588075760032, 1e-15);
+    I(p,n) <+ exp(limited) - 1.0;
+  end
+endmodule

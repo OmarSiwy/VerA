@@ -11,6 +11,7 @@
 // The directive's own effect — supplying `electrical` to an UNDECLARED net —
 // has nothing to act on in this module, so no value here can depend on it.
 //
+//! lrm 10.2
 //! bias V(p) = 0.75, V(n) = 0.25
 `default_discipline electrical
 `include "check.vh"

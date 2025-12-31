@@ -1,25 +1,68 @@
-// LRM 4.2.9 Table 4-4: `/` binds tighter than binary `+`/`-`, and operators of
-// equal precedence associate LEFT to right. Parentheses override both.
+// LRM 4.2.2 Table 4-3 "Precedence rules for operators", highest row first:
 //
-// With a=12, b=6, c=3 the one expression exercises all three:
-//   a + b / c   -> 12 + 2   (not (12+6)/3 = 6)
-//   (a + b) / c -> 18 / 3 = 6
-//   ... + a - b - c -> ((...+12) - 6) - 3
-// value = 12 + 2 + 6 + 12 - 6 - 3 = 23, exact in IEEE 754 (every term is an
-// integer-valued dyadic rational). A right-associative +/- chain would give 29.
+//     + - ! ~ & ~& | ~| ^ ~^ ^~ (unary)
+//     **
+//     * / %
+//     + - (binary)
+//     << >> <<< >>>
+//     < <= > >=
+//     == != === !==
+//     & (bitwise)
+//     ^ ^~ ~^ (bitwise)
+//     | (bitwise)
+//     &&
+//     || (logical)
+//     ?: (conditional)
+//     {} {{}}
+//
+// and "All operators associate left to right with the exception of the
+// conditional operator which associates right to left."
+//
+// One assertion per ADJACENT row boundary, every operand an integer so every
+// want is an exact CHECKI with no rounding to hide behind. Each literal is
+// chosen so a FLAT left-to-right parse — what a precedence-climbing parser
+// degenerates to when one row is transposed or missing — yields a different
+// number, written beside it. A pair of parses that agree proves nothing.
+//
+//   12 + 6 / 3           = 12 + 2       = 14   flat: (12+6)/3       = 6
+//   (12 + 6) / 3                        = 6    parentheses override
+//   12 - 6 - 3           = (12-6)-3     = 3    right-assoc: 12-(6-3) = 9
+//   1 << 2 + 3           = 1 << 5       = 32   flat: (1<<2)+3       = 7
+//   1 << 2 < 8           = (1<<2) < 8   = 1    flat: 1 << (2<8)     = 2
+//   1 < 2 == 1           = (1<2) == 1   = 1    flat: 1 < (2==1)     = 0
+//   1 & 2 == 2           = 1 & (2==2)   = 1    flat: (1&2) == 2     = 0
+//   1 ^ 3 & 2            = 1 ^ (3&2)    = 3    flat: (1^3) & 2      = 2
+//   3 | 1 ^ 1            = 3 | (1^1)    = 3    flat: (3|1) ^ 1      = 2
+//   0 && 1 | 1           = 0 && (1|1)   = 0    flat: (0&&1) | 1     = 1
+//   1 || 0 && 0          = 1 || (0&&0)  = 1    flat: (1||0) && 0    = 0
+//   0 || 1 ? 10 : 20     = (0||1)?10:20 = 10   flat: 0 || (1?10:20) = 1
+//
+// The unary / ** / * boundaries are 01_arithmetic_operators.va, the right
+// associativity of ?: is 08_conditional_operator.va, and the {} row is
+// 30_concatenation.va.
+//
+//! lrm 4.2.2
 `include "check.vh"
 module ch04_precedence_associativity(p, n);
     inout p, n;
     electrical p, n;
-    real a, b, c, value;
+    integer value;
 
     analog begin
-        a = 12.0;
-        b = 6.0;
-        c = 3.0;
-        value = a + b / c + (a + b) / c + a - b - c;
-        `CHECKX("subtraction is left associative", a - b - c, 3.0);
-        `CHECKX("precedence and associativity total", value, 23.0);
+        `CHECKI("* / % bind tighter than binary + -", 12 + 6 / 3, 14);
+        `CHECKI("parentheses override precedence", (12 + 6) / 3, 6);
+        `CHECKI("binary - associates left to right", 12 - 6 - 3, 3);
+        `CHECKI("binary + - bind tighter than <<", 1 << 2 + 3, 32);
+        `CHECKI("<< binds tighter than <", 1 << 2 < 8, 1);
+        `CHECKI("< binds tighter than ==", 1 < 2 == 1, 1);
+        `CHECKI("== binds tighter than bitwise &", 1 & 2 == 2, 1);
+        `CHECKI("bitwise & binds tighter than bitwise ^", 1 ^ 3 & 2, 3);
+        `CHECKI("bitwise ^ binds tighter than bitwise |", 3 | 1 ^ 1, 3);
+        `CHECKI("bitwise | binds tighter than &&", 0 && 1 | 1, 0);
+        `CHECKI("&& binds tighter than ||", 1 || 0 && 0, 1);
+        `CHECKI("|| binds tighter than ?:", 0 || 1 ? 10 : 20, 10);
+
+        value = 12 + 6 / 3;
         I(p, n) <+ value;
     end
 endmodule

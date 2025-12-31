@@ -1,12 +1,24 @@
-// LRM 6.5.6 / 9.19: `$port_connected(port)` returns one (1) if a connection was
-// specified for that port when the module was instantiated, and zero (0)
-// otherwise. The device under test is instantiated with every terminal bound to
-// a node — that is what makes it stampable at all — so the answer for `p` is 1,
-// and the conditional in the contribution must take its THEN arm.
+// LRM 6.5.6 / 9.19: `$port_connected(port)` returns one (1) if the port "was
+// connected to a net (by order or by name) when the module was instantiated, and
+// zero (0) otherwise."
 //
-// With p held at 0.5 V the flow is therefore V(p) = 0.5, not the 0.0 an
-// unconnected port would give.
+// READ THE WANT AS A HARNESS CONVENTION, NOT AS THE LRM'S NUMBER. §6.2.1 makes
+// this a top-level module — nothing instantiates it — and the LRM gives
+// $port_connected no top-level default the way Table 9-29 gives $mfactor its 1.0,
+// so a literal reading of "otherwise" would say 0. The 1 asserted here is the
+// testbench's position: it binds every terminal of the DUT to a node, because a
+// device with a dangling terminal has no residual to evaluate, and a bound
+// terminal is the connected case by any reading. A conforming compiler under a
+// host that binds its terminals answers 1 too; one that left `p` unbound would be
+// entitled to 0, and this fixture would be the wrong place to argue about it.
 //
+// What is genuinely pinned, and does not depend on the convention, is that the
+// result is a usable integer operand: with p held at 0.5 V the selected arm gives
+// V(p) = 0.5, not the 0.0 fallback. The 0 case needs a module that is
+// instantiated with a port left off, which is unwritable while VerA compiles one
+// flattened device.
+//
+//! lrm 6.5.6
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch6_port_connected(p);

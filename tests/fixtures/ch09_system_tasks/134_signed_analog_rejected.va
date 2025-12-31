@@ -1,0 +1,21 @@
+// §9.11 / Table 9-8: `$signed  Yes  No` — supported in the digital context,
+// NOT in the analog one. §9.11 names its whole extension in one sentence and
+// $signed is not in it: only $bitstoreal and $realtobits are carried into the
+// analog context.
+//
+// $signed reinterprets a sized vector's bit pattern as two's complement, which
+// presupposes the bit-vector type system of the digital context; an analog
+// block has integers and reals. So the call site is the whole claim and there
+// is no return value to write a `want` for.
+//
+//! lrm 9.11
+//! reject analog context
+//! xfail VerA has no Table 9-8 analog-context check; it accepts $signed in an analog block (only W0650 fires, and that is a float-mode note)
+module ch09_atomic_signed_analog_rejected(p, n);
+  inout p, n; electrical p, n;
+  integer x;
+  analog begin
+    x = $signed(4'b1011);
+    I(p,n) <+ V(p,n) + x;
+  end
+endmodule

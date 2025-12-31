@@ -1,4 +1,4 @@
-// §9.16 Table 9-29 gives the top-level value of every hierarchical parameter
+// §9.18 Table 9-29 gives the top-level value of every hierarchical parameter
 // system function, and the resolved value of an instance is that top-level
 // value combined with whatever each level down specified. This module is
 // elaborated as the top level and nothing overrides anything, so each function
@@ -11,6 +11,8 @@
 // so the first sum is 1.0 + 0.0 + 0.0 + 0.0 = 1.0 and the second adds the two
 // mirror flags for 3.0. Every term is a small integer in binary floating point,
 // so the sums are exact and `CHECKX` is the right form.
+//
+//! lrm 9.18
 `include "check.vh"
 module ch09_hierarchical_parameters(p, n);
   inout p, n; electrical p, n;

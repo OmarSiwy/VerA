@@ -1,4 +1,5 @@
 // LRM 5.2.1: contribution statements are forbidden in an analog initial block.
+//! lrm 5.2.1
 //! reject E0405
 // EXPECT: error -- LRM 5.2.1 forbids this in an analog initial block.
 module ch5_bad_initial(p);

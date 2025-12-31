@@ -1,5 +1,22 @@
-//! reject identifier
-// EXPECT: error
+// Annex C.8: "The hierarchical structure defined in Clause 6 is applicable to
+// both Verilog-AMS HDL and Verilog-A, except support for real value ports is
+// only applicable to Verilog-AMS HDL and IEEE Std 1364 Verilog (see 6.5.3)."
+//
+// This is the one and only Clause 6 carve-out, so refusing a real value port is
+// conformance and not a VerA limitation: hierarchy itself stays in the subset.
+// §6.5.3 declares one with `input real`, `output real` or `inout real`; the
+// direction is part of the declaration, so each gets its own fixture — the
+// diagnostic reads "found `real`" and cannot distinguish them, so one file
+// carrying all three would be satisfied by a compiler that refused only one.
+// The other two directions are 28 and 29.
+//
+// The pinned code is E0208 rather than the old bare word "identifier": VerA
+// reaches the rule lexically ("expected an identifier: found `real`", note
+// LRM 2.8), which is how it happens to be worded, not which rule fired.
+//
+//! lrm C.8
+//! lrm 6.5.3
+//! reject E0208
 module annex_c_real_value_port_rejected(p);
     input real p;
 endmodule

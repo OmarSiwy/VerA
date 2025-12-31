@@ -2,21 +2,18 @@
 // zero, then cross() is inactive, meaning that it does not generate an event at
 // threshold crossings and does not act to control the timestep."
 //
-// `enabled` is declared and never assigned, so §3.2.1 fixes it at 0 ("integer
+// `enabled` is declared and never assigned, so §3.2 fixes it at 0 ("integer
 // variables whose values are assigned in an analog context default to an
 // initial value of zero"). The testbench then walks V(c) from -1 to +1, which is
 // exactly the rising crossing this cross() selects — and it must still not fire.
-// `held` therefore keeps the 0.0 §3.2.1 gives a real; an implementation that
+// `held` therefore keeps the 0.0 §3.2 gives a real; an implementation that
 // drops the enable argument samples V(p) and reads 0.7.
 //
 // Transient on purpose: §5.10.3.1 bars cross() from non-transient analyses, so
 // under the default dc analysis the 0.0 would come for free and the enable
 // argument would not be under test at all.
 //
-// FAILS TODAY — known VerA defect, not a wrong want. `crossTest` in
-// src/backend/codegen.zig builds the hit test from args[0..1] only; the enable
-// argument (args[4]) is never read, so a disabled cross() still fires.
-//
+//! lrm 5.10.3.1
 //! analysis tran
 //! bias V(p) = 0.7
 //! time 0, 1n, 2n

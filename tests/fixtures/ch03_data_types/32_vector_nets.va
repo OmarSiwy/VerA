@@ -1,11 +1,30 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §3.6.3 Syntax 3-6: `discipline_identifier [ range ] list_of_net_identifiers ;`
+// — "If a range is specified for a net, the net is called a vector net;
+// otherwise it is called a scalar net." Its own examples are
+// `electrical [MSB:LSB] n1;` and `voltage [5:0] n2, n3;`.
 //
-// VAMS-3.12-03  (ch3-datatypes.html)
-// If one of the terminals of a branch is a vector net, then the other terminal shall either be a scalar net or a vector net of the same size.
+// `electrical [3:0] p` is therefore four independent nets addressed p[3] down
+// to p[0]. The bias gives each a different potential in half-volt steps, so a
+// reversed range (p[0] read as the msb) or an off-by-one index reads a
+// neighbour and fails. The last check is a difference across the whole bus,
+// 0.5 - 2.0 = -1.5, which no single-element mix-up can produce.
 //
-//! reject DiagnosticsReported
-module ch3_vector_nets(p); inout p; electrical [3:0] p; analog begin I(p[0])<+V(p[1]); I(p[2])<+V(p[3]); end endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.
+//! lrm 3.6.3
+//! bias V(p[0]) = 0.5, V(p[1]) = 1.0, V(p[2]) = 1.5, V(p[3]) = 2.0
+//! xfail VerA's parser has no net range: the `[` of `electrical [3:0] p` is E0208, before E0302 can fire
+`include "check.vh"
+module ch3_vector_nets(p);
+    inout p;
+    electrical [3:0] p;
+
+    analog begin
+        `CHECKX("the lsb element of the bus", V(p[0]), 0.5);
+        `CHECKX("an interior element", V(p[2]), 1.5);
+        `CHECKX("the msb element of the bus", V(p[3]), 2.0);
+        `CHECKX("a potential difference across the whole bus", V(p[0], p[3]), -1.5);
+        I(p[0]) <+ V(p[0]) / 1000.0;
+        I(p[1]) <+ V(p[1]) / 1000.0;
+        I(p[2]) <+ V(p[2]) / 1000.0;
+        I(p[3]) <+ V(p[3]) / 1000.0;
+    end
+endmodule

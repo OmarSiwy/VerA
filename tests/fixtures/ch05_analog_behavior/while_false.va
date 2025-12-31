@@ -6,6 +6,8 @@
 // i starts at 0 and the guard is i < 0, which is false on entry. So the body
 // never runs and i is still 0. A do-while -- a loop that tests after the body --
 // leaves 1, which is exactly what this assertion refuses.
+//
+//! lrm 5.9.1
 `include "check.vh"
 module ch5_while_false(p);
   inout p; electrical p;

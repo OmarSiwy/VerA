@@ -1,11 +1,21 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §2.6.1: "The unsigned number token shall immediately follow the base format,
+// optionally preceded by white space." Only the apostrophe and the base letter
+// are welded together — the digits are a separate token. The LRM spells that
+// space in four of its own examples: `'h 837FF` (Example 1), `5 'D 3`
+// (Example 2), `-8 'd 6` (Example 3) and `32 'h 12ab_f001` (Example 5).
 //
-// VAMS-2.6.1-09  (ch2-lexical.html)
-// The unsigned number token shall immediately follow the base format, optionally preceded by white space.
-//
-//! reject DiagnosticsReported
-module ch2_based_ws(p); inout p; electrical p; integer x; analog begin x=8'h Af + 8'b 1010 + 8'o 17 + 8'd 12; I(p)<+x+0.0*V(p); end endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.
+// The wants are deliberately identical to 35_uppercase_bases_hex.va, which
+// passes with the space removed, so the only thing that differs between the two
+// files is the rule under test: 0xAf = 175, 0b1010 = 10, 0o17 = 15, 0d12 = 12,
+// summing to 212.
+//! lrm 2.6.1
+//! xfail VerA's lexer scans a based number as one token, so white space between the base format and the digits splits it and the digits are then an invalid token (E0209) (src/frontend/lexer.zig)
+`include "check.vh"
+module ch2_based_ws(p); inout p; electrical p; integer x; analog begin x=8'h Af + 8'b 1010 + 8'o 17 + 8'd 12;
+  `CHECKI("8'h Af", 8'h Af, 175);
+  `CHECKI("8'b 1010", 8'b 1010, 10);
+  `CHECKI("8'o 17", 8'o 17, 15);
+  `CHECKI("8'd 12", 8'd 12, 12);
+  `CHECKI("sum of the four spaced literals", x, 212);
+  I(p)<+x+0.0*V(p);
+end endmodule

@@ -1,20 +1,22 @@
-// DEBT — this rejection is NOT conformance.
-// The LRM permits what VerA refuses here. The substrings below record
-// CURRENT behavior so the suite stays green on it; they do not claim it
-// is right. `zig build ledger` counts this rule against VerA.
+// §7.7.2 discipline resolution connect statement: "the discipline identifiers
+// before the resolveto keyword are the list of compatible disciplines and the
+// discipline identifier after is the discipline to be used", the override
+// §7.4.4.3 refers to when an interconnect already carries a discipline.
 //
-// VAMS-7.2.4-02  (ch7-mixed-signal.html)
-// If an undeclared net segment has multiple compatible disciplines connected to it, a connect statement shall specify which discipline to use during dis
-// VAMS-7.4.4.3-01  (ch7-mixed-signal.html)
-// If an interconnect is assigned a discipline, that discipline shall be used unless the resolveto connect statement overrides the discipline. [needs: `c
-// VAMS-7.7.2.1-01  (ch7-mixed-signal.html)
-// When more than one specified rule applies to a given scenario a warning message shall be issued by the simulator and the first match would be used. [n
-// VAMS-7.7.2.1-02  (ch7-mixed-signal.html)
-// If there is more than one subset matching a set of disciplines, the simulator shall give a warning message and apply the first subset rule that satisf
-// … and 1 more rule(s); see tests/lrm-rules/
+// C.9 settles the verdict for a Verilog-A compiler: "Clause 7 only applies to
+// Verilog-AMS HDL", and C.16 lists `connect`, `connectrules` and `resolvedto`
+// among the keywords "not used by Verilog-A". The module below keeps the
+// refusal about the connect specification rather than about an empty file.
 //
-//! reject NoModule
-// EXPECT: error -- discipline-resolution connect statements are host rules.
+//! lrm 7.7.2
+//! lrm C.9
+//! lrm C.16
+//! reject E0201
+//! reject connectrules
+module ch7_host(p);
+  inout p; electrical p;
+  analog I(p) <+ V(p);
+endmodule
 connectrules ch7_resolution;
   connect electrical, thermal resolveto electrical;
 endconnectrules

@@ -1,0 +1,17 @@
+// Annex C.9: "Clause 7 only applies to Verilog-AMS HDL." A connect module is
+// the Clause 7 construct itself — A.1.2 admits `connectmodule` as a third
+// `module_keyword`, and §7 gives it the discipline-conversion semantics that
+// exist only in a mixed-signal simulation. A Verilog-A compiler has no digital
+// side to convert to, so the declaration is out of the subset.
+//
+// The enclosing `connectrules ... endconnectrules` block is 24; see there for
+// why they are two files.
+//
+//! lrm C.9
+//! lrm C.16
+//! reject E0201
+//! reject connectmodule
+connectmodule annex_c_connectmodule_rejected(digital_side, analog_side);
+    input digital_side;
+    output analog_side;
+endmodule

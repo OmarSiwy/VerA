@@ -1005,8 +1005,8 @@ A series RLC circuit is formulated by summing the voltage across its three compo
 
 
                       d        1 t
-      v(t) = Ri(t) + L i(t) + ---  i() d
-                      dt      C –
+      v(t) = Ri(t) + L i(t) + --- ∫ i(τ) dτ
+                      dt      C –∞
 
 
 which can be defined as
@@ -1017,8 +1017,8 @@ A parallel RLC circuit is formulated by summing the currents through its three c
 
 
              v(t)       d       1 t
-      i(t) = ------- + C v(t) + --  v() d
-               R        dt      L –
+      i(t) = ------- + C v(t) + -- ∫ v(τ) dτ
+               R        dt      L –∞
 
 
 which can be defined as
@@ -1192,12 +1192,13 @@ For multiple indirect contribution statements, the targets frequently can be pai
 For example, the following ordinary differential equation,
 
          dx
-            = f  x y z 
+            = f ( x, y, z )
          dt
          dy
-            = g  x y z 
+            = g ( x, y, z )
          dt
-         dz = h  x y z 
+         dz
+            = h ( x, y, z )
          dt
 
 can be written as

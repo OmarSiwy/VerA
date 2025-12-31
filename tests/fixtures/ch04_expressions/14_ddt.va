@@ -8,6 +8,17 @@
 // trapezoidal rule disagree on the first step after a DC point. See
 // tests/fixtures/exhaustive/060_ddt_charge.va for the charge formulation.
 //
+// Table 4-17 gives ddt three argument shapes, not one: ddt(expr),
+// ddt(expr, abstol) and ddt(expr, nature). The optional argument only supplies
+// a tolerance — "The absolute tolerance, abstol or derived from nature, applies
+// to the OUTPUT of the ddt operator and is the largest signal level that is
+// considered negligible" — so it changes no value, and the DC answer stays the
+// zero 4.5.3 states for all three. What the extra line proves is that the
+// abstol shape parses and lowers, which nothing in the chapter did before.
+// The third shape, ddt(expr, nature), is 145_ddt_idt_nature_tolerance.va —
+// separate only because VerA cannot resolve a nature identifier there.
+//
+//! lrm 4.5.3
 //! bias V(p) = 1.0
 //! bias V(n) = 0
 //! print none
@@ -22,6 +33,7 @@ module ch04_ddt(p, n);
         // input's.
         `CHECK("the probe this ddt differentiates", V(p, n), 1.0, 1e-15);
         `CHECKX("ddt returns zero in DC", ddt(V(p, n)), 0.0);
+        `CHECKX("ddt(expr, abstol) is the same operator", ddt(V(p, n), 1e-6), 0.0);
         // The charge the reactive contribution below carries, C*V at 1 V with
         // the 3.4 default C = 1p.
         `CHECKR("charge C*V at this bias", capacitance * V(p, n), 1e-12, 1e-15);

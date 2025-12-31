@@ -13,8 +13,8 @@
 module ch11_nature_discipline_objects(p, n);
   inout p, n; electrical p, n;
   analog begin
-    `CHECK("the discipline's potential access reads the node pair", V(p, n), 0.5, 1e-15);
-    `CHECK("the potential nature is antisymmetric in the branch", V(n, p), -0.5, 1e-15);
+    `CHECKX("the discipline's potential access reads the node pair", V(p, n), 0.5);
+    `CHECKX("the potential nature is antisymmetric in the branch", V(n, p), -0.5);
     I(p,n) <+ V(p,n);
   end
 endmodule

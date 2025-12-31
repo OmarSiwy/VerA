@@ -3,10 +3,11 @@
 // so the if-generate condition is not elaboration-time constant.  The LRM gives
 // the construct no semantics -- the expected behavior IS the diagnostic.
 //
-// KNOWN GAP: VerA has no constant-condition check.  It accepts this silently and
-// emits a device, so this fixture fails until the frontend grows the rule.
-// Tighten the directive to the E-code once one exists.
+// KNOWN GAP: see the `//! xfail` below.  Tighten the reject directive to the
+// E-code once one exists.
+//! lrm 6.6
 //! reject DiagnosticsReported
+//! xfail VerA has no constant-expression check on a generate scheme; the if-generate condition may name a runtime `integer` and it elaborates silently
 module ch6_generate_nonconstant(p);
   inout p; electrical p; integer runtime_value;
   generate

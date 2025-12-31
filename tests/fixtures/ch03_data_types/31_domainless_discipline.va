@@ -1,2 +1,29 @@
-discipline ch3_domainless; enddiscipline
-module ch3_domainless_structural; ch3_domainless link; endmodule
+// §3.6.2.3: "Disciplines without a domain binding and without a nature binding
+// are known as domainless disciplines" — the LRM's `domainless` example, which
+// it declares legal and then deprecates: "Usage of domainless disciplines ...
+// is discouraged ... the definition of a domainless discipline may be made an
+// error in FUTURE versions". Discouraged is not an error in this edition, so
+// this file must RUN.
+//
+// The point of a domainless discipline is that the domain "[is] determined by
+// the connectivity of the net (see 7.4 and Annex F)", which needs a hierarchy;
+// what one module can show is that leaving both bindings off is accepted and
+// does not disturb the nets around it. The file used to be two lines with no
+// ports and no analog block. The behavioural half is 80_domainless_net_behavioral.va.
+//
+//! bias V(p) = 0.75
+//! lrm 3.6.2.3
+`include "check.vh"
+discipline ch3_domainless;
+enddiscipline
+
+module ch3_domainless_structural(p);
+    inout p;
+    electrical p;
+    ch3_domainless link;
+
+    analog begin
+        `CHECKX("a module carrying a domainless net still elaborates and solves", V(p), 0.75);
+        I(p) <+ 0.0 * V(p);
+    end
+endmodule

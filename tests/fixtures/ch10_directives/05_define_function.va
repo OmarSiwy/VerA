@@ -10,6 +10,7 @@
 // that ignored its actual argument could give neither, so the one digit string
 // pins both the substitution and its bracketing.
 //
+//! lrm 10.4
 //! bias V(p) = 0.5
 `define SQUARE(x) ((x)*(x))
 `include "check.vh"

@@ -1,0 +1,19 @@
+// Annex C.5: "The case equality operators (===, !==) are not supported in
+// Verilog-A." §4.2.6 defines them as the operators that compare x and z bit
+// positions literally rather than yielding x, which is 4-state digital matching
+// and has no analog meaning — so the rejection is conformance, not a VerA
+// limitation. The `!==` half is 17_case_inequality.va.
+//
+//! lrm C.5
+//! lrm 4.2.6
+//! reject E0323
+module annex_c_case_equality_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    integer equal;
+
+    analog begin
+        equal = V(p, n) === 0.0;
+        I(p, n) <+ equal;
+    end
+endmodule

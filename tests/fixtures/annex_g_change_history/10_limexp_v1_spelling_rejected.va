@@ -1,0 +1,18 @@
+// Annex G Table G.1, "Limiting exponential function": the OVI Verilog-A v1.0
+// spelling `$limexp( expression )` was replaced in v2.0 by `limexp( expression
+// )`, a syntax change. The retired form is not an alias -- a `$` name is a
+// system function (§9), and §4.5.13 defines the analog operator under the bare
+// name only. Accepting both is the backward-compatibility leak Table G.1
+// exists to close.
+//
+// The current spelling is covered by ch04_expressions/25_limexp.va.
+//
+//! lrm G.1
+//! lrm 4.5.13
+//! reject E0801
+//! reject $limexp
+//! xfail VerA accepts the retired v1.0 spelling $limexp() as an alias for limexp(); Table G.1 replaced it in v2.0
+module annex_g_limexp_v1(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ $limexp(V(p,n));
+endmodule

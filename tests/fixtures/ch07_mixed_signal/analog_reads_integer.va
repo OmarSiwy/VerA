@@ -12,6 +12,8 @@
 // zero", not by equality with one. With V(p) biased to 0.7 the two arms are
 // 0.7 and 0.0, so picking the wrong one is visible.
 //
+//! lrm 7.3.1
+//! lrm 4.2.12
 //! bias V(p) = 0.7
 `include "check.vh"
 module ch7_read_integer(p);

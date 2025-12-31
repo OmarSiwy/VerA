@@ -1,0 +1,23 @@
+// Annex C.7, bullet 1: "No digital behavior or events are supported in
+// Verilog-A." The digital continuous assignment drives a net structurally,
+// outside any analog block; the subset's only way to drive a signal is the `<+`
+// contribution of §5.5.
+//
+// The one other `assign` fixture in the tree
+// (ch07_mixed_signal/continuous_assign_unsupported.va) declares `wreal out;` in
+// the same module and pins E0205, `wreal` and `assign` together, so no single
+// rule is isolated. Here the target is a plain `wire` and the analog block is
+// clean, so the diagnostic can only be about `assign`.
+//
+//! lrm C.7
+//! lrm 5.5
+//! reject E0205
+//! reject assign
+module annex_c_continuous_assign_rejected(p);
+    inout p;
+    electrical p;
+    wire w;
+    assign w = 1'b1;
+
+    analog I(p) <+ V(p);
+endmodule

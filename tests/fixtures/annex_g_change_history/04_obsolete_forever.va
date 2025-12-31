@@ -1,6 +1,14 @@
 // LRM 5.9: the analog looping statements are repeat, while and for --
-// `forever` is not one of them.
-//! reject E0205
+// `forever` is not one of them. Annex G G.2.1 Forever: "This statement is no
+// longer supported." It remains a reserved word (Annex B.1), so it cannot be
+// reached as an identifier either.
+//
+// The code pinned is the one raised AT the keyword. VerA also emits an E0205
+// on the stray `end` once the parser resynchronises; that is recovery
+// behaviour, not the rule, so it is deliberately not pinned.
+//! lrm G.2.1
+//! lrm 5.9
+//! reject E0209
 //! reject forever
 module annex_g_obsolete_forever(p, n);
   inout p, n; electrical p, n;

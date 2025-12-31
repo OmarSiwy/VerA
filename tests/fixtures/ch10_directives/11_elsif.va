@@ -7,6 +7,7 @@
 // produce: 2.0*0.5 = 1.0 at V(p,n) = 0.5. The three coefficients 1.0, 2.0, 3.0
 // give three different products, so the digit names which arm compiled.
 //
+//! lrm 10.1
 //! bias V(p) = 0.5
 `define SECOND_CHOICE
 `include "check.vh"

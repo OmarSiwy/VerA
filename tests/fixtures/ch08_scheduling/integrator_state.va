@@ -8,6 +8,8 @@
 // honouring the ic would answer alike for both, and one that returned V(p)*t or
 // V(p) would answer 0 or 1.0 rather than 2.5.
 //
+//! lrm 4.5.4
+//! lrm 8.3.1
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch8_integrator(p);

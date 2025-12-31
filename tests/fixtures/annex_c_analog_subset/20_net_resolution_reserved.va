@@ -1,0 +1,17 @@
+// Annex C.16 lists ten keywords "not used by Verilog-A", and closes with
+// "NOTE—All keywords of Verilog-AMS HDL are reserved words for Verilog-A": not
+// used is not the same as free, so none of the ten may serve as an identifier.
+// `net_resolution` is one of them (Annex B lists it too) and is the one word of
+// the ten that 16_unused_ams_words leaves out.
+//
+// One word per fixture, because compilation stops at the first bad identifier:
+// a fixture naming several proves only the first.
+//
+//! lrm C.16
+//! lrm B
+//! reject E0208
+//! reject net_resolution
+//! xfail VerA's keyword table (src/frontend/token.zig) reserves the other nine C.16 words but not net_resolution, so `real net_resolution;` compiles clean (rc=0)
+module annex_c_net_resolution_reserved;
+    real net_resolution;
+endmodule

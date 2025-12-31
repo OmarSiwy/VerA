@@ -25,7 +25,21 @@
 // one that prefixes an 0x, or one that emits nothing at all — which is the whole
 // content of the two Table 9-22 rows.
 //
+// The third $display line carries the two §9.4.1 rules that are not format
+// specifiers at all: "Any null argument produces a single space character in
+// the display. (A null argument is characterized by two adjacent commas (,,) in
+// the argument list.)" and, from §9.4.3, "any expression argument with NO
+// corresponding format specification is displayed using the default decimal
+// format". Both are transcript-only — there is no return value to hold to a
+// literal — so they sit beside the other renderings a reader checks by eye.
+//
 //! print none
+//! lrm 9.4.1
+//! lrm 9.4.2
+//! lrm 9.4.3
+//! lrm 9.5.3
+//! lrm 9.5.4.2
+//! xfail two gaps, and the first stops the build before the assertions run. (1) `%c` does not compile: cg_display.zig appendConv maps it to Zig verb `c` with want=.int, and renderPrintArg then hands std.fmt an i64 where `{c}` takes a u8 — "expected type 'u8', found 'i64'" out of std/Io/Writer.zig printAsciiChar, so ANY $display carrying a Table 9-22 %c kills the generated testbench. (2) codegen.zig `void_tasks` lowers $sformat/$sscanf to the constant `S.con(0.0)`, so `text` is never written and `back` never assigned
 `include "check.vh"
 module ch09_display_formats(p, n);
   inout p, n; electrical p, n;
@@ -34,6 +48,7 @@ module ch09_display_formats(p, n);
   analog begin
     $display("bin=%b oct=%o dec=%d hex=%h char=%c str=%s", 5, 5, 5, 5, 65, "A");
     $display("real=%10.3g exp=%e fixed=%f eng=%r percent=%% name=%m octal=\\11 tab=\\t quote=\\\"");
+    $display("null=[", , "] bare=", 7);
     $sformat(text, "%h", 4096);
     nread = $sscanf(text, "%d", back);
     `CHECKI("Table 9-22 %h of 4096 is the hex digits 1000", back, 1000);

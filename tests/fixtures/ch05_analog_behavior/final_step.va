@@ -1,24 +1,29 @@
-// §5.10.2 final_step, and the contribution that reads the variable it writes.
+// §5.10.2 final_step, and §8.4.7's promise that the event lands on a solution.
 //
-// Table 5-1 gives final_step the value 1 in the DCOP column, so on a single-point
-// dc analysis it fires — but the body assigns 0.0, which is also what §3.2.1
-// gives an untouched real, so the firing itself leaves no trace a probe inside
-// the module can see. What IS pinned is that `x` is 0.0 on either path, and so
-// the contributed flow is the branch potential alone: 0.7 A into a 1 ohm
-// conductance at 0.7 V.
+// §8.4.7: "Certain analog events (above, cross, initial_step, and final_step)
+// cause an analog solution of the time where they occur." Table 5-1 gives
+// final_step the value 1 in the DCOP column, so on a single-point dc analysis
+// the event fires at this operating point and the guarded body runs.
 //
-// A lowering that let the guarded assignment escape its guard, or left the
-// event-held variable uninitialised, moves this number.
+// The body samples the probe rather than assigning a constant, so the firing
+// leaves a trace: 0.7 is the biased branch potential and is NOT the 0.0 §3.2
+// gives an untouched real. A final_step that never fires, or a guarded
+// assignment left uninitialised, now turns ok=1 into ok=0 — which the previous
+// `x = 0.0` could not.
 //
+// The contributed flow is then twice the branch potential, 1.4 A at 0.7 V.
+//
+//! lrm 5.10.2
+//! lrm 8.4.7
 //! analysis dc
 //! bias V(p) = 0.7
 `include "check.vh"
 module ch5_final_step(p);
   inout p; electrical p; real x;
   analog begin
-    @(final_step) x = 0.0;
-    `CHECK("the final_step body assigns 0, as does §3.2.1", x, 0.0, 0.0);
-    `CHECK("so the contributed flow is the branch potential alone", x + V(p), 0.7, 1e-15);
+    @(final_step) x = V(p);
+    `CHECKX("final_step fired, so the guard sampled the 0.7 V bias", x, 0.7);
+    `CHECK("and the contributed flow is twice the branch potential", x + V(p), 1.4, 1e-15);
     I(p) <+ x + V(p);
   end
 endmodule

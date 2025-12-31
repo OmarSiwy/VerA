@@ -1,0 +1,18 @@
+// §5.10, third bullet of the list of event characteristics as constrained by
+// A.6.4: an analog_event_statement's body is a plain analog_statement, so it
+// cannot itself be another event control statement. The LRM's remedy is the
+// `or` combinator — `@(initial_step or final_step)` — which event_or.va and
+// event_initial_or_cross.va cover on the positive side.
+//
+// Both events named here are global (§5.10.2) and both are implemented, so the
+// nesting is the only thing wrong with the file.
+//
+//! lrm 5.10
+//! reject E0703
+module ch5_nested_event_control(p);
+  inout p; electrical p; real x;
+  analog begin
+    @(initial_step) @(final_step) x = 1.0;
+    I(p) <+ x;
+  end
+endmodule

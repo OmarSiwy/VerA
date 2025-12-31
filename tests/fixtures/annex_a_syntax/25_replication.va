@@ -1,0 +1,37 @@
+// A.8.1 replication — a concatenation with a repeat count in front of it:
+//
+//   analog_concatenation          ::= { analog_expression { , analog_expression } }
+//   analog_multiple_concatenation ::= { constant_expression analog_concatenation }
+//
+// §4.2.13: replication "is expressed by a concatenation preceded by a
+// non-negative, non-x and non-z constant expression, called a replication
+// constant, enclosed together within brace characters, and which indicates a
+// joining together of that many copies of the concatenation". The constant is
+// 2 and the operand is a 4-bit sized literal, so the result is 8 bits:
+//
+//     {2{4'b0011}}  =  8'b0011_0011  =  51
+//
+// A conforming compiler accepts this — §4.2.13 is normative and Annex C.5
+// excludes exactly one thing from Clause 4 in Verilog-A, the case equality
+// operators === and !==. This file was part of 24_expression_composites.va as
+// a `//! reject`, which demanded a diagnostic for legal source and took four
+// working operators down with it; the suite meanwhile uses replication as a
+// green positive elsewhere (ch03_data_types/28_string_replication.va).
+//
+//! lrm A.8.1
+//! lrm 4.2.13
+//! bias V(p) = 0.5
+//! print none
+//! xfail VerA's concatenation parser has no replication form: `{2{...}}` is E0207 "unexpected token: found {  expected `}`"
+`include "check.vh"
+module annex_a_replication(p, n);
+    inout p, n;
+    electrical p, n;
+    integer bits;
+
+    analog begin
+        bits = {2{4'b0011}};
+        `CHECKI("a replication repeats its operand into one concatenation", bits, 51);
+        I(p, n) <+ bits * V(p, n);
+    end
+endmodule

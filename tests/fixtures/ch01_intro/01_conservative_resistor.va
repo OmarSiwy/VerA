@@ -3,6 +3,8 @@
 // At V(p)=1.5, V(n)=0.25 the branch potential is 1.25 V, and Ohm's law over
 // 250 ohm gives 1.25/250 = 5 mA.
 //
+//! lrm 1.3.1
+//! lrm 1.3.2
 //! param resistance = 250
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"

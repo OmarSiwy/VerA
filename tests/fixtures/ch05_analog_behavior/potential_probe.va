@@ -4,6 +4,8 @@
 // V(n) = 0.25 the branch potential is 0.5 V exactly, and the probe driving a
 // flow source through 1 kohm gives 0.5/1000 = 500 uA.
 //
+//! lrm 5.4.1
+//! lrm 5.6.1.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch5_potential_probe(p, n);

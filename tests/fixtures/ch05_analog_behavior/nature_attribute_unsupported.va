@@ -1,6 +1,42 @@
-//! reject expected `)`
-// EXPECT: error -- net.potential.abstol is not represented by the AST.
-module ch5_nature_attribute(p);
-  inout p; electrical p;
-  analog I(p) <+ ddt(V(p), p.potential.abstol);
+// §5.5.3 "the attributes for a net or a branch can be accessed by using the
+// hierarchical referencing operator (.) to the potential or flow for the net or
+// branch", Syntax 5-4:
+//
+//     nature_attribute_reference ::=
+//         net_identifier . potential_or_flow . nature_attribute_identifier
+//
+// This is the clause's own twocap example, both lines of it: the unnamed branch
+// (a,b) taking a.potential.abstol and the named branch cap taking
+// n1.potential.abstol.
+//
+// The abstol argument to ddt() (§4.5.4) is a tolerance hint for the solver's
+// time step; it does not change the value ddt() returns. §4.5.3 "In DC
+// analysis, ddt() returns zero (0)", so the contributed flows are exactly zero
+// whatever c and abstol are, and an implementation that let the extra argument
+// leak into the result would report a nonzero number against a deliberately
+// nonzero branch potential. abstol's own value comes from disciplines.vams and
+// not from the LRM, so it is not asserted.
+//
+// This is also the only Verilog-A spelling that reads what §11.6.2 models as
+// nature's one-to-many relationship to param assign, so ch11's s11-6-2 row
+// points here.
+//
+//! lrm A.8.9
+//! lrm 5.5.3
+//! lrm 11.6.2
+//! bias V(a) = 0.7, V(b) = 0.2, V(n1) = 0.4, V(n2) = 0.1
+//! xfail VerA cannot parse a nature attribute reference: the `.` in `a.potential.abstol` dies at E0207 (expected `)`)
+`include "check.vh"
+module ch5_nature_attribute(a, b, n1, n2);
+  inout a, b, n1, n2;
+  electrical a, b, n1, n2;
+  branch (n1, n2) cap;
+  parameter real c = 1p;
+  analog begin
+    `CHECKX("the probed branch potential is nonzero", V(a, b), 0.5);
+    `CHECKX("ddt() with a net-attribute abstol is still zero in dc", ddt(V(a, b), a.potential.abstol), 0.0);
+    `CHECKX("and so is the named-branch form", ddt(V(cap), n1.potential.abstol), 0.0);
+    I(a, b) <+ c*ddt(V(a, b), a.potential.abstol);
+    I(cap)  <+ c*ddt(V(cap), n1.potential.abstol);
+  end
 endmodule

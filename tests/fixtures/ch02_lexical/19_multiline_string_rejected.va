@@ -3,6 +3,7 @@
 //! reject ParseError
 //! reject E0138
 //! reject a string literal may not span lines
+//! lrm 2.7
 module ch02_multiline_string_rejected;
     string value = "first
 second";

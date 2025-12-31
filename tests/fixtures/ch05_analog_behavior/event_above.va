@@ -1,21 +1,37 @@
-// §5.10.3.2 above(). "The cross() function will not generate events for
-// non-transient analyses, such as ac, dc, or noise analyses ... but the
-// above() function can", and it generates one when its expression is positive.
+// §5.10.3.2 above(): "During a dc sweep, the above() function shall also
+// generate an event when the expression crosses zero from below; however, the
+// step size of the dc sweep is not controlled to accurately resolve the
+// crossing."
 //
-// Biased at V(c)=1.25 the expression V(c)-0.5 is +0.75, so the event fires in
-// this dc point and `held` takes V(p)=0.3. §3.2.1 initialises a real variable
-// to zero, so an implementation that treated above() like cross() and skipped
-// the dc event would leave `held` at 0 and fail — the assertion is restricting
-// in both directions.
+// That sentence, and the companion one about the initial condition analysis
+// preceding a transient, are the clause's only two "shall"s about when above()
+// fires. This file used to sit on a single standalone dc point with a
+// constantly-positive expression, which is neither of them — it leaned on the
+// permissive "the cross() function will not generate events for non-transient
+// analyses... but the above() function can", and so demanded of every compiler
+// something the LRM only permits.
 //
-//! bias V(c) = 1.25, V(p) = 0.3
+// So: a dc sweep, and V(c) - 0.5 walked from -1.5 to +0.75, one crossing of zero
+// from below and no crossing back. The firing samples V(p) = 0.3, and §3.2
+// leaves an untouched real at 0.0, so the two sweep points must read different
+// values — which is also why the oracle is relational: no single literal is
+// right at both. `n` pins the "an event", singular: a detector that re-fired
+// while the expression merely stayed positive reads 2.
+//
+//! lrm 5.10.3.2
+//! analysis dc
+//! bias V(p) = 0.3
+//! sweep V(c) = -1.0, 1.25
 `include "check.vh"
 module ch5_above(p, c);
-  inout p, c; electrical p, c; real held;
+  inout p, c; electrical p, c; real held; integer n;
   analog begin
-    `CHECK("the above() expression is positive here", V(c) - 0.5, 0.75, 1e-15);
-    @(above(V(c) - 0.5, 1p)) held = V(p);
-    `CHECK("above() fires in dc, so held sampled V(p)", held, 0.3, 1e-15);
+    @(above(V(c) - 0.5, 1p)) begin
+      held = V(p);
+      n = n + 1;
+    end
+    `CHECKEQ("above() fires on the sweep point past the upward zero crossing", held, (V(c) > 0.5) ? 0.3 : 0.0, 0.0);
+    `CHECKEQ("and one upward crossing is one event", n, (V(c) > 0.5) ? 1 : 0, 0.0);
     I(p) <+ held;
   end
 endmodule

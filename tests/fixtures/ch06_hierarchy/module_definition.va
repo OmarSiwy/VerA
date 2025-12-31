@@ -1,3 +1,22 @@
+// §6.2: "A module definition shall be enclosed between the keywords module and
+// endmodule ... The OPTIONAL list of ports or port declarations shall specify an
+// ordered list of the ports of the module." Optional is the word this file pins:
+// Annex A.1.2's `module_declaration` admits `module identifier ;`, so a module
+// with no port list at all is a well-formed definition and must compile. `p` here
+// is an internal node, which is the only kind such a module can have.
+//
+// This fixture makes no CHECK, and that is not an omission. It cannot: the
+// verdict it lands on is CANNOT RUN, because the emitted device has zero
+// terminals and `contract.validate` refuses it with `num_ports must be in 1..|U|`
+// — an engine limitation, documented in tests/fixtures/README.md, that no line in
+// this file can move. What is proved by getting that far is that VerA ACCEPTED
+// the definition; the refusal happens downstream, in the host.
+//
+// Do not add a port to make it run. A port-bearing module is every other fixture
+// in this directory, and adding one here deletes the only test of the word
+// "optional". Its sibling top_level_module.va carries the port and the assertion.
+//
+//! lrm 6.2
 module ch6_definition;
   electrical p;
   analog I(p) <+ V(p);

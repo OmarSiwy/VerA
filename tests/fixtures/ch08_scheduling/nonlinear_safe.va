@@ -6,11 +6,24 @@
 // exp()", and "the simulator can only converge when the output of limexp()
 // equals the exponential of the input".
 //
-// So at a converged operating point the value is fixed by exp, not by the
-// limiter. With V(p,n) = 0.5 V and scale = 1m (LRM 2.5.1: 1e-3):
-//   exp(0.5)           = 1.6487212707001282
-//   1e-3 * exp(0.5)    = 1.6487212707001282e-3 A
+// WHY THE IDENTITY AND NOT THE DIGITS. exp(0.5) = 1.6487212707001282, and an
+// earlier version of this file pinned limexp() to it at a single bias
+// evaluation. That over-specifies. 4.5.13 fixes the value only AT CONVERGENCE
+// -- "the simulator can only converge when the output of limexp() equals the
+// exponential of the input" -- and says outright that "there are different ways
+// of implementing limiting algorithms for the exponential". A testbench that
+// evaluates one bias point carries no Newton history, which is precisely the
+// un-converged first iteration where a conformant limiter is entitled to damp
+// its output. Writing 1.6487212707001282 here would fail any future
+// implementation that actually limits, which is the one thing the operator is
+// specified to do.
 //
+// So the assertion is the identity the clause states with no value attached --
+// the README's stated use for CHECKEQ -- and the digits stay only on the
+// literal the LRM does fix, the 1m scale factor of 2.5.1.
+//
+//! lrm 8.3.3
+//! lrm 4.5.13
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch8_nonlinear(p, n);
@@ -18,8 +31,8 @@ module ch8_nonlinear(p, n);
   parameter real scale = 1m;
   analog begin
     `CHECKX("the 1m scale factor", scale, 0.001);
-    `CHECKR("limexp at the solution is the exponential", limexp(V(p, n)), 1.6487212707001282, 1e-12);
-    `CHECKR("so the branch carries 1.6487 mA", scale * limexp(V(p, n)), 1.6487212707001282e-3, 1e-12);
+    `CHECKEQ("limexp equals the exponential at the converged solution",
+             limexp(V(p, n)), exp(V(p, n)), 1e-12);
     I(p, n) <+ scale * limexp(V(p, n));
   end
 endmodule

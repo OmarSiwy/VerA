@@ -7,6 +7,7 @@
 // produce: 5.0*0.5 = 2.5 at V(p,n) = 0.5. An `ifndef read as `ifdef would take
 // the other arm and print got = 0.5 against want = 2.5.
 //
+//! lrm 10.1
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch10_ifndef(p, n);

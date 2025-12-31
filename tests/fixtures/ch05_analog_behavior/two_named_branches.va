@@ -1,24 +1,38 @@
-// LRM 5.4.1: "There can be any number of named branches between any two
-// signals." `a` and `b` are two DISTINCT branches over the same net pair -- `a`
-// is a flow source (a 1 ohm resistor), `b` a potential source -- yet 5.4.1 fixes
-// the potential of each as "the potential difference between n1 to n2", and
-// 5.4.2.2 makes a source branch's potential readable anywhere in the module.
+// §5.4.1: "There can be any number of named branches between any two signals."
+// `a` and `b` are two DISTINCT branches over the same net pair, and §5.4.2.2
+// makes both quantities of a source branch readable anywhere in the module.
 //
-// So with p at 0.75 V and n at 0.25 V, BOTH named branches must read 0.5 V. A
-// compiler that collapsed the two declarations, or that handed back a source
-// branch's contributed value instead of the node difference, misses one of them.
-// 0.75 and 0.25 are exact in binary, so the difference is exact.
+// The potential half is easy and was all this file used to assert: §5.4.1 fixes
+// each branch's potential as "the potential difference between n1 to n2", so
+// with p at 0.75 V and n at 0.25 V both names read 0.5. Both operands are exact
+// in binary, so the difference is exact — but a compiler that COLLAPSED the two
+// declarations into one branch also reads 0.5 twice, which is precisely the
+// failure the header claimed to catch and could not.
 //
+// The flows discriminate. Each branch is a flow source with a different value,
+// and §5.4.2.2 makes the flow of a flow-source branch the value contributed to
+// it, so I(a) is 3 mA and I(b) is 7 mA — two different numbers off one net
+// pair, which one merged branch cannot produce. A collapsed pair reads the same
+// figure for both names, whether that is 3m, 7m or their 10m sum.
+//
+// 3m and 7m are 3e-3 and 7e-3 (§2.6.2), neither exact in binary, so the flows
+// are checked relatively; the potentials are exact and are checked as such.
+//
+//! lrm 5.4.1
+//! lrm 5.4.2.2
 //! bias V(p) = 0.75, V(n) = 0.25
+//! xfail VerA collapses two named branches over one net pair into a single unnamed branch with one shared flow unknown, so I(a) and I(b) both read 0 instead of their own contributed values
 `include "check.vh"
 module ch5_two_branches(p, n);
   inout p, n; electrical p, n;
   branch (p, n) a;
   branch (p, n) b;
   analog begin
-    `CHECKX("the flow-source branch a spans p,n: 0.75-0.25", V(a), 0.5);
-    `CHECKX("the second named branch b spans the same nets, so it reads the same", V(b), 0.5);
-    I(a) <+ V(a);
-    V(b) <+ I(b);
+    `CHECKX("branch a spans p,n: 0.75-0.25", V(a), 0.5);
+    `CHECKX("the second named branch spans the same nets, so it reads the same", V(b), 0.5);
+    `CHECKR("but a carries its own flow", I(a), 3.0e-3, 1e-15);
+    `CHECKR("and b carries a different one", I(b), 7.0e-3, 1e-15);
+    I(a) <+ 3m;
+    I(b) <+ 7m;
   end
 endmodule

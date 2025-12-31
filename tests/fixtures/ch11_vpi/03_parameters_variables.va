@@ -18,7 +18,7 @@ module ch11_parameters_variables(p, n);
     mode = 1;
     result = gain*V(p,n);
     `CHECKX("the parameter override reaches the expression", result, 1.5);
-    `CHECK("the integer variable promotes in the mixed sum", result + mode, 2.5, 1e-15);
+    `CHECKX("the integer variable promotes in the mixed sum", result + mode, 2.5);
     I(p,n) <+ result + mode;
   end
 endmodule

@@ -1,0 +1,29 @@
+// §1.3.4.1, second sentence of the port restriction: "In that case, potential
+// contributions may not be made to `input` ports."
+//
+// Distinct from 15_sf_potential_on_inout.va: here the DECLARATION is legal —
+// `voltage` on an `input` port is exactly what shiftPlus5 writes — and it is the
+// CONTRIBUTION `V(inp) <+ ...` that the clause forbids. The contribution to
+// `outp` is legal and is there to show the rule is about direction, not about
+// the discipline.
+//
+// E0423 is not yet allocated in src/diag_code.zig: this is a behavioral rule,
+// class 4 (behavioral semantics). It must NOT be pinned as
+// `GeneratedCompileError` — codegen refuses every single-nature directional
+// contribution for its own generic reason (11_potential_signal_flow.va is the
+// xfail for that), so the fixture would pass for the wrong reason today and go
+// on passing after codegen learns to lower signal-flow nets.
+//
+//! lrm 1.3.4.1
+//! reject E0423
+//! xfail no front-end diagnostic distinguishes an input from an output contribution target; `vera --lint` is silent and only codegen refuses, generically
+module ch01_sf_potential_contribution_to_input(inp, outp);
+    input inp;
+    output outp;
+    voltage inp, outp;
+
+    analog begin
+        V(inp) <+ 1.0;
+        V(outp) <+ 2.0;
+    end
+endmodule

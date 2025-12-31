@@ -14,6 +14,7 @@
 //
 // Correct behaviour is a syntax error here: `1` and `2` are two adjacent
 // primaries, which no A.8.3 production derives.
+//! lrm 2.2
 module ch2_comment_separator(p, n);
   inout p, n;
   electrical p, n;

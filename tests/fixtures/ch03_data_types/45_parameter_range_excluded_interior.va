@@ -1,0 +1,26 @@
+// §3.4.2: "It shall be an error only if the value of the parameter is out of
+// range during simulation." 15 lies strictly inside `exclude (10:20)`, so the
+// override below is out of range and must be diagnosed. The default, 0, is
+// legal — and would be legal even if it were not, because the same clause says
+// "Range checking applies to the value of the parameter for the instance and
+// not against the default values specified in the device", so the only way to
+// state this rule is with an override.
+//
+// No code is pinned: VerA carries the range into its parameter table and never
+// consults it, so there is no diagnostic to name. Note also that §3.4.2 puts
+// the error at SIMULATION time, and this suite's reject side reads only the
+// compile-time diagnostics, so an implementation that aborted the run instead
+// would need the runner taught about that verdict.
+//
+//! param val3 = 15
+//! lrm 3.4.2
+//! reject DiagnosticsReported
+//! xfail VerA does not range-check a parameter override: `//! param val3 = 15` is written straight into the model card with no comparison against the declared `from`/`exclude` set
+`include "check.vh"
+module ch03_parameter_range_excluded_interior(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real val3 = 0 from [0:inf) exclude (10:20) exclude (30:40];
+
+    analog I(p, n) <+ val3 * V(p, n);
+endmodule

@@ -1,0 +1,33 @@
+// §9.13: "Verilog-AMS HDL extends the probabilistic distribution functions so
+// that they are supported in the analog context." Table 9-10 lists all 17 names
+// and every row reads `Yes  Yes` — digital context AND analog context. So this
+// file must COMPILE and run green; a compiler that refuses the call is the one
+// that is wrong, which is why the expectation is a run and not a reject.
+//
+// The value itself is implementation-defined — §9.13.3 points at the IEEE 1364
+// §17.9.3 C code, which no clause of this LRM requires a tool to reproduce — so
+// no digits are written for it. What §9.13.2 DOES fix is repeatability: "The
+// system functions shall always return the same value given the same seed."
+// Two seeds initialized to the same integer must therefore agree, and that
+// holds for any conforming RNG whatever its stream.
+//
+// The $dist_* family is the IEEE 1364 §17.9 integer form, carried into the
+// analog context unchanged by §9.13; Table 9-10 marks it analog Yes.
+//
+// Arguments: mean = 3, which §9.13.2 requires to be greater than zero.
+//
+//! lrm 9.13.2
+//! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
+`include "check.vh"
+module ch09_dist_poisson(p, n);
+  inout p, n; electrical p, n;
+  integer sa, sb;
+  integer a, b;
+  analog begin
+    sa = 7; sb = 7;
+    a = $dist_poisson(sa, 3);
+    b = $dist_poisson(sb, 3);
+    `CHECKI("§9.13.2 the same seed gives the same value", a == b, 1);
+    I(p,n) <+ V(p,n) + a;
+  end
+endmodule

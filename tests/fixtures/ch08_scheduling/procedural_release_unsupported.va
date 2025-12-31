@@ -1,4 +1,11 @@
-//! reject unsupported module item
+// Annex C.7: "No digital behavior or events are supported in Verilog-A."
+// `release` drops a force and schedules the resulting value on the digital
+// queue; it and its `reg`/`initial` host are all refused.
+//! lrm C.7
+//! reject E0205
+//! reject reg
+//! reject initial
+//! reject release
 // EXPECT: error -- release removes a force and schedules the resulting value.
 module ch8_procedural_release;
   reg source, target;

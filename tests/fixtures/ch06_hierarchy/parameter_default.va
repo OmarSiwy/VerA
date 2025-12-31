@@ -6,6 +6,7 @@
 // With the node held at 2 V, Ohm's law over that default gives
 // 2 / 1000 = 0.002 A. Drop the scale factor and the number moves by 1000x.
 //
+//! lrm 3.4
 //! bias V(p) = 2.0
 `include "check.vh"
 module ch6_parameter(p);

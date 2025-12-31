@@ -18,19 +18,33 @@
 // in 02 — but that refusal is codegen declining to invent a VALUE for a
 // contribution (invariant 5), and a statement has no value to invent.
 //
-// With no application linked there is nothing for the call to do, so the only
-// quantity this module fixes is `r`: `1k` is the §2.6.1 scale factor k = 10^3,
-// on the parameter the call takes as its third argument. What $resistor
-// computes is the application's business and the suite cannot assert it.
+// With no application linked, resistor_calltf() never runs, and exactly two
+// things are observable from source. Both are §12.22.2 facts, not §2.6.1 ones:
 //
+//   - the analog block runs STRAIGHT THROUGH the call (§5.3.1 sequencing over
+//     the §12.22.2 call form), so `seq` reaches 1+2 = 3;
+//   - the output argument is the calltf's to write, and no calltf ran, so
+//     `current` still holds the 0.0 it was initialized with.
+//
+// An earlier revision asserted only `r == 1000.0`, which is the chapter-2 SI
+// scale-factor rule and is already pinned at ch02_lexical/07_si_scale_factors.va.
+// That assertion has the same verdict with or without a VPI host, so it left
+// this fixture unasserted about the construct it names.
+//
+//! lrm 12.22.2
 `include "check.vh"
 module ch12_analog_systf_resistor_call(p, n);
   inout p, n; electrical p, n;
   parameter real r = 1k;
   real current;
+  integer seq;
   analog begin
+    current = 0.0;
+    seq = 1;
     $resistor(current, V(p,n), r);
-    `CHECKX("1k scale factor on the systf argument", r, 1000.0);
+    seq = seq + 2;
+    `CHECKI("the block continues past an unregistered analog system task", seq, 3);
+    `CHECKX("no calltf ran, so the output argument is untouched", current, 0.0);
     I(p,n) <+ current;
   end
 endmodule

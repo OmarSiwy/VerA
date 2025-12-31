@@ -1,0 +1,20 @@
+// Annex B: "Verilog-AMS reserves the keywords listed in Table B.1." A reserved
+// spelling is therefore not available as an identifier, and `real <keyword>;`
+// is a syntax error in any conforming compiler.
+//
+// `assert` is in Table B.1 in both this repo's Annex B and the 2.4.0 printing
+// (page 395, between `asinh` and `assign`). Verilog-AMS 2.4 gives it no
+// statement, no system function and no production in Annex A — the language
+// reserves the word and then never spends it. Reservedness is therefore the
+// only thing about `assert` that can be tested at all, which is exactly why it
+// is the spelling an implementation forgets.
+//
+// Of the 217 Table B.1 spellings, this and `net_resolution` are the only two
+// VerA does not reserve.
+//! lrm B
+//! reject E0208
+//! reject assert
+//! xfail `assert` is absent from `reserved_keywords` in src/frontend/token.zig, so it lexes as an ordinary identifier and `real assert;` compiles clean
+module annex_b_assert_reserved;
+    real assert;
+endmodule

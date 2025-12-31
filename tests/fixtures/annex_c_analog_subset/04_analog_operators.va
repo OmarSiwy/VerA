@@ -7,6 +7,9 @@
 //   §4.5.3   "In DC analysis, ddt() returns zero (0)." Exactly zero, whatever
 //            the argument is — so the whole contribution here is limexp alone.
 //
+//! lrm C.2
+//! lrm 4.5.13
+//! lrm 4.5.3
 //! bias V(p) = 0.7
 `include "check.vh"
 module annex_c_analog_operators(p, n);

@@ -1,9 +1,10 @@
 // LRM 5.2.1: the analog initial block "is executed once for each analysis",
 // before a matrix solution exists — so its assignment is already visible to the
-// analog block that follows. LRM 3.3.1 starts a real at 0, so a `gain` that
+// analog block that follows. LRM 3.2 starts a real at 0, so a `gain` that
 // read 0 here would mean the initial block never ran or ran too late. At
 // V(p) = 0.3 the contributed flow is 2.0 * 0.3 = 0.6 A.
 //
+//! lrm 5.2.1
 //! bias V(p) = 0.3
 `include "check.vh"
 module ch5_analog_initial(p);

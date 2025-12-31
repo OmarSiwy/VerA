@@ -7,6 +7,7 @@
 // preprocessor keeps is the one that prints, so keeping the wrong one prints
 // got = 1.0 against want = 0.5 and fails.
 //
+//! lrm 10.4
 //! bias V(p) = 0.5
 `define TEMP_FEATURE
 `undef TEMP_FEATURE

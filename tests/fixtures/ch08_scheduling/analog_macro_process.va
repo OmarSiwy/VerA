@@ -8,6 +8,8 @@
 // At V(p) = 1.0 and V(n) = 0.25 that difference is 0.75 V, so the contributed
 // flow is 0.75 A — a model that read V(p) alone would say 1.0.
 //
+//! lrm 8.1
+//! lrm 4.4.2
 //! bias V(p) = 1.0, V(n) = 0.25
 `include "check.vh"
 module ch8_macro(p, n);

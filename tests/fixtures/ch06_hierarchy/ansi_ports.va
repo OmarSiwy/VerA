@@ -9,6 +9,9 @@
 // bound them in the wrong order, or dropped the `electrical` on one, cannot
 // still report 1.5 at `sense` and 1.25 across the (sense, p) branch.
 //
+//! lrm 6.5.2
+//! lrm 6.5.2.1
+//! lrm 6.5.2.2
 //! bias V(sense) = 1.5, V(p) = 0.25, V(out) = -0.5
 `include "check.vh"
 module ch6_ansi(input electrical sense, inout electrical p, output electrical out);

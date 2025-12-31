@@ -15,6 +15,7 @@
 // their difference is exactly 0.5, and CHECKX needs no `abs` — which is itself
 // a Verilog-AMS-only identifier and so out of the reserved set in force here.
 //
+//! lrm 10.6
 //! bias V(sin) = 0.75, V(n) = 0.25
 `begin_keywords "1364-2001"
 `include "check.vh"

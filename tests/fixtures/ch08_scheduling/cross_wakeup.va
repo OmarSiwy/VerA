@@ -11,6 +11,7 @@
 // therefore keeps the 0.0 LRM 3.5 gives a real variable, and the contributed
 // flow is 0 A rather than the 1 A the guarded body would assign.
 //
+//! lrm 5.10.3.1
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch8_cross_wakeup(p);

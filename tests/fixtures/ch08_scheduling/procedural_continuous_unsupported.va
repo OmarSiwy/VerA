@@ -1,4 +1,9 @@
-//! reject unsupported module item
+// Annex C.7: "No digital behavior or events are supported in Verilog-A." The
+// `always` process that would host a procedural continuous assignment is not a
+// Verilog-A module item.
+//! lrm C.7
+//! reject E0205
+//! reject always
 // EXPECT: error -- force/assign processes need the digital scheduler.
 module ch8_proc_continuous;
   integer source, target;

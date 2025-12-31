@@ -1,5 +1,28 @@
-//! reject GeneratedCompileError
-nature ch1_sf_current_n; units="A"; access=SI; abstol=1p; endnature
-discipline ch1_current_sf; flow ch1_sf_current_n; enddiscipline
-module ch1_flow_sf(input ch1_current_sf inp, output ch1_current_sf outp); analog SI(outp) <+ -SI(inp); endmodule
-// EXPECT: error -- normative syntax/restriction snapshot for this rule family.
+// §1.3.4.2 the LRM's own worked example, `currmir`, transcribed from the
+// clause: a current mirror on a flow-only signal-flow discipline. `current` is
+// Annex D's flow-only discipline — compatible with `electrical` but binding a
+// flow nature only — which is why the ports are `input`/`output` and never
+// `inout` (16_sf_flow_on_inout.va pins that).
+//
+// The LRM PRINTS this module as legal, so the fixture must compile and run: a
+// conforming compiler accepts it. Holding the input flow at 0.125 A (dyadic),
+// the mirrored expression is -0.125 — IEEE-754 negation flips the sign bit and
+// is exact, so the claim is an equality and not a tolerance.
+//
+// I(out) is deliberately NOT asserted: `out` carries the flow-source branch,
+// whose unknown the harness pins, not the contributed value.
+//
+//! lrm 1.3.4.2
+//! bias I(in) = 0.125
+//! xfail codegen refuses a contribution to a single-nature directional port (codegen.zig signalFlowNet); and `//! bias I(in)` needs the runner to resolve a port-flow unknown, which tb.zig unknownName strips to the NODE unknown today
+`include "check.vh"
+module ch01_flow_signal_flow(in, out);
+    input in;
+    output out;
+    current in, out;
+
+    analog begin
+        `CHECKX("the mirror negates the input flow", -I(in), -0.125);
+        I(out) <+ -I(in);
+    end
+endmodule

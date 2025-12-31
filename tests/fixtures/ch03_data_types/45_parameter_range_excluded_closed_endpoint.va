@@ -1,0 +1,23 @@
+// §3.4.2: "Parentheses, ( and ), indicate exclusion of the end points from the
+// value range. It is possible to include one end point and not the other using
+// [ ) and ( ]." The second hole in the LRM's range is `exclude (30:40]`, whose
+// upper end is CLOSED, so 40 is excluded and the override below is out of range.
+// This is the endpoint that distinguishes `(30:40]` from `(30:40)`; its open
+// twin, 30, is legal and is asserted in 45_parameter_range_legal_endpoints.va.
+//
+// No code is pinned: VerA never consults the range. §3.4.2 puts the error at
+// simulation time and the reject side of this suite reads compile-time
+// diagnostics only.
+//
+//! param val3 = 40
+//! lrm 3.4.2
+//! reject DiagnosticsReported
+//! xfail VerA does not range-check a parameter override: `//! param val3 = 40` is written straight into the model card with no comparison against the declared `from`/`exclude` set
+`include "check.vh"
+module ch03_parameter_range_excluded_closed_endpoint(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real val3 = 0 from [0:inf) exclude (10:20) exclude (30:40];
+
+    analog I(p, n) <+ val3 * V(p, n);
+endmodule

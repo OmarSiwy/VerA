@@ -1,0 +1,32 @@
+// §9.10 / Table 9-7, the other two "No" rows:
+//
+//     $realtime  Yes  No
+//     $time      Yes  No
+//     $stime     Yes  No
+//     $abstime   Yes  Yes
+//
+// $time and $stime are timescale TICK counts, integer-valued in the units of
+// the enclosing `timescale. The analog kernel has no tick — it advances by a
+// continuously variable step the solver chooses — so there is no integer for
+// them to return, which is why §9.10 adds $abstime "that can be used from the
+// analog and digital contexts" and gives it seconds. 14_abstime.va is the
+// positive and pins exactly that: seconds, not ticks.
+//
+// $realtime gets its own file (148) because §9.10 backs its row with a prose
+// deprecation note as well as the table. These two rest on the table alone.
+//
+// A reject, so there is nothing to run and no `want` to write. Both names are
+// in one file because they are one rule; the first diagnostic ends the compile.
+//
+//! lrm 9.10
+//! reject analog context
+//! xfail VerA implements no Table 9-7 analog-context restriction; it answers $time/$stime in an analog block like any time query
+module ch09_time_stime_analog_rejected(p, n);
+  inout p, n; electrical p, n;
+  integer a, b;
+  analog begin
+    a = $time;
+    b = $stime;
+    I(p,n) <+ V(p,n) + a + b;
+  end
+endmodule
