@@ -8,6 +8,7 @@
 // number: adding the operands gives 15, taking the last gives 5, and treating
 // `{}` as the §4.1 assignment pattern '{} gives an array rather than 165.
 //
+//! lrm 4.2.13
 //! bias V(p) = 0.0
 `include "check.vh"
 module ch04_concatenation(p, n);

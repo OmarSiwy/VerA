@@ -4,6 +4,8 @@
 // string names `$root.top.dev.p`, a port of an instance `dev` inside an instance
 // `top` (§6.7). This compilation elaborates this module as the top level and
 // instantiates nothing, so neither instance exists and the status is 0.
+//
+//! lrm 9.20
 `include "check.vh"
 
 module ch09_atomic_analog_port_alias(p, n);

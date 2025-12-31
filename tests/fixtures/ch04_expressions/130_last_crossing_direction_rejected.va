@@ -14,7 +14,7 @@
 //
 //! lrm 4.5.10
 //! reject direction
-//! xfail VerA does not check last_crossing()'s direction indicator: last_crossing(x, 2) and last_crossing(x, -2) both compile with only W0650, and src/diag_code.zig has no code for a direction outside {+1, -1, 0}
+//! reject last_crossing
 module ch04_last_crossing_direction_rejected(p, n);
     inout p, n;
     electrical p, n;

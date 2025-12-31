@@ -5,6 +5,8 @@
 // module AS the top level and instantiates nothing, so no such instance exists,
 // the reference resolves to nothing, and the status is 0. §9.20 then says
 // `local_node` stays an ordinary continuous node of this module.
+//
+//! lrm 9.20
 `include "check.vh"
 
 module ch09_atomic_analog_node_alias(p, n);

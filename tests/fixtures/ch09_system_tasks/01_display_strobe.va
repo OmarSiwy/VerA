@@ -7,6 +7,7 @@
 // The check is itself a $strobe, so it exercises the task under test: if the
 // hoisted display unit read a stale or zeroed node value, the digits move.
 //
+//! lrm 9.4.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch09_display_strobe(p, n);

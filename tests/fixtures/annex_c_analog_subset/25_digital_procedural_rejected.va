@@ -16,6 +16,14 @@
 // statement's recovery and never reported. `disable`, whose diagnostic comes
 // from a later stage that does not run at all once a parse error exists, is 27.
 //
+// E0209 ("expected an expression", .lrm A.8.3) is a parser-recovery artifact
+// and names no C.7 rule — VerA has no subset gate on `fork`/`wait`, it simply
+// does not parse them as statements. It is pinned only because it is what VerA
+// emits today; the three keyword arms are the load-bearing ones. If VerA ever
+// learns to parse them, this cite must move to whatever code then refuses them
+// (E0201, "construct is not in the supported subset", .lrm C, already exists)
+// rather than being deleted.
+//
 //! lrm C.7
 //! lrm A.6.3
 //! lrm A.6.5

@@ -11,7 +11,6 @@
 //! lrm 4.4
 //! lrm G.1
 //! reject E0315
-//! xfail VerA accepts I(n,n)/V(n,n) and folds the self-referential branch away instead of diagnosing the same-signal flow arguments (Table 4-16); E0315's explain text already claims the rule ("LRM 4.4 also forbids V(n1, n1)") but nothing raises it
 module ch4_same_flow(p);
   inout p; electrical p;
   analog begin

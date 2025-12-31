@@ -12,13 +12,18 @@
 // between the two samples puts it at 1.5ns, and any interpolation at all puts
 // it in that open interval.
 //
-// Both checks are gated by $abstime as an OPERAND rather than a branch, so each
+// Every check is gated by $abstime as an OPERAND rather than a branch, so each
 // is a real restriction on the points it covers and vacuously true elsewhere:
 // the first bites at t = 0 and 1ns, the second at t = 3ns and 4ns. The gap at
 // t = 2ns is left alone on purpose — §4.5.2 lets the history advance on the
 // accepted step, so whether the crossing is visible in the same step that
 // created it is not something the LRM fixes.
 //
+// 4.5.10 admits three direction indicators, +1, -1 and 0. This file queries
+// +1 only; the other two are 146_last_crossing_directions.va, split off because
+// VerA does not implement them and one file cannot be both green and xfail.
+//
+//! lrm 4.5.10
 //! bias V(n) = 0
 //! wave V(p) = -1, -1, 1, 1, 1
 //! time 0, 1n, 2n, 3n, 4n

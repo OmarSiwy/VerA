@@ -1,0 +1,37 @@
+// Table E.1 row `isine`: ports p, n, parameters dc, mag, phase, offset, ampl, freq, td, damp, sinephase, ammodindex, ammodfreq, ammodphase, fmmodindex, fmmodfreq, behaviour
+// an AM/FM-modulated damped sinusoidal current source.
+//
+// WHAT IS PINNED. E.3: "Table E.1 shows the REQUIRED names for primitives,
+// parameters, and ports which are otherwise unnamed in SPICE. For connection by
+// order instead of by name, the ports and parameters shall be given in the order
+// listed. The default discipline of the ports for these primitives shall be
+// electrical and their descriptions shall be inout." E.1.2 adds that "when
+// instantiating SPICE primitives in Verilog-AMS HDL, the primitives shall, and
+// parameters and ports can, be named", and E.2 that a tool "expected to provide
+// the basic set of Spice primitives" shall treat them "in the same manner in
+// Verilog-AMS HDL as built-in primitives of gate- and switch-level modeling".
+// So the instantiation below — every port and every parameter named, in the
+// Table E.1 order — is source a SPICE-compatible Verilog-AMS tool must accept.
+//
+// E.2.2.3 prints this primitive verbatim: `isine #(.dc(1m)) Iee (e, gnd);`.
+//
+// THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision of this file demanded
+// a diagnostic for the line below. That inverts the test: the LRM prints this
+// syntax as legal, so a conforming compiler would FAIL and only a compiler with
+// no SPICE support would pass. The requirement is that it compiles; the `xfail`
+// records that VerA does not, and fires the day it does.
+//
+// It asserts nothing because it cannot: the observable is elaboration. Table
+// E.1's behaviour column belongs to the primitive's own branches, which are not
+// reachable from this module's analog block, and a `CHECK on a biased port here
+// would only restate the bias directive.
+//
+//! lrm E.3
+//! lrm E.1.2
+//! lrm E.2
+//! lrm E.2.2.3
+//! xfail VerA rejects module instantiation (E0204), so no Table E.1 primitive can be instantiated at all
+module annex_e_primitive_isine(p, n);
+  inout p, n; electrical p, n;
+  isine #(.dc(0.0), .mag(1.0), .phase(0.0), .offset(0.0), .ampl(1m), .freq(1k), .td(1n), .damp(1k), .sinephase(0.0), .ammodindex(0.1), .ammodfreq(10k), .ammodphase(0.0), .fmmodindex(0.2), .fmmodfreq(20k)) x1(.p(p), .n(n));
+endmodule

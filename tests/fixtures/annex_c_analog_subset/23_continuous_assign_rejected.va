@@ -1,7 +1,10 @@
 // Annex C.7, bullet 1: "No digital behavior or events are supported in
-// Verilog-A." The digital continuous assignment drives a net structurally,
-// outside any analog block; the subset's only way to drive a signal is the `<+`
-// contribution of §5.5.
+// Verilog-A." The construct under test is A.6.1 `continuous_assign ::= assign
+// list_of_net_assignments ;`, which drives a net structurally, outside any
+// analog block; the subset's only way to drive a signal is the `<+`
+// contribution of §5.6 / A.6.10. (§5.5, cited here before, is "Accessing net
+// and branch signals and attributes" — a neighbour that defines the probes, not
+// the drive.)
 //
 // The one other `assign` fixture in the tree
 // (ch07_mixed_signal/continuous_assign_unsupported.va) declares `wreal out;` in
@@ -9,8 +12,18 @@
 // rule is isolated. Here the target is a plain `wire` and the analog block is
 // clean, so the diagnostic can only be about `assign`.
 //
+// The `wire w` carries no discipline, and that is not a second rule firing:
+// C.4 bullet 3 reads "All Verilog-A modules shall have a discipline defined for
+// each MODULE", and this module defines one (`electrical p`). 18 is the fixture
+// for a module that defines none. An undisciplined digital net is also
+// unavoidable here — `assign` drives nets, and any net given a discipline is
+// either continuous (which no continuous assignment may drive, in AMS either)
+// or discrete (which is C.4 bullet 1, fixture 07). A bare `wire` is the only
+// target that isolates `assign`.
+//
 //! lrm C.7
-//! lrm 5.5
+//! lrm 5.6
+//! lrm A.6.1
 //! reject E0205
 //! reject assign
 module annex_c_continuous_assign_rejected(p);

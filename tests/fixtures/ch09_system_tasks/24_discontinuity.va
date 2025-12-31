@@ -9,6 +9,7 @@
 // (a step in the equation itself), not the $discontinuity(-1) that §9.17.3
 // reserves for a $limit() helper that has not yet converged.
 //
+//! lrm 9.17.1
 //! bias V(p) = 0.7
 `include "check.vh"
 module ch09_discontinuity(p, n);

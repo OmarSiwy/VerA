@@ -6,9 +6,17 @@
 //
 // Neither `$root.top.n` nor `$root.top.dev.p` resolves here: this module is
 // elaborated on its own, so there is no `top` and no `top.dev` for §6.7 to walk
-// to. Both calls therefore return 0, and `status` — assigned last by the
-// $analog_port_alias call, since §9.20 says the last evaluated call takes
-// precedence — is 0.
+// to. Both calls therefore return 0, so `status` is 0 whichever of them wrote
+// it last.
+//
+// That "whichever" is ordinary sequential assignment, NOT §9.20's rule that "if
+// a particular node is involved in multiple calls to either system function,
+// then the last evaluated call shall take precedence". That clause is about
+// which alias BINDS the node in the matrix; `status` is an integer variable and
+// the second assignment overwrites the first for the same reason any two
+// assignments in a block do. Nothing here tests the precedence rule — both
+// return values are 0, so the two are indistinguishable — and the file should
+// not be read as claiming otherwise.
 //
 // The second check is what makes the first one more than a restatement of the
 // integer's default: because the alias failed, `local_node` stayed an ordinary
@@ -16,6 +24,7 @@
 // and read 0.4 V back through V(). Had the alias succeeded, the net would have
 // been folded onto the hierarchical node instead.
 //
+//! lrm 9.20
 //! bias V(local_node) = 0.4
 `include "check.vh"
 module ch09_node_alias_calls(p, n);

@@ -7,6 +7,8 @@
 // V(p) = 0.75, V(n) = 0.25 (exact in binary) make V(p,n) = 0.5, and the
 // potential of a reversed branch is its negation (§5.4.1), so V(n,p) = -0.5.
 //
+//! lrm 11.6.2
+//! lrm 5.4.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "disciplines.vams"
 `include "check.vh"

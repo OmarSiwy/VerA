@@ -11,8 +11,8 @@
 // V(p,n) the potential difference across the branch, 1.25 - 0.25 = 1.0 V, exact
 // in binary floating point — so a %g that prints anything but 1 is printing
 // something other than what it was passed. Note this is the ONLY value in the
-// file that is not host state: what lands in fixture.log is not readable from
-// here, and §9.5.9 makes even the timing of the write conditional ("if a file is
+// file that is not host state: what lands in ch09_08_file_output.log is not
+// readable from here, and §9.5.9 makes even the timing of the write conditional ("if a file is
 // being written to during an iterative solve, then the file write operations
 // shall not be performed unless the iteration is accepted. The exception to this
 // is the $fdebug").
@@ -26,11 +26,11 @@ module ch09_file_output(p, n);
   inout p, n; electrical p, n;
   integer fd;
   analog begin
-    fd = $fopen("fixture.log", "a");
+    fd = $fopen("ch09_08_file_output.log", "a");
     // Masked, not shifted: `>>` fills with zeros on a 32-bit integer, but VerA
     // carries integers in an i64 where a sign-extended fd would answer a shift
     // differently. `& 2147483648` is bit 31 whatever the width.
-    `CHECKI("append cannot fail, so bit 31 of the shared fd is set", (fd & 2147483648) != 0, 1);
+    `CHECKI("append cannot fail, so bit 31 of the fd is set", (fd & 2147483648) != 0, 1);
     `CHECK("the %g argument of all five tasks is the branch potential", V(p,n), 1.0, 1e-15);
     $fdisplay(fd, "display %g", V(p,n));
     $fwrite(fd, "write %g", V(p,n));

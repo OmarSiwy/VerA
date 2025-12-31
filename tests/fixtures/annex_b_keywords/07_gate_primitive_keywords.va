@@ -10,15 +10,17 @@
 // the parser resynchronises at each `;` and reports every spelling separately,
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
+//
+// `buf` is not declared here: it is a substring of `bufif0` and `bufif1`, so a
+// bare arm for it would be satisfied by their diagnostics. It is censused in
+// 22_shadowed_spellings.va, which explains the mechanism.
 //! lrm B
 //! reject E0208
-//! reject buf
 //! reject bufif0
 //! reject bufif1
 //! reject cmos
 //! reject nand
 module annex_b_reserved_gate_primitive_keywords;
-    real buf;
     real bufif0;
     real bufif1;
     real cmos;

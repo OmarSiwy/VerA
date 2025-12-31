@@ -17,6 +17,7 @@
 //! lrm D.1
 //! bias p = 350
 `include "check.vh"
+`include "disciplines.vams"
 module annex_d_literal_thermal(p);
   inout p; thermal p;
   analog begin

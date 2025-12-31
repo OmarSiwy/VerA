@@ -19,14 +19,19 @@
 // not a port at all — is port_direction_not_a_port_rejected.va, and VerA does
 // diagnose that one (E0206, whose explain text already quotes the sentence above).
 //
-// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to name.
-// `DiagnosticsReported` is the weakest form that still demands a rejection;
-// tighten it to the E-code the day one exists.
+// E0218 is that diagnostic, raised by parser.zig parsePortDecl. The test is the
+// port's DIRECTION: Syntax 6-1 lets only a `list_of_port_declarations` header
+// carry one, so a port that already has a direction when a body declaration
+// names it was declared once already.
+//
+// The `//! lrm 6.5.2` this file used to carry has been dropped. That clause says
+// "The type and direction of each port listed in the module definition's list of
+// ports are declared in the body of the module", which describes the NON-ANSI form
+// and, read alone, licenses exactly the body declaration this fixture forbids. §6.2
+// is the sentence quoted at the top and is the whole authority here.
 //
 //! lrm 6.2
-//! lrm 6.5.2
-//! reject DiagnosticsReported
-//! xfail VerA accepts an ANSI-declared port redeclared in the module body; the second `inout electrical p;` is silently folded onto the first
+//! reject E0218
 module ch6_ansi_port_redeclared(inout electrical p);
   inout electrical p;
   analog I(p) <+ V(p);

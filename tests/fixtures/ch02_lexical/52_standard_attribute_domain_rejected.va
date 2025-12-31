@@ -28,8 +28,19 @@
 //
 // 11_attributes.va is the positive half: it supplies all four names with
 // in-domain values and proves the decorated parameter is untouched.
+//
+// The pin is the PHASE label and not a code, deliberately. VerA has no code for
+// this rule to mint one from, and every existing code is semantically excluded:
+// `(* op = "maybe" *)` parses perfectly, so nothing about a missing identifier
+// or a missing expression can ever fire here. A code pinned on a diagnostic the
+// construct cannot produce would keep this file at XFAIL forever — the check
+// would land, a NEW code would be emitted, the substring still would not match,
+// and the debt marker would never be retired. `DiagnosticsReported` matches any
+// diagnostic at all, so the day the domain check lands this XPASSes and FAILs
+// loudly, demanding the xfail line be deleted. Retarget it at the real code
+// then; the module is three lines and has nothing else to diagnose.
 //! lrm 2.9.2
-//! reject E0208
+//! reject DiagnosticsReported
 //! xfail VerA does not check the value domain of the 2.9.2 standard attributes; `op="maybe"`, `multiplicity="sideways"` and `desc=7` all compile with no diagnostic
 module ch02_standard_attribute_domain_rejected(p, n);
     inout p, n;

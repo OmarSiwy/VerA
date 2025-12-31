@@ -6,6 +6,7 @@
 // calls below separate them so a compiler that matched only the first argument,
 // or that treated "static" as a synonym for "ic", still fails.
 //
+//! lrm 4.6.1
 //! analysis dc
 //! bias V(p) = 0.5
 `include "check.vh"

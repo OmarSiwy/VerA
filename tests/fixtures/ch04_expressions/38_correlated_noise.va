@@ -10,6 +10,7 @@
 // variable AND on the scaled use so a lowering that re-evaluated the source per
 // use is still pinned.
 //
+//! lrm 4.6.4.6
 //! analysis dc
 //! bias V(a) = 1.0
 //! bias V(b) = 0.5

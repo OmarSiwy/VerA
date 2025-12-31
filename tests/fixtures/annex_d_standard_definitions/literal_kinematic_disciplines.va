@@ -19,6 +19,7 @@
 //! bias p = 2.5
 //! bias q = 4.0
 `include "check.vh"
+`include "disciplines.vams"
 module annex_d_literal_kinematic(p, q);
   inout p, q;
   kinematic p;

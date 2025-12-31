@@ -1,6 +1,6 @@
 // §11.6.6 branch object: a branch reaches its two nodes and the quantities it
 // carries. §5.4.1 fixes the potential of `branch (p,n) path` as V(p) - V(n), and
-// §2.5.1 makes `1k` the real number 1 scaled by k = 1e3, i.e. 1000.0.
+// Table 2-1 of §2.6.2 makes `1k` the real number 1 scaled by k = 1e3, 1000.0.
 //
 // V(p) = 0.875, V(n) = 0.125 (exact in binary) give V(path) = 0.75 V, so the
 // contributed flow is 0.75/1000 = 750 uA. Read `k` as anything but 1e3 and the
@@ -11,6 +11,8 @@
 // which is what the literal 7.5e-4 parses to. Same bits, so CHECKX, not a
 // tolerance nine ulp wide.
 //
+//! lrm 11.6.6
+//! lrm 5.4.1
 //! bias V(p) = 0.875, V(n) = 0.125
 `include "check.vh"
 module ch11_branch_object(p, n);

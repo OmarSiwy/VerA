@@ -1,23 +1,30 @@
-// THIS REJECTION IS CORRECT CONFORMANCE for Verilog-A, and the authority is the
-// annex, not Clause 6. Annex C.8: "The hierarchical structure defined in Clause 6
-// is applicable to both Verilog-AMS HDL and Verilog-A, except support for real
-// value ports is only applicable to Verilog-AMS HDL and IEEE Std 1364-2005
-// Verilog HDL (see 6.5.3)." Annex C also strikes the net type such a port would
-// need: "From 3.7, Real net declarations: the wreal data type is not supported in
-// Verilog-A."
+// THIS REJECTION IS CORRECT CONFORMANCE, and the clause it pins is Syntax 6-7, not
+// the annex this file used to cite. §6.5.2.2 gives the port direction declaration as
 //
-// So `input real x` is outside the language this suite compiles, a conforming
-// Verilog-A compiler diagnoses it, and there is no `//! xfail` here.
+//     input [ discipline_identifier ] [ net_type | wreal ] [ signed ] [ range ]
+//           list_of_port_identifiers
+//
+// and `real` is neither a `net_type` (A.2.2.1: supply0 … wor) nor `wreal`. So
+// `input real x;` has no production in FULL Verilog-AMS either, with or without
+// Annex C, and every compiler this suite is meant to run against diagnoses it.
+//
+// THE CITES USED TO BE C.8 AND 6.5.3 AND NEITHER WAS REACHABLE FROM THIS SOURCE.
+// Annex C.8 excludes "support for real value ports" from Verilog-A, and §6.5.3
+// defines what a real-valued port IS — "This is done using the net type wreal" —
+// so pinning either one needs the source to write `input wreal x;`. This file never
+// did. Nor can it simply be changed to: `input wreal x;` is LEGAL Verilog-AMS, so a
+// fixture demanding its rejection would be inverted for every AMS compiler and
+// right only for the Verilog-A subset. §6.5.3 and C.8 are therefore left uncovered
+// by this chapter rather than credited to a file that cannot reach them.
 //
 // The road to the verdict is a parse boundary, which is worth writing down rather
 // than hiding: VerA's port direction declaration takes an identifier or a
 // discipline, so the keyword `real` is E0208 ("expected an identifier: found
-// `real`"). It never becomes a real-valued port that a later rule could refuse.
-// §6.5.3's own content — the wreal net type and its one-driver rule — stays
-// untested here on purpose: it is Verilog-AMS-only and out of this subset.
+// `real`"). It is the same code a ranged direction declaration gets in
+// vector_ports.va — the parser has one shape for this position and everything else
+// stops there.
 //
-//! lrm C.8
-//! lrm 6.5.3
+//! lrm 6.5.2.2
 //! reject E0208
 module ch6_real_port(x);
   input real x;

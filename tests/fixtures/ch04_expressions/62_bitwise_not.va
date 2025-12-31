@@ -10,6 +10,7 @@
 // only an unsigned or truncated reading would not. Contrast the logical `!` of
 // 4.2.8, for which !5 is 0 and !0 is 1.
 //
+//! lrm 4.2.9
 `include "check.vh"
 module ch04_bitwise_not(p, n);
     inout p, n;

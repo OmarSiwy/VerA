@@ -1,4 +1,21 @@
-// annex C: ===/!== are 4-state digital operators, outside Verilog-A.
+// Annex C.5, verbatim: "The case equality operators (===, !==) are not
+// supported in Verilog-A." C.5 is the clause that makes this an error, and it
+// is the one VerA's own E0323 cites.
+//
+// NOT 4.2.6. Read whole, 4.2.6 says the opposite: "These operators have limited
+// support in the analog block (see 7.3.2)", and 7.3.2 then PRINTS
+// `if (dnet === 1'b1)` inside an `analog begin` as a legal a2d example. A
+// Verilog-AMS compiler that supports the four-state value system is required to
+// accept ===/!== there; only the Verilog-A subset removes them. Citing 4.2.6
+// here would have demanded a diagnostic the clause forbids.
+//
+// The operands are also both real, which 4.2.1 rules out independently: "All
+// other operators are considered illegal when used with real operands" — Table
+// 4-2 does not list === or !==. Either clause condemns this module; C.5 is the
+// categorical one and is what E0323 says.
+//
+//! lrm C.5
+//! lrm 4.2.1
 //! reject E0323
 module ch04_case_equality(p, n);
     inout p, n;

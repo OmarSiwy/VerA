@@ -1,38 +1,40 @@
-// §6.6.3, the numbering rule, verbatim: "Each generate construct in a given scope
-// is assigned a number. The number will be 1 for the construct that appears
-// textually first in that scope and will increase by 1 for each subsequent
-// generate construct in that scope. All unnamed generate blocks will be given the
-// name `genblk<n>` where <n> is the number assigned to its enclosing generate
-// construct. If such a name would conflict with an explicitly declared name, then
-// leading zeroes are added in front of the number until the name does not
-// conflict." The clause exists so that "external interfaces can refer to" an
-// unnamed block, and the LRM's own `module top` writes the resulting hierarchical
-// names in its comments — `top.genblk1.a`, `top.genblk02.a`. So the references
-// below are REQUIRED to resolve; this is a run fixture, not the `//! reject` it
-// used to be, and that old directive pinned a stray `expected `)`` from the
-// parser rather than anything in §6.6.3.
+// §6.6.3 names unnamed generate blocks, and the FIRST sentence of the clause says
+// what that name is for — and what it is not for: "Although an unnamed generate
+// block HAS NO NAME THAT CAN BE USED IN A HIERARCHICAL NAME, it needs to have a
+// name by which EXTERNAL INTERFACES can refer to it." §6.6.2 states the same rule
+// from the other side: "If the generate block selected for instantiation is not
+// named, it still creates a scope; but the declarations within it cannot be
+// referenced using hierarchical names other than from within the hierarchy
+// instantiated by the generate block itself." And §6.6's introduction only ever
+// promises "Names in instantiated NAMED generate blocks can be referenced
+// hierarchically as described in 6.7."
 //
-// This is the LRM's worked case reduced to two constructs and given values to
-// read. `genblk2` is declared as a parameter, which is the whole point of the
-// second name: the first unnamed if-generate block is `genblk1`, the second would
-// be `genblk2`, that name is taken, so it becomes `genblk02`. A compiler that
-// numbered by generate BLOCK rather than by generate CONSTRUCT, or that ignored
-// the collision and produced `genblk2`, cannot resolve both names below.
+// THIS FIXTURE USED TO SAY THE OPPOSITE. It was a run fixture asserting that
+// `genblk1.tag` and `genblk02.tag` resolve from an `analog` block at module scope,
+// reading the `// top.genblk1.a` trailing comments in §6.6.3's `module top` as
+// proof. Those comments annotate the EXTERNAL (VPI / user-interface) name the
+// paragraph above them has just defined; they are not HDL that the LRM compiles.
+// The `analog begin` below is at module scope, outside both generate blocks, so it
+// is exactly the "other than from within the hierarchy instantiated by the generate
+// block itself" case §6.6.2 forbids. A conforming compiler refuses this source.
 //
-// `localparam` and not `parameter` inside the blocks: §6.6 forbids a generate
-// block to contain parameter declarations, and Syntax 6-8's
-// `module_or_generate_item` admits `local_parameter_declaration` and no
-// `parameter_declaration`.
+// The numbering itself is right and is kept here as prose, because §6.6.3 is an
+// external-interface rule with no in-HDL oracle: `genblk2` is a declared parameter,
+// so the first unnamed if-generate construct is `genblk1`, the second would collide
+// and becomes `genblk02`. Nothing in this suite can read those names back; what can
+// be pinned is that the HDL path built from them is illegal.
 //
-// Values: tag 1.0 and 2.0, and at V(p) = 0.25 the stamp is (1.0+2.0)*0.25 = 0.75,
-// all binary-exact. Swap the two names and the sum is unchanged but each CHECKX
-// moves, which is why both are asserted separately.
+// No `//! reject <code>`: VerA's road to the verdict has nothing to do with the
+// rule — its parser has no `hierarchical_identifier` at all, so the `.` in
+// `genblk1.tag` dies at E0207 ("unexpected token: found `.`") long before any
+// generate scope is resolved. `DiagnosticsReported` is the weakest form that still
+// demands the rejection, and it is the portable one: another compiler diagnoses the
+// same source with its own code. Tighten it the day VerA resolves hierarchical
+// names and can refuse this one for the reason the LRM gives.
 //
+//! lrm 6.6.2
 //! lrm 6.6.3
-//! lrm 6.7
-//! bias V(p) = 0.25
-//! xfail VerA's parser has no hierarchical_identifier and does not name unnamed generate blocks: the `.` in `genblk1.tag` dies at E0207 "unexpected token: found `.`"
-`include "check.vh"
+//! reject DiagnosticsReported
 module ch6_external_genblk_reference(p);
   inout p; electrical p;
   parameter integer genblk2 = 0;
@@ -44,9 +46,5 @@ module ch6_external_genblk_reference(p);
       localparam real tag = 2.0;
     end
   endgenerate
-  analog begin
-    `CHECKX("the textually first generate construct in the scope is genblk1", genblk1.tag, 1.0);
-    `CHECKX("the second collides with the declared genblk2, so it is genblk02", genblk02.tag, 2.0);
-    I(p) <+ (genblk1.tag + genblk02.tag) * V(p);
-  end
+  analog I(p) <+ (genblk1.tag + genblk02.tag) * V(p);
 endmodule

@@ -1,5 +1,5 @@
 // §3.6.2 discipline declarations. A conservative discipline binds a potential
-// nature and a flow nature, and §3.6.1.3 says the nature's `access` attribute
+// nature and a flow nature, and §3.6.1.2 says the nature's `access` attribute
 // is what names the access function — so a net declared `ch03_conservative`
 // is read with V() and driven with I() for no reason other than that the two
 // natures above say `access = V` and `access = I`.

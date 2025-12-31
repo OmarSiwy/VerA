@@ -50,7 +50,16 @@ module ch04_transcendental_math(p, n);
         // nor C requires them to agree bit for bit; glibc happens to return an
         // exact 0.0 for this difference today. The previous 1e-16 was 1.8 ulp,
         // which a different libm would fail for a reason that is not a bug.
-        `CHECK("atan2(x, 1) == atan(x)", atan2(x, 1.0) - atan(x), 0.0, 1e-15);
+        //
+        // Both sides are VerA expressions, so this is CHECKEQ and not a CHECK
+        // against a literal 0.0: writing the difference on the left and 0.0 on
+        // the right would route a relational claim past the macro that exists
+        // to keep relational claims greppable. The three identities above are
+        // CHECKs because their right side is a constant the LRM fixes (1, 1,
+        // pi/2), not a second call into the same table. Contrast the
+        // `expr - closed_form, 0.0` shape in 17/19/21, where the right side is
+        // an independent $abstime oracle.
+        `CHECKEQ("atan2(x, 1) == atan(x)", atan2(x, 1.0), atan(x), 1e-15);
 
         // All fourteen rows summed, left to right in source order. The double
         // is 8.516023054937422; the last digit is part of the value, not noise.

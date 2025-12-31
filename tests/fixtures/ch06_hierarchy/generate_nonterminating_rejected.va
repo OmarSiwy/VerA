@@ -10,6 +10,16 @@
 // choice and deliberately not asserted here; what the LRM fixes is that an error
 // is produced, which is what the directive pins.
 //
+// The block body is an EMPTY `begin end`, and that is deliberate. Syntax 6-8 reads
+// `generate_block ::= module_or_generate_item | begin [ : id ] { module_or_generate_item }
+// end`, and a contribution statement is neither — it is reachable only through
+// `analog_construct ::= analog analog_statement`. This file used to write a bare
+// `I(p) <+ V(p);` there, which pinned a VerA parser extension no conforming compiler
+// implements: a conforming compiler rejects such a source at the block body and
+// never evaluates the loop scheme, so the E0420 below would have been proved by
+// nothing. An empty begin-end is a legal generate block and adds no second rule for
+// the diagnostic to fire from.
+//
 // The neighbouring bullet, "It shall be an error if a genvar value is repeated
 // during the evaluation of the loop generate scheme", has no separate fixture on
 // purpose: the genvar is the loop's entire state and the step is a function of it
@@ -23,6 +33,6 @@ module ch6_generate_nonterminating(p);
   inout p; electrical p;
   genvar i;
   generate
-    for (i = 0; i < 3; i = i - 1) I(p) <+ V(p);
+    for (i = 0; i < 3; i = i - 1) begin end
   endgenerate
 endmodule

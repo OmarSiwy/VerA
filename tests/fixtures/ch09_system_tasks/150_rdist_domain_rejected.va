@@ -15,8 +15,12 @@
 // degree_of_freedom. Both are in one file because they are one rule; the first
 // diagnostic ends the compile.
 //
-// §9.13.2 also fixes the seed's type ("For each system function, the seed
-// argument shall be an integer"), and the third call violates that with a real.
+// §9.13.2's OTHER rule — "for each system function, the seed argument shall be
+// an integer" — used to be bundled in here as a third call with a real seed.
+// It is a different sentence, and Syntax 9-9 states it as grammar
+// (`seed ::= integer_variable_identifier | integer_parameter_identifier |
+// [sign] decimal_number`), so `//! reject greater than zero` could never have
+// pinned it. It now has its own file, 166_rdist_real_seed_rejected.va.
 //
 // A reject, so there is nothing to run and no `want` to write.
 //
@@ -26,12 +30,11 @@
 module ch09_rdist_domain_rejected(p, n);
   inout p, n; electrical p, n;
   integer seed;
-  real a, b, c;
+  real a, b;
   analog begin
     seed = 1;
     a = $rdist_erlang(seed, 0, 1.0);
     b = $rdist_chi_square(seed, -2.0);
-    c = $rdist_exponential(0.5, 1.0);
-    I(p,n) <+ V(p,n) + a + b + c;
+    I(p,n) <+ V(p,n) + a + b;
   end
 endmodule

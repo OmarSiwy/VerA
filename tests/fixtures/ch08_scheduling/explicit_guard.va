@@ -7,7 +7,7 @@
 // only when the clock crossing fires. LRM 5.10.3.1: cross() generates no events
 // for non-transient analyses, and this is a dc operating point — even though
 // V(clock) - 0.5 = +0.5 already sits above the threshold, no crossing happened.
-// So `latched` keeps its 0.0 (LRM 3.5) while V(p) sits at 1.25: the guard is
+// So `latched` keeps its 0.0 (LRM 3.2) while V(p) sits at 1.25: the guard is
 // doing exactly the job the clause describes, and an implementation that leaks
 // the unguarded probe through prints 1.25.
 //

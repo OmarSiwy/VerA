@@ -6,24 +6,28 @@
 // exp()", and "the simulator can only converge when the output of limexp()
 // equals the exponential of the input".
 //
-// WHY THE IDENTITY AND NOT THE DIGITS. exp(0.5) = 1.6487212707001282, and an
-// earlier version of this file pinned limexp() to it at a single bias
-// evaluation. That over-specifies. 4.5.13 fixes the value only AT CONVERGENCE
-// -- "the simulator can only converge when the output of limexp() equals the
-// exponential of the input" -- and says outright that "there are different ways
-// of implementing limiting algorithms for the exponential". A testbench that
-// evaluates one bias point carries no Newton history, which is precisely the
-// un-converged first iteration where a conformant limiter is entitled to damp
-// its output. Writing 1.6487212707001282 here would fail any future
-// implementation that actually limits, which is the one thing the operator is
-// specified to do.
+// WHY THE DIGITS ARE WRITABLE HERE. Limiting damps INTERMEDIATE iterations
+// only: 4.5.13 says that "on any iteration where the change in the output of
+// the limexp() function is bounded, the simulator is prevented from
+// terminating the iteration", so a damped output is by construction never a
+// reported solution. Every number this harness prints IS the reported solution
+// for its operating point, and at a solution 4.5.13 leaves the limiter no
+// freedom at all -- limexp(x) equals exp(x). So the value is fixed by the
+// clause and gets written out: exp(0.5) = 1.6487212707001282.
 //
-// So the assertion is the identity the clause states with no value attached --
-// the README's stated use for CHECKEQ -- and the digits stay only on the
-// literal the LRM does fix, the 1m scale factor of 2.5.1.
+// An earlier version wrote this as `CHECKEQ(limexp(V(p,n)), exp(V(p,n)), 1e-12)`
+// to leave room for a limiter. It does not: CHECKEQ is abs(GOT-WANT) <= TOL,
+// and at 1e-12 (6e-13 relative) any implementation that damped its output here
+// would fail it by exactly the margin the literal fails it by. The relational
+// form bought no robustness and only dropped the derived digit, so it is back
+// as a literal, with the tolerance sized for a conformant exp() that is a few
+// ulp off the correctly-rounded double rather than bit-identical to it.
+//
+// The second literal is the 1m scale factor of 2.6.2 Table 2-1.
 //
 //! lrm 8.3.3
 //! lrm 4.5.13
+//! lrm 2.6.2
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch8_nonlinear(p, n);
@@ -31,8 +35,8 @@ module ch8_nonlinear(p, n);
   parameter real scale = 1m;
   analog begin
     `CHECKX("the 1m scale factor", scale, 0.001);
-    `CHECKEQ("limexp equals the exponential at the converged solution",
-             limexp(V(p, n)), exp(V(p, n)), 1e-12);
+    `CHECK("limexp equals the exponential at the reported solution",
+           limexp(V(p, n)), 1.6487212707001282, 1e-15);
     I(p, n) <+ scale * limexp(V(p, n));
   end
 endmodule

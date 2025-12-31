@@ -64,12 +64,22 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_va_test.step);
 
     // =======================================================================
-    // The torture suite — the ONE oracle over tests/fixtures/**/*.va
+    // The conformance suite over tests/fixtures/**/*.va, run against TWO
+    // compilers by two runners sharing one judge:
     //
-    // It replaced `conformance`, `exhaustive`, `sema.sh` and `ledger`, which
-    // disagreed about what a fixture is and needed three sidecar file formats
-    // between them. Every fixture now states its own expected behavior in the
-    // .va: `//! reject <substring>` to demand a diagnostic, or a `CHECK` from
+    //   tests/harness.zig    the fixture format, the verdict algebra, the report
+    //   tests/torture.zig    VerA          `zig build torture`
+    //   tests/external.zig   OpenVAF, …    `zig build conformance`
+    //
+    // Sharing the judge is the point: "OpenVAF scores X and VerA scores Y" only
+    // means something if both were scored by the same code. What the runners
+    // differ by is depth, and only that — VerA is compiled in-process and its
+    // device is BUILT AND RUN, so the fixtures' own `ok=` assertions are
+    // evaluated; a foreign compiler is a subprocess that can only accept or
+    // refuse, and its report says so.
+    //
+    // Every fixture states its own expected behavior in the .va: `//! reject
+    // <substring>` to demand a diagnostic, or a `CHECK` from
     // tests/fixtures/check.vh whose `ok=1` column is the assertion.
     //
     // An EXECUTABLE, not a `test` block, on purpose: a failing fixture must
@@ -126,4 +136,35 @@ pub fn build(b: *std.Build) void {
     // from asserting nothing while looking like it asserts something.
     const run_torture_test = b.addRunArtifact(b.addTest(.{ .root_module = torture_mod }));
     test_step.dependOn(&run_torture_test.step);
+
+    // The same fixtures against a FOREIGN compiler — the conformance question
+    // the suite was rewritten to be able to ask. The default is OpenVAF, which
+    // `nix develop .#conformance` puts on PATH; `-Dconformance-cc` takes any
+    // compiler that accepts a .va path and exits nonzero when it refuses one,
+    // and being a whole command line is also where a timeout goes.
+    //
+    //   zig build conformance
+    //   zig build -Dconformance-cc="timeout 30 openvaf-r --dry-run" conformance -- ch04
+    const external_opts = b.addOptions();
+    external_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
+    external_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-conformance"));
+    external_opts.addOption([]const u8, "cc", b.option(
+        []const u8,
+        "conformance-cc",
+        "The compiler `zig build conformance` holds to the fixtures (default `openvaf-r --dry-run`)",
+    ) orelse "openvaf-r --dry-run");
+    const external_mod = b.createModule(.{
+        .root_source_file = b.path("tests/external.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "vera", .module = vera_mod }},
+    });
+    external_mod.addOptions("external_options", external_opts);
+    const run_external = b.addRunArtifact(b.addExecutable(.{
+        .name = "vera-conformance",
+        .root_module = external_mod,
+    }));
+    if (b.args) |a| run_external.addArgs(a);
+    b.step("conformance", "Run the fixtures against another Verilog-A compiler")
+        .dependOn(&run_external.step);
 }

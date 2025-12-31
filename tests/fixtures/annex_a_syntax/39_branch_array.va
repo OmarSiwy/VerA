@@ -9,11 +9,17 @@
 //
 // The declaration `branch (p, n) pair[0:1];` gives two branches over the same
 // node pair, so §5.5.1 makes V(pair[0]) and V(pair[1]) both the potential
-// difference V(p) - V(n) = 0.8 - 0.3 = 0.5, and their sum 1.0. Two elements
-// rather than one, because an implementation that collapsed the range to a
-// single branch, or resolved every index to element 0, still gets each
-// individual probe right — the pair has to be indexable independently for the
-// third check to hold when the flow is contributed to only one of them.
+// difference V(p) - V(n) = 0.8 - 0.3 = 0.5, and their sum 1.0.
+//
+// WHAT THE THIRD CHECK IS, AND IS NOT. It is the two indices in one expression,
+// the shape A.8.9 derives and the one a lowering that re-uses a single index
+// slot across references can still get wrong. It is NOT independent evidence of
+// two branches: both elements span the same voltage-biased pair, so an
+// implementation that collapsed the range to a single branch, or resolved every
+// index to element 0, produces 0.5 + 0.5 = 1.0 exactly as a correct one does.
+// This header used to claim it caught those; it does not. Telling them apart
+// needs the two elements to hold DIFFERENT values, which needs a solved flow,
+// and the harness does not solve (see 21_indirect_contribution.va).
 //
 // The numbers are the ones to demand the day it parses; nothing about them is
 // VerA-specific. Neither 0.8 nor 0.3 is representable in binary but their

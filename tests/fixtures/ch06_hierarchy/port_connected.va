@@ -1,31 +1,48 @@
-// LRM 6.5.6 / 9.19: `$port_connected(port)` returns one (1) if the port "was
-// connected to a net (by order or by name) when the module was instantiated, and
-// zero (0) otherwise."
+// §9.19: `$port_connected(port)` "shall be one (1) if the port was connected to a
+// net (by order or by name) WHEN THE MODULE WAS INSTANTIATED, and zero (0)
+// otherwise. Note that THE PORT MAY BE CONNECTED TO A NET THAT HAS NO OTHER
+// CONNECTIONS, but $port_connected() shall still return one."
 //
-// READ THE WANT AS A HARNESS CONVENTION, NOT AS THE LRM'S NUMBER. §6.2.1 makes
-// this a top-level module — nothing instantiates it — and the LRM gives
-// $port_connected no top-level default the way Table 9-29 gives $mfactor its 1.0,
-// so a literal reading of "otherwise" would say 0. The 1 asserted here is the
-// testbench's position: it binds every terminal of the DUT to a node, because a
-// device with a dangling terminal has no residual to evaluate, and a bound
-// terminal is the connected case by any reading. A conforming compiler under a
-// host that binds its terminals answers 1 too; one that left `p` unbound would be
-// entitled to 0, and this fixture would be the wrong place to argue about it.
+// THIS FILE USED TO ASSERT A HARNESS CONVENTION AS THE LRM'S NUMBER. It was a
+// green run fixture on a single top-level module with no instantiation anywhere,
+// asserting `$port_connected(p) == 1`, and its own header conceded the problem:
+// §6.2.1 makes such a module top-level, and unlike `$mfactor` — which Table 9-29
+// gives an explicit top-level value of 1.0 — the LRM gives `$port_connected` no
+// value outside an instantiation. The 1 came from `tb.zig` binding every terminal
+// of the DUT, so a conforming compiler on a host that leaves a top-level terminal
+// unbound was entitled to 0 and FAILed the file. Every want here is now the
+// LRM's, which costs an instantiation and therefore an `//! xfail`.
 //
-// What is genuinely pinned, and does not depend on the convention, is that the
-// result is a usable integer operand: with p held at 0.5 V the selected arm gives
-// V(p) = 0.5, not the 0.0 fallback. The 0 case needs a module that is
-// instantiated with a port left off, which is unwritable while VerA compiles one
-// flattened device.
+// The second assertion is the sentence quoted above, and it is this chapter's only
+// fixture for it: `dangle` is declared in the parent and connected to nothing else
+// in the design, so a compiler that resolved "connected" by counting the net's
+// other connections, or by checking that the net is driven, answers 0 where the
+// LRM demands 1. The 0 side of the predicate is held by the three connection-form
+// fixtures — blank_ordered_connection_unsupported.va (a blank in an ordered list),
+// empty_named_connection_unsupported.va (`.port()`) and
+// omitted_named_connection_unsupported.va (the port left out entirely).
+//
+// The bias makes the ordered binding checkable at the same time: p = 0.75 V,
+// n = 0.25 V, so V(a, b) = 0.5 exactly, which is what proves the two connected
+// ports were bound in the order written and not shifted by the third.
 //
 //! lrm 6.5.6
-//! bias V(p) = 0.5
+//! lrm 9.19
+//! bias V(p) = 0.75, V(n) = 0.25
+//! xfail VerA compiles one flat module, so a module instantiation is refused outright at E0204 "module instantiation is not supported"
 `include "check.vh"
-module ch6_port_connected(p);
-  inout p; electrical p;
+module ch6_port_connected_parent(p, n);
+  inout p, n; electrical p, n;
+  electrical dangle;
+  ch6_port_connected_child u(p, n, dangle);
+endmodule
+
+module ch6_port_connected_child(a, b, lone);
+  inout a, b, lone; electrical a, b, lone;
   analog begin
-    `CHECKI("a bound terminal reports as connected", $port_connected(p), 1);
-    `CHECK("the connected arm selects V(p), not the 0.0 fallback", $port_connected(p) ? V(p) : 0.0, 0.5, 1e-15);
-    I(p) <+ $port_connected(p) ? V(p) : 0.0;
+    `CHECKI("a port connected by order reports connected", $port_connected(a), 1);
+    `CHECKI("a net with no other connections still counts as connected", $port_connected(lone), 1);
+    `CHECKX("and the ordered binding straddles the biased pair", V(a, b), 0.5);
+    I(a, b) <+ V(a, b);
   end
 endmodule

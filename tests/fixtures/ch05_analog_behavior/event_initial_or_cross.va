@@ -8,10 +8,11 @@
 // and x = 0.0 — the value §3.2 gives an untouched real — means the global
 // event never fired.
 //
-// FAILS TODAY — known VerA defect, not a wrong want. Codegen answers
-// initial_step from `inst.is_initial_step`, but the testbench generator
-// src/backend/tb.zig never assigns that field (nor `is_final_step`), so §5.10.2
-// global events cannot fire in ANY generated testbench.
+// Codegen answers initial_step from `inst.is_initial_step`, and the testbench
+// generator assigns it (with `is_final_step`) per point — true on the first point
+// of an analysis, which on a single-point dc is this point. An earlier version of
+// this header recorded the opposite as a standing VerA defect; that is stale. The
+// field is set, the global event fires, and the fixture passes on its own terms.
 //
 //! lrm 5.10.1
 //! lrm 5.10.2

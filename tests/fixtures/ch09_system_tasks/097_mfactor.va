@@ -8,6 +8,8 @@
 // nothing multiplies into it: the resolved value is the top-level value, 1.0,
 // exactly. Zero would violate the "> 0" column, and any other number would be a
 // multiplicity nobody specified.
+//
+//! lrm 9.18
 `include "check.vh"
 module ch09_atomic_mfactor(p, n);
   inout p, n; electrical p, n;

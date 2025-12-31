@@ -1,11 +1,40 @@
-// annex C: gate primitives and `defparam` are outside Verilog-A.
+// §7.8.5.1 port names for Verilog built-in primitives: a built-in gate has no
+// declared port names, so the LRM fixes them for the connect modules an
+// elaborator auto-inserts. "For N-input gates (and, nand, nor, or, xnor, xor)
+// the output will be named out, and the inputs reading from left to right will
+// be in1, in2, in3, and so forth" — hence the `a__gate_instance__in1` below,
+// the §7.8.5 generated instance name reached by a hierarchical `defparam`.
+//
+// The three fields are fixed by §7.8.5 case 2 (split): SigName__InstName__Port-
+// Name, "where InstName and PortName are the local instance name of the port
+// and its instance respectively" — so SigName is the signal AT that port, not
+// the instance's output. In `and gate_instance(y, a, b)` the leftmost terminal
+// is the output, named `out` and carrying signal `y`; port `in1` carries signal
+// `a`. The name is therefore `a__gate_instance__in1`. `y__gate_instance__in1`
+// pairs the output's signal with an input's port name and is a name the scheme
+// cannot generate — which would matter, since the identifier text is the only
+// thing this fixture records.
+//
+// Only the N-input family is written here. The other five families (N-output
+// gates, 3- and 4-port MOS switches, bidirectional pass switches, single-port
+// primitives) would be the same test with a different identifier, because the
+// convention lives entirely in identifier TEXT that no parser interprets — the
+// same reason connect_generated_split_name was deleted. They are recorded in
+// COVERAGE.md, not written as fixtures.
+//
+// C.9 settles the verdict: "Clause 7 only applies to Verilog-AMS HDL", so
+// there is no auto-insertion in Verilog-A and no generated instance to name.
+// Both module items below are out of the subset independently — a gate
+// primitive and a `defparam` are neither of them analog module items — and the
+// file dies at E0205. Conformance, not debt.
+//
 //! lrm 7.8.5.1
+//! lrm 7.8.5
 //! lrm C.9
 //! reject E0205
 //! reject defparam
-// EXPECT: error -- built-in primitive ports have specified auto-connector names.
 module ch7_primitive_generated_ports(a, b, y);
   input a, b; output y; wire a, b, y;
   and gate_instance(y, a, b);
-  defparam y__gate_instance__in1.threshold = 0.5;
+  defparam a__gate_instance__in1.threshold = 0.5;
 endmodule

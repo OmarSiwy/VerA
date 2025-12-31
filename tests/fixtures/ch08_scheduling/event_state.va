@@ -6,11 +6,10 @@
 //
 // The guarded assignment therefore runs and `last` holds V(p) = 0.625, which is
 // then the whole contributed flow. A tool that never raises initial_step in dc
-// leaves `last` at the 0.0 of LRM 3.5 and contributes nothing.
+// leaves `last` at the 0.0 of LRM 3.2 and contributes nothing.
 //
 //! lrm 5.10.2
 //! lrm 5.10.1
-//! lrm 8.4.7
 //! bias V(p) = 0.625
 `include "check.vh"
 module ch8_event_state(p);

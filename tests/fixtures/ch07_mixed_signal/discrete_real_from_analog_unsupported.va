@@ -1,8 +1,22 @@
-// annex C: the digital `initial` block is outside Verilog-A.
+// §7.3.1 Table 7-1, the `real` row: a real owned by the discrete context and
+// read from a continuous one is read as a real number, with no conversion.
+// §7.2.2 makes that reading legal — `digital_real` is assigned in the discrete
+// context ONLY, by the `initial` block, and the analog block merely reads it,
+// so there is no both-contexts conflict (both_contexts_assignment_rejected.va
+// is the file that has one).
+//
+// The source is therefore legal Verilog-AMS HDL, and the rejection is a subset
+// rule rather than a defect in the source. C.7: "No digital behavior or events
+// are supported in Verilog-A" deletes the `initial` block — an unsupported
+// module item, E0205 — and with it the discrete owner the real would need;
+// C.9 puts Clause 7 out of reach entirely. Refusing this is conformance for
+// this dialect.
+//
 //! lrm 7.3.1
+//! lrm 7.2.2
 //! lrm C.7
+//! lrm C.9
 //! reject E0205
-// EXPECT: error -- a discrete-owned real is readable as real in analog context.
 module ch7_discrete_real_from_analog(p);
   inout p; electrical p; real digital_real;
   initial digital_real = 1.25;

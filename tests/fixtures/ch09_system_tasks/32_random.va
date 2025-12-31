@@ -11,10 +11,26 @@
 // Two seeds initialized to the same integer must therefore agree, and that
 // holds for any conforming RNG whatever its stream.
 //
-// §9.13.1 also prints a worked example, and that one HAS a range to write down:
-// "Where b > 0, the expression ($random % b) gives a number in the following
-// range: [(-b+1) : (b-1)]", followed by `rand = $random % 60;` for -59..59.
-// A 32-bit signed result is the only way that identity can hold.
+// §9.13.1 also fixes the WIDTH: "the random number returned is a 32-bit signed
+// integer; it can be positive or negative." That is the third check.
+//
+// It is deliberately NOT written as the chapter's old `($random % 60) is in
+// [-59,59]`. §9.13.1 does print that example — "where b > 0, the expression
+// ($random % b) gives a number in the following range: [(-b+1) : (b-1)]" — but
+// as an ASSERTION it is empty: a % 60 lies in [-59,59] for every integer a of
+// every width, including 0, so it cannot fail under any implementation, correct
+// or not. The 32-bit bound can: it is falsifiable on any host whose integer type
+// is wider than 32 bits, which is the case here (VerA carries integers in i64,
+// see the width note in 07_file_open_close.va).
+//
+// A SECOND rule, and the one that makes this fixture more than a stub test.
+// §9.13.1 makes the seed an inout: "If the random_seed argument is specified it
+// is an inout argument; that is, a value is passed to the function and A
+// DIFFERENT VALUE IS RETURNED. The variable should be initialized by the user
+// prior to calling $random and only updated by the system function." So after
+// the call `sa` shall no longer read 7. Without that check the only assertion
+// here is `a == b`, which a `return 0` stub satisfies perfectly; with it, a
+// constant-returning implementation fails.
 //
 //! lrm 9.13.1
 //! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
@@ -28,8 +44,10 @@ module ch09_random(p, n);
     a = $random(sa);
     b = $random(sb);
     `CHECKI("§9.13.1 the same initial random_seed gives the same stream", a == b, 1);
-    `CHECKI("§9.13.1 example: $random % 60 lands in [-59:59]",
-            (a % 60 >= -59) && (a % 60 <= 59), 1);
-    I(p,n) <+ V(p,n) + a;
+    `CHECKI("§9.13.1 the seed is inout: a DIFFERENT value is returned", sa != 7, 1);
+    `CHECKI("and both seeds advanced the same way from the same start", sa == sb, 1);
+    `CHECKI("§9.13.1 the result is a 32-bit SIGNED integer",
+            (a >= -2147483648) && (a <= 2147483647), 1);
+    I(p,n) <+ V(p,n) + a + b + sa + sb;
   end
 endmodule

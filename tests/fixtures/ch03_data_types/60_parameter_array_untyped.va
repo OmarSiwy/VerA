@@ -16,7 +16,6 @@
 //! lrm 3.4.4
 //! lrm 3.4.1
 //! reject DiagnosticsReported
-//! xfail VerA accepts an untyped parameter array declaration and gives it a real type by inference; there is no mandatory-type check on array parameters in lower.zig
 module ch3_parameter_array_untyped(p, n);
     inout p, n;
     electrical p, n;

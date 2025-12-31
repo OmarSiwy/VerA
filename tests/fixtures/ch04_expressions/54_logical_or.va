@@ -8,6 +8,7 @@
 // The third line separates `||` from `|`: 4 || 2 is 1, while the bit-wise
 // 4 | 2 is 6 (0100 | 0010).
 //
+//! lrm 4.2.8
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_logical_or(p, n);

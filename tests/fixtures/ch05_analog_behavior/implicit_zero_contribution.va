@@ -1,4 +1,5 @@
-// §5.6.1.3 value retention, Example 1 verbatim — the ideal switch:
+// §5.4.4 "Unassigned sources" verbatim, printed again as §5.6.1.3's Example 1
+// — the ideal switch:
 //
 //     if (closed) V(p,n) <+ 0;      is equivalent to      if (closed)
 //                                                            V(p,n) <+ 0;
@@ -25,6 +26,7 @@
 // retained branch value, because nothing inside a module can. §5.6.1.3's own
 // numeric rule — 1, then 2, then 3, then 4, answer 7.0 — is value_retention.va.
 //! lrm 4.2.5
+//! lrm 5.4.4
 //! lrm 5.4.1
 //! lrm 5.6.5
 //! bias V(c) = 0.75

@@ -9,8 +9,12 @@ module ex122_bit_conversions(p, n);
   electrical p, n;
   integer bits;
   analog begin
-    `CHECKI("$rtoi truncates, not rounds", $rtoi(1.9), 1);
-    `CHECKX("$itor", $itor(-5), -5.0);
+    // $rtoi and $itor are NOT tested here: the same Table 9-8 marks them
+    // "supported in analog context: No", so an `analog` block is not a legal
+    // call site for either. The two rows this file does exercise are exactly
+    // the two §9.11 carries into the analog context. The "No" rows live in
+    // ch09_system_tasks/061_rtoi_analog_rejected.va and 062_itor_analog_-
+    // rejected.va.
     // 1.0 is 0x3FF0000000000000 = 4607182418800017408.
     `CHECKI("$realtobits(1.0)", $realtobits(1.0), 4607182418800017408);
     `CHECKX("$bitstoreal round trip", $bitstoreal($realtobits(0.1)), 0.1);

@@ -1,8 +1,11 @@
 // §9.5 / Table 9-2. The file family is mostly analog-context "Yes" — $fopen,
 // $fclose, $fdisplay, $fwrite, $fstrobe, $fmonitor, $fgets, $fscanf, $swrite,
 // $sformat, $sscanf, $rewind, $fseek, $ftell, $fflush, $ferror and $feof all
-// carry over, and this directory has a fixture for each. Twelve spellings do
-// not:
+// carry over, and this directory has a fixture for each. So does $fdebug, which
+// is the one row of Table 9-2 that goes the other way — `No  Yes`, analog only —
+// and 043_fdebug.va is its positive.
+//
+// TWENTY-ONE spellings, over nine rows, do not carry over:
 //
 //     $fdisplayb , $fdisplayh , $fdisplayo   Yes  No
 //     $fwriteb , $fwriteh , $fwriteo         Yes  No
@@ -25,11 +28,18 @@
 // One file for the whole column. The first diagnostic ends the compile, so the
 // remaining calls are there to say which names the rule covers.
 //
+// WHERE THE RULE ACTUALLY LIVES. §9.5's opening sentence is a PERMISSION —
+// Verilog-AMS "extends many of the file operation tasks so that they can be used
+// in the analog context" — and forbids nothing. The prohibition is Table 9-2's
+// analog-context "No" column, and every Table 9-1..9-20 sits under §9.2
+// "Categories of System Tasks and Functions". Both are cited; 9.2 is the one
+// with teeth.
+//
 // A reject, so there is nothing to run and no `want` to write.
 //
+//! lrm 9.2
 //! lrm 9.5
 //! reject analog context
-//! xfail VerA implements no Table 9-2 analog-context restriction; grep across src/ finds no analog-context check for any ch9 system task
 module ch09_file_io_digital_only_analog_rejected(p, n);
   inout p, n; electrical p, n;
   integer fd, code;

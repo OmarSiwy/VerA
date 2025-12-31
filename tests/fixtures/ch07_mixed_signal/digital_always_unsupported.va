@@ -1,7 +1,18 @@
+// §7.2.2 contexts: "assignment statements within an initial or always block"
+// are in the discrete (digital) context. The `always` block below is that
+// context in its plainest form — one four-state reg, assigned from a digital
+// process and from nowhere else — and it is legal Verilog-AMS HDL.
+//
+// C.7 deletes it from this dialect: "No digital behavior or events are
+// supported in Verilog-A". So the block is an unsupported module item (E0205)
+// and refusing it is conformance. It is also the mask behind which several
+// rules in this chapter sit unreachable — see
+// both_contexts_assignment_rejected.va and
+// analog_function_from_digital_unsupported.va.
+//
 //! lrm 7.2.2
 //! lrm C.7
 //! reject E0205
-// EXPECT: error -- a digital always process needs the digital backend.
 module ch7_digital_always;
   reg state;
   always @(state) state = !state;

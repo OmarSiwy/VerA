@@ -3,6 +3,7 @@
 // sin(0.5) = 0.47942553860420300538..., nearest double 0.479425538604203. A
 // degree-based implementation would answer 0.0087, so the unit is pinned too.
 //
+//! lrm 4.3.2
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_sin(p, n);

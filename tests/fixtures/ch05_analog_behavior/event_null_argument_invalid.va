@@ -1,11 +1,20 @@
-// Two §5.10 sentences meet on this one line. §5.10: "Null arguments are not
-// allowed in analog events." §5.10.3.1: "If either or both tolerances are
-// defined, then the direction shall also be defined."
+// §5.10.3.1, the last sentence of the argument list: "If either or both
+// tolerances are defined, then the direction shall also be defined."
 //
 // The call supplies a time_tol but elides the direction, so the dir slot is
-// null. Both sentences forbid it, and they forbid it for the same reason: the
-// tolerance is the window around a crossing whose DIRECTION selects which
-// crossings count, so a tolerance without a direction narrows nothing.
+// null and that sentence is violated. The reason is what makes the tolerances
+// useful at all: a tolerance is the window around a crossing whose DIRECTION
+// selects which crossings count, so a tolerance without a direction narrows
+// nothing.
+//
+// DELIBERATELY NOT CITED: §5.10's "Null arguments are not allowed in analog
+// events." Read alone it would condemn this file twice over, but the LRM
+// refutes that reading in §5.10.3.1's own `sh` example — `@(cross(V(smpl) -
+// thresh, dir, , , en === 1'b1))`, two elided slots in a module printed as
+// legal — and Syntax 5-16 types those slots analog_expression_or_null. Elision
+// as such is permitted, so the only rule this file stands on is the
+// tolerance-needs-a-direction sentence, and the diagnostic has to be about the
+// missing DIRECTION and not about the comma.
 //
 // event_cross_any.va is the legal way to say "either direction" — dir written
 // as 0, not left out — and must keep compiling.
@@ -13,10 +22,8 @@
 // No VerA code exists for this, so the expectation is the phase label: the file
 // must not compile at all.
 //
-//! lrm 5.10
 //! lrm 5.10.3.1
 //! reject DiagnosticsReported
-//! xfail VerA accepts an elided argument in an analog event expression: `cross(expr, , 1n)` compiles with the direction slot empty
 module ch5_event_null_argument(p);
   inout p; electrical p; real x;
   analog begin

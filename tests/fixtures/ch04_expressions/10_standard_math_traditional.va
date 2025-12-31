@@ -13,6 +13,7 @@
 //   pow(1.5,2) = 2.25 exactly           floor(1.5) = 1    ceil(1.5) = 2
 // Summed left to right in the source order: 16.537990308893498.
 //
+//! lrm 4.3.1
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_standard_math_traditional(p, n);

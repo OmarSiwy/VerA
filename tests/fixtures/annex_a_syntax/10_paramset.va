@@ -22,6 +22,14 @@
 // A paramset that was parsed but never applied leaves 1.0; one that dropped its
 // own parameter default leaves 2.0.
 //
+// MODULE ORDER IS LOAD-BEARING. A device is elaborated from the FIRST module in
+// the file (01_source_text.va documents the same rule), so the instantiating
+// module has to come first and `annex_a_target` has to be reached THROUGH the
+// paramset instance. Written the other way round — target first — the target is
+// elaborated standalone, its `gain` is the declared 1.0, and the fixture stays
+// red at 1.0 != 3.0 on the day paramsets land: the XPASS would never fire and
+// the `//! xfail` below could never be deleted.
+//
 //! lrm A.1.9
 //! lrm 6.4
 //! lrm C.8
@@ -29,6 +37,18 @@
 //! print none
 //! xfail VerA rejects `paramset` outright with E0201, and applying one would also need module instantiation (E0204)
 `include "check.vh"
+module annex_a_paramset(p, n);
+    inout p, n;
+    electrical p, n;
+
+    annex_a_parameters instance_of_paramset(p, n);
+endmodule
+
+paramset annex_a_parameters annex_a_target;
+    parameter real scale = 1.5 from (0:inf);
+    .gain = 2.0 * scale;
+endparamset
+
 module annex_a_target(p, n);
     inout p, n;
     electrical p, n;
@@ -38,16 +58,4 @@ module annex_a_target(p, n);
         `CHECKX("the paramset's value reaches the module parameter", gain, 3.0);
         I(p, n) <+ gain * V(p, n);
     end
-endmodule
-
-paramset annex_a_parameters annex_a_target;
-    parameter real scale = 1.5 from (0:inf);
-    .gain = 2.0 * scale;
-endparamset
-
-module annex_a_paramset(p, n);
-    inout p, n;
-    electrical p, n;
-
-    annex_a_parameters instance_of_paramset(p, n);
 endmodule

@@ -1,7 +1,17 @@
 // Annex C.7, bullet 1: "No digital behavior or events are supported in
-// Verilog-A." The nonblocking assignment `<=` is the digital procedural
-// assignment of §5.6; inside an analog block §5.6/A.6.4 give exactly two
-// assignment forms — `=` for a variable and `<+` for a branch contribution.
+// Verilog-A." The nonblocking assignment `variable_lvalue <= expression` is
+// A.6.2 `nonblocking_assignment`, an alternative of the DIGITAL `statement`
+// production; it has no counterpart in A.6.4's `analog_statement`.
+//
+// The cite is §5.7, "Analog procedural assignments", whose Syntax 5-7 gives the
+// one procedural assignment an analog block admits:
+//
+//     scalar_analog_variable_lvalue = analog_expression
+//
+// and no other. (§5.6 is "Contribution statements", a neighbour: it defines
+// `<+`, not `=`. A.6.4's `analog_statement` derives three assigning forms in
+// all — analog_procedural_assignment, contribution_statement and
+// indirect_contribution_statement (§5.6.7) — none of them `<=`.)
 //
 // ch08_scheduling/nonblocking_unsupported.va writes `always @(source) target <=
 // source;`, so what it actually rejects is `always`. This fixture puts `<=` in
@@ -9,7 +19,8 @@
 // only be about the operator.
 //
 //! lrm C.7
-//! lrm 5.6
+//! lrm 5.7
+//! lrm A.6.2
 //! reject E0214
 module annex_c_nonblocking_assign_rejected(p);
     inout p;

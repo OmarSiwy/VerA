@@ -12,6 +12,7 @@
 //
 //! lrm D.2
 `include "check.vh"
+`include "disciplines.vams"
 `undef CONSTANTS_VAMS
 `define PHYSICAL_CONSTANTS_OLD 1
 // NIST2010 is also set: OLD has higher priority in the normative chain.

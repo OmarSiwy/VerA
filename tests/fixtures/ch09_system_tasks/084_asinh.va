@@ -5,6 +5,7 @@
 // asinh(x) = ln(x + sqrt(x^2 + 1)), so asinh(0.5) = ln(0.5 + sqrt(1.25))
 //          = 0.48121182505960347.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_asinh(p, n);

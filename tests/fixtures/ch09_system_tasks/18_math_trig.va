@@ -24,6 +24,7 @@
 // totals of order 10 — about 1e-13 relative — which admits an implementation
 // that builds asin/acosh out of atan/log identities but not one that is wrong.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_math_trig(p, n);

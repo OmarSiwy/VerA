@@ -31,7 +31,7 @@
 //
 // The third short-circuiting operator, `?:`, is 125_short_circuit_ternary.va —
 // a separate file only because VerA fails it, and keeping it here would take
-// the eleven assertions above down with it.
+// the ten assertions above down with it.
 //
 //! lrm 4.2.3
 `include "check.vh"
@@ -42,7 +42,8 @@ module ch04_short_circuit_side_effects(p, n);
     integer r_and, r_and_true, r_or, r_or_false, r_bitand;
 
     analog function integer bump;
-        inout integer counter;
+        inout counter;
+        integer counter;
         begin
             counter = counter + 1;
             bump = 1;

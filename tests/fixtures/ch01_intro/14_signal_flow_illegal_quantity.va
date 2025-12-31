@@ -6,15 +6,21 @@
 // The conservative contribution on (p, n) is there only so the module is a
 // well-formed device; the sole defect is the flow contribution to `vonly`.
 //
-// The pinned code is E0501, "unknown access function": `I` is not an access
-// function of `vonly`, which is exactly what lower.zig checkAccessMatch decides.
-// (The earlier version of this file wrote `flow(outp) <+ ...`; `flow` is a
-// discipline-item keyword per A.1.7, so it died in the parser at E0209 and never
-// reached this rule at all.)
+// The expectation is the phase label and NOT E0501. E0501 is "unknown access
+// function", `.lrm = "3.6.1.4"` (src/diag_code.zig:1463) — a NAME MISMATCH
+// between an access function and a nature's `access =` attribute. This rule is a
+// different one: the discipline binds no flow nature at all, so there is no
+// spelling to mismatch. lower.zig checkAccessMatch says so in as many words —
+// `if (want.len == 0 or ...) return;`, documented "the missing binding is its own
+// diagnostic" — so E0501 is a code VerA has already decided not to use here, and
+// pinning it would keep this fixture XFAIL forever no matter which code the rule
+// eventually gets. `DiagnosticsReported` matches whichever one that is, which is
+// what makes the XPASS able to fire. (The earlier version of this file wrote
+// `flow(outp) <+ ...`; `flow` is a discipline-item keyword per A.1.7, so it died
+// in the parser at E0209 and never reached this rule at all.)
 //
 //! lrm 1.3.4
-//! reject E0501
-//! xfail lower.zig checkAccessMatch returns early on `want.len == 0`, so a discipline that binds no flow nature accepts every flow access on its nets silently
+//! reject DiagnosticsReported
 module ch01_signal_flow_illegal_quantity(p, n);
     inout p, n;
     electrical p, n;

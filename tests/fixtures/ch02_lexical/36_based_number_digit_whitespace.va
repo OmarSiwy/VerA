@@ -9,7 +9,6 @@
 // files is the rule under test: 0xAf = 175, 0b1010 = 10, 0o17 = 15, 0d12 = 12,
 // summing to 212.
 //! lrm 2.6.1
-//! xfail VerA's lexer scans a based number as one token, so white space between the base format and the digits splits it and the digits are then an invalid token (E0209) (src/frontend/lexer.zig)
 `include "check.vh"
 module ch2_based_ws(p); inout p; electrical p; integer x; analog begin x=8'h Af + 8'b 1010 + 8'o 17 + 8'd 12;
   `CHECKI("8'h Af", 8'h Af, 175);

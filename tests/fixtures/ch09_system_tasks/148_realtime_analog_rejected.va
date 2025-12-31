@@ -6,17 +6,24 @@
 //    supported in the analog context and it had an additional argument. This
 //    version of the LRM deprecates using $realtime in the analog context."
 //
-// So this is not merely a table cell: $realtime in an analog block used to be
-// legal, model source in the wild still does it, and the LRM went out of its
-// way to withdraw it. §9.10 offers the replacement in the same paragraph —
-// "A new function is added called $abstime that can be used from the analog and
-// digital contexts" — and 14_abstime.va is the positive for it.
+// The NOTE is context, not the rule. "Deprecates" is not "shall not", and a
+// conforming compiler that merely warned about it would satisfy the note — so
+// this reject does not rest on it. It rests on Table 9-7's analog-context "No"
+// cell, which is a flat prohibition, and that table sits under §9.2 "Categories
+// of System Tasks and Functions", cited below alongside §9.10. §9.10 itself is
+// a PERMISSION ("a new function is added called $abstime that can be used from
+// the analog and digital contexts") and forbids nothing; 14_abstime.va is the
+// positive for that half.
+//
+// What the note adds is why $realtime gets its own file rather than sharing 149
+// with $time/$stime: $realtime in an analog block used to be legal, model source
+// in the wild still does it, and the LRM went out of its way to withdraw it.
 //
 // A reject, so there is nothing to run and no `want` to write.
 //
+//! lrm 9.2
 //! lrm 9.10
 //! reject analog context
-//! xfail VerA implements no Table 9-7 analog-context restriction; it answers $realtime in an analog block like any time query
 module ch09_realtime_analog_rejected(p, n);
   inout p, n; electrical p, n;
   real t;

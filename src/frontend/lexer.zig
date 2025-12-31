@@ -154,8 +154,17 @@ pub const Lexer = struct {
 
     /// LRM §2.6.1 based-constant tail: `' [s|S] base_char digits`. Cursor is on
     /// the apostrophe. Returns null (cursor untouched) if this is not a
-    /// base_format. No white space is accepted inside the number — see the
-    /// deviation note at the bottom of this file.
+    /// base_format.
+    ///
+    /// White space is legal between the base format and the digits and NOWHERE
+    /// else in the number: §2.6.1 says "the unsigned number token shall
+    /// immediately follow the base format, optionally preceded by white space",
+    /// and five of the clause's own examples are written that way (`'h 837FF`,
+    /// `5 'D 3`, `-8 'd 6`, `32 'h 12ab_f001`). The space before the base format
+    /// (`8 'h`) is already covered because the size is a separate scan; the
+    /// space INSIDE the apostrophe group (`8 ' h`) is not, and stays illegal.
+    /// The whitespace ends up inside the token's text span, so `parseInt` skips
+    /// it in exactly the same place.
     fn lexBasedTail(self: *Lexer) ?token.Tag {
         var i = self.pos + 1;
         if (i < self.src.len and (self.src[i] == 's' or self.src[i] == 'S')) i += 1; // signed designator
@@ -168,11 +177,19 @@ pub const Lexer = struct {
             else => return null,
         };
         i += 1;
+        const after_base = i;
+        while (i < self.src.len and std.ascii.isWhitespace(self.src[i])) i += 1;
         const digits = i;
         while (i < self.src.len and isBasedDigit(self.src[i], radix)) i += 1;
+        // §2.6.1: the base format must be followed by an unsigned number. With
+        // none there the token ends at the base format and the white space goes
+        // back to the stream, so the next token is whatever really follows.
+        if (i == digits) {
+            self.pos = after_base;
+            return .invalid;
+        }
         self.pos = i;
-        // §2.6.1: the base format must be followed by an unsigned number.
-        return if (i == digits) .invalid else .int_literal;
+        return .int_literal;
     }
 
     /// LRM §2.6.1 unsigned_number: decimal digits with `_` separators. A trailing
@@ -435,6 +452,9 @@ pub const ValueError = error{
     MissingDigits,
     /// §2.6.1: a digit outside the base's range (`4'b012`).
     DigitOutOfRange,
+    /// §2.6.1 / Syntax 2-2: `size ::= non_zero_unsigned_number`, so `0'b1` is
+    /// not a narrow constant — it is not a constant.
+    ZeroSize,
     /// Value does not fit in 64 bits.
     Overflow,
     /// Literal longer than the fixed decode buffer (see `parseReal`).
@@ -483,11 +503,19 @@ pub fn parseInt(text: []const u8) ValueError!IntLiteral {
             'h' => 16,
             else => return error.MissingBase,
         };
-        digits = text[i + 1 ..];
-        for (text[0..q]) |c| { // size constant, `_` ignored
+        // §2.6.1: white space may sit between the base format and the digits
+        // and nowhere else, so it is trimmed here and not skipped in the loop.
+        digits = std.mem.trimStart(u8, text[i + 1 ..], " \t\r\n\x0c");
+        const size_text = std.mem.trim(u8, text[0..q], " \t\r\n\x0c");
+        for (size_text) |c| { // size constant, `_` ignored
             if (c == '_') continue;
             width = @min(width * 10 + (c - '0'), 64);
         }
+        // Syntax 2-2 `size ::= non_zero_unsigned_number`, restated in prose:
+        // the size "shall be specified as a non-zero unsigned decimal number".
+        // Width 0 is this decoder's UNSIZED sentinel, so without this an
+        // explicit `0'b1` would silently read as the unsized `'b1`.
+        if (size_text.len != 0 and width == 0) return error.ZeroSize;
     }
 
     var v: u64 = 0;
@@ -795,6 +823,32 @@ test "parseInt decodes every base (§2.6.1)" {
     try testing.expectError(error.MissingDigits, parseInt("4'h"));
     try testing.expectError(error.MissingBase, parseInt("4'"));
     try testing.expectError(error.DigitOutOfRange, parseInt("4'b012"));
+    // §2.6.1: "the unsigned number token shall immediately follow the base
+    // format, OPTIONALLY PRECEDED BY WHITE SPACE" — four of the clause's five
+    // examples are written that way.
+    try testing.expectEqual(@as(i64, 0xaf), try val("8'h Af"));
+    try testing.expectEqual(@as(i64, 3), try val("5 'D 3"));
+    try testing.expectEqual(@as(i64, 0x12abf001), try val("32 'h 12ab_f001"));
+    // Syntax 2-2 `size ::= non_zero_unsigned_number`: an explicit 0 is not the
+    // unsized form, it is no form at all.
+    try testing.expectError(error.ZeroSize, parseInt("0'b1"));
+    try testing.expectError(error.ZeroSize, parseInt("0_0'h1"));
+}
+
+test "§2.6.1 white space splits the base format from the digits, and nothing else" {
+    var list = try Lexer.tokenize(testing.allocator, "8'h Af 8'h + 8 ' h 3");
+    defer list.deinit(testing.allocator);
+    const tags = list.items(.tag);
+    // One token for the spaced literal...
+    try testing.expectEqual(token.Tag.int_literal, tags[0]);
+    // ...but a base format with no digits after it still ends AT the base
+    // format, so the `+` that follows is its own token and not swallowed.
+    try testing.expectEqual(token.Tag.invalid, tags[1]);
+    try testing.expectEqual(token.Tag.plus, tags[2]);
+    // §2.6.1 permits no space INSIDE the apostrophe group: `8 ' h 3` is four
+    // tokens, not one number.
+    try testing.expectEqual(token.Tag.int_literal, tags[3]);
+    try testing.expect(tags[4] != .int_literal);
 }
 
 test "§10.6 the two keyword directives survive the preprocessor as tokens" {

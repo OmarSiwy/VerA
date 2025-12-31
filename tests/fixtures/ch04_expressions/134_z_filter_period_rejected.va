@@ -9,7 +9,10 @@
 // z^-1 — one T of delay — is undefined for both.
 //
 // Both violations are written because "positive" excludes two different things
-// and a guard spelled `T != 0` catches only one of them. Both are constants.
+// — a guard spelled `T != 0` admits the negative one and a guard spelled
+// `T >= 0` admits zero. Both raise the same message, so the single expectation
+// is satisfied by either line on its own: the second line widens what the
+// fixture covers, it is not a second gate. Both are constants.
 // 24_z_transform_filters.va is the legal side with T = 1u.
 //
 // VerA enforces this in codegen rather than as a numbered diagnostic, so the

@@ -2,7 +2,6 @@
 //! lrm C.7
 //! reject E0205
 //! reject assign
-// EXPECT: error -- continuous digital assignment uses the digital queue.
 module ch8_continuous_assignment;
   integer source, target;
   assign target = source;

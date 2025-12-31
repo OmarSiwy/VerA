@@ -9,6 +9,7 @@
 // carry: atan2(0.5, -1) = pi - atan(0.5) = 2.677945044588987, whereas
 // atan(0.5 / -1) would collapse to -0.4636476090008061.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_atan2(p, n);

@@ -17,6 +17,15 @@
 //
 // Arguments: degree_of_freedom = 4.0, which §9.13.2 requires to be greater than zero.
 //
+// A SECOND rule, and the one that makes this fixture more than a stub test.
+// §9.13.2 makes the seed an inout: "If it is an integer variable, then it is an
+// inout argument; that is, a value is passed to the function and A DIFFERENT
+// VALUE IS RETURNED. The variable is initialized by the user and only updated by
+// the system function. This ensures the desired distribution is achieved upon
+// successive calls." So after the call `sa` shall no longer read 7. Without that
+// check the only assertion here is `a == b`, which a `return 0` stub satisfies
+// perfectly; with it, a constant-returning implementation fails.
+//
 //! lrm 9.13.2
 //! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
 `include "check.vh"
@@ -29,6 +38,8 @@ module ch09_rdist_t(p, n);
     a = $rdist_t(sa, 4.0);
     b = $rdist_t(sb, 4.0);
     `CHECKI("§9.13.2 the same seed gives the same value", a == b, 1);
-    I(p,n) <+ V(p,n) + a;
+    `CHECKI("§9.13.2 the seed is inout: a DIFFERENT value is returned", sa != 7, 1);
+    `CHECKI("and both seeds advanced the same way from the same start", sa == sb, 1);
+    I(p,n) <+ V(p,n) + a + b + sa + sb;
   end
 endmodule

@@ -3,6 +3,7 @@
 // 3.1699…, so the ceiling is 4. 8 is the boundary the ceiling must not push
 // past: log2(8) is exactly 3, so $clog2(8) is 3 and not 4.
 //
+//! lrm 9.14
 `include "check.vh"
 module ch09_atomic_clog2(p, n);
   inout p, n; electrical p, n;

@@ -7,6 +7,7 @@
 // At V(p,n) = 0.5 the argument is 0.5 * tanh(0.5) = 0.23105857863000487, and
 // atanh(u) = 0.5 * ln((1 + u)/(1 - u)) = 0.2353074598670406.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_atanh(p, n);

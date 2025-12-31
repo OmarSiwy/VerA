@@ -18,7 +18,7 @@ module ch09_atomic_fdisplay(p, n);
   inout p, n; electrical p, n;
   integer fd;
   analog begin
-    fd = $fopen("fixture.log", "a");
+    fd = $fopen("ch09_039_fdisplay.log", "a");
     // Masked, not shifted: `>>` fills with zeros on a 32-bit integer but VerA
     // carries integers in an i64, where a sign-extended fd would answer a shift
     // differently. `& 2147483648` is bit 31 whatever the width, so this pins

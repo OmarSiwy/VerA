@@ -16,7 +16,7 @@
 //! lrm D.1
 //! lrm 3.6.3
 //! reject E0501
-//! xfail VerA accepts an analog access function on a natureless `ddiscrete` net: the discipline binds no natures, so nothing constrains which access name resolves on it
+`include "disciplines.vams"
 module annex_d_discrete(n);
   inout n;
   ddiscrete n;

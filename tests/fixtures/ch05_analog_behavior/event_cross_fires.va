@@ -13,11 +13,23 @@
 // that, and there is no falling crossing anywhere in the run.
 //
 // The runner asserts at every timepoint, and the sampled value is 0.0 before
-// the crossing and 1.5 after, so no one literal is right at all three points —
-// hence CHECKEQ against `V(p) > 1.0`, which is the same partition of the run
-// stated independently of the event machinery. It is the weaker relational
-// form, but it is not weak here: a cross() that never fires leaves x at 0.0 and
-// fails the third point, and one that fires twice reads n = 2 and fails it too.
+// the crossing and nonzero after, so no one literal is right at all three
+// points — hence a relational oracle against `V(p) > 1.0`, which is the same
+// partition of the run stated independently of the event machinery.
+//
+// WHAT THE SAMPLE IS NOT PINNED TO. The first check bounds x instead of naming
+// 1.5, because 1.5 is only the answer for a tool that evaluates strictly on the
+// declared grid. §5.10.3.1: "cross() controls the timestep to accurately
+// resolve the crossing", and with no tolerances given "the tool (e.g., the
+// simulator) sets them" — so a conforming simulator inserts a timepoint just
+// past V(p) = 1.0 and the event samples ≈1.0 there, never 1.5. What the clause
+// does fix is the box: "the event shall occur after the threshold crossing, and
+// while the signal remains in the box defined by actual crossing and expr_tol
+// and time_tol", so past the crossing x lies in [1.0, 1.5] and before it x is
+// untouched. Both bounds carry weight — a cross() that never fires leaves x at
+// 0.0 and fails the last point, one that fires early at t = 1n leaves x = 0.5
+// and fails that point, and one that fires twice reads n = 2 and fails the
+// second check.
 //
 //! lrm 5.10.3.1
 //! analysis tran
@@ -31,7 +43,8 @@ module ch5_cross_fires(p);
       x = V(p);
       n = n + 1;
     end
-    `CHECKEQ("x is sampled exactly on the timepoints past the rising crossing", x, (V(p) > 1.0) ? 1.5 : 0.0, 0.0);
+    `CHECKI("x is untouched before the crossing and inside the box after it",
+            (V(p) > 1.0) ? (x >= 1.0 && x <= 1.5) : (x == 0.0), 1);
     `CHECKEQ("and one rising crossing produces exactly one event", n, (V(p) > 1.0) ? 1 : 0, 0.0);
     I(p) <+ x;
   end

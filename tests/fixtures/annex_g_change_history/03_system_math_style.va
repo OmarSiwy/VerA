@@ -1,5 +1,7 @@
-// Annex G item 7795 ("Support the alternative Verilog style for $min(), $max()
-// and $abs()", 4.3.1 / Table 9-11). The $-prefixed spellings are the SAME
+// Annex G Table G.7 item 7795 ("Support the alternative Verilog style for
+// $min(), $max(), and $abs()", clause column "4.3.1, 9-11"). Table 4-14's first
+// column gives `$min(x,y)`, `$max(x,y)` and `$abs(x)`, and Table 9-11 lists all
+// three as supported in the analog context. The $-prefixed spellings are the SAME
 // functions as the bare ones, and §4.3.1 pins their behaviour at the kink by
 // defining them with the conditional operator:
 //
@@ -12,8 +14,12 @@
 //
 // At the declared bias V(p,n) = -3.5 the fixture's own composite is
 // min(abs(-3.5), max(1.0, -3.5)) = min(3.5, 1.0) = 1.0. Every want here is a
-// dyadic rational, so exact equality is the right claim.
+// dyadic rational, so exact equality is the right claim. $min of two integers
+// is the integer-result rule of Table 4-14, hence CHECKI.
 //
+//! lrm G.7
+//! lrm 4.3.1
+//! lrm 9.14
 //! bias V(p) = -3.5, V(n) = 0
 //! print none
 `include "check.vh"

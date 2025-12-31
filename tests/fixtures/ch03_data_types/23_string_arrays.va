@@ -3,6 +3,7 @@
 // The declared range starts at 1, so the assignment pattern's first element
 // lands at index 1 — a backend that treated the pattern as 0-based would put
 // "first" at 0 and read "middle" here.
+//! lrm 3.3
 `include "check.vh"
 module ch3_string_arrays(p);
   inout p;

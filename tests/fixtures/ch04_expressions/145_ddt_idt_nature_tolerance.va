@@ -8,10 +8,25 @@
 //                                        taken from the specified nature."
 //
 // A nature — 3.6.1 — carries an `abstol`, and naming one here is how a model
-// says "resolve this integral to the precision of a charge" without writing the
-// number. The alternative spelling, the bare abstol, is pinned by 14_ddt.va and
+// says "resolve this to the precision of an ampere" without writing the number.
+// The alternative spelling, the bare abstol, is pinned by 14_ddt.va and
 // 15_idt.va; this is the half where the tolerance comes from annex D's
 // disciplines.vams instead of a literal.
+//
+// WHICH SIGNAL THE NATURE DESCRIBES IS NOT THE SAME FOR THE TWO OPERATORS, and
+// the two calls below are written so that the units line up in each:
+//
+//   4.5.3: "The absolute tolerance, abstol or derived from nature, applies to
+//   the OUTPUT of the ddt operator" — so the argument is `1p * V(p,n)`, a
+//   capacitance times a voltage, i.e. a charge, whose time derivative is a
+//   current. `Current` is then a tolerance on an ampere-valued output.
+//   `ddt(V(p,n), Current)` would name an ampere tolerance for a volt-per-second
+//   output, which a tool that checks nature units is entitled to reject for a
+//   reason that has nothing to do with the shape this file pins.
+//
+//   4.5.4: "The absolute tolerance applies to the INPUT of the idt operator" —
+//   the input is I(p,n), an ampere, so the nature is `Current` here too. It is
+//   NOT `Charge`: coulombs are the units of idt's output.
 //
 // The tolerance changes no value — 4.5.3: it "is the largest signal level that
 // is considered negligible" — so the wants are the same ones the two siblings
@@ -21,7 +36,7 @@
 //
 //! lrm 4.5.3
 //! lrm 4.5.4
-//! xfail VerA does not resolve a nature identifier as an analog operator argument: `ddt(V(p,n), Current)` and `idt(I(p,n), 5.0, 0, Charge)` both raise E0314 "unknown identifier", with or without an explicit `include "disciplines.vams"
+//! xfail VerA does not resolve a nature identifier as an analog operator argument: `ddt(1p*V(p,n), Current)` and `idt(I(p,n), 5.0, 0, Current)` both raise E0314 "unknown identifier", with or without an explicit `include "disciplines.vams"
 //! print none
 `include "disciplines.vams"
 `include "check.vh"
@@ -30,9 +45,10 @@ module ch04_ddt_idt_nature_tolerance(p, n);
     electrical p, n;
 
     analog begin
-        `CHECKX("ddt(expr, nature) still returns zero in DC", ddt(V(p, n), Current), 0.0);
+        `CHECKX("ddt(expr, nature) still returns zero in DC",
+                ddt(1p * V(p, n), Current), 0.0);
         `CHECKX("idt(expr, ic, assert, nature) still returns ic in DC",
-                idt(I(p, n), 5.0, 0, Charge), 5.0);
+                idt(I(p, n), 5.0, 0, Current), 5.0);
         I(p, n) <+ V(p, n);
     end
 endmodule

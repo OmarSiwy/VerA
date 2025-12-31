@@ -16,10 +16,20 @@
 // have a parameter called "vera_no_such_simparam" and really does read zero,
 // which is why the LRM makes it an error rather than a default.
 //
+// THE REJECT SUBSTRING IS RULE-DERIVED, NOT NAME-DERIVED. It used to be the
+// literal `vera_no_such_simparam`, which is the least portable form the contract
+// allows: §9.15 does not require a diagnostic to echo the parameter name ("there
+// is no fixed list of simulation parameters ... simulators can also accept other
+// strings"), so a conforming tool that says only "simulation parameter is not
+// known" would have failed the fixture while any diagnostic that happened to
+// quote the call — including a blanket "unsupported system function" that
+// printed its arguments — would have satisfied it. The substring is now the
+// LRM's own words for the condition, which nothing else in the chapter produces.
+//
 // A reject, so there is nothing to run and no `want` to write.
 //
 //! lrm 9.15
-//! reject vera_no_such_simparam
+//! reject simulation parameter is not known
 //! xfail VerA answers every unknown $simparam with a default instead of diagnosing the missing-fallback case
 module ch09_simparam_unknown_no_fallback_rejected(p, n);
   inout p, n; electrical p, n;

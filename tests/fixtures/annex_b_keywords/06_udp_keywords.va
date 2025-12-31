@@ -10,15 +10,16 @@
 // the parser resynchronises at each `;` and reports every spelling separately,
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
+//
+// `primitive` and `table` are not declared here: they are substrings of
+// `endprimitive` and `endtable`, so their arms would be satisfied by the longer
+// spellings' diagnostics. They are censused in 22_shadowed_spellings.va and
+// 23_shadowed_spellings_inner.va, which explain the mechanism.
 //! lrm B
 //! reject E0208
 //! reject endprimitive
 //! reject endtable
-//! reject primitive
-//! reject table
 module annex_b_reserved_udp_keywords;
     real endprimitive;
     real endtable;
-    real primitive;
-    real table;
 endmodule

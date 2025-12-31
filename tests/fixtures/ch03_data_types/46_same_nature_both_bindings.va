@@ -16,7 +16,6 @@
 //
 //! lrm 3.6.2.1
 //! reject DiagnosticsReported
-//! xfail VerA binds the same nature to potential and flow without complaint; there is no same-nature check on a conservative discipline in lower.zig
 nature ch3_both_n; units="V"; access=Both; abstol=1u; endnature
 discipline ch3_both_d;
     domain continuous;

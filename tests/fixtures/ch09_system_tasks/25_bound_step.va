@@ -13,6 +13,7 @@
 // the sine would take a different value at each and no single literal would be
 // right for all of them.
 //
+//! lrm 9.17.2
 //! analysis tran
 //! time 250u
 `include "constants.vams"

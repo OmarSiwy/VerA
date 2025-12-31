@@ -3,6 +3,26 @@
 // text is not a value these macros can hold to a literal — so the two $display
 // lines below stay as they are, a rendering a reader checks by eye.
 //
+// Both of those lines obey the §9.4.3 pairing rule, "for each % character
+// (except %m, %% and %l) that appears in a string, a corresponding expression
+// argument shall be supplied after the string": the first carries six consuming
+// specifiers and six arguments, the second carries four (%10.3g, %e, %f, %r)
+// and four. 161_display_argument_pairing_rejected.va is the negative for that rule, so
+// these two must not violate it — a compiler that implements the check has to
+// accept this file.
+//
+// The four real formats are all handed 1e-9 so the four renderings of one value
+// can be read side by side, and %r is the reason for that particular number:
+// Table 9-23 defines it as "display 'real' in engineering notation, using the
+// scale factors defined in 2.6.2", and 1e-9 is exactly the §2.6.2 `n` factor.
+// %e and %f on the same input show the notation is not merely exponential.
+//
+// The escapes are Table 9-21 verbatim — \ddd, \t, \\ and \" — written with a
+// SINGLE backslash, which is what makes them escapes. `\101` is octal 101 =
+// 'A'; a `\\101` would be the two characters \1 followed by 01 and would test
+// only the \\ row. The three that render as whitespace or as a delimiter are
+// bracketed so a truncated or dropped escape is visible.
+//
 // Two of the rows CAN be pinned with digits, by sending the text back the way it
 // came. §9.5.3 $sformat is the same formatter writing into a string variable
 // instead of the transcript, and §9.5.4.2 $sscanf reads a string back with "%d
@@ -17,6 +37,10 @@
 // contain no letters (a hex a-f would not scan as decimal at all, which would
 // make the check pass or fail for the wrong reason) and so the two bases give
 // different answers from each other and from the input.
+//
+// Each round trip keeps its own `nread`. They used to share one variable, which
+// the second $sscanf overwrote before the single count assertion ran — so the
+// %h round trip's item count was never checked at all.
 //
 // The round trip is immune to field width: leading zeros or leading spaces are
 // both consumed by %d, since "for all descriptors except the character c, white
@@ -39,23 +63,25 @@
 //! lrm 9.4.3
 //! lrm 9.5.3
 //! lrm 9.5.4.2
-//! xfail two gaps, and the first stops the build before the assertions run. (1) `%c` does not compile: cg_display.zig appendConv maps it to Zig verb `c` with want=.int, and renderPrintArg then hands std.fmt an i64 where `{c}` takes a u8 — "expected type 'u8', found 'i64'" out of std/Io/Writer.zig printAsciiChar, so ANY $display carrying a Table 9-22 %c kills the generated testbench. (2) codegen.zig `void_tasks` lowers $sformat/$sscanf to the constant `S.con(0.0)`, so `text` is never written and `back` never assigned
+//! xfail VerA has no §9.5.3/§9.5.4.2 string-formatter surface: codegen.zig `void_tasks` lowers $sformat/$sscanf to the constant `S.con(0.0)`, so `text` is never written and neither `back_h` nor `back_o` is assigned. The §9.4.3 renderings above it, `%c` included, now compile and print
 `include "check.vh"
 module ch09_display_formats(p, n);
   inout p, n; electrical p, n;
   string text;
-  integer back, nread;
+  integer back_h, back_o, nread_h, nread_o;
   analog begin
     $display("bin=%b oct=%o dec=%d hex=%h char=%c str=%s", 5, 5, 5, 5, 65, "A");
-    $display("real=%10.3g exp=%e fixed=%f eng=%r percent=%% name=%m octal=\\11 tab=\\t quote=\\\"");
+    $display("g=%10.3g exp=%e fixed=%f eng=%r percent=%% name=%m octal=[\101] tab=[\t] backslash=[\\] quote=[\"]",
+             1e-9, 1e-9, 1e-9, 1e-9);
     $display("null=[", , "] bare=", 7);
     $sformat(text, "%h", 4096);
-    nread = $sscanf(text, "%d", back);
-    `CHECKI("Table 9-22 %h of 4096 is the hex digits 1000", back, 1000);
+    nread_h = $sscanf(text, "%d", back_h);
     $sformat(text, "%o", 4096);
-    nread = $sscanf(text, "%d", back);
-    `CHECKI("Table 9-22 %o of 4096 is the octal digits 10000", back, 10000);
-    `CHECKI("each round trip read exactly one item", nread, 1);
+    nread_o = $sscanf(text, "%d", back_o);
+    `CHECKI("Table 9-22 %h of 4096 is the hex digits 1000", back_h, 1000);
+    `CHECKI("Table 9-22 %o of 4096 is the octal digits 10000", back_o, 10000);
+    `CHECKI("the %h round trip read exactly one item", nread_h, 1);
+    `CHECKI("the %o round trip read exactly one item", nread_o, 1);
     I(p,n) <+ V(p,n);
   end
 endmodule

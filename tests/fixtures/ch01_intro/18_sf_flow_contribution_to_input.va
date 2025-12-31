@@ -6,13 +6,12 @@
 // the CONTRIBUTION `I(inp) <+ ...` that the clause forbids. The contribution to
 // `outp` is legal and is there to show the rule is about direction.
 //
-// E0423 is not yet allocated in src/diag_code.zig — see the note in
-// 17_sf_potential_contribution_to_input.va, including why this must not be
-// pinned as `GeneratedCompileError`.
+// The expectation is the phase label, not the unallocated E0423 this used to
+// pin — see the note in 17_sf_potential_contribution_to_input.va, including why
+// this must not be pinned as `GeneratedCompileError` either.
 //
 //! lrm 1.3.4.2
-//! reject E0423
-//! xfail no front-end diagnostic distinguishes an input from an output contribution target; `vera --lint` is silent and only codegen refuses, generically
+//! reject DiagnosticsReported
 module ch01_sf_flow_contribution_to_input(inp, outp);
     input inp;
     output outp;

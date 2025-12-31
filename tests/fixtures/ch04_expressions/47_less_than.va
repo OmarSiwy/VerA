@@ -4,6 +4,7 @@
 // 1.0 < 1.0 is FALSE, so the value is the integer 0, and the contribution is a
 // zero current. Moving the operand off the boundary gives the 1.
 //
+//! lrm 4.2.5
 //! bias V(p) = 1.0
 `include "check.vh"
 module ch04_less_than(p, n);

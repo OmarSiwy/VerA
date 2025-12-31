@@ -6,13 +6,16 @@
 // The OR stays as the disjointness claim: it equals the sum
 // 32+64+128+256+512+1024 = 2016 = 2^11 - 2^5 only if no two masks share a bit.
 //
-// The masks are `defined here rather than read from the annex file: VerA ships
-// constants.vams and disciplines.vams as builtin includes but not the digital
-// driver-access file, so `include "driver_access.vams" is E0126 (verified).
+// WHAT THIS FILE DOES NOT TEST. As in driver_flags_low.va, the masks are
+// `defined here rather than read from the annex file, so got and want are both
+// the fixture's own text and the lexer's 32'b conversion is what is under test.
+// D.3's real requirement — that the implementation SUPPLY driver_access.vams —
+// is stated in driver_access_include.va, which `includes it.
 // No `ifdef DRIVER_ACCESS_VAMS guard, deliberately — see driver_flags_low.va.
 //
 //! lrm D.3
 `include "check.vh"
+`include "disciplines.vams"
 `define DRIVER_SDF 32'b00000100000
 `define DRIVER_NODELETE 32'b00001000000
 `define DRIVER_NOPREEMPT 32'b00010000000

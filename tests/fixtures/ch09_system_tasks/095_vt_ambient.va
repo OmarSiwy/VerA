@@ -6,10 +6,10 @@
 // With the ambient at 350 K, kT/q = 1.3806503e-23 * 350 / 1.602176462e-19 =
 // 0.030160698054244664 V, using the NIST1998 k and q that Annex D.2 selects
 // when no `PHYSICAL_CONSTANTS_* macro is defined. The LRM does not mandate a
-// CODATA vintage, and the four sets D.2 offers (SPICE, OLD, NIST1998, NIST2010
-// — there is no NIST2018 set in the standard header) spread by at most 3.1e-5
-// relative, so the check is written at rtol 1e-4:
-// still four significant figures, and blind to the choice of constants.
+// CODATA vintage, and the FIVE sets D.2 offers (NIST2018, NIST2010, SPICE, OLD
+// and the NIST1998 `else default — annex-d-stddefs.html:363,371,390) spread by
+// at most 3.04e-5 relative, so the check is written at rtol 1e-4: still four
+// significant figures, and blind to the choice of constants.
 //
 // The second check is the LRM sentence itself — the no-argument form must be
 // the one-argument form applied to $temperature — which is an identity with no

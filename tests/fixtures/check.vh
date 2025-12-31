@@ -1,4 +1,4 @@
-// Shared self-check macros for the exhaustive testbenches. LRM §10.3 `define.
+// Shared self-check macros for the exhaustive testbenches. LRM §10.4 `define.
 //
 // A fixture states its OWN expectation and prints the comparison, so the golden
 // transcript is readable rather than merely diffable:

@@ -6,6 +6,7 @@
 // 0 + 1 + 2 = 3 and the index that failed the guard is 3.
 //
 // An unroll that ran one iteration too few gives 1, one too many gives 6.
+//! lrm 3.5
 `include "check.vh"
 module ch03_genvar(p, n);
     inout p, n;

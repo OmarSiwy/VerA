@@ -14,6 +14,7 @@
 // the catalogue entry would silently stop this fixture proving anything.
 //! lrm B
 //! lrm 2.8
+//! lrm 2.8.2
 //! reject E0208
 //! reject module
 module module;

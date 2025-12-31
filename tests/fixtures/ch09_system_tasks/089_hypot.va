@@ -6,6 +6,7 @@
 // hypot is even in each argument and never negative, so flipping the sign of the
 // first argument must not change the result.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_hypot(p, n);

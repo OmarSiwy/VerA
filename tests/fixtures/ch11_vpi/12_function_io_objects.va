@@ -6,6 +6,8 @@
 // V(p) = 0.875, V(n) = 0.125 are both exact in binary, so x = 0.75 and
 // gain = 2.0 give affine = 2.0*0.75 + 1.0 = 2.5. Drop the `+ 1.0` and it is 1.5.
 //
+//! lrm 11.6.3
+//! lrm 4.7.1
 //! bias V(p) = 0.875, V(n) = 0.125
 `include "check.vh"
 module ch11_function_io_objects(p, n);

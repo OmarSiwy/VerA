@@ -1,12 +1,19 @@
 // §5.10.3.1 cross(), driving a sample-and-hold. This file lives in ch07 for
 // historical reasons and does NOT pin §7.3.4: that clause is "Detecting
 // discrete events in a continuous context", and cross() is an ANALOG event, so
-// nothing here crosses a domain. What it pins is the one thing §5.10.3.1 fixes
-// about cross() without reference to any solver:
+// nothing here crosses a domain. §5.10.3.1 is where cross() is defined; the one
+// thing about it this fixture can observe without a solver is fixed one clause
+// later, in §5.10.3.2 (above function), where the two are contrasted:
 //
-//   "the cross() function can only generate an event after the simulation time
-//    has advanced from zero. The cross() function will not generate events for
-//    non-transient analyses, such as ac, dc, or noise analyses"
+//   "The above() function can generate an event during initialization. ... In
+//    contrast, the cross() function can only generate an event after the
+//    simulation time has advanced from zero. The cross() function will not
+//    generate events for non-transient analyses, such as ac, dc, or noise
+//    analyses"
+//
+// The sentence is normative about cross() wherever it is printed, but it is
+// printed in §5.10.3.2 — §5.10.3.1 covers the arguments, `dir`, the tolerances
+// and `enable`, and says nothing about dc — so both clauses are cited.
 //
 // The default analysis is dc, so the sampler cannot fire and `held` keeps the
 // value §3.2 gives every real variable: "Real variables are initialized to
@@ -17,6 +24,7 @@
 // event's body unconditionally would sample 2.0 rather than hold 0.
 //
 //! lrm 5.10.3.1
+//! lrm 5.10.3.2
 //! lrm 3.2
 //! bias V(p) = 2.0
 `include "check.vh"

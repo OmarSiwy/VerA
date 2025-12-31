@@ -1,6 +1,7 @@
 // max() (LRM 4.3.1 Table 4-14): "max(x,y) is equivalent to (x > y) ? x : y",
 // all x, all y, with the same integer/real result typing as min().
 `include "check.vh"
+//! lrm 4.3.1
 //! bias V(p) = 2.5
 module ch04_max(p, n);
   inout p, n; electrical p, n;

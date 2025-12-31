@@ -14,6 +14,12 @@
 // through (literal -> bias -> probe), so exact equality is the right claim: a
 // tool that routed a custom access function through a conversion would fail it.
 //
+// The `V(p)` on the bias line is NOT the source-level access function — the
+// whole point of this file is that p does not have one called `V`. `//!`
+// directives are harness notation (src/backend/tb.zig), where `V(name)` and
+// `I(name)` are the fixed spellings for "the potential of" and "the flow
+// through" whatever the net's discipline calls them.
+//
 //! lrm 4.4
 //! bias V(p) = 0.7
 `include "check.vh"

@@ -17,6 +17,7 @@
 //! bias p = 1.5
 //! bias q = 6.25
 `include "check.vh"
+`include "disciplines.vams"
 module annex_d_literal_rotational(p, q);
   inout p, q;
   rotational p;

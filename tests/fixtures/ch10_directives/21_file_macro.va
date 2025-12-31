@@ -9,9 +9,22 @@
 // fail a conforming tool that opened the file by an absolute path, so the claim
 // stops at "it expands, and it is a string".
 //
-// That leaves the fixture with nothing numeric of its own, so it carries one
-// independent assertion: the branch potential at the operating point,
-// 0.75 - 0.25 = 0.5 V exactly (§1.3.1), both operands binary-exact.
+// So where is the §10.7 requirement enforced, given the runner reads only
+// `ok=` lines? In the COMPILE, and that is a real floor rather than a
+// formality: `__FILE__ is the sole argument of a `$display` whose format
+// string ends in "%s.". If the macro is not defined the file does not
+// preprocess; if it expands to nothing the call becomes `$display("...%s.", )`
+// and does not parse; if it expands to anything that is not a string literal
+// the argument does not match §9.4's %s. The one case the compile cannot
+// catch is an expansion to the empty string literal "" — which §10.7 does not
+// spell out as illegal, and which an analog block has no way to measure,
+// there being no string length or comparison in the subset a device can
+// evaluate. That is the gap, stated rather than papered over with a check no
+// conforming tool would be obliged to pass.
+//
+// The branch potential is a second, independent assertion, so the fixture
+// still carries a digit of its own: 0.75 - 0.25 = 0.5 V exactly (§1.3.1),
+// both operands binary-exact.
 //
 //! lrm 10.7
 //! bias V(p) = 0.75, V(n) = 0.25

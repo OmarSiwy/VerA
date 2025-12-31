@@ -8,25 +8,32 @@
 //   $fatal    "terminates the simulation with an errorcode ... an implicit call
 //              to $finish"                             — run ends here
 //
-// So the operating point is chosen to sit between the two halves. §5.4.1 gives
-// V(p,n) = 3.0 - 0.5 = 2.5 V, and both operands and the difference are exact in
-// binary, so §4.2.5 makes the four guards exactly 1, 1, 0, 0: the two harmless
-// tasks fire and the two that would stop the simulation do not.
+// So the file splits them. $info and $warning are called UNCONDITIONALLY, and an
+// assertion sits after them: the `ok=` line only appears if execution reached
+// it, so a tool that stopped on either would print nothing and the fixture would
+// fail. That is the only observable §9.7.3 gives a task with no return value,
+// and it is the whole content of the "run continues" column above.
 //
-// The second check is the load-bearing one. If it read 1, $fatal would terminate
-// the run and this transcript would not exist to be read.
+// $error and $fatal stay under a guard the operating point makes FALSE, because
+// executing them is precisely what ends the run. §5.4.1 gives V(p,n) =
+// 3.0 - 0.5 = 2.5 V, exact in binary, so both guards are 0. What that pair of
+// checks proves is only that the bias is where the header says it is — it is
+// arithmetic, not §9.7 — and it is here to document why those two calls are not
+// reached, not to test them. Testing $error/$fatal positively would need a
+// harness that can observe a terminated run, which this suite does not have.
 //
+//! lrm 9.7.3
 //! bias V(p) = 3.0, V(n) = 0.5
 `include "check.vh"
 module ch09_severity_tasks(p, n);
   inout p, n; electrical p, n;
   analog begin
-    `CHECKI("§4.2.5: at V(p,n) = 2.5 V both non-terminating guards are true",
-            (V(p, n) > 1.0) && (V(p, n) > 2.0), 1);
-    `CHECKI("§9.7.3: neither $error nor $fatal is reached, so the run survives to print this",
+    `CHECKI("§4.2.5: at V(p,n) = 2.5 V neither terminating guard is true",
             (V(p, n) > 3.0) || (V(p, n) > 4.0), 0);
-    if (V(p,n) > 1.0) $info("info %g", V(p,n));
-    if (V(p,n) > 2.0) $warning("warning %g", V(p,n));
+    $info("info %g", V(p,n));
+    $warning("warning %g", V(p,n));
+    `CHECKX("§9.7.3: the run continues past $info and $warning, so this is reached",
+            V(p,n)*2.0, 5.0);
     if (V(p,n) > 3.0) $error("error %g", V(p,n));
     if (V(p,n) > 4.0) $fatal(1, "fatal %g", V(p,n));
     I(p,n) <+ V(p,n);

@@ -15,8 +15,11 @@
 // excludes exactly one thing from Clause 4 in Verilog-A, the case equality
 // operators === and !==. This file was part of 24_expression_composites.va as
 // a `//! reject`, which demanded a diagnostic for legal source and took four
-// working operators down with it; the suite meanwhile uses replication as a
-// green positive elsewhere (ch03_data_types/28_string_replication.va).
+// working operators down with it. (An earlier version of this paragraph called
+// ch03_data_types/28_string_replication.va a green positive for the same form;
+// it is not — it carries its own `//! xfail` for the same missing parser rule.
+// The §4.2.13 + C.5 argument above is what makes this file legal, and it does
+// not need a sibling.)
 //
 //! lrm A.8.1
 //! lrm 4.2.13

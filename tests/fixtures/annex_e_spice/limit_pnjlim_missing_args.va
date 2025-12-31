@@ -25,7 +25,6 @@
 //! lrm 9.17.3
 //! lrm E.3.4
 //! reject DiagnosticsReported
-//! xfail VerA silently DECLINES an under-supplied $limit — cg_limit.zig appends "too few arguments for the algorithm named" to a list rendered as a COMMENT in the emitted device, and exits 0 with no diagnostic
 module annex_e_pnjlim_missing_args(p);
   inout p; electrical p; electrical mid; real limited;
   analog begin

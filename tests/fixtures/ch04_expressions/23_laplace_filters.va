@@ -26,8 +26,15 @@
 //     This is the one case the sentence exists FOR: (1 - s/0) divides by zero,
 //     so a lowering that applies the general formula to every root returns inf
 //     or NaN here rather than 0. The zeros vector '{-1,0} used above is a real
-//     root at MINUS ONE and never enters the case. The identical rule in
-//     4.5.12.1 is reached by 24_z_transform_filters.va.
+//     root at MINUS ONE and never enters the case.
+//
+//     The Z twin of this sentence, in 4.5.12.1, is NOT exercised anywhere and
+//     cannot be from a DC point: there the origin term becomes z rather than s,
+//     and a DC evaluation puts z = 1, where z and the general formula's
+//     (1 - z^-1 * 0) = 1 are the same number. 24_z_transform_filters.va
+//     deliberately keeps every Z root away from the origin for that reason —
+//     an assertion there would have been green for a reason unrelated to the
+//     rule. Pinning it needs a transient, and 4.5.12 fixes no transient values.
 //
 // With V(p,n) = 1 V the outputs are therefore 1, 1, 0, 0, 0. The zeros are what
 // bite: a filter lowered as a pass-through, or one that read '{0,1} as a pair

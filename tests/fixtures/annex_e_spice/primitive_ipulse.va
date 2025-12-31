@@ -1,0 +1,34 @@
+// Table E.1 row `ipulse`: ports p, n, parameters dc, mag, phase, val0, val1, td, rise, fall, width, period, behaviour
+// a trapezoidal periodic current source.
+//
+// WHAT IS PINNED. E.3: "Table E.1 shows the REQUIRED names for primitives,
+// parameters, and ports which are otherwise unnamed in SPICE. For connection by
+// order instead of by name, the ports and parameters shall be given in the order
+// listed. The default discipline of the ports for these primitives shall be
+// electrical and their descriptions shall be inout." E.1.2 adds that "when
+// instantiating SPICE primitives in Verilog-AMS HDL, the primitives shall, and
+// parameters and ports can, be named", and E.2 that a tool "expected to provide
+// the basic set of Spice primitives" shall treat them "in the same manner in
+// Verilog-AMS HDL as built-in primitives of gate- and switch-level modeling".
+// So the instantiation below — every port and every parameter named, in the
+// Table E.1 order — is source a SPICE-compatible Verilog-AMS tool must accept.
+//
+// THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision of this file demanded
+// a diagnostic for the line below. That inverts the test: the LRM prints this
+// syntax as legal, so a conforming compiler would FAIL and only a compiler with
+// no SPICE support would pass. The requirement is that it compiles; the `xfail`
+// records that VerA does not, and fires the day it does.
+//
+// It asserts nothing because it cannot: the observable is elaboration. Table
+// E.1's behaviour column belongs to the primitive's own branches, which are not
+// reachable from this module's analog block, and a `CHECK on a biased port here
+// would only restate the bias directive.
+//
+//! lrm E.3
+//! lrm E.1.2
+//! lrm E.2
+//! xfail VerA rejects module instantiation (E0204), so no Table E.1 primitive can be instantiated at all
+module annex_e_primitive_ipulse(p, n);
+  inout p, n; electrical p, n;
+  ipulse #(.dc(0.0), .mag(1.0), .phase(0.0), .val0(0.0), .val1(1m), .td(1n), .rise(1p), .fall(1p), .width(1n), .period(2n)) x1(.p(p), .n(n));
+endmodule

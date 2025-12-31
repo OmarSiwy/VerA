@@ -1,5 +1,5 @@
 //! lrm 4.7
-//! lrm A.8.2
+//! lrm 12.9
 //! reject E0512
 //! reject `vpi_get_analog_time`
 module ch12_atomic_get_analog_time(p, n);

@@ -11,15 +11,13 @@
 //     t = 1n   timer event   -> held = V(p) = 0.7
 //     t = 2n   timer event   -> held = V(p) = 0.7
 //
-// and the check states that as a select on $abstime (§9.10), 0.5n being a value
-// strictly between the two declared regimes. It fails if the or-list drops its
-// timer operand (held stays 0), and it fails if the or-list is treated as a
-// conjunction (the silent cross() would veto the timer).
-//
-// FAILS TODAY at t = 1n only — the same one-timepoint-late event defect
-// event_timer.va documents: `__hit` is set in `updateState` after the point is
-// evaluated, so the t = 1n event is not seen until t = 2n. The or-list itself
-// is fine; t = 0 and t = 2n both pass.
+// and the check states that as a select on $abstime (§9.10). The breakpoint is
+// the timer's own first event, 1n, and not a value that merely separates the
+// declared timepoints: `held` is 0.0 on [0, 1n) and 0.7 from 1n, so `>= 1n` is
+// the true partition of the run and stays right at any timepoint a tool chooses
+// to add. It fails if the or-list drops its timer operand (held stays 0), and it
+// fails if the or-list is treated as a conjunction (the silent cross() would
+// veto the timer).
 //
 //! lrm 5.10.1
 //! lrm 5.10.3.1
@@ -32,7 +30,7 @@ module ch5_event_or(p, c);
   inout p, c; electrical p, c; real held;
   analog begin
     @(cross(V(c), +1) or timer(1n, 1n)) held = V(p);
-    `CHECK("the timer half of an or-list fires on its own", held - (($abstime > 0.5n) ? 0.7 : 0.0), 0.0, 1e-15);
+    `CHECK("the timer half of an or-list fires on its own", held - (($abstime >= 1n) ? 0.7 : 0.0), 0.0, 1e-15);
     I(p) <+ held;
   end
 endmodule

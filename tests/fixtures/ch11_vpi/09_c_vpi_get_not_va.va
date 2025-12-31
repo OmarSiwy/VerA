@@ -7,7 +7,7 @@
 //! lrm 4.7
 //! lrm 11.4
 //! reject E0512
-//! reject vpi_get
+//! reject `vpi_get`
 module ch11_c_vpi_get_not_va(p, n);
   inout p, n; electrical p, n;
   analog I(p,n) <+ vpi_get(1, 0);

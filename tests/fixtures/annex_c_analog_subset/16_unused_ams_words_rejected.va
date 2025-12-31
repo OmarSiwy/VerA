@@ -12,18 +12,33 @@
 // parser report each spelling separately, and one `//! reject` line per spelling
 // proves each one individually.
 //
-// Table B.1 spells it `resolveto`; the C.16 list in the 2.4.0 PDF spells it
-// `resolvedto`. Table B.1 is the reserved-word list, so this follows Table B.1.
+// TWO of the ten C.16 words are not here, because a `//! reject` substring is
+// matched against EVERY diagnostic of the file (tests/torture.zig
+// failureContains) and these two are prefixes of their neighbours:
 //
-// The tenth C.16 word, `net_resolution`, is NOT here: VerA does not reserve it,
-// so it would need `//! xfail` on the whole file and turn a nine-keyword proof
-// into a known gap. It has its own fixture, 20_net_resolution_reserved.va.
+//   `connect`      is a substring of `connectmodule`, `connectrules` and
+//                  `endconnectrules`
+//   `connectrules` is a substring of `endconnectrules`
+//
+// so in a file that also spells the longer word, those two arms are satisfied
+// without the shorter keyword ever being flagged — the opposite of what lines
+// 11-13 claim. They get their own files, 30_connect_reserved.va and
+// 31_connectrules_reserved.va, where nothing else can satisfy them. The seven
+// left here are pairwise non-containing, so each arm is load-bearing.
+//
+// Spelling: Table B.1 spells it `resolveto`, and Table B.1 is the normative
+// reserved-word list. The C.16 list — in this LRM as well as in the 2.4.0 PDF —
+// spells the same keyword `resolvedto`; that spelling appears nowhere in Annex
+// B, so it is not a reserved word and cannot be tested as one.
+//
+// The tenth C.16 word, `net_resolution`, is NOT here either: VerA does not
+// reserve it, so it would need `//! xfail` on the whole file and turn a
+// multi-keyword proof into a known gap. It has its own fixture,
+// 20_net_resolution_reserved.va.
 //! lrm B
 //! lrm C.16
 //! reject E0208
-//! reject connect
 //! reject connectmodule
-//! reject connectrules
 //! reject driver_update
 //! reject endconnectrules
 //! reject merged
@@ -31,9 +46,7 @@
 //! reject split
 //! reject wreal
 module annex_c_unused_ams_words_rejected;
-    real connect;
     real connectmodule;
-    real connectrules;
     real driver_update;
     real endconnectrules;
     real merged;

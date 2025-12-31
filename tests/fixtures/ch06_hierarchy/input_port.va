@@ -11,7 +11,7 @@
 `include "check.vh"
 module ch6_input(input electrical p);
   analog begin
-    `CHECK("the input port's potential is the biased unknown", V(p), 1.25, 1e-15);
+    `CHECKX("the input port's potential is the biased unknown", V(p), 1.25);
     I(p) <+ V(p);
   end
 endmodule

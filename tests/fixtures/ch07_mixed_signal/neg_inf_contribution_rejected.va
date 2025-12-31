@@ -17,7 +17,6 @@
 //
 //! lrm 7.3.2.1
 //! reject contribution of an infinite value
-//! xfail VerA does not diagnose an infinite contribution; `I(p) <+ -1.0/0.0` yields only W0650
 module ch7_neg_inf_contribution(p);
   inout p; electrical p;
   real bad;

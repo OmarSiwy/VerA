@@ -16,6 +16,10 @@
 // the parser resynchronises at each `;` and reports every spelling separately,
 // and one `//! reject` line per spelling so each keyword is proved individually
 // rather than the file passing on whichever token the parser tripped over first.
+//
+// `discipline` and `nature` are not declared here: they are substrings of
+// `enddiscipline` and of `ddt_nature`/`endnature`/`idt_nature`. They are
+// censused in 22_shadowed_spellings.va, which explains the mechanism.
 //! lrm B
 //! reject E0208
 //! reject abstol
@@ -23,7 +27,6 @@
 //! reject branch
 //! reject continuous
 //! reject ddt_nature
-//! reject discipline
 //! reject discrete
 //! reject domain
 //! reject enddiscipline
@@ -31,7 +34,6 @@
 //! reject flow
 //! reject ground
 //! reject idt_nature
-//! reject nature
 //! reject potential
 //! reject units
 //! reject aliasparam
@@ -44,7 +46,6 @@ module annex_b_reserved_discipline_nature;
     real branch;
     real continuous;
     real ddt_nature;
-    real discipline;
     real discrete;
     real domain;
     real enddiscipline;
@@ -52,7 +53,6 @@ module annex_b_reserved_discipline_nature;
     real flow;
     real ground;
     real idt_nature;
-    real nature;
     real potential;
     real units;
     real aliasparam;

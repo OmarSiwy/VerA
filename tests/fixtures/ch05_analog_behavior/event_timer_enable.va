@@ -8,10 +8,6 @@
 // gives a real. The three declared timepoints are the first three fires the
 // enable has to suppress.
 //
-// FAILS TODAY — known VerA defect, not a wrong want. The `.timer` arm of
-// `updateState` in src/backend/codegen.zig reads args[0] and args[1] only; the
-// enable argument (args[3]) is never read, so a disabled timer still fires.
-//
 //! lrm 5.10.3.3
 //! analysis tran
 //! time 0, 1n, 2n

@@ -1,9 +1,14 @@
 // Annex C.8 / §6.5.3, the `inout` direction of the real value port. See
-// 15_real_value_port_rejected.va for why the three directions are three files.
+// 15_real_value_port_rejected.va for why the three directions are three files,
+// and for why a real value port is spelled `wreal` and not `real` (A.2.1.2
+// admits `inout [discipline_identifier] [net_type | wreal] ...`; `real` is
+// neither, so `inout real p;` was a plain syntax error full Verilog-AMS
+// rejects too, and proved nothing about the C.8 carve-out).
 //
 //! lrm C.8
 //! lrm 6.5.3
 //! reject E0208
+//! reject wreal
 module annex_c_real_value_inout_port_rejected(p);
-    inout real p;
+    inout wreal p;
 endmodule

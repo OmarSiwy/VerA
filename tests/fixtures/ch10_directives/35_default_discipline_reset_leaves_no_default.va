@@ -17,13 +17,26 @@
 // force, where V(p,n) resolves and reads 0.5. Delete the bare directive from
 // this file and it must compile; leave it in and it must not.
 //
-// The expectation is a message substring rather than a code because VerA has no
-// diagnostic for an undisciplined net to name yet; any diagnostic about this
-// rule will say "discipline". When the check lands, replace this line with its
-// code.
+// The clause that turns the withdrawn default into a DIAGNOSTIC is not in
+// chapter 10 — §10.2 only stops supplying one — so this fixture cites the two
+// that do. §7.4 is discipline resolution, which §10.2 names outright and which
+// now has nothing to resolve; §3.6.1 is where an access function comes from,
+// "the `access` attribute of a nature", reached through the net's discipline.
+// With no discipline there is no nature and V is not an access function of
+// this net, which is E0501's exact subject.
+//
+// The expectation was the bare word "discipline" until a review pointed out
+// that the word occurs inside `default_discipline itself, so any diagnostic
+// that merely quoted the offending directive satisfied it and this xfail could
+// have XPASSed without the rule ever being implemented. E0501 cannot be
+// matched that way. It is a guess at WHICH code VerA will use, and a wrong
+// guess is harmless here: an unmatched substring on an xfail fixture stays
+// XFAIL, so the failure mode is a debt left standing, not a debt laundered.
 //
 //! lrm 10.2
-//! reject discipline
+//! lrm 7.4
+//! lrm 3.6.1
+//! reject E0501
 //! xfail VerA discards `default_discipline (preprocessor.zig marks it .ignored) and never runs discipline resolution, so it neither supplies a default nor withholds one — V() resolves on a bare port regardless
 `default_discipline electrical
 `default_discipline

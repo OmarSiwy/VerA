@@ -17,7 +17,6 @@
 //! lrm 7.4.4
 //! lrm 3.11
 //! reject more than one discipline declaration
-//! xfail VerA has no redeclaration-of-discipline diagnostic; the second declaration silently overwrites the first
 nature ch7_conf_potential;
   units = "V";
   access = V;

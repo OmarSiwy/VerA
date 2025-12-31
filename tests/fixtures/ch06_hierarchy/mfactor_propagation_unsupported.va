@@ -36,7 +36,7 @@
 `include "check.vh"
 module ch6_mfp_parent(p, n);
   inout p, n; electrical p, n;
-  ch6_mfp_mid u(p, n);
+  ch6_mfp_mid #(.$mfactor(2.0)) u(p, n);
   analog `CHECKX("the top of the hierarchy starts at Table 9-29's 1.0", $mfactor, 1.0);
 endmodule
 

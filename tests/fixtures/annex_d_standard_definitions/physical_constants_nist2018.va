@@ -15,6 +15,7 @@
 //
 //! lrm D.2
 `include "check.vh"
+`include "disciplines.vams"
 `undef CONSTANTS_VAMS
 `define PHYSICAL_CONSTANTS_NIST2018 1
 // Define every lower-priority selector too: NIST2018 must still win.

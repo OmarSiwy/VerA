@@ -1,4 +1,4 @@
-//! lrm 2.9.1
+//! lrm 2.9
 //! lrm A.8.3
 `include "check.vh"
 //! bias V(p) = 0.5
@@ -12,4 +12,7 @@ module ch2_cond_attr(p); inout p; electrical p; analog begin I(p)<+(V(p)>0.0 ? (
   `CHECKX("attr_after_question_false_arm", (V(p)<0.0 ? (* no_glitch *) 7.25 : -3.5), -3.5);
 end endmodule
 // Annex A.8.3 allows `{ attribute_instance }` after the `?` of a conditional
-// expression (LRM 2.9.1), so this must COMPILE.
+// expression, and §2.9 Example 8 prints exactly this form — `a = b ? (*
+// no_glitch *) c : d;` — so this must COMPILE. Not 2.9.1: Syntax 2-5 through
+// 2-10 there cover module, port, module-item, function-port/task/block, port
+// connection and UDP, and none of them reaches a conditional expression.

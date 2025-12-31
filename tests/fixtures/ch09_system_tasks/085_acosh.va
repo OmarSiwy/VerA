@@ -6,6 +6,7 @@
 // acosh(x) = ln(x + sqrt(x^2 - 1)), so at V(p,n) = 0.5 the argument is 1.5 and
 // acosh(1.5) = ln(1.5 + sqrt(1.25)) = 0.9624236501192069.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_acosh(p, n);

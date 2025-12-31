@@ -32,12 +32,14 @@ module ch04_function_implicit_real_return(p, n);
     electrical p, n;
 
     analog function halve;
-        input real x;
+        input x;
+        real x;
         halve = 0.5 * x;
     endfunction
 
     analog function integer trunc;
-        input real x;
+        input x;
+        real x;
         trunc = x;
     endfunction
 

@@ -5,6 +5,7 @@
 // sinh(0.5) = 0.5210953054937474, and sinh is ODD — the property that separates
 // it from cosh(0.5) = 1.1276259652063807.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_sinh(p, n);

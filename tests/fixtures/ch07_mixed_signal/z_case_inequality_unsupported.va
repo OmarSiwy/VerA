@@ -1,6 +1,12 @@
-// §7.3.2 makes case inequality (`!==`) over a four-state digital net the way an analog block
-// tests for a z bit: "if (dnet === 1'b1) ... else if (dnet === 1'bx)". Two
-// independent annex C rules delete that from Verilog-A, and both apply to the
+// §7.3.2 lists "the case inequality operator (!==)" as one of the four features
+// Verilog-AMS HDL provides for "accessing of 4-state logic values within the
+// analog context", alongside `===`, the case/casex/casez statements and x/z
+// digits in numeric constants. Its `a2d` example uses the positive form on the
+// z bit — "else if (dnet === 1'bz) avar = 2.5; // high impedance - float value"
+// — and `!==` is that same test negated, which is the form written below so
+// that this file and x_case_equality_unsupported.va pin different operators.
+//
+// Two independent annex C rules delete it from Verilog-A, and both apply to the
 // line below:
 //
 //   C.5: "The case equality operators (===, !==) are not supported in

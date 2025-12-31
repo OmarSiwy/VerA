@@ -13,6 +13,14 @@
 // Table 9-27 names "gmin" and "scale" but fixes neither's value, so any digits
 // written for them would be a recording of this engine's own defaults.
 //
+// Both of them carry a fallback anyway, and that is not decoration. Table 9-27
+// is prefaced "to access commonly-known simulation parameters, IF THEY SUPPORT
+// THE PARAMETER", and §9.15 makes the no-fallback form on a name the tool does
+// not know an error — which is the entire content of 147. `$simparam("scale")`
+// bare would therefore make this RUN fixture illegal on any conforming compiler
+// that does not implement "scale", against a rule the fixture is not testing.
+// `$simparam("scale", 1.0)` is legal for every tool, known name or not.
+//
 // The second sentence quoted above — the unknown name with NO fallback, which
 // is an error — is 147_simparam_unknown_no_fallback_rejected.va.
 //
@@ -23,6 +31,6 @@ module ch09_simparam(p, n);
   analog begin
     `CHECKX("an unknown $simparam returns its fallback expression verbatim",
             $simparam("vera_no_such_simparam", 2.5), 2.5);
-    I(p,n) <+ $simparam("gmin", 1e-12) + $simparam("scale") + 0.0*V(p,n);
+    I(p,n) <+ $simparam("gmin", 1e-12) + $simparam("scale", 1.0) + 0.0*V(p,n);
   end
 endmodule

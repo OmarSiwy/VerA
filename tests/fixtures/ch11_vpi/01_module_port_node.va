@@ -6,6 +6,10 @@
 // V(p) = 0.75 and V(n) = 0.25 are both exact in binary, so V(p,n) = 0.5 to the
 // last bit. Swap the two port bindings and the number becomes -0.5.
 //
+//! lrm 11.6.1
+//! lrm 11.6.4
+//! lrm 11.6.5
+//! lrm 5.4.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch11_module_port_node(p, n);

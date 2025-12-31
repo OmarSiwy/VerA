@@ -14,6 +14,16 @@
 // A `>` lowered as `>=` fires $stop(1) here and turns the first 0 into a 1; a
 // $finish reached out of turn would end the run before these lines are printed.
 //
+// WHAT THIS FIXTURE DOES NOT PROVE. $stop / $finish is never executed, and cannot be: doing
+// so is what ends the run, and this suite reads its verdict off a transcript the
+// run has to survive to print. So the assertion below is about the OPERATING
+// POINT — that the bias sits below the guard, i.e. that `>` is strict — and not
+// about §9.7. It documents why the call is not reached. 060_info.va and
+// 059_warning.va are the two tasks of this family that CAN be called
+// unconditionally, and they are, with the assertion placed after the call.
+//
+//! lrm 9.7.1
+//! lrm 9.7.2
 //! bias V(p) = 2.0
 `include "check.vh"
 module ch09_finish_stop(p, n);

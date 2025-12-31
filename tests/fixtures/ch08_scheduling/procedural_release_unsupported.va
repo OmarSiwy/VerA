@@ -6,7 +6,6 @@
 //! reject reg
 //! reject initial
 //! reject release
-// EXPECT: error -- release removes a force and schedules the resulting value.
 module ch8_procedural_release;
   reg source, target;
   initial begin

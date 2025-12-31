@@ -8,6 +8,7 @@
 // The second line pins xor against or, which they differ on wherever two set
 // bits meet: 6 ^ 3 = 0110 ^ 0011 = 0101 = 5, whereas 6 | 3 would be 7.
 //
+//! lrm 4.2.9
 `include "check.vh"
 module ch04_bitwise_xor(p, n);
     inout p, n;

@@ -8,6 +8,7 @@
 // would answer 30. The checks are OUTSIDE the guard: §9.4.6 display tasks must
 // be unconditional or VerA drops them with W0851.
 //
+//! lrm 4.3.2
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch04_asin(p, n);

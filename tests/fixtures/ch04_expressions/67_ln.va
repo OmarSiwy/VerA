@@ -4,6 +4,7 @@
 // ln(2) = 0.69314718055994530942..., nearest double 0.6931471805599453. A
 // log10 implementation would answer 0.30103, so this pins the base.
 //
+//! lrm 4.3.1
 //! bias V(p) = -1.0
 `include "check.vh"
 module ch04_ln(p, n);

@@ -5,6 +5,7 @@
 // its true arm, making the contribution V(p,n) = 0.5 rather than 0.
 `include "check.vh"
 
+//! lrm 9.19
 //! bias V(p) = 0.5
 
 module ch09_atomic_port_connected(p, n);

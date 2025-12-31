@@ -7,6 +7,8 @@
 // Table 4-14 also says the Verilog system-function spelling `$ln(x)` and the
 // traditional Verilog-AMS spelling `ln(x)` are the SAME function — an identity
 // with no value of its own, hence CHECKEQ.
+//
+//! lrm 9.14
 `include "check.vh"
 module ch09_atomic_ln(p, n);
   inout p, n; electrical p, n;

@@ -18,8 +18,11 @@
 //                from the operator, not from its input. Both unrolled `ddt`
 //                instances must give it, so the sum is exactly 0 -- no
 //                integration scheme enters, this is the analysis kind alone.
-`include "check.vh"
+//
+//! lrm 4.5.15
+//! lrm 4.5.3
 //! bias V(p) = 0.7
+`include "check.vh"
 module ch4_op_genvar_for(p);
   inout p;
   electrical p;

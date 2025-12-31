@@ -10,9 +10,12 @@
 // Both delays are constants, so the check is static. 19_absdelay.va is the
 // legal side with td = 2n.
 //
+// `td` on its own is a two-character substring — "stdout" contains it — so the
+// LRM's own word for the bound is required alongside it.
+//
 //! lrm 4.5.7
 //! reject td
-//! xfail VerA validates none of 4.5.7's argument bounds: absdelay(x, -2n) and absdelay(x, -2n, 5n) both compile with only W0650, and src/diag_code.zig has no code for a non-positive transport delay
+//! reject positive
 module ch04_absdelay_negative_delay_rejected(p, n);
     inout p, n;
     electrical p, n;

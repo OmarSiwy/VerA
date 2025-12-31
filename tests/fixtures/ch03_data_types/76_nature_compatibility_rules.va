@@ -22,9 +22,23 @@
 // or crossed two pairs fails on the value rather than on the compile.
 // 54_incompatible_nets_access.va is the negative side.
 //
-// Note the access function is `ch3_volt`'s `CV` throughout: §3.6.1.2 forbids a
-// derived nature to change `access`, so all four disciplines here are read with
-// the same name and only the natures differ.
+// The POTENTIAL access function is `ch3_volt`'s `CV` for the first two pairs:
+// §3.6.1.2 forbids a derived nature to change `access`, so ch3_hi_volt and
+// ch3_lo_volt are both read with their base's name and only the natures differ.
+//
+// The Units Value Rule cannot be reached that way. `ch3_other_volt` is a BASE
+// nature, and §3.13.2 makes the access function of each base nature unique, so
+// it cannot spell itself `CV` — its access is `OV`, and §3.13.3 says "a net can
+// only be accessed through its access functions", which makes `CV(base_net,
+// other_net)` the same error 42_wrong_access_function.va and
+// 64_flow_on_potential_only_net.va pin as E0501. The pair is therefore spanned
+// through the FLOW half instead: both disciplines bind the one nature `ch3_amp`,
+// so `CI(base_net, other_net)` is spelled legally for both nets — and it is
+// still an access function over two nets, so §3.11 requires them compatible,
+// which under the Potential Incompatibility Rule requires ch3_volt and
+// ch3_other_volt to be compatible, which nothing but the Units Value Rule
+// supplies. The accompanying number is the potential difference read through
+// each net's OWN access function, 4.0 - 3.0.
 //
 //! lrm 3.11.1
 //! lrm 3.11
@@ -52,10 +66,10 @@ module ch03_nature_compatibility_rules(p);
     analog begin
         `CHECKX("Base Nature Rule: a derived nature is compatible with its base", CV(base_net, hi_net), 2.5);
         `CHECKX("Derived Nature Rule: two natures derived from the same base", CV(hi_net, lo_net), 1.25);
-        `CHECKX("Units Value Rule: unrelated natures agreeing only on units", CV(base_net, other_net), 1.0);
+        `CHECKX("Units Value Rule: unrelated natures agreeing only on units", CV(base_net) - OV(other_net), 1.0);
         V(p) <+ 0.0;
         CI(base_net, hi_net) <+ CV(base_net, hi_net) / 2.0;
         CI(hi_net, lo_net) <+ CV(hi_net, lo_net) / 2.0;
-        CI(base_net, other_net) <+ CV(base_net, other_net) / 2.0;
+        CI(base_net, other_net) <+ (CV(base_net) - OV(other_net)) / 2.0;
     end
 endmodule

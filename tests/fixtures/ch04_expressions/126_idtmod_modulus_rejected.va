@@ -14,7 +14,7 @@
 //
 //! lrm 4.5.5
 //! reject modulus
-//! xfail VerA validates none of Table 4-19's argument bounds: idtmod(x, 0.0, -2.0, 0.0) and idtmod(x, 0.0, 0.0, 0.0) both compile with only W0650, and src/diag_code.zig has no code for a non-positive modulus
+//! reject positive
 module ch04_idtmod_modulus_rejected(p, n);
     inout p, n;
     electrical p, n;

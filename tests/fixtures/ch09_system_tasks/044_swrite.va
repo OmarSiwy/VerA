@@ -7,6 +7,7 @@
 // The resulting string itself is not assertable here: `text` can only be
 // compared with the §3.8 string operators, which these macros do not cover.
 //
+//! lrm 9.5.3
 //! bias V(p) = 4.5, V(n) = 0.5
 `include "check.vh"
 module ch09_atomic_swrite(p, n);

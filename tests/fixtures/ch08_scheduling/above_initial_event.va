@@ -18,24 +18,38 @@
 // says "shall" is conformant and would fail it. No digit changes.
 //
 // At the initial condition V(c) - 0.5 = 0.9 - 0.5 = +0.4 is positive, so the
-// event fires and the guarded assignment runs: sample takes V(p) = 0.75, at
-// that point and at every later one (the bias is held, so nothing re-arms).
+// event fires and the guarded assignment runs: sample takes the V(p) of that
+// row, 0.75.
 //
-// Restricting both ways: an implementation that treats above() like cross()
-// leaves sample at the 0.0 LRM 3.5 gives an unassigned real, and one that
-// samples the threshold expression instead of V(p) prints 0.9 or 0.4.
+// AND THEN IT MUST NOT FIRE AGAIN. The same clause says above() "generates a
+// monitored analog event to detect threshold crossings in analog signals when
+// the expression crosses zero (0) from below" and "maintains its internal
+// state". V(c) is held at 0.9, so the threshold expression stays at +0.4 for
+// the whole walk and never crosses zero from below after the initial
+// condition. The sampled probe is therefore stepped instead: V(p) moves to 0.25
+// at t = 1 ns, and a conforming tool still reports sample = 0.75 there, because
+// the latch closed at the initial condition and nothing re-armed it.
+//
+// That step is what makes the row at 1 ns a test. With a HELD V(p), which this
+// file used to declare, "fires once at the IC and holds" and "fires at every
+// solution" print the identical 0.75 / 0.75 transcript, so the assertion could
+// not see the over-firing direction at all -- and over-firing is the direction a
+// level-test lowering of above() is wrong in. Under-firing is still covered:
+// a tool that treats above() like cross() and skips the IC leaves sample at the
+// 0.0 LRM 3.2 gives an unassigned real, on both rows.
 //
 //! lrm 5.10.3.2
-//! lrm 8.4.7
 //! analysis tran
 //! time 0, 1n
-//! bias V(p) = 0.75, V(c) = 0.9
+//! bias V(c) = 0.9
+//! wave V(p) = 0.75, 0.25
+//! xfail VerA lowers above() as a stateless level test (`if (expr.val() > 0.0)`, src/backend/codegen.zig), so it re-fires at every solution instead of only on an upward zero crossing, and sample follows V(p) down to 0.25
 `include "check.vh"
 module ch8_above(p, c);
   inout p, c; electrical p, c; real sample;
   analog begin
     @(above(V(c) - 0.5)) sample = V(p);
-    `CHECKX("above(+0.4) triggers at the dc point, so the guard ran", sample, 0.75);
+    `CHECKX("above(+0.4) fires at the initial condition and the latch holds it", sample, 0.75);
     I(p) <+ sample;
   end
 endmodule

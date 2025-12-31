@@ -10,6 +10,30 @@
 // INTERNAL seed which "gets updated every time the call to $arandom is made",
 // so the second call is free to differ. Only the range of the result is fixed.
 //
+// WHAT THIS FIXTURE CAN AND CANNOT PROVE. The seed is a CONSTANT, so there is
+// no inout to observe — §9.13.1 says a constant seed "does not update the
+// parameter value" and the internal seed it creates is not visible from the
+// source. §9.13.1 fixes nothing else about the returned value here. The one
+// sentence left with content is the width: "the random number returned is a
+// 32-bit signed integer; it can be positive or negative." That is the check
+// below, and it is the weakest in the
+// chapter: it is falsifiable only on a host whose integer type is wider than 32
+// bits (VerA carries integers in i64 — see the width note in
+// 07_file_open_close.va), and satisfied for free where `integer` is exactly 32.
+//
+// It is deliberately NOT the chapter's old `($random % 60) is in [-59,59]`.
+// §9.13.1 does print that example, but as an assertion it is EMPTY: a % 60 lies
+// in [-59,59] for every integer a of every width, including 0, so it cannot fail
+// under any implementation. Dressing an identity as a check is worse than
+// admitting the clause pins nothing.
+//
+// The discriminating checks for this family are elsewhere and are cited here so
+// the gap is not silent: 32_random.va / 33_arandom.va pin the inout seed rule
+// ("a value is passed to the function and a different value is returned") and
+// 117_arandom_parameter_seed.va pins the parameter form that must NOT be
+// updated. This file's own content is that Syntax 9-8's `[ sign ]
+// decimal_number` seed is ACCEPTED at all.
+//
 //! lrm 9.13.1
 //! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
 `include "check.vh"
@@ -20,8 +44,9 @@ module ch09_arandom_negative_seed(p, n);
     a = $arandom(-7);
     c = $arandom(-7);
     `CHECKI("Syntax 9-8 admits a signed decimal_number as the seed",
-            (a % 60 >= -59) && (a % 60 <= 59), 1);
-    `CHECKI("and so does the second call site", (c % 60 >= -59) && (c % 60 <= 59), 1);
+            (a >= -2147483648) && (a <= 2147483647), 1);
+    `CHECKI("and so does the second call site",
+            (c >= -2147483648) && (c <= 2147483647), 1);
     I(p,n) <+ V(p,n) + a + c;
   end
 endmodule

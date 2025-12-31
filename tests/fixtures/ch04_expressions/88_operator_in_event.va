@@ -1,9 +1,16 @@
-// §5.9 "The following restrictions are applied to looping statements (repeat,
-// while and for) except for analog_for statements: - Analog filter functions are
-// not allowed". No analysis_or_constant carve-out here, unlike §5.8.1 — and an
-// event body is conditionally executed by definition.
+// §4.5.15, second bullet, verbatim and entire: "Analog operators shall not be
+// used inside event triggered statements."
+//
+// This is a DIFFERENT bullet from the one 89/90/91 pin — those are the third,
+// "Analog operators are not allowed in the repeat, while and non-genvar for
+// looping statements", and §5.9's looping-statement list. Neither says anything
+// about an event body, and this bullet says nothing about loops. There is no
+// analysis_or_constant carve-out on either: §4.5.15's first bullet grants one
+// to `if`/`case`/`?:` alone (119_operator_under_constant_condition.va is that
+// carve-out being exercised), and an event body is not a conditional statement.
 //
 // This fixture used to assert the opposite — that the illegal form COMPILES.
+//! lrm 4.5.15
 //! reject E0514
 // §5.10.3.1: `cross()` "maintains its internal state and has the same
 // restrictions as analog operators" — an event body runs only when the event

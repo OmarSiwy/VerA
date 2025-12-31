@@ -4,7 +4,7 @@
 // equal to (=) the new value (e.g., flow.abstol = 10u)" — the
 // nature_attribute_override nonterminal of Syntax 3-5.
 //
-// `abstol` is a solver tolerance: §3.6.1.1 makes it the absolute convergence
+// `abstol` is a solver tolerance: §3.6.1.2 makes it the absolute convergence
 // tolerance, and nothing in the LRM fixes a transcript value for it, so asserting
 // a number for it would over-specify and a conforming compiler would fail. What
 // §3.6.2.5 does fix is that the override changes ONE attribute of the bound

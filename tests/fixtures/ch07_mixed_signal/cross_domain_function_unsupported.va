@@ -1,13 +1,29 @@
-// §7.3.7 function calls, both directions at once: an `always` block (the
-// digital context, §7.2.2) calls a digital `function` whose argument is an
-// analog probe `V(p)`. Whichever way the call is read, §7.3.7 forbids it.
+// §7.3.6.3 analog primary appearing in a digital expression: "an analog primary
+// (variable, potential, or flow) whose value is calculated in the continuous
+// domain appears in an expression which is in the digital context; thus the
+// analog primary is evaluated in the digital domain." The probe `V(p)` below
+// sits in the argument list of a call made from an `always` block, which §7.2.2
+// puts in the discrete context — so the analog value crosses, the call does
+// not.
 //
-// The rule is MASKED here, not exercised. C.7: "No digital behavior or events
-// are supported in Verilog-A", so BOTH the `always` block and the non-analog
-// `function` are outside the subset, and the module item dies (E0205,
-// "unsupported module item") before the call is analysed. Conformance for this
-// dialect, but nothing here reaches the domain-crossing rule.
+// This file used to claim "§7.3.7 forbids it, whichever way the call is read".
+// That was wrong in both readings, and the correction is the point of the file:
+// §7.3.7 forbids a digital function called from the ANALOG context and an
+// analog function called from the DIGITAL context, and `probe` is a digital
+// function (`function`, not `analog function`) called from a digital context.
+// Both ends are digital, so §7.3.7 is satisfied, and §7.3.6.3 makes the analog
+// argument legal. The whole module item is legal Verilog-AMS HDL. Its two
+// genuine §7.3.7 violations are elsewhere:
+// digital_function_from_analog_unsupported.va and
+// analog_function_from_digital_unsupported.va, one per sentence.
 //
+// C.7 is what refuses it here: "No digital behavior or events are supported in
+// Verilog-A", so both the `always` block and the non-analog `function` are
+// outside the subset and the module item dies at E0205 ("unsupported module
+// item"). Conformance for this dialect — and §7.3.6.3's interpolation rule,
+// like everything else behind the digital keyword, is never reached.
+//
+//! lrm 7.3.6.3
 //! lrm 7.3.7
 //! lrm C.7
 //! reject E0205

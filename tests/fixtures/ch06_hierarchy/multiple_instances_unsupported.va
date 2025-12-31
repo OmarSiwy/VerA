@@ -18,6 +18,15 @@
 // module_instantiation_unsupported.va. The shared `#(2.0)` is asserted directly:
 // one parameter_value_assignment applies to every instance in the statement.
 //
+// THE PRICE OF THE SQUARE IS THAT THE INSTANCE COUNT GOES UNASSERTED, and that is
+// worth saying rather than leaving to be discovered. Squaring is forced — one
+// `CHECK` name carries one want, and the two instances read +0.5 and -0.5 — but it
+// also means a compiler that elaborated only `first` passes every line below. The
+// second instance shows up only as a second set of `ok=1` lines, which the runner
+// does not count against a floor. Pinning the count needs a probe in the PARENT of
+// what the two instances together stamp, which needs the instantiation this file is
+// already xfail'd on.
+//
 //! lrm 6.2.2
 //! bias V(p) = 0.75, V(n) = 0.25
 //! xfail VerA compiles one flat module, so a module instantiation is refused outright at E0204 "module instantiation is not supported"

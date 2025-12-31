@@ -3,6 +3,7 @@
 // expression." `V(p, n) > 0.0` is a probe: it moves on every Newton iteration.
 //
 // This fixture used to assert the opposite — that the illegal form COMPILES.
+//! lrm 4.5.15
 //! reject E0514
 // §5.8.1: the conditional expression governing a statement that contains an
 // analog operator shall be an analysis_or_constant_expression. `V(p,n) > 0.0`

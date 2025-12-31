@@ -11,7 +11,6 @@
 // CHECKX is the right strength.
 //! lrm 2.9
 //! lrm A.8.2
-//! xfail VerA's parser has no `{ attribute_instance }` slot between a function name and its argument list, so Example 7's form dies at E0207 "unexpected token: found `(*`, expected `)`" (src/frontend/parser.zig)
 //! bias V(p) = 0.7
 `include "check.vh"
 module ch2_call_attr(p);

@@ -14,9 +14,13 @@
 //
 //     (0 - V(p))/1 + (0 - V(out))/1 = 0   =>   V(out) = -V(p) = -0.75
 //
-// 0.75 is exact in binary (3/4), but the tolerance is 1e-9 rather than exact
-// equality: a conforming simulator reaches the constraint by Newton iteration
-// and is entitled to stop at its own reltol.
+// 0.75 is exact in binary (3/4), but the tolerance is not exact equality: a
+// conforming simulator reaches the constraint by Newton iteration and is
+// entitled to stop at its own tolerance. The number is the one the standard
+// itself fixes — annex D declares `nature Voltage ... abstol = `VOLTAGE_ABSTOL`
+// and `VOLTAGE_ABSTOL` defaults to 1e-6 — so a tool that converges to its
+// declared voltage abstol passes. This used to read 1e-9, three decades tighter
+// than anything normative and not derivable from the LRM at all.
 //
 // WHAT THIS REPLACED, so it is not reintroduced: the previous version asserted
 // `V(c) - 2.0*V(p) == 0.0` with BOTH V(p) and V(c) pinned by `//! bias`. That
@@ -25,6 +29,7 @@
 //
 //! lrm 5.6.7
 //! lrm A.6.10
+//! lrm D.1
 //! bias V(p) = 0.75
 //! print none
 //! xfail VerA's testbench writes `//! bias` straight into x[] and never solves (src/backend/tb.zig), so V(out) stays 0 and no 5.6.7 constraint is ever enforced
@@ -40,7 +45,7 @@ module annex_a_indirect(p, out);
         I(in) <+ (V(in) - V(p)) + (V(in) - V(out));
         // Drive V(out) until the input node sits at zero.
         V(out) : V(in) == 0.0;
-        `CHECK("the indirect contribution holds its equation V(in) == 0", V(in), 0.0, 1e-9);
-        `CHECK("driving V(out) to satisfy it gives -V(p)", V(out), -0.75, 1e-9);
+        `CHECK("the indirect contribution holds its equation V(in) == 0", V(in), 0.0, 1e-6);
+        `CHECK("driving V(out) to satisfy it gives -V(p)", V(out), -0.75, 1e-6);
     end
 endmodule

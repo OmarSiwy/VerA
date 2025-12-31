@@ -16,10 +16,25 @@
 //           the answer is zero. An implementation that reported EOF merely
 //           because the descriptor is unusable fails this.
 //
-// The positioning calls in between ($ftell/$fseek/$rewind/$fflush/$ferror) stay
-// deliberately unasserted: §9.5.5/§9.5.7 say only "if an error occurs, EOF is
-// returned", and the LRM never fixes EOF's numeric value, so there is no digit
-// to write for them.
+// Neither of those digits is 0 by accident on a real tool — but BOTH of them are
+// 0 on an implementation that answers 0 to every §9.5 call, so on their own they
+// cannot tell the two apart. That is what the second half of this fixture is
+// for: it opens a descriptor that DOES work, on a four-byte file it writes
+// itself, and walks the same positioning family across it, where §9.5.5 fixes
+// every answer:
+//
+//   §9.5.5  "pos = $ftell(fd) returns in pos the offset from the beginning of
+//            the file of the current byte" — 0 before any read, 4 after the
+//            $fgets consumes "abc\n"
+//   §9.5.5  "$rewind is equivalent to $fseek (fd,0,0)" and "code is set to 0"
+//            on success — so 0 back, and $ftell 0 again
+//
+// Those are the same rules 049/050/051 pin one at a time; here they are the
+// discriminator that stops the two zeros above from passing for free.
+//
+// The calls on the FAILED descriptor stay deliberately unasserted: §9.5.5/§9.5.7
+// say only "if an error occurs, EOF is returned", and the LRM never fixes EOF's
+// numeric value, so there is no digit to write for them.
 //
 // The filename is unique to this fixture on purpose. Nine §9.5 fixtures used to
 // share the single name "fixture.dat", and 052_fflush.va opened it for append —
@@ -28,12 +43,15 @@
 // untested. Every §9.5 fixture now owns its filename.
 //
 //! lrm 9.5.1
+//! lrm 9.5.5
 //! lrm 9.5.8
+//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so the two zeros the LRM demands of a FAILED open are produced for the wrong reason and every positioning answer on the working descriptor comes back 0 as well
 `include "check.vh"
 module ch09_file_position_status(p, n);
   inout p, n; electrical p, n;
   integer fd, code, pos;
-  string message;
+  integer live, count, at_open, after_read, rewound, at_rewind;
+  string message, text;
   analog begin
     fd = $fopen("ch09_11_missing.dat", "r+");
     `CHECKI("§9.5.1: opening a missing file with type r+ yields fd = 0", fd, 0);
@@ -44,6 +62,21 @@ module ch09_file_position_status(p, n);
     code = $ferror(fd, message);
     code = $feof(fd);
     `CHECKI("§9.5.8: nothing was read from fd, so no EOF was detected", code, 0);
-    I(p,n) <+ pos + code + 0.0*V(p,n);
+
+    live = $fopen("ch09_11_position.dat", "w");
+    $fwrite(live, "abc\n");
+    $fclose(live);
+    live = $fopen("ch09_11_position.dat", "r");
+    at_open = $ftell(live);
+    count = $fgets(text, live);
+    after_read = $ftell(live);
+    rewound = $rewind(live);
+    at_rewind = $ftell(live);
+    $fclose(live);
+    `CHECKI("§9.5.5: $ftell on a fresh read descriptor is byte 0", at_open, 0);
+    `CHECKI("§9.5.5: and byte 4 once the 4-byte line has been read", after_read, 4);
+    `CHECKI("§9.5.5: $rewind succeeds, and success is 0", rewound, 0);
+    `CHECKI("§9.5.5: after which the position really is back at byte 0", at_rewind, 0);
+    I(p,n) <+ pos + code + count + at_open + after_read + rewound + at_rewind + 0.0*V(p,n);
   end
 endmodule

@@ -1,11 +1,15 @@
 // Annex D.2 constants.vams, the fourteen mathematical constants. Nothing here
-// `defines them: the implementation's constants.vams must supply every one, so
-// a compiler shipping no annex D file fails at the first `M_E instead of
-// reading back a copy the fixture handed it.
+// `defines them: constants.vams is `included the way the LRM's own examples
+// include it, and the implementation's copy of that file must supply every one,
+// so the check reads the annex file rather than a copy the fixture handed it.
+// (Under VerA the include is a no-op — the engine prepends both annex files and
+// the CONSTANTS_VAMS guard swallows the second pass, which
+// disciplines_vams_guard_idempotent.va pins — so the line costs nothing here
+// and is what makes the fixture run on a compiler that does not prepend.)
 //
 // Each want is the binary64 nearest to the true mathematical value, derived to
 // 40 decimal digits (decimal.Decimal: exp/ln/sqrt) and rounded once. All
-// fourteen decimals published at annex-d-stddefs.html:338-351 round to exactly
+// fourteen decimals published at annex-d-stddefs.html:340-353 round to exactly
 // those same doubles — ulp difference 0 for every one, re-checked here. An
 // earlier revision of this fixture claimed `M_LOG10E's published decimal was
 // one ulp off 1/ln(10) and used that to justify 1e-15 slack on all fourteen;
@@ -19,6 +23,8 @@
 //
 //! lrm D.2
 `include "check.vh"
+`include "constants.vams"
+`include "disciplines.vams"
 module annex_d_math(p);
   inout p; electrical p;
   analog begin

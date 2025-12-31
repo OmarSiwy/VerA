@@ -13,6 +13,7 @@
 //
 //! lrm D.2
 `include "check.vh"
+`include "disciplines.vams"
 `undef CONSTANTS_VAMS
 `define PHYSICAL_CONSTANTS_SPICE 1
 // Both lower-priority selectors are set: SPICE must still win.

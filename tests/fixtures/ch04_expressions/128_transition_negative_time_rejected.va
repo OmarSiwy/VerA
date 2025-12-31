@@ -12,9 +12,16 @@
 // written for the rise/fall pair alone leaves td and time_tol open. Every value
 // is a constant. 20_transition.va is the legal side.
 //
+// Each slot gets its OWN expectation, and every one must appear: a lone
+// `non-negative` fragment would be satisfied by whichever single slot a partial
+// guard happened to cover, which would defeat the point of writing four.
+//
 //! lrm 4.5.8
 //! reject non-negative
-//! xfail VerA validates none of 4.5.8's argument bounds: transition(x, -1n, 2n, 3n) and the rise_time/fall_time/time_tol variants all compile with only W0650, and src/diag_code.zig has no code for a negative transition time
+//! reject td
+//! reject rise_time
+//! reject fall_time
+//! reject time_tol
 module ch04_transition_negative_time_rejected(p, n);
     inout p, n;
     electrical p, n;

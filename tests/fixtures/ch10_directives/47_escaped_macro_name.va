@@ -24,7 +24,6 @@
 //
 //! lrm 10.4
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA rejects an escaped macro name with E0109 "`define requires a macro name"; its `define name lexer accepts only a simple identifier, which Syntax 10-3 requires of the FORMAL and not of the name
 `define \MY-GAIN 3.0
 `include "check.vh"
 module ch10_escaped_macro_name(p, n);

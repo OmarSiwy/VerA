@@ -17,14 +17,12 @@
 // about: were MY_ENABLE ever expanded, an `ifdef would be reading a predefined
 // macro's name out of a user definition.
 //
-// The expectation is a message substring rather than a code because VerA has no
-// code for this rule to name yet; __VAMS_ is the offending text and any
-// diagnostic about it will quote it. When the check lands, replace this line
-// with its code.
+// The expectation was a message substring while VerA had no code for this rule
+// to name. It has one now, E0139, so the pin is the code, as this file's own
+// note asked for: it says WHICH rule fired rather than how it was worded.
 //
 //! lrm 10.4
-//! reject __VAMS_
-//! xfail VerA never inspects macro text: preprocessor.zig protects only the two predefined NAMES, so a body beginning with __VAMS_ is defined silently
+//! reject E0139
 `define MY_ENABLE __VAMS_ENABLE__
 module ch10_define_vams_macro_text(p, n);
   inout p, n; electrical p, n;

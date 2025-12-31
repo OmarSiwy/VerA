@@ -1,7 +1,17 @@
-// LRM 6.6: "all expressions in generate schemes shall be constant expressions,
-// deterministic at elaboration time."  `runtime_value` is an integer VARIABLE,
-// so the if-generate condition is not elaboration-time constant.  The LRM gives
-// the construct no semantics -- the expected behavior IS the diagnostic.
+// §6.6: "all expressions in generate schemes shall be constant expressions,
+// deterministic at elaboration time." `runtime_value` is an integer VARIABLE, so
+// the if-generate condition is not elaboration-time constant. The LRM gives the
+// construct no semantics -- the expected behavior IS the diagnostic.
+//
+// The selected block is the NULL statement, and that is deliberate:
+// `if_generate_construct ::= if ( constant_expression ) generate_block_or_null` and
+// `generate_block_or_null ::= generate_block | ;` (Syntax 6-8), so `;` is the
+// smallest legal body there is. This file used to write a bare `I(p) <+ V(p);`
+// there instead, which has no production at all -- `generate_block ::=
+// module_or_generate_item | begin ... end`, and a contribution is reachable only
+// through `analog_construct ::= analog analog_statement`. That pinned a VerA parser
+// extension, and it also meant a conforming compiler would reject the body and
+// never look at the condition this fixture is about.
 //
 // KNOWN GAP: see the `//! xfail` below.  Tighten the reject directive to the
 // E-code once one exists.
@@ -11,6 +21,7 @@
 module ch6_generate_nonconstant(p);
   inout p; electrical p; integer runtime_value;
   generate
-    if (runtime_value) I(p) <+ V(p);
+    if (runtime_value) ;
   endgenerate
+  analog I(p) <+ V(p);
 endmodule

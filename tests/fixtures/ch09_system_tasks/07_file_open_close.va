@@ -14,8 +14,8 @@
 // indicating what file is opened. Three file descriptors are pre-opened; they
 // are STDIN, STDOUT, and STDERR, which have the values 32'h8000_0000,
 // 32'h8000_0001, and 32'h8000_0002." Those three name the standard streams, so
-// a descriptor for fixture.log cannot be any of them: the small number has to be
-// greater than 2. (§9.5.1 does allow reuse — "the $fopen function shall reuse
+// a descriptor for this fixture's own log cannot be any of them: the small
+// number has to be greater than 2. (§9.5.1 does allow reuse — "the $fopen function shall reuse
 // channels that have been closed" — but the standard streams are never closed,
 // so no reuse can reach them.) This catches an implementation that answers
 // $fopen with STDOUT and quietly sends every later $fdisplay to the transcript.
@@ -27,7 +27,7 @@ module ch09_file_open_close(p, n);
   inout p, n; electrical p, n;
   integer fd;
   analog begin
-    fd = $fopen("fixture.log", "w");
+    fd = $fopen("ch09_07_open_close.log", "w");
     // Masked, not shifted: `>>` fills with zeros on a 32-bit integer, but VerA
     // carries integers in an i64 where a sign-extended fd would answer a shift
     // differently. `& 2147483648` is bit 31 whatever the width, and

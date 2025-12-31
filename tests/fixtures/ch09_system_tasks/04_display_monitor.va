@@ -1,7 +1,9 @@
-// §9.4.2: "$monitor … provides the ability to monitor and display the values of
-// any variables or expressions specified as arguments", and "the arguments for
-// this task are specified in exactly the same manner as for the $strobe task",
-// the whole argument list being displayed "as if reported by the $strobe task".
+// §9.4.1: "The $monitor task provides the ability to monitor and display the
+// values of any variables or expressions specified as arguments to the task",
+// and "the arguments for this task are specified in exactly the same manner as
+// for the $strobe system task", the whole argument list being displayed "at the
+// end of the time step as if reported by the $strobe task". (§9.4.2 is the
+// escape-sequence table; it says nothing about $monitor.)
 //
 // So what $monitor is handed here is not the node p — it is the BRANCH POTENTIAL
 // V(p,n), the §5.4.1 difference of the two node potentials. The bias makes that
@@ -13,6 +15,7 @@
 // is there only so the assertion is about the model and not about the last bit
 // of a subtraction.
 //
+//! lrm 9.4.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module ch09_display_monitor(p, n);

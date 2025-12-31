@@ -5,6 +5,7 @@
 // cosh(0.5) = 1.1276259652063807, and cosh is EVEN and never below 1 — the two
 // properties that separate it from sinh(0.5) = 0.5210953054937474.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_cosh(p, n);

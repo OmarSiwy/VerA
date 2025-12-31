@@ -27,6 +27,8 @@
 // The two sums together pin all eight functions: any one of them off by a real
 // amount moves the first total, and any of the four integer-valued ones off by
 // one moves the difference away from 9.
+//
+//! lrm 9.14
 `include "check.vh"
 module ch09_math_unary(p, n);
   inout p, n; electrical p, n;

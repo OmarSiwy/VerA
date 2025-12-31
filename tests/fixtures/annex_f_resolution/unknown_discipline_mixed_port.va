@@ -1,34 +1,76 @@
-// LRM Annex F.2.1 step 4.b, fourth bullet (verbatim in F.2.2 4.b and F.2.2 5.b):
-// "Otherwise the discipline is unknown. This is legal provided the net has no
-// mixed-port connections (i.e., it does not connect through a port to a segment
-// of a different domain). Otherwise this is an error."
+// LRM Annex F.2.1 step 4.b, fourth bullet (printed verbatim in F.2.2 4.b and
+// F.2.2 5.b, so both are cited): "Otherwise the discipline is unknown. This is
+// legal provided the net has no mixed-port connections (i.e., it does not connect
+// through a port to a segment of a different domain). Otherwise this is an error."
 //
 // `sig` is left undeclared, so it goes into step 4 with no discipline:
 //
 //   4.a  its child nets are not all digital (two are continuous), so per
 //        "any others shall be considered analog" sig is in the CONTINUOUS domain;
 //   4.b  the list of child disciplines whose domain matches that of the segment
-//        is {annex_f_a, annex_f_b} — more than one, and there is no `connect`
-//        resolution statement whose discipline list matches, so the first three
-//        bullets are all skipped and the discipline is UNKNOWN;
+//        is {annex_f_a, annex_f_b} — more than one, and there is no
+//        `connect ... resolveto` statement whose discipline list matches it, so
+//        the first three bullets are all skipped and the discipline is UNKNOWN;
 //   4.b  fourth bullet: unknown is legal only with no mixed-port connections, and
 //        sig connects through the port of `annex_f_dig_leaf` to a discrete
 //        segment. Different domain => mixed-port connection => this is an error.
 //
-// Both disciplines are natureless so §3.11.1 keeps them compatible: the error is
-// the unresolvable-plus-mixed-port one, not a compatibility one.
+// Two competing diagnostics are ruled OUT by construction, so bullet 4 is the
+// only rule a conforming compiler can reach:
+//
+//   §3.11 Signal Connection Rule (same domain, incompatible disciplines) —
+//        annex_f_a and annex_f_b are natureless and both `domain continuous`, so
+//        §3.11.1's Natureless Discipline Rule makes them compatible.
+//   §3.11 Signal Domain Rule ("it shall be an error to connect two ports or nets
+//        of different domains UNLESS THERE IS A CONNECT STATEMENT (see 7.4)
+//        defined between the disciplines of the nets or ports") — this is why the
+//        two connectmodules and the connectrules block are here. Without them the
+//        a-to-dig and b-to-dig crossings are an error on their own, before
+//        resolution runs at all, and the fixture would be demanding a diagnostic
+//        a conforming compiler has no reason to reach. Their bodies are empty
+//        exactly as §7.6's example 3 prints them ("// insert connect module
+//        behavioral here"); nothing here reaches the insertion phase, because
+//        §7.6 puts it AFTER resolution ("the disciplines of mixed nets are
+//        determined prior to the connect module insertion phase") and resolution
+//        errors out first.
+//
+// The connect statements are §7.7.1 connect_insertion, NOT §7.7.2
+// connect_resolution: an insertion statement names a bridging module and does
+// not resolve a discipline list, so {annex_f_a, annex_f_b} still matches no
+// resolution statement and the net stays unknown. That distinction is the whole
+// mechanism of this fixture.
 //
 // There is no value to CHECK: the only observable is the diagnostic. The reject
-// substring names the rule rather than using `DiagnosticsReported`, because VerA
-// stops at E0204 on the instantiations and a generic substring would match that
-// unrelated diagnostic and XPASS.
+// line is a CODE, not a message fragment, per the suite contract — VerA stops at
+// E0204 on the instantiations today, so the generic `DiagnosticsReported` would
+// match that unrelated diagnostic and XPASS. E0903 is the code RESERVED for the
+// unresolvable-plus-mixed-port error, next to E0902 for the step-3 conflict, in
+// class 9 (hierarchy and elaboration, src/diag_code.zig; E0901 is the last one
+// implemented). Nothing emits it yet — that is what the `//! xfail` records.
 //
 //! lrm F.2.1
-//! reject mixed-port
-//! xfail VerA compiles one flat module — `annex_f_a_leaf la(sig)` is refused with E0204 "module instantiation is not supported", so no signal hierarchy is ever built and step 4 never runs
+//! lrm F.2.2
+//! reject E0903
+//! xfail VerA compiles one flat module — `annex_f_a_leaf la(sig)` is refused with E0204 "module instantiation is not supported" and the connectmodule/connectrules design elements with E0201/E1001, so no signal hierarchy is ever built and step 4 never runs
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 discipline annex_f_dig; domain discrete; enddiscipline
+connectmodule annex_f_a_bridge(c, d);
+  inout c; inout d;
+  annex_f_a   c;
+  annex_f_dig d;
+  // insert connect module behavioral here
+endmodule
+connectmodule annex_f_b_bridge(c, d);
+  inout c; inout d;
+  annex_f_b   c;
+  annex_f_dig d;
+  // insert connect module behavioral here
+endmodule
+connectrules annex_f_domain_crossings;
+  connect annex_f_a_bridge;
+  connect annex_f_b_bridge;
+endconnectrules
 module annex_f_a_leaf(p);
   inout p; annex_f_a p;
 endmodule

@@ -6,6 +6,7 @@
 // without it the identity below would be 0 == 0 and would pass in a compiler
 // that resolved `named_path` to nothing at all.
 //
+//! lrm 4.4
 //! bias V(p) = 2.0
 //! bias V(n) = 0
 //! print none

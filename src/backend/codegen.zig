@@ -839,7 +839,10 @@ pub const Gen = struct {
         const nodes = self.lower.node_order.items;
         for ([_]u16{ c.hi, c.lo }) |n| {
             if (n >= nodes.len) continue; // ground
-            if (!self.lower.node_directional.items[n]) continue;
+            switch (self.lower.node_dir.items[n]) {
+                .input, .output => {},
+                else => continue,
+            }
             const dname = self.lower.node_disciplines.items[n];
             if (dname.len == 0) continue;
             const d = self.lower.disciplines.get(dname) orelse continue;
@@ -2035,8 +2038,12 @@ pub const Gen = struct {
             .cosh => try self.method1(a, "cosh"),
             .atan => try self.method1(a, "atan"),
             .fabs => try self.method1(a, "abs"),
-            .expm1 => try self.helper1("zExpm1", a),
-            .ln1p => try self.helper1("zLn1p", a),
+            // §4.3.1 Table 4-14 names the C library's expm1/log1p, which exist
+            // BECAUSE exp(x)-1 and log(1+x) cancel for small x. So they are
+            // scalar PRIMITIVES here, not helpers composed from exp/log — a
+            // composed helper is the exact form the clause tells us to avoid.
+            .expm1 => try self.method1(a, "expm1"),
+            .ln1p => try self.method1(a, "log1p"),
             .log10 => try self.helper1("zLog10", a),
             .tan => try self.helper1("zTan", a),
             .asin => try self.helper1("zAsin", a),
@@ -2417,7 +2424,7 @@ pub const Gen = struct {
         if (k != .none) return self.emitOperator(inst, d.args, k);
 
         // §4.5.13 limexp — user-invoked only; the engine never inserts it.
-        if (std.mem.eql(u8, name, "limexp") or std.mem.eql(u8, name, "$limexp"))
+        if (std.mem.eql(u8, name, "limexp"))
             return self.helper1("zLimexp", if (d.args.len > 0) d.args[0] else .f_zero);
 
         // §4.5.14 ddx(f, V(node)) — the unknown index came through as an int.
@@ -3376,7 +3383,7 @@ pub fn callArgIsValue(name: []const u8, i: usize, display: Display) bool {
     if (eq(u8, name, "ddx")) return i == 0;
     if (eq(u8, name, "limexp")) return i == 0;
     if (name.len == 0 or name[0] != '$') return false; // events, noise, analysis
-    if (eq(u8, name, "$limexp") or eq(u8, name, "$vt") or eq(u8, name, "$limit") or
+    if (eq(u8, name, "$vt") or eq(u8, name, "$limit") or
         eq(u8, name, "$clog2") or eq(u8, name, "$rtoi") or eq(u8, name, "$itor")) return i == 0;
     const bare = name[1..];
     if (mathOpByName(bare) != null) return true;
@@ -3535,12 +3542,6 @@ const math_txt =
     \\}
     \\fn zLog10(comptime S: type, a: S) S { // §4.3.1 log() is base 10
     \\    return a.log().scale(0.4342944819032518);
-    \\}
-    \\fn zExpm1(comptime S: type, a: S) S { // §4.3.1
-    \\    return a.exp().addC(-1.0);
-    \\}
-    \\fn zLn1p(comptime S: type, a: S) S { // §4.3.1
-    \\    return a.addC(1.0).log();
     \\}
     \\fn zHypot(comptime S: type, a: S, b: S) S { // §4.3.1
     \\    return a.mul(a).add(b.mul(b)).sqrt();
@@ -3796,8 +3797,6 @@ const prelude_head_txt =
 const prelude_math_txt =
     \\const zTan = h.zTan;
     \\const zLog10 = h.zLog10;
-    \\const zExpm1 = h.zExpm1;
-    \\const zLn1p = h.zLn1p;
     \\const zHypot = h.zHypot;
     \\const zAsin = h.zAsin;
     \\const zAcos = h.zAcos;
@@ -3885,6 +3884,8 @@ const rscalar_txt =
     \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + c }; }
     \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
     \\    pub fn log(a: T) T { return .{ .v = @log(a.v) }; }
+    \\    pub fn expm1(a: T) T { return .{ .v = std.math.expm1(a.v) }; }
+    \\    pub fn log1p(a: T) T { return .{ .v = std.math.log1p(a.v) }; }
     \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
     \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
     \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }

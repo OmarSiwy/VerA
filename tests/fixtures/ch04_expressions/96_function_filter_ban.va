@@ -1,4 +1,5 @@
-// LRM 5.2.1/4.7.2: analog filters are analog operators and are forbidden
-// inside an analog function.
+// LRM 4.7.1 bullet list: an analog user-defined function "shall not use analog
+// filter functions". (Not 5.2.1 — that clause is the `analog initial` block.)
+//! lrm 4.7.1
 //! reject E0422
 module ch4_fn_filter(p); inout p; electrical p; analog function real filt; input x; real x; filt=laplace_nd(x,'{1.0},'{1.0,1.0}); endfunction analog I(p)<+filt(V(p)); endmodule

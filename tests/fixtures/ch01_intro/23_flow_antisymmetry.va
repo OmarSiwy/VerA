@@ -16,11 +16,12 @@
 // (The branch-flow unknown is `flow(p,n)`, which codegen spells with its
 // punctuation escaped; `sweep` and not `bias` because a bias line splits its
 // bindings on commas. Same spelling as 05_potential_and_flow.va and
-// 10_flow_probe.va, so ch01-W23 can change all three in one edit.)
+// 10_flow_probe.va, which makes THREE unportable fixtures in this chapter, not
+// the two 05's note used to claim; all three change in one edit. See the longer
+// note in 05_potential_and_flow.va for why no `//! xfail` covers it.)
 //
 //! lrm 1.3.1.2
 //! sweep flowZ28pZ2cnZ29 = 0.125
-//! xfail VerA mints a SECOND unknown, `flowZ28nZ2cpZ29`, for the reversed terminal order instead of negating the branch flow, so I(n,p) reads 0 rather than -I(p,n)
 `include "check.vh"
 module ch01_flow_antisymmetry(p, n);
     inout p, n;

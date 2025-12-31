@@ -17,6 +17,16 @@
 // harness can assert observes it. A file that multiplied a probe by $mfactor
 // and called that flow scaling would only be restating the bias directive.
 //
+// AND WHY $mfactor APPEARS ONLY IN THE `CHECK. §6.3.6's `badres` example writes
+// `I(a,b) <+ V(a,b) / r * $mfactor;` and rules "the simulator will generate an
+// error for this module", because the automatic scaling would then be applied
+// twice; the same clause requires a warning for "a misuse of the $mfactor in a
+// manner that would result in double-scaling". This fixture must COMPILE, so
+// $mfactor may not appear in the right-hand side of a flow contribution here at
+// all — not even multiplied by zero, which a syntactic double-scaling check
+// flags exactly as it flags `badres`. The contribution below is therefore plain,
+// and the `CHECK above is what reads $mfactor.
+//
 //! lrm E.4.1
 //! lrm 9.18
 //! bias V(p) = 2.0
@@ -25,6 +35,6 @@ module annex_e_mfactor(p);
   inout p; electrical p;
   analog begin
     `CHECKX("$mfactor at the top of the hierarchy", $mfactor, 1.0);
-    I(p) <+ V(p) + 0.0 * $mfactor;
+    I(p) <+ V(p);
   end
 endmodule

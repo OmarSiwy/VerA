@@ -14,7 +14,6 @@
 //
 //! lrm 3.4.1
 //! reject DiagnosticsReported
-//! xfail VerA accepts a numeric initializer on a `parameter string`; there is no string/numeric parameter type check in lower.zig
 module ch3_string_parameter_from_numeric(p, n);
     inout p, n;
     electrical p, n;

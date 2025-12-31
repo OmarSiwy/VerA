@@ -4,16 +4,25 @@
 // and has no analog meaning — so the rejection is conformance, not a VerA
 // limitation. The `!==` half is 17_case_inequality.va.
 //
+// Both operands are INTEGER, deliberately. The earlier version wrote
+// `V(p, n) === 0.0`, and §4.2.1 already makes that an error in FULL Verilog-AMS:
+// "The operators shown in Table 4-2 are legal when applied to real operands.
+// All other operators are considered illegal when used with real operands", and
+// `===` is not in Table 4-2. A conforming AMS compiler therefore rejected it
+// too, so the fixture proved nothing about the subset. On integer operands only
+// C.5 forbids it, which is the shape 17 already uses.
+//
 //! lrm C.5
 //! lrm 4.2.6
 //! reject E0323
 module annex_c_case_equality_rejected(p, n);
     inout p, n;
     electrical p, n;
+    integer state;
     integer equal;
 
     analog begin
-        equal = V(p, n) === 0.0;
-        I(p, n) <+ equal;
+        equal = (state === 1);
+        I(p, n) <+ equal * 1m + 0.0 * V(p, n);
     end
 endmodule

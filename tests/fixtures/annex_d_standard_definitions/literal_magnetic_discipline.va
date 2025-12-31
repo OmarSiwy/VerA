@@ -21,6 +21,7 @@
 //! lrm D.1
 //! bias p = 3.0
 `include "check.vh"
+`include "disciplines.vams"
 module annex_d_literal_magnetic(p);
   inout p;
   magnetic p;

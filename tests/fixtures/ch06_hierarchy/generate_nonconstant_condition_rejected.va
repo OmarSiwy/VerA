@@ -13,6 +13,12 @@
 // VerA reports it at the rule: E0418, "genvar loop condition is not a constant
 // expression".
 //
+// The block body is an EMPTY `begin end`: Syntax 6-8's `generate_block ::=
+// module_or_generate_item | begin [ : id ] { module_or_generate_item } end` admits no
+// bare statement — a contribution is reachable only through `analog_construct ::=
+// analog analog_statement` — so the `I(p) <+ V(p);` this file used to write there was
+// a VerA parser extension, and a conforming compiler would have rejected the body
+// and never evaluated the loop scheme the directive below pins.
 //! lrm 6.6.1
 //! lrm 6.6
 //! reject E0418
@@ -22,6 +28,6 @@ module ch6_generate_nonconstant_condition(p);
   genvar i;
   analog rv = 1;
   generate
-    for (i = 0; i < rv; i = i + 1) I(p) <+ V(p);
+    for (i = 0; i < rv; i = i + 1) begin end
   endgenerate
 endmodule

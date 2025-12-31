@@ -5,8 +5,11 @@
 // `%` among the operators legal on real operands, and 4.2.4 immediately goes on
 // to define the real case — "a % b = ((a/b) < 0) ? (a - ceil(a/b)*b) :
 // (a - floor(a/b)*b)" — which divides by b just as the integer case does. So
-// both spellings below are the same error, and both are written here: a
-// compiler that guarded only the integer path would otherwise pass.
+// both spellings below are the same error, and both are written here. Note
+// what that does and does not buy: the two lines raise the same code, so the
+// single expectation is satisfied by either one on its own. The second line
+// widens what the fixture COVERS — a tool that guards only the integer path
+// shows up as one diagnostic instead of two — it is not a second gate.
 //
 // Note this is NOT the real-division rule. Real `x / 0.0` is a well-defined
 // IEEE infinity and 4.2.4 says nothing against it (VerA accepts it and forfeits

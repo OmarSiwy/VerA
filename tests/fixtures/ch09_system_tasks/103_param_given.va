@@ -5,6 +5,7 @@
 // (1.0), which the second check pins at V(p,n) = 0.5: 2.0 * 0.5 = 1.0.
 `include "check.vh"
 
+//! lrm 9.19
 //! param gain = 2.0
 //! bias V(p) = 0.5
 

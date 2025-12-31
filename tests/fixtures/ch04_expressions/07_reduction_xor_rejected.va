@@ -1,5 +1,23 @@
-//! reject E0215
-// EXPECT: error
+// LRM 4.2.10, the whole clause, verbatim: "The reduction operators can not be
+// used inside the analog block and only have meaning when used in the digital
+// context." Annex C.5 removes the xor spellings `^`, `~^` and `^~` from
+// Verilog-A outright, along with the rest of the four-state operator set.
+//
+// This is the xor half of the rule; 06_reduction_rejected.va is `&`, `|`, `~&`
+// and `~|`.
+//
+// The expectation is E0320, "xor reduction is not in the analog subset", which
+// is the code that STATES the rule. It used to be E0215, "expected an operand"
+// — a parser-recovery diagnostic that fires because VerA's expression parser
+// has no unary `^` at all and reports the token it could not start an operand
+// with. E0215 is green here by accident of the grammar, not because the analog
+// subset was checked: it would fire for any unparseable token in that
+// position, and the day VerA parses `^bits` and diagnoses it properly this
+// fixture would have FAILED for being fixed.
+//
+//! lrm 4.2.10
+//! lrm C.5
+//! reject E0320
 module ch04_reduction_xor_rejected;
     integer bits, parity;
     analog parity = ^bits;

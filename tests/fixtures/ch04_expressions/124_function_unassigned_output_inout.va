@@ -32,9 +32,10 @@ module ch04_function_unassigned_output_inout(p, n);
     real out_actual, io_actual, returned;
 
     analog function real passive;
-        input real seed;
-        output real out_arg;
-        inout real io_arg;
+        input seed;
+        output out_arg;
+        inout io_arg;
+        real seed, out_arg, io_arg;
         begin
             passive = seed;
         end

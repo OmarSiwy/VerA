@@ -556,6 +556,10 @@ const runner_body =
     \\    pub fn addC(a: T, c: f64) T { return map(a, a.v + c, 1.0); }
     \\    pub fn exp(a: T) T { return map(a, @exp(a.v), @exp(a.v)); }
     \\    pub fn log(a: T) T { return map(a, @log(a.v), 1.0 / a.v); }
+    \\    // §4.3.1 Table 4-14: the C forms, because exp(x)-1 and log(1+x) cancel
+    \\    // for small x. The DERIVATIVES do not cancel, so they stay exp/1÷(1+x).
+    \\    pub fn expm1(a: T) T { return map(a, std.math.expm1(a.v), @exp(a.v)); }
+    \\    pub fn log1p(a: T) T { return map(a, std.math.log1p(a.v), 1.0 / (1.0 + a.v)); }
     \\    pub fn sqrt(a: T) T { return map(a, @sqrt(a.v), 0.5 / @sqrt(a.v)); }
     \\    pub fn sin(a: T) T { return map(a, @sin(a.v), @cos(a.v)); }
     \\    pub fn cos(a: T) T { return map(a, @cos(a.v), -@sin(a.v)); }

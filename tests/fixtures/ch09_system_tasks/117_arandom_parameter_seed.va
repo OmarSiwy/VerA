@@ -12,6 +12,12 @@
 // an implementation that treated the parameter as the inout seed of the
 // variable form fails that check and nothing else would catch it.
 //
+// The second check is the width sentence, "the random number returned is a
+// 32-bit signed integer". It replaces the chapter's old `($random % 60) is in
+// [-59,59]`, which is true of every integer of every width and therefore cannot
+// fail; the width bound at least fails on a host with integers wider than 32
+// bits, which is the case here.
+//
 //! lrm 9.13.1
 //! xfail VerA refuses the whole §9.13 probabilistic family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks every one of the 17 names analog-context Yes
 `include "check.vh"
@@ -22,8 +28,8 @@ module ch09_arandom_parameter_seed(p, n);
   analog begin
     a = $arandom(seed);
     `CHECKI("§9.13.1 a parameter seed is NOT updated by the call", seed, 7);
-    `CHECKI("and the §9.13.1 modulo example still holds",
-            (a % 60 >= -59) && (a % 60 <= 59), 1);
+    `CHECKI("§9.13.1 the result is still a 32-bit SIGNED integer",
+            (a >= -2147483648) && (a <= 2147483647), 1);
     I(p,n) <+ V(p,n) + a;
   end
 endmodule

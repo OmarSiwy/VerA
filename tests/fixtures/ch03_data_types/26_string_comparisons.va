@@ -6,6 +6,7 @@
 //
 // The two single-operator checks are there so a pair of compensating errors
 // cannot reach the sum by accident.
+//! lrm 3.3
 `include "check.vh"
 module ch3_string_compare(p);
   inout p;

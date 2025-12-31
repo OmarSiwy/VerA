@@ -16,10 +16,19 @@
 //     timeUnit       = 1 ns  = 1e-9
 //     timePrecision  = 1 ps  = 1e-12
 //
-// Both are exact in double, so CHECKX. §9.15 adds "$simparam() shall always
-// return a real value; simulation parameters that have integer values shall be
-// coerced to real", which is why the destinations are reals and not the tick
-// counts a $timeformat-minded implementation would hand back.
+// NEITHER IS EXACT IN BINARY. 1e-9 and 1e-12 are not representable in IEEE-754,
+// so bit equality would demand that the tool materialise the same double this
+// fixture's decimal literal parses to. A conforming implementation that derives
+// timeUnit as pow(10, -9), or scales 1000 up from a picosecond precision, can
+// land one ulp away and would fail for a reason that has nothing to do with
+// Table 9-27. The checks are therefore relative at 1e-12: far tighter than any
+// confusion of unit with precision (a factor of 1000) or of seconds with ticks
+// (a factor of 1e9 or 1e12), and blind to the last bit.
+//
+// §9.15 adds "$simparam() shall always return a real value; simulation
+// parameters that have integer values shall be coerced to real", which is why
+// the destinations are reals and not the tick counts a $timeformat-minded
+// implementation would hand back.
 //
 //! lrm 9.15
 //! xfail VerA does not thread `timescale into $simparam: codegen.zig answers every unknown name with its fallback, and "timeUnit"/"timePrecision" have none here, so both come back 0.0
@@ -31,8 +40,8 @@ module ch09_simparam_timescale(p, n);
   analog begin
     unit = $simparam("timeUnit");
     precision = $simparam("timePrecision");
-    `CHECKX("Table 9-27 timeUnit is the `timescale unit in seconds", unit, 1e-9);
-    `CHECKX("Table 9-27 timePrecision is the `timescale precision in seconds", precision, 1e-12);
+    `CHECKR("Table 9-27 timeUnit is the `timescale unit in seconds", unit, 1e-9, 1e-12);
+    `CHECKR("Table 9-27 timePrecision is the `timescale precision in seconds", precision, 1e-12, 1e-12);
     I(p,n) <+ V(p,n) + unit + precision;
   end
 endmodule

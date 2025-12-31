@@ -12,9 +12,13 @@
 // above it and could not fail independently of it.
 //
 // At V(a)=1.0, V(b)=0.5 both differences are exact in binary64: 1.0-0.5 == 0.5
-// and 0.5-1.0 == -0.5, so CHECKX. The third line is the legitimate CHECKEQ
-// case — the LRM states it as an identity between two of the language's own
-// expressions, with no value of its own to write down.
+// and 0.5-1.0 == -0.5, so CHECKX.
+//
+// The third line WAS a `CHECKEQ(V(path_ab), V(a, b))`. It is not a CHECKEQ case:
+// line 1 already pins V(path_ab) at 0.5, so the digits for the node-pair form
+// exist and README says write them. `CHECKX(V(a, b), 0.5)` is the strictly
+// stronger claim — an error common to both sides passes the relational form —
+// and it removes the chapter's only CHECKEQ.
 //
 //! lrm 1.3.1
 //! lrm 1.3.1.2
@@ -28,7 +32,7 @@ module ch01_named_branch(a, b);
     analog begin
         `CHECKX("named branch potential", V(path_ab), 0.5);
         `CHECKX("reversing the orientation negates the potential", V(b, a), -0.5);
-        `CHECKEQ("the named branch and its node pair agree", V(path_ab), V(a, b), 1e-15);
+        `CHECKX("the node-pair form of the same branch", V(a, b), 0.5);
         I(path_ab) <+ V(path_ab) / 50.0;
     end
 endmodule

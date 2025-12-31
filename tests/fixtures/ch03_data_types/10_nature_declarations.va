@@ -1,4 +1,4 @@
-// §3.6.1 nature declarations, and §3.6.1.2 derived natures. A derived nature
+// §3.6.1 nature declarations, and §3.6.1.1 derived natures. Per §3.6.1.2 a derived nature
 // may change `abstol` and add attributes of its own, but "it is illegal for a
 // derived nature to change the access attribute; the derived nature always
 // inherits the access attribute of its parent nature".
@@ -8,6 +8,9 @@
 // in `ch03_high_voltage` says `access = V` — that name comes from the parent —
 // and the bias makes the value it returns a number rather than a compile check.
 //
+//! lrm 3.6.1
+//! lrm 3.6.1.1
+//! lrm 3.6.1.2
 //! bias V(hv_p) = 4, V(hv_n) = 1
 `include "check.vh"
 nature ch03_voltage;

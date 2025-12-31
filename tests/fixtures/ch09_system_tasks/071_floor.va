@@ -3,6 +3,7 @@
 // negative argument is what separates floor from truncation, since floor(-1.9)
 // is -2 where an integer cast would give -1.
 //
+//! lrm 9.14
 `include "check.vh"
 module ch09_atomic_floor(p, n);
   inout p, n; electrical p, n;

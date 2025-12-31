@@ -5,6 +5,7 @@
 // tanh(0.5) = 0.46211715726000974, which is also
 // 0.5210953054937474 / 1.1276259652063807 = sinh(0.5)/cosh(0.5).
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_tanh(p, n);

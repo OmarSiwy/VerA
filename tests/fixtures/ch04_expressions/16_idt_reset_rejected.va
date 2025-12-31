@@ -16,6 +16,7 @@
 // 7, 8, 9, 10 — while assert pinned nonzero forever must hold it at 7 for all
 // four points.
 //
+//! lrm 4.5.4
 //! analysis tran
 //! time 0, 1n, 2n, 3n
 //! print none

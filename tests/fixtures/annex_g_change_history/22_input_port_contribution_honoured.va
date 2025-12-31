@@ -45,7 +45,7 @@
 // left stating the operating point, because that is the requirement; the day
 // the harness solves, this XPASSes and the marker comes off.
 //
-//! lrm G.1
+//! lrm G.7
 //! lrm 5.6.1
 //! print none
 //! xfail the generated testbench never solves — src/backend/tb.zig evaluates the residual and Jacobian at each declared operating point and has no Newton loop, so an unbiased unknown stays at the 0.0 initial guess and V(i) reads 0, not the 1.0 its own KCL row gives. VerA itself stamps the contribution correctly: res[i] = -1e-3 with d res[i]/d x[i] = 1e-3

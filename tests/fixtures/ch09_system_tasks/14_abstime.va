@@ -7,6 +7,7 @@
 // what is asserted here. The one time point is placed off a round nanosecond so
 // a truncation to whole ticks fails too.
 //
+//! lrm 9.10
 //! analysis tran
 //! time 2.5e-9
 `include "check.vh"

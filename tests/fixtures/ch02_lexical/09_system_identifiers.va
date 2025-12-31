@@ -1,22 +1,27 @@
-// §2.8.3: a `$` introduces a system function, and §9.13 gives these two their
-// values — `$temperature` is the ambient in kelvin, `$vt` "returns the thermal
-// voltage (kT/q)" at `$temperature`.
+// §2.8.3: a `$` introduces a system function, and §9.15 (Syntax 9-10,
+// environment_parameter_functions) gives these two their values —
+// `$temperature` "returns the circuit's ambient temperature in Kelvin units",
+// and `$vt` without the optional argument "returns the thermal voltage (kT/q)"
+// using `$temperature`.
 //
 // The testbench pins the ambient at 300 K exactly, so kT/q is a number a human
-// can write down. Annex D offers five constant sets and they disagree in the
-// fifth significant digit, so the want is the NIST2018 pair (Annex D's newest
-// set; the un-ifdef'd default is NIST1998, and the 1e-4 band covers all five —
-// `P_K = 1.380649e-23`, `P_Q = 1.602176634e-19`):
+// can write down. Annex D's constants.vams carries several `ifdef'd constant
+// sets that disagree in the fifth significant digit, so the want is the
+// un-ifdef'd DEFAULT one, NIST1998: the arm a source defining no
+// PHYSICAL_CONSTANTS_* macro gets, and the only set every edition of Annex D
+// has spelled the same way.
 //
-//   k/q = 8.617333262145e-5 V/K  ->  300 K * k/q = 0.0258519997864 V
+//   P_K_NIST1998 = 1.3806503e-23, P_Q_NIST1998 = 1.602176462e-19
+//   300 K * P_K / P_Q = 0.025852026903638286 V
 //
-// and the 1e-4 relative band covers every other Annex D set (the widest, the
-// SPICE pair, gives 0.0258512411) while still rejecting a $vt computed at the
-// wrong temperature: 300.15 K would be 0.0258649, 1.3e-5 away and out of band.
+// The 1e-4 relative band admits every other set Annex D lists (the widest miss
+// is the SPICE pair, 0.025851241113725592, 3.0e-5 relative) while still
+// rejecting a $vt computed at the wrong temperature: at 300.15 K every set
+// gives ~0.0258649, at least 4.7e-4 relative away and out of band.
 //
 //! temp 300
 //! lrm 2.8.3
-//! lrm 9.13
+//! lrm 9.15
 //! lrm D.2
 `include "check.vh"
 module ch02_system_identifiers(p, n);
@@ -25,7 +30,7 @@ module ch02_system_identifiers(p, n);
 
     analog begin
         `CHECKX("$temperature is the ambient in kelvin", $temperature, 300.0);
-        `CHECKR("$vt is kT/q at $temperature", $vt, 0.0258519997864, 1e-4);
+        `CHECKR("$vt is kT/q at $temperature", $vt, 0.025852026903638286, 1e-4);
         I(p, n) <+ $vt + 1u * $temperature;
     end
 endmodule

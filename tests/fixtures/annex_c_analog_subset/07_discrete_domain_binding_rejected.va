@@ -9,9 +9,16 @@
 // own — it uses `ddiscrete`, whose `domain discrete;` is Annex D's own
 // definition — and binds a net to it. That binding is the error.
 //
+// The pinned substring is `domain`, not `discrete`: the discipline this net is
+// bound to is spelled `ddiscrete`, which CONTAINS "discrete", so a diagnostic
+// that merely quotes the offending token ("unknown discipline ddiscrete")
+// satisfies `//! reject discrete` with no domain-binding rule having fired —
+// and an undeclared-identifier error is not the C.4 rule. "domain" cannot
+// occur inside the discipline's own name, so the arm stays load-bearing.
+//
 //! lrm C.4
 //! lrm 3.6.2.2
-//! reject discrete
+//! reject domain
 //! xfail VerA has no subset gate on domain binding; `ddiscrete q;` inside a Verilog-A module compiles clean (rc=0), as does a net of any undefined discipline
 module annex_c_discrete_domain_binding_rejected(p);
     inout p;

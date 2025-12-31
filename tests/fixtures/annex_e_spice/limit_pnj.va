@@ -2,25 +2,34 @@
 // gives pnjlim two extra arguments, vte and vcrit; §9.17.3 makes both REQUIRED
 // when the string is "pnjlim", and names vcrit = vte*ln(vte/(sqrt(2)*Is)).
 //
-// WHAT IS PINNED. §9.17.3: the simulator is "prevented from terminating the
-// iteration" while $limit()'s output differs from the value of its access
-// function. A solved operating point is therefore one where the limiter is
-// transparent: the junction current the model stamps is the one V(mid) implies,
-// never a damped stand-in.
+// WHAT IS PINNED. §9.17.3: "When the simulator has converged, the return value
+// of the $limit() function is the value of the access function reference, within
+// appropriate tolerances." At the answer the limiter is therefore transparent:
+// the junction current the model stamps is the one V(mid) implies, never a
+// damped stand-in.
+//
+// WHAT THE HARNESS SUPPLIES, and why the digit holds anyway. §9.17.3 also says
+// "in all cases, the simulator is responsible for determining if limiting should
+// be applied and what the return value is on a given iteration", and this
+// harness does not iterate: `//! bias` imposes x and the device is evaluated
+// ONCE, so the convergence sentence is not handed to the fixture for free. This
+// bias needs no help from it. SPICE's DEVpnjlim limits only when vnew > vcrit AND
+// |vnew - vold| > 2*vte; vnew = 0.5 V is below the vcrit = 0.6 V passed in, so
+// the FIRST conjunct fails for any stored previous value whatsoever and the
+// function is the identity on every iteration, not merely the last. That is why
+// this file, alone of the three, needs no assumption about the cold start —
+// including the pnjlim-specific one a SPICE-family tool makes, MODEINITJCT
+// seeding the junction at vcrit = 0.6 V, which still returns 0.5.
 //
 // WHY THE PROBE IS AN INTERNAL NET. A limiter corrects an unknown the device
 // owns. Probing the module PORT instead makes the correction a write to a node
 // the host imposes, and a simulator is entitled to decline it — VerA does,
-// silently — so a port-probing form of this fixture asserts the transparency of
-// the identity function and cannot fail. `mid` is private to the device, so the
-// clamp really is installed. The bias directive holds `mid` at 0.5 V, and the
-// branch to `p` is written in terms of the LIMITED value, so a clamp that fired
-// would move the stamped current as well as the assertion.
-//
-// The bias makes the claim true even under SPICE's DEVpnjlim, which limits only
-// when vnew > vcrit AND |vnew - vold| > 2*vte. Here vnew = 0.5 V is below the
-// vcrit = 0.6 V passed in, so the first conjunct fails for ANY previous value
-// and the function is the identity on every iteration, not merely the last.
+// silently — so a port-probing form of this fixture would put the transparency
+// question to a call the tool had already refused to limit. `mid` is private to
+// the device, so a tool that installs the clamp at all installs it here. The
+// bias directive holds `mid` at 0.5 V, and the branch to `p` is written in terms
+// of the LIMITED value, so a clamp that fired would move the stamped current and
+// not only the assertion.
 //
 // TOLERANCE. §9.17.3 fixes only "within appropriate tolerances". The only number
 // the LRM supplies for a Voltage-natured quantity is Annex D disciplines.vams

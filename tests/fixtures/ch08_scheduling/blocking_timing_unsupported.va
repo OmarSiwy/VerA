@@ -5,7 +5,6 @@
 //! reject E0205
 //! reject reg
 //! reject initial
-// EXPECT: error -- blocking assignment delay/event controls use the active queue.
 module ch8_blocking_timing;
   reg source, target;
   initial begin

@@ -4,6 +4,7 @@
 // of the Taylor series 0.5 - 0.5^3/6 + 0.5^5/120 - ... A degree reading would
 // give 0.0087, three orders out.
 //
+//! lrm 9.14
 //! bias V(p) = 0.5
 `include "check.vh"
 module ch09_atomic_sin(p, n);

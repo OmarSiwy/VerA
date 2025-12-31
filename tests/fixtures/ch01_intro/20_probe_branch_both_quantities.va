@@ -13,14 +13,21 @@
 // The output branch is (o, r), disjoint from (p, n), so nothing contributes to
 // the probe's node pair even indirectly.
 //
-// E0424 is not yet allocated in src/diag_code.zig: this is a behavioral rule,
-// class 4. Pinned as a code rather than a message fragment so the XPASS fires
-// against a stable spelling the day it is allocated. RESERVE E0424 FOR THIS
-// RULE — if it is taken for something else this fixture stays XFAIL silently.
+// §5.4.2.1 is cited alongside §1.3.1 because it is the clause that states the
+// rule with the word illegal: "Using both the potential and the flow of a probe
+// branch is illegal." ch05_analog_behavior/probe_both_quantities_invalid.va pins
+// the same rule on an UNNAMED branch; the two now demand the same expectation,
+// so implementing the rule closes both instead of one.
+//
+// That expectation is the phase label. It WAS `//! reject E0424`, a code that
+// does not exist — src/diag_code.zig allocates class 4 up to E0422 (line 181) —
+// so nothing VerA can emit would match, and the "RESERVE E0424 FOR THIS RULE"
+// comment that used to sit here reserved nothing: a `.va` comment is not a
+// mechanism. The phase label matches whichever code the rule gets.
 //
 //! lrm 1.3.1
-//! reject E0424
-//! xfail lower.zig never correlates the two accesses of an uncontributed node pair: V(prb) and I(prb) are lowered independently, so nothing observes that both quantities of one probe branch were read; `vera --lint` and `--emit-zig` both exit 0
+//! lrm 5.4.2.1
+//! reject DiagnosticsReported
 module ch01_probe_branch_both_quantities(p, n, o, r);
     inout p, n, o, r;
     electrical p, n, o, r;

@@ -18,7 +18,7 @@
 // write down at all and has no fixture yet.
 //
 //! lrm 9.13.1
-//! reject paramset
+//! reject within a paramset
 //! xfail VerA refuses the whole §9.13 family with E0801 and never reaches the type_string scope rule
 module ch09_arandom_type_string_outside_paramset(p, n);
   inout p, n; electrical p, n;

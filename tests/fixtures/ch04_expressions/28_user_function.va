@@ -1,6 +1,14 @@
-// §4.7 a user-defined analog function, and §4.4.3 the conditional operator it
+// §4.7 a user-defined analog function, and §4.2.12 the conditional operator it
 // is built from. `max_value` is max() written by hand, so its value is fixed by
 // arithmetic alone.
+//
+// The formals are spelled the way A.2.6 and every §4.7.1 example spell them: a
+// direction (A.2.1.2 `input_declaration`, which has no slot for `real`) and a
+// separate `real_declaration` for the type — which is also what 4.7.1's "all
+// formal arguments shall have an associated block item declaration specifying
+// the data type" asks for, and what 101_function_untyped_argument.va rejects
+// the absence of. `input real first;` is IEEE 1364 task syntax; the
+// Verilog-AMS grammar does not admit it.
 //
 // The bias makes both arms reachable in one operating point: with
 // V(p,n) = -0.5 the call in the contribution must select the SECOND argument
@@ -9,6 +17,8 @@
 // The tie case pins the operator as a strict `>`: 4 > 4 is false, so the second
 // argument is returned.
 //
+//! lrm 4.7.1
+//! lrm 4.7.2.1
 //! bias V(p) = -0.5
 //! bias V(n) = 0.0
 `include "check.vh"
@@ -18,7 +28,8 @@ module ch04_user_function(p, n);
     real clamped;
 
     analog function real max_value;
-        input real first, second;
+        input first, second;
+        real first, second;
         begin
             max_value = first > second ? first : second;
         end

@@ -1,0 +1,68 @@
+// E.2.2.1 Accessing SPICE models, transcribed. Given the SPICE model card
+//
+//     .MODEL VERTNPN NPN BF=80 IS=1E-18 RB=100 VAF=50
+//     + CJE=3PF CJC=2PF CJS=2PF TF=0.3NS TR=6NS
+//
+// the LRM prints the Verilog-AMS module that instantiates it:
+//
+//     module diffPair (c1, b1, e, b2, c2);
+//        electrical c1, b1, e, b2, c2;
+//        vertNPN Q1 (c1, b1, e);
+//        vertNPN Q2 (.c(c2), .b(b2), .e(e));
+//     endmodule
+//
+// WHAT IS PINNED. E.2: "In addition to SPICE primitives, it shall also be
+// possible to access subcircuits and models defined within SPICE netlists. The
+// subcircuits and models contained within the SPICE netlist are treated as
+// module definitions." So a SPICE model name is instantiable from Verilog-AMS
+// with no Verilog-AMS declaration of it anywhere in this file — which is exactly
+// what makes it distinguishable from an undefined-module error. E.2.2.1 also
+// fixes that "the first letter of the instance name... is not constrained by the
+// primitive type", so `q1` rather than `Q1` is deliberate, and that the ports
+// come from the `bjt` primitive rather than the model card, with the substrate
+// port "defaulted by simply not giving it" — which is why three ports are given
+// where Table E.1's bjt row lists four.
+//
+// THE OBSERVABLE IS THE PORT ASSOCIATION, and E.2.2.1 is the clause that fixes
+// it: the ordered list is c, b, e "determined by the bjt primitive itself and
+// not by the model statement". The three nets are biased to three different
+// potentials, and the two checks read the collector-emitter and base-emitter
+// potentials back out of the INSTANCE — §6.7.1, "potential and flow access for
+// named and unnamed branches (including port branches) can be done
+// hierarchically". Any of the six orderings other than (c, b, e) moves at least
+// one of the two numbers. The LRM's own `Q1 (c1, b1, e)` is this shape, and
+// three distinct nets are used rather than the collector and base tied together,
+// because tying them makes the first two positions indistinguishable.
+//
+// NO CURRENT IS ASSERTED, and none can be. The Behavior column of Table E.1's
+// `bjt` row is empty, E.2 says "all aspects of SPICE primitives are
+// implementation dependent", and the BF/IS/VAF card above is a set of model
+// parameters whose equations the annex does not write down — E.1.2's fourth
+// axis of incompatibility is precisely that "the mathematical description of the
+// built-in primitives can differ". A digit for the collector current here would
+// be invented, not derived.
+//
+// THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision demanded a diagnostic
+// for the LRM's own worked example. E.1.1 does make SPICE-netlist reading
+// conditional — "IF a simulator which supports Verilog-AMS HDL is also able to
+// read SPICE netlists of a particular flavor" — but the conditional is about the
+// netlist input, not about this syntax: a tool that reads no SPICE at all still
+// has to parse `vertNPN q1(c1, b1, e1);` as an instantiation and resolve it, and
+// that is the step VerA never reaches.
+//
+//! lrm E.2.2.1
+//! lrm E.2
+//! lrm 6.7.1
+//! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
+//! xfail VerA rejects module instantiation (E0204), so a SPICE model cannot be instantiated
+`include "check.vh"
+module annex_e_spice_model(c1, b1, e1);
+  inout c1, b1, e1; electrical c1, b1, e1;
+  vertNPN q1(c1, b1, e1);
+  analog begin
+    `CHECKX("ordered position 1 is the collector: 1.0 - 0.25",
+            V(q1.c, q1.e), 0.75);
+    `CHECKX("ordered position 2 is the base: 0.75 - 0.25",
+            V(q1.b, q1.e), 0.5);
+  end
+endmodule

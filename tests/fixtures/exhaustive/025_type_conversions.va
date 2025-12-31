@@ -24,10 +24,12 @@ module ex025_type_conversions(p, n);
     `CHECKX("mixed arithmetic promotes", 1 + 0.5, 1.5);
     `CHECKX("integer division stays integer", 7 / 2 + 0.0, 3.0);
     `CHECKX("one real operand makes it real division", 7 / 2.0, 3.5);
-    // §9.11 explicit conversions, which do NOT round: $rtoi truncates.
-    `CHECKI("$rtoi truncates", $rtoi(2.9), 2);
-    `CHECKI("$rtoi truncates toward zero", $rtoi(-2.9), -2);
-    `CHECKX("$itor", $itor(3), 3.0);
+    // The §9.11 explicit conversions used to be contrasted here — $rtoi
+    // TRUNCATES where the implicit conversion above rounds. They are gone
+    // because Table 9-8 marks $rtoi and $itor "supported in analog context:
+    // No", so an `analog` block is not a legal call site for either and this
+    // file cannot host the contrast. ch09_system_tasks/061_rtoi_analog_-
+    // rejected.va and 062_itor_analog_rejected.va own that rule now.
     I(p, n) <+ 0.0;
   end
 endmodule

@@ -1,14 +1,36 @@
 // Annex C.7, bullet 1: "No digital behavior or events are supported in
-// Verilog-A." `posedge` and `negedge` are the digital edge event expressions of
-// §8/A.6.5; the analog block admits only the analog events of §5.10 (`initial_step`,
-// `cross`, `timer`, ...), which 05_analog_event.va pins on the positive side.
+// Verilog-A."
+//
+// The cite is 5.10.5, not 5.10. §5.10 is where `posedge`/`negedge` are GRANTED:
+// Syntax 5-13, repeated verbatim in A.6.5, reads
+//
+//   analog_event_expression ::= expression | posedge expression
+//                             | negedge expression | ...
+//
+// so arguing from §5.10 would argue against this fixture. What C.7 removes is
+// §5.10.5, "Digital events in analog behavior": "To model mixed signal
+// functionality, analog behavior can be made sensitive to digital events,
+// including posedge events, negedge events, state change events, and named
+// events." That sensitivity is the mixed-signal feature, and it is the one the
+// subset drops. The analog events of §5.10.2/5.10.3 (`initial_step`, `cross`,
+// `timer`, ...) stay, and 05_analog_event.va pins them on the positive side;
+// a named event triggered and detected within the analog block is the §5.10.4
+// case, which stays too — 19_named_event_in_subset.va.
 //
 // Both edges appear, and both are pinned, because the parser recovers and
 // reports each one: a fixture naming a single edge would leave the other
 // unproven.
 //
+// E0209 ("expected an expression", .lrm A.8.3) is a parser-recovery artifact
+// and names no C.7 rule — VerA has no subset gate here, it simply does not
+// parse `posedge` in an event expression. It is pinned only because it is what
+// VerA emits today; `posedge`/`negedge` are the load-bearing arms. If VerA ever
+// learns to parse the edge expressions, this cite must move to whatever code
+// then refuses them (E0201, "construct is not in the supported subset", .lrm C,
+// already exists) rather than being deleted.
+//
 //! lrm C.7
-//! lrm 5.10
+//! lrm 5.10.5
 //! reject E0209
 //! reject posedge
 //! reject negedge

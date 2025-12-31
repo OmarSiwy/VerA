@@ -1,5 +1,6 @@
 // hypot() (LRM 4.3.2 Table 4-15): sqrt(x^2 + y^2), all x, all y.
 `include "check.vh"
+//! lrm 4.3.2
 //! bias V(p) = 0.75
 module ch04_hypot(p, n);
   inout p, n; electrical p, n;

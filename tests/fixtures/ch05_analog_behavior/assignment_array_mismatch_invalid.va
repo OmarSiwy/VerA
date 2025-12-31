@@ -1,0 +1,40 @@
+// §5.7 on unpacked array assignment: "Array assignments shall only be done with
+// arrays that are compatible. An array, or a slice of such an array, shall be
+// assignment compatible with any other such array or slice if all the following
+// conditions are satisfied: — The element types of source and target shall be
+// equivalent. — Every dimension of the source array shall have the same number
+// of elements as the target array."
+//
+// The clause prints its own verdict against its own example:
+//
+//     int A[10:1];   // fixed-size array of 10 elements
+//     int B[0:9];    // fixed-size array of 10 elements
+//     int C[24:1];   // fixed-size array of 24 elements
+//     A = B;         // ok. Compatible type and same size
+//     A = C;         // type check error: different sizes
+//
+// which is why both assignments are written here, in the Verilog-AMS spelling
+// of `int`. `A = B` must compile — the bounds differ, 10:1 against 0:9, and the
+// rule counts ELEMENTS, not indices — and `A = C` must not. A fixture with only
+// the failing line would be satisfied by a compiler that refused whole-array
+// assignment outright, which is a different answer to a different question.
+//
+// The expectation is the word `array` rather than a code: no VerA diagnostic
+// says it. VerA today reports E0313 "unknown variable: `A`" for BOTH lines —
+// the same refusal for the legal assignment and the illegal one — so pinning
+// what it currently emits would launder the gap into a pass.
+//
+//! lrm 5.7
+//! reject array
+//! xfail VerA does not implement whole-array assignment: `A = B` and `A = C` alike die at E0313 (unknown variable), so the compatible pair is refused with the incompatible one and no size check is ever reached
+module ch5_assignment_array_mismatch(p);
+  inout p; electrical p;
+  integer A[10:1];             // 10 elements
+  integer B[0:9];              // 10 elements
+  integer C[24:1];             // 24 elements
+  analog begin
+    A = B;                     // ok: compatible type and same size
+    A = C;                     // type check error: different sizes
+    I(p) <+ 0.0;
+  end
+endmodule

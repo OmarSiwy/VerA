@@ -2,6 +2,7 @@
 // rounds towards PLUS infinity. ceil(1.1) is 2; ceil(-1.1) is -1, which is the
 // case that distinguishes it from rounding away from zero.
 //
+//! lrm 9.14
 `include "check.vh"
 module ch09_atomic_ceil(p, n);
   inout p, n; electrical p, n;

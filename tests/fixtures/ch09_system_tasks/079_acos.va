@@ -3,6 +3,7 @@
 // pi/3 = 1.0471975511965979 — twice asin(0.5), and the complement of it about
 // pi/2, which is the identity that fixes the branch.
 //
+//! lrm 9.14
 `include "check.vh"
 module ch09_atomic_acos(p, n);
   inout p, n; electrical p, n;

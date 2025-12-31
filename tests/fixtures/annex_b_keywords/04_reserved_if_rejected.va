@@ -12,8 +12,18 @@
 // The reject pins the diagnostic CODE, not the prose: `identifier` — what this
 // file used to demand — is a fragment of the diagnostic's title, so rewording
 // the catalogue entry would silently stop this fixture proving anything.
+//
+// So is `if` itself: E0208's title is "identIFier", and a `//! reject` pattern is
+// matched against the catalogue title as well as against the message
+// (tests/torture.zig failureContains). The `//! reject if` line below therefore
+// discriminates nothing on its own; it is kept because the chapter counts
+// covered spellings by their reject lines (14_include_reserved.va). The proof is
+// that this file declares exactly ONE thing, so the E0208 can only have come
+// from `real if;`. 24_reserved_exp.va and 25_reserved_or.va exist for the same
+// reason.
 //! lrm B
 //! lrm 2.8
+//! lrm 2.8.2
 //! reject E0208
 //! reject if
 module annex_b_reserved_if_rejected;

@@ -13,7 +13,9 @@
 // Two operators from two different tables, so the rule is pinned as the general
 // one 4.2.1 states rather than as a quirk of `&`: a bitwise AND and a left
 // shift, each with a real left operand. Both are compile-time constants, so the
-// diagnosis is static and needs no operating point.
+// diagnosis is static and needs no operating point. Both raise the same code,
+// so the single expectation is satisfied by either line alone: the second one
+// widens what the fixture covers, it is not a second gate.
 //
 // (VerA answers E0322, whose catalogue entry cites 4.2.9. 4.2.1 is where the
 // rule actually lives; the code is the stable half and is what is matched.)
