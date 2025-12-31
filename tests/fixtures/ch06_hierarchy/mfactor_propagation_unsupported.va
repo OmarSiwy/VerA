@@ -1,0 +1,14 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-6.3.6-05  (ch6-hierarchy.html)
+// The simulator shall issue a warning if it detects misuse that would result in double-scaling.
+//
+//! reject module instantiation is not supported
+// EXPECT: error -- inherited $mfactor propagation requires module elaboration.
+module ch6_mfactor_propagation_parent(p);
+  inout p; electrical p;
+  ch6_child u(p);
+endmodule

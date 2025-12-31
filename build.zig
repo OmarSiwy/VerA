@@ -27,20 +27,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    // Public so an embedder can compile Verilog-A in-process instead of
-    // shelling out to the binary.
     const vera_mod = b.addModule("vera", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // =======================================================================
-    // The binary
-    // =======================================================================
-
-    // The CLI reaches the engine with relative `@import`s, so the whole thing is
-    // one module and there is nothing to wire.
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
         .target = target,
@@ -72,61 +64,51 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_va_test.step);
 
     // =======================================================================
-    // Verilog-A oracles
+    // The torture suite — the ONE oracle over tests/fixtures/**/*.va
     //
-    // EXECUTABLES, not `test` blocks, on purpose: a failing fixture must print
-    // the whole failing set in one run instead of aborting at the first assert.
-    // =======================================================================
-
-    // The BEHAVIORAL oracle: every tests/va/fixtures/**/*.va through
-    // compileSource, checked against its sibling `.expected-error.txt`.
-    const va_conf_opts = b.addOptions();
-    va_conf_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/va/fixtures"));
-    const va_conf_mod = b.createModule(.{
-        .root_source_file = b.path("tests/va/conformance.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "vera", .module = vera_mod }},
-    });
-    va_conf_mod.addOptions("conformance_options", va_conf_opts);
-    const run_va_conf = b.addRunArtifact(b.addExecutable(.{
-        .name = "vera-conformance",
-        .root_module = va_conf_mod,
-    }));
-    b.step("conformance", "Run the Verilog-A fixture conformance suite").dependOn(&run_va_conf.step);
-    test_step.dependOn(&run_va_conf.step);
-
-    // The SEMANTIC oracle: every tests/va/fixtures/exhaustive/*.va becomes a
-    // native testbench binary (ch9 display tasks on, plus the `//!` operating
-    // points) whose transcript is diffed against the committed `.expected.txt`.
+    // It replaced `conformance`, `exhaustive`, `sema.sh` and `ledger`, which
+    // disagreed about what a fixture is and needed three sidecar file formats
+    // between them. Every fixture now states its own expected behavior in the
+    // .va: `//! reject <substring>` to demand a diagnostic, or a `CHECK` from
+    // tests/fixtures/check.vh whose `ok=1` column is the assertion.
+    //
+    // An EXECUTABLE, not a `test` block, on purpose: a failing fixture must
+    // print the whole failing set in one run instead of aborting at the first
+    // assert.
     //
     // NOT in `test`: it spawns a `zig build-exe` per fixture, seconds rather
     // than milliseconds. Run it explicitly:
     //
-    //   zig build exhaustive              # check every transcript
-    //   zig build exhaustive -- 04_       # only fixtures matching `04_`
-    //   zig build exhaustive -- --bless   # (re)write them, then READ the diff
+    //   zig build torture              # every fixture
+    //   zig build torture -- ch04      # only paths matching `ch04`
+    //   zig build torture -- --strict  # unasserted fixtures FAIL instead of warn
     const contract_path = b.option(
         []const u8,
         "contract",
         "Root of the `contract` module the generated devices import",
     ) orelse b.pathFromRoot("tools/contract.zig");
-    const exh_opts = b.addOptions();
-    exh_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/va/fixtures/exhaustive"));
-    exh_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-tb"));
-    exh_opts.addOption([]const u8, "contract", contract_path);
-    exh_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
-    const exh_mod = b.createModule(.{
-        .root_source_file = b.path("tests/va/exhaustive.zig"),
+    const torture_opts = b.addOptions();
+    torture_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
+    torture_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-tb"));
+    torture_opts.addOption([]const u8, "contract", contract_path);
+    torture_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
+    const torture_mod = b.createModule(.{
+        .root_source_file = b.path("tests/torture.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "vera", .module = vera_mod }},
     });
-    exh_mod.addOptions("exhaustive_options", exh_opts);
-    const run_exh = b.addRunArtifact(b.addExecutable(.{
-        .name = "vera-exhaustive",
-        .root_module = exh_mod,
+    torture_mod.addOptions("torture_options", torture_opts);
+    const run_torture = b.addRunArtifact(b.addExecutable(.{
+        .name = "vera-torture",
+        .root_module = torture_mod,
     }));
-    if (b.args) |a| run_exh.addArgs(a);
-    b.step("exhaustive", "Run the Verilog-A testbench transcripts").dependOn(&run_exh.step);
+    if (b.args) |a| run_torture.addArgs(a);
+    b.step("torture", "Run the Verilog-A torture suite").dependOn(&run_torture.step);
+
+    // The runner's own unit tests (the assertion lint, the verdict tally) DO
+    // belong in `test`: they are milliseconds and they are what stops a fixture
+    // from asserting nothing while looking like it asserts something.
+    const run_torture_test = b.addRunArtifact(b.addTest(.{ .root_module = torture_mod }));
+    test_step.dependOn(&run_torture_test.step);
 }

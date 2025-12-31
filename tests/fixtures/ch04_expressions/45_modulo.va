@@ -1,0 +1,23 @@
+// §4.2.4: "For the case of the modulus operator where either argument is real,
+// the operation performed is
+//     a % b = ((a/b) < 0) ? (a - ceil(a/b)*b) : (a - floor(a/b)*b);"
+// and "the result of a modulus operation takes the sign of the first operand".
+//
+// At V(p,n) = 5.5, b = 2.0:  5.5/2.0 = 2.75 >= 0, so the result is
+//     5.5 - floor(2.75)*2.0 = 5.5 - 4.0 = 1.5.
+// Negating the first operand takes the other arm: -5.5/2.0 = -2.75 < 0, so
+//     -5.5 - ceil(-2.75)*2.0 = -5.5 - (-2.0)*2.0 = -1.5,
+// i.e. the sign follows a and NOT the C-truncation-free floor form, which would
+// have given +0.5. Every value here is exact in IEEE 754 binary.
+//
+//! bias V(p) = 5.5
+`include "check.vh"
+module ch04_modulo(p, n);
+    inout p, n;
+    electrical p, n;
+    analog begin
+        `CHECKX("5.5 % 2.0", V(p, n) % 2.0, 1.5);
+        `CHECKX("-5.5 % 2.0 takes the sign of the first operand", (-V(p, n)) % 2.0, -1.5);
+        I(p, n) <+ V(p, n) % 2.0;
+    end
+endmodule

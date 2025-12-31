@@ -1,0 +1,23 @@
+// Annex E.3.4 / §9.17.3 $limit with the built-in "vdslim" algorithm. Table E.2
+// is explicit that vdslim takes NO arguments beyond the access function, which
+// is why this call has two arguments where limit_pnj.va has four.
+//
+// WHAT IS PINNED. §9.17.3: while $limit()'s output differs from the value of its
+// access function the simulator may not terminate the iteration, so at a solved
+// point the limiter is transparent and the stamped drain current is the one
+// V(p) implies.
+//
+// 0.4 V keeps that true even for a simulator running SPICE's DEVlimvds: for any
+// previous value below 3.5 V that function clamps only at +4 V (rising) and
+// -0.5 V (falling), and 0.4 V is inside both.
+//
+//! bias V(p) = 0.4
+`include "check.vh"
+module annex_e_vdslim(p);
+  inout p; electrical p; real limited;
+  analog begin
+    limited = $limit(V(p), "vdslim");
+    I(p) <+ limited;
+    `CHECK("vdslim is transparent at the solution", limited, 0.4, 1e-12);
+  end
+endmodule

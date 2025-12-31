@@ -1,0 +1,19 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-7.2.4-02  (ch7-mixed-signal.html)
+// If an undeclared net segment has multiple compatible disciplines connected to it, a connect statement shall specify which discipline to use during dis
+// VAMS-7.7.1-01  (ch7-mixed-signal.html)
+// The form is connect connect_module_identifier connect_attributes discipline_identifier , discipline_identifier ; where the specified disciplines shall
+// VAMS-7.7.1-02  (ch7-mixed-signal.html)
+// The form is connect connect_module_identifier connect_attributes direction discipline_identifier , direction discipline_identifier ; where the specifi
+// VAMS-7.8-02  (ch7-mixed-signal.html)
+// When two disciplines are specified in a connect statement, one shall be discrete and the other continuous. [needs: `connect` statement parsing + a per
+//
+//! reject NoModule
+// EXPECT: error -- connectrules need post-elaboration insertion.
+connectrules ch7_rules;
+  connect ch7_a2d;
+endconnectrules

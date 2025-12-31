@@ -1,0 +1,29 @@
+// §3.6.1.1 derived natures: `nature ch3_child_n : ch3_parent_n; endnature` is
+// the LRM's own "alias" shape — a derived nature with no items of its own, so
+// every attribute comes from the parent.
+//
+// §3.6.1.2, access: "It is illegal for a derived nature to change the access
+// attribute; the derived nature always inherits the access attribute of its
+// parent nature." So the potential access function of a net whose discipline
+// binds ch3_child_n is spelled ParentV, not some name derived from the child.
+// §3.13.3: "Each access function is used with the name of the net as its
+// argument", and it reads that net's potential.
+//
+// The testbench holds node p at 0.75, a value exact in binary, so the probe has
+// exactly one right answer: ParentV(p) = 0.75. That fails if the child does not
+// inherit ParentV (the module would not compile), and it fails if ParentV is
+// bound to anything but p's potential.
+//
+//! bias V(p) = 0.75
+`include "check.vh"
+nature ch3_parent_n; units="V"; access=ParentV; abstol=1u; endnature
+nature ch3_child_n:ch3_parent_n; endnature
+discipline ch3_child_d; potential ch3_child_n; enddiscipline
+module ch3_derived(p);
+  inout p;
+  ch3_child_d p;
+  analog begin
+    `CHECK("inherited access function probes p", ParentV(p), 0.75, 1e-15);
+    ParentV(p) <+ 0.0;
+  end
+endmodule

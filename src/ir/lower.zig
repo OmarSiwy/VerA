@@ -109,6 +109,12 @@ pub const DisciplineInfo = struct {
     /// the distinction: a contribution to a signal-flow net has no KCL meaning.
     has_potential: bool = false,
     has_flow: bool = false,
+    /// §3.6.1.4 the access identifier each bound nature declares, `""` when the
+    /// discipline binds none. §4.4 requires the name in `V(n)` to be THIS one,
+    /// so the check needs the discipline's spelling, not just the global set of
+    /// access names.
+    potential_access: []const u8 = "",
+    flow_access: []const u8 = "",
 };
 
 /// Value type of a lowered expression. LRM §3.1 — the analog kernel only has
@@ -534,6 +540,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     self.cur = entry;
 
     try self.collectDisciplines(); // §3.6.1/§3.6.2 (annex D.1 is inlined here)
+    try self.checkNatureTable(); // §3.6.1/§3.13 — the declaration table itself
 
     // §6.5 ports first: this order IS the host device's terminal order.
     for (module.ports) |p| {
@@ -614,6 +621,9 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the assignment that reveals it — see `holdSlot`.
     try self.markHeldVars(module);
     for (module.vars) |*v| try self.declareVarDecl(v, .module);
+
+    // §4.7.3 — checked on the DECLARATIONS, before any call site sees them.
+    try self.checkFuncRecursion(module.functions);
 
     // §5.2 analog blocks, concatenated (§6.9.1).
     for (module.analog) |blk| {
@@ -720,12 +730,18 @@ fn collectDisciplines(self: *Lower) Oom!void {
         if (d.potential != .none) {
             const n = self.natureOf(d.potential);
             if (n.abstol) |a| info.potential_abstol = a;
-            if (n.access) |acc| try self.access_kind.put(self.arena, acc, .potential);
+            if (n.access) |acc| {
+                info.potential_access = acc;
+                try self.access_kind.put(self.arena, acc, .potential);
+            }
         }
         if (d.flow != .none) {
             const n = self.natureOf(d.flow);
             if (n.abstol) |a| info.flow_abstol = a;
-            if (n.access) |acc| try self.access_kind.put(self.arena, acc, .flow);
+            if (n.access) |acc| {
+                info.flow_access = acc;
+                try self.access_kind.put(self.arena, acc, .flow);
+            }
         }
         // §3.6.2.3 discipline-level attribute overrides win over the nature's.
         for (d.overrides) |o| {
@@ -738,6 +754,94 @@ fn collectDisciplines(self: *Lower) Oom!void {
         }
         try self.disciplines.put(self.arena, self.file.str(d.name), info);
     }
+}
+
+/// §3.6.1/§3.6.1.2/§3.13 — the rules the nature+discipline TABLE has to satisfy
+/// on its own, before a module refers to any of it. One pass, because all of
+/// them read the same two declaration lists.
+///
+/// WHY THE UNIQUENESS RULES ARE PER-FILE. §3.13.1 gives natures and disciplines
+/// one global scope, but VerA prepends annex D's `disciplines.vams` to EVERY
+/// compilation whether or not the source included it. A model that declares its
+/// own `nature My_Voltage; access = V;` never asked for annex D's `Voltage`, so
+/// comparing across the prelude would reject it for a declaration its author did
+/// not write. Within one file the comparison is exactly §3.13.1's.
+fn checkNatureTable(self: *Lower) Oom!void {
+    const natures = self.file.natures;
+    // §3.6.1.4 access identifier per nature, `.none` when it declares no
+    // `access` of its own (a derived nature inherits it — §3.6.1.2).
+    const access = try self.arena.alloc(Ast.StrId, natures.len);
+
+    for (natures, access) |*n, *acc| {
+        var abstol: bool = false;
+        var units: u32 = Mir.no_tok;
+        acc.* = .none;
+        var acc_tok: u32 = Mir.no_tok;
+        for (n.attrs) |a| {
+            const an = self.file.str(a.name);
+            if (std.mem.eql(u8, an, "abstol")) {
+                abstol = true;
+            } else if (std.mem.eql(u8, an, "units")) {
+                units = a.main_tok;
+            } else if (std.mem.eql(u8, an, "access")) {
+                acc_tok = a.main_tok;
+                if (self.file.exprs.tag(a.value) == .ident) acc.* = self.file.exprs.strOf(a.value);
+            }
+        }
+        const name = self.file.str(n.name);
+        if (n.parent == .none) {
+            // §3.6.1: a nature definition "shall include all the required
+            // attributes specified in 3.6.1.2"; that clause says of abstol,
+            // access and units alike that each "is required for all base
+            // natures". A nature meaning to inherit them says so with a parent.
+            const missing: []const u8 = if (!abstol)
+                "abstol"
+            else if (acc_tok == Mir.no_tok)
+                "access"
+            else if (units == Mir.no_tok)
+                "units"
+            else
+                "";
+            if (missing.len != 0) {
+                var b = self.errWith(n.main_tok, .E0332);
+                b.msg("`{s}` has no `{s}`", .{ name, missing });
+                b.help("or derive it from a base nature: `nature {s} : <parent>;`", .{name});
+                try b.emit();
+            }
+        } else {
+            if (units != Mir.no_tok) try self.err(units, .E0333, "`{s}`", .{name});
+            if (acc_tok != Mir.no_tok) try self.err(acc_tok, .E0334, "`{s}`", .{name});
+        }
+    }
+
+    // §3.13.2 "the access function of each base nature shall be unique". Keyed
+    // on the nature NAME, so one nature declared twice (annex D's own headers
+    // arrive that way when a fixture restates them) is one claim, not two.
+    for (natures, access, 0..) |*a, a_acc, i| {
+        if (a.parent != .none or a_acc == .none) continue;
+        for (natures[i + 1 ..], access[i + 1 ..]) |*b, b_acc| {
+            if (b.parent != .none or b_acc != a_acc or b.name == a.name) continue;
+            if (self.fileOf(a.main_tok) != self.fileOf(b.main_tok)) continue;
+            try self.err(b.main_tok, .E0335, "`{s}` and `{s}` both access `{s}`", .{
+                self.file.str(a.name), self.file.str(b.name), self.file.str(b_acc),
+            });
+        }
+    }
+
+    // §3.13.1 natures and disciplines share ONE global scope.
+    for (natures) |*n| {
+        for (self.file.disciplines) |*d| {
+            if (d.name != n.name or self.fileOf(d.main_tok) != self.fileOf(n.main_tok)) continue;
+            try self.err(d.main_tok, .E0336, "`{s}` is already a nature", .{self.file.str(d.name)});
+        }
+    }
+}
+
+/// Which source file a token came from (§3.13.1 scope comparisons). The
+/// preprocessor's segment map is the only thing that still knows: by lowering,
+/// the prelude and the user's text are one byte stream.
+fn fileOf(self: *const Lower, tok: u32) diag.FileId {
+    return self.bag.locate(self.tokenSpan(tok), null).file;
 }
 
 const NatureAttrs = struct { abstol: ?f64 = null, access: ?[]const u8 = null };
@@ -854,16 +958,30 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         .real => .real,
         .str => .string,
     };
-    // §6.3.4 later defaults may reference this one.
+    // §6.3.4 later defaults may reference this one. §6.6.1 also makes a
+    // parameter a legal constant expression for an array or generate bound, so
+    // `consts` keeps carrying the value it folds to under the declared default
+    // — that is the only value those two positions can ever see.
     if (folded) |c| try self.consts.put(self.arena, name, c);
 
-    const default: Mir.Value = if (folded) |c| switch (c) {
+    // §6.3.4: "an update of gate_width, whether by a defparam statement or in
+    // an instantiation statement for the module which defined these parameters,
+    // automatically updates gate_cap". So a default that MENTIONS another
+    // parameter may NOT be frozen at the number it folds to under that
+    // parameter's declared default — the host overrides the base after
+    // elaboration and the dependent has to follow it. `elabConst` is precisely
+    // the fold that refuses to look through a parameter, so it is the "may this
+    // be baked into the model card?" test; `folded` above cannot be, for the
+    // §6.6.1 reason. Codegen turns the surviving expression into `derive()`.
+    const frozen = self.elabConst(decl.default);
+
+    const default: Mir.Value = if (frozen) |c| switch (c) {
         .int => try self.iconst(c.asInt()),
         .real => try self.fconst(c.asReal()),
         .str => |s| try self.mir.addStrConst(self.arena, s),
     } else blk: {
-        // Not constant-foldable (e.g. `parameter real b = a*2;` where `a` is
-        // itself overridable): keep it as an expression over other params.
+        // `parameter real b = a*2;` where `a` is itself overridable: keep it as
+        // an expression over other params.
         const tv = try self.lowerExpr(decl.default);
         break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
     };
@@ -911,10 +1029,14 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
         const elem = if (k < elems.len) elems[k] else Ast.ExprId.none;
         const default: Mir.Value = if (elem == .none)
             (if (astTy(ty) == .real) Mir.Value.f_zero else Mir.Value.zero)
-        else if (self.constEval(elem)) |c|
+            // §6.3.4 again: `elabConst`, not `constEval` — an element written
+            // over another parameter tracks it exactly like a scalar default.
+        else if (self.elabConst(elem)) |c|
             (if (astTy(ty) == .real) try self.fconst(c.asReal()) else try self.iconst(c.asInt()))
-        else
-            try self.toReal(try self.lowerExpr(elem));
+        else blk: {
+            const tv = try self.lowerExpr(elem);
+            break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
+        };
         try self.addParam(try self.elemName(name, i), ty, default, decl.ranges, decl.is_local, decl.main_tok);
     }
 }
@@ -1015,6 +1137,17 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
     if (decl.dims.len != 0) {
         const dim = try self.dimBounds(decl.dims, decl.main_tok, name) orelse return;
         try self.arrays.put(self.arena, name, .{ .lo = dim.lo, .hi = dim.hi, .ty = ty });
+        // §3.3's own example is `string names[1:3] = '{"first","middle","last"}`:
+        // the declaration takes an initializer exactly like the §3.4.4 array
+        // PARAMETER does, and dropping it silently zeroed every element. The
+        // pattern is positional over the declared range, so element k lands at
+        // `dim.lo + k` — a 1:3 range puts "first" at index 1, not 0.
+        const elems: []const Ast.ExprId = if (decl.init != .none and
+            (self.file.exprs.tag(decl.init) == .assign_pattern or
+                self.file.exprs.tag(decl.init) == .concat))
+            self.file.exprs.args(decl.init)
+        else
+            &.{};
         var i = dim.lo;
         while (i <= dim.hi) : (i += 1) {
             // §3.2.2 arrays are scalarized, so a held array is just one held
@@ -1022,7 +1155,16 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
             // element takes a slot, since the index may be a runtime `case`.
             const en = try self.elemName(name, i);
             const slot = try self.declareVar(en, ty);
-            const init_val = zeroOf(ty);
+            const k: usize = @intCast(i - dim.lo);
+            // §3.2 an element the pattern does not reach keeps the zero start.
+            const init_val: Mir.Value = if (k < elems.len) blk: {
+                const tv = try self.lowerExpr(elems[k]);
+                break :blk switch (ty) {
+                    .real => try self.toReal(tv),
+                    .integer => try self.toInt(tv),
+                    .string => tv.v,
+                };
+            } else zeroOf(ty);
             try self.builder.writeVariable(slot.place, self.cur, if (hold)
                 try self.holdSlot(en, ty, init_val, slot.place)
             else
@@ -1516,12 +1658,48 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     const first = ex.lhs(e);
     // §3.12 a single argument naming a declared branch.
     if (ex.rhs(e) == .none and ex.tag(first) == .ident) {
-        if (self.branches.get(self.file.str(ex.strOf(first)))) |b|
+        if (self.branches.get(self.file.str(ex.strOf(first)))) |b| {
+            try self.checkAccessMatch(e, name, access, b.hi);
             return .{ .access = access, .hi = b.hi, .lo = b.lo };
+        }
     }
     const hi = try self.nodeOf(first);
     const lo = if (ex.rhs(e) == .none) ground else try self.nodeOf(ex.rhs(e));
+    try self.checkAccessMatch(e, name, access, hi);
     return .{ .access = access, .hi = hi, .lo = lo };
+}
+
+/// §4.4: "The access function name shall match the discipline declaration for
+/// the nets, ports, or branch given in the argument expression list."
+///
+/// `access_kind` alone cannot answer this — it is the global set of access
+/// names, so every name that belongs to SOME discipline resolves on EVERY net,
+/// and `V(n)` quietly read a net whose discipline names its potential something
+/// else. The discipline of the node is what decides.
+///
+/// Silent when the node has no declared discipline (§3.6.5 implicit nets) or
+/// when the discipline binds no nature for that half: neither has a spelling to
+/// match against, and the missing binding is its own diagnostic.
+fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u16) Oom!void {
+    if (node == ground) return;
+    const dname = self.node_disciplines.items[node];
+    if (dname.len == 0) return;
+    const info = self.disciplines.get(dname) orelse return;
+    const want = switch (access) {
+        .potential => info.potential_access,
+        .flow => info.flow_access,
+    };
+    if (want.len == 0 or std.mem.eql(u8, want, name)) return;
+    var b = self.errAtWith(e, .E0501);
+    b.msg("`{s}` is not an access function of `{s}`", .{ name, self.nodeName(node) });
+    b.suggestHere(want);
+    b.note("`{s}` is of discipline `{s}`, whose {s} nature declares `access = {s}`", .{
+        self.nodeName(node),
+        dname,
+        if (access == .potential) "potential" else "flow",
+        want,
+    });
+    try b.emit();
 }
 
 /// Find or create the accumulator pair for one contribution target. A pair
@@ -2719,6 +2897,8 @@ fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try b.emit();
         return poison;
     }
+    // §4.4 the name still has to be the port discipline's flow access.
+    try self.checkAccessMatch(e, name, access, p);
     return .{ .v = try self.probe(try self.portFlowUnknown(p)), .ty = .real };
 }
 
@@ -2998,8 +3178,13 @@ fn sysFuncTy(name: []const u8) Ty {
         // does not even compile — see tests/fixtures/exhaustive/122.
         "$rtoi",          "$clog2",
         "$realtobits",
-        "$driver_count", "$receiver_count", "$driver_state", "$driver_strength", // §9.22
-        "$driver_delay", "$driver_next_state", "$driver_next_strength", "$driver_type", // §9.23
+        "$driver_count",      "$receiver_count",       "$driver_state", "$driver_strength", // §9.22
+        // §9.23 — `$driver_delay` is deliberately NOT here: §9.23.1 says "the
+        // returned delay value is a real number ... The fractional part arises
+        // from the possibility of a driver being updated by an A2D event off
+        // the digital timeticks", so truncating it to an integer loses exactly
+        // the part the clause exists to describe.
+        "$driver_next_state", "$driver_next_strength", "$driver_type",
     };
     for (ints) |i| if (std.mem.eql(u8, name, i)) return .integer;
     if (std.mem.eql(u8, name, "$simparam$str")) return .string; // §9.15
@@ -3009,6 +3194,126 @@ fn sysFuncTy(name: []const u8) Ty {
 // ---------------------------------------------------------------------------
 // Class 9 — user-defined analog functions (LRM §4.7)
 // ---------------------------------------------------------------------------
+
+/// §4.7.3: "An analog user-defined function ... shall not call itself directly
+/// or indirectly, i.e., recursive functions are not permitted."
+///
+/// The sentence constrains the FUNCTION, so the check cannot be left to
+/// `inlineUserFunc`'s inline stack: that one only fires when the analog block
+/// actually reaches the call, which makes an illegal declaration legal as long
+/// as nobody calls it — and it is precisely the declarations that cannot be
+/// compiled, since §4.7.2 inlining has no call ABI to fall back on.
+///
+/// The call graph is tiny (functions are per-module and hand-written), so this
+/// is a reachability walk per function rather than an SCC pass; both report the
+/// same set, and this one names every function that sits on a cycle.
+fn checkFuncRecursion(self: *Lower, fns: []const Ast.FuncDecl) Oom!void {
+    if (fns.len == 0) return;
+    const edges = try self.arena.alloc(std.ArrayList(u32), fns.len);
+    for (fns, edges) |*fd, *out| {
+        out.* = .empty;
+        try self.scanCallees(fd.body, fns, out);
+    }
+
+    const seen = try self.arena.alloc(bool, fns.len);
+    var stack: std.ArrayList(u32) = .empty;
+    for (fns, 0..) |*fd, i| {
+        @memset(seen, false);
+        stack.clearRetainingCapacity();
+        try stack.append(self.arena, @intCast(i));
+        while (stack.pop()) |j| {
+            for (edges[j].items) |k| {
+                if (k == i) { // back at the start ⇒ `fd` calls itself, however far around
+                    try self.err(fd.main_tok, .E0510, "`{s}`", .{self.file.str(fd.name)});
+                    stack.clearRetainingCapacity();
+                    break;
+                }
+                if (seen[k]) continue;
+                seen[k] = true;
+                try stack.append(self.arena, k);
+            }
+        }
+    }
+}
+
+/// Collect the §4.7 functions one statement tree calls, as indices into `fns`.
+/// A name that is not a declared function is not an edge — `lowerUserCall`
+/// reports it (E0512) when the call is reached.
+fn scanCallees(self: *Lower, id: Ast.StmtId, fns: []const Ast.FuncDecl, out: *std.ArrayList(u32)) Oom!void {
+    if (id == .none) return;
+    switch (self.file.stmt(id)) {
+        .block => |b| for (b.body) |s| try self.scanCallees(s, fns, out),
+        .assign => |a| {
+            try self.scanCalleesExpr(a.target, fns, out);
+            try self.scanCalleesExpr(a.value, fns, out);
+        },
+        .contribute => |c| {
+            try self.scanCalleesExpr(c.lhs, fns, out);
+            try self.scanCalleesExpr(c.rhs, fns, out);
+        },
+        .indirect => |c| {
+            try self.scanCalleesExpr(c.lhs, fns, out);
+            try self.scanCalleesExpr(c.probe, fns, out);
+            try self.scanCalleesExpr(c.eqn, fns, out);
+        },
+        .if_stmt => |s| {
+            try self.scanCalleesExpr(s.cond, fns, out);
+            try self.scanCallees(s.then_s, fns, out);
+            try self.scanCallees(s.else_s, fns, out);
+        },
+        .case_stmt => |s| {
+            try self.scanCalleesExpr(s.scrutinee, fns, out);
+            for (s.arms) |arm| {
+                for (arm.labels) |l| try self.scanCalleesExpr(l, fns, out);
+                try self.scanCallees(arm.body, fns, out);
+            }
+        },
+        .for_stmt => |s| {
+            try self.scanCallees(s.init, fns, out);
+            try self.scanCalleesExpr(s.cond, fns, out);
+            try self.scanCallees(s.step, fns, out);
+            try self.scanCallees(s.body, fns, out);
+        },
+        .while_stmt => |s| {
+            try self.scanCalleesExpr(s.cond, fns, out);
+            try self.scanCallees(s.body, fns, out);
+        },
+        .repeat_stmt => |s| {
+            try self.scanCalleesExpr(s.count, fns, out);
+            try self.scanCallees(s.body, fns, out);
+        },
+        .event_control => |s| try self.scanCallees(s.body, fns, out),
+        .sys_task => |s| for (s.args) |a| try self.scanCalleesExpr(a, fns, out),
+        .jump => |j| try self.scanCalleesExpr(j.value, fns, out),
+        else => {},
+    }
+}
+
+fn scanCalleesExpr(self: *Lower, e: Ast.ExprId, fns: []const Ast.FuncDecl, out: *std.ArrayList(u32)) Oom!void {
+    if (e == .none) return;
+    const ex = &self.file.exprs;
+    const tag = ex.tag(e);
+    if (tag == .call) {
+        // StrIds are interned, so identity IS name equality (`natureOf` relies
+        // on the same thing).
+        for (fns, 0..) |*fd, k| if (fd.name == ex.strOf(e)) {
+            try out.append(self.arena, @intCast(k));
+            break;
+        };
+    }
+    switch (tag) {
+        // Every tag whose `extra` is an ExprId list; the rest park a literal, an
+        // opcode or a StrId list there, which `args` must not be handed.
+        .call, .builtin_call, .sys_call, .filter_call, .noise_call, .concat, .assign_pattern, .event_function => {
+            for (ex.args(e)) |a| try self.scanCalleesExpr(a, fns, out);
+        },
+        .ternary => try self.scanCalleesExpr(ex.ternaryElse(e), fns, out),
+        else => {},
+    }
+    // `lhs`/`rhs` are `.none` on every tag that does not use them.
+    try self.scanCalleesExpr(ex.lhs(e), fns, out);
+    try self.scanCalleesExpr(ex.rhs(e), fns, out);
+}
 
 fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;

@@ -1,0 +1,8 @@
+//! reject E0801
+//! reject $arandom
+// EXPECT: error
+module ch09_arandom_unsupported(p, n);
+  inout p, n; electrical p, n;
+  integer seed;
+  analog I(p,n) <+ $arandom(seed);
+endmodule

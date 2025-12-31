@@ -1,0 +1,24 @@
+// §7.3.4 events in a continuous context, driving a sample-and-hold. The event
+// here is cross(), and §5.10.3.1 pins what it may NOT do:
+//
+//   "the cross() function can only generate an event after the simulation time
+//    has advanced from zero. The cross() function will not generate events for
+//    non-transient analyses, such as ac, dc, or noise analyses"
+//
+// The default analysis is dc, so the sampler cannot fire and `held` keeps the
+// value §3.4 gives every real variable: "Real variables are initialized to
+// zero (0) at the start of a simulation."
+//
+// V(p) is biased to 2.0 so the two answers differ: a compiler that executed the
+// event's body unconditionally would sample 2.0 rather than hold 0.
+//
+//! bias V(p) = 2.0
+`include "check.vh"
+module ch7_analog_event(p, threshold);
+  inout p, threshold; electrical p, threshold; real held;
+  analog begin
+    @(cross(V(threshold), +1)) held = V(p);
+    `CHECKX("cross() cannot fire in dc, so the hold keeps its initial 0", held, 0.0);
+    I(p) <+ held;
+  end
+endmodule

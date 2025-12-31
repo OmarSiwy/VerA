@@ -1,0 +1,30 @@
+// LRM 4.7.3: "The argument expressions are assigned to the declared inputs,
+// outputs, and inouts in the order of their declaration", and 4.7.2.1 returns
+// the last value assigned to the function-name variable. `untyped` assigns its
+// single input straight to that variable, so the call is the identity on its
+// actual: at the bias below it must be 0.75, not the 0.0 the return variable
+// starts at and not a value read from anywhere else.
+//
+// 0.75 is a dyadic rational, so the round trip literal -> bias -> V(p) -> formal
+// -> return value is exact in IEEE 754 (3.2) and CHECKX is the right macro.
+//
+// NOTE for a reviewer: 4.7.1 requires that "all formal arguments shall have an
+// associated block item declaration specifying the data type of the argument",
+// so `input x;` with no `real x;` is strictly a violation and a conforming tool
+// may reject this module. VerA applies the 4.7.1 default of real; the assertion
+// pins what that default then has to produce.
+//
+//! bias V(p) = 0.75
+`include "check.vh"
+module ch4_fn_untyped(p);
+  inout p;
+  electrical p;
+  analog function real untyped;
+    input x;
+    untyped = x;
+  endfunction
+  analog begin
+    `CHECKX("untyped formal carries the actual through", untyped(V(p)), 0.75);
+    I(p) <+ untyped(V(p));
+  end
+endmodule

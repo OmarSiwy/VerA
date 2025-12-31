@@ -1,0 +1,26 @@
+// §5.10.1's own worked example, or-ing a global event with a monitored one.
+// Table 5-1 gives initial_step the value 1 in the DCOP column, so on the single
+// point of a dc analysis the global event fires and the body samples V(p).
+//
+// The cross() operand cannot be what does it: §5.10.3.1 says "the cross()
+// function will not generate events for non-transient analyses, such as ac, dc,
+// or noise analyses". So x = 2.0 here is attributable to initial_step alone,
+// and x = 0.0 — the value §3.2.1 gives an untouched real — means the global
+// event never fired.
+//
+// FAILS TODAY — known VerA defect, not a wrong want. Codegen answers
+// initial_step from `inst.is_initial_step`, but the testbench generator
+// src/backend/tb.zig never assigns that field (nor `is_final_step`), so §5.10.2
+// global events cannot fire in ANY generated testbench.
+//
+//! analysis dc
+//! bias V(p) = 2.0
+`include "check.vh"
+module ch5_initial_or_cross(p);
+  inout p; electrical p; real x;
+  analog begin
+    @(initial_step or cross(V(p), +1)) x = V(p);
+    `CHECK("initial_step fires on the first point of a dc analysis", x, 2.0, 0.0);
+    I(p) <+ x;
+  end
+endmodule

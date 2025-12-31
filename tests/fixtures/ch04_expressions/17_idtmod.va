@@ -1,0 +1,37 @@
+// §4.5.5 circular integrator. Two things the LRM states outright:
+//
+//   "The output of the idtmod() function shall remain in the range
+//    offset <= idtmod < offset+modulus"
+//
+//   "y = idt(expr, ic); z = idtmod(expr, ic, modulus, offset);
+//    then y = n * modulus + z   // n is an integer"
+//
+// Both are checked against a CONSTANT integrand, 0.9e9, so the exact integral
+// is 0.9e9*t and no integration formula can disagree: the trapezoidal rule and
+// backward Euler both integrate a constant exactly. With modulus 2 and 1 ns
+// steps the running integral is 0, 0.9, 1.8, 2.7, 3.6, 4.5 and the circular
+// integrator must answer 0, 0.9, 1.8, 0.7, 1.6, 0.5 — three wraps, and never
+// within 0.2 of a wrap boundary, so nothing here rides on a rounding.
+//
+// The second check is the LRM relation written as `z - (y mod modulus)`, which
+// is the same value at every time point; a plain idt substituted for idtmod
+// fails it from t = 3ns on, and fails the range check too.
+//
+//! analysis tran
+//! time 0, 1n, 2n, 3n, 4n, 5n
+//! print none
+`include "check.vh"
+module ch04_idtmod(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin
+        `CHECKI("output stays in [offset, offset+modulus)",
+                (idtmod(0.9e9, 0.0, 2.0, 0.0) >= 0.0) && (idtmod(0.9e9, 0.0, 2.0, 0.0) < 2.0), 1);
+        `CHECK("idtmod is idt reduced modulo the modulus",
+               idtmod(0.9e9, 0.0, 2.0, 0.0) -
+               (idt(0.9e9, 0.0) - 2.0 * floor(idt(0.9e9, 0.0) / 2.0)), 0.0, 1e-9);
+
+        V(p, n) <+ idtmod(I(p, n), 0.0, 6.283185307179586, 0.0);
+    end
+endmodule

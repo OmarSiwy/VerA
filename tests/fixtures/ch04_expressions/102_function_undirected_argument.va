@@ -1,0 +1,4 @@
+// LRM 4.7.2: every formal of an analog function must be declared input,
+// output or inout, so `real x;` alone declares a local, not an argument.
+//! reject E0511
+module ch4_fn_undirected(p); inout p; electrical p; analog function real undirected; real x; undirected=x; endfunction analog I(p)<+undirected(V(p)); endmodule

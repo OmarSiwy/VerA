@@ -1,0 +1,31 @@
+// Annex F.2 step 2, with §3.6.2.2 and §3.6.3: a user-declared discipline that
+// binds both natures and declares `domain continuous` is a conservative analog
+// net, and its access functions are the ones the NATURES name — `access = V`
+// for the potential, `access = I` for the flow. So `V(p)` is the potential of p
+// against ground, which the testbench holds at 0.7; the want is the bias, not
+// anything VerA computed.
+//
+//! bias V(p) = 0.7
+`include "check.vh"
+nature annex_f_voltage;
+  units = "V";
+  access = V;
+  abstol = 1u;
+endnature
+nature annex_f_current;
+  units = "A";
+  access = I;
+  abstol = 1p;
+endnature
+discipline annex_f_continuous;
+  potential annex_f_voltage;
+  flow annex_f_current;
+  domain continuous;
+enddiscipline
+module annex_f_cont(p);
+  inout p; annex_f_continuous p;
+  analog begin
+    `CHECK("potential access function of the user-declared nature", V(p), 0.7, 1e-15);
+    I(p) <+ V(p);
+  end
+endmodule

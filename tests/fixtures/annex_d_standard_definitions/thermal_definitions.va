@@ -1,0 +1,30 @@
+// Annex D.1 thermal natures: Temperature (units "K", access Temp, abstol 1e-4)
+// and Power (units "W", access Pwr, abstol 1e-9), joined by the conservative
+// `thermal` discipline. What a transcript can see is the access binding: `Temp`
+// is the POTENTIAL of a thermal node, so a node held at 400 K probes as 400 —
+// and Annex D's `P_CELSIUS0` (273.15) turns that into 126.85 degrees Celsius.
+//
+//! bias p = 400
+`include "check.vh"
+nature Temperature;
+  units = "K";
+  access = Temp;
+  abstol = 1e-4;
+endnature
+nature Power;
+  units = "W";
+  access = Pwr;
+  abstol = 1e-9;
+endnature
+discipline thermal_d;
+  potential Temperature;
+  flow Power;
+enddiscipline
+module annex_d_thermal(p);
+  inout p; thermal p;
+  analog begin
+    `CHECKX("Temp is the thermal potential access", Temp(p), 400.0);
+    `CHECK("400 K is 126.85 degC", Temp(p) - 273.15, 126.85, 1e-12);
+    Pwr(p) <+ Temp(p);
+  end
+endmodule

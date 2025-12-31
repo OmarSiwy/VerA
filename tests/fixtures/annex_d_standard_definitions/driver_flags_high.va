@@ -1,0 +1,19 @@
+// Annex D.3 driver_access.vams, the high six flags. Disjoint bits 5..10:
+// SDF 32, NODELETE 64, NOPREEMPT 128, KERNEL 256, WOR 512, WAND 1024 — so the
+// OR of all six is 32+64+128+256+512+1024 = 2016, and it is also 2^11 - 2^5.
+`include "check.vh"
+`define DRIVER_SDF 32'b00000100000
+`define DRIVER_NODELETE 32'b00001000000
+`define DRIVER_NOPREEMPT 32'b00010000000
+`define DRIVER_KERNEL 32'b00100000000
+`define DRIVER_WOR 32'b01000000000
+`define DRIVER_WAND 32'b10000000000
+module annex_d_driver_high(p);
+  inout p; electrical p; integer flags;
+  analog begin
+    flags = `DRIVER_SDF | `DRIVER_NODELETE | `DRIVER_NOPREEMPT | `DRIVER_KERNEL | `DRIVER_WOR | `DRIVER_WAND;
+    `CHECKI("driver_access.vams high six flags OR to 2016", flags, 2016);
+    `CHECKI("DRIVER_WAND is bit 10", `DRIVER_WAND, 1024);
+    I(p) <+ flags + 0.0*V(p);
+  end
+endmodule

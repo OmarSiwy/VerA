@@ -1,0 +1,20 @@
+// NONCONFORMING ACCEPTANCE SNAPSHOT: $driver_count is connectmodule-only.
+//
+// Table 9-19 marks $driver_count "No" in the analog context, so the call site is
+// nonconforming — but its DEFINITION (§9.22.1, "an integer representing the
+// number of drivers associated with the signal in question") still has an
+// unambiguous answer here: `p` is an analog port of a flat design that contains
+// no digital drivers at all, so the count is exactly 0. That is a fact about the
+// netlist, not about what this compiler chooses to return, and it is why the
+// contribution below is V(p,n) and nothing more.
+`include "check.vh"
+
+//! bias V(p) = 0.5
+
+module ch09_atomic_driver_count(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("drivers on an analog port of a driverless design", $driver_count(p), 0);
+    I(p,n) <+ V(p,n) + $driver_count(p);
+  end
+endmodule

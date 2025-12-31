@@ -1,0 +1,35 @@
+// §9.20: "The return value for both system functions shall be one (1) if the
+// hierarchical_reference_string points to a valid continuous node and zero (0)
+// otherwise", and "If the return value is zero (0), then the node referenced by
+// the analog_net_reference shall be treated as a normal continuous node
+// declared in the module containing the system function call."
+//
+// Neither `$root.top.n` nor `$root.top.dev.p` resolves here: this module is
+// elaborated on its own, so there is no `top` and no `top.dev` for §6.7 to walk
+// to. Both calls therefore return 0, and `status` — assigned last by the
+// $analog_port_alias call, since §9.20 says the last evaluated call takes
+// precedence — is 0.
+//
+// The second check is what makes the first one more than a restatement of the
+// integer's default: because the alias failed, `local_node` stayed an ordinary
+// local continuous node of this module, so the testbench can bias it by name
+// and read 0.4 V back through V(). Had the alias succeeded, the net would have
+// been folded onto the hierarchical node instead.
+//
+//! bias V(local_node) = 0.4
+`include "check.vh"
+module ch09_node_alias_calls(p, n);
+  inout p, n; electrical p, n;
+  electrical local_node;
+  integer status;
+  analog initial begin
+    status = $analog_node_alias(local_node, "$root.top.n");
+    status = $analog_port_alias(local_node, "$root.top.dev.p");
+  end
+  analog begin
+    `CHECKI("an unresolvable hierarchical reference makes the alias return 0", status, 0);
+    `CHECK("so the net stays an ordinary local node the testbench can bias",
+           V(local_node), 0.4, 1e-15);
+    I(p,n) <+ V(local_node);
+  end
+endmodule

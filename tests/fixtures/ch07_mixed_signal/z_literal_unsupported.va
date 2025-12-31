@@ -1,0 +1,14 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-2.6.1-15  (ch2-lexical.html)
+// Similarly, a z shall set 4 bits, 3 bits, and 1 bit, respectively, to the high-impedance value.
+//
+//! reject E0130
+// EXPECT: error -- FastVAF numeric IR cannot represent Z.
+module ch7_z_literal(p);
+  inout p; electrical p; integer state;
+  analog begin state = 1'bz; I(p) <+ state; end
+endmodule

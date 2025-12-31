@@ -1,0 +1,25 @@
+// §11.6.23 if-else and case. §4.2.5 makes a relational operator yield the
+// INTEGER 0 when false, so a negative branch potential drives both the else arm
+// and the case default. At V(p)=0.25, V(n)=1.5 the potential is -1.25 V:
+//   mode   = (-1.25 > 0.0)        -> 0
+//   else   : result = -(-1.25)    -> 1.25
+//   default: result = 1.25 - 1.0  -> 0.25
+// Taking the true arm and the `1:` item instead would give -0.25.
+//
+//! bias V(p) = 0.25, V(n) = 1.5
+`include "check.vh"
+module ch11_conditional_case_objects(p, n);
+  inout p, n; electrical p, n;
+  integer mode; real result;
+  analog begin
+    mode = (V(p,n) > 0.0);
+    if (mode) result = V(p,n); else result = -V(p,n);
+    case (mode)
+      1: result = result + 1.0;
+      default: result = result - 1.0;
+    endcase
+    `CHECKI("a false relation yields the integer 0 (4.2.5)", mode, 0);
+    `CHECKX("the else arm then the case default", result, 0.25);
+    I(p,n) <+ result;
+  end
+endmodule

@@ -1,0 +1,22 @@
+// LRM 5.10.3.2 above(): "almost identical to the cross() function, except that
+// it also triggers during initialization or dc analysis". Where "cross() will
+// not generate events for non-transient analyses ... the above() function can".
+//
+// At this dc operating point V(c) - 0.5 = 0.9 - 0.5 = +0.4 is positive while the
+// initial state is being solved, so the event fires and the guarded assignment
+// runs: sample takes V(p) = 0.75.
+//
+// Restricting both ways: an implementation that treats above() like cross()
+// leaves sample at the 0.0 LRM 3.5 gives an unassigned real, and one that
+// samples the threshold expression instead of V(p) prints 0.9 or 0.4.
+//
+//! bias V(p) = 0.75, V(c) = 0.9
+`include "check.vh"
+module ch8_above(p, c);
+  inout p, c; electrical p, c; real sample;
+  analog begin
+    @(above(V(c) - 0.5)) sample = V(p);
+    `CHECKX("above(+0.4) triggers at the dc point, so the guard ran", sample, 0.75);
+    I(p) <+ sample;
+  end
+endmodule

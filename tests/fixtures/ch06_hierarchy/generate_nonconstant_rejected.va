@@ -1,0 +1,15 @@
+// LRM 6.6: "all expressions in generate schemes shall be constant expressions,
+// deterministic at elaboration time."  `runtime_value` is an integer VARIABLE,
+// so the if-generate condition is not elaboration-time constant.  The LRM gives
+// the construct no semantics -- the expected behavior IS the diagnostic.
+//
+// KNOWN GAP: VerA has no constant-condition check.  It accepts this silently and
+// emits a device, so this fixture fails until the frontend grows the rule.
+// Tighten the directive to the E-code once one exists.
+//! reject DiagnosticsReported
+module ch6_generate_nonconstant(p);
+  inout p; electrical p; integer runtime_value;
+  generate
+    if (runtime_value) I(p) <+ V(p);
+  endgenerate
+endmodule

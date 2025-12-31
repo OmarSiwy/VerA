@@ -1,0 +1,18 @@
+// §9.18: "$hflip and $vflip are used to indicate that the instance has been
+// mirrored about its center." Table 9-29: top-level value +1, resolved value
+// $hflip_specified * $hflip_hier, allowed values $hflip = +1 or -1.
+//
+// This module is elaborated on its own, so it IS the top of the hierarchy and
+// nothing multiplies into it: the resolved value is the top-level value, +1,
+// exactly. The allowed-values column is the second check — a mirror flag is a
+// sign, so it must square to 1, which rules out 0 as well as any magnitude
+// other than one.
+`include "check.vh"
+module ch09_atomic_hflip(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKX("Table 9-29 top-level $hflip", $hflip, 1.0);
+    `CHECKX("a mirror flag is a sign: it squares to 1", $hflip*$hflip, 1.0);
+    I(p,n) <+ V(p,n) + $hflip;
+  end
+endmodule

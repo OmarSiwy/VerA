@@ -1,0 +1,26 @@
+// NONCONFORMING ACCEPTANCE SNAPSHOT: $receiver_count is connectmodule-only.
+//
+// Annex G item 7793 is "Support $receiver_count() function, 9.22.2" — the
+// function this fixture exists to show is new. Its call site here is
+// nonconforming: 9.22 states "Driver access functions can only be called from
+// connect modules", and this is an ordinary module.
+//
+// The DEFINITION is still unambiguous for this netlist. 9.22.2: $receiver_count
+// "returns an integer representing the number of receivers associated with the
+// signal in question", and 9.22 defines the drivers/receivers it counts as the
+// ones "found in ordinary modules" — digital processes and instance ports. `p`
+// is an analog port of a flat design elaborated on its own, with no digital
+// receivers anywhere in it, so the count is exactly 0. That is a fact about the
+// netlist, not about what this compiler chooses to return; it is why the
+// contribution below carries V(p,n) and not the count.
+`include "check.vh"
+
+//! bias V(p) = 0.5
+
+module annex_g_receiver_count(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("receivers on an analog port of a receiverless design", $receiver_count(p), 0);
+    I(p,n) <+ V(p,n) + $receiver_count(p);
+  end
+endmodule

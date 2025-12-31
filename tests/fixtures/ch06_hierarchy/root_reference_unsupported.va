@@ -1,0 +1,17 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-6.7.1-04  (ch6-hierarchy.html)
+// Verilog-AMS HDL follows the rules for hierarchical upward referencing as described in 12.6 of IEEE Std 1364 Verilog with the addition that the scope_n
+//
+// LRM 6.7.1: $root is an out-of-module reference and needs an elaborated
+// instance tree; Verilog-A does not permit it.
+//! reject E0208
+//! reject $root
+// EXPECT: error -- $root is an OOMR and requires an elaborated instance tree.
+module ch6_root_reference(p);
+  inout p; electrical p;
+  analog I(p) <+ V($root.ch6_top.supply);
+endmodule

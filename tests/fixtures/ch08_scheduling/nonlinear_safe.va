@@ -1,0 +1,25 @@
+// LRM 8.3.3 convergence is why this operator exists: the behavioral description
+// is evaluated iteratively and "models need to be written so they do something
+// reasonable even when given unreasonable signal values". LRM 4.5.13 answers
+// that for the exponential — limexp() limits how far its output may move per
+// iteration, but "the apparent behavior of limexp() is not distinguishable from
+// exp()", and "the simulator can only converge when the output of limexp()
+// equals the exponential of the input".
+//
+// So at a converged operating point the value is fixed by exp, not by the
+// limiter. With V(p,n) = 0.5 V and scale = 1m (LRM 2.5.1: 1e-3):
+//   exp(0.5)           = 1.6487212707001282
+//   1e-3 * exp(0.5)    = 1.6487212707001282e-3 A
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module ch8_nonlinear(p, n);
+  inout p, n; electrical p, n;
+  parameter real scale = 1m;
+  analog begin
+    `CHECKX("the 1m scale factor", scale, 0.001);
+    `CHECKR("limexp at the solution is the exponential", limexp(V(p, n)), 1.6487212707001282, 1e-12);
+    `CHECKR("so the branch carries 1.6487 mA", scale * limexp(V(p, n)), 1.6487212707001282e-3, 1e-12);
+    I(p, n) <+ scale * limexp(V(p, n));
+  end
+endmodule

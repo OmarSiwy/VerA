@@ -1,0 +1,13 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-9.13.1-02  (ch9-system.html)
+// The type_string provides support for Monte-Carlo analysis and shall only by used in calls to $arandom from within a paramset.
+//
+//! reject E0201
+// EXPECT: error -- the type string is only valid in a paramset, which FastVAF rejects.
+paramset ch09_arandom_type_string parameters;
+  .gain = $arandom(7, "instance");
+endparamset

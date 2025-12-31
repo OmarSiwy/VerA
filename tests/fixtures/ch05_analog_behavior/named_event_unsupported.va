@@ -1,0 +1,39 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-5.10.4-01  (ch5-analog.html)
+// An event name shall be declared explicitly before it is used.
+// VAMS-5.10.4-02  (ch5-analog.html)
+// An event-controlled statement (for example, @trig rega = regb;) shall cause simulation of its containing procedure to wait until some other procedure
+//
+// LRM 5.10.4 named events. Two independent reasons this fixture cannot compile;
+// the parse-stage one below is the one reached first.
+//
+// (1) `event tick;` — A.2.1.3 event_declaration. Named events ARE in the
+// Verilog-A subset: 5.10 says "There are three types of analog events,
+// global events (5.10.2), monitored events (5.10.3), and named events
+// (5.10.4)", and 5.10.4's own example triggers and detects one entirely
+// inside an `analog` block. Annex C.7's "No digital behavior or events are
+// supported in Verilog-A" excludes DIGITAL events, not this one — C.2 lists
+// "a set of events to control when certain code is simulated" as a
+// Verilog-A feature. So the fixture's own header comment ("Named events need
+// the digital scheduler") is wrong; VerA simply does not implement them,
+// and says so rather than accepting `@(tick)` as a guard that is silently
+// never true.
+//
+// (2) `@(tick) I(p) <+ ...` — a contribution in an event control block. 5.10:
+// "Contribution statements cannot be used inside an event control block
+// because it can generate discontinuity in analog signals", and A.6.4
+// `analog_event_statement` has no contribution_statement alternative. This
+// rule IS enforced (see lower.zig `eventContribMsg`); it is simply not the
+// first diagnostic here.
+//! reject ParseError
+//! reject E0203
+// Named events need the digital scheduler; this snapshots the missing diagnostic.
+module ch5_named_event(p);
+  inout p; electrical p;
+  event tick;
+  analog @(tick) I(p) <+ 1m + 0.0*V(p);
+endmodule

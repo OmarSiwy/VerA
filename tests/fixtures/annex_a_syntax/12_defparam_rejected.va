@@ -1,0 +1,5 @@
+//! reject E0205
+// EXPECT: error
+module annex_a_defparam_rejected;
+    defparam child.gain = 2.0;
+endmodule

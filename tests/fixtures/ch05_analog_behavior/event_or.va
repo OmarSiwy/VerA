@@ -1,0 +1,35 @@
+// §5.10.1 "The OR-ing of events indicates the occurrence of any one of the
+// events specified shall trigger the execution of the procedural statement
+// following the event."
+//
+// Only one half of this or-list can ever fire here: V(c) is held at -1 for the
+// whole run, so cross(V(c),+1) has no rising crossing to detect (and §5.10.3.1
+// bars cross() from non-transient analyses besides). The timer half is
+// timer(1n, 1n), whose first event is at t = 1n (§5.10.3.3). So
+//
+//     t = 0    neither event -> held keeps the 0.0 of §3.2.1
+//     t = 1n   timer event   -> held = V(p) = 0.7
+//     t = 2n   timer event   -> held = V(p) = 0.7
+//
+// and the check states that as a select on $abstime (§9.10), 0.5n being a value
+// strictly between the two declared regimes. It fails if the or-list drops its
+// timer operand (held stays 0), and it fails if the or-list is treated as a
+// conjunction (the silent cross() would veto the timer).
+//
+// FAILS TODAY at t = 1n only — the same one-timepoint-late event defect
+// event_timer.va documents: `__hit` is set in `updateState` after the point is
+// evaluated, so the t = 1n event is not seen until t = 2n. The or-list itself
+// is fine; t = 0 and t = 2n both pass.
+//
+//! analysis tran
+//! bias V(p) = 0.7, V(c) = -1.0
+//! time 0, 1n, 2n
+`include "check.vh"
+module ch5_event_or(p, c);
+  inout p, c; electrical p, c; real held;
+  analog begin
+    @(cross(V(c), +1) or timer(1n, 1n)) held = V(p);
+    `CHECK("the timer half of an or-list fires on its own", held - (($abstime > 0.5n) ? 0.7 : 0.0), 0.0, 1e-15);
+    I(p) <+ held;
+  end
+endmodule

@@ -1,0 +1,24 @@
+// §3.2 arrays of integer and real variables. `[0:2]` declares THREE elements
+// addressed 0, 1, 2, each its own storage — the digit-per-element sum below is
+// 421 only if a write to one index leaves the other two alone, and only if
+// index 0 is the first element rather than the last.
+`include "check.vh"
+module ch03_variable_arrays(p, n);
+    inout p, n;
+    electrical p, n;
+    integer flags[0:2];
+    real gains[0:2];
+
+    analog begin
+        flags[0] = 1;
+        flags[1] = 2;
+        flags[2] = 4;
+        gains[0] = 1.5;
+        gains[1] = 2.5;
+        gains[2] = 3.5;
+        `CHECKI("each element is independent storage", flags[0] + 10 * flags[1] + 100 * flags[2], 421);
+        `CHECKX("real array element 2", gains[2], 3.5);
+        `CHECKX("integer element times real element promotes", flags[0] * gains[0], 1.5);
+        I(p, n) <+ flags[0] * gains[0] * V(p, n);
+    end
+endmodule

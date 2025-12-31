@@ -1,0 +1,18 @@
+// NONCONFORMING ACCEPTANCE SNAPSHOT: $receiver_count is connectmodule-only.
+//
+// Table 9-19 is the only driver/receiver access function marked "Yes" in the
+// analog context — of a connectmodule, which this is not. Its definition
+// (§9.22.2, "an integer representing the number of receivers associated with the
+// signal in question") is nevertheless unambiguous here: `p` is an analog port of
+// a flat design with no digital receivers anywhere, so the count is exactly 0.
+`include "check.vh"
+
+//! bias V(p) = 0.5
+
+module ch09_atomic_receiver_count(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("receivers on an analog port of a receiverless design", $receiver_count(p), 0);
+    I(p,n) <+ V(p,n) + $receiver_count(p);
+  end
+endmodule

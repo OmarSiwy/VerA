@@ -1,0 +1,13 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-6.5.2.2-02  (ch6-hierarchy.html)
+// If a port is declared as a vector, the range specification between the two declarations shall be identical.
+//
+//! reject identifier
+module ch6_vector(p);
+  inout p; electrical [3:0] p;
+  analog begin I(p[0]) <+ V(p[1]); I(p[2]) <+ V(p[3]); end
+endmodule

@@ -1,0 +1,16 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-7.3.6.1-01  (ch7-mixed-signal.html)
+// When it is determined the event has occurred in the analog domain, the statements under the event control shall be scheduled in the digital domain at
+// VAMS-7.3.6.1-02  (ch7-mixed-signal.html)
+// This event shall not be scheduled in the digital domain earlier than the last or current digital event, however it may appear to be in a delta cycle b
+//
+//! reject unsupported module item
+// EXPECT: error -- analog cross inside always requires both engines.
+module ch7_digital_cross(p);
+  inout p; electrical p; integer d;
+  always @(cross(V(p), +1)) d = 1;
+endmodule

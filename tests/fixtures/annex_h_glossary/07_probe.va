@@ -1,0 +1,17 @@
+// Annex H "probe": a branch which does not alter the behavior of the circuit,
+// but lets the simulator read out the potential at that point. Read at 0.75 V
+// and 0.25 V it must hand back 0.5 V — the same number the unnamed node pair
+// gives — and reading it must contribute nothing of its own.
+//
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module glossary_probe(p, n);
+  inout p, n; electrical p, n;
+  branch (p,n) probe_branch;
+  real measured;
+  analog begin
+    measured = V(probe_branch);
+    `CHECKX("the probe reads the branch potential", measured, 0.5);
+    I(p,n) <+ measured;
+  end
+endmodule

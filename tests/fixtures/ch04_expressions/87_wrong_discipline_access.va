@@ -1,0 +1,33 @@
+// LRM 4.4: "The name of the access function for a signal is taken from the
+// discipline of the net, port, or branch where the signal or port is
+// associated", and "The access function name shall match the discipline
+// declaration for the nets, ports, or branch given in the argument expression
+// list."
+//
+// `p` is `ch4_custom_d`, whose potential nature `ch4_custom_p` declares
+// `access = CustomV` (3.6.2.1: "The access function defined in the nature bound
+// to potential ... is called the potential access function"). So `CustomV` is
+// the only discipline-derived spelling for p's potential; `V` is electrical's
+// access function and does not match p's discipline.
+//
+// The assertion pins the half of that rule which has a value: the custom
+// nature's access function reads p's potential relative to ground (4.4, "If the
+// signal or port access function is used in an expression, the access function
+// returns the value of the signal"). Biased to 0.7, CustomV(p) is 0.7 --
+// renaming the access function changes nothing about what it returns.
+//
+// The `V(p)` contribution below is the construct the file is named for and is
+// left exactly as it was.
+`include "check.vh"
+//! bias V(p) = 0.7
+nature ch4_custom_p; units="V"; access=CustomV; abstol=1u; endnature
+nature ch4_custom_f; units="A"; access=CustomI; abstol=1p; endnature
+discipline ch4_custom_d; potential ch4_custom_p; flow ch4_custom_f; enddiscipline
+module ch4_wrong_discipline(p);
+  inout p;
+  ch4_custom_d p;
+  analog begin
+    `CHECK("CustomV(p) reads p's potential", CustomV(p), 0.7, 1e-15);
+    V(p) <+ 0.0;
+  end
+endmodule

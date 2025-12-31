@@ -1,0 +1,20 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-E.3.2.1-01  (annex-e-spice.html)
+// A new optional attribute shall be provided called port_discipline.
+// VAMS-E.3.2.1-02  (annex-e-spice.html)
+// [port_discipline] shall have as a value the desired discipline for the port of the analog primitive.
+// VAMS-E.3.2.1-04  (annex-e-spice.html)
+// The value shall be of type string and the value must be a valid discipline of domain continuous.
+//
+//! reject module instantiation is not supported
+// EXPECT: error -- port_discipline may be attached to individual primitive ports.
+module annex_e_primitive_port_discipline(node1, node2);
+  inout node1, node2; electrical node1, node2;
+  resistor #(.r(1k)) r1(
+      (* port_discipline="rotational" *) node1,
+      (* port_discipline="rotational" *) node2);
+endmodule

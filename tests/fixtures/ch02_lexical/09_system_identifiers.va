@@ -1,0 +1,27 @@
+// §2.8.3: a `$` introduces a system function, and §9.13 gives these two their
+// values — `$temperature` is the ambient in kelvin, `$vt` "returns the thermal
+// voltage (kT/q)" at `$temperature`.
+//
+// The testbench pins the ambient at 300 K exactly, so kT/q is a number a human
+// can write down. Annex D offers five constant sets and they disagree in the
+// fifth significant digit, so the want is the NIST2018 pair (Annex D's default,
+// `P_K = 1.380649e-23`, `P_Q = 1.602176634e-19`):
+//
+//   k/q = 8.617333262145e-5 V/K  ->  300 K * k/q = 0.0258519997864 V
+//
+// and the 1e-4 relative band covers every other Annex D set (the widest, the
+// SPICE pair, gives 0.0258512411) while still rejecting a $vt computed at the
+// wrong temperature: 300.15 K would be 0.0258649, 1.3e-5 away and out of band.
+//
+//! temp 300
+`include "check.vh"
+module ch02_system_identifiers(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin
+        `CHECKX("$temperature is the ambient in kelvin", $temperature, 300.0);
+        `CHECKR("$vt is kT/q at $temperature", $vt, 0.0258519997864, 1e-4);
+        I(p, n) <+ $vt + 1u * $temperature;
+    end
+endmodule

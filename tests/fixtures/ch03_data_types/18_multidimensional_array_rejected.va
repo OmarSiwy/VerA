@@ -1,0 +1,5 @@
+//! reject expected `;`
+// EXPECT: error
+module ch03_multidimensional_array_rejected;
+    real values[0:2][0:3];
+endmodule

@@ -1,0 +1,19 @@
+// §7.2.2 contexts: "Assignment statements which appear within an analog block
+// or analog initial block are considered to be in the continuous (analog)
+// context." So `x` is a continuous variable — it is recomputed from the probe
+// every time the analog block is evaluated, not left at the 0 §3.4 initialises
+// every real variable to.
+//
+// Biased at V(p) = 1.25 (exact in binary), the assignment must leave x at 1.25;
+// a dropped or hoisted-away analog assignment leaves 0.
+//
+//! bias V(p) = 1.25
+`include "check.vh"
+module ch7_continuous(p);
+  inout p; electrical p; real x;
+  analog begin
+    x = V(p);
+    `CHECKX("a continuous-context assignment takes the probe's value at the solve", x, 1.25);
+    I(p) <+ x;
+  end
+endmodule

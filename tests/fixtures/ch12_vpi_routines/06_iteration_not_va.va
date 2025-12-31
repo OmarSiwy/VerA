@@ -1,0 +1,7 @@
+//! reject E0512
+//! reject vpi_iterate
+// EXPECT: error
+module ch12_iteration_not_va(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ vpi_iterate(1, 0);
+endmodule

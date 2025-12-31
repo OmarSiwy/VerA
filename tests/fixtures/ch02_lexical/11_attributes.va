@@ -1,0 +1,19 @@
+// §2.9: an attribute_instance is a prefix on a declaration or module item and
+// carries information for tools OTHER than the compiler — "properties about
+// objects ... that can be used by various tools". It therefore has to leave the
+// declaration it decorates alone. The observable consequence is that
+// `conductance` still holds the §2.6.2 scaled literal `1m` = 1e-3 after four
+// attributes were attached to it, and the module still conducts.
+`include "check.vh"
+(* optimize_power = 1 *)
+module ch02_attributes(p, n);
+    (* desc = "positive terminal" *) inout p, n;
+    (* desc = "disciplined terminals" *) electrical p, n;
+    (* desc = "conductance", units = "S", op = "yes", multiplicity = "none" *)
+    parameter real conductance = 1m;
+
+    analog begin
+        `CHECKX("an attributed parameter keeps its default", conductance, 0.001);
+        I(p, n) <+ conductance * V(p, n);
+    end
+endmodule

@@ -1,0 +1,11 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-11.6.19-01  (ch11-vpi.html)
+// For an operator whose type is vpiMultiConcat , the first operand shall be the multiplier expression.
+//
+//! reject DiagnosticsReported
+module annex_a_composites(p); inout p; electrical p; integer bits; real x; analog begin bits={4'b1010,4'b0101}; bits={2{4'b0011}}; x=(~bits)+(bits<<1)+(bits&3)+(V(p)>0.0?1.0:-1.0); I(p)<+x; end endmodule
+// EXPECT: error -- normative syntax/restriction snapshot for this rule family.

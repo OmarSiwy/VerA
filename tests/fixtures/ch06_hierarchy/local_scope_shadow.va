@@ -1,0 +1,21 @@
+// LRM §6.6 scope rules: a named `begin : inner` opens a new scope. A name
+// declared there is local to it, and every name of the ENCLOSING scope stays
+// visible inside — so `value`, assigned 1.0 by the statement above, is the
+// `value` the inner block reads. Held at V(p) = 0.25, `local_value` is
+// 1.0 + 0.25 = 1.25, exact in binary, so equality is the right test. A
+// compiler that gave the inner scope a fresh (zero) `value` would print 0.25.
+//
+//! bias V(p) = 0.25
+`include "check.vh"
+module ch6_scope(p);
+  inout p; electrical p; real value;
+  analog begin
+    value = 1.0;
+    begin : inner
+      real local_value;
+      local_value = value + V(p);
+      `CHECKX("inner scope reads the enclosing value", local_value, 1.25);
+      I(p) <+ local_value;
+    end
+  end
+endmodule

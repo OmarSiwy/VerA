@@ -1,0 +1,29 @@
+// NONCONFORMING ACCEPTANCE SNAPSHOT: these functions are connectmodule-only.
+// FastVAF currently accepts them in an ordinary module and lowers them to zero.
+//
+// §9.22 defines a driver as "a process which assigns a value to the signal, or
+// a connection of the signal to an output port of a module instance or
+// simulation primitive". `p` is a continuous node of a module elaborated on its
+// own: no process assigns to it and no instance output port is connected to it,
+// so the count is 0 by the definition — not by this engine's convenience.
+// $receiver_count is 0 for the mirror-image reason.
+//
+// The six indexed queries below are NOT checked. §9.22.3/§9.22.4 admit a
+// driver_index "between 0 and N-1", and with N = 0 that range is empty, so
+// $driver_state(p,0) and its siblings have no defined answer to write down.
+`include "check.vh"
+module ch09_driver_access(p, n);
+  inout p, n; electrical p, n;
+  real info;
+  analog begin
+    info = $driver_count(p) + $receiver_count(p);
+    `CHECKI("a continuous node with no assigning process has no drivers",
+            $driver_count(p), 0);
+    `CHECKI("and no receivers", $receiver_count(p), 0);
+    `CHECKX("so their sum is 0", info, 0.0);
+    info = info + $driver_state(p,0) + $driver_strength(p,0);
+    info = info + $driver_delay(p,0) + $driver_next_state(p,0);
+    info = info + $driver_next_strength(p,0) + $driver_type(p,0);
+    I(p,n) <+ info + 0.0*V(p,n);
+  end
+endmodule

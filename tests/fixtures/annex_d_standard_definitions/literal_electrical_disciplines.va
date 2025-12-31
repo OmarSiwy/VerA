@@ -1,0 +1,25 @@
+// Literal standard electrical conservative and signal-flow discipline names.
+//
+// Annex D.1 makes `electrical` potential Voltage / flow Current, so `V(p)` is
+// the potential and `I(p) <+ V(p)` is a 1 S element: at the biased 0.9 V the
+// element carries 0.9 A out of p.
+//
+//! bias V(p) = 0.9
+`include "check.vh"
+discipline electrical;
+  potential Voltage;
+  flow Current;
+enddiscipline
+discipline voltage;
+  potential Voltage;
+enddiscipline
+discipline current;
+  flow Current;
+enddiscipline
+module annex_d_literal_electrical(p);
+  inout p; electrical p;
+  analog begin
+    `CHECK("V() is the potential of the standard-named electrical discipline", V(p), 0.9, 1e-12);
+    I(p) <+ V(p);
+  end
+endmodule

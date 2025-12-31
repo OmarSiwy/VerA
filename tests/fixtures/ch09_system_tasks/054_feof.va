@@ -1,0 +1,22 @@
+// §9.5.8: `code = $feof(fd)` "returns a nonzero value when EOF has previously
+// been detected reading fd; returns zero otherwise."
+//
+// PREVIOUSLY DETECTED READING is the whole rule, and it is what makes this one
+// checkable without knowing anything about the host. The descriptor has only
+// just come back from $fopen and no read has been issued on it, so no EOF can
+// have been detected — the answer is zero, and it is zero whether or not
+// `fixture.dat` exists, whether or not the file is empty, and whether or not the
+// open succeeded (a failed open gives fd zero per §9.5.1, and that is an open
+// error, not an end-of-file). Only an implementation that answers "at EOF" for
+// an empty file, a dead descriptor, or an unread one fails this.
+`include "check.vh"
+module ch09_atomic_feof(p, n);
+  inout p, n; electrical p, n;
+  integer fd, code;
+  analog begin
+    fd = $fopen("fixture.dat", "r");
+    code = $feof(fd);
+    `CHECKI("$feof is zero until a read detects EOF", code, 0);
+    I(p,n) <+ V(p,n) + code;
+  end
+endmodule

@@ -1,0 +1,19 @@
+// LRM §6.3.6, fourth automatic rule: "Contributions to a branch potential
+// quantity using the noise functions shall have the noise power DIVIDED by
+// $mfactor" — the opposite sense of the flow rule, because m devices in
+// parallel divide a series noise voltage. Table 9-29 fixes $mfactor at its
+// top-level 1.0 here, so the division is the identity and the declared power
+// 1e-18 V^2/Hz stands.
+//
+// And §4.6.4: "The noise functions are only active in small-signal noise
+// analyses and return zero (0) otherwise." The default analysis is DC, so the
+// potential this source contributes is exactly zero.
+`include "check.vh"
+module ch6_mfactor_potential_noise(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKX("$mfactor is 1.0, so the noise power is undivided", $mfactor, 1.0);
+    `CHECKX("white_noise returns 0 outside a noise analysis", white_noise(1e-18, "potential_noise"), 0.0);
+    V(p, n) <+ white_noise(1e-18, "potential_noise");
+  end
+endmodule

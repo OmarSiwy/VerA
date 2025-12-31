@@ -1,0 +1,14 @@
+// Annex D.2 constants.vams: `P_CELSIUS0 is zero Celsius in kelvin, 273.15.
+// §9.10 `$temperature` is in kelvin, so `$temperature - `P_CELSIUS0` is that
+// same operating point in Celsius: 350 K - 273.15 = 76.85 C.
+//
+//! temp 350
+`include "check.vh"
+`define P_CELSIUS0 273.15
+module annex_d_celsius(p);
+  inout p; electrical p;
+  analog begin
+    `CHECK("350 K is 76.85 C via P_CELSIUS0", $temperature - `P_CELSIUS0, 76.85, 1e-12);
+    I(p) <+ V(p) - `P_CELSIUS0;
+  end
+endmodule

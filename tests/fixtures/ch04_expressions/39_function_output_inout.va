@@ -1,0 +1,44 @@
+// §4.7.2.3 output arguments: "At the end of the execution of the analog
+// user-defined function, the last value assigned to the output argument is then
+// assigned to the corresponding analog variable reference that was passed into
+// the function." §4.7.2.4 inout arguments: same copy-out, but "the inout
+// arguments ... do not get initialized like those defined as output" — the
+// caller's value is copied IN.
+//
+// At V(p,n) = 1.5 and width = 2.0, with the accumulator primed to 4.0:
+//     result_area      = 1.5 * 2.0        = 3.0
+//     result_perimeter = 2.0 * (1.5+2.0)  = 7.0
+//     accumulator      = 4.0 + 3.0        = 7.0   <- 3.0 if the inout were
+//                                                    zero-initialized like an
+//                                                    output argument
+// and §4.7.2.1 makes the returned value the last one assigned to the function
+// identifier, which is that same 7.0.
+//
+//! bias V(p) = 1.5
+`include "check.vh"
+module ch04_function_output_inout(p, n);
+    inout p, n;
+    electrical p, n;
+    real area, perimeter, value;
+
+    analog function real geometry;
+        input real length, width;
+        output real result_area, result_perimeter;
+        inout real accumulator;
+        begin
+            result_area = length * width;
+            result_perimeter = 2.0 * (length + width);
+            accumulator = accumulator + result_area;
+            geometry = accumulator;
+        end
+    endfunction
+
+    analog begin
+        value = 4.0;
+        value = geometry(V(p, n), 2.0, area, perimeter, value);
+        `CHECKX("output argument carries l*w back out", area, 3.0);
+        `CHECKX("output argument carries 2*(l+w) back out", perimeter, 7.0);
+        `CHECKX("inout argument was copied in, not zero-initialized", value, 7.0);
+        I(p, n) <+ value + area + perimeter;
+    end
+endmodule

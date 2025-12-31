@@ -1,0 +1,18 @@
+// §5.10.3.2 above() with both tolerances given: `above(expr, time_tol,
+// expr_tol)`. The tolerances only bound WHEN the event lands relative to the
+// true crossing during a transient; they do not gate the dc event, which
+// §5.10.3.2 grants whenever the expression is positive.
+//
+// Biased at V(p)=0.6 the expression is +0.6, so the event fires here and `x`
+// takes 0.6; §3.2.1 would otherwise leave it at zero.
+//
+//! bias V(p) = 0.6
+`include "check.vh"
+module ch5_above_tol(p);
+  inout p; electrical p; real x;
+  analog begin
+    @(above(V(p), 1p, 1u)) x = V(p);
+    `CHECK("above() with both tolerances still fires in dc", x, 0.6, 1e-15);
+    I(p) <+ x;
+  end
+endmodule

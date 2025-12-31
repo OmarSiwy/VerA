@@ -1,0 +1,22 @@
+// §9.7 / Table 9-4: `$warning` is a simulation-control message task, supported
+// in the analog context and in no other. It returns nothing, so what a check can
+// pin here is the operating point that decides whether it fires at all.
+//
+// §5.4.1 makes V(p,n) the potential DIFFERENCE of the two nodes, in the order
+// named: at V(p) = 2.0 V and V(n) = 0.5 V it is exactly 1.5 V (both operands and
+// the result are exact in IEEE-754). That is above the 1.0 V guard, so the model
+// is at the bias where the warning is emitted rather than skipped, and §4.2.5
+// makes the guard itself the integer 1 — not a boolean type Verilog-A does not
+// have.
+//
+//! bias V(p) = 2.0, V(n) = 0.5
+`include "check.vh"
+module ch09_atomic_warning(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKX("branch potential is V(p) - V(n), in that order", V(p,n), 1.5);
+    `CHECKI("4.2.5: the guard is the integer 1", V(p,n) > 1.0, 1);
+    if (V(p,n) > 1.0) $warning("voltage=%g", V(p,n));
+    I(p,n) <+ V(p,n);
+  end
+endmodule

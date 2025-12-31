@@ -1,0 +1,16 @@
+// Annex A.1.3 / LRM 3.5: an ANSI-style module port list declares direction and
+// discipline in the header itself. The assertion pins that each header-declared
+// port binds to the node the testbench biases: V(sense) = 0.7 and
+// V(common) = 0.2 make the input branch probe exactly 0.5 V. Swap two port
+// bindings and the number moves.
+//
+//! bias V(sense) = 0.7
+//! bias V(common) = 0.2
+//! print none
+`include "check.vh"
+module annex_a_module_ports(input electrical sense, output electrical drive, inout electrical common);
+    analog begin
+        `CHECK("ANSI-declared input port probes its own node", V(sense, common), 0.5, 1e-15);
+        V(drive, common) <+ V(sense, common);
+    end
+endmodule

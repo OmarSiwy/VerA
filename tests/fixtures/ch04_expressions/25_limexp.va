@@ -1,0 +1,40 @@
+// §4.5.13 limexp in the shape it exists for: the ideal-diode law. Below the
+// linearization threshold limexp IS exp (§4.5.13 only permits limiting for
+// large arguments), so the current is Is*(exp(V/Vt) - 1) exactly.
+//
+// Vt = kT/q. Annex D lists five vintages of k and q (`P_K_SPICE ... P_K_NIST2018);
+// at T = 300.15 K they span 0.02586417 .. 0.02586495 V, a spread of 3e-5
+// relative, so the want below is the middle of that band and the tolerance is
+// wide enough to admit any of them — and nothing else. A simulator that used
+// 300 K instead of 300.15, or that dropped the temperature entirely, is out by
+// 5e-4 and 4 orders of magnitude respectively.
+//
+// At V = 0.7 V the exponent is 0.7/0.0258649 = 27.06, far below any limiting
+// knee, so
+//
+//   Id = 1e-14 * (exp(27.06) - 1) = 5.672e-3 A
+//
+// spanning the same 8e-4 relative band as Vt does through the exponential.
+// This is the assertion that bites: the exponential amplifies an error in Vt by
+// a factor of 27, so a percent-level slip in Vt is a 30% slip in Id.
+//
+//! temp 300.15
+//! bias V(p) = 0.7
+//! bias V(n) = 0.0
+`include "check.vh"
+module ch04_limexp(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real saturation_current = 1e-14;
+    real id;
+
+    analog begin
+        id = saturation_current * (limexp(V(p, n) / $vt) - 1.0);
+
+        `CHECKR("$vt is kT/q at 300.15 K", $vt, 0.0258649, 1e-4);
+        `CHECKR("limexp is exp below the limiting knee", limexp(1.0), 2.718281828459045, 1e-14);
+        `CHECKR("ideal diode current at 0.7 V", id, 0.005672, 3e-3);
+
+        I(p, n) <+ id;
+    end
+endmodule

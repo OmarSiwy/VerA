@@ -1,0 +1,13 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-8.5.3.5-01  (ch8-scheduling.html)
+// Switch processing shall consider all the devices in a bidirectional switch-connected net before it can determine the appropriate value for any node on
+//
+//! reject unsupported module item
+// EXPECT: error -- tran switch networks need the digital switch solver.
+module ch8_switch(a, b);
+  tran (a, b);
+endmodule

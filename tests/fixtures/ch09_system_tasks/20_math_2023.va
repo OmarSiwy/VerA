@@ -1,0 +1,24 @@
+// $ln1p and $expm1 — the two math operators Verilog-AMS 2023 added (§4.3.1,
+// Annex G.7 item 7780). Biased at V(p,n) = 0.25, where both have a closed form:
+//
+//   $ln1p(0.25) = ln(1 + 0.25) = ln(5/4) = ln5 - 2*ln2
+//               = 1.6094379124341003 - 1.3862943611198906
+//               = 0.22314355131420976
+//   $expm1(0.25) = e^(1/4) - 1 = 1.2840254166877415 - 1
+//               = 0.2840254166877415
+//
+// The distinguishing claim is that these are ln(1+x) and e^x-1 and NOT ln(x) and
+// e^x: at 0.25 the naive spellings give -1.3862943611198906 and
+// 1.2840254166877415, both a whole unit away, so a wrong lowering cannot squeak
+// through the tolerance.
+//
+//! bias V(p) = 0.25
+`include "check.vh"
+module ch09_math_2023(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECK("$ln1p(0.25) = ln(1.25), not ln(0.25)", $ln1p(V(p,n)), 0.22314355131420976, 1e-15);
+    `CHECK("$expm1(0.25) = e^0.25 - 1, not e^0.25", $expm1(V(p,n)), 0.2840254166877415, 1e-15);
+    I(p,n) <+ $ln1p(V(p,n)) + $expm1(V(p,n));
+  end
+endmodule

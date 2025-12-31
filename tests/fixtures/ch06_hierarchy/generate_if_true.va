@@ -1,0 +1,15 @@
+// §6.6.2 if-generate with a true constant condition and no else. "At most one
+// generate block instantiated from a set of alternatives" — here the set has
+// one member and the condition selects it, so the block's items become module
+// items and its assignment runs. `arm` reading 0 would mean the elaborator
+// dropped the only alternative it had.
+//
+//! bias V(p) = 0.5
+`include "check.vh"
+module ch6_gen_true(p);
+  inout p; electrical p;
+  integer arm;
+  analog arm = 0;
+  generate if (1) begin arm = 1; I(p) <+ V(p); end endgenerate
+  analog `CHECKI("if(1) elaborates its block", arm, 1);
+endmodule

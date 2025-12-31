@@ -1,0 +1,18 @@
+// §3.6.4 a `ground` declaration makes the associated net's node the GLOBAL
+// REFERENCE node of the circuit, whose potential is zero by definition. So a
+// probe taken ACROSS it reads the same number as the node alone: with p held at
+// 1.5 V, V(p, local_reference) is 1.5, not 1.5 minus some separately solved
+// value of local_reference.
+//
+//! bias V(p) = 1.5
+`include "check.vh"
+module ch03_ground_declaration(p);
+    input p;
+    electrical p, local_reference;
+    ground local_reference;
+
+    analog begin
+        `CHECK("a ground net is the 0 V global reference", V(p, local_reference), 1.5, 1e-12);
+        V(p, local_reference) <+ 5.0;
+    end
+endmodule

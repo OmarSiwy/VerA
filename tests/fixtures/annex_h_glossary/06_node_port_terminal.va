@@ -1,0 +1,19 @@
+// Annex H "port" (an external connection point, also known as a terminal) vs
+// "node" (any connection point with access functions, which an internal net is
+// too). The distinction is observable: `internal_node` is a solver unknown of
+// its own, so held at 0.25 while the terminals sit at 0.5 and 0.125 it reads
+// 0.25-0.125 = 0.125, while the port pair reads 0.5-0.125 = 0.375.
+//
+//! bias V(terminal_p) = 0.5, V(terminal_n) = 0.125, V(internal_node) = 0.25
+`include "check.vh"
+module glossary_node_port_terminal(terminal_p, terminal_n);
+  inout terminal_p, terminal_n;
+  electrical terminal_p, terminal_n;
+  electrical internal_node;
+  analog begin
+    `CHECKX("the port pair's potential", V(terminal_p,terminal_n), 0.375);
+    `CHECKX("an internal node is an unknown of its own", V(internal_node,terminal_n), 0.125);
+    V(internal_node,terminal_n) <+ V(terminal_p,terminal_n);
+    I(terminal_p,terminal_n) <+ V(internal_node,terminal_n);
+  end
+endmodule

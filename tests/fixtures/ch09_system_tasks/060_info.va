@@ -1,0 +1,20 @@
+// §9.7 / Table 9-4: `$info` is a simulation-control message task, supported in
+// the analog context and in no other. It returns nothing, so what a check can
+// pin here is the operating point that decides whether it fires.
+//
+// The bias is deliberately BELOW the guard: §5.4.1 gives V(p,n) = 0.75 - 0.25 =
+// 0.5 V exactly, so `V(p,n) > 1.0` is false and §4.2.5 makes it the integer 0 —
+// the message is correctly suppressed. Reading 1 here would mean the comparison,
+// or the probe's operand order, is wrong.
+//
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module ch09_atomic_info(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKX("branch potential is V(p) - V(n), in that order", V(p,n), 0.5);
+    `CHECKI("4.2.5: a false comparison is the integer 0", V(p,n) > 1.0, 0);
+    if (V(p,n) > 1.0) $info("voltage=%g", V(p,n));
+    I(p,n) <+ V(p,n);
+  end
+endmodule

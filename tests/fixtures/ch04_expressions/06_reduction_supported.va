@@ -1,0 +1,33 @@
+// LRM 4.2.10 reduction operators, with the widths fixed by 3.2: "An integer
+// declaration declares one or more variables of type integer. These variables
+// can hold values ranging from -2**31 to 2**31-1", i.e. 32 bits, 2's complement.
+//
+// bits = 15 = 32'b0000...00001111, so over all 32 bit positions:
+//   |bits  = 1  (some bit is set)
+//   &bits  = 0  (bits 4..31 are zero -- this is the assertion that pins the
+//                width; a 4-bit operand would give 1)
+//   ~|bits = 0  (nor)
+//   ~&bits = 1  (nand)
+// value = 1, then 1 + 0 + 0 + 1 = 2.
+//
+// Note: 4.2.10 says the reduction operators "can not be used inside the analog
+// block"; VerA accepts &, |, ~& and ~| there as an extension (^ is rejected --
+// see 07_reduction_xor_rejected.va), so this fixture pins the extension's
+// semantics against IEEE 1364.
+`include "check.vh"
+module ch04_reduction_supported(p, n);
+    inout p, n;
+    electrical p, n;
+    integer bits, value;
+
+    analog begin
+        bits = 15;
+        value = |bits;
+        `CHECKI("reduction or of 15", value, 1);
+        `CHECKI("reduction and over 32 bits", &bits, 0);
+        `CHECKI("reduction nand is the complement of and", ~&bits, 1);
+        value = value + &bits + ~|bits + ~&bits;
+        `CHECKI("sum of the four reductions", value, 2);
+        I(p, n) <+ value;
+    end
+endmodule

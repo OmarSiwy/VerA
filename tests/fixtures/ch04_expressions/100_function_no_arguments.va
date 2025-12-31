@@ -1,0 +1,22 @@
+// LRM 4.7.2.1: an analog function declaration implicitly declares a variable of
+// the function's own name and type, initialized to 0 for a numeric type; "the
+// last value assigned to this variable will be the return value". `noargs`
+// assigns 1.0 to it, so the call returns 1.0 and not the 0.0 default -- which is
+// what makes the check restricting.
+//
+// NOTE for a reviewer: 4.7.1 also requires a function to "have at least one
+// formal argument declared", and A.8.2 `analog_function_call` requires at least
+// one actual, so a strict reading rejects this module rather than running it.
+// VerA accepts it; the assertion below pins what it then has to compute.
+`include "check.vh"
+module ch4_fn_noargs(p);
+  inout p;
+  electrical p;
+  analog function real noargs;
+    noargs = 1.0;
+  endfunction
+  analog begin
+    `CHECKX("implicit return variable of a zero-argument function", noargs(), 1.0);
+    I(p) <+ noargs();
+  end
+endmodule

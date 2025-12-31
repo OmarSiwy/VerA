@@ -1,0 +1,21 @@
+// NONCONFORMING ACCEPTANCE SNAPSHOT: $driver_type is valid only in the digital context of a connectmodule.
+//
+// §9.23.4 names the answer for exactly this situation: "A simulator that cannot
+// provide proper information for a given driver type should return 0
+// (`DRIVER_UNKNOWN)." Annex D's driver_access.vams fixes that literal:
+//
+//     `define DRIVER_UNKNOWN 32'b00000000000  // No information
+//
+// A flat analog device has no digital drivers at all, so none of the header's
+// other bits (`DRIVER_DELAYED 1, `DRIVER_GATE 2, `DRIVER_UDP 4, `DRIVER_ASSIGN 8,
+// … `DRIVER_WAND 1024) may be set. Any one of them set makes this fail, which is
+// the point — 0 here is the LRM's answer, not a placeholder.
+`include "check.vh"
+module ch09_atomic_driver_type(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("§9.23.4 + Annex D: no driver information, so DRIVER_UNKNOWN = 0",
+            $driver_type(p,0), 0);
+    I(p,n) <+ V(p,n) + $driver_type(p,0);
+  end
+endmodule

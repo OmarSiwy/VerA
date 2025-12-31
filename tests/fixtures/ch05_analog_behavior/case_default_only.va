@@ -1,0 +1,17 @@
+// LRM 5.8.3: "If all comparisons fail, and the default item is given, then the
+// default item statement is executed". There is no case item other than
+// default, so mode=2 matches nothing and the default arm must run. LRM 3.3.1
+// starts x at 0, so an unexecuted default would leave 0 instead of the biased
+// V(p) = 0.4 V.
+//
+//! bias V(p) = 0.4
+`include "check.vh"
+module ch5_case_default(p);
+  inout p; electrical p; integer mode; real x;
+  analog begin
+    mode = 2;
+    case (mode) default: x = V(p); endcase
+    `CHECKX("no item matched, so the default arm ran", x, 0.4);
+    I(p) <+ x;
+  end
+endmodule

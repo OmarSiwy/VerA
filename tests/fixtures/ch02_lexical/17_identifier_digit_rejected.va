@@ -1,0 +1,5 @@
+//! reject identifier
+// EXPECT: error
+module ch02_identifier_digit_rejected;
+    real 2gain;
+endmodule

@@ -1,0 +1,29 @@
+// NONCONFORMING ACCEPTANCE SNAPSHOT: $driver_strength is connectmodule-only.
+//
+// Table 9-19 marks $driver_strength "No" in the analog context, so the call site
+// is nonconforming — but §9.22.4 still fixes the SHAPE of whatever comes back:
+//
+//     "The strength value is returned as two strengths, bits 5-3 for strength0
+//      and bits 2-0 for strength1."
+//
+// Two 3-bit fields and nothing above bit 5, so the whole word is an integer in
+// 0..63. Figure 9-3 confirms the ceiling: the mapping has rows B5, B4, B3 for
+// strength0 and B2, B1, B0 for strength1 and no others, one of eight codes per
+// field (Su0 … HiZ … Su1).
+//
+// The range is the whole claim, and it is restricting in both directions: a -1
+// sentinel (the shape §9.23.1 uses for "nothing there") fails the lower bound,
+// and a value that spilled a third field or a full 8-bit strength word fails the
+// upper one.
+`include "check.vh"
+
+//! bias V(p) = 0.5
+
+module ch09_atomic_driver_strength(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("§9.22.4: strength0 in bits 5-3, strength1 in bits 2-0, so the word is in 0..63",
+            ($driver_strength(p,0) >= 0) && ($driver_strength(p,0) <= 63), 1);
+    I(p,n) <+ V(p,n) + $driver_strength(p,0);
+  end
+endmodule

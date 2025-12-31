@@ -1,0 +1,19 @@
+//! reject DiagnosticsReported
+// LRM Annex F.2.1, discipline resolution step 3: "More than one conflicting
+// in-context discipline declaration ... for the same hierarchical segment of a
+// signal is an error. In this case, conflicting simply means an attempt to
+// declare more than one discipline regardless of whether the disciplines are
+// compatible or not."  `sig` below is declared both annex_f_a and annex_f_b,
+// so a conforming compiler must diagnose it.  There is no value to CHECK here:
+// the only observable is the diagnostic.
+//
+// KNOWN VerA BUG: VerA accepts this silently (zero diagnostics, exit 0), so
+// this fixture is expected to be RED until a conflicting-discipline diagnostic
+// exists.  Do not "fix" it by deleting the `//! reject` line.
+discipline annex_f_a; domain continuous; enddiscipline
+discipline annex_f_b; domain continuous; enddiscipline
+module annex_f_conflict(sig);
+  inout sig;
+  annex_f_a sig;
+  annex_f_b sig;
+endmodule

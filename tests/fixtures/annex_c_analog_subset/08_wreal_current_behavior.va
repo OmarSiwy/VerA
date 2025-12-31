@@ -1,0 +1,18 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-3.7-01  (ch3-datatypes.html)
+// A wreal net shall not store its value.
+// VAMS-3.7-02  (ch3-datatypes.html)
+// If no driver is connected to a wreal net, its value shall be zero (0.0).
+// VAMS-3.7-03  (ch3-datatypes.html)
+// Unlike other digital nets which have an initial value of 'z', wreal nets shall have an initial value of zero.
+//
+// annex C: wreal is a discrete-real (digital) net type, outside Verilog-A.
+//! reject E0205
+//! reject wreal
+module annex_c_wreal_current_behavior;
+    wreal real_signal;
+endmodule

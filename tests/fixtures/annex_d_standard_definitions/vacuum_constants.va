@@ -1,0 +1,19 @@
+// Annex D.2 constants.vams, the vacuum constants. `P_C is 299792458 m/s EXACTLY
+// -- it is the SI definition of the metre, not a measurement, so exact equality
+// is the right claim. `P_U0_OLD is the pre-2019 definition mu0 = 4e-7*pi H/m,
+// and the two together fix the permittivity through eps0 = 1/(mu0*c^2), which
+// reproduces Annex D's own `P_EPS0_NIST1998 (8.854187817e-12) to nine digits.
+`include "check.vh"
+`define P_C 2.99792458e8
+`define M_PI 3.14159265358979323846
+`define P_U0_OLD (4.0e-7 * `M_PI)
+module annex_d_vacuum(p);
+  inout p; electrical p;
+  analog begin
+    `CHECKX("P_C is exactly 299792458 m/s", `P_C, 299792458.0);
+    `CHECKR("P_U0_OLD = 4e-7*pi H/m", `P_U0_OLD, 1.2566370614359173e-6, 1e-15);
+    `CHECKR("1/(mu0*c^2) is the vacuum permittivity",
+            1.0 / (`P_U0_OLD * `P_C * `P_C), 8.854187817620389e-12, 1e-15);
+    I(p) <+ `P_C + `P_U0_OLD + 0.0*V(p);
+  end
+endmodule

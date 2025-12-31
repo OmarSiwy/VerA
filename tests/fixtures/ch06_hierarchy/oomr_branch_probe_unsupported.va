@@ -1,0 +1,14 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-6.7.1-04  (ch6-hierarchy.html)
+// Verilog-AMS HDL follows the rules for hierarchical upward referencing as described in 12.6 of IEEE Std 1364 Verilog with the addition that the scope_n
+//
+//! reject expected `)`
+// EXPECT: error -- branch probes may be OOMRs only after hierarchy resolution.
+module ch6_oomr_branch_probe(p);
+  inout p; electrical p;
+  analog I(p) <+ V(device.path);
+endmodule

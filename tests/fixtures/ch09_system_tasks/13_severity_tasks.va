@@ -1,0 +1,34 @@
+// §9.7.3 $fatal, $error, $warning, $info — the four assertion severity tasks,
+// analog-context-only in Table 9-4. None returns a value; what separates them is
+// what they do to the RUN:
+//
+//   $info     "carries no specific severity"           — run continues
+//   $warning  "a run-time warning"                     — run continues
+//   $error    "a run-time error"                       — run does not proceed
+//   $fatal    "terminates the simulation with an errorcode ... an implicit call
+//              to $finish"                             — run ends here
+//
+// So the operating point is chosen to sit between the two halves. §5.4.1 gives
+// V(p,n) = 3.0 - 0.5 = 2.5 V, and both operands and the difference are exact in
+// binary, so §4.2.5 makes the four guards exactly 1, 1, 0, 0: the two harmless
+// tasks fire and the two that would stop the simulation do not.
+//
+// The second check is the load-bearing one. If it read 1, $fatal would terminate
+// the run and this transcript would not exist to be read.
+//
+//! bias V(p) = 3.0, V(n) = 0.5
+`include "check.vh"
+module ch09_severity_tasks(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("§4.2.5: at V(p,n) = 2.5 V both non-terminating guards are true",
+            (V(p, n) > 1.0) && (V(p, n) > 2.0), 1);
+    `CHECKI("§9.7.3: neither $error nor $fatal is reached, so the run survives to print this",
+            (V(p, n) > 3.0) || (V(p, n) > 4.0), 0);
+    if (V(p,n) > 1.0) $info("info %g", V(p,n));
+    if (V(p,n) > 2.0) $warning("warning %g", V(p,n));
+    if (V(p,n) > 3.0) $error("error %g", V(p,n));
+    if (V(p,n) > 4.0) $fatal(1, "fatal %g", V(p,n));
+    I(p,n) <+ V(p,n);
+  end
+endmodule

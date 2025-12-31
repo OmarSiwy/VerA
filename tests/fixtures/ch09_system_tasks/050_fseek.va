@@ -1,0 +1,22 @@
+// §9.5.5: `code = $fseek(fd, offset, operation)` with an operation of 0 "sets
+// position equal to offset bytes" from the beginning of the file, and the return
+// is pinned to exactly two values: "if an error occurs repositioning the file,
+// then code is set to -1. Otherwise, code is set to 0."
+//
+// Which of the two applies depends on whether `fixture.dat` exists in the
+// working directory — this fixture never creates it, so a failed open gives fd
+// zero (§9.5.1) and the seek on that descriptor errors. The assertion is the
+// part §9.5.5 pins regardless: the return is a STATUS, 0 or -1, and nothing
+// else. A $fseek that handed back the new position, the old position, or a
+// positive errno fails it.
+`include "check.vh"
+module ch09_atomic_fseek(p, n);
+  inout p, n; electrical p, n;
+  integer fd, code;
+  analog begin
+    fd = $fopen("fixture.dat", "r");
+    code = $fseek(fd, 0, 0);
+    `CHECKI("$fseek returns a status: 0, or -1 if repositioning errored", (code == 0) || (code == -1), 1);
+    I(p,n) <+ V(p,n) + code;
+  end
+endmodule

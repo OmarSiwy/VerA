@@ -1,0 +1,39 @@
+// §4.5.9 slew — "slew() forces all transitions of expr faster than
+// max_pos_slew_rate to change at max_pos_slew_rate rate". Unlike the transition
+// filter, this one the LRM pins numerically: the output moves at exactly the
+// limit while limiting, and stops at the input.
+//
+// The rates here are 1e6 V/s up and -2e6 V/s down, so the time base is
+// microseconds: 1e6 * 1e-6 = 1.0 exactly in binary, one volt per step. A 5 V
+// step applied at t = 1us therefore takes five steps to arrive, and the output
+// at t is min(5, t/1us):
+//
+//   t/us    0    1    2    3    4    5    6
+//   in      0    5    5    5    5    5    5
+//   out     0    1    2    3    4    5    5
+//
+// which is written below as output minus that closed form, so the want is one
+// literal at every time point. The t = 0 point is the DC point and covers
+// §4.5.9's "In DC analysis, slew() simply passes the value ... to its output".
+//
+//! bias V(n) = 0
+//! wave V(p) = 0, 5
+//! time 0, 1u, 2u, 3u, 4u, 5u, 6u
+//! analysis tran
+//! print none
+`include "check.vh"
+module ch04_slew(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin
+        `CHECK("rises at exactly 1e6 V/s, then stops at the input",
+               slew(V(p, n), 1e6, -2e6) - min(5.0, $abstime * 1e6), 0.0, 1e-12);
+        // "If the rate of change of expr is less than the specified maximum
+        // slew rates, slew() returns the value of expr" — so it approaches the
+        // input from below and never overshoots it.
+        `CHECKI("never overshoots its input", slew(V(p, n), 1e6, -2e6) <= V(p, n), 1);
+
+        I(p, n) <+ slew(V(p, n), 1e6, -2e6);
+    end
+endmodule

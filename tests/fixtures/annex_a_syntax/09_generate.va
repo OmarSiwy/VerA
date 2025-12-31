@@ -1,0 +1,21 @@
+// Annex A.4.2 / A.6.2 loop generate: the body is UNROLLED, once per value the
+// genvar takes. `index` runs 0 then 1 and stops, so `index*index - index` is 0
+// on every unrolled copy and on no other integer — the transcript therefore
+// carries one ok=1 line per iteration, and an unroll that reached 2 (or -1)
+// would print ok=0.
+//
+//! bias V(p) = 0.5
+//! print none
+`include "check.vh"
+module annex_a_generate(p, n);
+    inout p, n;
+    electrical p, n;
+    genvar index;
+
+    generate
+        for (index = 0; index < 2; index = index + 1) begin
+            `CHECKI("generate unrolls with index 0 then 1", index * index - index, 0);
+            I(p, n) <+ index * V(p, n);
+        end
+    endgenerate
+endmodule

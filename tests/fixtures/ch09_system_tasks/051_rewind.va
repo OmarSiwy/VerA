@@ -1,0 +1,26 @@
+// §9.5.5 states $rewind as an IDENTITY and not as a value: "$rewind is
+// equivalent to $fseek (fd,0,0)". Both set the position to zero bytes from the
+// beginning, both "cancel any $ungetc operations", and both return the same
+// status — 0, or -1 if repositioning errored.
+//
+// There is no number to write down: whether the status is 0 or -1 depends on
+// whether `fixture.dat` exists in the working directory, which this fixture does
+// not control. What the LRM does pin is that the two spellings agree, so this is
+// a CHECKEQ. It is restricting: a $rewind lowered to something other than a
+// seek-to-zero — a no-op returning success on a dead descriptor, say, or one
+// that reports the new position — disagrees with the $fseek beside it.
+//
+// Ordering is not a factor: both calls leave the file at byte 0, so the second
+// starts from the state the first produced and must still report the same
+// status.
+`include "check.vh"
+module ch09_atomic_rewind(p, n);
+  inout p, n; electrical p, n;
+  integer fd, code;
+  analog begin
+    fd = $fopen("fixture.dat", "r");
+    code = $rewind(fd);
+    `CHECKEQ("§9.5.5: $rewind(fd) is $fseek(fd,0,0)", code, $fseek(fd, 0, 0), 0);
+    I(p,n) <+ V(p,n) + code;
+  end
+endmodule

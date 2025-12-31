@@ -1,0 +1,11 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-3.12-03  (ch3-datatypes.html)
+// If one of the terminals of a branch is a vector net, then the other terminal shall either be a scalar net or a vector net of the same size.
+//
+//! reject DiagnosticsReported
+module ch3_vector_nets(p); inout p; electrical [3:0] p; analog begin I(p[0])<+V(p[1]); I(p[2])<+V(p[3]); end endmodule
+// EXPECT: error -- normative syntax/restriction snapshot for this rule family.

@@ -1,0 +1,31 @@
+// §4.7.2.2 "Analog function return statement": "The return statement shall
+// override any value assigned to the function name." (§5.9 permits `return`
+// exactly here — inside an analog user-defined function — so despite this
+// fixture's legacy name the source is LEGAL.)
+//
+// `choose` never assigns its identifier variable, so if the `return` were
+// dropped the function would yield the §4.7.2.1 default of 0. The two calls pin
+// both ternary arms, and the second is entirely below zero so a "max with 0"
+// mis-lowering cannot pass it:
+//     choose(0.75,  0.0) = 0.75   (first > second)
+//     choose(-2.5, -1.5) = -1.5   (second > first, and the answer is negative)
+//
+//! bias V(p) = 0.75
+`include "check.vh"
+module ch04_function_return_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog function real choose;
+        input real first, second;
+        begin
+            return first > second ? first : second;
+        end
+    endfunction
+
+    analog begin
+        `CHECKX("return delivers the larger operand", choose(V(p, n), 0.0), 0.75);
+        `CHECKX("return delivers the second arm too", choose(-2.5, -1.5), -1.5);
+        I(p, n) <+ choose(V(p, n), 0.0);
+    end
+endmodule

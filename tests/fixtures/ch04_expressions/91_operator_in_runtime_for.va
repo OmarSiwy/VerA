@@ -1,0 +1,11 @@
+// §5.9 "The following restrictions are applied to looping statements (repeat,
+// while and for) except for analog_for statements: - Analog filter functions are
+// not allowed". No analysis_or_constant carve-out here, unlike §5.8.1 — and an
+// event body is conditionally executed by definition.
+//
+// This fixture used to assert the opposite — that the illegal form COMPILES.
+//! reject E0514
+// §5.9: "Analog filter functions are not allowed" in repeat/while/non-genvar
+// for — `integer i` makes this a procedural for, not a §5.9.3 analog_for.
+// Rejected as E0514.
+module ch4_op_for(p); inout p; electrical p; integer i; real x; analog begin for(i=0;i<2;i=i+1) x=ddt(V(p)); I(p)<+x; end endmodule

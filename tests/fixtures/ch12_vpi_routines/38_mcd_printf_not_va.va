@@ -1,0 +1,8 @@
+//! reject E0512
+//! reject vpi_mcd_printf
+// EXPECT: error
+module ch12_atomic_mcd_printf(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ vpi_mcd_printf(0);
+endmodule
+

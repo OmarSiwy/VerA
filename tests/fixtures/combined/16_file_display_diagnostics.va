@@ -1,0 +1,39 @@
+// LRM 9.4 file I/O and 9.6 severity, alongside the plain behaviour they wrap.
+//
+// The $fdisplay/$warning pair lives under a conditional on purpose: VerA hoists
+// display tasks into one straight-line unit, so those two are dropped (W0851)
+// and cannot be the assertion. What the conditional's CONTROLLING expression
+// says is still checkable, and that is LRM 4.2.5: a relational operator yields
+// an integer 1 or 0, not a boolean. At the declared 1.5 V bias, V(p,n) > 1.0
+// is the integer 1.
+//
+// $abstime (9.7.1) is the current simulation time; the testbench declares the
+// single default time point, so it is 0 to the last bit.
+//
+// The resistor is Ohm's law at 1.5 V into 1 kOhm: 1.5 mA.
+//
+// NOT asserted: the value of `fd`. IEEE 1364 has $fopen return a non-zero
+// descriptor on success, but this engine lowers the whole file-I/O family to a
+// no-op returning 0, so `fd != 0` would be an assertion about a stub rather
+// than about the LRM.
+//
+//! bias V(p) = 1.5
+`include "check.vh"
+module combined_file_display_diagnostics(p, n);
+  inout p, n; electrical p, n;
+  integer fd;
+  analog begin
+    fd = $fopen("combined.log", "a");
+    `CHECKI("4.2.5: a relational yields the integer 1, and 1.5 > 1.0", (V(p,n) > 1.0), 1);
+    `CHECKI("4.2.5: the same operator yields 0 when it does not hold", (V(p,n) > 2.0), 0);
+    `CHECKX("$abstime at the single declared time point", $abstime, 0.0);
+    `CHECKR("Ohm's law: 1.5 V across 1 kOhm", V(p,n) / 1k, 1.5e-3, 1e-15);
+    if (V(p,n) > 1.0) begin
+      $fdisplay(fd, "t=%g voltage=%g", $abstime, V(p,n));
+      $warning("combined voltage=%g", V(p,n));
+    end
+    $fflush(fd);
+    $fclose(fd);
+    I(p,n) <+ V(p,n) / 1k;
+  end
+endmodule

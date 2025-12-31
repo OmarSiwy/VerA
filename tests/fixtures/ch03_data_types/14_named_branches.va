@@ -1,0 +1,26 @@
+// §3.12 a named branch is a path between two nets, and "only one net need be
+// specified, in which case the second net defaults to ground". With p at 2.0 V
+// and n at 0.5 V that fixes both branch potentials:
+//
+//   V(differential_branch) = V(p) - V(n) = 1.5
+//   V(ground_branch)       = V(p) - 0    = 2.0
+//
+// The second literal is the one that bites: a compiler that quietly made the
+// missing terminal `n`, or that aliased both declarations onto the same p-n
+// branch, reads 1.5 there and fails.
+//
+//! bias V(p) = 2.0, V(n) = 0.5
+`include "check.vh"
+module ch03_named_branches(p, n);
+    inout p, n;
+    electrical p, n;
+    branch (p, n) differential_branch;
+    branch (p) ground_branch;
+
+    analog begin
+        `CHECK("two-terminal branch potential is the difference", V(differential_branch), 1.5, 1e-12);
+        `CHECK("one-terminal branch defaults its second net to ground", V(ground_branch), 2.0, 1e-12);
+        I(differential_branch) <+ V(differential_branch) / 100.0;
+        I(ground_branch) <+ V(ground_branch) / 200.0;
+    end
+endmodule

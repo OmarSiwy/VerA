@@ -1,0 +1,18 @@
+// §1.3.1.1 the reference node. A net declared `ground` IS the global reference
+// and its potential is always zero, so V(p,gnd) is V(p) alone. Biased at
+// 0.75 V the branch potential reads 0.75 and the source's residual, which
+// §1.3.1.2 orients from + to -, is 0.75 - 1.25 = -0.5.
+//
+//! bias V(p) = 0.75
+`include "check.vh"
+module ch01_reference_ground(p);
+    inout p;
+    electrical p, gnd;
+    ground gnd;
+
+    analog begin
+        `CHECK("potential to the zero reference node", V(p, gnd), 0.75, 1e-15);
+        `CHECK("source residual", V(p, gnd) - 1.25, -0.5, 1e-15);
+        V(p, gnd) <+ 1.25;
+    end
+endmodule

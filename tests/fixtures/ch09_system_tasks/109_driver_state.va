@@ -1,0 +1,31 @@
+// NONCONFORMING ACCEPTANCE SNAPSHOT: $driver_state is connectmodule-only.
+//
+// Table 9-19 marks $driver_state "No" in the analog context, so the call site is
+// nonconforming. Its return is not assertable either: §9.22.3 says "the state
+// value is returned as 0, 1, x, or z", and two of those four are not values a
+// Verilog-A real or integer expression can carry at all.
+//
+// What IS assertable is the precondition §9.22.3 states for the second argument:
+// "driver_index is an integer value between 0 and N-1, where N is the total
+// number of drivers contributing to the signal value." N is what §9.22.1
+// returns, "an integer representing the number of drivers associated with the
+// signal in question" — and `p` is an analog port of a flat design with no
+// digital drivers anywhere in it, so N is exactly 0. That is a fact about the
+// netlist, not about what this compiler chooses to return.
+//
+// N = 0 makes the range 0..-1 empty: there is no legal driver_index, so the 0
+// written below indexes a driver that does not exist. The assertion is that
+// fact, and it is why the contribution is V(p,n) plus a term that can only be a
+// nonconformance. A compiler that reported a driver here — inventing one for the
+// analog contribution, or counting the port itself — would fail it.
+`include "check.vh"
+
+//! bias V(p) = 0.5
+
+module ch09_atomic_driver_state(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKI("no driver exists for index 0 to name: a driverless analog port", $driver_count(p), 0);
+    I(p,n) <+ V(p,n) + $driver_state(p,0);
+  end
+endmodule

@@ -1,0 +1,21 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-F.2-01  (annex-f-resolution.html)
+// A net segment of a signal on the upper connection of a port shall be considered as the parent to a net segment on the lower connection of the port.
+// VAMS-F.2-02  (annex-f-resolution.html)
+// The net segment on the lower connection of a port shall be considered as a child net segment of that parent net segment.
+// VAMS-F.2-03  (annex-f-resolution.html)
+// When a signal is being traversed depth-first, this means that the traversal shall start at the bottom (leaf) net segments of the signal - these are ne
+// VAMS-F.2-04  (annex-f-resolution.html)
+// It further means that all the children net segments of a parent net segment shall be traversed before that parent net segment is traversed.
+// … and 3 more rule(s); see tests/lrm-rules/
+//
+//! reject module instantiation is not supported
+// EXPECT: error -- resolution requires upper and lower port connections.
+module annex_f_hierarchy(sig);
+  electrical sig;
+  child u(sig);
+endmodule

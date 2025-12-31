@@ -1,0 +1,28 @@
+// Annex E.3.4 / §9.17.3 $limit with the built-in "fetlim" algorithm. Table E.2
+// gives fetlim exactly one extra argument, vth, and it limits a gate-to-source
+// voltage.
+//
+// WHAT IS PINNED. §9.17.3: "On any iteration where the output value is not the
+// same as the value of the access function (within appropriate tolerances), the
+// simulator is prevented from terminating the iteration." So at a solved
+// operating point $limit() is TRANSPARENT — it returns its access function, and
+// the stamped current is V(p), not some damped fraction of it. A limiter that
+// leaked its damping into the answer would change the circuit the netlist
+// describes, which is the one thing it may never do.
+//
+// The bias is chosen so the claim holds even for a simulator that really does
+// run SPICE's DEVfetlim on this evaluation: 0.3 V is below vth = 0.7 V, so the
+// "off" branch applies for any previous-iteration value in [0, vth], and both of
+// its clamps — a step of vtsthi = |2*(vold-vth)|+2 >= 2 V going off, a ceiling
+// of vth+0.5 = 1.2 V going on — are slack by more than a volt at 0.3 V.
+//
+//! bias V(p) = 0.3
+`include "check.vh"
+module annex_e_fetlim(p);
+  inout p; electrical p; real limited;
+  analog begin
+    limited = $limit(V(p), "fetlim", 0.7);
+    I(p) <+ limited;
+    `CHECK("fetlim is transparent at the solution", limited, 0.3, 1e-12);
+  end
+endmodule

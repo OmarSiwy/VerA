@@ -1,0 +1,18 @@
+// §9.2 Table 9-11 lists `$ln` as supported in the analog context, and §4.3.1
+// Table 4-14 defines it as the natural logarithm — the C `log(x)`, domain x > 0.
+//
+// ln(2) = 0.69314718055994530941723... The correctly rounded IEEE-754 double is
+// 0.6931471805599453; the tolerance is ~1.5 ulp at that magnitude.
+//
+// Table 4-14 also says the Verilog system-function spelling `$ln(x)` and the
+// traditional Verilog-AMS spelling `ln(x)` are the SAME function — an identity
+// with no value of its own, hence CHECKEQ.
+`include "check.vh"
+module ch09_atomic_ln(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECK("$ln(2.0) is the natural log", $ln(2.0), 0.6931471805599453, 1e-15);
+    `CHECKEQ("Table 4-14: $ln(x) is ln(x)", $ln(7.5), ln(7.5), 0.0);
+    I(p,n) <+ V(p,n) + $ln(2.0);
+  end
+endmodule

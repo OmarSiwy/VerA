@@ -1,0 +1,7 @@
+//! reject E0512
+//! reject vpi_handle_by_name
+// EXPECT: error
+module ch12_handle_not_va(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ vpi_handle_by_name(0, 0);
+endmodule

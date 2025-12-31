@@ -85,11 +85,40 @@ it: every reference is a string inside generated code or a path handed to a chil
 
 ```
 zig build                # the vera binary
-zig build test           # unit tests + the conformance suite
-zig build conformance    # Verilog-A fixtures vs .expected-error.txt
-zig build exhaustive     # testbench transcripts vs .expected.txt (slow: spawns a compile per fixture)
-zig build exhaustive -- --bless   # rewrite transcripts, then READ the diff
+zig build test           # unit tests
+zig build torture        # every fixture: compile, run, check its own assertions
+zig build torture -- ch04       # only paths matching `ch04`
+zig build torture -- --strict   # fixtures that assert nothing FAIL instead of warn
 ```
 
 `docs/VAMS-LRM/` is the Verilog-AMS LRM, chapter and annex, which the fixture
-tree in `tests/va/fixtures/` is organized to mirror.
+tree in `tests/fixtures/` is organized to mirror.
+
+## What is actually verified
+
+One suite, `tests/torture.zig`, over 857 `.va` fixtures. Each states its own
+expected behavior in the file — `//! reject <substring>` to demand a diagnostic,
+or a `CHECK` from `check.vh` whose `ok=1` column is the assertion. There are no
+sidecar files.
+
+It replaced four runners (`conformance`, `exhaustive`, `sema`, `ledger`) that
+disagreed about what a fixture is and needed three sidecar formats between them.
+Three of the four could not answer the only question that matters — does the
+generated device compute the right number? — because they never ran it.
+
+**The want is a literal, and that is the whole design.** The old oracle was
+VerA's own recorded output, so a wrong answer once recorded stayed frozen as
+correct and a reviewer's only job was to accept a diff they had no way to check.
+Now a fixture asserts against a number a human derived from the LRM, and
+`torture.zig` refuses a want that is anything but a numeric literal — an
+expression would let VerA supply its own expectation. See
+`tests/fixtures/README.md`.
+
+A passing fixture is still not a claim that VerA is right where the fixture
+itself records debt: 60 rejections the LRM does not sanction open with a `DEBT`
+banner naming the rule they violate. They stay green on purpose — a suite exists
+to notice change, and a permanently-red fixture notices nothing.
+
+Known blocker: a module with no port list is legal per Annex A.1.2 and compiles,
+but `contract.validate` refuses the emitted device with `num_ports must be in
+1..|U|`, so ~29 fixtures cannot be run at all until that is fixed in the engine.

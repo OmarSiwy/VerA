@@ -1,0 +1,13 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-3.6.3.2-01  (ch3-datatypes.html)
+// The initializer shall be a constant_expression and will be used as a nodeset value for the potential of the net by the analog solver.
+//
+//! reject expected `;`
+// EXPECT: error
+module ch03_net_nodeset_rejected;
+    electrical node = 5.0;
+endmodule

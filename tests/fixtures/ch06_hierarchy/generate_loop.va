@@ -1,0 +1,18 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-6.6-01  (ch6-hierarchy.html)
+// Therefore, all expressions in generate schemes shall be constant expressions, deterministic at elaboration time.
+// VAMS-6.6.1-01  (ch6-hierarchy.html)
+// The loop index variable shall be declared in a genvar declaration prior to its use.
+//
+//! reject identifier
+module ch6_generate_loop(p);
+  inout p; electrical [0:2] p; genvar i;
+  generate
+    for (i = 0; i < 3; i = i + 1)
+      I(p[i]) <+ V(p[i]);
+  endgenerate
+endmodule

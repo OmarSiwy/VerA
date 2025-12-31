@@ -1,0 +1,12 @@
+// §3.6.1.2, units: "It is illegal for a derived nature to define or change the
+// units; the derived nature always inherits its parent nature units."
+//
+// `ch3_units_child : ch3_units_parent` redefines units from "V" to "A", which
+// is exactly the construct that sentence forbids. The parent carries all three
+// attributes §3.6.1.2 requires of a base nature, so the override is the only
+// defect in the file.
+//
+//! reject DiagnosticsReported
+nature ch3_units_parent; units="V"; access=UnitsV; abstol=1u; endnature
+nature ch3_units_child:ch3_units_parent; units="A"; endnature
+module ch3_bad_units; endmodule

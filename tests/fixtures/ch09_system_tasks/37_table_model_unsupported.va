@@ -1,0 +1,17 @@
+// DEBT — this rejection is NOT conformance.
+// The LRM permits what VerA refuses here. The substrings below record
+// CURRENT behavior so the suite stays green on it; they do not claim it
+// is right. `zig build ledger` counts this rule against VerA.
+//
+// VAMS-9.21-01  (ch9-system.html)
+// Within the data set, each point shall be distinct in terms of its independent variable values.
+// VAMS-9.21-02  (ch9-system.html)
+// If there are two or more data points with the same independent and dependent values, then the duplicates shall be ignored and the tool may generate a
+//
+//! reject E0801
+//! reject $table_model
+// EXPECT: error
+module ch09_table_model_unsupported(p, n);
+  inout p, n; electrical p, n;
+  analog I(p,n) <+ $table_model(V(p,n), "sample.dat", "1LL");
+endmodule

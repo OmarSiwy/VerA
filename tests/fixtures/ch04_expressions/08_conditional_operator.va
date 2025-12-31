@@ -1,0 +1,24 @@
+// LRM 4.2.12: "The conditional operator, also known as ternary operator, is
+// right associative". So the nest parses as
+//
+//   V(p,n) > 1.0 ? 10.0 : (V(p,n) < -1.0 ? -10.0 : 0.0)
+//
+// The bias of 2.0 is what makes that a RESTRICTING claim. At V(p,n) = 2.0 the
+// first condition is true, so the right-associative parse yields 10.0. A
+// left-associative parse, ((V>1.0 ? 10.0 : V<-1.0) ? -10.0 : 0.0), would take
+// the nonzero 10.0 as its condition and yield -10.0 instead. (At V(p,n) = -2.0
+// the two parses agree, which is why the bias is not negative.)
+//
+//! bias V(p) = 2.0
+`include "check.vh"
+module ch04_conditional_operator(p, n);
+    inout p, n;
+    electrical p, n;
+    real value;
+
+    analog begin
+        value = V(p, n) > 1.0 ? 10.0 : V(p, n) < -1.0 ? -10.0 : 0.0;
+        `CHECKX("nested ?: is right associative", value, 10.0);
+        I(p, n) <+ value;
+    end
+endmodule

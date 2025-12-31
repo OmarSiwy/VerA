@@ -1,0 +1,16 @@
+// §11.6.20 contrib: the right-hand side of `<+` is an ordinary expression, and
+// its `1k` operand is a real constant in scaled notation — Table 2-1 of §2.6.2
+// makes the symbol k exactly 1e3, so `1k` is 1000.0 and not 1.0 with a stray
+// identifier. At V(p)=1.5, V(n)=0.25 the branch potential is 1.25 V, so the
+// contributed flow is 1.25/1000 = 1.25 mA.
+//
+//! bias V(p) = 1.5, V(n) = 0.25
+`include "check.vh"
+module ch11_contribution_object(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    `CHECKX("the k scale factor is 1e3 (Table 2-1)", 1k, 1000.0);
+    `CHECK("the contributed flow", V(p,n) / 1k, 1.25e-3, 1e-18);
+    I(p,n) <+ V(p,n) / 1k;
+  end
+endmodule

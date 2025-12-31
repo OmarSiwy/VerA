@@ -1,0 +1,25 @@
+// §9.5.5: `pos = $ftell(fd)` "returns in pos the offset from the beginning of
+// the file of the current byte of the file fd", and "if an error occurs, EOF is
+// returned" — EOF being -1 (IEEE 1364 §17.2, which §9.5 carries in).
+//
+// Nothing has been read yet, so a SUCCESSFUL open leaves the offset on the first
+// byte: 0. A FAILED open gives fd zero (§9.5.1: "if a file cannot be opened …
+// a zero is returned for the mcd or fd") and the $ftell on it errors: -1.
+//
+// Which of the two applies depends on whether `fixture.dat` exists in the
+// working directory — this fixture never creates it, but a sibling that opens
+// the same name for append would. So the assertion is the part that holds EITHER
+// WAY, and that is still the whole of what §9.5.5 permits $ftell to return here:
+// those two values and nothing else. A descriptor value, a file size, or a
+// positive error sentinel all fail it.
+`include "check.vh"
+module ch09_atomic_ftell(p, n);
+  inout p, n; electrical p, n;
+  integer fd, position;
+  analog begin
+    fd = $fopen("fixture.dat", "r");
+    position = $ftell(fd);
+    `CHECKI("$ftell before any read is 0, or EOF -1 if the open failed", (position == 0) || (position == -1), 1);
+    I(p,n) <+ V(p,n) + position;
+  end
+endmodule

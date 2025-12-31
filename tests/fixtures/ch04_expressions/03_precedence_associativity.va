@@ -1,0 +1,25 @@
+// LRM 4.2.9 Table 4-4: `/` binds tighter than binary `+`/`-`, and operators of
+// equal precedence associate LEFT to right. Parentheses override both.
+//
+// With a=12, b=6, c=3 the one expression exercises all three:
+//   a + b / c   -> 12 + 2   (not (12+6)/3 = 6)
+//   (a + b) / c -> 18 / 3 = 6
+//   ... + a - b - c -> ((...+12) - 6) - 3
+// value = 12 + 2 + 6 + 12 - 6 - 3 = 23, exact in IEEE 754 (every term is an
+// integer-valued dyadic rational). A right-associative +/- chain would give 29.
+`include "check.vh"
+module ch04_precedence_associativity(p, n);
+    inout p, n;
+    electrical p, n;
+    real a, b, c, value;
+
+    analog begin
+        a = 12.0;
+        b = 6.0;
+        c = 3.0;
+        value = a + b / c + (a + b) / c + a - b - c;
+        `CHECKX("subtraction is left associative", a - b - c, 3.0);
+        `CHECKX("precedence and associativity total", value, 23.0);
+        I(p, n) <+ value;
+    end
+endmodule
