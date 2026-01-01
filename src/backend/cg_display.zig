@@ -110,6 +110,48 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
     try g.b("}}); break :zd S.con(0.0); }}", .{});
 }
 
+/// §9.5.3 `$swrite`/`$sformat` — "the same as their counterparts", §9.4.1's
+/// writers, "except that ... the resulting string shall be written" to a string
+/// variable. So the format translation is `emitDisplayTask`'s, verbatim: the
+/// operands, the conversions, the pairing rule and the "no format string at all"
+/// fallback are all the same clause. The only differences are the SINK
+/// (`bufPrint` into this call site's scratch row instead of `std.debug.print`)
+/// and the newline, which §9.4.1 gives to `$display` and not to the writers.
+///
+/// The value of the emitted block is the formatted slice, which lowering
+/// assigns to the string variable the source named.
+pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
+    var fmt_at: ?usize = null;
+    for (args, 0..) |_, i| {
+        if (g.strArg(args, i) != null) {
+            fmt_at = i;
+            break;
+        }
+    }
+    var fmt: std.ArrayList(u8) = .empty;
+    var ops: std.ArrayList(PrintArg) = .empty;
+    if (fmt_at) |at| {
+        try translateFormat(g, g.strArg(args, at).?, args[at + 1 ..], &fmt, &ops);
+    } else {
+        for (args, 0..) |a, i| {
+            if (i != 0) try fmt.append(g.arena, ' ');
+            try appendConv(g, &fmt, &ops, a, 0, "");
+        }
+    }
+    try g.b("zs: {{ ", .{});
+    for (ops.items, 0..) |p, i| {
+        if (p.pad) try g.b("var zb{d}: [24]u8 = undefined; ", .{i});
+    }
+    // An overrun formats to the empty string: §9.5.3 states no truncation rule,
+    // and half a number is a worse answer than none. See `zSBuf`'s size note.
+    try g.b("break :zs std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
+    for (ops.items, 0..) |p, i| {
+        if (i != 0) try g.b(", ", .{});
+        try renderPrintArg(g, p, i);
+    }
+    try g.b("}}) catch \"\"; }}", .{});
+}
+
 /// §9.7.3 severity tasks. Null for the §9.4.1 display family.
 pub fn severityWord(name: []const u8) ?[]const u8 {
     const eq = std.mem.eql;

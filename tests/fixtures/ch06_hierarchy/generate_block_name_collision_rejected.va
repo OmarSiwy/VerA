@@ -17,13 +17,14 @@
 // what "even if not selected for instantiation" forbids. The name is declared by
 // the TEXT of the construct, before any condition is evaluated.
 //
-// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to
-// name. `DiagnosticsReported` is the weakest form that still demands a
-// rejection; tighten it to the E-code the day one exists.
+// E0230 is that rule. Nothing in the check consults either condition, which is
+// what "even if not selected" demands; what separates the two constructs from one
+// is an identity stamped on the OUTERMOST enclosing construct, so the permitted
+// case (two arms of one `if`, including an `else if` chain) shares it and these
+// two do not.
 //
 //! lrm 6.6.2
-//! reject DiagnosticsReported
-//! xfail VerA does not register a conditional generate block's name in the enclosing scope, so two `begin : b` blocks in two separate if-generate constructs coexist silently
+//! reject E0230
 module ch6_generate_block_name_collision(p);
   inout p; electrical p;
   generate

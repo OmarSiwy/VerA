@@ -23,7 +23,6 @@
 // that rule is a separate fixture, event_contribution_rejected.va.
 //
 //! lrm 5.10.4
-//! xfail VerA does not implement named events: `event tick;` is refused at E0203 and `@(tick)` at E0705
 `include "check.vh"
 module ch5_named_event(p);
   inout p; electrical p; real seen;

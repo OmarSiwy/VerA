@@ -551,6 +551,12 @@ pub const FuncArg = struct {
     name: StrId,
     ty: Type,
     direction: Direction, // §4.7.2.3 — `.input` unless declared otherwise
+    /// §4.7.2.3/§4.7.2.4 an ARRAY formal, `output [0:1] out;`. A.2.6 spells the
+    /// range on the direction declaration (`input_declaration ::= input [ range ]
+    /// list_of_identifiers`), and §4.7.1's Example 3 writes it on the matching
+    /// block item declaration too (`real a[0:1], b[0:1];`) — either fills this,
+    /// and `parseFuncDecl` merges them.
+    dims: []const Dim = &.{},
     /// The identifier token, so §4.7.1's "all formal arguments shall have an
     /// associated block item declaration" (E0225) can point at the formal that
     /// never got one. The verdict is only reachable once the whole item list
@@ -597,9 +603,24 @@ pub const ModuleDecl = struct {
     nets: []const NetDecl = &.{}, // §3.6.3
     branches: []const BranchDecl = &.{}, // §3.12
     genvars: []const StrId = &.{}, // §3.5 (unrolling evidence, §6.6.1)
+    /// §5.10.4 named events (A.2.1.3 event_declaration). Names only: an event
+    /// carries no value, only a per-timepoint triggered/not flag, which lowering
+    /// materializes as an ordinary integer slot in the §2.8 declaration space.
+    events: []const StrId = &.{},
     functions: []const FuncDecl = &.{}, // §4.7.1
     /// §5.2 analog blocks in source order.
     analog: []const AnalogBlock = &.{},
+    /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
+    /// attached to the item each decorated, because both rules the LRM states
+    /// about an attribute — §2.9's "constant_expression" and §2.9.2's value
+    /// domains — are properties of the attribute ALONE, and nothing downstream
+    /// reads an attribute's value.
+    ///
+    /// `NatureAttr` is the shape because A.9.1 `attr_spec ::= attr_name [ =
+    /// constant_expression ]` and A.1.6 `nature_attribute ::= identifier =
+    /// nature_attribute_expression` are the same (name, value, token) triple —
+    /// `skipAttributes` said so before this field existed.
+    attrs: []const NatureAttr = &.{},
     main_tok: u32 = 0,
 };
 
@@ -699,9 +720,27 @@ pub const Stmt = union(enum) {
     indirect: struct { lhs: ExprId, probe: ExprId, eqn: ExprId },
     /// §5.8 conditional. `else_s` is `.none` when absent; `else if` chains
     /// nest in `else_s`.
-    if_stmt: struct { cond: ExprId, then_s: StmtId, else_s: StmtId },
-    /// §5.8.3 case (A.6.7). An arm with `labels.len == 0` is `default`.
-    case_stmt: struct { kind: CaseKind = .normal, scrutinee: ExprId, arms: []const CaseArm },
+    if_stmt: struct {
+        cond: ExprId,
+        then_s: StmtId,
+        else_s: StmtId,
+        /// Syntax 6-8 `if_generate_construct` rather than A.6.6's
+        /// `analog_conditional_statement`. The two are one node because the
+        /// SEMANTICS are one — §6.6.2 selects an alternative, §5.8 executes one
+        /// — and lowering already collapses a constant condition either way.
+        /// What only the generate form carries is §6.6's "all expressions in
+        /// generate schemes shall be constant expressions, deterministic at
+        /// elaboration time", which is E0428.
+        is_generate: bool = false,
+    },
+    /// §5.8.3 case (A.6.7), and Syntax 6-8 `case_generate_construct` when
+    /// `is_generate`. An arm with `labels.len == 0` is `default`.
+    case_stmt: struct {
+        kind: CaseKind = .normal,
+        scrutinee: ExprId,
+        arms: []const CaseArm,
+        is_generate: bool = false,
+    },
     /// §5.9.2 `for (init; cond; step) body`. Also carries the genvar
     /// loop-generate form (A.4.2) — lowering decides whether to unroll by
     /// looking the loop variable up in `ModuleDecl.genvars` (§6.6.1).
@@ -713,6 +752,10 @@ pub const Stmt = union(enum) {
     /// §5.10 `@(event) body` (A.6.5 analog_event_control_statement). `event` is
     /// one of the `event_*` expression tags, or an `.ident` naming an event.
     event_control: struct { event: ExprId, body: StmtId },
+    /// §5.10.4 `-> event;` (A.6.5 `event_trigger`). `name` is a
+    /// `hierarchical_event_identifier`, so only its last (and, in a flat
+    /// elaboration, only) component is kept.
+    event_trigger: struct { name: StrId },
     /// §5.11 `disable <block>;` (A.6.5 disable_statement).
     disable: struct { name: StrId },
     /// §5.12 / ch9 analog system task: `$strobe`, `$finish`, `$error`,

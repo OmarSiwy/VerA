@@ -58,6 +58,27 @@ pub const Parser = struct {
     /// for module scope, so the position is the only thing that tells them
     /// apart. See `parseFuncDecl`, E0226 and E0227.
     in_analog_fn: bool = false,
+    /// §6.6 nesting depth of generate REGIONS and generate CONSTRUCT bodies,
+    /// counted together because the two grammar gates it feeds care about the
+    /// same thing — being anywhere below a `generate`. Syntax 6-8's
+    /// `module_or_generate_item` has neither `generate_region` (§6.6: "Generate
+    /// regions do not nest, and they may only occur directly within a module")
+    /// nor `parameter_declaration` (§6.6: a generate block "may not contain
+    /// port declarations, parameter declarations, specify blocks, or specparam
+    /// declarations"), so `> 0` refuses both: E0228 and E0229.
+    gen_depth: u32 = 0,
+    /// How many generate CONSTRUCTS (loop/if/case, not regions) enclose the
+    /// cursor, and an identity for the outermost one. Together they are the
+    /// §6.6.2 name space key — see `checkGenBlockNames`.
+    gen_construct_depth: u32 = 0,
+    gen_construct: u32 = 0,
+    /// §2.9 every `attr_spec` of the module being parsed, flattened. Moved into
+    /// the `ModuleDecl` at `endmodule` and cleared — see `parseAttributes`.
+    attrs: std.ArrayList(Ast.NatureAttr) = .empty,
+    /// Are we inside an attribute VALUE? §2.9's nesting ban is the only rule
+    /// that needs to know, and it needs no more than a flag; `u32` because the
+    /// counter is bumped before the check that would refuse the second one.
+    attr_depth: u32 = 0,
 
     pub fn init(
         arena: std.mem.Allocator,
@@ -133,9 +154,37 @@ pub const Parser = struct {
                     };
                     try natures.append(self.arena, n);
                 },
+                // §6.4 / Syntax 6-4 `paramset`. Read past and dropped, NOT
+                // refused: annex C.8 keeps clause 6 in Verilog-A except for real
+                // valued ports, so a compilation unit may not be rejected for
+                // containing a paramset — and this one does not change a single
+                // number in the module beside it. A paramset only takes effect
+                // through an INSTANCE that names it (§6.4: "a paramset can be
+                // instantiated exactly like a module"), and VerA compiles one
+                // flat module with no instance hierarchy (E0204), so there is
+                // nothing here to select and no override to bind.
+                //
+                // ponytail: a token skip, not a parse. The body is
+                // `paramset_item_declaration`s and `paramset_statement`s whose
+                // only consumer is that instantiation; parsing them into an AST
+                // nothing reads would be scaffolding for a pass that does not
+                // exist. The day §6.4 instantiation lands, this arm is where its
+                // real parser goes — and until then §6.4's own restrictions (no
+                // behavioral code, `.name` overrides only) are unchecked, which
+                // is why the skip is silent rather than a claim of conformance.
+                .kw_paramset => {
+                    while (true) : (self.pos += 1) switch (self.peek()) {
+                        .eof => break,
+                        .kw_endparamset => {
+                            self.pos += 1;
+                            break;
+                        },
+                        else => {},
+                    };
+                },
                 else => {
-                    // §6.4 paramsets, UDPs, config/library files and
-                    // connectrules are all out of the annex C subset.
+                    // UDPs, config/library files and connectrules are all out of
+                    // the annex C subset.
                     _ = self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)}) catch {};
                     self.recoverTopLevel(before);
                 },
@@ -238,6 +287,9 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
         try self.parseModuleItems(&b, .kw_endmodule);
         _ = try self.expect(.kw_endmodule);
+        try self.checkGenBlockNames(&b);
+        const attrs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items);
+        self.attrs.clearRetainingCapacity();
 
         return .{
             .name = name,
@@ -249,8 +301,14 @@ pub const Parser = struct {
             .nets = b.nets.items,
             .branches = b.branches.items,
             .genvars = b.genvars.items,
+            .events = b.events.items,
             .functions = b.functions.items,
             .analog = b.analog.items,
+            // §2.9 — every attr_spec seen since the last module. Attributes
+            // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
+            // collected by `parseSource` and belong to this module too, which is
+            // why the list is cleared at the end and not at the start.
+            .attrs = attrs,
         };
     }
 
@@ -264,8 +322,27 @@ pub const Parser = struct {
         nets: std.ArrayList(Ast.NetDecl) = .empty,
         branches: std.ArrayList(Ast.BranchDecl) = .empty,
         genvars: std.ArrayList(Ast.StrId) = .empty,
+        events: std.ArrayList(Ast.StrId) = .empty, // §5.10.4
         functions: std.ArrayList(Ast.FuncDecl) = .empty,
         analog: std.ArrayList(Ast.AnalogBlock) = .empty,
+        /// §6.6.1/§6.6.2 every named generate block of the module, with the
+        /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
+        /// is a declaration of a scope nothing downstream can reach yet
+        /// (§6.6.3 hierarchical names are unimplemented), so its only consumer
+        /// is `checkGenBlockNames`.
+        gen_blocks: std.ArrayList(GenBlock) = .empty,
+    };
+
+    /// One `begin : name` produced by the `generate_block` production — which
+    /// is the only production whose name is a DECLARATION rather than a §5.3.2
+    /// statement label, and the reason this is collected in the parser: no later
+    /// stage can tell the two `begin`s apart.
+    const GenBlock = struct {
+        name: Ast.StrId,
+        tok: u32,
+        /// `Parser.gen_construct` at the time — the OUTERMOST enclosing
+        /// construct, so two arms of one `if`/`case` share it.
+        construct: u32,
     };
 
     /// A.1.3 list_of_ports / list_of_port_declarations (§6.5). Both styles fall
@@ -406,12 +483,31 @@ pub const Parser = struct {
             // and `analog` is not the start of any analog statement.
             .kw_for => try self.parseLoopGenerate(b),
             .kw_if => try self.parseIfGenerate(b),
+            // Syntax 6-8 case_generate_construct. Gated on being inside a
+            // generate region or block because `case` is ALSO A.6.7's statement
+            // keyword, and at module scope with no generate above it there is no
+            // production for either — that stays E0205, which a dozen fixtures
+            // pin together with the word `case`.
+            .kw_case => if (self.gen_depth > 0)
+                try self.parseCaseGenerate(b)
+            else
+                return self.unsupportedItem(),
             // Not an item: a generate_block is only ever the body of the two
             // above (E0221). Kept as its own arm so the diagnostic can cite
             // Syntax 6-8 rather than blaming the analog subset.
             .kw_begin => return self.failAt(self.pos, .E0221, "", .{}),
             // §3.4 parameter / localparam (A.2.1.1)
             .kw_parameter, .kw_localparam => {
+                // §6.6: a generate block "MAY NOT CONTAIN port declarations,
+                // PARAMETER DECLARATIONS, specify blocks, or specparam
+                // declarations", and Syntax 6-8 says it again by omission —
+                // `module_or_generate_item` admits `local_parameter_declaration`
+                // and no `parameter_declaration`. `localparam` is therefore
+                // deliberately NOT gated: it is the form the grammar keeps,
+                // because it carries no override for the elaborator to need
+                // before it exists (§6.3).
+                if (self.gen_depth > 0 and self.peek() == .kw_parameter)
+                    return self.failAt(self.pos, .E0229, "", .{});
                 try self.parseParamDecl(&b.params);
                 _ = try self.expect(.semicolon);
             },
@@ -438,14 +534,19 @@ pub const Parser = struct {
                 }
                 _ = try self.expect(.semicolon);
             },
-            // A.2.1.3 event_declaration (§5.10.4). Named events ARE part of the
-            // Verilog-A subset — §5.10 lists them as one of the three kinds of
-            // ANALOG event and §5.10.4's own example triggers and detects one
-            // entirely inside an `analog` block; annex C.7 excludes only DIGITAL
-            // behavior and events. VerA does not implement them yet, and says
-            // so here rather than accepting the declaration and turning `@(ev)`
-            // into a guard that is silently never true.
-            .kw_event => return self.failAt(self.pos, .E0203, "", .{}),
+            // A.2.1.3 `event_declaration ::= event list_of_event_identifiers ;`
+            // (§5.10.4). Named events ARE part of the Verilog-A subset — §5.10
+            // lists them as one of the three kinds of ANALOG event and §5.10.4's
+            // own example triggers and detects one entirely inside an `analog`
+            // block; annex C.7 excludes only DIGITAL behavior and events.
+            .kw_event => {
+                self.pos += 1;
+                while (true) {
+                    try b.events.append(self.arena, try self.expectIdent());
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
+            },
             // §3.12 branch declaration (A.2.1.3)
             .kw_branch => try self.parseBranchDecl(b),
             // §3.6.4 ground declaration (A.2.1.3 net_declaration)
@@ -498,10 +599,23 @@ pub const Parser = struct {
             .kw_analog => try self.parseAnalog(b),
             // A.4.2 generate_region — transparent, per §6.6's "there is no
             // semantic difference": the items inside are plain module items and
-            // the region introduces no scope. `case` here is still
-            // case_generate, which is not implemented, and lands on E0205.
+            // the region introduces no scope. What it is NOT is re-enterable:
+            // §6.6 "Generate regions do not nest, and they may only occur
+            // directly within a module", and A.4.2 backs both halves by making
+            // `generate_region` a `module_item` that `module_or_generate_item`
+            // does not list. `gen_depth` is that sentence — it counts construct
+            // bodies too, so a `generate` inside an if-generate's block is
+            // refused by the same test as a `generate` inside a `generate`.
             .kw_generate => {
+                // Reported and then parsed ANYWAY, transparently: §6.6 gives a
+                // region no scope and "no semantic difference", so reading the
+                // inner one as if the keywords were absent is exact recovery —
+                // bailing here instead left the stray `endgenerate` to arrive as
+                // a second, meaningless E0205.
+                if (self.gen_depth > 0) _ = self.failAt(self.pos, .E0228, "", .{}) catch {};
                 self.pos += 1;
+                self.gen_depth += 1;
+                defer self.gen_depth -= 1;
                 try self.parseModuleItems(b, .kw_endgenerate);
                 _ = try self.expect(.kw_endgenerate);
             },
@@ -554,6 +668,27 @@ pub const Parser = struct {
     // occupies exactly the slot it would have occupied written out by hand.
     // -----------------------------------------------------------------------
 
+    /// Enter/leave one generate CONSTRUCT. `gen_construct` is bumped only on the
+    /// outermost one, and that is what makes §6.6.2's two naming rules one test:
+    /// "it is permissible for more than one block within a single conditional
+    /// generate construct to have the same name (since at most one is
+    /// instantiated)" — those arms share the id — while "named generate blocks
+    /// may not have the same name as blocks in any other generate construct in
+    /// the same scope" gets a different one. §6.6.2's direct-nesting exception
+    /// falls out too: an `else if` chain is an if_generate_construct nested in
+    /// the outer construct's block, so it inherits the id rather than starting
+    /// a new one.
+    fn enterConstruct(self: *Parser) void {
+        if (self.gen_construct_depth == 0) self.gen_construct += 1;
+        self.gen_construct_depth += 1;
+        self.gen_depth += 1;
+    }
+
+    fn leaveConstruct(self: *Parser) void {
+        self.gen_construct_depth -= 1;
+        self.gen_depth -= 1;
+    }
+
     /// Syntax 6-8 `loop_generate_construct ::= for ( genvar_initialization ;
     /// genvar_expression ; genvar_iteration ) generate_block`.
     ///
@@ -561,8 +696,12 @@ pub const Parser = struct {
     /// carries them: lowering tells the two apart by looking the loop variable
     /// up in `ModuleDecl.genvars` (§3.5), not by which parser produced it. That
     /// is also why the non-constant scheme diagnostics (E0417 init, E0418
-    /// condition, E0419 iteration, E0420 non-terminating) need nothing here.
+    /// condition, E0419 iteration, E0420 non-terminating) need nothing here —
+    /// and why the §6.6 scheme rule the if/case forms carry (E0428) does not
+    /// apply to this node: for a `for` it is those four codes instead.
     fn parseLoopGenerate(self: *Parser, b: *Body) Error!void {
+        self.enterConstruct();
+        defer self.leaveConstruct();
         const tok = self.pos;
         self.pos += 1; // 'for'
         _ = try self.expect(.lparen);
@@ -589,6 +728,8 @@ pub const Parser = struct {
     /// module_or_generate_item, so the chain is a one-item generate_block in
     /// the `else`, which `parseGenerateBlock` reaches through `parseModuleItem`.
     fn parseIfGenerate(self: *Parser, b: *Body) Error!void {
+        self.enterConstruct();
+        defer self.leaveConstruct();
         const tok = self.pos;
         self.pos += 1; // 'if'
         _ = try self.expect(.lparen);
@@ -600,9 +741,32 @@ pub const Parser = struct {
         else
             .none;
         const s = try self.addStmt(
-            .{ .if_stmt = .{ .cond = cond, .then_s = then_s, .else_s = else_s } },
+            .{ .if_stmt = .{
+                .cond = cond,
+                .then_s = then_s,
+                .else_s = else_s,
+                // §6.6's "all expressions in generate schemes shall be constant
+                // expressions" is judged in lowering (E0428), which is the only
+                // stage that can evaluate one.
+                .is_generate = true,
+            } },
             tok,
         );
+        try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
+    }
+
+    /// Syntax 6-8 `case_generate_construct ::= case ( constant_expression )
+    /// case_generate_item { case_generate_item } endcase`.
+    ///
+    /// The arms are `generate_block_or_null`, which is the only thing separating
+    /// this from A.6.7's `case_statement` — so `parseCase` parses both and takes
+    /// the module `Body` the generate blocks hoist their declarations into as the
+    /// switch between them.
+    fn parseCaseGenerate(self: *Parser, b: *Body) Error!void {
+        self.enterConstruct();
+        defer self.leaveConstruct();
+        const tok = self.pos;
+        const s = try self.parseCase(.normal, b);
         try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
     }
 
@@ -632,7 +796,20 @@ pub const Parser = struct {
         var blk: Ast.SeqBlock = .{};
         var gb: Body = .{};
         if (self.eat(.kw_begin)) {
-            if (self.eat(.colon)) blk.name = try self.expectIdent();
+            if (self.eat(.colon)) {
+                const name_tok = self.pos;
+                blk.name = try self.expectIdent();
+                // §6.6.1: "If the generate block is named, IT IS A DECLARATION
+                // OF AN ARRAY of generate block instances"; §6.6.2: "its name
+                // declares a generate block instance and is the name for the
+                // scope it creates". Either way the identifier lands in the
+                // ENCLOSING scope, and `checkGenBlockNames` is what enforces it.
+                try b.gen_blocks.append(self.arena, .{
+                    .name = blk.name,
+                    .tok = name_tok,
+                    .construct = self.gen_construct,
+                });
+            }
             while (self.peek() != .kw_end and self.peek() != .eof) {
                 self.skipAttributes();
                 if (self.peek() == .kw_end) break;
@@ -666,7 +843,81 @@ pub const Parser = struct {
         try b.branches.appendSlice(self.arena, gb.branches.items);
         try b.genvars.appendSlice(self.arena, gb.genvars.items);
         try b.functions.appendSlice(self.arena, gb.functions.items);
+        // A nested generate construct's block names are declarations of the
+        // scope they sit in and this one is not it — §6.6.2's rule is about "the
+        // same scope", and VerA has no generate scope to hold them, so they ride
+        // up to the module with the nets. That is what makes the §6.6.2
+        // direct-nesting permission work: `construct` already says which
+        // construct each came from.
+        try b.gen_blocks.appendSlice(self.arena, gb.gen_blocks.items);
         return self.addStmt(.{ .block = blk }, tok);
+    }
+
+    /// §6.6.1/§6.6.2/§6.8: a named generate block's name is a DECLARATION in
+    /// the enclosing scope — "it shall be an error if the name of a generate
+    /// block instance array conflicts with any other declaration, including any
+    /// other generate block instance array" (§6.6.1), "named generate blocks may
+    /// not have the same name as any other declaration in the same scope … or as
+    /// blocks in any other generate construct in the same scope, EVEN IF NOT
+    /// SELECTED FOR INSTANTIATION" (§6.6.2). §6.8 states the general rule and
+    /// adds that it applies "regardless of whether the generate block is
+    /// instantiated", which is why nothing here consults the scheme.
+    ///
+    /// Run once at the end of the module, not at the `begin : name` itself: a
+    /// declaration may follow the generate construct in the text, and the clause
+    /// is about one SCOPE, not about source order.
+    ///
+    /// Diagnosed and carried on (`catch {}`, like the E0222 width check) so that
+    /// a second, unrelated mistake in the same module is still reported;
+    /// `self.failed` is what refuses the file.
+    ///
+    /// ponytail: two named blocks collide only across different OUTERMOST
+    /// constructs. §6.6.2 permits arms of one conditional construct to share a
+    /// name and extends that through direct nesting, and `gen_construct` keys on
+    /// the root of the nest — so a loop generate nested inside one arm is let off
+    /// as well, which the clause does not license. Key on the construct itself
+    /// rather than its root the day a fixture asks; that needs generate blocks to
+    /// be real scope objects, which is also what §6.6.3 hierarchical names want.
+    fn checkGenBlockNames(self: *Parser, b: *Body) Error!void {
+        for (b.gen_blocks.items, 0..) |g, i| {
+            // Every ordinary declaration space of the module. A port is listed
+            // as well as a net: §6.5's header names are declarations too.
+            const clash = self.nameIn(Ast.Port, b.ports.items, g.name) or
+                self.nameIn(Ast.ParamDecl, b.params.items, g.name) or
+                self.nameIn(Ast.VarDecl, b.vars.items, g.name) or
+                self.nameIn(Ast.NetDecl, b.nets.items, g.name) or
+                self.nameIn(Ast.BranchDecl, b.branches.items, g.name) or
+                self.nameIn(Ast.FuncDecl, b.functions.items, g.name) or
+                containsStr(b.genvars.items, g.name) or
+                alias: {
+                    // §3.4.6 an aliasparam's own identifier is a declaration.
+                    for (b.aliasparams.items) |a| if (a.alias == g.name) break :alias true;
+                    break :alias false;
+                } or
+                other: {
+                    for (b.gen_blocks.items[0..i]) |h| {
+                        if (h.name == g.name and h.construct != g.construct) break :other true;
+                    }
+                    break :other false;
+                };
+            if (clash) _ = self.failAt(g.tok, .E0230, "`{s}`", .{
+                self.file.strings.get(g.name),
+            }) catch {};
+        }
+    }
+
+    /// Is `name` the name of one of `decls`? One helper for eight declaration
+    /// slices, which all carry a `.name: StrId` — and a StrId comparison is a
+    /// name comparison because §2.8 identifiers are interned.
+    fn nameIn(self: *const Parser, comptime T: type, decls: []const T, name: Ast.StrId) bool {
+        _ = self;
+        for (decls) |d| if (d.name == name) return true;
+        return false;
+    }
+
+    fn containsStr(names: []const Ast.StrId, name: Ast.StrId) bool {
+        for (names) |n| if (n == name) return true;
+        return false;
     }
 
     /// §6.5.2 body port declaration: it re-declares a header port's direction
@@ -818,13 +1069,7 @@ pub const Parser = struct {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
-            var dims: []const Ast.Dim = &.{};
-            if (self.peek() == .lbracket) {
-                const d = try self.parseDim();
-                const one = try self.arena.alloc(Ast.Dim, 1);
-                one[0] = d;
-                dims = one;
-            }
+            const dims = try self.parseDims();
             _ = try self.expect(.assign_eq);
             const default = try self.parseExpr();
 
@@ -933,13 +1178,7 @@ pub const Parser = struct {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
-            var dims: []const Ast.Dim = &.{};
-            if (self.peek() == .lbracket) {
-                const d = try self.parseDim();
-                const one = try self.arena.alloc(Ast.Dim, 1);
-                one[0] = d;
-                dims = one;
-            }
+            const dims = try self.parseDims();
             var init_expr: Ast.ExprId = .none;
             if (self.eat(.assign_eq)) init_expr = try self.parseExpr();
             try out.append(self.arena, .{
@@ -964,6 +1203,24 @@ pub const Parser = struct {
         const ex = &self.file.exprs;
         if (ex.tag(d.msb) != .int_literal or ex.tag(d.lsb) != .int_literal) return null;
         return @abs(ex.intValue(d.msb) - ex.intValue(d.lsb)) + 1;
+    }
+
+    /// A.2.2.1 `variable_type ::= identifier { dimension } …` and A.2.1.1's
+    /// `parameter_identifier { dimension }` — the braces are the LRM's, so the
+    /// list is a LOOP. §3.2 prints both shapes it admits:
+    ///
+    ///     integer flag_array[0:8][0:3];         // a multidimensional array
+    ///     real vtable[0:16][0:7][0:64];         // three dimensions
+    ///
+    /// One dimension used to be the whole of it, which made the second `[` an
+    /// E0207 "expected `;`" — a syntax verdict on a declaration A.2.2.1 spells
+    /// out. Lowering scalarizes whatever arrives here (see `dimsBounds`).
+    fn parseDims(self: *Parser) Error![]const Ast.Dim {
+        if (self.peek() != .lbracket) return &.{};
+        var dims: std.ArrayList(Ast.Dim) = .empty;
+        while (self.peek() == .lbracket)
+            try dims.append(self.arena, try self.parseDim());
+        return dims.items;
     }
 
     /// A.2.5 `dimension ::= [ expr : expr ]` (§3.2.2, §3.4.4).
@@ -1040,12 +1297,18 @@ pub const Parser = struct {
                         else => .unspecified,
                     };
                     if (ty != .unspecified) self.pos += 1 else _ = try self.optDiscipline();
+                    // A.2.6 `input_declaration ::= input [ range ] list_of_ports`
+                    // — one range, BEFORE the names, shared by all of them.
+                    // §4.7.2.3's own example is `output [0:1] out;` and §4.7.1's
+                    // Example 3 is `inout [0:1]a;`.
+                    const dims = try self.parseDims();
                     while (true) {
                         const at = self.pos;
                         try args.append(self.arena, .{
                             .name = try self.expectIdent(),
                             .ty = ty,
                             .direction = dir,
+                            .dims = dims,
                             .main_tok = at,
                         });
                         if (!self.eat(.comma)) break;
@@ -1060,13 +1323,18 @@ pub const Parser = struct {
                     const first = vars.items.len;
                     try self.parseVarDecl(&vars);
                     _ = try self.expect(.semicolon);
-                    // A variable that re-declares an argument only types it.
+                    // A variable that re-declares an argument only types it —
+                    // and, per §4.7.1 Example 3 (`inout [0:1]a; real a[0:1];`),
+                    // may be where the SHAPE is written instead of on the
+                    // direction. Whichever carries it wins; they agree in every
+                    // example the LRM prints.
                     var i = vars.items.len;
                     while (i > first) {
                         i -= 1;
                         for (args.items) |*a| {
                             if (a.name != vars.items[i].name) continue;
                             if (a.ty == .unspecified) a.ty = vars.items[i].ty;
+                            if (a.dims.len == 0) a.dims = vars.items[i].dims;
                             _ = vars.orderedRemove(i);
                             break;
                         }
@@ -1263,7 +1531,7 @@ pub const Parser = struct {
     }
 
     /// One analog statement (A.6.4). Digital `initial`/`always`, `fork`/`join`,
-    /// `->`, `wait` and the procedural continuous assignments are NOT dispatched
+    /// `wait` and the procedural continuous assignments are NOT dispatched
     /// here: they fall through to the expression statement and report "expected
     /// expression", which is the annex C answer — they are not analog
     /// statements. `casex`/`casez` ARE dispatched, to `parseCase`, so annex
@@ -1294,9 +1562,9 @@ pub const Parser = struct {
             },
             // §5.8.3 / A.6.7. `casex`/`casez` share the production and are
             // refused in lowering by E0416, the code annex C.7 owns.
-            .kw_case => return self.parseCase(.normal),
-            .kw_casex => return self.parseCase(.casex),
-            .kw_casez => return self.parseCase(.casez),
+            .kw_case => return self.parseCase(.normal, null),
+            .kw_casex => return self.parseCase(.casex, null),
+            .kw_casez => return self.parseCase(.casez, null),
             .kw_for => { // §5.9.2 / A.6.8 (also A.4.2 loop generate)
                 self.pos += 1;
                 _ = try self.expect(.lparen);
@@ -1331,6 +1599,16 @@ pub const Parser = struct {
                 return self.addStmt(.{ .repeat_stmt = .{ .count = count, .body = body } }, tok);
             },
             .at => return self.parseEventControl(), // §5.10 / A.6.5
+            // A.6.5 `event_trigger ::= -> hierarchical_event_identifier
+            // { [ expression ] } ;` (§5.10.4). The bracketed expressions index
+            // an event ARRAY, which A.2.1.3's `list_of_event_identifiers` cannot
+            // declare in this subset, so only the scalar form is parsed.
+            .arrow => {
+                self.pos += 1;
+                const name = try self.expectIdent();
+                _ = try self.expect(.semicolon);
+                return self.addStmt(.{ .event_trigger = .{ .name = name } }, tok);
+            },
             .kw_disable => { // §5.11
                 self.pos += 1;
                 const name = try self.expectIdent();
@@ -1433,7 +1711,11 @@ pub const Parser = struct {
     /// §5.8.3 / A.6.7 analog_case_statement. `casex`/`casez` are out of the
     /// analog subset (annex C.7); they parse here and `lowerCase` refuses the
     /// kind, so the diagnostic names the rule instead of the grammar.
-    fn parseCase(self: *Parser, kind: Ast.CaseKind) Error!Ast.StmtId {
+    /// A.6.7 `case_statement`, and — when `gen` is non-null — Syntax 6-8's
+    /// `case_generate_construct`. The two productions differ in exactly one
+    /// place, what an arm body is: an `analog_statement_or_null` there, a
+    /// `generate_block_or_null` here.
+    fn parseCase(self: *Parser, kind: Ast.CaseKind, gen: ?*Body) Error!Ast.StmtId {
         const tok = self.pos;
         self.pos += 1; // 'case' / 'casex' / 'casez'
         _ = try self.expect(.lparen);
@@ -1453,12 +1735,17 @@ pub const Parser = struct {
                 }
                 _ = try self.expect(.colon);
             }
-            const body = try self.parseStmt();
+            const body = if (gen) |b| try self.parseGenerateBlock(b) else try self.parseStmt();
             try arms.append(self.arena, .{ .labels = labels.items, .body = body });
         }
         _ = try self.expect(.kw_endcase);
         return self.addStmt(
-            .{ .case_stmt = .{ .kind = kind, .scrutinee = scrutinee, .arms = arms.items } },
+            .{ .case_stmt = .{
+                .kind = kind,
+                .scrutinee = scrutinee,
+                .arms = arms.items,
+                .is_generate = gen != null,
+            } },
             tok,
         );
     }
@@ -1773,8 +2060,52 @@ pub const Parser = struct {
                 // is a prefix on whatever comes next.
                 if (self.peek() == .attr_open) {
                     const before_attrs = self.pos;
+                    const attr_mark = self.attrs.items.len;
                     self.skipAttributes();
-                    if (self.peek() != .lparen) self.pos = before_attrs;
+                    if (self.peek() != .lparen) {
+                        self.pos = before_attrs;
+                        // The specs come with the cursor: this instance belongs
+                        // to whatever follows and will be collected there.
+                        self.attrs.shrinkRetainingCapacity(attr_mark);
+                    }
+                }
+                // §5.5.3 Syntax 5-4 `nature_attribute_reference ::=
+                // net_identifier . potential_or_flow . nature_attribute_identifier`
+                // — "the attributes for a net or a branch can be accessed by
+                // using the hierarchical referencing operator (.) to the
+                // potential or flow for the net or branch". `potential` and
+                // `flow` are annex B keywords, so this is not the §6.8
+                // hierarchical-name spelling; both land in `.hier_ident` all the
+                // same, which is that tag's documented job, and lowering tells
+                // them apart by resolving the parts.
+                if (self.peek() == .dot) {
+                    var parts: std.ArrayList(Ast.StrId) = .empty;
+                    try parts.append(self.arena, name);
+                    while (self.eat(.dot)) {
+                        // Syntax 5-4's middle and last parts are annex B
+                        // KEYWORDS, not identifiers — `potential`/`flow` on the
+                        // one hand and the §3.6.1.2 attribute names on the other
+                        // — which is the same list `parseNatureAttr` admits at a
+                        // nature declaration, for the same reason.
+                        const part = switch (self.peek()) {
+                            .kw_potential,
+                            .kw_flow,
+                            .kw_abstol,
+                            .kw_access,
+                            .kw_units,
+                            .kw_ddt_nature,
+                            .kw_idt_nature,
+                            => blk: {
+                                const s = try self.internTok(self.pos);
+                                self.pos += 1;
+                                break :blk s;
+                            },
+                            else => try self.expectIdent(),
+                        };
+                        try parts.append(self.arena, part);
+                    }
+                    const off = try self.file.exprs.addStrList(self.arena, parts.items);
+                    return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
                 }
                 if (self.peek() == .lparen) {
                     // §4.4 branch probe vs §4.7 user function: only a declared
@@ -2377,19 +2708,77 @@ pub const Parser = struct {
         return self.file.addStmt(self.arena, s, main_tok);
     }
 
-    /// §2.9 attribute_instance. Parsed and skipped; `Ast.NatureAttr` is the
-    /// shape to capture into if desc/units ever need to reach the host.
+    /// §2.9 Syntax 2-4 / A.9.1:
+    ///
+    ///     attribute_instance ::= (* attr_spec { , attr_spec } *)
+    ///     attr_spec          ::= attr_name [ = constant_expression ]
+    ///
+    /// Every spec is COLLECTED, into `self.attrs`, which `parseModule` hands to
+    /// the enclosing module. Nothing downstream reads an attribute's value — the
+    /// list exists so §2.9's "constant_expression" and §2.9.2's value domains can
+    /// be checked at all, and both are properties of the attr_spec alone, so the
+    /// item it decorated does not have to be recorded with it.
+    ///
+    /// It used to be a token scan, which is why it is still named for skipping:
+    /// the caller's cursor lands past the instance either way, and 14 call sites
+    /// depend on that. The value is now a real `parseExpr`, so a malformed one is
+    /// a diagnostic where it used to be silently swallowed.
     fn skipAttributes(self: *Parser) void {
-        while (self.peek() == .attr_open) {
-            self.pos += 1;
+        self.parseAttributes() catch {
+            // A parse error inside an attribute has already been reported (or is
+            // OOM, which `self.failed` will end the compile on regardless). The
+            // cursor is resynchronized to the closing `*)` so ONE bad attribute
+            // does not turn the decorated declaration into a second diagnostic.
             while (true) : (self.pos += 1) switch (self.peek()) {
                 .eof => return,
                 .attr_close => {
                     self.pos += 1;
-                    break;
+                    return;
                 },
                 else => {},
             };
+        };
+    }
+
+    fn parseAttributes(self: *Parser) Error!void {
+        while (self.peek() == .attr_open) {
+            // §2.9: "Nesting of attribute instances is disallowed. It shall be
+            // illegal to specify the value of an attribute with a constant
+            // expression that contains an attribute instance." Checked HERE
+            // because an attribute value is a full `parseExpr`, and A.8.3 gives
+            // an operator its own `{ attribute_instance }` slot — so without this
+            // counter `(* outer = (1 + (* inner *) 2) *)` would parse cleanly, the
+            // inner instance being legal in every position but this one.
+            if (self.attr_depth != 0) {
+                var d = self.failWith(self.pos, .E0357);
+                d.msg("the value contains an attribute instance", .{});
+                d.note("§2.9: \"Nesting of attribute instances is disallowed\"", .{});
+                try d.emit();
+                return error.ParseError;
+            }
+            self.pos += 1;
+            self.attr_depth += 1;
+            defer self.attr_depth -= 1;
+            while (true) {
+                const tok = self.pos;
+                // `attr_name ::= identifier`, but §2.9.2's own `units` is an
+                // annex B keyword and so arrives as one (`kw_units`) — the same
+                // collision `parseNatureAttr` handles. In this position no
+                // keyword can be anything else, so every keyword is a name.
+                if (!self.identLike(tok) and !token.isKeyword(self.peek()))
+                    return self.failAt(tok, .E0208, "found {s}", .{self.found(tok)});
+                const name = try self.internTok(tok);
+                self.pos += 1;
+                // "[ = constant_expression ]" — §2.9's own default: "If the
+                // value is not specified, then ... the default value is 1."
+                const value: Ast.ExprId = if (self.eat(.assign_eq))
+                    try self.parseExpr()
+                else
+                    .none;
+                try self.attrs.append(self.arena, .{ .name = name, .value = value, .main_tok = tok });
+                if (!self.eat(.comma)) break;
+            }
+            _ = try self.expect(.attr_close);
         }
     }
 
@@ -3077,8 +3466,16 @@ test "annex C rejections keep their pinned wording" {
     const cases = [_]struct { src: []const u8, code: diag.Code, point: []const u8 = "" }{
         // §2.6.1 x/z digits are not in the analog subset
         .{ .src = "module m; integer v; analog v = 4'b01xz; endmodule", .code = .E0130 },
-        // §6.4 paramsets
-        .{ .src = "paramset ps mod; endparamset", .code = .E0201 },
+        // §2.9 "Nesting of attribute instances is disallowed. It shall be illegal
+        // to specify the value of an attribute with a constant expression that
+        // contains an attribute instance." The outer instance sits in a slot
+        // Syntax 2-7 has, and A.8.3 gives the `+` its own attribute slot, so the
+        // inner one is refused by this rule and not by the grammar — delete it and
+        // the same file parses.
+        .{
+            .src = "module m(p); inout p; electrical p; (* o = (1 + (* i *) 2) *) parameter real x = 1.0; analog I(p) <+ x; endmodule",
+            .code = .E0357,
+        },
         // A.1.3 module_parameter_port_list. The header `#(parameter real a = 1)`
         // USED to be this row, pinning that it was unimplemented; it parses now.
         // What A.1.3 still refuses is the SystemVerilog shorthand that drops the
@@ -3105,6 +3502,61 @@ test "annex C rejections keep their pinned wording" {
         // the caret, so that is what the fixtures pin.
         if (c.point.len != 0)
             try std.testing.expectEqualStrings(c.point, res.bag.at(0).point);
+    }
+}
+
+test "§6.6 generate: what does not nest, what may not be declared, what may share a name" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const head = "module m(p); inout p; electrical p; ";
+    // `.code = null` = the parser must accept it. Those rows are the point of the
+    // test: every rule here is a rule about POSITION, so the permitted position
+    // has to be pinned beside the refused one or the gate is untestable.
+    const cases = [_]struct { src: []const u8, code: ?diag.Code }{
+        // §6.6 "Generate regions do not nest, and they may only occur directly
+        // within a module" — both halves of the sentence, then the legal single
+        // region.
+        .{ .src = head ++ "generate generate if (1) ; endgenerate endgenerate endmodule", .code = .E0228 },
+        .{ .src = head ++ "generate if (1) begin generate if (1) ; endgenerate end endgenerate endmodule", .code = .E0228 },
+        .{ .src = head ++ "generate if (1) ; endgenerate endmodule", .code = null },
+        // §6.6 a generate block "may not contain ... parameter declarations".
+        // `localparam` in the same position is `module_or_generate_item`'s own
+        // alternative, and a `parameter` back at module scope is untouched.
+        .{ .src = head ++ "generate if (1) begin parameter real x = 1.0; end endgenerate endmodule", .code = .E0229 },
+        .{ .src = head ++ "generate parameter real x = 1.0; endgenerate endmodule", .code = .E0229 },
+        .{ .src = head ++ "generate if (1) begin localparam real x = 1.0; end endgenerate endmodule", .code = null },
+        .{ .src = head ++ "parameter real x = 1.0; generate if (1) ; endgenerate endmodule", .code = null },
+        // §6.6.2 "Named generate blocks may not have the same name as any other
+        // declaration in the same scope", and §6.6.1 the same for a loop
+        // construct's instance array. The declaration may come after.
+        .{ .src = head ++ "real g; generate if (1) begin end endgenerate endmodule", .code = null },
+        .{ .src = head ++ "real g; generate if (1) begin : g end endgenerate endmodule", .code = .E0230 },
+        .{ .src = head ++ "generate if (1) begin : g end endgenerate real g; endmodule", .code = .E0230 },
+        .{ .src = head ++ "genvar i; real g; generate for (i=0;i<2;i=i+1) begin : g end endgenerate endmodule", .code = .E0230 },
+        // §6.6.2 "... as blocks in any other generate construct in the same
+        // scope, EVEN IF NOT SELECTED FOR INSTANTIATION" — hence `if (0)`.
+        .{ .src = head ++ "generate if (1) begin : b end if (0) begin : b end endgenerate endmodule", .code = .E0230 },
+        // ...against the permission in the preceding bullet: "more than one block
+        // within a single conditional generate construct" may share a name, and
+        // an `else if` chain is one construct by §6.6.2's direct nesting.
+        .{ .src = head ++ "generate if (1) begin : b end else begin : b end endgenerate endmodule", .code = null },
+        .{ .src = head ++ "generate if (1) begin : b end else if (1) begin : b end else begin : b end endgenerate endmodule", .code = null },
+        // Syntax 6-8 case_generate_construct: a label list, a `default`, and the
+        // arms sharing one name (one construct). Outside a generate it is A.6.7's
+        // statement keyword with no module-item production at all — E0205.
+        .{ .src = head ++ "generate case (1) 1, 2: begin : b end default: begin : b end endcase endgenerate endmodule", .code = null },
+        .{ .src = head ++ "case (1) 1: ; endcase endmodule", .code = .E0205 },
+    };
+    for (cases) |c| {
+        const res = try parseForTest(arena, c.src);
+        if (c.code) |code| {
+            try std.testing.expect(res.count() > 0);
+            try std.testing.expectEqual(code, res.code(0));
+        } else {
+            try std.testing.expectEqual(@as(usize, 0), res.count());
+        }
     }
 }
 

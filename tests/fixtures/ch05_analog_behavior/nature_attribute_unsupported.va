@@ -32,7 +32,6 @@
 //! lrm 5.5.3
 //! lrm 11.6.2
 //! bias V(a) = 0.75, V(b) = 0.25, V(n1) = 0.5, V(n2) = 0.125
-//! xfail VerA cannot parse a nature attribute reference: the `.` in `a.potential.abstol` dies at E0207 (expected `)`)
 `include "check.vh"
 module ch5_nature_attribute(a, b, n1, n2);
   inout a, b, n1, n2;

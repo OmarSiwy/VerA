@@ -21,14 +21,14 @@
 // The condition is `1`, so the block IS selected — the collision here does not
 // depend on the "even if not selected" extension, which the sibling covers.
 //
-// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to
-// name. `DiagnosticsReported` is the weakest form that still demands a
-// rejection; tighten it to the E-code the day one exists.
+// E0230 is that rule. It compares the block name against every ordinary
+// declaration slice of the module — ports, parameters, variables, nets, branches,
+// genvars, analog functions, aliasparams — which is the ONE declaration space the
+// clause puts it in.
 //
 //! lrm 6.6.2
 //! lrm 6.8
-//! reject DiagnosticsReported
-//! xfail VerA does not register a conditional generate block's name in the enclosing scope, so `begin : sel` and `real sel;` coexist silently
+//! reject E0230
 module ch6_generate_block_shadows_declaration(p);
   inout p; electrical p;
   real sel;

@@ -23,7 +23,6 @@
 //! lrm 6.6.2
 //! bias V(p) = 0.5
 //! print none
-//! xfail VerA has no case generate at all: E0205 "unsupported module item: found case"
 `include "check.vh"
 module annex_a_case_generate(p, n);
     inout p, n;

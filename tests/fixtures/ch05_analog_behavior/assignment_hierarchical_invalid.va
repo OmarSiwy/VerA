@@ -13,15 +13,16 @@
 // procedural_assignments.va is the positive §5.7 fixture and keeps compiling;
 // assignment_concatenation_invalid.va is the first of the three restrictions.
 //
-// VerA's E0214 is the right verdict reached by the shorter route: it has no
-// hierarchical references at all, so the `.` stops the statement at parse time
-// rather than at a scope check. That is still a refusal of exactly the
-// construct §5.7 bans — `x = 1.0` in the same position compiles — but should
-// VerA ever resolve hierarchical names, this fixture must start matching the
-// §5.7 scope diagnostic instead, and it will say so by failing.
+// VerA reached this by the shorter route for as long as it had no hierarchical
+// references at all: the `.` stopped the statement at parse time (E0214) rather
+// than at a scope check. It now PARSES a dotted name — §5.5.3's nature attribute
+// reference needed that — so the refusal is where §5.7 puts it, on the assignment
+// TARGET: E0316 quoting the hierarchical-assignment sentence. `x = 1.0` in the
+// same position still compiles, which is what makes it a verdict on the target
+// and not on the dot.
 //
 //! lrm 5.7
-//! reject E0214
+//! reject E0316
 module ch5_assignment_hierarchical(p);
   inout p; electrical p; real x;
   analog begin

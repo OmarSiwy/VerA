@@ -118,13 +118,30 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         }
         p.period = try g.f64Expr(args[dv.next]);
         p.uses_model = g.uses_model;
-        // §4.5.12 τ (transition time) and t0 (time of the first
-        // transition). Neither is implemented: the emitted output steps
-        // abruptly at t0 = 0. A silent τ would be a different waveform, so
-        // it is rejected instead of ignored.
-        if (dv.next + 1 < args.len) return planErr(
-            "VerA does not implement the optional τ / t0 arguments of a zi_* filter (LRM 4.5.12)",
-        );
+        // §4.5.12 τ (transition time) and t0 (time of the first transition).
+        // The emitted sampler steps abruptly at t = 0, and that is not a
+        // stand-in for the general form — it is exactly what the clause
+        // describes for τ = 0 ("If the transition time is specified as zero
+        // (0), then the output is abruptly discontinuous") starting at t0 = 0.
+        // So those two values are what the implementation MEANS and are
+        // accepted; anything else is a different waveform, and a silent
+        // different waveform is worse than a refusal.
+        //
+        // Whether a τ = 0 filter may be contributed straight to a branch is
+        // the other half of the clause, and it is a property of the STATEMENT
+        // rather than of the call — `lower.checkZeroTransitionZFilter` (E0518).
+        for (args[@min(dv.next + 1, args.len)..]) |a| {
+            const c = g.an.foldConst(a, 0, true) orelse return planErr(
+                "LRM 4.5.12: the τ and t0 arguments of a zi_* filter must be constant expressions",
+            );
+            if (c.f < 0.0) return planErr(
+                "LRM 4.5.12: the transition time τ of a zi_* filter shall be nonnegative",
+            );
+            if (c.f != 0.0) return planErr(
+                "VerA implements only the τ = 0 / t0 = 0 form of a zi_* filter, whose output " ++
+                    "is abruptly discontinuous at the sample (LRM 4.5.12)",
+            );
+        }
     }
     // §4.5.11 the optional ε argument only "deriv[es] an absolute
     // tolerance (if needed)"; VerA has no per-signal tolerance table, so

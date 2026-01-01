@@ -84,7 +84,7 @@ than about a device.
 | `060_ddt_charge` | §4.5.3, §5.6.1.2 | `ddt` becomes `q()`; resistive residual is zero; dq/dV is the capacitance |
 | `061_ddx_derivative` | §4.5.14 | symbolic partials, including w.r.t. the branch's other node |
 | `062_idt_integral` | §4.5.4 | the accumulated integral equals `k*t` step for step, and the `ic` form offsets it |
-| `063_transition` | §4.5.8 | the implemented first-order lag: 0, ½, ¾, ⅞, … exact in binary |
+| `063_transition` | §4.5.8 | the piecewise-linear ramp: `min(t/2.2n, 1)`, arrives and stops. Pinned the retired first-order lag until §4.5.8's shape landed |
 | `064_slew` | §4.5.9 | rate limiting at `rise*dt` per step, then holding at the input |
 | `065_absdelay` | §4.5.7 | out(t) = in(t − td), with the startup clamped to 0 |
 | `066_laplace_dc_gain` | §4.5.11 | DC gain is b0/a0 exactly; the step response is monotone and settles there |

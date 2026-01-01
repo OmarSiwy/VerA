@@ -10,11 +10,14 @@ asserted that `resetall` undefines a text macro and nothing in the LRM says so
 sentence). A conforming tool failed it. `36`'s header records the reasoning.
 
 Every section has a fixture, so the interesting number here is not the section
-count. It is 7: the fixtures that state a rule this compiler does not meet.
-What is left is `` `default_transition ``, which the preprocessor still marks
-`.ignored` and which drags §4.5.8's ramp in behind it. §10.2 and §10.7 are
-implemented: `` `default_discipline `` is parsed and fed to §7.4 discipline
-resolution, and `` `__FILE__ ``/`` `__LINE__ ``/`` `line `` expand and remap.
+count but the fixtures that state a rule this compiler does not meet. §10.2,
+§10.3 and §10.7 are implemented: `` `default_discipline `` is parsed and fed to
+§7.4 discipline resolution, `` `default_transition `` is parsed (operand
+included — E0129) and published as a positional event list that §4.5.8's
+rise/fall defaulting consults, and `` `__FILE__ ``/`` `__LINE__ ``/`` `line ``
+expand and remap. The four `` `default_transition `` fixtures that used to lead
+this paragraph closed together with §4.5.8's piecewise-linear ramp, which was
+the second half of their one cause.
 
 Table 10-1 in §10.1 lists 23 directives. All 23 appear in some fixture in this
 folder; that is checkable by grep and it is checked. The previous version of
@@ -36,10 +39,10 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 | `s10-2` | the bare form withdraws the default for later nets | `35_default_discipline_reset_leaves_no_default.va` — **`//! xfail`**: the rule fires, but VerA prints E0337 and the fixture guessed E0501 |
 | `s10-2` | `` `resetall `` withdraws it too ("In addition to `resetall") | `36_resetall_clears_default_discipline.va` — **`//! xfail`**, same code mismatch as `35` |
 | `s10-3` | the directive is accepted; §4.5.8 DC pass-through survives it | `03_default_transition.va` — the 1n itself is deliberately not pinned, and the header says why |
-| `s10-3` | the default IS the rise/fall time of an argument-free filter | `38_default_transition_ramp.va` — **`//! xfail`** |
-| `s10-3` | a later directive supersedes an earlier one | `39_default_transition_supersedes.va` — **`//! xfail`** |
-| `s10-3` | explicit filter arguments beat the directive | `40_transition_arguments_override_default.va` — **`//! xfail`** |
-| `s10-3` | Syntax 10-2's operand is mandatory (no brackets) | `48_default_transition_requires_an_operand.va` — **`//! xfail`** |
+| `s10-3` | the default IS the rise/fall time of an argument-free filter | `38_default_transition_ramp.va` |
+| `s10-3` | a later directive supersedes an earlier one | `39_default_transition_supersedes.va` |
+| `s10-3` | explicit filter arguments beat the directive | `40_transition_arguments_override_default.va` |
+| `s10-3` | Syntax 10-2's operand is mandatory (no brackets) | `48_default_transition_requires_an_operand.va` (`//! reject E0129`, upgraded from the substring it carried while no code existed) |
 | `s10-4` | object-like `` `define `` | `04_define_object.va` |
 | `s10-4` | `list_of_formal_arguments`, actual-argument text substitution | `05_define_function.va` (compound actual, bracketing pinned by 2.25 vs 2.0) |
 | `s10-4` | backslash-newline continuation of the macro text | `06_define_multiline.va` |
@@ -72,11 +75,11 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 
 ## The xfail ledger
 
-Seven of the 47 fixtures run and fail. Each names a concrete defect in a
-named file, so the row disappears the day the defect does. Four of the seven
-are `` `default_transition `` fixtures blocked by the same one-line cause —
-the preprocessor still marks that directive `.ignored` — which is why this
-chapter's debt looks larger than it is.
+Each row names a concrete defect in a named file, so it disappears the day the
+defect does. Four rows used to sit here for `` `default_transition ``, blocked
+by one cause in two halves — the preprocessor marked the directive `.ignored`,
+and `codegen.zig` implemented `transition()` as a first-order lag rather than
+§4.5.8's ramp. Both halves landed together, so all four are gone.
 
 | Fixture | Rule it states | Why it fails today |
 |---|---|---|
@@ -85,10 +88,6 @@ chapter's debt looks larger than it is.
 | `47_escaped_macro_name.va` | Syntax 10-3 `text_macro_identifier ::= identifier`, so escapes are legal | VerA's `` `define `` name lexer accepts only a simple identifier and raises E0109; the restriction belongs to the FORMAL, not the name |
 | `35_default_discipline_reset_leaves_no_default.va` | 10.2 the bare directive withdraws the default | Not a missing rule any more: the default IS withdrawn and the module IS rejected. The fixture's `//! reject E0501` was a stated guess at the code, and VerA prints E0337 "net has no declared discipline", which is the code wave 1 added for exactly this condition. Whether to retarget the fixture or to widen E0501 is a fixture decision |
 | `36_resetall_clears_default_discipline.va` | 10.2 `` `resetall `` withdraws it too | Same, via the other mechanism, and the same code mismatch |
-| `48_default_transition_requires_an_operand.va` | Syntax 10-2's operand is mandatory | Same shape: consumed to end of line, so the operand-less form is silently accepted |
-| `38_default_transition_ramp.va` | 10.3 the directive sets the filter's rise/fall time | Two gaps stacked. `` `default_transition `` is `.ignored` so the 4n is discarded; and `codegen.zig` implements `transition()` as a first-order lag (`zTransition`/`transitionTau`), not §4.5.8's linear ramp. Fixing the directive alone leaves the slope bound failing on the §4.5.8 residue |
-| `39_default_transition_supersedes.va` | 10.3 a later directive supersedes an earlier one | Both values discarded, so there is nothing to supersede; same §4.5.8 residue underneath |
-| `40_transition_arguments_override_default.va` | 10.3 explicit filter arguments beat the directive | The 8n is discarded, so the argument-free filter falls back to a simulator default; same §4.5.8 residue |
 
 
 ## Readings this chapter takes, and where they are argued

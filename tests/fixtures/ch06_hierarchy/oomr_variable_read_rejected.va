@@ -4,17 +4,15 @@
 // expressly PERMITS through a hierarchical name — an analog variable is off
 // limits, so this rejection is correct conformance and carries no `//! xfail`.
 //
-// The diagnostic is a parse boundary and not the rule, which is worth writing
-// down. VerA's parser has no `hierarchical_identifier`, so the `.` in
-// `device.local_value` is E0207 ("unexpected token: found `.`", labelled "expected
-// `;`" at the caret) — the right verdict for the wrong reason, and it fires
-// identically for the hierarchical names §6.7.1 permits. Tighten this to a
-// semantic code the day a hierarchical reference resolves and only the variable
-// case is refused. The old directive demanded the bare label; the code pins which
-// diagnostic.
+// The diagnostic is a scope boundary and not the rule, which is worth writing
+// down. The `.` PARSES now (§5.5.3's nature attribute reference needed a dotted
+// name), so `device.local_value` is E0901 "hierarchical name in a flat module" —
+// the right verdict for the wrong reason, and it fires identically for the
+// hierarchical names §6.7.1 permits. Tighten this to the §6.7.1 code the day a
+// hierarchical reference resolves and only the variable case is refused.
 //
 //! lrm 6.7.1
-//! reject E0207
+//! reject E0901
 module ch6_oomr_variable_read(p);
   inout p; electrical p;
   analog I(p) <+ device.local_value;

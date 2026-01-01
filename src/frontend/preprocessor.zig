@@ -29,6 +29,9 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const diag = @import("../diag.zig");
+/// §2.6.2 number decoding, for §10.3's `transition_time` operand. The lexer
+/// does not depend on this file, so the edge only goes one way.
+const Lexer = @import("lexer.zig");
 
 pub const Options = struct {
     /// Searched in order for `include, before the built-in annex D files.
@@ -43,6 +46,10 @@ pub const Options = struct {
     /// Out-param: every §10.2 `default_discipline event, in text-stream order,
     /// for §7.4 discipline resolution to consult. Arena-owned like the output.
     defaults: ?*[]const DefaultDiscipline = null,
+    /// Out-param: every §10.3 `default_transition event, in text-stream order,
+    /// for §4.5.8's rise/fall defaulting to consult. Arena-owned like the
+    /// output.
+    transitions: ?*[]const DefaultTransition = null,
     /// Out-param: the IEEE 1364 §19.9 `timescale in force, or null if the
     /// stream declared none. Read by §9.15 Table 9-27's "timeUnit" and
     /// "timePrecision", which are the only two rows of that table whose value
@@ -74,6 +81,7 @@ pub const Directive = enum {
     resetall, // IEEE 1364 — clears user macros (predefined ones survive)
     keywords, // §10.6 — emitted verbatim, handled by the parser
     default_discipline, // §10.2 — parsed here, applied by discipline resolution
+    default_transition, // §10.3 — parsed here, applied by §4.5.8 codegen
     line, // IEEE 1364 §19.7 — remaps §10.7 `__LINE__` / `__FILE__`
     timescale, // IEEE 1364 §19.9 — read back by §9.15 Table 9-27
     ignored, // parsed, consumed to end of line, no effect
@@ -116,6 +124,25 @@ pub const DefaultDiscipline = struct {
     discipline: []const u8,
 };
 
+/// One §10.3 `` `default_transition ``, in the order the text stream met it.
+///
+/// An event list rather than a single latched value, for the reason
+/// `DefaultDiscipline` is one: §10.3 makes the directive POSITIONAL. "If
+/// another `default_transition directive is encountered in the subsequent
+/// source description, the transition filters following the newly encountered
+/// directive derive their default rise and fall times from … the directive
+/// which IMMEDIATELY PRECEDES the transition filter." A latched value cannot
+/// express supersession — it answers the first directive, or the last, but
+/// never "the nearest one above this call".
+///
+/// `at` is an offset into the PREPROCESSED output, the currency every later
+/// stage reports in, so it compares directly against a token start.
+pub const DefaultTransition = struct {
+    at: u32,
+    /// Seconds. §10.3's transition_time, used for BOTH the rise and the fall.
+    time: f64,
+};
+
 /// IEEE Std 1364 §19.9 `` `timescale <unit> / <precision> ``, in SECONDS.
 ///
 /// The analog kernel has no tick — §9.10 `$abstime` is seconds whatever this
@@ -153,8 +180,9 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     .{ "default_discipline", .default_discipline },
     .{ "line", .line },
 
+    .{ "default_transition", .default_transition }, // §10.3 — read by §4.5.8
+
     // Accepted but intentionally ignored (consumed to end of line).
-    .{ "default_transition", .ignored }, // §10.3  GAP: default rise/fall not retained
     .{ "timescale", .timescale }, // IEEE 1364 §19.9 — §9.15 reads it back
     .{ "default_nettype", .ignored }, // IEEE 1364
     .{ "celldefine", .ignored }, // IEEE 1364
@@ -230,6 +258,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
     }
 
     if (opts.defaults) |d| d.* = try pp.defaults.toOwnedSlice(arena);
+    if (opts.transitions) |t| t.* = try pp.transitions.toOwnedSlice(arena);
     if (opts.timescale) |t| t.* = pp.timescale;
 
     opts.bag.map = .{
@@ -287,6 +316,8 @@ const Pp = struct {
     segs: std.ArrayList(diag.Segment) = .empty,
     /// §10.2 events, in text-stream order. Published via `Options.defaults`.
     defaults: std.ArrayList(DefaultDiscipline) = .empty,
+    /// §10.3 events, in text-stream order. Published via `Options.transitions`.
+    transitions: std.ArrayList(DefaultTransition) = .empty,
     /// IEEE 1364 §19.9. Last one wins rather than a positional event list like
     /// `defaults`: the directive scopes to the design elements that FOLLOW it,
     /// and VerA elaborates exactly one module, so the last `timescale before
@@ -645,6 +676,7 @@ fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             pp.timescale = null;
         },
         .default_discipline => try handleDefaultDiscipline(pp, text[j..end], j),
+        .default_transition => try handleDefaultTransition(pp, text[j..end], j),
         .line => try handleLine(pp, text[j..end], at, j),
         .timescale => handleTimescale(pp, text[j..end]),
         .ignored => {},
@@ -1116,6 +1148,55 @@ fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void {
         .qualifier = qual,
         .discipline = disc,
     });
+}
+
+/// §10.3 Syntax 10-2:
+///
+///   default_transition_directive ::= `default_transition transition_time
+///   transition_time ::= constant_expression
+///
+/// No brackets round the operand, so it is MANDATORY — see E0129 for why the
+/// bare form is a diagnostic rather than a request for the simulator default.
+///
+/// `constant_expression` in full is a parser's job and this is a text stage, so
+/// what is read here is one §2.6 number, scale factor included: `4n`, `4e-9`,
+/// `0.000000004`. That is every `default_transition anyone writes, and the
+/// alternative — deferring the directive to the parser the way §10.6
+/// `begin_keywords is deferred — buys an expression grammar for an operand the
+/// LRM only ever illustrates as a literal.
+/// ponytail: upgrade path is emitting the directive verbatim and letting the
+/// parser fold it, the day a model writes `default_transition tr*2.
+fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void {
+    var r: Rest = .{ .s = rest };
+    r.skipSpace();
+    const start = r.i;
+    while (r.i < r.s.len and !isSpace(r.s[r.i])) r.i += 1;
+    const text = r.s[start..r.i];
+    if (text.len == 0) {
+        var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0129);
+        b.msg("`default_transition needs a transition time and this one has none", .{});
+        b.note("Syntax 10-2 is `default_transition transition_time, and the operand is not optional", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
+    const t = Lexer.parseReal(text) catch {
+        return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "`{s}` is not a transition time", .{text});
+    };
+    // §4.5.8 gives the value straight to rise_time and fall_time, and both are
+    // times: a negative one describes an edge that finishes before it starts.
+    // (E0516 says the same of a rise_time written at the call.)
+    if (!(t >= 0.0) or !std.math.isFinite(t)) {
+        return pp.fail(pp.spanAt(off + start, off + r.i), .E0129, "a transition time cannot be `{s}`", .{text});
+    }
+    r.skipSpace();
+    if (r.i < r.s.len and std.mem.trim(u8, r.s[r.i..], " \t\r").len != 0) {
+        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0129);
+        b.msg("`{s}` follows the transition time", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
+        b.note("Syntax 10-2 is `default_transition transition_time, and nothing more", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
+    try pp.transitions.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .time = t });
 }
 
 /// IEEE Std 1364 §19.9 `` `timescale <unit> / <precision> ``.
@@ -1881,6 +1962,58 @@ test "§10.2 `default_discipline Syntax 10-1" {
     // fixture ch10 45: a discipline name is not one of the fifteen qualifiers.
     try expectFail("`default_discipline electrical electrical\n", .E0127);
     try expectFail("`default_discipline electrical wire junk\n", .E0127);
+}
+
+test "§10.3 `default_transition Syntax 10-2" {
+    // The published §10.3 events for `src`, which is the whole surface §4.5.8
+    // consumes: the value, and the output offset it takes effect from.
+    const T = struct {
+        fn ev(src: []const u8) ![]const DefaultTransition {
+            var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+            defer arena_state.deinit();
+            var bag: diag.Bag = .init(arena_state.allocator());
+            var out: []const DefaultTransition = &.{};
+            _ = try process(arena_state.allocator(), src, .{
+                .std_defs = false,
+                .transitions = &out,
+                .bag = &bag,
+            });
+            return testing.allocator.dupe(DefaultTransition, out);
+        }
+    };
+
+    const one = try T.ev("`default_transition 4n\n");
+    defer testing.allocator.free(one);
+    try testing.expectEqual(@as(usize, 1), one.len);
+    try testing.expectEqual(@as(f64, 4e-9), one[0].time);
+
+    // §10.3's supersession sentence: BOTH are published, in text order, so the
+    // consumer can pick "the directive which immediately precedes" a call
+    // rather than being handed one latched value.
+    const two = try T.ev("`default_transition 8n\n`default_transition 4n\n");
+    defer testing.allocator.free(two);
+    try testing.expectEqual(@as(usize, 2), two.len);
+    try testing.expectEqual(@as(f64, 8e-9), two[0].time);
+    try testing.expectEqual(@as(f64, 4e-9), two[1].time);
+    try testing.expect(two[0].at < two[1].at);
+
+    // Every §2.6.2 spelling of the same time, since the operand is read in a
+    // text stage and not by the number lexer proper.
+    for ([_][]const u8{ "4n\n", "4e-9\n", "0.000000004\n", "4_000p\n" }) |t| {
+        const src = try std.fmt.allocPrint(testing.allocator, "`default_transition {s}", .{t});
+        defer testing.allocator.free(src);
+        const e = try T.ev(src);
+        defer testing.allocator.free(e);
+        try testing.expectEqual(@as(f64, 4e-9), e[0].time);
+    }
+
+    // fixture ch10 48: the operand is not bracketed in Syntax 10-2, so it is
+    // mandatory — and the bare form is NOT a request for the simulator default.
+    try expectFail("`default_transition\n", .E0129);
+    try expectFail("`default_transition    \n", .E0129);
+    try expectFail("`default_transition electrical\n", .E0129);
+    try expectFail("`default_transition -4n\n", .E0129);
+    try expectFail("`default_transition 4n junk\n", .E0129);
 }
 
 test "`include resolves the built-in annex D files" {

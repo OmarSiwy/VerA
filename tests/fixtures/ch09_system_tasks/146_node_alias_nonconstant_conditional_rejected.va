@@ -23,7 +23,6 @@
 //
 //! lrm 9.20
 //! reject inside conditional
-//! xfail VerA lowers $analog_node_alias/$analog_port_alias to a constant 0 (codegen.zig) without inspecting the guard it sits under
 module ch09_node_alias_nonconstant_conditional_rejected(p, n);
   inout p, n; electrical p, n;
   electrical local_node; integer status;

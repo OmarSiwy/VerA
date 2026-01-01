@@ -278,14 +278,18 @@ pub const Lexer = struct {
     }
 
     /// LRM §2.5 operators (longest match) and §2.9 attribute delimiters.
-    /// Digital-only sequences with no tag (`->`, `=>`, `*>`, `&&&`) are consumed
+    /// Digital-only sequences with no tag (`=>`, `*>`, `&&&`) are consumed
     /// whole as `.invalid` so the parser reports one error, not three.
     fn lexOperator(self: *Lexer) token.Tag {
         const c = self.src[self.pos];
         self.pos += 1;
         return switch (c) {
             '+' => .plus,
-            '-' => if (self.eat('>')) .invalid else .minus, // '->' event trigger: digital only
+            // §5.10.4/A.6.5 `event_trigger ::= -> hierarchical_event_identifier`.
+            // Not digital-only: §5.10 lists the named event as one of the three
+            // kinds of ANALOG event, and §5.10.4's own example triggers one from
+            // an analog event statement.
+            '-' => if (self.eat('>')) .arrow else .minus,
             '*' => if (self.eat('*')) .star_star // §4.2.4 power
             else if (self.eat(')')) .attr_close // §2.9
             else if (self.eat('>')) .invalid // '*>' specify path
@@ -673,8 +677,10 @@ test "operators are longest-match (§2.5)" {
         .tilde_pipe,        .amp_amp,  .pipe_pipe,   .attr_open,   .attr_close,
         .apostrophe_lbrace, .eof,
     });
+    // §5.10.4 `->` is a real token: it triggers a named analog event.
+    try expectTags("-> -", &.{ .arrow, .minus, .eof });
     // No tag for these; each is consumed whole so the parser reports once.
-    try expectTags("-> => *> &&&", &.{ .invalid, .invalid, .invalid, .invalid, .eof });
+    try expectTags("=> *> &&&", &.{ .invalid, .invalid, .invalid, .eof });
     // §2.9 attributes nest no deeper than one token pair.
     try expectTags("(* full_case = 1 *)", &.{
         .attr_open, .identifier, .assign_eq, .int_literal, .attr_close, .eof,

@@ -12,7 +12,6 @@
 //
 //! lrm 3.3
 //! bias V(p) = 1.0
-//! xfail VerA's parser takes only one dimension in a string array declaration: the second `[` is E0207
 `include "check.vh"
 module ch3_multistring(p);
     inout p;

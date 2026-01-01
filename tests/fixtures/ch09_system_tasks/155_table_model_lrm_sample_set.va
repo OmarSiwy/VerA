@@ -57,7 +57,6 @@
 //
 //! lrm 9.21
 //! lrm 9.21.5
-//! xfail VerA refuses $table_model with E0801 (no isoline interpolator); Table 9-18 marks it analog-context Yes
 `include "check.vh"
 module ch09_table_model_lrm_sample_set(p, n);
   inout p, n; electrical p, n;

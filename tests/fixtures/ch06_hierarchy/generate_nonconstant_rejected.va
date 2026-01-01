@@ -13,11 +13,14 @@
 // extension, and it also meant a conforming compiler would reject the body and
 // never look at the condition this fixture is about.
 //
-// KNOWN GAP: see the `//! xfail` below.  Tighten the reject directive to the
-// E-code once one exists.
+// E0428 is that rule, judged in lowering because that is the only stage that can
+// evaluate a constant expression. A `parameter` in the same position is ACCEPTED
+// and must be: A.8.4 makes it a `constant_primary` and §6.6's stated purpose is
+// "the ability for parameter values to affect the structure of the model".
+// generate_direct_nesting.va and generate_implicit_region_unsupported.va are that
+// side; a module variable is this one.
 //! lrm 6.6
-//! reject DiagnosticsReported
-//! xfail VerA has no constant-expression check on a generate scheme; the if-generate condition may name a runtime `integer` and it elaborates silently
+//! reject E0428
 module ch6_generate_nonconstant(p);
   inout p; electrical p; integer runtime_value;
   generate

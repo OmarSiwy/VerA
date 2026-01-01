@@ -12,7 +12,7 @@
 // conforming diagnosis is an unknown function, not "unsupported". E0801
 // "unsupported system function" would be the wrong rule — it is VerA's
 // capability class for ch9 functions it declines to implement (§9.13 $random,
-// §9.21 $table_model) — and it is also not the code this gap would close under:
+// §9.16 $simprobe) — and it is also not the code this gap would close under:
 // VerA aliases the spelling in codegen (`$limexp` beside `limexp`), and deleting
 // that alias drops the call into codegen's abort path, not into a diagnostic at
 // all. Naming a code VerA will never emit here is how an xfail outlives its gap:

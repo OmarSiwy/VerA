@@ -203,6 +203,11 @@ tok_starts: []const u32 = &.{},
 /// which needs the module's declarations — so all it can do is say WHERE each
 /// one took effect. Empty when the text never came through stage 1.
 default_disciplines: []const Preprocessor.DefaultDiscipline = &.{},
+/// §10.3 `default_transition events, in text-stream order, set by the same
+/// caller for the same reason: only the text stage knows where each directive
+/// sat, and only §4.5.8 codegen knows which `transition()` call it reaches.
+/// `codegen.defaultTransition` does the positional lookup.
+default_transitions: []const Preprocessor.DefaultTransition = &.{},
 /// IEEE 1364 §19.9 `timescale, set by the same caller and for the same reason:
 /// it is a text-stream fact with a §9.15 consumer. Null when the stream carried
 /// no `timescale, which is not the same as a default one — Table 9-27 defines
@@ -244,6 +249,26 @@ inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
 /// (§4.7.2); names the context in the "not allowed here" diagnostic.
 restrict: ?[]const u8 = null,
+/// §9.20 the analog_net_reference of every alias call so far, in source order.
+/// The clause's last rule relates two calls — "It shall be an error for the
+/// hierarchical_reference_string to reference a node that is used as an
+/// analog_net_reference in ANOTHER ... call" — and this is the only state that
+/// needs. Names, not indices: the comparison is against a §6.7 path string.
+alias_refs: std.ArrayList([]const u8) = .empty,
+/// §9.5.3/§9.5.4.2 — does the module call `$sformat`/`$swrite`/`$sscanf`? Set at
+/// the call, read by codegen to decide whether `str_kernels.zig` is emitted. A
+/// flag rather than a site list because the SITE that needs a name (the format
+/// scratch) is identified by its MIR instruction, which codegen already has.
+uses_str_tasks: bool = false,
+/// §9.21 — does the module call `$table_model`? Set at the call, read by codegen
+/// to decide whether `table_kernels.zig` is emitted, exactly as
+/// `uses_str_tasks` gates the string kernels.
+uses_table_model: bool = false,
+/// Where a §9.21.1 `$table_model` data FILE is looked for, in order. The same
+/// list `include` searches, set by the caller (root.zig) for the same reason the
+/// directives above are: only the driver knows the search path. Empty means "the
+/// working directory only", which is what a bare `vera foo.va` gives.
+include_dirs: []const []const u8 = &.{},
 /// True inside an `analog initial` block (§5.2.1), and ONLY that — `restrict`
 /// conflates it with an analog function, and §9.7.2's `$stop` rule keys on the
 /// narrower one. Deliberately not cleared when an analog function is inlined:
@@ -309,6 +334,11 @@ held_vars: std.ArrayList(HeldVar) = .empty,
 /// Source names `markHeldVars` found under an `@(...)`, collected BEFORE the
 /// module's variables are declared. Empty for a module with no event control.
 held_names: std.StringHashMapUnmanaged(void) = .empty,
+/// §5.10.4 named events, name -> the flag slot `-> ev` writes and `@(ev)` reads.
+/// Its own map and NOT `vars`, because §2.8 gives an event a name but no value:
+/// `x = tick;` has no derivation, and putting the flag in `vars` would give it
+/// one.
+events: std.StringHashMapUnmanaged(Ssa.Place) = .empty,
 
 /// One §5.10 event-assigned module variable and its persistent slot.
 pub const HeldVar = struct {
@@ -348,7 +378,19 @@ pub const Display = struct {
 
 const VarSlot = struct { place: Ssa.Place, ty: Ty };
 const ScopeEntry = struct { name: []const u8, prev: ?VarSlot };
-const ArrayInfo = struct { lo: i64, hi: i64, ty: Ty };
+/// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
+/// first. `dims.len` is the number of subscripts a reference must supply.
+const ArrayInfo = struct {
+    dims: []const Bounds,
+    ty: Ty,
+
+    /// The first dimension, for the callers that only handle a flat vector
+    /// (a whole array passed to §4.5.11's coefficient slot, §3.4.4's parameter
+    /// element walk).
+    fn first(a: ArrayInfo) Bounds {
+        return a.dims[0];
+    }
+};
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 const Accum = struct { resist: Ssa.Place, react: Ssa.Place };
@@ -463,6 +505,7 @@ pub fn deinit(self: *Lower) void {
     self.displays.deinit(gpa);
     self.held_vars.deinit(gpa);
     self.held_names.deinit(gpa);
+    self.events.deinit(gpa);
 }
 
 // ---------------------------------------------------------------------------
@@ -561,14 +604,43 @@ fn startUnreachable(self: *Lower) Oom!void {
 /// in this loop: the zero fill is the accumulator starting at 0, and the
 /// truncation is walking only the last `bits/8` bytes.
 ///
-/// ponytail: the result is the unsigned value, so a 32-bit "\377\377\377\377"
-/// is 4294967295 and not the -1 that §3.2's signed `integer` would hold. VerA
-/// stores an `integer` in an i64 and has no 32-bit wrap anywhere else either;
-/// 72_integer_overflow_wrap.va owns that gap and closing it closes this too.
+/// ponytail: the result is the UNSIGNED value, so a 32-bit "\377\377\377\377"
+/// is 4294967295 and not the -1 that §3.2's signed `integer` would hold. That
+/// is not the width gap `wrap32` closed — width is imposed on the OPERATION
+/// there, so this string reads 4294967295 and the first arithmetic done to it
+/// wraps into range. §2.7 calls the operand "unsigned integer constants" in so
+/// many words, so the reading here is the clause's own; sign-extending it needs
+/// a fixture that asks.
 pub fn strToInt(s: []const u8, bits: u8) i64 {
     var acc: u64 = 0;
     for (s[s.len - @min(s.len, bits / 8) ..]) |c| acc = acc << 8 | c;
     return @bitCast(acc);
+}
+
+/// §3.2, two sentences and one width: an `integer` "can hold values ranging from
+/// -2^31 to 2^31-1", and "arithmetic operations performed on integer variables
+/// produce 2's complement results". So the answer to `2147483647 + 1` is
+/// -2147483648, and a 64-bit type is wrong at both ends of the range.
+///
+/// The width is imposed on the OPERATION, not on the storage: an `integer` stays
+/// in an i64 slot (one machine word, and every ch9 status return and array
+/// index already fits) and every integer arithmetic result is truncated to 32
+/// bits and widened back. That is exact rather than approximate, because both
+/// operands of an integer operation are themselves in range — either literals
+/// §2.5.1 keeps in range or the output of another wrapped operation — so
+/// truncating the 64-bit result is bit-for-bit the 32-bit result.
+///
+/// THREE SITES MUST AGREE and this is the only definition of the rule: this fold
+/// (`foldBinary`, §4.2 constant expressions), `analysis.foldConst` (parameter
+/// defaults and §4.5 operator control arguments) and `codegen.intBin` (the
+/// device). A fold that disagreed with the runtime would make one expression
+/// answer differently depending on whether it landed in a parameter default.
+///
+/// NOT applied to a literal: §2.5.1's `-2147483648` is `ineg` of the in-range-
+/// as-unsigned 2147483648, and wrapping the operand first would make the
+/// negation of it positive.
+pub fn wrap32(x: i64) i64 {
+    return @as(i32, @truncate(x));
 }
 
 /// §2.7 at an OPERAND: a string about to be used as a number becomes one.
@@ -954,17 +1026,53 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     try self.markHeldVars(module);
     for (module.vars) |*v| try self.declareVarDecl(v, .module);
 
+    // §5.10.4 named events. An event carries no value — only "triggered at this
+    // timepoint or not" — so one integer flag per event, zero on entry to every
+    // evaluation, set by `-> ev` and tested by `@(ev)`.
+    //
+    // Deliberately NOT a `holdSlot` like an event-ASSIGNED variable: a trigger
+    // is instantaneous. A flag that survived the timepoint would leave `@(ev)`
+    // active at every later step, which is the opposite of §5.10's event model —
+    // and the retained flag would never be cleared, since §5.10.4 gives no
+    // "untrigger". The known ceiling of the fresh flag is the other order: a
+    // detection that lexically PRECEDES its trigger reads 0 and does not run at
+    // the following step either. Closing that needs a scheduler with a queue,
+    // which the flat analog kernel has no place to put; §5.10.4's own example
+    // (and every fixture) triggers first.
+    for (module.events) |ev| {
+        const place = self.builder.newPlace();
+        try self.builder.writeVariable(place, self.cur, .zero);
+        try self.events.put(self.arena, self.file.str(ev), place);
+    }
+
     // §4.7.3 — checked on the DECLARATIONS, before any call site sees them.
     try self.checkFuncRecursion(module.functions);
+
+    // §2.9/§2.9.2 — AFTER the declarations, because "constant expression" is a
+    // question about the scopes, and BEFORE the analog block, so an attribute is
+    // reported at its own token rather than after a body that may not compile.
+    try self.checkAttributes(module.attrs);
 
     // §5.2 analog blocks, concatenated (§6.9.1).
     for (module.analog) |blk| {
         if (blk.is_initial) {
             // §5.2.1 executed once per analysis, before a matrix solution
             // exists. Guarded rather than split into a second CFG so codegen
-            // keeps ONE walk; the guard is a call codegen answers from
-            // `inst.analysis_kind`.
-            const flag = try self.call("initial_step", &.{});
+            // keeps ONE walk; the guard is a call codegen answers from a flag on
+            // the Instance.
+            //
+            // NOT `initial_step`, and that is the whole of §5.2.1's second
+            // sentence: "The analog initial block is executed once for each
+            // analysis, and CAN BE EXECUTED FOR EACH SUB-TASK of parameter sweep
+            // analysis (such as dc sweep). ... If a parameter or variable that is
+            // referenced from an analog initial block is changed during a
+            // sub-task of a parameter sweep analysis, then the analog initial
+            // block SHALL BE RE-EXECUTED so that the new value is taken into
+            // account." Table 5-1 makes `initial_step` the FIRST POINT of an
+            // analysis, and a dc sweep is ONE analysis whose points are its
+            // sub-tasks — so a body guarded on it runs at the first sweep point
+            // and never again, which is the opposite of the "shall".
+            const flag = try self.call("analog_initial", &.{});
             const prev = self.restrict;
             self.restrict = "an analog initial block";
             self.in_analog_initial = true;
@@ -1362,25 +1470,37 @@ const NatureAttrs = struct {
 /// they do not override.
 fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
     var out: NatureAttrs = .{};
+    if (self.natureAttrExpr(name, "abstol")) |v| {
+        if (self.constEval(v)) |c| out.abstol = c.asReal();
+    }
+    if (self.natureAttrExpr(name, "access")) |v| {
+        if (self.file.exprs.tag(v) == .ident) out.access = self.file.str(self.file.exprs.strOf(v));
+    }
+    if (self.natureAttrExpr(name, "units")) |v| {
+        if (self.file.exprs.tag(v) == .str_literal) out.units = self.file.str(self.file.exprs.strOf(v));
+    }
+    return out;
+}
+
+/// §3.6.1.1: the value expression a (possibly derived) nature gives `attr`, or
+/// null. "A derived nature ... can override the attributes of the base nature",
+/// so the FIRST hit walking up the chain wins.
+///
+/// The chain walk lives here rather than in `natureOf` because §5.5.3's
+/// attribute reference can name any attribute at all, including a §3.6.1.3 user
+/// one — `natureOf`'s three named fields are just the three attributes the rest
+/// of lowering happens to consume.
+fn natureAttrExpr(self: *Lower, name: Ast.StrId, attr: []const u8) ?Ast.ExprId {
     var want = name;
     var hops: u32 = 0;
     while (hops < 16) : (hops += 1) {
         const nat = for (self.file.natures) |*n| {
             if (n.name == want) break n;
-        } else return out;
+        } else return null;
         for (nat.attrs) |a| {
-            const an = self.file.str(a.name);
-            if (out.abstol == null and std.mem.eql(u8, an, "abstol")) {
-                if (self.constEval(a.value)) |c| out.abstol = c.asReal();
-            } else if (out.access == null and std.mem.eql(u8, an, "access")) {
-                if (self.file.exprs.tag(a.value) == .ident)
-                    out.access = self.file.str(self.file.exprs.strOf(a.value));
-            } else if (out.units == null and std.mem.eql(u8, an, "units")) {
-                if (self.file.exprs.tag(a.value) == .str_literal)
-                    out.units = self.file.str(self.file.exprs.strOf(a.value));
-            }
+            if (std.mem.eql(u8, self.file.str(a.name), attr)) return a.value;
         }
-        if (nat.parent == .none) return out;
+        if (nat.parent == .none) return null;
         // A.1.6 `parent_nature ::= nature_identifier | discipline_identifier .
         // potential_or_flow`. In the second form the parent names a DISCIPLINE,
         // so the walk continues at whichever nature that discipline binds to
@@ -1390,18 +1510,18 @@ fn natureOf(self: *Lower, name: Ast.StrId) NatureAttrs {
         if (nat.parent_access) |half| {
             const d = for (self.file.disciplines) |*x| {
                 if (x.name == nat.parent) break x;
-            } else return out;
+            } else return null;
             const bound = switch (half) {
                 .potential => d.potential,
                 .flow => d.flow,
             };
-            if (bound == .none) return out;
+            if (bound == .none) return null;
             want = bound;
             continue;
         }
         want = nat.parent;
     }
-    return out;
+    return null;
 }
 
 // ---- §3.11 net compatibility -----------------------------------------------
@@ -1911,7 +2031,7 @@ fn addParam(
 /// §3.4.4 `parameter real c[0:2] = '{1,2,3};` → three scalar parameters named
 /// `c[0]`, `c[1]`, `c[2]`. Codegen emits one Model field each.
 fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) Oom!void {
-    const dim = try self.dimBounds(decl.dims, decl.main_tok, name) orelse return;
+    const dims = try self.dimsBounds(decl.dims, decl.main_tok, name) orelse return;
     // §3.4.4, in the restriction list closed by "Failure to follow these
     // restrictions shall result in an error": "A type of a parameter array
     // shall be given in the declaration." §3.4.1 says it again from the other
@@ -1936,17 +2056,13 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
         b.help("write the list as an assignment pattern: `'{{ ... }}`", .{});
         try b.emit();
     }
-    const elems: []const Ast.ExprId = if (decl.default != .none and
-        self.file.exprs.tag(decl.default) == .assign_pattern)
-        self.file.exprs.args(decl.default)
-    else
-        &.{};
+    const elems = try self.flattenPattern(decl.default, dims);
 
-    try self.arrays.put(self.arena, name, .{ .lo = dim.lo, .hi = dim.hi, .ty = astTy(ty) });
-    var i = dim.lo;
-    while (i <= dim.hi) : (i += 1) {
-        const k: usize = @intCast(i - dim.lo);
-        const elem = if (k < elems.len) elems[k] else Ast.ExprId.none;
+    try self.arrays.put(self.arena, name, .{ .dims = dims, .ty = astTy(ty) });
+    var sub: [8]i64 = undefined;
+    for (elems, 0..) |elem, k| {
+        const idx = if (dims.len <= sub.len) sub[0..dims.len] else try self.arena.alloc(i64, dims.len);
+        shapeSubscripts(dims, k, idx);
         const default: Mir.Value = if (elem == .none)
             (if (astTy(ty) == .real) Mir.Value.f_zero else Mir.Value.zero)
             // §6.3.4 again: `elabConst`, not `constEval` — an element written
@@ -1957,46 +2073,199 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
             const tv = try self.lowerExpr(elem);
             break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
         };
-        try self.addParam(try self.elemName(name, i), ty, default, decl.ranges, decl.is_local, decl.main_tok);
+        try self.addParam(try self.elemName(name, idx), ty, default, decl.ranges, decl.is_local, decl.main_tok);
     }
 }
 
-const Bounds = struct { lo: i64, hi: i64 };
-
-/// §3.2.2/§3.4.4 `[msb:lsb]`. Only one dimension is supported.
-fn dimBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u8) Oom!?Bounds {
-    if (dims.len != 1) {
-        try self.err(tok, .E0307, "`{s}` has {d} dimensions", .{ name, dims.len });
-        return null;
+/// §2.9's two rules about an attribute VALUE, and §2.9.2's four value domains.
+///
+/// In lowering because "constant expression" is a question about the scopes: `z`
+/// is refused and `gain` is not, and only the declaration tables know which is
+/// which. The parser collects the specs (`Parser.parseAttributes`) and checks the
+/// one rule it alone can see, the nesting ban.
+///
+/// The attribute's TARGET is not recorded and is not needed: neither rule is
+/// about the decorated item, and §2.9 leaves what an attribute MEANS entirely to
+/// the tool that reads it — "properties about objects, statements and groups of
+/// statements in the HDL source that can be used by various tools".
+fn checkAttributes(self: *Lower, attrs: []const Ast.NatureAttr) Oom!void {
+    for (attrs) |a| {
+        // §2.9: "If the value is not specified, then ... the default value is 1"
+        // — a name on its own is complete, so there is nothing to judge.
+        if (a.value == .none) continue;
+        const name = self.file.str(a.name);
+        const c = self.constEval(a.value) orelse {
+            var b = self.errWith(a.main_tok, .E0357);
+            b.msg("`{s}`", .{name});
+            b.note("§2.9 Syntax 2-4: `attr_spec ::= attr_name [ = constant_expression ]`", .{});
+            try b.emit();
+            continue;
+        };
+        // §2.9.2 fixes the value of exactly four names, with a "must" each.
+        // Every OTHER name is a tool convention with no stated domain, so it is
+        // not checked — inventing one would refuse conforming source.
+        const want: ?[]const []const u8 = if (std.mem.eql(u8, name, "desc") or
+            std.mem.eql(u8, name, "units"))
+            // "The attribute must be assigned a string" — any string.
+            &.{}
+        else if (std.mem.eql(u8, name, "op"))
+            &.{ "yes", "no" }
+        else if (std.mem.eql(u8, name, "multiplicity"))
+            &.{ "multiply", "divide", "none" }
+        else
+            null;
+        const allowed = want orelse continue;
+        const got = switch (c) {
+            .str => |sv| sv,
+            // `desc = 7` fails on this arm: not a string at all.
+            else => {
+                var b = self.errWith(a.main_tok, .E0358);
+                b.msg("`{s}` must be assigned a string", .{name});
+                try b.emit();
+                continue;
+            },
+        };
+        if (allowed.len == 0) continue; // desc/units: a string is the whole rule
+        var in_domain = false;
+        for (allowed) |ok| {
+            if (std.mem.eql(u8, got, ok)) in_domain = true;
+        }
+        if (!in_domain) {
+            var b = self.errWith(a.main_tok, .E0358);
+            b.msg("`{s} = \"{s}\"`", .{ name, got });
+            b.help("§2.9.2 lists the values for `{s}`: {s}", .{ name, try joinQuoted(self.arena, allowed) });
+            try b.emit();
+        }
     }
-    const a = self.constEval(dims[0].msb) orelse {
-        try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
-        return null;
-    };
-    const b = self.constEval(dims[0].lsb) orelse {
-        try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
-        return null;
-    };
-    const x = a.asInt();
-    const y = b.asInt();
-    return .{ .lo = @min(x, y), .hi = @max(x, y) };
 }
 
-/// The scalarized key for one array element, `name[i]` (§3.2.2, §3.4.4).
+/// `"a", "b" or "c"` — the LRM's own listing style, for E0358's help line.
+fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    for (items, 0..) |it, i| {
+        if (i != 0) try out.appendSlice(arena, if (i + 1 == items.len) " or " else ", ");
+        try out.print(arena, "\"{s}\"", .{it});
+    }
+    return out.toOwnedSlice(arena);
+}
+
+/// §3.4.8/§3.3's nested assignment pattern, flattened to one expression per
+/// cell of `dims` in the same row-major order `shapeSubscripts` walks. §3.3's
+/// own example is
+///
+///     string paths[0:2][0:1] = '{ '{"dir1","fileA"}, '{"dir2","fileA"}, … };
+///
+/// — an element list per dimension, so the flattening is one recursion per
+/// dimension rather than a single `args` read. A cell the pattern does not
+/// reach is `.none`, which every caller reads as §3.2's zero (or "").
+/// A `.concat` is accepted alongside `.assign_pattern` because the parser folds
+/// `{a,b}` to the same node shape and §3.4.4's diagnostic (E0349) already
+/// covers the spelling.
+fn flattenPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds) Oom![]const Ast.ExprId {
+    const out = try self.arena.alloc(Ast.ExprId, shapeCells(dims));
+    @memset(out, .none);
+    self.fillPattern(e, dims, out);
+    return out;
+}
+
+fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) void {
+    if (dims.len == 0) {
+        out[0] = e;
+        return;
+    }
+    const ex = &self.file.exprs;
+    const elems: []const Ast.ExprId = if (e != .none and
+        (ex.tag(e) == .assign_pattern or ex.tag(e) == .concat))
+        ex.args(e)
+    else
+        &.{};
+    const stride = shapeCells(dims[1..]);
+    for (0..@intCast(dims[0].count())) |k| {
+        const child = if (k < elems.len) elems[k] else Ast.ExprId.none;
+        self.fillPattern(child, dims[1..], out[k * stride ..][0..stride]);
+    }
+}
+
+const Bounds = struct {
+    lo: i64,
+    hi: i64,
+
+    fn count(b: Bounds) i64 {
+        return b.hi - b.lo + 1;
+    }
+};
+
+/// §3.2/§3.2.2/§3.4.4 `{ [msb:lsb] }` — one `Bounds` per declared dimension,
+/// outermost first, so `flag_array[0:8][0:3]` is `{{0,8},{0,3}}`.
+///
+/// §3.2 puts no limit on the count and neither does this: a multidimensional
+/// array is scalarized cell by cell (see `shapeCells`), exactly as the
+/// one-dimensional case always was, so a second dimension costs a longer key
+/// and nothing else.
+fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u8) Oom!?[]const Bounds {
+    if (dims.len == 0) {
+        try self.err(tok, .E0307, "`{s}` has no dimensions", .{name});
+        return null;
+    }
+    const out = try self.arena.alloc(Bounds, dims.len);
+    for (dims, out) |d, *b| {
+        const a = self.constEval(d.msb) orelse {
+            try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
+            return null;
+        };
+        const c = self.constEval(d.lsb) orelse {
+            try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
+            return null;
+        };
+        const x = a.asInt();
+        const y = c.asInt();
+        b.* = .{ .lo = @min(x, y), .hi = @max(x, y) };
+    }
+    return out;
+}
+
+/// How many scalars a declared shape becomes.
+fn shapeCells(dims: []const Bounds) usize {
+    var n: usize = 1;
+    for (dims) |d| n *= @intCast(d.count());
+    return n;
+}
+
+/// The subscripts of the `k`th cell of a ROW-MAJOR walk — the last dimension
+/// varies fastest, which is the order §3.4.8's nested assignment pattern lists
+/// its elements in (`'{ '{a,b}, '{c,d} }` is rows of columns).
+fn shapeSubscripts(dims: []const Bounds, k: usize, out: []i64) void {
+    var rest = k;
+    var i = dims.len;
+    while (i > 0) {
+        i -= 1;
+        const n: usize = @intCast(dims[i].count());
+        out[i] = dims[i].lo + @as(i64, @intCast(rest % n));
+        rest /= n;
+    }
+}
+
+/// The scalarized key for one array element, `name[i]` / `name[i][j]`
+/// (§3.2, §3.2.2, §3.4.4).
 ///
 /// Only the two DECLARATION sites need this: `vars` and `param_index` retain
 /// the key, so it has to outlive the call. Every *lookup* goes through
 /// `elemKey` instead — see there.
-fn elemName(self: *Lower, name: []const u8, i: i64) Oom![]const u8 {
-    return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, i });
+fn elemName(self: *Lower, name: []const u8, idx: []const i64) Oom![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(self.arena, name);
+    for (idx) |i| try out.print(self.arena, "[{d}]", .{i});
+    return out.toOwnedSlice(self.arena);
 }
 
-/// Widest `name[i]` a legal model can produce: §2.7 caps an identifier at 1024
-/// characters (the same source bound `naming.max_name_len` is sized from), plus
-/// `[`, a 20-character `i64` and `]`.
-const elem_key_len = 1024 + 22;
+/// Widest `name[i][j]…` a legal model can produce without spilling: §2.7 caps
+/// an identifier at 1024 characters (the same source bound
+/// `naming.max_name_len` is sized from), plus four subscripts of `[`, a
+/// 20-character `i64` and `]`. A deeper array spills to the arena — see
+/// `elemKey`.
+const elem_key_len = 1024 + 22 * 4;
 
-/// `name[i]` for a *lookup*, formatted into the caller's stack buffer.
+/// `name[i][j]` for a *lookup*, formatted into the caller's stack buffer.
 ///
 /// `HashMap.get` only compares the key, it never retains it, so the arena copy
 /// `elemName` makes is pure waste on this path — and it was paid once per
@@ -2005,12 +2274,27 @@ const elem_key_len = 1024 + 22;
 /// declaration. Same trick as `naming.zig`'s fixed key buffer, and safe for the
 /// same reason: the slice never escapes the caller's frame.
 ///
-/// ponytail: an over-long identifier falls back to the arena rather than
-/// carrying a diagnostic of its own — it is already rejected upstream, and
-/// silently truncating the key would alias two distinct elements.
-fn elemKey(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, i: i64) Oom![]const u8 {
-    return std.fmt.bufPrint(buf, "{s}[{d}]", .{ name, i }) catch
-        try self.elemName(name, i);
+/// ponytail: an over-long identifier, or an array of more than four dimensions,
+/// falls back to the arena rather than carrying a diagnostic of its own — the
+/// first is already rejected upstream, the second is legal §3.2 and only pays
+/// one allocation per reference. Silently truncating the key would alias two
+/// distinct elements, which is the one outcome that must not happen.
+fn elemKey(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, idx: []const i64) Oom![]const u8 {
+    if (name.len > buf.len) return try self.elemName(name, idx);
+    @memcpy(buf[0..name.len], name);
+    var n = name.len;
+    for (idx) |i| {
+        const s = std.fmt.bufPrint(buf[n..], "[{d}]", .{i}) catch
+            return try self.elemName(name, idx);
+        n += s.len;
+    }
+    return buf[0..n];
+}
+
+/// The one-dimensional spelling of the two above, for the many callers that
+/// index a `[lo:hi]` array with a single subscript.
+fn elemKey1(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, i: i64) Oom![]const u8 {
+    return self.elemKey(buf, name, &.{i});
 }
 
 // ---- §3.2 variables and scopes ---------------------------------------------
@@ -2055,30 +2339,27 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
     const hold = scope == .module and ty != .string and self.held_names.contains(name);
 
     if (decl.dims.len != 0) {
-        const dim = try self.dimBounds(decl.dims, decl.main_tok, name) orelse return;
-        try self.arrays.put(self.arena, name, .{ .lo = dim.lo, .hi = dim.hi, .ty = ty });
+        const dims = try self.dimsBounds(decl.dims, decl.main_tok, name) orelse return;
+        try self.arrays.put(self.arena, name, .{ .dims = dims, .ty = ty });
         // §3.3's own example is `string names[1:3] = '{"first","middle","last"}`:
         // the declaration takes an initializer exactly like the §3.4.4 array
         // PARAMETER does, and dropping it silently zeroed every element. The
         // pattern is positional over the declared range, so element k lands at
-        // `dim.lo + k` — a 1:3 range puts "first" at index 1, not 0.
-        const elems: []const Ast.ExprId = if (decl.init != .none and
-            (self.file.exprs.tag(decl.init) == .assign_pattern or
-                self.file.exprs.tag(decl.init) == .concat))
-            self.file.exprs.args(decl.init)
-        else
-            &.{};
-        var i = dim.lo;
-        while (i <= dim.hi) : (i += 1) {
+        // `dims[0].lo + k` — a 1:3 range puts "first" at index 1, not 0 — and
+        // one list per dimension for a multidimensional array (§3.3, §3.4.8).
+        const elems = try self.flattenPattern(decl.init, dims);
+        var sub: [8]i64 = undefined;
+        for (elems, 0..) |elem, k| {
+            const idx = if (dims.len <= sub.len) sub[0..dims.len] else try self.arena.alloc(i64, dims.len);
+            shapeSubscripts(dims, k, idx);
             // §3.2.2 arrays are scalarized, so a held array is just one held
             // slot per element — `markHeldVars` records the base name and every
             // element takes a slot, since the index may be a runtime `case`.
-            const en = try self.elemName(name, i);
+            const en = try self.elemName(name, idx);
             const slot = try self.declareVar(en, ty);
-            const k: usize = @intCast(i - dim.lo);
             // §3.2 an element the pattern does not reach keeps the zero start.
-            const init_val: Mir.Value = if (k < elems.len)
-                try self.coerceTo(elems[k], ty, try self.lowerExpr(elems[k]))
+            const init_val: Mir.Value = if (elem != .none)
+                try self.coerceTo(elem, ty, try self.lowerExpr(elem))
             else
                 zeroOf(ty);
             try self.builder.writeVariable(slot.place, self.cur, if (hold)
@@ -2206,16 +2487,38 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
         .assign => |a| try self.lowerAssign(a.target, a.value), // §5.7
         .contribute => |c| try self.lowerContribute(c.lhs, c.rhs), // §5.6
         .indirect => |c| try self.lowerIndirect(tok, c.lhs, c.probe, c.eqn), // §5.6.7
-        .if_stmt => |s| try self.lowerIf(s.cond, s.then_s, s.else_s), // §5.8
-        .case_stmt => |s| try self.lowerCase(tok, s.kind, s.scrutinee, s.arms), // §5.8.3
+        .if_stmt => |s| {
+            if (s.is_generate) try self.checkGenScheme(tok, s.cond); // §6.6
+            try self.lowerIf(s.cond, s.then_s, s.else_s); // §5.8
+        },
+        .case_stmt => |s| {
+            if (s.is_generate) try self.checkGenScheme(tok, s.scrutinee); // §6.6
+            try self.lowerCase(tok, s.kind, s.scrutinee, s.arms); // §5.8.3
+        },
         .for_stmt => |s| try self.lowerFor(s.init, s.cond, s.step, s.body), // §5.9.2
         .while_stmt => |s| try self.lowerWhile(s.cond, s.body), // §5.9.1
         .repeat_stmt => |s| try self.lowerRepeat(s.count, s.body), // §5.9
         .event_control => |s| try self.lowerEventControl(s.event, s.body), // §5.10
+        .event_trigger => |s| try self.lowerEventTrigger(tok, self.file.str(s.name)), // §5.10.4
         .disable => try self.lowerDisable(tok),
         .sys_task => |s| try self.lowerSysTask(tok, self.file.str(s.name), s.args),
         .jump => |j| try self.lowerJump(tok, j.kind, j.value),
     }
+}
+
+/// §5.10.4 / A.6.5 `event_trigger ::= -> hierarchical_event_identifier ;`.
+/// Sets the event's flag for this timepoint; `@(ev)` reads it.
+///
+/// A.6.4 lists `event_trigger` under `analog_event_statement` and not under
+/// `analog_statement`, so a trigger on the analog spine has no derivation. That
+/// is NOT gated here: unlike `disable` (E0401), no fixture pins it, and the
+/// accepted form is harmless — an unconditional trigger means "this event is
+/// active every timepoint", which is what the source says. Add the
+/// `!in_event_stmt` gate beside `lowerDisable`'s when a fixture asks.
+fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
+    const place = self.events.get(name) orelse
+        return self.err(tok, .E0705, "`{s}`", .{name});
+    try self.builder.writeVariable(place, self.cur, .one);
 }
 
 /// A.6.5 `disable_statement`. It is an alternative of A.6.4
@@ -2256,19 +2559,39 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     if (ex.tag(target) == .ident and (ex.tag(value) == .assign_pattern or ex.tag(value) == .concat)) {
         const name = self.file.str(ex.strOf(target));
         if (self.arrays.get(name)) |info| {
-            const elems = ex.args(value);
+            const elems = try self.flattenPattern(value, info.dims);
             var key_buf: [elem_key_len]u8 = undefined;
-            var i = info.lo;
-            while (i <= info.hi) : (i += 1) {
-                const k: usize = @intCast(i - info.lo);
-                if (k >= elems.len) break;
-                const slot = self.vars.get(try self.elemKey(&key_buf, name, i)) orelse continue;
-                const tv = try self.lowerExpr(elems[k]);
-                const v = try self.coerceTo(elems[k], slot.ty, tv);
+            var sub: [8]i64 = undefined;
+            for (elems, 0..) |elem, k| {
+                if (elem == .none) continue;
+                const idx = if (info.dims.len <= sub.len) sub[0..info.dims.len] else try self.arena.alloc(i64, info.dims.len);
+                shapeSubscripts(info.dims, k, idx);
+                const slot = self.vars.get(try self.elemKey(&key_buf, name, idx)) orelse continue;
+                const tv = try self.lowerExpr(elem);
+                const v = try self.coerceTo(elem, slot.ty, tv);
                 try self.builder.writeVariable(slot.place, self.cur, v);
             }
             return;
         }
+    }
+    // §5.7 whole-array assignment from another ARRAY, `A = B`. The clause is a
+    // shape rule, checked here and nowhere else because this is the only place
+    // both shapes are in scope; when it holds the copy is element-wise, since
+    // both sides are scalarized and there is no array Value to move.
+    if (ex.tag(target) == .ident and ex.tag(value) == .ident) {
+        const dst_name = self.file.str(ex.strOf(target));
+        if (self.arrays.get(dst_name)) |dst| {
+            if (try self.copyWholeArray(target, value, dst_name, dst)) return;
+        }
+    }
+    // §3.2.2 `a[i] = …` with a RUNTIME index. The array is scalarized, so there
+    // is no memory to store into: the write becomes one masked write per element,
+    // which is the mirror image of the select chain `lowerIndex` already folds for
+    // a runtime READ. §4.7.1's Example 3 (`arrayadd`) is why this has to exist —
+    // its body is `for (i…) a[i] = a[i] + b[i]`, and `i` is an ordinary variable,
+    // not a genvar, so nothing unrolls it.
+    if (ex.tag(target) == .index) {
+        if (try self.assignRuntimeIndex(target, value)) return;
     }
     const slot = try self.resolveLvalue(target) orelse {
         _ = try self.lowerExpr(value); // keep collecting errors from the rhs
@@ -2277,6 +2600,116 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     const tv = try self.lowerExpr(value);
     const v = try self.coerceTo(value, slot.ty, tv);
     try self.builder.writeVariable(slot.place, self.cur, v);
+}
+
+/// `a[i] = v` for a non-constant `i` over a one-dimensional array. True when it
+/// was handled; false leaves the ordinary `resolveLvalue` path and its
+/// diagnostics (a constant index, a multidimensional array, a non-array name).
+///
+/// Every element is rewritten as `select(i == k, v, a[k])`, so an index outside
+/// the declared range writes nothing at all — §3.2.2 leaves that case undefined,
+/// and dropping the write is the one answer that cannot corrupt a neighbour.
+///
+/// ponytail: N selects per assignment, so a loop over an N-element array is
+/// O(N²) instructions. Fine at the sizes §3.2 arrays are written at (the LRM's
+/// own examples are 2 and 4 elements) and the alternative is real memory in the
+/// emitted device, which is the whole thing scalarization exists to avoid.
+fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
+    var subs: [8]Ast.ExprId = undefined;
+    const chain = self.indexChain(target, &subs) orelse return false;
+    if (chain.subs.len != 1) return false;
+    if (self.constEval(chain.subs[0]) != null) return false;
+    const name = self.file.str(chain.name);
+    const info = self.arrays.get(name) orelse return false;
+    if (info.dims.len != 1) return false;
+
+    const iv = try self.toInt(try self.lowerExpr(chain.subs[0]));
+    const tv = try self.lowerExpr(value);
+    const d = info.first();
+    var key_buf: [elem_key_len]u8 = undefined;
+    var i = d.lo;
+    while (i <= d.hi) : (i += 1) {
+        const slot = self.vars.get(try self.elemKey(&key_buf, name, &.{i})) orelse continue;
+        const old = try self.builder.readVariable(slot.place, self.cur);
+        const new = try self.coerceTo(value, slot.ty, tv);
+        const c = try self.emit(.ieq, &.{ iv, try self.iconst(i) });
+        try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ c, new, old }));
+    }
+    return true;
+}
+
+/// §5.7 unpacked array assignment, `A = B`: "Array assignments shall only be
+/// done with arrays that are compatible. An array, or a slice of such an array,
+/// shall be assignment compatible with any other such array or slice if all the
+/// following conditions are satisfied: — The element types of source and target
+/// shall be equivalent. — Every dimension of the source array shall have the
+/// same number of elements as the target array."
+///
+/// The clause counts ELEMENTS, not indices, and prints its own worked verdict:
+/// `int A[10:1]; int B[0:9]; int C[24:1]; A = B;` is legal and `A = C` is not.
+/// So the test is `count()` per dimension and never `lo`/`hi`.
+///
+/// Returns false when the right-hand side is not an array at all, so the
+/// ordinary scalar path keeps its own diagnostics.
+fn copyWholeArray(
+    self: *Lower,
+    target: Ast.ExprId,
+    value: Ast.ExprId,
+    dst_name: []const u8,
+    dst: ArrayInfo,
+) Oom!bool {
+    const src_name = self.file.str(self.file.exprs.strOf(value));
+    const src = self.arrays.get(src_name) orelse return false;
+
+    if (src.dims.len != dst.dims.len) {
+        var b = self.errAtWith(target, .E0429);
+        b.msg("array `{s}` has {d} dimensions and `{s}` has {d}", .{
+            dst_name, dst.dims.len, src_name, src.dims.len,
+        });
+        try b.emit();
+        return true;
+    }
+    for (dst.dims, src.dims, 0..) |d, s, k| {
+        if (d.count() == s.count()) continue;
+        var b = self.errAtWith(target, .E0429);
+        // The element COUNTS, not the bounds: `dimsBounds` normalizes `[10:1]`
+        // to lo/hi, so printing them back is not the source's own spelling and
+        // sends the reader looking for a declaration that is not there.
+        b.msg("dimension {d} of array `{s}` holds {d} elements and `{s}` holds {d}", .{
+            k, dst_name, d.count(), src_name, s.count(),
+        });
+        b.note("§5.7 counts elements, not indices: `A[10:1] = B[0:9]` is legal", .{});
+        try b.emit();
+        return true;
+    }
+    // "The element types of source and target shall be equivalent." §4.2.1.1's
+    // integer/real conversions are NOT that: a `real` array and an `integer`
+    // array hold different objects, and the clause has no coercion in it.
+    if (src.ty != dst.ty) {
+        var b = self.errAtWith(target, .E0429);
+        b.msg("array `{s}` holds `{s}` and `{s}` holds `{s}`", .{
+            dst_name, @tagName(dst.ty), src_name, @tagName(src.ty),
+        });
+        try b.emit();
+        return true;
+    }
+
+    var key_buf: [elem_key_len]u8 = undefined;
+    var d_sub: [8]i64 = undefined;
+    var s_sub: [8]i64 = undefined;
+    const n = shapeCells(dst.dims);
+    for (0..n) |k| {
+        const di = if (dst.dims.len <= d_sub.len) d_sub[0..dst.dims.len] else try self.arena.alloc(i64, dst.dims.len);
+        const si = if (src.dims.len <= s_sub.len) s_sub[0..src.dims.len] else try self.arena.alloc(i64, src.dims.len);
+        shapeSubscripts(dst.dims, k, di);
+        shapeSubscripts(src.dims, k, si);
+        const v = (try self.arrayElemValue(src_name, si)) orelse continue;
+        const slot = self.vars.get(try self.elemKey(&key_buf, dst_name, di)) orelse continue;
+        // The element types are already known equivalent, so there is no
+        // conversion to make here — only the source's `Value` to re-bind.
+        try self.builder.writeVariable(slot.place, self.cur, v.v);
+    }
+    return true;
 }
 
 /// An assignable location: `x` or `x[<constant>]` (§3.2.2). Anything else is a
@@ -2303,19 +2736,36 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
             return null;
         },
         .index => {
-            const name_id = ex.strOf(ex.lhs(e));
-            if (ex.tag(ex.lhs(e)) != .ident or name_id == .none) {
+            var subs: [8]Ast.ExprId = undefined;
+            const chain = self.indexChain(e, &subs) orelse {
                 try self.errAt(e, .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
                 return null;
-            }
-            const name = self.file.str(name_id);
-            const idx = self.constEval(ex.rhs(e)) orelse {
-                // ponytail: a runtime array index would need a select chain or
-                // real memory; every fixture indexes with a constant/genvar.
-                try self.errAt(e, .E0311, "indexing `{s}`", .{name});
-                return null;
             };
-            return self.arrayElem(e, name, idx.asInt());
+            const name = self.file.str(chain.name);
+            var idx: [8]i64 = undefined;
+            const at = if (chain.subs.len <= idx.len) idx[0..chain.subs.len] else try self.arena.alloc(i64, chain.subs.len);
+            for (chain.subs, at) |s, *o| {
+                const c = self.constEval(s) orelse {
+                    // ponytail: a runtime array index would need a select chain or
+                    // real memory; every fixture indexes with a constant/genvar.
+                    try self.errAt(e, .E0311, "indexing `{s}`", .{name});
+                    return null;
+                };
+                o.* = c.asInt();
+            }
+            return self.arrayElem(e, name, at);
+        },
+        // §5.7's third restriction: "Hierarchical assignment of a variable from
+        // another scope/module is not allowed." Its own code because the generic
+        // arm below would say "only `x` and `x[<constant>]`", which reads as a
+        // VerA limitation — this one is a rule, and a variable in another scope
+        // stays unwritable however much of §6.8 is implemented.
+        .hier_ident => {
+            var b = self.errAtWith(e, .E0316);
+            b.msg("a hierarchical name is not an assignment target", .{});
+            b.note("§5.7: \"Hierarchical assignment of a variable from another scope/module is not allowed\"", .{});
+            try b.emit();
+            return null;
         },
         // A.6.3: `{a, b} = ...` is net_lvalue/variable_lvalue, a different
         // production from the §4.2.13 expression, and it is not in the analog
@@ -2331,17 +2781,63 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
     }
 }
 
-fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, i: i64) Oom!?VarSlot {
+fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oom!?VarSlot {
     const info = self.arrays.get(name) orelse {
         try self.errAt(e, .E0309, "`{s}`", .{name});
         return null;
     };
-    if (i < info.lo or i > info.hi) {
-        try self.errAt(e, .E0310, "index {d} is outside `{s}[{d}:{d}]`", .{ i, name, info.lo, info.hi });
-        return null;
-    }
+    if (!try self.checkSubscripts(e, name, info, idx)) return null;
     var key_buf: [elem_key_len]u8 = undefined;
-    return self.vars.get(try self.elemKey(&key_buf, name, i));
+    return self.vars.get(try self.elemKey(&key_buf, name, idx));
+}
+
+/// The base identifier and the subscripts of `name[i][j]…` (§3.2), outermost
+/// first. `null` when the base is not a plain name — `f(x)[0]` has no
+/// scalarized element to resolve to.
+///
+/// The chain is walked from the OUTSIDE in (`.index` nests to the left), so the
+/// subscripts come out reversed and are flipped once, in place.
+const IndexChain = struct { name: Ast.StrId, subs: []const Ast.ExprId };
+fn indexChain(self: *const Lower, e: Ast.ExprId, buf: []Ast.ExprId) ?IndexChain {
+    const ex = &self.file.exprs;
+    var n: usize = 0;
+    var cur = e;
+    while (ex.tag(cur) == .index) {
+        if (n == buf.len) return null; // deeper than any legal declaration here
+        buf[n] = ex.rhs(cur);
+        n += 1;
+        cur = ex.lhs(cur);
+    }
+    if (ex.tag(cur) != .ident or ex.strOf(cur) == .none) return null;
+    std.mem.reverse(Ast.ExprId, buf[0..n]);
+    return .{ .name = ex.strOf(cur), .subs = buf[0..n] };
+}
+
+/// §3.2: a reference supplies one subscript per declared dimension. Separate
+/// from the range check below because a runtime subscript has a COUNT but no
+/// value — and a caller that checked only the range would read `flag_array[3]`,
+/// a whole ROW, as if it were a scalar.
+fn checkSubscriptCount(self: *Lower, e: Ast.ExprId, name: []const u8, info: ArrayInfo, n: usize) Oom!bool {
+    if (n == info.dims.len) return true;
+    var b = self.errAtWith(e, .E0356);
+    b.msg("`{s}` is declared with {d} dimension(s) and is indexed with {d}", .{
+        name, info.dims.len, n,
+    });
+    try b.emit();
+    return false;
+}
+
+/// §3.2.2: each subscript inside its own dimension's declared bounds.
+fn checkSubscripts(self: *Lower, e: Ast.ExprId, name: []const u8, info: ArrayInfo, idx: []const i64) Oom!bool {
+    if (!try self.checkSubscriptCount(e, name, info, idx.len)) return false;
+    for (idx, info.dims, 0..) |i, d, k| {
+        if (i >= d.lo and i <= d.hi) continue;
+        try self.errAt(e, .E0310, "index {d} is outside dimension {d} of `{s}[{d}:{d}]`", .{
+            i, k, name, d.lo, d.hi,
+        });
+        return false;
+    }
+    return true;
 }
 
 /// §4.7.1 `return`, §5.9 `break` / `continue`. All three close the current
@@ -2420,6 +2916,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         _ = try self.lowerExpr(rhs);
         return;
     }
+    try self.checkZeroTransitionZFilter(rhs);
     const target = try self.branchOf(lhs) orelse return;
     // §5.6.7.2 "Once a value is indirectly assigned to a branch, it cannot be
     // contributed to using the branch contribution operator <+."
@@ -2455,6 +2952,10 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     if (split.resist) |v| try self.checkFiniteContribution(lhs, v); // §7.3.2.1
     if (split.react) |v| try self.checkFiniteContribution(lhs, v);
     const acc = self.accum.items[idx];
+    // §5.6.1.3 value retention, the half that is a REPLACEMENT and not a sum.
+    // Before this statement's own value is added, anything retained for the
+    // OTHER quantity of the same branch is thrown away.
+    try self.discardOpposite(target.access, target.hi, target.lo);
     // §1.3.1.2: `I(n,p) <+ e` drives the same branch as `I(p,n) <+ -e`, so the
     // reversed spelling accumulates into the same source with the sign flipped.
     // Checked AFTER §7.3.2.1, which is about the value the source names and
@@ -2471,6 +2972,40 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     }
     // §4.6.4 the noise kind belongs to the target, not to one statement.
     if (self.noiseKindOf(rhs)) |k| self.contributions.items[idx].noise_kind = k;
+}
+
+/// §4.5.12, the two sentences that are one rule: "If the transition time is
+/// specified as zero (0), then the output is abruptly discontinuous. A Z-filter
+/// with zero (0) transition time shall not be directly assigned to a branch."
+///
+/// A zero τ is LEGAL — the same clause makes τ optional and "nonnegative", and
+/// reading the discontinuous output into a variable is fine. What is banned is
+/// putting the discontinuity straight into the equation system, where a branch
+/// quantity that steps instantaneously has no derivative for Newton-Raphson.
+/// So the target of the rule is the STATEMENT, which is why the check lives
+/// here and not beside the operator's other argument checks.
+///
+/// DIRECTLY: the filter call has to BE the right-hand side. `V(x) <+ 2*zi_zp(…)`
+/// is arithmetic over the filter's output and the clause does not reach it —
+/// the LRM says "directly assigned", and a scan of the whole subtree would
+/// invent a rule about expressions the clause declines to state.
+///
+/// An absent τ is not a zero one: it means the sampler's own default, which is
+/// the simulator's business (§4.5.12 leaves it unstated) and is not the
+/// "specified as zero" the sentence conditions on.
+fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
+    const ex = &self.file.exprs;
+    if (ex.tag(rhs) != .filter_call) return;
+    if (!std.mem.startsWith(u8, self.file.str(ex.strOf(rhs)), "zi_")) return;
+    // zi_*(expr, numerator, denominator, T [, τ [, t0]]) — A.8.2.
+    const args = ex.args(rhs);
+    if (args.len < 5 or args[4] == .none) return;
+    const tau = self.constEval(args[4]) orelse return;
+    if (tau.asReal() != 0.0) return;
+    var b = self.errAtWith(rhs, .E0518);
+    b.msg("a Z-filter with zero (0) transition time shall not be directly assigned to a branch", .{});
+    b.help("read it into a variable first, then contribute the variable", .{});
+    try b.emit();
 }
 
 /// §7.3.2.1: "While use of these special numbers in digital expressions is not
@@ -2947,6 +3482,36 @@ fn newContrib(self: *Lower, kind: Kind, access: Access, hi: u16, lo: u16, tok: u
     return idx;
 }
 
+/// §5.6.1.3 "Contributing a flow to a branch which already has a value retained
+/// for the potential results in the potential being discarded and the branch
+/// being converted to a flow source. Similarly, contributing a potential to a
+/// branch which already has a flow retained results in the flow being
+/// discarded." Only contributions of the SAME kind are additive, so a kind
+/// mismatch replaces rather than accumulates — which is the whole difference
+/// between the clause's own worked example answering 7.0 (1 discarded by the
+/// flow, the flow discarded by the 3, then 3 + 4) and answering 8.0.
+///
+/// Zeroing the other accumulator is the whole implementation, because a zeroed
+/// accumulator emits NO row: `emitResidual` skips a contribution whose folded
+/// value is `.f_zero`. So an unconditional discard deletes the source from the
+/// device, which is what "discarded" means, and a zero FLOW source is in any
+/// case §5.4.4's open circuit — the state the branch is in when nothing is
+/// retained for it.
+///
+/// ponytail: under a conditional the discard survives as a phi rather than a
+/// constant, so an arm that discards a POTENTIAL leaves a zero potential source
+/// (a short) instead of no source. Fixing that means making the ROW itself
+/// switchable at run time, i.e. implementing §5.6.5's switch branch in codegen,
+/// which VerA does not do for the plain `if (c) V(p,n) <+ 0;` shape either.
+fn discardOpposite(self: *Lower, access: Access, hi: u16, lo: u16) Oom!void {
+    const other: Access = if (access == .potential) .flow else .potential;
+    for (self.contributions.items, self.accum.items) |c, acc| {
+        if (c.kind != .direct or c.access != other or c.hi != hi or c.lo != lo) continue;
+        try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
+        try self.builder.writeVariable(acc.react, self.cur, .f_zero);
+    }
+}
+
 const Split = struct { resist: ?Mir.Value, react: ?Mir.Value };
 
 /// LRM §5.6.1.2 — separate the ddt terms (§4.5.3) into the reactive part.
@@ -3041,7 +3606,12 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                     try self.errAt(e, .E0502, "", .{});
                     return null;
                 }
-                // args[1] (abstol/nature, §4.5.3) only affects tolerance.
+                // args[1] (abstol/nature, §4.5.3) only affects tolerance, so
+                // it is not lowered — but it still has to be LEGAL, on the same
+                // grounds as the E0502 agreement above: this spine bypasses
+                // `lowerFilter`, where §5.5.3's ban on a non-constant attribute
+                // reference is otherwise reached through `lowerExpr`.
+                if (args.len > 1) _ = try self.lowerAbstolArg(args[1]);
                 return try self.toReal(try self.lowerExpr(args[0]));
             }
         },
@@ -3111,6 +3681,34 @@ fn noiseKindOf(self: *const Lower, e: Ast.ExprId) ?NoiseKind {
 // ---------------------------------------------------------------------------
 // Class 4 — control flow (LRM §5.8, §5.9)
 // ---------------------------------------------------------------------------
+
+/// §6.6: "All expressions in generate schemes shall be constant expressions,
+/// deterministic at elaboration time." The scheme of an if-generate is its
+/// condition and of a case-generate its selector; the loop generate's three
+/// parts are E0417-E0419, judged in `tryUnrollFor` where the unroll needs them.
+///
+/// `constEval`, NOT `elabConst`: a `parameter` is a `constant_primary` (A.8.4)
+/// and §6.6's stated purpose is "the ability for parameter values to affect the
+/// structure of the model", so a parameterized scheme is exactly what the clause
+/// is for. What it excludes is a module variable or anything reading the
+/// solution — the things `constEval` returns null for.
+///
+/// Reported and then lowered anyway: a scheme VerA cannot fold is still lowered
+/// as the §5.8 runtime branch it looks like, so a second mistake inside the
+/// selected arm is reported in the same run.
+///
+/// ponytail: a scheme this accepts is not necessarily FOLDED. `elabConst` keeps
+/// refusing a parameter on purpose — folding it to its declared default would
+/// compile the arm the model card did not ask for — so a parameterized generate
+/// becomes a runtime diamond over both arms instead of one elaborated arm. Same
+/// behavior, different structure, and nothing VerA emits can observe the
+/// difference until §6.6.1's per-instance declarations exist.
+fn checkGenScheme(self: *Lower, tok: u32, scheme: Ast.ExprId) Oom!void {
+    if (self.constEval(scheme) != null) return;
+    var b = self.errWith(tok, .E0428);
+    b.help("a generate scheme may read parameters and genvars, not variables", .{});
+    try b.emit();
+}
 
 /// §5.8 conditional. A constant-foldable condition lowers only the taken arm —
 /// that is also what makes `generate if` (§6.6.2) collapse at elaboration.
@@ -3540,14 +4138,15 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
             try self.errAt(e, .E0704, "", .{});
             return null;
         },
-        // §5.10.4. IN SCOPE for Verilog-A — §5.10 lists named events as one of
-        // the three kinds of ANALOG event, and annex C.7 excludes only DIGITAL
-        // behavior and events — but not implemented: an event that can be
-        // detected and never triggered would make `@(ev)` a silently
-        // never-taken guard, which is exactly the substitution invariant 5
-        // forbids.
+        // §5.10.4 `@ hierarchical_event_identifier` — the event's flag IS the
+        // guard. IN SCOPE for Verilog-A: §5.10 lists named events as one of the
+        // three kinds of ANALOG event, and annex C.7 excludes only DIGITAL
+        // behavior and events (§5.10.5's named events are the ones a digital
+        // process triggers, which is the mixed-signal case).
         .ident => {
-            try self.errAt(e, .E0705, "`{s}`", .{self.file.str(ex.strOf(e))});
+            const name = self.file.str(ex.strOf(e));
+            if (self.events.get(name)) |p| return try self.builder.readVariable(p, self.cur);
+            try self.errAt(e, .E0705, "`{s}`", .{name});
             return null;
         },
         else => {
@@ -3641,6 +4240,14 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         return;
     }
     if (isDisplayTask(name)) try self.checkFormatPairing(tok, args);
+    // §9.5.3/§9.5.4.2: all three of these write through an argument, which is
+    // not something a `call` result can do — see `lowerStringWrite`/`lowerScan`.
+    if (std.mem.eql(u8, name, "$swrite") or std.mem.eql(u8, name, "$sformat"))
+        return self.lowerStringWrite(tok, name, args);
+    if (std.mem.eql(u8, name, "$sscanf")) {
+        _ = try self.lowerScan(tok, args); // the count is the value; a statement drops it
+        return;
+    }
     if (try self.lowerKernelCtl(tok, name, args)) return; // §9.17
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
@@ -3716,6 +4323,111 @@ fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!void
     var b = self.errWith(tok, .E0810);
     b.msg("the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
     try b.emit();
+}
+
+/// §9.5.3 `$swrite(str, …)` / `$sformat(str, fmt, …)` — the §9.4.3 formatter
+/// with a string variable where the transcript would be: "the first argument to
+/// $swrite shall be a string variable to which the resulting string shall be
+/// written, instead of a variable specifying the file to which to write".
+///
+/// Lowered as an ASSIGNMENT, not as a void call, because the write IS the task.
+/// A call whose result nothing reads is dead code the moment codegen slices a
+/// unit out of the MIR — which is precisely how the old stub could return
+/// `S.con(0.0)` and lose the text. Rendering the formatter is then the same job
+/// as rendering a `$display`, and `cg_display` does both.
+fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+    if (args.len == 0 or args[0] == .none) {
+        try self.err(tok, .E0813, "`{s}` needs a string variable to write into", .{name});
+        return;
+    }
+    const slot = try self.resolveLvalue(args[0]) orelse return;
+    if (slot.ty != .string) {
+        try self.errAt(args[0], .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
+        return;
+    }
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    defer vals.deinit(self.arena);
+    // Types are preserved, not coerced: the conversion `cg_display.appendConv`
+    // picks depends on the operand's own type (§9.4.3 `%d` on a real is a
+    // §4.2.1.1 conversion, `%s` on a string is the text).
+    for (args[1..]) |a| {
+        if (a == .none) continue;
+        try vals.append(self.arena, (try self.lowerExpr(a)).v);
+    }
+    self.uses_str_tasks = true;
+    const v = try self.call("$sformat", vals.items);
+    try self.builder.writeVariable(slot.place, self.cur, v);
+}
+
+/// §9.5.4.2 `code = $sscanf( str, format, args )`. One source call becomes one
+/// `$sscanf` (the count) plus one `$sscanf$<ty>` assignment per output argument,
+/// each naming the item it wants by index among the ASSIGNED items — so a `%*d`
+/// suppressed field shifts nothing, because it is not assigned.
+///
+/// An out-parameter has no spelling in an SSA expression tree, and the scan is a
+/// pure function of the two strings, so N+1 evaluations compute what one call
+/// with N writes would. `str_kernels.zig` says the same from the runtime side.
+///
+/// Returns the count value; a statement-position call drops it.
+fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
+    if (args.len < 2 or args[0] == .none or args[1] == .none) {
+        try self.err(tok, .E0813, "$sscanf needs a string to read and a format string", .{});
+        return self.iconst(0);
+    }
+    const src = (try self.lowerExpr(args[0])).v;
+    const fmt = (try self.lowerExpr(args[1])).v;
+    // Only a literal format can be checked, and only a literal one is worth
+    // checking: a conversion code the scanner does not implement would consume
+    // nothing and still be counted, so the model would read a plausible number.
+    if (self.constEval(args[1])) |c| switch (c) {
+        .str => |s| if (try self.checkScanFormat(tok, s)) return self.iconst(0),
+        else => {},
+    };
+    self.uses_str_tasks = true;
+    var item: i64 = 0;
+    for (args[2..]) |a| {
+        if (a == .none) continue;
+        const slot = try self.resolveLvalue(a) orelse continue;
+        // The destination's declared type picks the callee, exactly as §5.10's
+        // `holdSlot` does: the name IS the type, so `analysis.callTy` and
+        // `sysFuncTy` cannot disagree about it.
+        const callee: []const u8 = switch (slot.ty) {
+            .integer => "$sscanf$int",
+            .string => "$sscanf$str",
+            .real => "$sscanf$real",
+        };
+        const v = try self.call(callee, &.{ src, fmt, try self.iconst(item) });
+        try self.builder.writeVariable(slot.place, self.cur, v);
+        item += 1;
+    }
+    return self.call("$sscanf", &.{ src, fmt });
+}
+
+/// §9.5.4.2's conversion codes, and nothing else. True when the format was
+/// refused. The suppression `*` and the maximum field width are part of the
+/// specification and are read past here; `str_kernels.zScan` implements them.
+fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+        i = p + 1;
+        if (i >= fmt.len) break;
+        if (fmt[i] == '%') { // a literal percent, matched not converted
+            i += 1;
+            continue;
+        }
+        if (fmt[i] == '*') i += 1;
+        while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') i += 1;
+        if (i >= fmt.len) break;
+        const conv = std.ascii.toLower(fmt[i]);
+        i += 1;
+        if (std.mem.indexOfScalar(u8, "dohxbcfegs", conv) != null) continue;
+        var b = self.errWith(tok, .E0813);
+        b.msg("$sscanf does not support the conversion `%{c}`", .{conv});
+        b.note("§9.5.4.2's codes are %d %o %h %x %b %c %f %e %g %s", .{});
+        try b.emit();
+        return true;
+    }
+    return false;
 }
 
 /// §9.17 analog kernel control. Handled here rather than as an ordinary void
@@ -3799,7 +4511,6 @@ fn isRejectedSysFunc(name: []const u8) bool {
         // would silently change the device the user wrote.
         "$rdist_exponential", "$rdist_poisson",   "$rdist_chi_square",
         "$rdist_t",           "$rdist_erlang",
-        "$table_model", // §9.21
         "$simprobe", // §9.16
     };
     for (rejected) |r| if (std.mem.eql(u8, name, r)) return true;
@@ -3901,23 +4612,29 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 
         .ident => return self.lookupIdent(e),
         .hier_ident => {
+            // §5.5.3 Syntax 5-4 first: a nature attribute reference is a
+            // CONSTANT this module can resolve, unlike a §6.8 hierarchical name,
+            // which needs an instance tree (E0901).
+            if (self.natureAttrRef(e)) |r| switch (r) {
+                .value => |c| return switch (c) {
+                    .real, .int => .{ .v = try self.fconst(c.asReal()), .ty = .real },
+                    .str => .{ .v = try self.mir.addStrConst(self.arena, c.str), .ty = .string },
+                },
+                .banned => |attr| {
+                    var b = self.errAtWith(e, .E0359);
+                    b.msg("`{s}`", .{attr});
+                    b.note("§5.5.3: \"This syntax shall not be used for the access, ddt_nature, or idt_nature attributes of a nature, nor any other attribute whose value is not a constant expression\"", .{});
+                    try b.emit();
+                    return poison;
+                },
+            };
             try self.errAt(e, .E0901, "", .{});
             return poison;
         },
 
         .unary => return self.lowerUnary(e),
         .binary => return self.lowerBinary(e),
-        // §4.2.12 value-form conditional: `select` needs no CFG split, so a
-        // ternary inside an expression stays one basic block.
-        .ternary => {
-            const c = try self.toBool(try self.lowerExpr(ex.lhs(e)));
-            const t = try self.lowerExpr(ex.rhs(e));
-            const f = try self.lowerExpr(ex.ternaryElse(e));
-            const ty = unify(t.ty, f.ty);
-            const tv = if (ty == .real) try self.toReal(t) else t.v;
-            const fv = if (ty == .real) try self.toReal(f) else f.v;
-            return .{ .v = try self.emit(.select, &.{ c, tv, fv }), .ty = ty };
-        },
+        .ternary => return self.lowerTernary(e), // §4.2.3 / §4.2.12
 
         .call => return self.lowerUserCall(e), // §4.7
         .builtin_call => return self.lowerBuiltin(e), // §4.3
@@ -3954,34 +4671,47 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// element; a runtime index becomes a `select` chain over them (the array is
 /// scalarized, so there is no memory to index).
 fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    const ex = &self.file.exprs;
-    const base = ex.lhs(e);
-    if (ex.tag(base) != .ident) {
+    var subs: [8]Ast.ExprId = undefined;
+    const chain = self.indexChain(e, &subs) orelse {
         try self.errAt(e, .E0330, "only `name[<index>]` is supported", .{});
         return poison;
-    }
-    const name = self.file.str(ex.strOf(base));
+    };
+    const name = self.file.str(chain.name);
     const info = self.arrays.get(name) orelse {
         try self.errAt(e, .E0309, "`{s}`", .{name});
         return poison;
     };
 
-    if (self.constEval(ex.rhs(e))) |k| {
-        const i = k.asInt();
-        if (i < info.lo or i > info.hi) {
-            try self.errAt(e, .E0310, "index {d} is outside `{s}[{d}:{d}]`", .{ i, name, info.lo, info.hi });
-            return poison;
-        }
-        return (try self.arrayElemValue(name, i)) orelse poison;
+    var idx: [8]i64 = undefined;
+    const at = if (chain.subs.len <= idx.len) idx[0..chain.subs.len] else try self.arena.alloc(i64, chain.subs.len);
+    var all_const = true;
+    for (chain.subs, at) |s, *o| {
+        if (self.constEval(s)) |c| o.* = c.asInt() else all_const = false;
+    }
+    if (!try self.checkSubscriptCount(e, name, info, at.len)) return poison;
+    if (all_const) {
+        if (!try self.checkSubscripts(e, name, info, at)) return poison;
+        return (try self.arrayElemValue(name, at)) orelse poison;
     }
 
     // Runtime index: fold from the top down so element `lo` is the fallback.
     // An out-of-range index yields element `lo` (§3.2.2 leaves it undefined).
-    const iv = try self.toInt(try self.lowerExpr(ex.rhs(e)));
+    //
+    // ponytail: one dimension only. A multidimensional runtime index would fold
+    // a select chain over the whole cartesian product — every cell tested with a
+    // conjunction of subscript comparisons — and no fixture writes one; §3.2's
+    // own examples index a multidimensional array with literals. `for (i…) a[i]`
+    // (§4.7.1's `arrayadd`) is the shape that needs the chain, and it is flat.
+    if (info.dims.len != 1) {
+        try self.errAt(e, .E0311, "indexing the multidimensional array `{s}`", .{name});
+        return poison;
+    }
+    const d = info.first();
+    const iv = try self.toInt(try self.lowerExpr(chain.subs[0]));
     var acc: ?TypedValue = null;
-    var i = info.hi;
+    var i = d.hi;
     while (true) : (i -= 1) {
-        const el = (try self.arrayElemValue(name, i)) orelse return poison;
+        const el = (try self.arrayElemValue(name, &.{i})) orelse return poison;
         if (acc) |a| {
             const ty = unify(el.ty, a.ty);
             const c = try self.emit(.ieq, &.{ iv, try self.iconst(i) });
@@ -3991,7 +4721,7 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         } else {
             acc = el;
         }
-        if (i == info.lo) break;
+        if (i == d.lo) break;
     }
     return acc orelse poison;
 }
@@ -4066,13 +4796,13 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 
 /// The Value of one scalarized element — a variable array (§3.2.2) or a
 /// parameter array (§3.4.4).
-fn arrayElemValue(self: *Lower, name: []const u8, i: i64) Oom!?TypedValue {
+fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?TypedValue {
     var key_buf: [elem_key_len]u8 = undefined;
-    const key = try self.elemKey(&key_buf, name, i);
+    const key = try self.elemKey(&key_buf, name, idx);
     if (self.vars.get(key)) |slot|
         return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
-    if (self.param_index.get(key)) |idx|
-        return .{ .v = self.param_values.items[idx], .ty = astTy(self.params.items[idx].ty) };
+    if (self.param_index.get(key)) |pi|
+        return .{ .v = self.param_values.items[pi], .ty = astTy(self.params.items[pi].ty) };
     return null;
 }
 
@@ -4267,6 +4997,74 @@ fn cmp(self: *Lower, op: Ast.BinaryOp, a: TypedValue, b: TypedValue) Oom!Mir.Val
     return self.emit(opc, &.{ lv, rv });
 }
 
+/// §4.2.3 names THREE short-circuiting operators, "&&, ||, and ?:", and says of
+/// all three that "any side effects or runtime errors that would have occurred
+/// due to evaluation of the short-circuited operand expression shall not occur";
+/// §4.2.12 says the same from the value side, naming only the arm it selects.
+/// So the arms are BRANCHES and not operands of a `select`: an inlined function
+/// that writes an `inout` formal (§4.7.2.4) must not run in the arm that was not
+/// chosen, and neither must a division the condition exists to guard.
+///
+/// The shape is `lowerShortCircuit`'s — one place, one phi at the join. The one
+/// difference is the type: `&&` is integer by definition, while §4.2.1 makes a
+/// ternary's type the unification of BOTH arms, and neither arm's type is known
+/// until it has been lowered. So the then-arm is left UNTERMINATED while the
+/// else-arm is lowered, and both are finished afterwards, once `ty` is settled
+/// and the `.itof` each arm may need can still be emitted before its jump.
+/// Nothing between the two reads the then-arm's terminator: the SSA builder
+/// walks predecessors, and the else-arm has none of the then-arm's blocks.
+fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+    const ex = &self.file.exprs;
+    const cond = ex.lhs(e);
+    const c = try self.toBool(try self.lowerExpr(cond));
+
+    // §4.5.15 "Analog operators shall not be used inside conditional (if, case,
+    // or ?:) statements unless the conditional expression controlling the
+    // statement consists of terms which can not change their value during the
+    // course of a simulation." `?:` is in that list, and short-circuiting is
+    // precisely WHY: an operator in an arm loses its history on every step the
+    // arm is off. The two counters `lowerCondBody` raises for an `if` body are
+    // raised here for the same rule, and that is what lets E0514 in
+    // `lowerFilter` see it.
+    const static = self.isAnalysisOrConst(cond);
+    self.cond_depth += 1;
+    self.static_cond_depth += @intFromBool(static);
+    defer {
+        self.cond_depth -= 1;
+        self.static_cond_depth -= @intFromBool(static);
+    }
+
+    const then_b = try self.newBlock();
+    const else_b = try self.newBlock();
+    const join = try self.newBlock();
+    _ = try self.mir.emitBranch(self.arena, self.cur, c, then_b, else_b);
+    try self.builder.addPredecessor(then_b, self.cur);
+    try self.builder.addPredecessor(else_b, self.cur);
+    try self.builder.sealBlock(then_b);
+    try self.builder.sealBlock(else_b);
+
+    self.cur = then_b;
+    const t = try self.lowerExpr(ex.rhs(e));
+    const then_end = self.cur; // an arm may have branched on its own (`&&`, a nested `?:`)
+
+    self.cur = else_b;
+    const f = try self.lowerExpr(ex.ternaryElse(e));
+    const else_end = self.cur;
+
+    const ty = unify(t.ty, f.ty);
+    const place = self.builder.newPlace();
+    try self.builder.writeVariable(place, else_end, if (ty == .real) try self.toReal(f) else f.v);
+    try self.gotoBlock(join);
+
+    self.cur = then_end;
+    try self.builder.writeVariable(place, then_end, if (ty == .real) try self.toReal(t) else t.v);
+    try self.gotoBlock(join);
+
+    try self.builder.sealBlock(join);
+    self.cur = join;
+    return .{ .v = try self.builder.readVariable(place, join), .ty = ty };
+}
+
 /// §4.2.7 `&&` / `||` with LRM short-circuit evaluation. The rhs gets its own
 /// block, so a guard like `(x != 0) && (1/x > k)` never divides by zero.
 fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedValue {
@@ -4332,11 +5130,51 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return .{ .v = try self.emit(.fsub, &d), .ty = .real };
         },
         .flow => {
+            // §5.4.2.2 "Both the potential and the flow of a source branch are
+            // accessible in expressions anywhere in the module." For a FLOW
+            // source that access cannot be a solver unknown: a current source's
+            // branch flow has no node-derived value and no row pins it, so a
+            // read of the unknown answers its initial 0 whatever was
+            // contributed. What the branch flow of a flow source IS, by
+            // definition, is the value retained on the branch (§5.6.1.2) — so
+            // the read is the ACCUMULATOR, read at THIS point in the block.
+            // §5.6.1.2 states retention sequentially ("adds the value of the
+            // right-hand side to any previously retained value", the assignment
+            // being made at the end of the simulation cycle), so a read placed
+            // before the first `<+` must still see nothing retained;
+            // `readVariable` at `self.cur` is exactly that, and §5.8's
+            // conditional arms come out as its phis with nothing written here.
+            //
+            // Only once a flow contribution has ALREADY been lowered onto this
+            // pair, which is the distinction the clause draws: an uncontributed
+            // branch is a §5.4.2.1 flow PROBE — a short whose current is a
+            // genuine unknown of the solve — and a POTENTIAL source's branch
+            // current is pinned by the branch row codegen emits for it. Both of
+            // those keep the unknown and read it.
+            if (self.flowAccum(t.hi, t.lo)) |acc| {
+                // ponytail: the resistive half only. A reactive flow
+                // contribution retains a CHARGE (§5.6.1.2 strips the `ddt`), so
+                // reading the branch flow back would have to differentiate it
+                // again; that needs a second `ddt` operator instance and no
+                // fixture reads the current of a capacitive branch.
+                const v = try self.builder.readVariable(acc.resist, self.cur);
+                return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
+            }
             const u = try self.flowUnknown(t.hi, t.lo);
             const v = try self.probe(u);
             return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
         },
     }
+}
+
+/// The §5.6.1.2 retained-flow accumulator of the branch (hi, lo), if a `<+` has
+/// already made it a flow source. Keyed exactly like `contribIndex` — on the
+/// canonicalised pair, so `I(n,p)` finds the one entry `I(p,n)` created.
+fn flowAccum(self: *const Lower, hi: u16, lo: u16) ?Accum {
+    for (self.contributions.items, self.accum.items) |c, acc| {
+        if (c.kind == .direct and c.access == .flow and c.hi == hi and c.lo == lo) return acc;
+    }
+    return null;
 }
 
 /// LRM §5.4.3 port access — `I(<p>)`.
@@ -4590,7 +5428,23 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     for (args, 0..) |a, i| {
         // A.8.2 analog_filter_function_call has no `analog_expression_or_null`
         // form: every declared argument must be present (§4.5.14).
+        //
+        // §4.5.15 states the rule with its own escape hatch — "It is illegal to
+        // specify a null argument in the argument list of an analog operator,
+        // EXCEPT AS SPECIFIED ELSEWHERE in this document" — and §4.5.11/§4.5.12
+        // are what the exception points at, in the identical sentence: "The
+        // zeros argument may be represented as a null argument. The null
+        // argument is characterized by two adjacent commas (,,) in the argument
+        // list." §4.5.11.5's own band-limited-noise example writes it. An empty
+        // zeros vector is an empty PRODUCT, hence the numerator 1 — which is
+        // why the carve-out is only for the root forms (`*_zp`, `*_zd`), where
+        // the slot is a list of roots. In `*_np`/`*_nd` the same slot is a
+        // coefficient vector, and an empty one has no such reading.
         if (a == .none) {
+            if (i == 1 and nullZerosOk(name)) {
+                try vals.append(self.arena, try self.iconst(0));
+                continue;
+            }
             try self.errAt(e, .E0505, "`{s}()`", .{name});
             return poison;
         }
@@ -4640,8 +5494,35 @@ fn abstolSlot(name: []const u8) ?usize {
 /// happens to share a nature's name still wins here exactly as it does
 /// everywhere else (§2.8). Only a name nothing else answers reaches the nature
 /// table.
+/// The §4.5.3/§5.5.3 tolerance slot as a value, with its diagnostics. Returns
+/// null when the slot holds an ordinary expression, which the caller lowers as
+/// A.8.3's `constant_expression` arm.
+fn lowerAbstolArg(self: *Lower, e: Ast.ExprId) Oom!?f64 {
+    if (self.natureAbstol(e)) |t| return t;
+    // A `.banned` reference has no value; `lowerExpr` is where E0359 lives, so
+    // the argument is lowered for its diagnostic and the result discarded.
+    if (self.file.exprs.tag(e) == .hier_ident) _ = try self.lowerExpr(e);
+    return null;
+}
+
 fn natureAbstol(self: *Lower, e: Ast.ExprId) ?f64 {
     const ex = &self.file.exprs;
+    // §5.5.3's other spelling of the same value, `n1.potential.abstol`. Its last
+    // sentence makes the two interchangeable in this slot: "The abstol attribute
+    // of a nature may ALSO be accessed simply by using the nature's identifier
+    // as the appropriate argument to the ddt(), idt(), or idtmod() operators".
+    if (ex.tag(e) == .hier_ident) {
+        // A `.banned` attribute is diagnosed by `lowerExpr`, which every caller
+        // falls through to; returning null here is what routes it there.
+        const r = self.natureAttrRef(e) orelse return null;
+        return switch (r) {
+            .value => |c| switch (c) {
+                .real, .int => c.asReal(),
+                .str => null,
+            },
+            .banned => null,
+        };
+    }
     if (ex.tag(e) != .ident) return null;
     const id = ex.strOf(e);
     const name = self.file.str(id);
@@ -4657,6 +5538,57 @@ fn natureAbstol(self: *Lower, e: Ast.ExprId) ?f64 {
         return self.natureOf(id).abstol orelse 0;
     }
     return null;
+}
+
+/// §5.5.3 Syntax 5-4 `nature_attribute_reference ::= net_identifier .
+/// potential_or_flow . nature_attribute_identifier` — "the attributes for a net
+/// or a branch can be accessed by using the hierarchical referencing operator
+/// (.) to the potential or flow for the net or branch". §5.5.3's own twocap
+/// example is `ddt(V(a,b), a.potential.abstol)`.
+///
+/// A constant, resolved at elaboration: the net's discipline decides which
+/// nature each half binds, and a nature attribute "shall be constant"
+/// (§3.6.1.3). Null when the expression is a §6.8 hierarchical name instead,
+/// which is the other thing `.hier_ident` carries.
+///
+/// `abstol` comes from `DisciplineInfo` and not from the nature, deliberately:
+/// §3.6.2.3 lets a DISCIPLINE override its bound nature's tolerance, and that
+/// map is where the override has already been applied.
+///
+/// The sentence right after Syntax 5-4 is enforced by the same walk: "This
+/// syntax shall not be used for the access, ddt_nature, or idt_nature attributes
+/// of a nature, nor any other attribute whose value is not a constant
+/// expression." Those three name an IDENTIFIER, so there is nothing to fold —
+/// which is why the ban and the fold are one test (`.banned`) and not two.
+const NatureRef = union(enum) {
+    value: Const,
+    /// The attribute named, for the message.
+    banned: []const u8,
+};
+fn natureAttrRef(self: *Lower, e: Ast.ExprId) ?NatureRef {
+    const parts = self.file.exprs.nameParts(e);
+    if (parts.len != 3) return null;
+    const half = self.file.str(parts[1]);
+    const is_potential = std.mem.eql(u8, half, "potential");
+    if (!is_potential and !std.mem.eql(u8, half, "flow")) return null;
+
+    const net = self.file.str(parts[0]);
+    const idx = self.node_voltages.get(net) orelse return null;
+    if (idx == ground) return null;
+    const dname = self.node_disciplines.items[idx];
+    const attr = self.file.str(parts[2]);
+
+    if (std.mem.eql(u8, attr, "abstol")) {
+        const info = self.disciplines.get(dname) orelse return null;
+        return .{ .value = .{ .real = if (is_potential) info.potential_abstol else info.flow_abstol } };
+    }
+    const d = for (self.file.disciplines) |*x| {
+        if (std.mem.eql(u8, self.file.str(x.name), dname)) break x;
+    } else return null;
+    const nat = if (is_potential) d.potential else d.flow;
+    if (nat == .none) return null;
+    const v = self.natureAttrExpr(nat, attr) orelse return .{ .banned = attr };
+    return .{ .value = self.constEval(v) orelse return .{ .banned = attr } };
 }
 
 /// §4.5.5-§4.5.10 control-argument bounds. Each operator states its bound in
@@ -4745,6 +5677,16 @@ fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId
 /// vectors: an assignment pattern `'{a,b}` or the name of an array parameter
 /// (§3.4.4). Flattened into the call as `<count>, e0, e1, …`, so the argument
 /// list stays self-describing. Returns false when `a` is an ordinary scalar.
+/// §4.5.11/§4.5.12: does this filter take its ZEROS as a root vector, so that
+/// the null form `f(x, , poles, …)` reads as the empty product 1?
+fn nullZerosOk(name: []const u8) bool {
+    const forms = [_][]const u8{ "laplace_zp", "laplace_zd", "zi_zp", "zi_zd" };
+    for (forms) |f| {
+        if (std.mem.eql(u8, name, f)) return true;
+    }
+    return false;
+}
+
 fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) Oom!bool {
     const ex = &self.file.exprs;
     switch (ex.tag(a)) {
@@ -4758,10 +5700,15 @@ fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) 
         .ident => {
             const name = self.file.str(ex.strOf(a));
             const info = self.arrays.get(name) orelse return false;
-            try out.append(self.arena, try self.iconst(info.hi - info.lo + 1));
-            var i = info.lo;
-            while (i <= info.hi) : (i += 1) {
-                const el = (try self.arrayElemValue(name, i)) orelse return true;
+            // §4.5.11's coefficient slot is a FLAT vector: a multidimensional
+            // array has no reading as a list of poles and is left to the
+            // ordinary path, which reports it (E0356).
+            if (info.dims.len != 1) return false;
+            const d = info.first();
+            try out.append(self.arena, try self.iconst(d.count()));
+            var i = d.lo;
+            while (i <= d.hi) : (i += 1) {
+                const el = (try self.arrayElemValue(name, &.{i})) orelse return true;
                 try out.append(self.arena, try self.toReal(el));
             }
             return true;
@@ -4869,15 +5816,515 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             };
         }
     }
-    var vals: std.ArrayList(Mir.Value) = .empty;
-    defer vals.deinit(self.arena);
-    if (ex.extraOf(e) < ex.pool.items.len) {
-        for (ex.args(e)) |a| {
-            if (a == .none) continue;
-            try vals.append(self.arena, try self.lowerSysArg(a));
+    const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
+    // §9.20 the two alias functions: six validity rules, all of them about the
+    // CALL rather than the value, so all of them here (E0812).
+    if (std.mem.eql(u8, name, "$analog_node_alias") or std.mem.eql(u8, name, "$analog_port_alias")) {
+        if (try self.checkAliasCall(e, name, sys_args)) return poison;
+    }
+    // §9.17.3 Syntax 9-12's THIRD form, `$limit(access, analog_function_identifier,
+    // arg_list)`. The second argument names a §4.7 function, so it is not a value
+    // and must not be looked up as one (E0314 was the whole gap): it is dropped
+    // here, along with the tail that §9.17.3 says is passed on to that function.
+    if (std.mem.eql(u8, name, "$limit") and sys_args.len >= 2) {
+        if (try self.limitUserFunc(sys_args[1])) |fd| {
+            // "The arguments of the user-defined function shall all be declared
+            // input." The simulator supplies all of them — the probe's value for
+            // this iteration, the value $limit returned on the previous one, then
+            // the call's tail — so an `output` formal would write back into the
+            // solver's own iteration history mid-Newton-step, and §9.17.3 defines
+            // no meaning for that.
+            for (fd.args) |formal| {
+                if (formal.direction == .input) continue;
+                var b = self.errAtWith(e, .E0814);
+                b.msg("formal `{s}` of the `$limit` limiter `{s}` is declared `{s}`", .{
+                    self.file.str(formal.name), self.file.str(fd.name), @tagName(formal.direction),
+                });
+                b.note("§9.17.3: \"The arguments of the user-defined function shall all be declared input\"", .{});
+                try b.emit();
+                return poison;
+            }
+            // §4.5.15 lets the simulator decline a limiting request ("the
+            // simulator may choose to ignore the limiting request"), and §9.17.3
+            // only calls the user function "if the simulator determines that
+            // limiting is needed to improve convergence". VerA declines: the
+            // limiter is not called, and §9.17.3's converged answer — "When the
+            // simulator has converged, the return value of the $limit() function
+            // is the value of the access function reference, within appropriate
+            // tolerances" — is what is left, which is the probe. Written as the
+            // one-argument form so `cg_limit` reaches its own decline path and
+            // renders the identity of the probe.
+            //
+            // ponytail: declined, not inlined. Inlining the limiter would mean
+            // emitting it into the contract's `limit` hook with the PREVIOUS
+            // return as its second argument, i.e. one more piece of per-call
+            // solver state; the identity answer above is what §9.17.3 promises at
+            // convergence either way, and no fixture can see the difference
+            // (a non-identity limiter would, which is why this is written down).
+            return .{
+                .v = try self.call(name, &.{try self.lowerSysArg(sys_args[0])}),
+                .ty = sysFuncTy(name),
+            };
         }
     }
+    // §9.21 — Syntax 9-16 is not an ordinary argument list: it carries a data
+    // SOURCE (arrays, or a file) and a control string, neither of which is a
+    // value. `lowerTableModel` rewrites the call into one that is.
+    if (std.mem.eql(u8, name, "$table_model")) return self.lowerTableModel(e);
+    // §9.5.4.2 `$sscanf` writes through its arguments, which a `call` cannot do
+    // — `lowerScan` turns the one source call into the assignments it means.
+    if (std.mem.eql(u8, name, "$sscanf"))
+        return .{ .v = try self.lowerScan(ex.mainTok(e), sys_args), .ty = .integer };
+    // §9.5.3 the two writers are TASKS: their whole content is the assignment to
+    // the string variable, and in expression position there is nothing to assign.
+    if (std.mem.eql(u8, name, "$swrite") or std.mem.eql(u8, name, "$sformat")) {
+        try self.errAt(e, .E0813, "`{s}` is a task and has no value; call it as a statement", .{name});
+        return poison;
+    }
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    defer vals.deinit(self.arena);
+    for (sys_args) |a| {
+        if (a == .none) continue;
+        try vals.append(self.arena, try self.lowerSysArg(a));
+    }
     return .{ .v = try self.call(name, vals.items), .ty = sysFuncTy(name) };
+}
+
+// ---- §9.21 $table_model -----------------------------------------------------
+
+/// §9.21 Syntax 9-16, rewritten into ONE self-describing call:
+///
+///     $table_model(ND, NP, NCOL, dep, "<extrap>", in₀…in_{ND-1}, row₀…row_{NP-1})
+///
+/// — the dimensionality, the sample count, the column count, the dependent
+/// COLUMN the selector picked, two Table 9-31 extrapolation characters per
+/// dimension, then the lookup point and the flat row-major sample block.
+///
+/// Everything §9.21.2 and §9.21.1 decide is decided HERE, and the reason is the
+/// same one that puts §9.20's rules in lowering: none of it is a value. The
+/// control string is a constant, so a scheme VerA cannot honour has to be
+/// reported rather than approximated (E0815); the data source is a set of ARRAY
+/// IDENTIFIERS or a file name, neither of which survives into MIR. What reaches
+/// codegen is a call whose every operand is a number, a string or a probe.
+///
+/// A FILE data source is read at compile time and its rows emitted as constants.
+/// That is not a shortcut around run-time I/O, it is what §9.21.1 says the
+/// semantics are: "The state of the data source is captured on the first call to
+/// the table model function. Any change after this point is ignored." A residual
+/// re-read per Newton iteration would be both slower and less faithful.
+fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+    const ex = &self.file.exprs;
+    const args = ex.args(e);
+
+    // Syntax 9-16 puts `table_inputs` first, then `table_data_source`. The
+    // boundary is decidable without counting: an input is "any legal expression
+    // that can be assigned to an analog signal", while every data-source
+    // argument is an array (a name, or a §3.4.8 pattern) or a string.
+    var i: usize = 0;
+    while (i < args.len and args[i] != .none and !self.isTableSource(args[i])) i += 1;
+    const nd = i;
+    if (nd == 0 or i == args.len) {
+        try self.errAt(e, .E0815, "`$table_model(table_inputs, table_data_source [, table_control_string])` — one lookup expression per dimension, then the data source", .{});
+        return poison;
+    }
+
+    // The columns, in file order: N independents outermost-first, then the
+    // dependents. §9.21.1: "When the data source is a sequence of 1-D arrays the
+    // isolines are laid out in conceptually the same way with each array being
+    // just as a column in the file format described above."
+    var cols: std.ArrayList([]const Mir.Value) = .empty;
+    defer cols.deinit(self.arena);
+    while (i < args.len and self.isTableArray(args[i])) : (i += 1) {
+        var one: std.ArrayList(Mir.Value) = .empty;
+        defer one.deinit(self.arena);
+        _ = try self.appendVectorArg(&one, args[i]);
+        try cols.append(self.arena, try self.arena.dupe(Mir.Value, one.items[1..]));
+    }
+
+    // What is left must be the file name (when there were no arrays) and/or the
+    // control string. §9.21's `file_name ::= string_literal | string_parameter`,
+    // so a constant fold is the whole admissible set.
+    var strs: [2][]const u8 = .{ "", "" };
+    var ns: usize = 0;
+    while (i < args.len) : (i += 1) {
+        if (args[i] == .none) continue;
+        const c = self.constEval(args[i]) orelse break;
+        if (c != .str or ns == 2) break;
+        strs[ns] = c.str;
+        ns += 1;
+    }
+    if (i != args.len) {
+        try self.errAt(e, .E0815, "trailing argument to `$table_model` is neither an array data source nor a constant string", .{});
+        return poison;
+    }
+
+    var rows: []const Mir.Value = &.{};
+    var ncol: usize = 0;
+    var np: usize = 0;
+    var ctl: []const u8 = "";
+    if (cols.items.len != 0) {
+        // `table_model_array ::= 1st_dim_array_identifier [, …], output_array_identifier`
+        // — one column per dimension plus at least one dependent.
+        if (ns > 1) {
+            try self.errAt(e, .E0815, "an array data source takes at most one control string", .{});
+            return poison;
+        }
+        ctl = strs[0];
+        ncol = cols.items.len;
+        np = cols.items[0].len;
+        if (ncol <= nd) {
+            try self.errAt(e, .E0815, "{d} lookup input(s) need {d} independent arrays plus an output array, got {d}", .{ nd, nd, ncol });
+            return poison;
+        }
+        for (cols.items) |c| {
+            if (c.len != np) {
+                try self.errAt(e, .E0815, "the arrays of a `$table_model` data source are columns of one table and must be the same length; got {d} and {d}", .{ np, c.len });
+                return poison;
+            }
+        }
+        const flat = try self.arena.alloc(Mir.Value, np * ncol);
+        for (0..np) |r| for (cols.items, 0..) |c, k| {
+            flat[r * ncol + k] = c[r];
+        };
+        rows = flat;
+    } else {
+        if (ns == 0) {
+            try self.errAt(e, .E0815, "`$table_model` needs a data source: a file name, or one array per dimension plus an output array", .{});
+            return poison;
+        }
+        ctl = strs[1];
+        const nums = (try self.readTableFile(e, strs[0], nd)) orelse return poison;
+        ncol = nums.cols;
+        np = nums.vals.len / ncol;
+        const flat = try self.arena.alloc(Mir.Value, nums.vals.len);
+        for (nums.vals, flat) |v, *out| out.* = try self.fconst(v);
+        rows = flat;
+    }
+
+    // §9.21: "The minimum data requirement is to have the product of at least
+    // two points per dimension (2ᴺ for N dimensions)."
+    if (np < std.math.pow(usize, 2, @min(nd, 30))) {
+        try self.errAt(e, .E0815, "a {d}-dimensional table needs at least {d} samples, got {d}", .{ nd, std.math.pow(usize, 2, @min(nd, 30)), np });
+        return poison;
+    }
+
+    const ext = try self.arena.alloc(u8, 2 * nd);
+    const dep = (try self.parseTableCtl(e, ctl, nd, ncol, ext)) orelse return poison;
+
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    defer vals.deinit(self.arena);
+    try vals.appendSlice(self.arena, &.{
+        try self.iconst(@intCast(nd)),
+        try self.iconst(@intCast(np)),
+        try self.iconst(@intCast(ncol)),
+        try self.iconst(@intCast(dep)),
+        try self.mir.addStrConst(self.arena, ext),
+    });
+    for (args[0..nd]) |a| try vals.append(self.arena, try self.toReal(try self.lowerExpr(a)));
+    for (rows) |v| try vals.append(self.arena, v);
+    self.uses_table_model = true;
+    return .{ .v = try self.call("$table_model", vals.items), .ty = .real };
+}
+
+/// Is this argument part of `table_data_source` rather than a lookup input?
+fn isTableSource(self: *Lower, a: Ast.ExprId) bool {
+    if (self.isTableArray(a)) return true;
+    const c = self.constEval(a) orelse return false;
+    return c == .str;
+}
+
+/// One column of an array data source: an array name (§9.21.1 "via array
+/// variable names") or a pattern (". Arrays may be specified directly via the
+/// concatenation operator"). The same two shapes §4.5.11's coefficient slot
+/// takes, so `appendVectorArg` is the reader for both.
+fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    return switch (ex.tag(a)) {
+        .assign_pattern, .concat => true,
+        .ident => if (self.arrays.get(self.file.str(ex.strOf(a)))) |info| info.dims.len == 1 else false,
+        else => false,
+    };
+}
+
+const TableFile = struct { vals: []const f64, cols: usize };
+
+/// A sample table is text; 16 MiB is ~700k rows of three columns, well past what
+/// a device that re-sorts its block per evaluation can afford anyway.
+const max_table_bytes: usize = 16 << 20;
+
+/// §9.21.1's text format: "Each sample point is separated by a newline and each
+/// column is separated by one or more spaces or tabs. Comments begin with # and
+/// continue to the end of that line. They may appear anywhere in the file. Blank
+/// lines are ignored. The numbers shall be real or integer."
+///
+/// Resolved against the `include_dirs` the caller passed, which is where the
+/// source file's own directory is: §9.21 says nothing about the search path, and
+/// a data file sits beside the model that names it exactly as an `include does.
+fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?TableFile {
+    const io = std.Io.Threaded.global_single_threaded.io();
+    const dir: std.Io.Dir = .cwd();
+    const text = blk: {
+        for (self.include_dirs) |base| {
+            const full = try std.fs.path.join(self.arena, &.{ base, name });
+            const r = dir.readFileAlloc(io, full, self.arena, .limited(max_table_bytes)) catch |e2| {
+                if (e2 == error.OutOfMemory) return error.OutOfMemory;
+                continue; // try the next dir, exactly as `readInclude` does
+            };
+            break :blk r;
+        }
+        const r = dir.readFileAlloc(io, name, self.arena, .limited(max_table_bytes)) catch |e2| {
+            if (e2 == error.OutOfMemory) return error.OutOfMemory;
+            try self.errAt(e, .E0815, "cannot read the `$table_model` data source \"{s}\"", .{name});
+            return null;
+        };
+        break :blk r;
+    };
+
+    var vals: std.ArrayList(f64) = .empty;
+    var cols: usize = 0;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const line = if (std.mem.indexOfScalar(u8, raw, '#')) |h| raw[0..h] else raw;
+        var n: usize = 0;
+        var it = std.mem.tokenizeAny(u8, line, " \t\r");
+        while (it.next()) |tok| {
+            const x = std.fmt.parseFloat(f64, tok) catch {
+                try self.errAt(e, .E0815, "\"{s}\": `{s}` is not a real or integer number", .{ name, tok });
+                return null;
+            };
+            try vals.append(self.arena, x);
+            n += 1;
+        }
+        if (n == 0) continue; // blank line, or a line that was only a comment
+        if (cols == 0) cols = n;
+        if (n != cols) {
+            try self.errAt(e, .E0815, "\"{s}\": every sample point is one row of {d} columns; found a row of {d}", .{ name, cols, n });
+            return null;
+        }
+    }
+    if (cols <= nd) {
+        try self.errAt(e, .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ name, nd, nd, cols });
+        return null;
+    }
+    return .{ .vals = vals.items, .cols = cols };
+}
+
+/// §9.21.2 the control string. Writes `2*nd` Table 9-31 extrapolation characters
+/// into `ext` (low end then high end, per dimension) and returns the dependent
+/// COLUMN index, or null when the string asks for something VerA does not
+/// implement.
+///
+/// The interpolation character is validated and then DROPPED, because only one
+/// value of it survives: Table 9-30's `1`. `D`, `2` and `3` (closest point,
+/// quadratic and cubic splines) and `I` (ignore this column) are refused at the
+/// call. So is Table 9-31's `E` — "an extrapolation error is reported if the
+/// $table_model function is requested to evaluate a point beyond the
+/// interpolation region", and a device residual has no channel to report one on;
+/// silently extrapolating instead is exactly the wrong-number failure the refusal
+/// exists to prevent.
+fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: usize, ext: []u8) Oom!?usize {
+    // "the function defaults to performing linear interpolation and linear
+    // extrapolation in both dimensions" (§9.21.5), which Table 9-32's first row
+    // states for every dimension: `""` is "default linear interpolation and
+    // extrapolation".
+    @memset(ext, 'L');
+    const semi = std.mem.indexOfScalar(u8, ctl, ';');
+    const head = if (semi) |s| ctl[0..s] else ctl;
+
+    // `dependent_selector ::= integer`, "a column number ... This number runs 1
+    // through M with M being the total number of dependent variables". Table
+    // 9-32: with none given, "Column N+1 is taken as the dependent".
+    var sel: usize = 1;
+    if (semi) |s| {
+        const tail = std.mem.trim(u8, ctl[s + 1 ..], " \t");
+        if (tail.len != 0) sel = std.fmt.parseInt(usize, tail, 10) catch 0;
+    }
+    if (sel == 0 or nd + sel - 1 >= ncol) {
+        try self.errAt(e, .E0815, "dependent selector {d} names no dependent column: the data source has {d} column(s) and {d} independent(s)", .{ sel, ncol, nd });
+        return null;
+    }
+
+    var d: usize = 0;
+    var it = std.mem.splitScalar(u8, head, ',');
+    while (it.next()) |raw| {
+        const s = std.mem.trim(u8, raw, " \t");
+        if (d >= nd) {
+            // One sub-string per independent variable, "with the first
+            // sub-string applying to the outermost dimension and so on".
+            if (s.len == 0) continue;
+            try self.errAt(e, .E0815, "the control string has more interpolation sub-strings than the {d} lookup input(s)", .{nd});
+            return null;
+        }
+        defer d += 1;
+        var j: usize = 0;
+        if (s.len != 0 and std.mem.indexOfScalar(u8, "ID123", s[0]) != null) {
+            if (s[0] != '1') {
+                try self.errAt(e, .E0815, "VerA implements Table 9-30's `1` (linear interpolation) only; `{c}` is not implemented", .{s[0]});
+                return null;
+            }
+            j = 1;
+        }
+        const xs = s[j..];
+        if (xs.len > 2) {
+            try self.errAt(e, .E0815, "`{s}`: a control sub-string carries at most 2 extrapolation characters", .{s});
+            return null;
+        }
+        for (xs) |c| if (c != 'C' and c != 'L') {
+            try self.errAt(e, .E0815, "`{c}` is not an extrapolation method VerA implements (Table 9-31 `C` or `L`)", .{c});
+            return null;
+        };
+        // "When one extrapolation method character is given, the specified
+        // extrapolation method will be used for both ends. When two ... the
+        // first character specifies the extrapolation method used for the end
+        // with the lower coordinate value."
+        if (xs.len == 1) {
+            ext[2 * d] = xs[0];
+            ext[2 * d + 1] = xs[0];
+        } else if (xs.len == 2) {
+            ext[2 * d] = xs[0];
+            ext[2 * d + 1] = xs[1];
+        }
+    }
+    return nd + sel - 1;
+}
+
+/// The §4.7 function a `$limit` second argument names, or null when the argument
+/// is not one — Syntax 9-12's other two forms put a string there, or nothing.
+///
+/// The ordinary scopes are consulted FIRST, so a variable or parameter that
+/// happens to share a function's name still wins (§2.8), exactly as
+/// `natureAbstol` arranges for a nature identifier in a tolerance slot.
+fn limitUserFunc(self: *Lower, a: Ast.ExprId) Oom!?*const Ast.FuncDecl {
+    const ex = &self.file.exprs;
+    if (ex.tag(a) != .ident) return null;
+    const name = self.file.str(ex.strOf(a));
+    if (self.vars.contains(name) or self.param_index.contains(name) or self.consts.contains(name))
+        return null;
+    const m = self.module orelse return null;
+    for (m.functions) |*fd| {
+        if (std.mem.eql(u8, self.file.str(fd.name), name)) return fd;
+    }
+    return null;
+}
+
+/// §9.20's validity list for `$analog_node_alias()` / `$analog_port_alias()`.
+/// True when the call was refused.
+///
+/// All six rules are checked HERE, in lowering, because every one of them is a
+/// property of the call and none of them is a property of a value: the block the
+/// call sits in, the guard above it, the SHAPE of the first argument (a node
+/// declaration, not a probe and not a bit select), the constancy of the second,
+/// and the relation between two calls. codegen sees a `call` with two operands
+/// and cannot recover any of that.
+///
+/// One code for the list. The six sentences are one rule with one reason — an
+/// alias makes its node "refer to the same circuit matrix position" as the
+/// hierarchical reference, so it is a topology edit and topology is fixed before
+/// a solve — and each message quotes the sentence it enforces.
+fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const Ast.ExprId) Oom!bool {
+    const ex = &self.file.exprs;
+    // 1. "It shall be an error for the $analog_node_alias() and
+    // $analog_port_alias() system functions to be used outside the analog
+    // initial block." The next sentence gives the reason: both "shall be
+    // re-evaluated each sweep point of a dc sweep", i.e. between solves.
+    if (!self.in_analog_initial) {
+        try self.errAt(e, .E0812, "`{s}` is used outside an analog initial block", .{name});
+        return true;
+    }
+    // 2. "shall not be used inside conditional ( if , case , or ?: ) statements
+    // unless the conditional expression controlling the statement consists of
+    // terms which can not change during the course of a simulation."
+    //
+    // That carve-out is EXACTLY `static_cond_depth`: A.8.3's
+    // `analysis_or_constant_expression` is the same "cannot change during the
+    // simulation" set, so a parameter or `analysis()` guard is admitted and
+    // `$abstime` is not. A constant-folded `if` never raises either counter and
+    // so never reaches here at all.
+    //
+    // ponytail: a `?:` whose arms are the call is not counted — lowering emits a
+    // `select`, not a conditional body. No fixture writes one; the day one does,
+    // the place to count it is `lowerTernary`.
+    //
+    // The `analog initial` block is itself ONE guarded body — `lowerModule`
+    // wraps it in the `initial_step` flag rather than splitting the CFG — so the
+    // depth inside an EMPTY initial block is already 1/0. That guard is not a
+    // §9.20 conditional, it is the context the clause requires, so it is
+    // discounted (saturating, since rule 1 above is what guarantees it is there).
+    if ((self.cond_depth -| 1) != self.static_cond_depth) {
+        try self.errAt(e, .E0812, "`{s}` is used inside conditional statement whose condition can change during the simulation", .{name});
+        return true;
+    }
+    // 3/4/5. The analog_net_reference. "The analog_net_reference shall be either
+    // a scalar or vector continuous node declared in the module containing the
+    // system function call."
+    const ref = if (args.len > 0) args[0] else Ast.ExprId.none;
+    if (ref == .none) {
+        try self.errAt(e, .E0812, "`{s}` needs an analog_net_reference and a hierarchical_reference_string", .{name});
+        return true;
+    }
+    switch (ex.tag(ref)) {
+        .ident => {
+            const rname = self.file.str(ex.strOf(ref));
+            const idx = self.node_voltages.get(rname);
+            if (idx == null or idx.? == ground or self.vars.contains(rname)) {
+                try self.errAt(e, .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
+                return true;
+            }
+            // 4. "It shall be an error for the analog_net_reference to be a port
+            // or to be involved in port connections." A port is already bound to
+            // whatever the instantiating netlist connected it to, and the alias
+            // would bind the same matrix position a second time.
+            if (idx.? < self.num_ports) {
+                try self.errAt(e, .E0812, "§9.20 does not allow the analog_net_reference to be a port: `{s}`", .{rname});
+                return true;
+            }
+        },
+        // 5. "If the analog_net_reference is a vector node, it shall reference
+        // the full vector node, it shall be an error for it to be a bit select
+        // or part select of a vector node." The asymmetry is deliberate: the
+        // scalar ELEMENT is what the hierarchical_reference_string may name.
+        .index, .range => {
+            try self.errAt(e, .E0812, "a vector analog_net_reference must be the whole vector, not a bit select or part select", .{});
+            return true;
+        },
+        else => {
+            try self.errAt(e, .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
+            return true;
+        },
+    }
+    // 6. "The hierarchical_reference_string shall be a CONSTANT string value
+    // (string literal or string parameter) containing a hierarchical reference
+    // to a continuous node." Two spellings and nothing else — a string VARIABLE
+    // is read during a solve, which is what the analog-initial rule already
+    // rules out for the call itself. `constEval` admits exactly those two.
+    const target = blk: {
+        if (args.len > 1) if (self.constEval(args[1])) |c| switch (c) {
+            .str => |s| break :blk s,
+            else => {},
+        };
+        try self.errAt(e, .E0812, "the hierarchical_reference_string of `{s}` is not a constant string (a string literal or a string parameter)", .{name});
+        return true;
+    };
+    // "It shall be an error for the hierarchical_reference_string to reference a
+    // node that is used as an analog_net_reference in ANOTHER
+    // $analog_node_alias or $analog_port_alias() system function call." The same
+    // LEFT argument twice is legal — the clause spends a last-writer rule on it
+    // — so only target-against-other-reference is compared.
+    //
+    // Only a dotted-free string can name one: §6.7 says "the first name in a
+    // path name can also be the top of a hierarchy which starts at the level
+    // where the path is being used", so a bare name resolves locally, while
+    // `$root.top.a` names something this module does not declare.
+    const ref_name = self.file.str(ex.strOf(args[0]));
+    if (std.mem.indexOfScalar(u8, target, '.') == null) {
+        for (self.alias_refs.items) |prev| {
+            if (!std.mem.eql(u8, prev, target)) continue;
+            try self.errAt(e, .E0812, "`\"{s}\"` is already the analog_net_reference of another $analog_node_alias/$analog_port_alias call", .{target});
+            return true;
+        }
+    }
+    try self.alias_refs.append(self.arena, ref_name);
+    return false;
 }
 
 /// Several ch9 functions take a NET or PORT reference rather than a value —
@@ -4950,9 +6397,16 @@ fn sysFuncTy(name: []const u8) Ty {
         // the digital timeticks", so truncating it to an integer loses exactly
         // the part the clause exists to describe.
         "$driver_next_state", "$driver_next_strength", "$driver_type",
+        // §9.5.4.2 the scan count, and the item flavour whose destination is an
+        // integer variable. Synthetic names `lowerScan` builds; the flavour name
+        // IS the type, so this and `analysis.callTy` agree by construction.
+         "$sscanf",
+        "$sscanf$int",
     };
     for (ints) |i| if (std.mem.eql(u8, name, i)) return .integer;
     if (std.mem.eql(u8, name, "$simparam$str")) return .string; // §9.15
+    // §9.5.3 the formatted text itself, and §9.5.4.2's string-valued item.
+    if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str")) return .string;
     return .real;
 }
 
@@ -5119,19 +6573,40 @@ pub fn inlineUserFunc(
     }
 
     // Actuals are evaluated in the CALLER's scope, before it is swapped out.
-    var actuals: std.ArrayList(Mir.Value) = .empty;
+    // An ARRAY formal (§4.7.2.3) takes one Value per element — the formal is
+    // scalarized inside the function exactly as a §3.2 array is anywhere else,
+    // so the pass is element-wise in both directions.
+    var actuals: std.ArrayList([]const Mir.Value) = .empty;
     defer actuals.deinit(self.arena);
     for (fd.args, arg_exprs) |formal, actual| {
+        const ty = astTy(formal.ty);
+        if (formal.dims.len != 0) {
+            const n = try self.funcArrayLen(&formal, site) orelse return poison;
+            const vals = try self.arena.alloc(Mir.Value, n);
+            // §4.7.2.3: "All output arguments ... are initialized, zero (0) if
+            // numeric, which in turn means that the argument passed to it is
+            // reset to zero." An `inout` is NOT (§4.7.2.4 copies in).
+            if (formal.direction == .output) {
+                @memset(vals, zeroOf(ty));
+            } else if (!try self.funcArrayIn(actual, ty, vals)) {
+                try self.errAt(actual, .E0511, "`{s}()` argument `{s}` needs {d} elements", .{
+                    name, self.file.str(formal.name), n,
+                });
+                return poison;
+            }
+            try actuals.append(self.arena, vals);
+            continue;
+        }
         if (formal.direction == .output) {
-            try actuals.append(self.arena, zeroOf(astTy(formal.ty)));
+            try actuals.append(self.arena, try self.arena.dupe(Mir.Value, &.{zeroOf(ty)}));
             continue;
         }
         const tv = try self.lowerExpr(actual);
-        try actuals.append(self.arena, switch (astTy(formal.ty)) {
+        try actuals.append(self.arena, try self.arena.dupe(Mir.Value, &.{switch (ty) {
             .real => try self.toReal(tv),
             .integer => try self.toInt(tv),
             .string => tv.v,
-        });
+        }}));
     }
 
     // ---- enter the function scope (§4.7.1) ----
@@ -5156,12 +6631,32 @@ pub fn inlineUserFunc(
     const ret_slot = try self.declareVar(name, ret_ty); // §4.7.1 return variable
     try self.builder.writeVariable(ret_slot.place, self.cur, zeroOf(ret_ty));
 
-    var arg_slots: std.ArrayList(VarSlot) = .empty;
+    var arg_slots: std.ArrayList([]const VarSlot) = .empty;
     defer arg_slots.deinit(self.arena);
-    for (fd.args, actuals.items) |formal, v| {
-        const slot = try self.declareVar(self.file.str(formal.name), astTy(formal.ty));
-        try self.builder.writeVariable(slot.place, self.cur, v);
-        try arg_slots.append(self.arena, slot);
+    for (fd.args, actuals.items) |formal, vals| {
+        const fname = self.file.str(formal.name);
+        const ty = astTy(formal.ty);
+        if (formal.dims.len != 0) {
+            // The formal's own §3.2 declaration, inside the function scope: the
+            // shape comes from the FORMAL and the values from the actual, which
+            // is what makes `arrayadd(x, '{y,z})` (§4.7.3) legal — the two
+            // actuals have different shapes and the same size.
+            const dims = try self.dimsBounds(formal.dims, formal.main_tok, fname) orelse continue;
+            try self.arrays.put(self.arena, fname, .{ .dims = dims, .ty = ty });
+            const slots = try self.arena.alloc(VarSlot, vals.len);
+            var sub: [8]i64 = undefined;
+            for (vals, slots, 0..) |v, *slot, k| {
+                const idx = if (dims.len <= sub.len) sub[0..dims.len] else try self.arena.alloc(i64, dims.len);
+                shapeSubscripts(dims, k, idx);
+                slot.* = try self.declareVar(try self.elemName(fname, idx), ty);
+                try self.builder.writeVariable(slot.place, self.cur, v);
+            }
+            try arg_slots.append(self.arena, slots);
+            continue;
+        }
+        const slot = try self.declareVar(fname, ty);
+        try self.builder.writeVariable(slot.place, self.cur, vals[0]);
+        try arg_slots.append(self.arena, try self.arena.dupe(VarSlot, &.{slot}));
     }
     for (fd.vars) |*v| try self.declareVarDecl(v, .local);
 
@@ -5177,11 +6672,13 @@ pub fn inlineUserFunc(
         .ty = ret_ty,
     };
     // §4.7.2.3/§4.7.2.4 read the writeback values while the scope is still up.
-    var writeback: std.ArrayList(Mir.Value) = .empty;
+    var writeback: std.ArrayList([]const Mir.Value) = .empty;
     defer writeback.deinit(self.arena);
-    for (fd.args, arg_slots.items) |formal, slot| {
+    for (fd.args, arg_slots.items) |formal, slots| {
         if (formal.direction != .output and formal.direction != .inout) continue;
-        try writeback.append(self.arena, try self.builder.readVariable(slot.place, self.cur));
+        const vals = try self.arena.alloc(Mir.Value, slots.len);
+        for (slots, vals) |slot, *v| v.* = try self.builder.readVariable(slot.place, self.cur);
+        try writeback.append(self.arena, vals);
     }
 
     // ---- leave the function scope ----
@@ -5199,10 +6696,96 @@ pub fn inlineUserFunc(
     for (fd.args, arg_exprs) |formal, actual| {
         if (formal.direction != .output and formal.direction != .inout) continue;
         defer w += 1;
+        const vals = writeback.items[w];
+        if (formal.dims.len != 0) {
+            // §4.7.2.3: "the last value assigned to the output argument is then
+            // assigned to the corresponding analog variable reference that was
+            // passed into the function" — element by element, in declaration
+            // order, into the caller's own storage.
+            try self.funcArrayOut(actual, vals);
+            continue;
+        }
         const slot = try self.resolveLvalue(actual) orelse continue;
-        try self.builder.writeVariable(slot.place, self.cur, writeback.items[w]);
+        try self.builder.writeVariable(slot.place, self.cur, vals[0]);
     }
     return result;
+}
+
+/// How many scalars an array FORMAL declares (§4.7.2.3). Its bounds are a
+/// `constant_expression` like any other array's, folded in the CALLER's scope
+/// because a formal's range may name a module parameter.
+fn funcArrayLen(self: *Lower, formal: *const Ast.FuncArg, site: Ast.ExprId) Oom!?usize {
+    const dims = try self.dimsBounds(formal.dims, formal.main_tok, self.file.str(formal.name)) orelse {
+        _ = site;
+        return null;
+    };
+    return shapeCells(dims);
+}
+
+/// §4.7.2.3: "the argument passed into the function must be an analog variable
+/// or an array assignment pattern of analog variables of equivalent size."
+/// Copy IN — one Value per element of the formal. False when the actual has the
+/// wrong size or is not one of those two shapes.
+///
+/// The pattern arm lowers each element as an EXPRESSION and not as an lvalue:
+/// copy-in has no reason to require storage, and `funcArrayOut` is where the
+/// clause's write-back needs one. `'{y, z}` satisfies both.
+fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) Oom!bool {
+    const ex = &self.file.exprs;
+    switch (ex.tag(actual)) {
+        .ident => {
+            const aname = self.file.str(ex.strOf(actual));
+            const info = self.arrays.get(aname) orelse return false;
+            if (shapeCells(info.dims) != out.len) return false;
+            var sub: [8]i64 = undefined;
+            for (out, 0..) |*v, k| {
+                const idx = if (info.dims.len <= sub.len) sub[0..info.dims.len] else try self.arena.alloc(i64, info.dims.len);
+                shapeSubscripts(info.dims, k, idx);
+                const el = (try self.arrayElemValue(aname, idx)) orelse return false;
+                v.* = if (ty == .real) try self.toReal(el) else el.v;
+            }
+            return true;
+        },
+        .assign_pattern, .concat => {
+            const elems = ex.args(actual);
+            if (elems.len != out.len) return false;
+            for (elems, out) |e, *v| {
+                const tv = try self.lowerExpr(e);
+                v.* = if (ty == .real) try self.toReal(tv) else tv.v;
+            }
+            return true;
+        },
+        else => return false,
+    }
+}
+
+/// The write-back half of the same sentence. Each element of the actual is an
+/// ordinary lvalue, so a pattern element that is not writable collects the usual
+/// E0313/E0316 from `resolveLvalue` — which is the right verdict: §4.7.2.3 says
+/// "analog variables", and a literal there has nowhere to receive the result.
+fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) Oom!void {
+    const ex = &self.file.exprs;
+    switch (ex.tag(actual)) {
+        .ident => {
+            const aname = self.file.str(ex.strOf(actual));
+            const info = self.arrays.get(aname) orelse return;
+            var key_buf: [elem_key_len]u8 = undefined;
+            var sub: [8]i64 = undefined;
+            for (vals, 0..) |v, k| {
+                const idx = if (info.dims.len <= sub.len) sub[0..info.dims.len] else try self.arena.alloc(i64, info.dims.len);
+                shapeSubscripts(info.dims, k, idx);
+                const slot = self.vars.get(try self.elemKey(&key_buf, aname, idx)) orelse continue;
+                try self.builder.writeVariable(slot.place, self.cur, v);
+            }
+        },
+        .assign_pattern, .concat => {
+            for (ex.args(actual), vals) |e, v| {
+                const slot = try self.resolveLvalue(e) orelse continue;
+                try self.builder.writeVariable(slot.place, self.cur, v);
+            }
+        },
+        else => {},
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -5312,12 +6895,16 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     const int = a == .int and b == .int;
     const x = a.asReal();
     const y = b.asReal();
+    // §3.2's 32-bit 2's complement result — see `wrap32`. `%` needs none: a
+    // remainder is never wider than its operands.
     return switch (op) {
-        .add => if (int) Const{ .int = a.asInt() +% b.asInt() } else Const{ .real = x + y },
-        .sub => if (int) Const{ .int = a.asInt() -% b.asInt() } else Const{ .real = x - y },
-        .mul => if (int) Const{ .int = a.asInt() *% b.asInt() } else Const{ .real = x * y },
+        .add => if (int) Const{ .int = wrap32(a.asInt() +% b.asInt()) } else Const{ .real = x + y },
+        .sub => if (int) Const{ .int = wrap32(a.asInt() -% b.asInt()) } else Const{ .real = x - y },
+        .mul => if (int) Const{ .int = wrap32(a.asInt() *% b.asInt()) } else Const{ .real = x * y },
+        // The one overflowing division is -2^31 / -1, whose 2's complement
+        // answer is -2^31 again.
         .div => if (int)
-            (if (b.asInt() == 0) null else Const{ .int = @divTrunc(a.asInt(), b.asInt()) })
+            (if (b.asInt() == 0) null else Const{ .int = wrap32(@divTrunc(a.asInt(), b.asInt())) })
         else
             Const{ .real = x / y },
         .mod => if (int)
@@ -5340,7 +6927,9 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
         .shl, .shr => blk: {
             const sh = b.asInt();
             if (sh < 0 or sh > 63) break :blk null;
-            if (op == .shl) break :blk Const{ .int = a.asInt() << @as(u6, @intCast(sh)) };
+            // §4.2.11 `<<` zero-fills from the right; §3.2's width is what makes
+            // `1 << 31` negative and `1 << 32` zero rather than 2^31 and 2^32.
+            if (op == .shl) break :blk Const{ .int = wrap32(a.asInt() << @as(u6, @intCast(sh))) };
             // §4.2.11 `>>` fills the vacated positions with zeroes, over
             // §3.2.1's 32-bit `integer` — same rule codegen's `shrLogical`
             // emits, and the fold has to agree with it or a constant and a
@@ -5428,6 +7017,96 @@ test "lower: §2.7 a string literal is a base-256 numeral, §3.3 justified right
     try std.testing.expectEqual(@as(i64, 65), strToInt("A", 32));
     try std.testing.expectEqual(@as(i64, 18432), strToInt("H\x00", 32));
     try std.testing.expectEqual(@as(i64, 0), strToInt("", 32));
+}
+
+test "lower: §3.2 a multidimensional array is scalarized row-major" {
+    // The ORDER is the load-bearing part: §3.3's own initializer
+    // `string paths[0:2][0:1] = '{ '{"dir1","fileA"}, … }` is rows of columns,
+    // so cell k of the flat walk must be `[k / cols][k % cols]`. Transposing it
+    // reads one cell where another was written, and every value in that example
+    // is plausible in both places — which is why the fixture checks all six.
+    const dims = [_]Bounds{ .{ .lo = 0, .hi = 2 }, .{ .lo = 0, .hi = 1 } };
+    try std.testing.expectEqual(@as(usize, 6), shapeCells(&dims));
+    var idx: [2]i64 = undefined;
+    const want = [_][2]i64{
+        .{ 0, 0 }, .{ 0, 1 },
+        .{ 1, 0 }, .{ 1, 1 },
+        .{ 2, 0 }, .{ 2, 1 },
+    };
+    for (want, 0..) |w, k| {
+        shapeSubscripts(&dims, k, &idx);
+        try std.testing.expectEqualSlices(i64, &w, &idx);
+    }
+    // A non-zero `lo` offsets the subscript and not the walk (§3.2.2 counts
+    // elements): `[1:3]` puts the first cell at 1.
+    const off = [_]Bounds{.{ .lo = 1, .hi = 3 }};
+    var one: [1]i64 = undefined;
+    shapeSubscripts(&off, 0, &one);
+    try std.testing.expectEqual(@as(i64, 1), one[0]);
+    shapeSubscripts(&off, 2, &one);
+    try std.testing.expectEqual(@as(i64, 3), one[0]);
+}
+
+test "lower: §2.9/§2.9.2 attribute values — constant, and in domain" {
+    // Every row is one attr_spec in a slot Syntax 2-7 really has, so the only
+    // thing under test is the VALUE. The accepting rows matter as much as the
+    // refusing ones: §2.9 leaves an unlisted name's meaning to the tool, so a
+    // domain check that fired on `tool_hint` would refuse conforming source.
+    const cases = [_]struct { attr: []const u8, code: ?diag.Code }{
+        // §2.9 `attr_spec ::= attr_name [ = constant_expression ]`.
+        .{ .attr = "q = 1", .code = null },
+        .{ .attr = "q", .code = null }, // "the default value is 1"
+        .{ .attr = "q = gain", .code = null }, // A.8.4 a parameter IS constant
+        .{ .attr = "q = z", .code = .E0357 }, // a variable is not
+        .{ .attr = "q = 1 + z", .code = .E0357 },
+        // §2.9.2's four names and nothing else.
+        .{ .attr = "desc = \"a resistance\"", .code = null },
+        .{ .attr = "desc = 7", .code = .E0358 },
+        .{ .attr = "units = \"S\"", .code = null },
+        .{ .attr = "units = 1.0", .code = .E0358 },
+        .{ .attr = "op = \"yes\"", .code = null },
+        .{ .attr = "op = \"no\"", .code = null },
+        .{ .attr = "op = \"maybe\"", .code = .E0358 },
+        .{ .attr = "op = 1", .code = .E0358 },
+        .{ .attr = "multiplicity = \"multiply\"", .code = null },
+        .{ .attr = "multiplicity = \"divide\"", .code = null },
+        .{ .attr = "multiplicity = \"none\"", .code = null },
+        .{ .attr = "multiplicity = \"sideways\"", .code = .E0358 },
+        // Not a §2.9.2 name: no stated domain, so no check.
+        .{ .attr = "tool_hint = \"anything\"", .code = null },
+        .{ .attr = "full_case = 1", .code = null },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  real z;
+            \\  (* {s} *) parameter real gain = 1.0;
+            \\  analog begin
+            \\    z = 2.0;
+            \\    I(p, n) <+ gain * V(p, n);
+            \\  end
+            \\endmodule
+        , .{c.attr});
+        defer std.testing.allocator.free(src);
+
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        h.low.lowerFile() catch |e| switch (e) {
+            error.DiagnosticsReported => {},
+            else => return e,
+        };
+        var seen: ?diag.Code = null;
+        for (0..h.bag.count()) |i| {
+            if (h.code(i) == .E0357 or h.code(i) == .E0358) seen = h.code(i);
+        }
+        std.testing.expectEqual(c.code, seen) catch |e| {
+            std.debug.print("attribute: (* {s} *)\n", .{c.attr});
+            return e;
+        };
+    }
 }
 
 test "lower: contribution splits into resistive and reactive parts" {
@@ -5684,6 +7363,67 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
     try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.port_probes.items[0].u));
 }
 
+test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.2 reads it" {
+    var h: Harness = undefined;
+    // §5.6.1.3's own worked example, whose stated answer is 7.0 and whose whole
+    // point is that 8.0 (every potential contribution accumulated, both
+    // conversions ignored) is wrong.
+    try Harness.run(std.testing.allocator,
+        \\module vr(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog begin
+        \\    V(p,n) <+ 1.0;
+        \\    I(p,n) <+ 2.0;
+        \\    V(p,n) <+ 3.0;
+        \\    V(p,n) <+ 4.0;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try h.low.lowerFile();
+
+    // Two entries — the pair received both kinds — but only ONE survives with a
+    // value. `emitResidual` skips a contribution whose value folds to `.f_zero`,
+    // so the discarded flow source of 2.0 emits no row at all, which is what
+    // "the flow being discarded" has to mean in the device.
+    try std.testing.expectEqual(@as(usize, 2), h.low.contributions.items.len);
+    for (h.low.contributions.items) |c| {
+        switch (c.access) {
+            .flow => try std.testing.expectEqual(Mir.Value.f_zero, c.resist_val),
+            .potential => try std.testing.expect(c.resist_val != .f_zero),
+        }
+        try std.testing.expectEqual(Mir.Value.f_zero, c.react_val);
+    }
+
+    // §5.4.2.2 the read side: a flow read AFTER a flow contribution is the
+    // retained value, so it mints no `flow(p,n)` unknown; before one — or on a
+    // POTENTIAL source, whose branch current codegen does pin — it still does.
+    const cases = [_]struct { src: []const u8, unknown: bool }{
+        .{ .src = "I(p,n) <+ 1.0; x = I(p,n);", .unknown = false },
+        .{ .src = "x = I(p,n); I(p,n) <+ 1.0;", .unknown = true },
+        .{ .src = "V(p,n) <+ 1.0; x = I(p,n);", .unknown = true },
+    };
+    for (cases) |c| {
+        var g: Harness = undefined;
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module fr(p, n);
+            \\  inout p, n; electrical p, n;
+            \\  real x;
+            \\  analog begin {s} end
+            \\endmodule
+        , .{c.src});
+        defer std.testing.allocator.free(src);
+        try Harness.run(std.testing.allocator, src, &g);
+        defer g.deinit();
+        try g.low.lowerFile();
+        var minted = false;
+        for (g.low.node_order.items) |name| {
+            if (std.mem.eql(u8, name, "flow(p,n)")) minted = true;
+        }
+        try std.testing.expectEqual(c.unknown, minted);
+    }
+}
+
 test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditionally" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -5789,6 +7529,48 @@ test "lower: A.6.4 the analog_statement / analog_event_statement split" {
     try std.testing.expectEqual(diag.Code.E0401, h2.code(0));
     // A.6.4, never §5.11 (which is jump_statement) — the citation is the code's.
     try std.testing.expectEqualStrings("A.6.4", diag.info(.E0401).lrm);
+}
+
+test "lower: §5.10.4 a named event resolves; anything else at `@`/`->` is E0705" {
+    // The accepting side is three fixtures (annex_a/17, ch05/named_event_*,
+    // annex_c/19), which pin the NUMBER end to end. What no fixture reaches is
+    // the resolution failure, and it has to be a failure in both positions:
+    // §2.8 gives an event a name and no value, so a real variable is not an
+    // event even though `@(v)` would type-check as an integer guard.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module ev(p);
+        \\  inout p; electrical p; real v; event tick;
+        \\  analog begin
+        \\    @(initial_step) -> tick;
+        \\    @(tick) v = 1.0;
+        \\    @(v) v = 2.0;
+        \\    I(p) <+ v;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
+    try std.testing.expectEqual(@as(usize, 1), h.bag.count());
+    try std.testing.expectEqual(diag.Code.E0705, h.code(0));
+    try std.testing.expectEqualStrings("`v`", h.msg(0));
+
+    // The trigger goes through the same table, so a misspelling there lands on
+    // the same code rather than silently triggering nothing.
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module ev2(p);
+        \\  inout p; electrical p; event tick;
+        \\  analog begin
+        \\    @(initial_step) -> tock;
+        \\    I(p) <+ V(p);
+        \\  end
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    try std.testing.expectError(error.DiagnosticsReported, h2.low.lowerFile());
+    try std.testing.expectEqual(diag.Code.E0705, h2.code(0));
+    try std.testing.expectEqualStrings("`tock`", h2.msg(0));
 }
 
 test "lower: an unknown name carries a `did you mean` help" {

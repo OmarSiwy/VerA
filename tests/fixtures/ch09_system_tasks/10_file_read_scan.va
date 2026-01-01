@@ -14,7 +14,6 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.4.2
-//! xfail VerA has no file or string reading surface: codegen.zig `void_tasks` lowers $fopen/$fgets/$fscanf/$sscanf to the constant `S.con(0.0)`, so every call returns 0 and none of them writes its output argument — `value` keeps its initial 0 even for the $sscanf that reads a string literal
 `include "check.vh"
 
 module ch09_file_read_scan(p, n);

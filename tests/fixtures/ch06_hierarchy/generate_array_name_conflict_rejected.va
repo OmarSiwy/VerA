@@ -17,14 +17,15 @@
 // fails this, because the rule is that the array name lands in the ORDINARY
 // declaration space of the module.
 //
-// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to name.
-// `DiagnosticsReported` is the weakest form that still demands a rejection;
-// tighten it to the E-code the day one exists.
+// E0230 is that rule and nothing else. The check runs in the parser, and at the
+// END of the module rather than at the `begin : g`: the colliding declaration may
+// follow the construct in the text, and the clause is about one SCOPE, not about
+// source order. In the parser at all because no later stage can tell a
+// `generate_block`'s name from a §5.3.2 statement label.
 //
 //! lrm 6.6.1
 //! lrm 6.8
-//! reject DiagnosticsReported
-//! xfail VerA does not declare a named generate block's instance array in the module scope, so `begin : g` and `real g;` coexist silently
+//! reject E0230
 module ch6_generate_array_name_conflict(p);
   inout p; electrical p;
   real g;

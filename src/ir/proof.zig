@@ -818,10 +818,16 @@ const Prover = struct {
         };
     }
 
-    /// LRM §4.2.12 `?:` is a value-form `select`, so its arms carry NO CFG
-    /// dominance — without this, the canonical guarded idiom
-    /// `x > 0 ? ln(x) : 0` would be rejected. An arm's exclusively-owned
-    /// backward slice (use count 1) is guarded by the select condition.
+    /// A `select`'s arms carry NO CFG dominance, so without this the canonical
+    /// guarded idiom `x > 0 ? ln(x) : 0` would be rejected. An arm's
+    /// exclusively-owned backward slice (use count 1) is guarded by the select
+    /// condition.
+    ///
+    /// §4.2.3 makes `?:` short-circuiting, so `lowerTernary` now emits a real
+    /// diamond and that idiom reaches the prover with dominance evidence
+    /// instead — this pass is what still covers every OTHER `select`: the
+    /// masked element writes of a runtime array index, and any diamond
+    /// `ifconv` fuses back.
     ///
     /// CODEGEN OBLIGATION: `select` must be emitted as a lazy Zig `if`, not as
     /// "evaluate both arms then pick" — otherwise `ln(x)` really does run with

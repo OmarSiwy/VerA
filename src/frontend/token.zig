@@ -45,6 +45,7 @@ pub const Tag = enum(u8) {
     star_star, // '**'  power §4.2.4
     // contribution §5.6 / assignment §5.5
     contribute, // '<+'
+    arrow, // '->'  §5.10.4 event_trigger (A.6.5)
     assign_eq, // '='
     // relational §4.2.5
     lt,
@@ -287,6 +288,7 @@ pub const Tag = enum(u8) {
             .percent => "%",
             .star_star => "**",
             .contribute => "<+",
+            .arrow => "->",
             .assign_eq => "=",
             .lt => "<",
             .gt => ">",

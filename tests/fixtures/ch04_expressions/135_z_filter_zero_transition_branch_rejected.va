@@ -16,7 +16,6 @@
 //
 //! lrm 4.5.12
 //! reject shall not be directly assigned to a branch
-//! xfail VerA refuses the whole optional tau/t0 tail of a zi_* filter in codegen ("VerA does not implement the optional t / t0 arguments of a zi_* filter"), so the legal non-zero tau is rejected too and the 4.5.12 rule that distinguishes them is never reached
 module ch04_z_filter_zero_transition_branch_rejected(p, n);
     inout p, n;
     electrical p, n;

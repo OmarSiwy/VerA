@@ -12,11 +12,14 @@
 // ::= analog analog_statement` -- so a conforming compiler would have rejected the
 // body and never reported the nesting.
 //
-// KNOWN GAP: see the `//! xfail` below.  Tighten the reject directive to the
-// E-code once one exists.
+// E0228 is that rule. One counter carries it: the parser tracks how many generate
+// regions AND generate construct bodies enclose the cursor, so the same test also
+// refuses a `generate` inside an if-generate's block, which is the other half of
+// "they may only occur directly within a module". The inner region is then parsed
+// anyway, transparently — §6.6 gives it no scope, so reading it as if the keywords
+// were absent is exact recovery and the file reports this rule alone.
 //! lrm 6.6
-//! reject DiagnosticsReported
-//! xfail VerA has no generate-region non-nesting check; a `generate` inside a `generate` parses and elaborates silently
+//! reject E0228
 module ch6_generate_nested_region(p);
   inout p; electrical p;
   generate

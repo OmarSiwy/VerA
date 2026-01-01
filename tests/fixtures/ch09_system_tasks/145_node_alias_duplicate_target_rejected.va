@@ -38,7 +38,6 @@
 //! lrm 6.7
 //! lrm 9.20
 //! reject another $analog_node_alias
-//! xfail VerA lowers $analog_node_alias/$analog_port_alias to a constant 0 (codegen.zig) and never relates two calls to each other
 module ch09_node_alias_duplicate_target_rejected(p, n);
   inout p, n; electrical p, n;
   electrical first, second;

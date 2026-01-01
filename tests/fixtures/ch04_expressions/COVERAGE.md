@@ -31,7 +31,7 @@ the prose, never silently promoted.
 | 4.2.1.2 Integer to real conversion | — **no fixture.** The clause's own content is the x/z error case, which needs a four-state value system VerA does not have |
 | 4.2.1.3 Arithmetic conversion | — no fixture cites it. `02_numeric_conversions.va` runs this clause's printed examples (`1/2` integer, `1/2.0` real) but cites them to 4.2.4 |
 | 4.2.2 Operator precedence | `01_arithmetic_operators.va`, `03_precedence_associativity.va` (the full table, plus parenthesization) |
-| 4.2.3 Expression evaluation order | `123_short_circuit_side_effects.va` (`&&`, `\|\|` and Example 1's non-short-circuiting bitwise `&`, each operand a counter so evaluation is observable). `125_short_circuit_ternary.va` **xfail** — VerA evaluates both arms of `?:` and selects afterwards, so `0 ? bump(e) : 0` leaves `e` at 1 instead of 0 |
+| 4.2.3 Expression evaluation order | `123_short_circuit_side_effects.va` (`&&`, `\|\|` and Example 1's non-short-circuiting bitwise `&`, each operand a counter so evaluation is observable). `125_short_circuit_ternary.va` — the clause's third operator, green: `?:` lowers to a CFG diamond (`Lower.lowerTernary`), so the call in the unselected arm never runs its side effect |
 | 4.2.4 Arithmetic operators | `01_arithmetic_operators.va`, `02_numeric_conversions.va`, atomics `41_add.va` `42_subtract.va` `43_multiply.va` `44_divide.va` `45_modulo.va` `46_power_operator.va` `63_unary_plus.va` `64_unary_minus.va`; `111_modulus_by_zero_rejected.va` (E0601). `118_modulo_negative_divisor.va` **xfail** — VerA's range analysis does not fold unary minus on an integer literal, so the legal `11 % -3` raises a false E0601 with a full-i64 divisor range |
 | 4.2.5 Relational operators | `04_relational_logical.va`; atomics `47_less_than.va` `48_greater_than.va` `49_less_equal.va` `50_greater_equal.va` |
 | 4.2.6 Case equality operators | — **deliberately not cited.** `29_case_equality.va` runs `===`/`!==` and rejects them at E0323, but cites C.5 and 4.2.1: read whole, 4.2.6 grants these operators "limited support in the analog block" and 7.3.2 prints `if (dnet === 1'b1)` inside `analog begin` as legal. Citing 4.2.6 would demand a diagnostic the clause forbids. The header says so in full |
@@ -40,7 +40,7 @@ the prose, never silently promoted.
 | 4.2.9 Bitwise operators | `56_bitwise_and.va`, `57_bitwise_or.va`, `58_bitwise_xor.va`, `59_bitwise_xnor.va` (both `^~` and `~^`), `62_bitwise_not.va` |
 | 4.2.10 Reduction operators | both fixtures are **xfail**. `06_reduction_rejected.va` — VerA lowers unary `&`, `\|`, `~&`, `~\|` in the analog block as IEEE 1364 32-bit reductions instead of diagnosing them; `src/diag_code.zig` has E0319/E0320 but no code for the 4.2.10 analog-block ban itself. `07_reduction_xor_rejected.va` — the expression parser has no unary `^` at all, so `^bits` dies at E0215 before any subset check; E0320 exists and nothing raises it |
 | 4.2.11 Shift operators | positive: `60_shift_left.va`, `61_shift_right.va`. Negative, both halves of the arithmetic-shift ban: `05_bitwise_shift.va` (`>>>`, E0324 — the filename is stale, it is a reject) and `117_arithmetic_shift_left_rejected.va` (`<<<`, E0324) |
-| 4.2.12 Conditional operator | `08_conditional_operator.va` (nesting, right association). `125_short_circuit_ternary.va` **xfail**, as under 4.2.3 |
+| 4.2.12 Conditional operator | `08_conditional_operator.va` (nesting, right association). `125_short_circuit_ternary.va`, as under 4.2.3 — "expression3 is evaluated and used as the result" names one arm, and only that arm is evaluated |
 | 4.2.13 Concatenations | `30_concatenation.va` (the joining form); `116_concatenation_unsized_rejected.va` (E0216, unsized constant); `31_replication.va` — three of the clause's four replication rules, `{4{2'b10}}`, the nested `{b, {3{a, b}}}` and the zero count, all unrolled in the parser where the operand widths still exist; `137_replication_lhs_rejected.va` (E0317, "expressions containing replications shall not appear on the left-hand side") |
 | 4.2.14 Assignment patterns | `09_assignment_pattern.va` (parameter initialization), `32_array_assignment.va` (post-declaration), `144_assignment_pattern_replication.va` (the clause's own `'{5{0.0}}` — A.8.1's second alternative, unrolled into five elements) |
 | 4.3 Built-in mathematical functions | — no fixture cites the parent. Its one rule is that both syntax styles are supported; `10_standard_math_traditional.va` and `11_standard_math_system.va` are the two styles and both cite 4.3.1 |
@@ -57,25 +57,25 @@ the prose, never silently promoted.
 | 4.5.7 Absolute delay operator | `19_absdelay.va`. `127_absdelay_negative_delay_rejected.va` **xfail** — no argument-bound validation: `absdelay(x, -2n)` and the three-argument form both compile with only W0650, and no diag code covers a non-positive transport delay |
 | 4.5.8 Transition filter | `20_transition.va`. `128_transition_negative_time_rejected.va` **xfail** — no argument-bound validation: the negative `td`, `rise_time`, `fall_time` and `time_tol` variants all compile with only W0650 |
 | 4.5.9 Slew filter | `21_slew.va`. `129_slew_rate_sign_rejected.va` **xfail** — neither rate-sign bound is checked: `slew(x, -1e6, -2e6)` and `slew(x, 1e6, 2e6)` both compile with only W0650 |
-| 4.5.10 last_crossing function | `22_last_crossing.va` (rising edge over a five-point transient). Two **xfail**: `146_last_crossing_directions.va` — VerA's `last_crossing` ignores its direction argument for anything but +1, so the −1 and 0 queries both return a flat 0.0 at every time point; `130_last_crossing_direction_rejected.va` — no check on the direction indicator either, `last_crossing(x, 2)` and `last_crossing(x, -2)` compile with only W0650 |
-| 4.5.11 Laplace transform filters | `23_laplace_filters.va` (all four forms), `35_filter_parameter_arrays.va`, `94_operator_null_argument.va` (E0502). `136_filter_null_zeros_argument.va` **xfail** — the legal null zeros vector is rejected at E0505 ("analog operator does not accept an empty argument"): that code is 4.5.15's null-argument ban and it over-fires on the 4.5.11/4.5.12 carve-out the ban's own "except" points at |
+| 4.5.10 last_crossing function | `22_last_crossing.va` (rising edge over a five-point transient), `146_last_crossing_directions.va` (the −1 and 0 queries; the −1 one never leaves the negative sentinel because this input never falls). One **xfail**: `130_last_crossing_direction_rejected.va` — no check on the direction indicator, `last_crossing(x, 2)` and `last_crossing(x, -2)` compile with only W0650 |
+| 4.5.11 Laplace transform filters | `23_laplace_filters.va` (all four forms), `35_filter_parameter_arrays.va`, `94_operator_null_argument.va` (E0502), `136_filter_null_zeros_argument.va` (the null zeros vector, `,,`, as the empty product 1 — E0505 is now scoped to the slots 4.5.15's "except" does NOT carve out) |
 | 4.5.11.1 laplace_zp | `133_laplace_unpaired_complex_root_rejected.va` (a complex root with no conjugate partner) |
 | 4.5.11.2 laplace_zd | — no fixture cites it; `23_laplace_filters.va` runs the form under the 4.5.11 cite |
 | 4.5.11.3 laplace_np | — as 4.5.11.2 |
 | 4.5.11.4 laplace_nd | — as 4.5.11.2; also run by `35_filter_parameter_arrays.va` and `96_function_filter_ban.va` under other cites |
 | 4.5.11.5 Examples | — no fixture cites it. `136_filter_null_zeros_argument.va` quotes this clause's band-limited-noise example as its source but cites 4.5.11 |
-| 4.5.12 Z-transform filters | `24_z_transform_filters.va` (all four forms), `94_operator_null_argument.va` (E0502), `134_z_filter_period_rejected.va` (non-positive period). `136_filter_null_zeros_argument.va` **xfail** (E0505, above) and `135_z_filter_zero_transition_branch_rejected.va` **xfail** — VerA's codegen refuses the whole optional `t`/`t0` tail of a `zi_*` filter, so the legal non-zero transition is rejected alongside the illegal zero one and the rule that distinguishes them is never reached |
+| 4.5.12 Z-transform filters | `24_z_transform_filters.va` (all four forms), `94_operator_null_argument.va` (E0502), `134_z_filter_period_rejected.va` (non-positive period), `136_filter_null_zeros_argument.va` (null zeros, above), `135_z_filter_zero_transition_branch_rejected.va` (E0518 — a zero-transition-time Z-filter contributed straight to a branch; the zero itself is legal and reading it into a variable still compiles). VerA implements the τ = 0 / t0 = 0 form only, and refuses a nonzero τ rather than emitting a different waveform silently |
 | 4.5.12.1 zi_zp | — no fixture cites it; `24_z_transform_filters.va` runs the form under the 4.5.12 cite |
 | 4.5.12.2 zi_zd | — as 4.5.12.1; also `134_z_filter_period_rejected.va` |
 | 4.5.12.3 zi_np | — as 4.5.12.1 |
 | 4.5.12.4 zi_nd | — as 4.5.12.1 |
 | 4.5.13 Limited exponential | `25_limexp.va` |
 | 4.5.14 Constant versus dynamic arguments | — **no fixture.** Table 4-20 splits every operator's arguments into constant and dynamic; nothing in this directory asserts that a dynamic expression in a constant slot is refused, or that a constant one is held fixed for the analysis |
-| 4.5.15 Restrictions on analog operators | the legal side: `119_operator_under_constant_condition.va` (a `parameter`-selected filter under `if`/`case`/`?:`, plus an `analysis("dc")` guard — the only fixture that can catch over-rejection) and `92_operator_in_genvar_for.va` (the analog_for that must keep compiling). Rejects that reject: `36_operator_in_conditional.va`, `88_operator_in_event.va`, `89_operator_in_repeat.va`, `90_operator_in_while.va`, `91_operator_in_runtime_for.va` (all E0514), `92_operator_in_function.va` (E0422), `94_operator_null_argument.va` (E0502). Three **xfail**: `121_operator_in_ternary_rejected.va` — E0514's check walks `if` and `case` only, an operator in a `?:` arm under a probe condition compiles with W0650; `93_operator_in_initial.va` and `122_operator_in_always_rejected.va` — `initial` and `always` are refused wholesale at E0205 (unsupported module item), so the parse dies before 4.5.15 is reached and E0422 never fires |
+| 4.5.15 Restrictions on analog operators | the legal side: `119_operator_under_constant_condition.va` (a `parameter`-selected filter under `if`/`case`/`?:`, plus an `analysis("dc")` guard — the only fixture that can catch over-rejection) and `92_operator_in_genvar_for.va` (the analog_for that must keep compiling). Rejects that reject: `36_operator_in_conditional.va`, `88_operator_in_event.va`, `89_operator_in_repeat.va`, `90_operator_in_while.va`, `91_operator_in_runtime_for.va` (all E0514), `121_operator_in_ternary_rejected.va` (E0514 — the arms of a `?:` raise the same two conditional counters an `if` body does, so the clause's third named form is checked by the same test as the first two), `92_operator_in_function.va` (E0422), `94_operator_null_argument.va` (E0502). Two **xfail**: `93_operator_in_initial.va` and `122_operator_in_always_rejected.va` — `initial` and `always` are refused wholesale at E0205 (unsupported module item), so the parse dies before 4.5.15 is reached and E0422 never fires |
 | 4.6 Analysis dependent functions | `27_noise_sources.va` cites the parent alongside 4.6.4 |
 | 4.6.1 Analysis | `26_analysis.va` (multi-argument call as an OR; `"static"` is not a synonym for `"ic"`), `143_analysis_transient.va` (the three names that disagree between dc and tran, plus an unsupported name returning 0) |
 | 4.6.2 DC analysis | — **no fixture.** The clause's rules are that `analysis("dc")`/`("static")` are true at every point of a sweep and that `analysis("nodeset")` is true only during the nodeset phase. `26_analysis.va` and `143_analysis_transient.va` exercise `"dc"`/`"static"`/`"ic"` at a single point under the 4.6.1 cite; `"nodeset"` appears in no fixture in this directory |
-| 4.6.3 AC stimulus | `37_ac_stim.va` **xfail** — VerA's codegen emits `@compileError` for `ac_stim`; the small-signal source functions of 4.6 have no lowering at all |
+| 4.6.3 AC stimulus | `37_ac_stim.va` — zero in a large-signal analysis and zero for a name that matches nothing. VerA's residual is real, so a MATCHING small-signal analysis contributes the phasor's real part and there is no `ac_gens` export beside `noise_gens`; the clause's zero cases are the ones a real-valued device can state |
 | 4.6.4 Noise | `27_noise_sources.va` (all four functions, with and without the optional name) |
 | 4.6.4.1 white_noise | — no fixture cites it; run by `27_noise_sources.va`, `38_correlated_noise.va` and `136_filter_null_zeros_argument.va` under other cites |
 | 4.6.4.2 flicker_noise | — as 4.6.4.1, run by `27_noise_sources.va` |
@@ -88,9 +88,9 @@ the prose, never silently promoted.
 | 4.7.2 Returning a value | *nothing* — `102_function_undirected_argument.va` used to be credited here for E0511's arity check, and is now refused one clause earlier, at 4.7.1's minimum of one formal (E0224) |
 | 4.7.2.1 Function identifier variable | `28_user_function.va`, `40_function_return.va` |
 | 4.7.2.2 Analog function return statement | `40_function_return.va` is the legal side including the override rule; `139_function_bare_return_rejected.va` is E0227, "the function shall specify an expression" |
-| 4.7.2.3 Output arguments | `39_function_output_inout.va`, `124_function_unassigned_output_inout.va` (the initialize-to-zero half of the output/inout difference), `106_function_output_nonvariable.va` (E0316). `108_function_array_output_pattern.va` **xfail** — VerA's parser has no array formals in an analog function: `output [0:1] out` and the `'{a,b}` actual are both ParseErrors |
-| 4.7.2.4 Inout arguments | `39_function_output_inout.va`, `124_function_unassigned_output_inout.va` (the left-untouched half), `107_function_inout_nonvariable.va` (E0316). `109_function_array_inout_pattern.va` **xfail** — same array-formal parser gap, `inout [0:1] a` and `'{y,z}` |
-| 4.7.3 Calling an analog user-defined function | `104_function_direct_recursion.va`, `105_function_indirect_recursion.va` (both E0510). Two **xfail**: `138_function_called_outside_analog_rejected.va` — `initial` is refused wholesale at E0205, so the parse dies before the calling-context rule is reached; `109_function_array_inout_pattern.va` — the array-formal parser gap, above |
+| 4.7.2.3 Output arguments | `39_function_output_inout.va`, `124_function_unassigned_output_inout.va` (the initialize-to-zero half of the output/inout difference), `106_function_output_nonvariable.va` (E0316), `108_function_array_output_pattern.va` (green: `output [0:1] out` is an array formal and `'{a,b}` its assignment-pattern actual, copied out element by element) |
+| 4.7.2.4 Inout arguments | `39_function_output_inout.va`, `124_function_unassigned_output_inout.va` (the left-untouched half), `107_function_inout_nonvariable.va` (E0316), `109_function_array_inout_pattern.va` (green: §4.7.1's own `arrayadd` example, copy-in and copy-out both asserted) |
+| 4.7.3 Calling an analog user-defined function | `104_function_direct_recursion.va`, `105_function_indirect_recursion.va` (both E0510), `109_function_array_inout_pattern.va` (§4.7.3's own call of `arrayadd`). One **xfail**: `138_function_called_outside_analog_rejected.va` — `initial` is refused wholesale at E0205, so the parse dies before the calling-context rule is reached |
 
 ## The debt ledger
 
@@ -112,12 +112,14 @@ rules that used to sit beside them — the named-block ban, the minimum of one
 formal, the formal's data type and the bare `return;` — are E0226, E0224,
 E0225 and E0227 and no longer xfail.
 
-**Three are checks that exist but are too weak.** `131_ddx_two_node_probe_rejected.va`
+**Two are checks that exist but are too weak.** `131_ddx_two_node_probe_rejected.va`
 — E0504 asks only "is the second argument an access-function call", so a
-two-net probe slips through. `121_operator_in_ternary_rejected.va` — E0514
-walks `if` and `case` statements and not `?:`. `86_same_flow_terminals.va` —
+two-net probe slips through. `86_same_flow_terminals.va` —
 E0315's own explain text already prints the rule ("LRM 4.4 also forbids
-V(n1, n1)") and nothing raises it. These are three edits, not three features.
+V(n1, n1)") and nothing raises it. These are two edits, not two features.
+`121_operator_in_ternary_rejected.va` was the third and is not any more: E0514
+walked `if` and `case` statements only, and the arms of a `?:` now raise the same
+counters.
 
 **Five never reach the rule: something earlier refuses, or mis-lowers.**
 `93_operator_in_initial.va`, `122_operator_in_always_rejected.va` and
@@ -143,14 +145,14 @@ the second because E0505, which is 4.5.15's null-argument ban, fires on the
 analysis does not fold unary minus on an integer literal, so `11 % -3` is
 reported as a possible division by zero.
 
-**Eight get the wrong answer or cannot be reached, with no reject to carry.**
-Two are parser boundaries: `108_function_array_output_pattern.va`
-and `109_function_array_inout_pattern.va` (no array formals in an analog
-function). The remaining six are semantic: `125_short_circuit_ternary.va` (`?:` evaluates both arms),
-`146_last_crossing_directions.va` (`last_crossing` honours only +1),
-`33_ln1p_expm1.va` (`ln1p`/`expm1` emitted as the cancelling forms),
-`37_ac_stim.va` (`ac_stim` lowers to `@compileError`), and the two
-over-rejections already counted above.
+**Some get the wrong answer or cannot be reached, with no reject to carry.**
+No parser boundary is left here: `108_function_array_output_pattern.va` and
+`109_function_array_inout_pattern.va` were the two, and A.2.6's array formals now
+parse and pass element-wise in both directions. The rest are semantic:
+`33_ln1p_expm1.va` (`ln1p`/`expm1` emitted as the cancelling forms) and the two
+over-rejections already counted above. `146_last_crossing_directions.va`,
+`37_ac_stim.va` and `125_short_circuit_ternary.va` were on this list and are not
+any more.
 
 ## Where a fixture is credited, and where it is not
 

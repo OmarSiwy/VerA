@@ -63,7 +63,6 @@
 //! lrm 9.4.3
 //! lrm 9.5.3
 //! lrm 9.5.4.2
-//! xfail VerA has no §9.5.3/§9.5.4.2 string-formatter surface: codegen.zig `void_tasks` lowers $sformat/$sscanf to the constant `S.con(0.0)`, so `text` is never written and neither `back_h` nor `back_o` is assigned. The §9.4.3 renderings above it, `%c` included, now compile and print
 `include "check.vh"
 module ch09_display_formats(p, n);
   inout p, n; electrical p, n;

@@ -29,7 +29,6 @@
 //! analysis dc
 //! bias V(p) = 0.3
 //! sweep V(c) = -1.0, 1.25, 2.0
-//! xfail VerA's above() is level-triggered, not edge-triggered: codegen emits `expr > 0.0` with nothing compared against the previous point, so it re-fires on every sweep point where the expression is positive and n counts points instead of crossings
 `include "check.vh"
 module ch5_above(p, c);
   inout p, c; electrical p, c; real held; integer n;

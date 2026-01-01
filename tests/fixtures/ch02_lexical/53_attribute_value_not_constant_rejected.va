@@ -21,20 +21,16 @@
 // Inert today — nothing downstream in VerA reads attribute values, so the wrong
 // acceptance has no observable consequence yet. It will the moment one does.
 //
-// The pin is the PHASE label and not a code, deliberately, and here a code is
-// not merely unavailable but excluded: `z` IS a well-formed expression, so
-// "expected an expression" is precisely the diagnostic this construct can never
-// produce. The violated rule is the CONSTANT in `attr_spec ::= attr_name [ =
-// constant_expression ]`, and VerA's not-constant codes are all bound to other
-// contexts (array bound, array index, genvar loop bound). Pinning any of them
-// would freeze this fixture at XFAIL forever: the check lands, a new code fires,
-// the substring still misses, the marker is never retired. `DiagnosticsReported`
-// matches any diagnostic, so the day the check lands this XPASSes and FAILs,
-// demanding the xfail line go. Retarget it at the real code then.
+// The pin was the PHASE label for as long as VerA's not-constant codes were all
+// bound to other contexts (array bound, array index, genvar loop bound) and none
+// of them could fire here. E0357 is the code for `attr_spec`'s own
+// `constant_expression`, so the pin is now it.
+//
+// Still inert downstream — nothing in VerA reads attribute values — which is why
+// the rule is checked and the value is then dropped.
 //! lrm 2.9
 //! lrm A.9.1
-//! reject DiagnosticsReported
-//! xfail VerA does not require an attribute value to be a constant expression; `(* q = z *)` with `real z` in scope compiles with no diagnostic
+//! reject E0357
 module ch02_attribute_value_not_constant_rejected(p, n);
     inout p, n;
     electrical p, n;

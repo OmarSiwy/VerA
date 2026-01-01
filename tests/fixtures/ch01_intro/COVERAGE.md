@@ -20,7 +20,7 @@ VerA does not yet meet them. That ledger is below the table and is the most usef
 | 1.2 analog potentials and flows receive contributions only inside an `analog` block | **no fixture here.** Every `<+` in this folder is inside `analog`, but nothing places one *outside* one, so the rule is never tested; the whole list in 1.2 is mixed-signal and belongs to `ch07_mixed_signal` |
 | 1.3 signal/port/node terminology; one node per analog-or-mixed signal regardless of net count | **no fixture.** Needs instantiation and port connection to be observable; no fixture in this directory instantiates anything. `ch06_hierarchy` territory |
 | 1.3.1 two values per node; branch potential is the node difference | `01_conservative_resistor.va` (V(p,n) = 1.25, Ohm's law over the `//! param` override), `05_potential_and_flow.va` (the mirror: flow probed, potential contributed), `09_potential_probe.va` (probe drives a source in another branch) |
-| 1.3.1 probe/source approach; source-branch flow readable | `07_current_source.va` **xfail** — flow-source branch reads 0, not the retained value; `10_flow_probe.va` (named-branch flow probe, plus the alias claim `I(measured) == I(p,n)`) |
+| 1.3.1 probe/source approach; source-branch flow readable | `07_current_source.va` (the retained 1 mA read back at all three sweep points, so the source value does not drift with the bias), `04_kirchhoff_flow_sum.va` (two flow contributions read back as their sum, 1.4 mA); `10_flow_probe.va` (named-branch flow probe, plus the alias claim `I(measured) == I(p,n)`) |
 | 1.3.1 "the potential and flow of a probe branch may not both appear in expressions" | `20_probe_branch_both_quantities.va` **xfail** — the two accesses of an uncontributed node pair are lowered independently and never correlated; lint and `--emit-zig` both exit 0 |
 | 1.3.1 "nor is it allowed to specify both the potential and flow of a source branch" | **no fixture here.** `ch05_analog_behavior/source_probe_both.va` is the near-miss and is *legal*; the illegal double-source form is uncovered |
 | 1.3.1 a probed branch flow forces the branch potential to zero | **no fixture.** Requires observing a forced residual the runner cannot inspect |
@@ -55,13 +55,12 @@ closes every fixture on it:
 | Defect | Fixtures | Where |
 |---|---|---|
 | codegen refuses any contribution to a single-nature directional port | `11`, `12`, `13` | `codegen.zig signalFlowNet`; `--emit-zig` reports "codegen refused a construct" while `--lint` is silent |
-| a flow-SOURCE branch reads back 0 instead of its retained value (§5.4.2.2) | `04`, `07`, `13` | the read is lowered as a branch-flow unknown that only a *potential* source frees |
 | a discipline binding no nature for a quantity accepts every access to it, read or write | `14`, `19`, `22` | `lower.zig checkAccessMatch`, `if (want.len == 0 …) return;` |
 | nothing rejects declaring a single-nature discipline on an `inout` port | `15`, `16` | port `.direction` is recorded only for codegen's refusal; both modules lint *and* emit clean |
 | no front-end diagnostic distinguishes an `input` from an `output` contribution target | `17`, `18` | only codegen refuses, and generically — which is why neither pins `GeneratedCompileError` |
 | the two quantities of one probe branch are never correlated | `20` | `V(prb)` and `I(prb)` lowered independently; lint and emit both exit 0 |
 | reversed terminal order mints a second branch-flow unknown instead of negating | `23` | `flowZ28nZ2cpZ29` alongside `flowZ28pZ2cnZ29` |
-| the testbench forces every node unknown to its bias rather than solving | `11` | second half of 11's xfail; also recorded by `ch05_analog_behavior/value_retention.va` |
+| the testbench forces every node unknown to its bias rather than solving | `11`, `13` | second half of both xfails; also recorded by `ch05_analog_behavior/value_retention.va`. A POTENTIAL read is the node difference (§5.4.1), so unlike the flow-source read it has no retained value to substitute — it needs a Newton loop |
 | a port flow is not expressible as a precondition | `12` | `tb.zig unknownName` (`src/backend/tb.zig:237`) strips `I(`…`)` and binds the node |
 
 Eight of the fourteen are `//! reject DiagnosticsReported` (`14`–`20`, `22`). None pins a

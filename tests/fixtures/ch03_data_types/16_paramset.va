@@ -3,8 +3,10 @@
 // Verilog-AMS HDL and Verilog-A, except support for real value ports is only
 // applicable to Verilog-AMS HDL". Paramset is Clause 6 and is not excepted, so
 // a Verilog-A compiler may not refuse a compilation unit for containing one.
-// VerA does, at E0201 — that is a subset decision, not a conformance rule, and
-// this file records it as the debt it is instead of pinning it as correct.
+// VerA used to, at E0201 — a subset decision, not a conformance rule. It now
+// reads past the declaration and drops it, which is all a paramset can mean
+// without instantiation: §6.4 gives one effect only through an instance that
+// names it.
 //
 // What is asserted here is only the part a single-module testbench can see:
 // the paramset is legal, it contains no behavioral code (§6.4), and the module
@@ -15,7 +17,6 @@
 //! lrm 6.4
 //! lrm C.8
 //! bias V(p) = 1.0, V(n) = 0.0
-//! xfail VerA refuses the whole compilation unit at E0201 because it contains a paramset
 `include "check.vh"
 module ch03_paramset_target(p, n);
     inout p, n;

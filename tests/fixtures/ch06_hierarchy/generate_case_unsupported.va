@@ -28,7 +28,6 @@
 //! lrm 6.6
 //! param mode = 2
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA has no case_generate_construct: `case` at module scope is E0205 "unsupported module item: found `case`". Loop and if-generate now hold module items; only this third scheme is missing
 `include "check.vh"
 module ch6_generate_case(p, n);
   inout p, n; electrical p, n;

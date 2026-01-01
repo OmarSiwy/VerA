@@ -24,7 +24,7 @@
 //
 //! lrm 6.4
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA compiles one flat module: the paramset instantiation is refused at E0204 "module instantiation is not supported" and the paramset declaration itself at E0201
+//! xfail VerA compiles one flat module: the paramset DECLARATION is now read past and dropped (§6.4 gives it effect only through an instance), but the instantiation that would select it is refused at E0204 "module instantiation is not supported"
 `include "check.vh"
 module ch6_ps_user(p, n);
   inout p, n; electrical p, n;

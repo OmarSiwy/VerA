@@ -35,7 +35,7 @@
 //! lrm C.8
 //! bias V(p) = 0.5
 //! print none
-//! xfail VerA rejects `paramset` outright with E0201, and applying one would also need module instantiation (E0204)
+//! xfail VerA reads past a `paramset` declaration and drops it; applying one needs module instantiation, which is E0204
 `include "check.vh"
 module annex_a_paramset(p, n);
     inout p, n;

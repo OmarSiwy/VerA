@@ -51,7 +51,6 @@
 //! time 0, 1n, 2n, 3n, 4n
 //! analysis tran
 //! print none
-//! xfail VerA's last_crossing ignores its direction argument for anything but +1: `last_crossing(V(p,n), -1)` and `last_crossing(V(p,n), 0)` both return a flat 0.0 at every time point, so the -1 query is not negative before its (never-occurring) first falling edge and the 0 query does not track the rising edge the +1 query reports
 `include "check.vh"
 module ch04_last_crossing_directions(p, n);
     inout p, n;

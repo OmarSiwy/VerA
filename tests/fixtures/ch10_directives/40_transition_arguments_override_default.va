@@ -49,7 +49,6 @@
 //! time 0, 1n, 2n, 3n, 4n
 //! analysis tran
 //! print none
-//! xfail VerA discards `default_transition (preprocessor marks it .ignored), so the argument-free filter falls back to a simulator default instead of the directive's 8n
 `default_transition 8n
 `include "check.vh"
 module ch10_transition_arguments_override_default(in, n);

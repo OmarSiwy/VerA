@@ -17,7 +17,6 @@
 // keyword, annex B.)
 //
 //! lrm 3.2
-//! xfail VerA lowers `integer` to i64 (src/backend/codegen.zig, "plain i64 (LRM §3.2 integer)"), so neither endpoint wraps: 2147483647 + 1 evaluates to 2147483648
 `include "check.vh"
 module ch03_integer_overflow_wrap(p, n);
     inout p, n;

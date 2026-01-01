@@ -15,15 +15,17 @@
 // nothing about nesting at all. Delete `(* inner *)` from THIS file and it
 // compiles clean, which is what makes the nesting the cause of the diagnostic.
 //
-// It arrives as E0205 because the nested `(*` desynchronizes the attribute
-// skip, so the module item ends where the parser did not expect one; the code
-// is the stable pin. The legal cases this bounds -- a value-less attribute
+// It used to arrive as E0205: the nested `(*` desynchronized a token-scanning
+// attribute skip, so the module item ended where the parser did not expect one —
+// the right verdict for no reason at all. The parser now reads an attribute value
+// as an expression and refuses a second instance inside one, so the code is
+// E0357, the clause's own rule. The legal cases this bounds -- a value-less attribute
 // defaulting to 1, and several attribute instances in a row -- are in
 // 29_attribute_default_and_multiple.va, and 53_attribute_value_not_constant.va
 // is the other half of the same sentence pair.
 //! lrm 2.9
 //! lrm 2.9.1
-//! reject E0205
+//! reject E0357
 module ch2_nested_attr(p);
     inout p;
     electrical p;

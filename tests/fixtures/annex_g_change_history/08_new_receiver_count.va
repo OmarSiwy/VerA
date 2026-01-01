@@ -28,7 +28,7 @@
 // how an xfail gets stuck: pin the wrong code and the XPASS never fires when the
 // gap closes under a different code. E0801 "unsupported system function" in
 // particular is the WRONG rule — it is VerA's capability class for functions it
-// declines to implement at all (§9.13 $random, §9.21 $table_model), and it fires
+// declines to implement at all (§9.13 $random, §9.16 $simprobe), and it fires
 // on the NAME in any context, whereas the LRM's rule is about the context and
 // makes the identical call legal in the digital part of a connectmodule.
 // `DiagnosticsReported` is honest: this module's only defect is the call, so any

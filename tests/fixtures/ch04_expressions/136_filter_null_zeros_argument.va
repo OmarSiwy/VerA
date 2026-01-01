@@ -34,7 +34,6 @@
 //
 //! lrm 4.5.11
 //! lrm 4.5.12
-//! xfail VerA rejects the legal null argument at E0505 "analog operator does not accept an empty argument" for both `laplace_zp(x, , poles)` and `zi_zp(x, , poles, T)`; E0505 is 4.5.15's "It is illegal to specify a null argument in the argument list of an analog operator, except as specified elsewhere in this document" and is over-firing on the 4.5.11/4.5.12 carve-out that the "except" points at
 //! analysis dc
 //! bias V(p) = 1.0
 //! bias V(n) = 0.0
