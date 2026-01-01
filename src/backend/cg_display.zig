@@ -152,6 +152,190 @@ pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!voi
     try g.b("}}) catch \"\"; }}", .{});
 }
 
+// ------------------------------------------------------- §9.5 file I/O ----
+//
+// §9.5.2 defines its five output tasks as the §9.4.1 ones "with one additional
+// argument, which is either a multichannel descriptor or a file descriptor", so
+// the formatter is the same formatter and lives here rather than in a second
+// copy. The rest of the family is a descriptor operation with no text at all,
+// but it is emitted from the same place because it is sequenced in the same
+// unit — see `codegen.Gen.emitting_display`.
+
+/// One §9.5 call, in the display unit. `site` is the call's MIR instruction id,
+/// which is the per-call-site key for the formatted bytes (`zSBuf`) exactly as
+/// it is for `$sformat`.
+pub fn emitFileCall(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
+    // §9.5.1/§9.5.2/§9.5.6: `$fclose`, `$fflush` and the five output tasks are
+    // TASKS, so `analysis.callTy` leaves them real like every other void call —
+    // but the kernels answer in bytes and channels, which are integers. The
+    // conversion is here rather than in the type table because the value is
+    // discarded either way: it exists only to give the display chain something to
+    // carry (`Lower.sequenceFileCall`), and typing seven void tasks as integers to
+    // avoid one cast would change what `$display`'s own chain carries too.
+    const wrap = Analysis.callTy(name) == .real;
+    if (wrap) try g.b("S.con(@as(f64, @floatFromInt(", .{});
+    try emitFileCallInner(g, name, args, site);
+    if (wrap) try g.b(")))", .{});
+}
+
+fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
+    const eq = std.mem.eql;
+    if (isFileOut(name)) return emitFileWrite(g, name, args, site);
+    // §9.5.1 Syntax 9-2: one argument is a multichannel descriptor, two are a
+    // file descriptor. The presence of the type argument IS the discriminator,
+    // and it is the only thing that decides which encoding comes back.
+    if (eq(u8, name, "$fopen")) {
+        try g.b("zFOpen(", .{});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.f_zero, .str);
+        try g.b(", ", .{});
+        if (args.len > 1) try g.renderVal(args[1], .str) else try g.b("\"\"", .{});
+        return g.b(", {s})", .{if (args.len > 1) "false" else "true"});
+    }
+    // The one-argument descriptor operations, in clause order.
+    const one = [_]struct { n: []const u8, k: []const u8 }{
+        .{ .n = "$fclose", .k = "zFClose" }, // §9.5.1
+        .{ .n = "$fflush", .k = "zFFlush" }, // §9.5.6
+        .{ .n = "$fgets", .k = "zFGets" }, // §9.5.4.1 — the character count
+        .{ .n = "$ftell", .k = "zFTell" }, // §9.5.5
+        .{ .n = "$feof", .k = "zFEof" }, // §9.5.8
+        .{ .n = "$ferror", .k = "zFError" }, // §9.5.7 — the errno
+    };
+    for (one) |o| if (eq(u8, name, o.n)) {
+        try g.b("{s}(", .{o.k});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        return g.b(")", .{});
+    };
+    // §9.5.5 `$rewind(fd)` "is equivalent to $fseek (fd,0,0)" — the clause's own
+    // words, so it is the same kernel with the constants written in.
+    if (eq(u8, name, "$rewind")) {
+        try g.b("zFSeek(", .{});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        return g.b(", 0, 0)", .{});
+    }
+    if (eq(u8, name, "$fseek")) {
+        try g.b("zFSeek(", .{});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.b(", ", .{});
+        try g.renderVal(if (args.len > 1) args[1] else Mir.Value.zero, .int);
+        try g.b(", ", .{});
+        try g.renderVal(if (args.len > 2) args[2] else Mir.Value.zero, .int);
+        return g.b(")", .{});
+    }
+    // §9.5.4.2 the count: read one line and hand it to §9.5.3's scanner, which
+    // `str_kernels.zScan` already is. `Lower.lowerFileRead` built the operands as
+    // (fd, format).
+    if (eq(u8, name, "$fscanf")) {
+        try g.b("zScanN(zFRead(", .{});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.b("), ", .{});
+        try g.renderVal(if (args.len > 1) args[1] else Mir.Value.f_zero, .str);
+        return g.b(")", .{});
+    }
+    // The synthetic readers, all of which take the count first — see
+    // `file_kernels.zFLine` for why that operand is there and why it is read.
+    if (eq(u8, name, "$fgets$str")) return emitLine(g, args, "zFLine");
+    if (eq(u8, name, "$ferror$str")) {
+        try g.b("zFErrorStr(", .{});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.b(", ", .{});
+        try g.renderVal(if (args.len > 1) args[1] else Mir.Value.zero, .int);
+        return g.b(")", .{});
+    }
+    // §9.5.4.2's items: the same three flavours `$sscanf` has, over the line the
+    // count's read latched. `(count, fd, format, item)`.
+    const scan: ?[]const u8 = if (eq(u8, name, "$fscanf$int"))
+        "zScanI"
+    else if (eq(u8, name, "$fscanf$real"))
+        "zScanR"
+    else if (eq(u8, name, "$fscanf$str")) "zScanS" else null;
+    if (scan) |k| {
+        try g.b("{s}(", .{k});
+        try emitLine(g, args, "zFLine");
+        try g.b(", ", .{});
+        try g.renderVal(if (args.len > 2) args[2] else Mir.Value.f_zero, .str);
+        try g.b(", ", .{});
+        try g.renderVal(if (args.len > 3) args[3] else Mir.Value.zero, .int);
+        return g.b(")", .{});
+    }
+    return g.abort("VerA: unhandled §9.5 call `{s}`", .{name});
+}
+
+/// `zFLine(count, fd)` — the latched line, over the first two operands every
+/// synthetic reader carries.
+fn emitLine(g: *Gen, args: []const Mir.Value, kernel: []const u8) Error!void {
+    try g.b("{s}(", .{kernel});
+    try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+    try g.b(", ", .{});
+    try g.renderVal(if (args.len > 1) args[1] else Mir.Value.zero, .int);
+    try g.b(")", .{});
+}
+
+/// §9.5.2's five output tasks. The descriptor is `args[0]`; everything after it
+/// is the §9.4.1 task this one is named after, so the format translation, the
+/// pairing rule, the "no format string" fallback and the newline rule are all
+/// `emitDisplayTask`'s, applied to the BASE name — `$fwrite` is the one that does
+/// not end the line, exactly as `$write` is.
+fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
+    const eq = std.mem.eql;
+    // §9.5.1 `$fclose` and §9.5.6 `$fflush` take a descriptor and no text.
+    if (eq(u8, name, "$fclose") or eq(u8, name, "$fflush")) {
+        try g.b("{s}(", .{if (eq(u8, name, "$fclose")) "zFClose" else "zFFlush"});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        return g.b(")", .{});
+    }
+    // "$fdisplay" → "display", "$fwrite" → "write": the §9.4.1 task §9.5.2 names
+    // this one after, with both the `$` and the `f` gone. The two things it is
+    // read for are §9.4.1's newline rule (`$write` is the member that does not end
+    // the line, and so is `$fwrite`) and §9.4.1's radix suffix.
+    const base = name[2..];
+    const rest = if (args.len > 0) args[1..] else args;
+    var fmt_at: ?usize = null;
+    for (rest, 0..) |_, i| {
+        if (g.strArg(rest, i) != null) {
+            fmt_at = i;
+            break;
+        }
+    }
+    var fmt: std.ArrayList(u8) = .empty;
+    var ops: std.ArrayList(PrintArg) = .empty;
+    if (fmt_at) |at| {
+        try translateFormat(g, g.strArg(rest, at).?, rest[at + 1 ..], &fmt, &ops);
+    } else {
+        const conv: u8 = switch (base[base.len - 1]) {
+            'b' => 'b',
+            'o' => 'o',
+            'h' => 'x',
+            else => 0,
+        };
+        for (rest, 0..) |a, i| {
+            if (i != 0) try fmt.append(g.arena, ' ');
+            try appendConv(g, &fmt, &ops, a, conv, "");
+        }
+    }
+    if (!std.mem.startsWith(u8, base, "write")) try fmt.append(g.arena, '\n');
+
+    // The text is formatted into this call site's own scratch row and then
+    // written, which is `emitStringFormat`'s sink with a descriptor instead of a
+    // string variable. An overrun writes nothing rather than half a line: §9.5.2
+    // states no truncation rule, same as §9.5.3.
+    try g.b("zf: {{ ", .{});
+    for (ops.items, 0..) |p, i| {
+        if (p.pad) try g.b("var zb{d}: [24]u8 = undefined; ", .{i});
+    }
+    try g.b("break :zf zFPut(", .{});
+    try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+    try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
+    for (ops.items, 0..) |p, i| {
+        if (i != 0) try g.b(", ", .{});
+        try renderPrintArg(g, p, i);
+    }
+    try g.b("}}) catch \"\"); }}", .{});
+}
+
+fn isFileOut(name: []const u8) bool {
+    return Lower.isFileOutTask(name);
+}
+
 /// §9.7.3 severity tasks. Null for the §9.4.1 display family.
 pub fn severityWord(name: []const u8) ?[]const u8 {
     const eq = std.mem.eql;

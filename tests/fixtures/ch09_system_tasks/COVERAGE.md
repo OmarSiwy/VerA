@@ -22,11 +22,12 @@ single re-census is scheduled.
 Reading the table: **xfail** on a fixture means the file runs and fails, and the
 reason on that row is the defect. A row whose fixtures are *all* xfail is a
 section the suite states and the compiler does not meet — there is no passing
-evidence behind it. §9.5.1, §9.5.4.1, §9.5.5, §9.5.6, §9.5.7, §9.5.8, §9.6,
-§9.8, §9.9, §9.13.1, §9.13.2, §9.16, §9.22.x and
-§9.23.x are all in that state. §9.4.2, §9.4.3 and §9.5.4.2 left it when the
-string formatter and scanner landed; §9.21 and its five subclauses left it when
-the table interpolator did.
+evidence behind it. §9.6, §9.8, §9.9, §9.16, §9.22.x and §9.23.x are all in that
+state. §9.4.2, §9.4.3 and §9.5.4.2 left it when the string formatter and scanner
+landed; §9.21 and its five subclauses left it when the table interpolator did;
+§9.13.1 and §9.13.2 left it when the probabilistic distributions did; and
+§9.5.1, §9.5.2, §9.5.4.1, §9.5.5, §9.5.6, §9.5.7 and §9.5.8 left it when the
+descriptor table did.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
@@ -42,19 +43,19 @@ the table interpolator did.
 | `s9.4.6` | no display output except `$debug` unless the iteration is accepted | — no fixture. `043_fdebug.va` quotes the rule in its header and does not test it; the harness runs one accepted solve |
 | `s9.4.7` | `%r`/`%R` on reals **in the digital context** | — no fixture. The `%r` in `03_display_write.va` and `06` is the Table 9-23 *analog* engineering-notation specifier; Verilog-A has no digital context for this extension to apply to |
 | `s9.5` | file-I/O family, Table 9-2 | `153_file_io_digital_only_analog_rejected.va` (`$fdisplayb`, `$fwriteh`, `$fstrobeo`, `$fmonitorb`, `$swriteh`, `$fgetc`, `$ungetc`, `$fread`, `$readmemb`, `$sdf_annotate`) — **xfail**, *no Table 9-2 analog-context restriction* |
-| `s9.5.1` | `$fopen` descriptor forms, `$fclose` | `07_file_open_close.va`, `08_file_output.va`, `039_fdisplay.va`, `047_fscanf.va`, `052_fflush.va`, `053_ferror.va`, `10_file_read_scan.va`, `11_file_position_status.va`, `158_fopen_multichannel_descriptor.va` — **all nine xfail**, one shared cause: *`codegen.zig` `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so `$fopen` answers 0 — bit 31 clear and channel 0. `lower.zig:2362` states the reason: the file family "needs a descriptor the compiled device has no way to own"* |
+| `s9.5.1` | `$fopen` descriptor forms, `$fclose` | `07_file_open_close.va`, `08_file_output.va`, `039_fdisplay.va`, `047_fscanf.va`, `052_fflush.va`, `053_ferror.va`, `10_file_read_scan.va`, `11_file_position_status.va`, `158_fopen_multichannel_descriptor.va` — **all nine pass**, and both descriptor shapes are pinned at the bit: an fd with bit 31 set and a channel number above the three pre-opened streams, an mcd with bit 31 clear and exactly one bit set that is not bit 0, and 0 for a missing file opened `r`/`r+`. `$fclose` frees the channel, which `158` observes through the reuse §9.5.1 requires |
 | `s9.5.1.1` | reopening a write-mode file across analyses appends | — no fixture. Needs two analyses in one process, which the harness does not run |
 | `s9.5.1.2` | analog/digital descriptor sharing | — no fixture; mixed-signal runtime policy, no Verilog-A source form |
-| `s9.5.2` | `$fdisplay` `$fwrite` `$fstrobe` `$fmonitor` `$fdebug` | `040_fwrite.va`, `041_fstrobe.va`, `042_fmonitor.va`, `043_fdebug.va` pass — but each pins only the *argument value* handed to `%g`, never a byte in a file; `039_fdisplay.va` and `08_file_output.va` — **xfail**, *same `void_tasks` constant; `lower.zig:2365` excludes them from `isDisplayTask` so unlike `$display` they never reach `cg_display.zig` at all* |
+| `s9.5.2` | `$fdisplay` `$fwrite` `$fstrobe` `$fmonitor` `$fdebug` | `040_fwrite.va`, `041_fstrobe.va`, `042_fmonitor.va`, `043_fdebug.va`, `039_fdisplay.va`, `08_file_output.va` all pass. Each of the atomics still pins only the *argument value* handed to `%g` — a byte in a file is not readable from inside the model — but the BYTES are now pinned indirectly, and exactly where they can be: `046`/`049`/`050`/`051`/`054`/`11` write with `$fwrite` and read the result back, so the four-byte line and the positions after it are assertions about what the writer actually put there. §9.5.2's "the same type of arguments as the tasks upon which they are based" is literal in the emitter: the formatter is `emitDisplayTask`'s, over the arguments after the descriptor, with §9.4.1's newline rule applied to the base name so `$fwrite` does not end the line |
 | `s9.5.3` | `$swrite` and `$sformat` | `044_swrite.va`, `045_sformat.va` pass on the argument value only (their `text` is never read back); `06_display_formats.va` and `09_string_formatting.va` pass on the TEXT, by sending it back through `$sscanf` — lowering makes both writers an assignment to the named string variable, not a void call, so a formatter that wrote nothing would now fail them |
 | `s9.5.4` | files are readable only if opened `r`/`r+` | — no fixture; there is no descriptor to open in the wrong mode |
-| `s9.5.4.1` | `$fgets` | `046_fgets.va` — **xfail**, *`$fopen` answers 0 and `$fgets` reads nothing and returns 0* |
-| `s9.5.4.2` | `$fscanf` and `$sscanf` | `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09`, `10_file_read_scan.va` pass — `$sscanf` is `zScan` (suppression `*`, maximum field width, early matching failure, EOF, and the ten conversion codes), and each output argument is its own assignment from a `$sscanf$<ty>` item call. `047_fscanf.va` remains **xfail**: it reads a DESCRIPTOR, which is the wall below, and its missing-file half passes by accident |
-| `s9.5.5` | `$ftell` `$fseek` `$rewind` | `049_ftell.va`, `050_fseek.va`, `051_rewind.va`, `11_file_position_status.va` — **all four xfail**, *every positioning answer is the same constant 0, so a moved and an unmoved pointer are indistinguishable* |
-| `s9.5.6` | `$fflush` | `052_fflush.va` — **xfail**, *no-op returning 0* |
-| `s9.5.7` | `$ferror` | `053_ferror.va` — **xfail**, *`$fopen` reports failure (fd 0) while `$ferror` simultaneously reports no error — a file that could not be opened raising none* |
-| `s9.5.8` | `$feof` | `054_feof.va`, `11_file_position_status.va` — **xfail**, *0 whether or not a read has hit the end* |
-| `s9.5.9` | file position rolled back on a rejected iteration; `$fdebug` excepted | — no fixture. Requires a rejected iteration and a real descriptor; neither exists |
+| `s9.5.4.1` | `$fgets` | `046_fgets.va` passes on the sentence that distinguishes it from C: the newline is "read AND transferred to str", so a four-byte line returns 4 and not 3. `049`/`051`/`054`/`11` read the same line for its side effect on the position |
+| `s9.5.4.2` | `$fscanf` and `$sscanf` | `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09`, `10_file_read_scan.va` pass — `$sscanf` is `zScan` (suppression `*`, maximum field width, early matching failure, EOF, and the ten conversion codes), and each output argument is its own assignment from a `$sscanf$<ty>` item call. `047_fscanf.va` passes too, on both halves it was written to separate: 0 for the missing file, and `code == 1` with `value == 42` for a file it writes itself. `$fscanf` is the SAME scanner — `zScan` over one line the file kernels read — because §9.5.4.2 states one set of conversion rules for both spellings |
+| `s9.5.5` | `$ftell` `$fseek` `$rewind` | `049_ftell.va`, `050_fseek.va`, `051_rewind.va`, `11_file_position_status.va` — **all four pass**, and each asserts a MOVED and an unmoved pointer so the two cannot be confused: 0 then 4 across a `$fgets`, 4 after `$fseek(fd,0,2)` on a four-byte file, 0 after `$rewind`, and the status half separately (0, not the new position). The position is the kernels' own quantity and every read is positional, which is what makes `$ftell` exact after a read that stopped at a newline |
+| `s9.5.6` | `$fflush` | `052_fflush.va` passes on what §9.5.6 leaves observable — the descriptor it is handed. The task itself is genuinely a no-op and says so: every write goes positionally straight to the descriptor, so there is never buffered output to flush |
+| `s9.5.7` | `$ferror` | `053_ferror.va` passes in both directions, which is the point of it: zero errno and an EMPTY description after a successful open, a nonzero errno after one that failed. The errno's numeric value is deliberately unasserted — §9.5.7 says only "an error code is returned" |
+| `s9.5.8` | `$feof` | `054_feof.va`, `11_file_position_status.va` pass. `054` puts the descriptor in both states in turn — zero until a read detects EOF, nonzero after the read that runs off the end — and it takes TWO `$fgets` to get there, because the first stops at the newline and need not have touched the end |
+| `s9.5.9` | file position rolled back on a rejected iteration; `$fdebug` excepted | — no fixture. The descriptor is real now, but the harness runs one accepted solve per point, so there is no rejected iteration to roll back. The rule is nevertheless what the implementation is BUILT on: every §9.5 call is sequenced in the per-accepted-point phase (`codegen.Gen.emitting_display`) and none of them runs inside `eval`, so a rejected Newton iteration cannot have written anything to undo |
 | `s9.6` | `$printtimescale` `$timeformat`, analog "No" | `154_timescale_pla_queue_analog_rejected.va` — **xfail**, *no Table 9-3 analog-context restriction* |
 | `s9.7` | simulation control family | — parent; carried by 9.7.1–9.7.3 |
 | `s9.7.1` | `$finish` and its optional diagnostic level | `055_finish.va`, `12_finish_stop.va` |
@@ -66,9 +67,9 @@ the table interpolator did.
 | `s9.11` | conversion functions; only `$bitstoreal`/`$realtobits` extend to analog | `15_conversion_functions.va` (the pair is the identity on 3.7, bit-exact), `063_realtobits.va`, `064_bitstoreal.va`; the four Table 9-8 "No" rows are `061_rtoi`, `062_itor`, `134_signed`, `135_unsigned` — **all xfail**, *no Table 9-8 analog-context check; `$rtoi` even emits a truncation* |
 | `s9.12` | `$test$plusargs` and `$value$plusargs` | `065_test_plusargs.va`, `066_value_plusargs.va`, `16_plusargs.va` |
 | `s9.13` | probabilistic distribution family | — parent; carried by 9.13.1–9.13.2 |
-| `s9.13.1` | `$random` and `$arandom`, seeded and unseeded | `32_random.va`, `33_arandom.va`, `115_random_no_seed.va`, `116_arandom_no_seed.va`, `117_arandom_parameter_seed.va`, `118_arandom_negative_seed.va` — **xfail**, *VerA refuses the whole §9.13 family with E0801 rather than stubbing a seeded RNG stream; Table 9-10 marks all seventeen names analog-context Yes*. `132_arandom_type_string_outside_paramset_rejected.va` — **xfail**, *E0801 fires at the name, so the paramset-only `type_string` scope rule is never reached* |
-| `s9.13.2` | seven `$dist_*` and six `$rdist_*` names | `34_distribution.va`, `35_real_distribution.va`, `119`–`130` (one file per name) — **all xfail on the same E0801**. Argument-rule negatives `150_rdist_domain_rejected.va`, `151_rdist_uniform_start_end_rejected.va`, `166_rdist_real_seed_rejected.va`, `133_rdist_type_string_outside_paramset_rejected.va` — **xfail**, *E0801 fires at the function name, so no argument is ever examined and the domain, start/end and integer-seed rules are not reached* |
-| `s9.13.3` | Table 9-26 cross-listing to the 1364 C algorithms | — no fixture claims a distribution's shape. Nothing could: every call is refused at the name |
+| `s9.13.1` | `$random` and `$arandom`, seeded and unseeded | `32_random.va`, `33_arandom.va`, `115_random_no_seed.va`, `116_arandom_no_seed.va`, `117_arandom_parameter_seed.va`, `118_arandom_negative_seed.va`. Scope negative `132_arandom_type_string_outside_paramset_rejected.va` — E0816 |
+| `s9.13.2` | seven `$dist_*` and six `$rdist_*` names | `34_distribution.va`, `35_real_distribution.va`, `119`–`130` (one file per name). Argument-rule negatives `150_rdist_domain_rejected.va`, `151_rdist_uniform_start_end_rejected.va`, `166_rdist_real_seed_rejected.va`, `133_rdist_type_string_outside_paramset_rejected.va` — all E0816 |
+| `s9.13.3` | Table 9-26 cross-listing to the 1364 C algorithms | — no fixture claims a distribution's VALUE, and none can: this clause defers the algorithms to IEEE 1364 §17.9.3 and no clause of *this* LRM requires a tool to reproduce that stream. What the family's fixtures pin instead is §9.13.1/§9.13.2's own two sentences — repeatability on a seed, and the inout seed coming back different |
 | `s9.14` | math system functions | Twenty-seven atomics `067`–`093` plus `17_math_unary.va`, `18_math_trig.va`, `19_math_binary.va`, `20_math_2023.va`. Two of the atomics are **xfail**: `092_ln1p.va` — *`codegen.zig` `zLn1p` is `a.addC(1.0).log()`, so `$ln1p(5e-16)` returns 4.440892098500625e-16, 11% low — precisely the naive value Table 4-14's C `log1p` exists to replace* — and `093_expm1.va` — *`zExpm1` is `a.exp().addC(-1.0)`, same 11% error for the same reason* |
 | `s9.15` | `$temperature` `$vt` `$simparam` `$simparam$str` | `21_temperature_vt.va`, `094_temperature.va`, `095_vt_ambient.va`, `096_vt_temperature.va` (all `//! temp`-driven), `22_simparam.va` (unknown name returns its fallback verbatim), `23_simparam_string.va`. All three branches of the clause's `$simparam` sentence are now green: `147_simparam_unknown_no_fallback_rejected.va` is a **reject VerA meets** (E0811 — the unknown name with no fallback), and `157_simparam_timescale.va` pins Table 9-27's two source-derived rows, `"timeUnit"`/`"timePrecision"` in seconds, which the preprocessor now parses out of `` `timescale `` and publishes for `Lower.simparamValue` |
 | `s9.16` | `$simprobe(inst_name, param_name [, expr])` | `36_simprobe.va` — **xfail**, *E0801: no sibling-instance host to probe; Table 9-13 marks it analog-context Yes* |
@@ -103,28 +104,52 @@ the table interpolator did.
 
 Eighty xfails is not eighty defects. It is four walls and a short tail —
 17 + 25 + 11 + 19 + 8 = 80 — and it is worth knowing which wall a row is behind
-before reading it as debt.
+before reading it as debt. TWO of the four are now down (the RNG wall, 25, and
+the descriptor wall, 14), so that arithmetic is stale in the same direction as
+the counts in the header and waits on the same single re-census; what each
+paragraph says about its own wall is current.
 
-**No descriptor table.** `codegen.zig` `void_tasks` lowers every §9.5 name that
-needs a FILE — `$fopen`, `$fclose`, the five output tasks, `$fgets`, `$fscanf`,
-`$ftell`, `$fseek`, `$rewind`, `$fflush`, `$ferror`, `$feof` — to the constant
-`S.con(0.0)`. `lower.zig` writes the reason down: the family "needs a descriptor
-the compiled device has no way to own". One change closes §9.5.1 through §9.5.8
-at once.
+**Descriptors: the wall is down (14 fixtures).** Every §9.5 name that needs a
+FILE — `$fopen`, `$fclose`, the five output tasks, `$fgets`, `$fscanf`, `$ftell`,
+`$fseek`, `$rewind`, `$fflush`, `$ferror`, `$feof` — used to lower to the constant
+`S.con(0.0)`, and `lower.zig` gave the reason: the family "needs a descriptor the
+compiled device has no way to own". It still does not own one, and that turned out
+to be the answer rather than the obstacle.
 
-The three names that need no descriptor are OUT of this wall and have landed:
+The table is a HOST facility (`src/backend/file_kernels.zig`), carried only by the
+printing artifact, and every §9.5 call is sequenced in that artifact's
+per-accepted-point phase — the same optional `display` decl §9.4's prints go
+through, which §9.5.2 ("$fdisplay … the same as $display", with a descriptor
+prepended) and §9.5.9 ("the file write operations shall not be performed unless
+the iteration is accepted") both point at. `eval` therefore never opens, reads or
+writes anything, which is what keeps the residual a pure function of x and the
+host's Newton iteration convergent. A device compiled for a solver has no such
+phase, so its `$fopen` answers 0 — and §9.5.1 reserves exactly that for a file
+that cannot be opened, so the degraded path is conformant and not a stub.
+
+The three names that need no descriptor were OUT of this wall and landed first:
 `$swrite`, `$sformat` and `$sscanf` write into and read out of a string
 variable, so `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09` and
-`10_file_read_scan.va` are green — the note that used to sit here, that they
-were "behind a different wall wearing the same coat", was right, and the wall
-they were behind was the formatter.
+`10_file_read_scan.va` went green with the formatter — and `$fscanf` is now the
+same scanner over a line the file kernels read, which is what §9.5.4.2 states one
+set of conversion rules for both spellings in order to mean.
 
-**No RNG (25 fixtures).** `$random`, `$arandom`, seven `$dist_*` and six
-`$rdist_*` are all E0801 at the function name. Because the refusal is at the
-name, the four argument-rule negatives (`150`, `151`, `166`, and the paramset
-scope pair `132`/`133`) are xfail for a *second-order* reason: they are waiting
-on the family to be accepted before their own rule can be tested. Fixing E0801
-without fixing the argument checks converts four xfails into four failures.
+**RNG: the wall is down (25 fixtures).** `$random`, `$arandom`, seven `$dist_*`
+and six `$rdist_*` used to be one blanket E0801 at the function name, on the
+argument that a draw changing between Newton iterations makes the residual
+non-deterministic so the solve never converges. The premise was right and the
+conclusion was wrong. §9.13.1/§9.13.2 make the seed a SOURCE VARIABLE — "a value
+is passed to the function and a different value is returned" — so a variate is a
+pure function of that variable's incoming value and is automatically fixed for
+the whole Newton loop at one operating point. Lowering splits one source call
+into two pure calls over the seed (the variate, and the write-back), exactly as
+`$sscanf` is split into one call per out-parameter. The seedless forms have no
+such variable, so their §9.13.1 "internal seed" is a latch in `Instance` advanced
+by `updateState` on the ACCEPTED step and only read by `eval` — the same
+discipline, with the boundary the contract already had. The four argument-rule
+negatives (`150`, `151`, `166`, and the paramset scope pair `132`/`133`) reject
+on E0816, which is per-argument and therefore fires whether or not the family is
+otherwise supported.
 
 **No analog-context table (11 fixtures).** Tables 9-1, 9-2, 9-3, 9-5, 9-6, 9-7,
 and 9-8 each have a "No" column, and VerA implements none of it — `061`, `062`,

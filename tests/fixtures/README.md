@@ -140,11 +140,51 @@ by any other tool.
 //! wave V(in) = 0, 1, 1           one entry per `time`; a short list holds
 //! analysis dc                    §4.6.1
 //! print none                     drop the residual dump; for §9.4 format tests
+//! solve                          §5.6 the unknowns nothing above names are the
+//!                                DEVICE's to determine, not the harness's
 ```
 
 Every field has a default, so a `.va` with no directives is still runnable: one
 operating point, every unknown at zero, every parameter at its §3.4 default. The
 grammar is `src/backend/tb.zig`.
+
+### `//! solve` — who determines an unknown nothing names
+
+The testbench runs a real Newton-Raphson on the residual the device stamps, with
+the Jacobian its own dual arithmetic carries and a dense LU under it. It has to:
+§5.6.7's indirect contribution is a CONSTRAINT the simulator satisfies, not an
+assignment, so `V(out): V(in) == 0` cannot be expressed by evaluating anything,
+and §5.4.2.2's "the potential of a source branch may be read" is a question about
+what the solver settled on.
+
+What is NOT automatic is the netlist. A `.va` compiled alone is not a circuit —
+nothing says what its terminals connect to — so by default the harness supplies
+the only netlist it can and ties every unknown no `//!` line names to the
+reference. That is why
+
+```verilog
+//! bias V(p) = 0.5
+I(p,n) <+ V(p,n)/2000;
+`CHECKX("Ohm's law at 0.5 V", V(p,n)/resistance, 2.5e-4);
+```
+
+means 0.5 V *across* the resistor. Solve the isolated device instead and `n` is
+an open lead: KCL through it is zero current, so `n` follows `p` and `V(p,n)`
+comes out 0. A hundred fixtures state a rule in that shape.
+
+`//! solve` unties the rest. It composes with `bias` — `bias` still pins what it
+names, `solve` frees only what nothing names — so a fixture needing one terminal
+grounded and another determined writes both lines. Reach for it when the digit
+under test is one the solver produces:
+`ch05_analog_behavior/indirect_contribution.va`,
+`annex_g_change_history/22_input_port_contribution_honoured.va`.
+
+An unknown the device's own equations leave undetermined even then — the common
+mode of a module that never references ground, or the row `I(p,n) <+ 0.0` stamps
+— gets no pivot, holds its initial guess, and is excluded from the convergence
+test. A testbench that genuinely fails to converge exits nonzero naming the
+unknown that would not settle, so the fixture FAILs loudly instead of asserting
+against a half-iterated number.
 
 ## Running
 

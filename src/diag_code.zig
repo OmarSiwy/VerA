@@ -277,6 +277,9 @@ pub const Code = enum(u16) {
     /// §5.5.3 a nature attribute reference (`n.potential.abstol`) naming an
     /// attribute whose value is not a constant expression.
     E0359,
+    /// §1.3.4.1/§1.3.4.2 a net of signal-flow discipline bound to an `inout`
+    /// port. The sibling of E0425, which is about the contribution target.
+    E0360,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -407,6 +410,11 @@ pub const Code = enum(u16) {
     /// §9.21 a `$table_model` data source, control string or dimensionality that
     /// VerA cannot compile into a lookup.
     E0815,
+    /// §9.13.1/§9.13.2 a probabilistic distribution argument that breaks one of
+    /// the clause's own rules: the seed's type, an out-of-domain distribution
+    /// parameter, the uniform's start/end order, or the paramset-only
+    /// `type_string`.
+    E0816,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
     /// §9.4 display task under a conditional — not emitted even into an exe.
@@ -2167,6 +2175,29 @@ pub fn info(c: Code) Info {
             \\uses, and it works.
             ,
         },
+        .E0360 => .{
+            .title = "signal-flow discipline on an `inout` port",
+            .lrm = "1.3.4.1",
+            .explain =
+            \\LRM 1.3.4.1: "Nets of potential signal flow disciplines in modules
+            \\may only be bound to `input` or `output` ports of the module, not
+            \\to `inout` ports." 1.3.4.2 says the same of flow signal-flow
+            \\disciplines.
+            \\
+            \\A signal-flow net carries ONE nature, so its port direction is the
+            \\direction of that one quantity: `input` means the netlist supplies
+            \\it, `output` means this module does. `inout` claims both at once,
+            \\and there is no conservation law here to reconcile them — that is
+            \\what 1.3.1's conserved potential/flow PAIR is for, and a
+            \\single-nature discipline has no such pair.
+            \\
+            \\Declare the port `input` or `output`, or give the net a
+            \\conservative discipline (both natures) if it really is a terminal.
+            \\
+            \\Contributing to an `input` signal-flow port is the sibling rule,
+            \\E0425.
+            ,
+        },
 
         // ------------------------------------------------------------ class 4
         .E0401 => .{
@@ -3422,6 +3453,42 @@ pub fn info(c: Code) Info {
             \\(4.7.1), which is what $limit() reads.
             ,
         },
+        .E0816 => .{
+            .title = "a $9.13 probabilistic distribution argument",
+            .lrm = "9.13",
+            .explain =
+            \\Table 9-10's 17 names are supported in the analog context, and
+            \\9.13.1/9.13.2 state four rules about their arguments. This fires on
+            \\all four, because they are one clause and the message says which:
+            \\
+            \\THE SEED'S TYPE. "For each system function, the seed argument shall
+            \\be an integer", and Syntax 9-9 spells the same rule as grammar:
+            \\
+            \\    seed ::= integer_variable_identifier
+            \\           | integer_parameter_identifier
+            \\           | [ sign ] decimal_number
+            \\
+            \\A real is none of the three, and no coercion is available: an
+            \\integer VARIABLE seed is an inout argument, so the function needs a
+            \\place to write an updated integer back to.
+            \\
+            \\THE DOMAIN. "For the $rdist_exponential, $rdist_poisson,
+            \\$rdist_chi_square, $rdist_t, and $rdist_erlang functions, the
+            \\arguments mean, degree_of_freedom, and k_stage shall be greater
+            \\than zero (0). Otherwise an error shall be reported." Not a
+            \\warning, not a clamp — and IEEE 1364 17.9.2 states the same domain
+            \\for the integer $dist_ twins.
+            \\
+            \\THE UNIFORM'S ORDER. "In $rdist_uniform, the start and end
+            \\arguments are real inputs which bound the values returned. The
+            \\start value shall be smaller than the end value." An interval with
+            \\start above end is empty, so there is no value to draw from it.
+            \\
+            \\THE type_string. Syntax 9-8/9-9's optional trailing string
+            \\("instance" or "global") says which paramset override owns the
+            \\stream, so it is meaningful only inside a 6.4 paramset.
+            ,
+        },
         .E0815 => .{
             .title = "$table_model data source or control string",
             .lrm = "9.21",
@@ -3456,7 +3523,7 @@ pub fn info(c: Code) Info {
             ,
         },
         .W0850 => .{
-            .title = "display task dropped: a device does not print",
+            .title = "task dropped: a device does not print and has no file table",
             .lrm = "9.4",
             .explain =
             \\VerA makes two artifacts out of one .va, and this one is the
@@ -3477,6 +3544,20 @@ pub fn info(c: Code) Info {
             \\
             \\which lowers the same tasks to `std.debug.print` and gives the
             \\device a `display()` entry point that runs them.
+            \\
+            \\The LRM 9.5 file family is on the same list, for the same reason
+            \\one step further out: a descriptor operation is a side effect, and
+            \\`eval` has to stay a pure function of x or the solver's Newton
+            \\iteration cannot converge. 9.5.9 agrees — "the file write
+            \\operations shall not be performed unless the iteration is
+            \\accepted" — so those calls are sequenced in the same per-point
+            \\`display()` phase, and a device without one has no file table.
+            \\
+            \\That is not a stub: 9.5.1 reserves zero for "if a file cannot be
+            \\opened", and a device with no table genuinely cannot open one. So
+            \\`$fopen` answers 0, and every later call on that 0 has a defined
+            \\answer of its own (9.5.4.1's "code is set to zero", 9.5.7's zero
+            \\errno with an empty description, 9.5.8's zero).
             \\
             \\Silence it for a model you know prints only under a debug flag
             \\with `--allow=W0850`.

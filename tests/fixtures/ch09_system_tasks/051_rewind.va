@@ -29,7 +29,6 @@
 // now, sequenced above the checks.
 //
 //! lrm 9.5.5
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $rewind is a no-op returning 0 and $ftell cannot observe the position it did not change
 `include "check.vh"
 module ch09_atomic_rewind(p, n);
   inout p, n; electrical p, n;

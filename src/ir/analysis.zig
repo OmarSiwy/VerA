@@ -595,11 +595,21 @@ pub fn callTy(name: []const u8) VTy {
         // §9.20 "The return value for both system functions shall be one (1) ...
         // and zero (0) otherwise" — a status, not a measurement.
         "$analog_node_alias",    "$analog_port_alias",
+        // §9.5.1–§9.5.8 the descriptor family, plus `lowerFileRead`'s synthetic
+        // item name. Every one integer-valued; see `Lower.sysFuncTy`.
+        "$fopen",                "$fgets",
+        "$fscanf",               "$fscanf$int",
+        "$ftell",                "$fseek",
+        "$rewind",               "$ferror",
+        "$feof",
     };
     for (ints) |i| if (std.mem.eql(u8, name, i)) return .int;
     if (std.mem.eql(u8, name, "$simparam$str")) return .str;
     // §9.5.3 the formatted text, §9.5.4.2 the item whose destination is a string.
     if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str")) return .str;
+    // §9.5.4.1's string, §9.5.4.2's file-sourced string item, §9.5.7's description.
+    if (std.mem.eql(u8, name, "$fgets$str") or std.mem.eql(u8, name, "$fscanf$str") or
+        std.mem.eql(u8, name, "$ferror$str")) return .str;
     // §5.10 `Lower.holdSlot`'s synthetic seed. Not a ch9 task and not in
     // `Lower.sysFuncTy`: the callee is chosen by the variable's declared type,
     // so the name IS the type and the two sides agree by construction.

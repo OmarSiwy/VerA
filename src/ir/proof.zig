@@ -1717,6 +1717,30 @@ fn callAbstract(name: []const u8) Prover.Abstract {
         return .{ .iv = positive, .finite = true };
     if (std.mem.eql(u8, name, "$abstime") or std.mem.eql(u8, name, "$realtime"))
         return .{ .iv = non_negative, .finite = true };
+    // §9.13's draws, in the `$rng$*` shape `Lower.lowerRandom` rewrote them to.
+    // FINITE by construction, and this is a claim about `rng_kernels.zig` rather
+    // than about the LRM: every kernel there is a bounded arithmetic expression
+    // over a uniform on [0,1) whose logarithm arguments are held in (0,1], and
+    // `zRngT`'s divisor is guarded away from zero. Without this line every model
+    // drawing a variate compiled `.strict` — a speed cost, but also a diagnostic
+    // pointing at a call the prover COULD model.
+    //
+    // No interval, because §9.13 fixes none worth writing: `$random` spans the
+    // signed 32-bit range and a normal is unbounded in principle. The value
+    // proved here is finiteness.
+    if (std.mem.startsWith(u8, name, "$rng$"))
+        return .{ .iv = .top, .finite = true };
+    // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
+    // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
+    // unit — the only kind `proof` rates — the emitter renders it as the literal 0
+    // §9.5.1 reserves, because the descriptor operation itself happens only in the
+    // display unit (`codegen.Gen.emitting_display`). Without this line a model
+    // that reads a file into its contribution compiled `.strict` on account of a
+    // call the emitter had already folded to a constant.
+    //
+    // No interval: §9.5.1's fd has bit 31 set, so it is a large positive number
+    // rather than a small one, and there is nothing useful to bound.
+    if (Lower.isFileCall(name)) return .{ .iv = .top, .finite = true };
     return .{ .iv = .top, .finite = false };
 }
 

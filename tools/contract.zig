@@ -275,6 +275,18 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "u_kinds") and @TypeOf(D.u_kinds) != [n]UnknownKind)
         @compileError(name ++ ".u_kinds must be [|U|]UnknownKind");
 
+    // §3.6.1.2 `abstol`, per unknown: "the largest signal value that can be
+    // safely ignored", declared on the NATURE bound to that net (and
+    // overridable per discipline, §3.6.2.3). OPTIONAL, because it is a
+    // convergence aid and not part of the residual: a host without it has to
+    // invent one tolerance for every unknown, which is what a host that only
+    // knows `u_kinds` does. A host that runs Newton on `eval` reads it — the
+    // absolute half of the iteration's stopping test is exactly this number,
+    // and it is per-unknown because a thermal net and a voltage net do not
+    // agree on what "negligible" means.
+    if (@hasDecl(D, "u_abstol") and @TypeOf(D.u_abstol) != [n]f64)
+        @compileError(name ++ ".u_abstol must be [|U|]f64");
+
     // In-device noise PSDs: pure fn of ANY state vector (AC noise calls it
     // once at x_op, pnoise per PSS sample, tran-noise per step). Position k of
     // the result describes generator k. Devices without it keep the
@@ -349,12 +361,36 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // builtin; the host engine sets Instance.analysis_kind per pass. Its
     // ordinals are checked against `AnalysisKind` by `validateSimState`.
     .{ "AnalysisKind", {} },
-    // LRM 9.4 display tasks. Present ONLY in a device built with
-    // `--display=emit` (FastVAF's testbench artifact); the engine never calls
-    // it, and a device compiled for the solver does not have it at all.
+    // LRM 9.4 display tasks AND LRM 9.5 file I/O: the device's per-accepted-point
+    // SIDE-EFFECT phase, and the whole of the optional I/O interface a host may
+    // provide. Present ONLY in a device built with `--display=emit` (FastVAF's
+    // testbench artifact); the engine never calls it, and a device compiled for
+    // the solver does not have it at all.
+    //
+    // One decl for both clauses, because they are one phase. §9.5.2 defines its
+    // output tasks as §9.4.1's "with one additional argument, which is either a
+    // multichannel descriptor or a file descriptor", and §9.5.9 puts every file
+    // write at the ACCEPTED point — "if a file is being written to during an
+    // iterative solve, then the file write operations shall not be performed
+    // unless the iteration is accepted. The exception to this is the $fdebug". So
+    // the descriptor operations are sequenced here, in source order, with the
+    // prints, and NOT in `eval`: a residual has to stay a pure function of x or
+    // the host's Newton iteration cannot converge, and an open, a read position
+    // and an appended line are none of them.
+    //
+    // A host that declines to call this gets the DEGRADED path, and that path is
+    // conformant rather than a fudge. §9.5.1 reserves 0 as $fopen's failure
+    // return; a device whose host offers no file table genuinely cannot open a
+    // file, so 0 is the correct answer and every later operation on it is a
+    // no-op with a defined result (§9.5.4.1's "code is set to zero", §9.5.7's
+    // zero errno with an empty description, §9.5.8's zero).
+    //
+    // This is NOT part of the Kernel ABI and must not become part of it: nothing
+    // in `Instance` holds a descriptor, and `eval`/`q` cannot reach a file at all.
     .{ "display", {} },
     .{ "attempt", {} },
     .{ "u_kinds", {} },
+    .{ "u_abstol", {} },
     .{ "noise_gens", {} },
     .{ "noisePsd", {} },
     .{ "ac_stamps", {} },

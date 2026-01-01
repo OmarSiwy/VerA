@@ -29,7 +29,6 @@
 //
 //! lrm 9.5.1
 //! lrm 9.5.7
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fopen reports failure (fd 0) while $ferror still reports no error — a file that could not be opened raising none
 `include "check.vh"
 module ch09_atomic_ferror(p, n);
   inout p, n; electrical p, n;

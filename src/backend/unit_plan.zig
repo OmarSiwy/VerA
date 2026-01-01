@@ -76,6 +76,15 @@ an: *const Analysis,
 /// §9.4 — `addUses`/`markOperands` need it to know whether a display task's
 /// operand is a value the slice must reach.
 display: Display,
+/// Is the unit being analyzed the §9.4/§9.5 display unit? Set by the emitter
+/// before `analyze`, and read only through `dispHere`.
+///
+/// The artifact mode above is not enough on its own: a §9.5 call's VALUE is live
+/// in the residual (`I(p,n) <+ V(p,n) + code`) while the descriptor operation
+/// itself may only happen in the display unit, so its operands are a live slice
+/// there and dead everywhere else. Marking them everywhere emitted locals the
+/// residual's rendering never reads, which Zig rejects outright.
+display_unit: bool = false,
 /// The shared core's dedup index, from `planCommon`. Stable for the whole
 /// compilation; a value with an entry here is read out of the core rather than
 /// recomputed, unless this unit re-runs the loop that defines it.
@@ -115,6 +124,12 @@ dead_branch: []bool = &.{},
 /// index (03-codegen.html#canonicalization).
 slot: []u32 = &.{},
 n_slots: u32 = 0,
+
+/// The §9.4 mode as the unit being analyzed sees it: a task's operands are a
+/// live slice only in the one unit that renders the task.
+inline fn dispHere(self: *const UnitPlan) Display {
+    return if (self.display_unit) self.display else .drop;
+}
 
 pub fn init(
     arena: std.mem.Allocator,
@@ -342,7 +357,7 @@ fn markOperands(self: *UnitPlan, work: *std.ArrayList(Mir.Value), inst: Mir.Inst
             try self.mark(work, d.else_val);
         },
         .call => |d| for (d.args, 0..) |a, i| {
-            if (cg.callArgIsValue(d.name, i, self.display)) try self.mark(work, a);
+            if (cg.callArgIsValue(d.name, i, self.dispHere())) try self.mark(work, a);
         },
         .phi => |d| {
             var i: u32 = 0;
@@ -420,7 +435,7 @@ fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
             bump(self, d.else_val, true, undo);
         },
         .call => |d| for (d.args, 0..) |a, i| {
-            if (cg.callArgIsValue(d.name, i, self.display)) bump(self, a, false, undo);
+            if (cg.callArgIsValue(d.name, i, self.dispHere())) bump(self, a, false, undo);
         },
         .phi => |d| {
             var i: u32 = 0;
@@ -491,7 +506,7 @@ fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
             (!self.foldedExponent(d) and self.an.rv(d.rhs) == v),
         .ternary => |d| self.an.rv(d.cond) == v,
         .call => |d| for (d.args, 0..) |a, i| {
-            if (cg.callArgIsValue(d.name, i, self.display) and self.an.rv(a) == v) break true;
+            if (cg.callArgIsValue(d.name, i, self.dispHere()) and self.an.rv(a) == v) break true;
         } else false,
         else => false,
     };

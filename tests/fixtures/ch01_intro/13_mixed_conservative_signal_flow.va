@@ -14,18 +14,27 @@
 // Both halves are read back off the net they were contributed to, not retyped
 // as expressions. The previous version asserted `GAIN_V * V(a, b)` and
 // `V(a, b) / R`, which are exactly the two right-hand sides one and two lines
-// below them: neither observed a `<+`, so the day codegen learns signalFlowNet
-// the file would XPASS having proved only that V(a,b) is 2.0. Reading V(out) is
-// strictly stronger — it still fails if GAIN_V's §3.4 default is wrong — and it
-// routes through the mixing the clause guarantees. §5.4.2.2 makes both
-// quantities of a source branch readable; the flow source on (a, b) retains
-// 2.0e-3, and V(out) on a potential-only signal-flow net is defined by its
-// source alone.
+// below them: neither observed a `<+`, so the file would have XPASSed having
+// proved only that V(a,b) is 2.0. Reading V(out) is strictly stronger — it still
+// fails if GAIN_V's §3.4 default is wrong — and it routes through the mixing the
+// clause guarantees. §5.4.2.2 makes both quantities of a source branch readable;
+// the flow source on (a, b) retains 2.0e-3, and V(out) on a potential-only
+// signal-flow net is defined by its source alone.
+//
+// The directives are the netlist, and each line says which side of the
+// device/host boundary an unknown lives on. `a` and `b` are CONSERVATIVE
+// terminals: an isolated device cannot decide their potentials — solve it and
+// `b` becomes an open lead that follows `a`, KCL through it being zero — so the
+// host states both, `b` at the reference. `out` is the signal-flow `output` and
+// belongs to the device, so `//! solve` frees it and the solver reads back the
+// 20.0 the source imposes. Naming `b` explicitly rather than leaning on the
+// default is what lets the two coexist on one module.
 //
 //! lrm 1.3.5
 //! lrm 5.4.2.2
 //! bias V(a) = 2.0
-//! xfail the flow-source half is CLOSED — I(a,b) now reads the retained 2.0e-3 (§5.4.2.2) — but two gaps remain: codegen refuses a contribution to a single-nature directional port (codegen.zig signalFlowNet), so the mixed module the clause guarantees does not lower at all, and V(out) is lowered as a node POTENTIAL probe (§5.4.1), which without a Newton loop in tb.zig reads its bias default 0 rather than the 20.0 its source imposes
+//! bias V(b) = 0.0
+//! solve
 `include "check.vh"
 module ch01_mixed_conservative_signal_flow(a, b, out);
     inout a, b;

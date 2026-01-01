@@ -295,6 +295,18 @@ pub const Gen = struct {
     /// of a struct that does not exist yet; the §9.4 display unit — the only
     /// other body — slices from one target and reads the rest.
     emitting_common: bool = false,
+    /// Set while the §9.4/§9.5 display unit is being emitted, and read by exactly
+    /// one thing: `emitSysCall`'s §9.5 dispatch.
+    ///
+    /// This is the whole boundary Ruling B asks for. A §9.5 call OPENS a file,
+    /// MOVES a read position or APPENDS bytes, and `eval` has to stay a pure
+    /// function of x or the host's Newton iteration cannot converge — so the
+    /// kernels run in the one unit `planCommon` deliberately keeps out of the
+    /// shared core, and in every other unit the family keeps the constant it has
+    /// always had. §9.5.9 states the same rule normatively: "if a file is being
+    /// written to during an iterative solve, then the file write operations shall
+    /// not be performed unless the iteration is accepted."
+    emitting_display: bool = false,
     /// `<module>__common__core`, or empty for a model with no targets at all.
     common_name: []const u8 = "",
     common_mode: proof.FloatMode = .optimized,
@@ -660,7 +672,14 @@ pub const Gen = struct {
         // §9.21, set at the call for the same reason `strs` is: the lookup may
         // land in any unit once the MIR is sliced.
         const tbl = self.lower.uses_table_model;
-        try self.buildPrelude(stateful, hist, filt, timer, strs, tbl);
+        // §9.13, set at the call for the same reason: `lowerRandom` runs long
+        // before the MIR is sliced into units.
+        const rng = self.lower.uses_rng;
+        // §9.5 the descriptor table. `display == .emit` is the second condition
+        // and not a convenience: it is the artifact whose host runs the per-point
+        // side-effect phase these kernels have to be sequenced in.
+        const files = self.display == .emit and self.lower.uses_file_tasks;
+        try self.buildPrelude(stateful, hist, filt, timer, strs, tbl, rng, files);
         try self.out.appendSlice(self.gpa, header_txt);
         try self.out.appendSlice(self.gpa, math_txt);
         try self.out.appendSlice(self.gpa, ops_txt);
@@ -679,7 +698,9 @@ pub const Gen = struct {
         // into a string.
         if (self.display == .emit or strs) try self.out.appendSlice(self.gpa, display_txt);
         if (strs) try depublish(self.gpa, &self.out, str_txt);
+        if (files) try depublish(self.gpa, &self.out, file_txt);
         if (tbl) try depublish(self.gpa, &self.out, table_txt);
+        if (rng) try depublish(self.gpa, &self.out, rng_txt);
         if (self.limits.len != 0) try self.out.appendSlice(self.gpa, cg_limit.helpers_txt);
         try self.out.appendSlice(self.gpa, "\n");
         // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
@@ -695,7 +716,10 @@ pub const Gen = struct {
         try self.emitUnits();
         try self.emitDispatchers();
         try self.emitNoiseTable();
-        if (stateful) try self.emitStateMachine();
+        // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
+        // advance, which is the ONLY place a stream may move: a per-iteration draw
+        // makes the residual non-deterministic and Newton never converges.
+        if (stateful or self.lower.rng_auto_sites != 0) try self.emitStateMachine();
         try cg_limit.emit(self);
         try self.emitNextBreakpoint();
         try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
@@ -715,7 +739,7 @@ pub const Gen = struct {
     /// `n_u` is RECOMPUTED (`contract.nU(dev)`) rather than aliased: it is
     /// private in device.zig and `contract.rejectStrayPubDecls` will not let it
     /// become public. It is the same comptime value either way.
-    fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: bool, strs: bool, tbl: bool) Error!void {
+    fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: bool, strs: bool, tbl: bool, rng: bool, files: bool) Error!void {
         var p: std.ArrayList(u8) = .empty;
         try p.appendSlice(self.arena, prelude_head_txt);
         try p.appendSlice(self.arena, prelude_math_txt);
@@ -724,7 +748,9 @@ pub const Gen = struct {
         if (filt) try p.appendSlice(self.arena, prelude_filt_txt);
         if (self.display == .emit or strs) try p.appendSlice(self.arena, prelude_display_txt);
         if (strs) try p.appendSlice(self.arena, prelude_str_txt);
+        if (files) try p.appendSlice(self.arena, prelude_file_txt);
         if (tbl) try p.appendSlice(self.arena, prelude_table_txt);
+        if (rng) try p.appendSlice(self.arena, prelude_rng_txt);
         if (stateful) try p.appendSlice(self.arena, "const R = h.R;\n");
         // The shared core is a unit file like any other, and it sits beside the
         // unit that calls it — device.zig's own alias for it is private to
@@ -749,7 +775,9 @@ pub const Gen = struct {
         if (filt) try publish(self.arena, &hz, filt_txt);
         if (self.display == .emit or strs) try publish(self.arena, &hz, display_txt);
         if (strs) try publish(self.arena, &hz, str_txt);
+        if (files) try publish(self.arena, &hz, file_txt);
         if (tbl) try publish(self.arena, &hz, table_txt);
+        if (rng) try publish(self.arena, &hz, rng_txt);
         if (stateful) try publish(self.arena, &hz, rscalar_txt);
         self.helpers = hz.items;
     }
@@ -841,6 +869,20 @@ pub const Gen = struct {
             }
             try self.w("}};\n\n", .{});
         }
+        // §3.6.1.2 the tolerance the DISCIPLINE settled on for each unknown.
+        // `DisciplineInfo` has carried both halves since it was written, with
+        // nothing consuming them; this is the consumer. A host solving `eval`
+        // needs the absolute half of its stopping test per unknown and cannot
+        // derive it — "negligible" is 1e-6 V on an electrical node, 1e-12 A on
+        // its current, and 1e-4 K on a thermal one, and §3.6.2.3 lets a
+        // discipline override the nature's number outright.
+        try self.w("/// §3.6.1.2 `abstol` per unknown: the largest value of this\n", .{});
+        try self.w("/// quantity a host may treat as zero, after any §3.6.2.3 override.\n", .{});
+        try self.w("pub const u_abstol = [n_u]f64{{\n", .{});
+        for (0..self.n_u) |i| {
+            try self.w("    {d},\n", .{self.abstolOf(@intCast(i))});
+        }
+        try self.w("}};\n\n", .{});
         try self.w(
             \\/// §4.6.1 analysis() / §5.10.2 global events. The host sets this per pass.
             \\pub const AnalysisKind = enum(u8) {{ static, ic, nodeset, dc, tran, ac, noise }};
@@ -855,13 +897,25 @@ pub const Gen = struct {
     /// LRM's unambiguous signal-flow port, and it has no conserved pair for a
     /// nodal device to stamp.
     ///
-    /// A single-nature discipline on an `inout` port or on an internal net is
-    /// NOT caught here: those are conservative-shaped declarations whose net
-    /// simply has one tolerance, which the device stamps as usual (§3.9).
-    fn signalFlowNet(self: *const Gen, c: Lower.Contribution) ?[]const u8 {
-        const nodes = self.lower.node_order.items;
+    /// A single-nature discipline on an `inout` port is NOT caught here, and no
+    /// longer can be: §1.3.4.1/§1.3.4.2 forbid that binding outright and
+    /// lower.zig rejects it at the declaration (E0132). An internal net is not
+    /// caught either — it is a conservative-shaped declaration whose net simply
+    /// has one tolerance, which the device stamps as usual (§3.9).
+    ///
+    /// §1.3.4.2's flow-only net is the one case the ordinary nodal stamp gets
+    /// WRONG. On such a net there is no potential (§1.3.4: "Potential for such
+    /// a node is not defined"), so the node's single unknown carries the FLOW,
+    /// and `I(out) <+ e` is the equation `x[out] − e = 0`, not a KCL injection
+    /// into a conservation law the net does not obey. §1.3.4.1's potential-only
+    /// net needs nothing special: the ordinary branch relation already reduces
+    /// to it — the KCL row at the net is `ib = 0` (a signal-flow net has no
+    /// flow to conserve, and zero is what the clause says it is), which leaves
+    /// the branch row `V(out) − e = 0` to fix the potential.
+    fn flowOnlySignalFlowNet(self: *const Gen, c: Lower.Contribution) ?u16 {
+        if (c.access != .flow or c.kind != .direct) return null;
         for ([_]u16{ c.hi, c.lo }) |n| {
-            if (n >= nodes.len) continue; // ground
+            if (n >= self.lower.node_order.items.len) continue; // ground
             switch (self.lower.node_dir.items[n]) {
                 .input, .output => {},
                 else => continue,
@@ -869,14 +923,60 @@ pub const Gen = struct {
             const dname = self.lower.node_disciplines.items[n];
             if (dname.len == 0) continue;
             const d = self.lower.disciplines.get(dname) orelse continue;
-            if (!d.has_potential or !d.has_flow) return nodes[n];
+            if (!d.has_potential and d.has_flow) return n;
         }
         return null;
     }
 
     pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
         if (i >= self.lower.node_order.items.len) return true; // codegen-added branch current
-        return std.mem.startsWith(u8, self.lower.node_order.items[i], "flow(");
+        if (std.mem.startsWith(u8, self.lower.node_order.items[i], "flow(")) return true;
+        // §1.3.4.2 a flow signal-flow net has no potential ("Potential for such
+        // a node is not defined"), so its ONE unknown is a flow even though it
+        // is a plain node with a plain name. Everything that asks this question
+        // — the host's `u_kinds`, the §3.6.1.2 tolerance, §4.5.15's refusal to
+        // `$limit` a current — wants the quantity, not the spelling.
+        const dname = self.lower.node_disciplines.items[i];
+        if (dname.len == 0) return false;
+        const d = self.lower.disciplines.get(dname) orelse return false;
+        return d.has_flow and !d.has_potential;
+    }
+
+    /// §3.6.1.2 the `abstol` of the nature this unknown's quantity belongs to,
+    /// after §3.6.2.3's per-discipline override — which is why it is read off
+    /// `DisciplineInfo` and not off the nature table.
+    ///
+    /// A §5.4.2 branch-flow unknown has no discipline of its own (`internNode`
+    /// gives it `""`), so its tolerance comes from the discipline at its HIGH
+    /// node — the one whose name `flowUnknown`/`portFlowUnknown` spelled into
+    /// the unknown's own name. Reading it back out of that name is exact rather
+    /// than a guess: both spellings are `"flow(" ++ nodeName(hi) ++ …`, and
+    /// `nodeName` is what `node_voltages` is keyed by.
+    ///
+    /// The two fallbacks are annex D's own defaults for `Voltage` and `Current`
+    /// (`VOLTAGE_ABSTOL` 1e-6, `CURRENT_ABSTOL` 1e-12), reached only by an
+    /// unknown whose net never got a discipline — a §3.5 implicit net in a file
+    /// with no `default_discipline`, which cannot be contributed to anyway.
+    fn abstolOf(self: *const Gen, i: u32) f64 {
+        const names = self.lower.node_order.items;
+        const flow = self.isFlowUnknown(i);
+        var idx: u16 = @intCast(i);
+        // Only a `flow(...)`-SPELLED unknown needs its node recovered from its
+        // name; a §1.3.4.2 flow-only net is its own node already, so it falls
+        // straight through to `flow_abstol` below.
+        if (flow and i < names.len and std.mem.startsWith(u8, names[i], "flow(")) {
+            const name = names[i];
+            // `flow(a,b)` -> `a`; `flow(<p>)` -> `p`.
+            var inner = name["flow(".len .. name.len - 1];
+            if (inner.len >= 2 and inner[0] == '<') inner = inner[1 .. inner.len - 1];
+            if (std.mem.indexOfScalar(u8, inner, ',')) |c| inner = inner[0..c];
+            idx = self.lower.node_voltages.get(inner) orelse return 1e-12;
+        }
+        if (idx == Lower.ground or idx >= self.lower.node_disciplines.items.len)
+            return if (flow) 1e-12 else 1e-6;
+        const info = self.lower.disciplines.get(self.lower.node_disciplines.items[idx]) orelse
+            return if (flow) 1e-12 else 1e-6;
+        return if (flow) info.flow_abstol else info.potential_abstol;
     }
 
     /// §3.4 parameters. One field, typed, with the constant-folded spec default.
@@ -1087,6 +1187,26 @@ pub const Gen = struct {
             \\    discontinuity_order: i32 = -1,
             \\
         , .{});
+        // §9.13.1's "internal seed", one slot per seedless call site. The
+        // DEFAULT is the seed "the simulator picks" — a fixed value, not a clock
+        // read, because §9.13.2's "shall always return the same value given the
+        // same seed" is only checkable if a run is reproducible, and a device
+        // whose numbers move between two identical runs cannot be debugged.
+        // Distinct per site: §9.13.1 says the internal seed "gets updated every
+        // time the call ... is made", so two call sites are two streams.
+        if (self.lower.rng_auto_sites != 0) {
+            try self.w(
+                "    /// §9.13.1 the internal seed of each seedless `$random`/`$arandom`\n" ++
+                    "    /// call site. Advanced by `updateState` on the ACCEPTED step and only\n" ++
+                    "    /// READ by `eval`: a draw that moved between Newton iterations would\n" ++
+                    "    /// make the residual non-deterministic and the solve would not converge.\n" ++
+                    "    rng_auto: [{d}]i64 = .{{", .{self.lower.rng_auto_sites},
+            );
+            for (0..self.lower.rng_auto_sites) |k| try self.w("{s}{d}", .{
+                if (k == 0) "" else ", ", 1 + 7919 * @as(u32, @intCast(k)),
+            });
+            try self.w("}},\n", .{});
+        }
         for (self.units, 0..) |u, i| {
             if (u.role != .analog_op) continue;
             const n = self.unit_names[i];
@@ -1211,18 +1331,6 @@ pub const Gen = struct {
         var jobs: std.ArrayList(Job) = .empty;
         for (self.lower.contributions.items, 0..) |c, i| {
             const mode = self.unitMode(i);
-            // §3.6.2.2: a signal-flow discipline binds ONE nature, so its nets
-            // carry a value, not a conserved pair. VerA's artifact is a
-            // nodal/KCL device (§8.3): stamping `<+` on such a net would
-            // silently invent the missing half of the branch, so the unit
-            // collapses to `@compileError` like any other deliberate gap.
-            const pf: ?[]const u8 = if (self.signalFlowNet(c)) |net| try std.fmt.allocPrint(
-                self.arena,
-                "VerA does not implement contributions to the signal-flow port " ++
-                    "`{s}` (LRM 1.3.4/3.6.2.2); only a conservative discipline has " ++
-                    "the potential/flow pair a nodal device stamps",
-                .{net},
-            ) else null;
             const resist = self.an.rv(c.resist_val);
             const react = self.an.rv(c.react_val);
             if (resist != .f_zero) try jobs.append(self.arena, .{
@@ -1230,14 +1338,12 @@ pub const Gen = struct {
                 .target = resist,
                 .mode = mode,
                 .comment = unitComment(c, false),
-                .pre_fatal = pf,
             });
             if (react != .f_zero) try jobs.append(self.arena, .{
                 .name = try std.fmt.allocPrint(self.arena, "{s}__q", .{self.unit_names[i]}),
                 .target = react,
                 .mode = mode,
                 .comment = unitComment(c, true),
-                .pre_fatal = pf,
             });
         }
         for (self.units, 0..) |u, i| {
@@ -1344,6 +1450,9 @@ pub const Gen = struct {
         for (self.jobs) |job| {
             if (!job.is_display) continue;
             self.pre_fatal = job.pre_fatal;
+            // §9.5 the one unit where a descriptor operation may actually happen.
+            self.emitting_display = true;
+            defer self.emitting_display = false;
             const lo = self.out.items.len;
             const at = try self.emitUnit(job.name, job.target, @tagName(job.mode), job.comment);
             try self.recordUnitFile(job.name, lo, at);
@@ -1382,6 +1491,7 @@ pub const Gen = struct {
             }
         }
         const pre = self.fatal;
+        self.plan.display_unit = self.emitting_display;
         try self.plan.analyze(.undef, self.emitting_common); // `emitting_common` ⇒ the live-outs are the targets
 
         const lo = self.out.items.len;
@@ -1473,6 +1583,7 @@ pub const Gen = struct {
         self.uses_model = false;
         self.uses_inst = false;
         self.fatal = self.pre_fatal;
+        self.plan.display_unit = self.emitting_display;
         try self.plan.analyze(target, self.emitting_common);
 
         try self.w("/// {s}\n", .{comment});
@@ -2340,6 +2451,42 @@ pub const Gen = struct {
         if (want == .real) try self.b(")", .{});
     }
 
+    /// §9.13 one probabilistic draw. `$rng$auto` is the seedless form's
+    /// `Instance` latch and reads a field; every other name is a `rng_kernels.zig`
+    /// call taking the i64 seed and its real parameters.
+    fn emitRng(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+        const tail = name["$rng$".len..];
+        if (std.mem.eql(u8, tail, "auto")) {
+            // §9.13.1's "internal seed", which "gets updated every time the call
+            // ... is made" — by `updateState` on the accepted step, never here.
+            self.uses_inst = true;
+            const site = self.intArg(args, 0) orelse 0;
+            return self.b("S.con(@floatFromInt(inst.rng_auto[{d}]))", .{site});
+        }
+        // `zRngIUniform`, `zRngChiSquare`, … — the kernel's camel spelling of the
+        // callee's tail, so the two lists cannot drift apart by a typo.
+        var fn_name: std.ArrayList(u8) = .empty;
+        defer fn_name.deinit(self.gpa);
+        try fn_name.appendSlice(self.gpa, "zRng");
+        var up = true;
+        for (tail) |c| {
+            if (c == '_') {
+                up = true;
+                continue;
+            }
+            try fn_name.append(self.gpa, if (up) std.ascii.toUpper(c) else c);
+            up = false;
+        }
+        try self.b("S.con({s}(", .{fn_name.items});
+        try self.renderVal(if (args.len > 0) args[0] else .zero, .int);
+        for (args[@min(1, args.len)..]) |a| {
+            try self.b(", ", .{});
+            try self.renderVal(a, .real);
+            try self.b(".val()", .{});
+        }
+        try self.b("))", .{});
+    }
+
     /// §9.21 `$table_model`, in the shape `Lower.lowerTableModel` rewrote it:
     ///
     ///     (ND, NP, NCOL, dep, "<extrap>", in₀…, row₀…)
@@ -2778,6 +2925,13 @@ pub const Gen = struct {
         // device they fall through to `void_tasks` below.
         if (self.display == .emit and Lower.isDisplayTask(name))
             return cg_display.emitDisplayTask(self, name, args);
+        // §9.5 the descriptor family. Real kernels only in the display unit (see
+        // `emitting_display`); rendered but discarded in any other unit of the
+        // same artifact, so the slice `callArgIsValue` asked for is consumed.
+        if (self.display == .emit and Lower.isFileCall(name)) {
+            if (!self.emitting_display) return self.emitFileCallDropped(name, args);
+            return cg_display.emitFileCall(self, name, args, @intFromEnum(inst));
+        }
         // §9.10 environment.
         if (eq(u8, name, "$temperature")) {
             self.uses_inst = true;
@@ -2957,13 +3111,27 @@ pub const Gen = struct {
         // per-item `found` flag. Reading a destination past the returned count is
         // the only way to observe the difference.
         if (eq(u8, name, "$table_model")) return self.emitTable(args); // §9.21
+        // §9.13 Table 9-10, in the shape `Lower.lowerRandom` rewrote it: the
+        // seed's incoming value, then the distribution's parameters. Every one is
+        // a pure function of that seed and carries no derivative — a variate is a
+        // constant of the operating point, which is what makes it admissible in a
+        // residual at all (see `rng_kernels.zig`).
+        if (std.mem.startsWith(u8, name, "$rng$")) return self.emitRng(name, args);
         if (eq(u8, name, "$sscanf")) return self.emitScan("zScanN", args, .int);
         if (eq(u8, name, "$sscanf$int")) return self.emitScan("zScanI", args, .int);
         if (eq(u8, name, "$sscanf$real")) return self.emitScan("zScanR", args, .real);
         if (eq(u8, name, "$sscanf$str")) return self.emitScan("zScanS", args, .str);
-        // §9.4/§9.5/§9.7 display, file and control tasks: void. Lowering keeps
-        // them as calls; their result is never read, so this only fires if a
-        // model assigns one.
+        // §9.4/§9.7 display and control tasks: void. Lowering keeps them as
+        // calls; their result is never read, so this only fires if a model
+        // assigns one.
+        //
+        // The §9.5 names are here too, and NOT as a stub: this is the answer a
+        // device with no host file table has to give. §9.5.1 reserves zero — "if a
+        // file cannot be opened … a zero is returned for the mcd or fd" — and a
+        // device compiled for a solver has no `display` decl, hence no per-point
+        // phase a descriptor operation could be sequenced in, hence genuinely no
+        // file it could have opened. The artifact that DOES have one took the
+        // `Lower.isFileCall` branch above and never reaches this list.
         const void_tasks = [_][]const u8{
             "$display",       "$displayb",   "$displayo",   "$displayh",
             "$write",         "$writeb",     "$writeo",     "$writeh",
@@ -2994,6 +3162,30 @@ pub const Gen = struct {
         // would corrupt the physics, so say so loudly.
         return self.abort("VerA does not implement `{s}` (ch9); " ++
             "a substitute value would corrupt the model", .{name});
+    }
+
+    /// A §9.5 call in a unit that is NOT the display unit: the descriptor answers
+    /// what §9.5.1 says a device with no file table has to answer, and the
+    /// operands are consumed rather than dropped.
+    ///
+    /// Consumed, because `callArgIsValue` said they were live and the slice
+    /// therefore declared them — an unused local is a hard error in Zig, so the
+    /// two have to agree. The alternative, teaching `callArgIsValue` which unit it
+    /// is being asked about, would thread the display flag through `UnitPlan`'s
+    /// whole marking pass to save four characters of generated text.
+    fn emitFileCallDropped(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+        _ = args; // `UnitPlan.dispHere` did not mark them: there is nothing here to read them
+        // §9.5.1 reserves 0 for `$fopen`'s failure, §9.5.4.1 for "an error occurs
+        // reading", §9.5.8 for "no EOF has been detected" and §9.5.7 for "the most
+        // recent operation did not result in an error" — so zero is the right
+        // answer here and not a stub. §9.5.5's positioning family is the one
+        // exception: its error return is EOF, but `$ftell` on a descriptor that
+        // was never opened has no offset to report either way.
+        try self.b("{s}", .{switch (Analysis.callTy(name)) {
+            .real => "S.con(0.0)",
+            .int => "@as(i64, 0)",
+            .str => "\"\"",
+        }});
     }
 
     pub fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
@@ -3325,7 +3517,21 @@ pub const Gen = struct {
                 continue;
             }
             switch (c.access) {
-                .flow => {
+                .flow => if (self.flowOnlySignalFlowNet(c)) |n| {
+                    // §1.3.4.2 a flow signal-flow net has no potential, so its
+                    // one unknown IS its flow and the contribution is that
+                    // unknown's defining equation. Stamping KCL here instead
+                    // would write a row with no `x` in it at all — `e = 0` —
+                    // because the quantity the row is about is not a potential
+                    // difference. See `flowOnlySignalFlowNet`.
+                    if (!react) {
+                        try self.ind(2);
+                        try self.b("res[@intFromEnum(U.{0s})] = x[@intFromEnum(U.{0s})].sub(c);\n", .{self.u_names[n]});
+                    } else {
+                        try self.ind(2);
+                        try self.b("res[@intFromEnum(U.{s})] = c.neg();\n", .{self.u_names[n]});
+                    }
+                } else {
                     // §1.3.1.2: the value flows INTO hi and OUT OF lo.
                     try self.stamp(2, c.hi, "add", "c");
                     try self.stamp(2, c.lo, "sub", "c");
@@ -3464,7 +3670,15 @@ pub const Gen = struct {
             \\    return .{{}};
             \\}}
             \\
-            \\pub fn updateState(model: *const Model, inst: *Instance, x: [n_u]f64, state: *State) contract.UpdateResult {{
+            \\pub fn updateState({0s}: *const Model, inst: *Instance, {1s}: [n_u]f64, state: *State) contract.UpdateResult {{
+            \\
+        , .{
+            // Both go unread when the only accepted-step work is §9.13.1's
+            // internal-seed advance, which is a function of the seed alone.
+            if (uses_core) "model" else "_",
+            if (uses_core) "x" else "_",
+        });
+        if (uses_core) try self.w(
             \\    var xr: [n_u]R = undefined;
             \\    for (x, 0..) |xv, i| xr[i] = R.con(xv);
             \\
@@ -3482,6 +3696,15 @@ pub const Gen = struct {
         try self.w(
             \\    inst.bound_step = std.math.inf(f64); // §9.17.2
             \\    inst.discontinuity_order = -1; // §9.17.1
+            \\
+        , .{});
+        // §9.13.1 the internal seed advances HERE and nowhere else: this is the
+        // accepted-step boundary, so a stream moves once per solved point and the
+        // residual it feeds is fixed for the whole Newton loop that produced it.
+        if (self.lower.rng_auto_sites != 0) try self.w(
+            \\    // §9.13.1 "this internal seed gets updated every time the call
+            \\    // to $arandom is made" — once per ACCEPTED point, per call site.
+            \\    for (&inst.rng_auto) |*rs| rs.* = @intFromFloat(zRngNext(rs.*));
             \\
         , .{});
         for (self.units, 0..) |u, i| {
@@ -3758,6 +3981,12 @@ pub fn callArgIsValue(name: []const u8, i: usize, display: Display) bool {
     if (opKind(name) != .none) return (enableArgIdx(name) orelse return false) == i;
     const eq = std.mem.eql;
     if (display == .emit and Lower.isDisplayTask(name)) return true;
+    // §9.5 every operand is live: the path, the type, the descriptor, the control
+    // string, the offset. `emitSysCall` renders them all — in the display unit
+    // because the kernels take them, and in every other unit through
+    // `emitFileCallDropped`, which exists precisely so this answer can be one
+    // rule instead of two.
+    if (display == .emit and Lower.isFileCall(name)) return true;
     if (eq(u8, name, "ddx")) return i == 0;
     if (eq(u8, name, "limexp")) return i == 0;
     if (name.len == 0 or name[0] != '$') return false; // events, noise, analysis
@@ -4126,11 +4355,27 @@ const timer_txt =
 const str_txt = "// ---- §9.5.3/§9.5.4.2 string kernels (src/backend/str_kernels.zig) ----\n\n" ++
     @embedFile("str_kernels.zig");
 
+/// §9.13 the probabilistic distribution kernels, emitted VERBATIM from
+/// `rng_kernels.zig` on the same terms as `str_txt`: the stream codegen's tests
+/// exercise is byte-for-byte the stream the device draws from. Only devices that
+/// call one of Table 9-10's 17 names carry it.
+const rng_txt = "// ---- §9.13 probabilistic distribution kernels (src/backend/rng_kernels.zig) ----\n\n" ++
+    @embedFile("rng_kernels.zig");
+
 /// §9.21 the table-model interpolator, emitted VERBATIM from
 /// `table_kernels.zig` on the same terms. Only devices that call
 /// `$table_model` carry it.
 const table_txt = "// ---- §9.21 table model kernels (src/backend/table_kernels.zig) ----\n\n" ++
     @embedFile("table_kernels.zig");
+
+/// §9.5 the file-descriptor table and its operations, emitted VERBATIM from
+/// `file_kernels.zig` on the same terms. Carried ONLY by a device that both calls
+/// the family and is built `display == .emit` — the artifact that has a host
+/// willing to run side effects. A device compiled for a solver has no `display`
+/// decl to sequence them in, so it has no table, so §9.5.1's "a zero is returned
+/// for the mcd or fd" is its truthful answer to `$fopen`.
+const file_txt = "// ---- §9.5 file descriptor I/O kernels (src/backend/file_kernels.zig) ----\n\n" ++
+    @embedFile("file_kernels.zig");
 
 /// §4.5.11/§4.5.12 the filter kernels, emitted VERBATIM from `filter_kernels.zig`
 /// so the numerics codegen's tests exercise are byte-for-byte the numerics the
@@ -4311,6 +4556,39 @@ const prelude_table_txt =
     \\const zTabSort = h.zTabSort;
     \\const zTabAt = h.zTabAt;
     \\const zTable = h.zTable;
+    \\
+;
+
+const prelude_rng_txt =
+    \\const zRngNorm = h.zRngNorm;
+    \\const zRngNext = h.zRngNext;
+    \\const zRngU = h.zRngU;
+    \\const zRngRand = h.zRngRand;
+    \\const zRngIUniform = h.zRngIUniform;
+    \\const zRngUniform = h.zRngUniform;
+    \\const zRngZ = h.zRngZ;
+    \\const zRngNormal = h.zRngNormal;
+    \\const zRngExponential = h.zRngExponential;
+    \\const zRngPoisson = h.zRngPoisson;
+    \\const zRngChiSquare = h.zRngChiSquare;
+    \\const zRngT = h.zRngT;
+    \\const zRngErlang = h.zRngErlang;
+    \\
+;
+
+const prelude_file_txt =
+    \\const zFOpen = h.zFOpen;
+    \\const zFPut = h.zFPut;
+    \\const zFGets = h.zFGets;
+    \\const zFLine = h.zFLine;
+    \\const zFRead = h.zFRead;
+    \\const zFTell = h.zFTell;
+    \\const zFSeek = h.zFSeek;
+    \\const zFEof = h.zFEof;
+    \\const zFError = h.zFError;
+    \\const zFErrorStr = h.zFErrorStr;
+    \\const zFFlush = h.zFFlush;
+    \\const zFClose = h.zFClose;
     \\
 ;
 
@@ -4591,8 +4869,8 @@ test "codegen: every emitted helper is aliased into the unit prologue" {
     // use it, which is the worst possible failure mode. Catch it here instead.
     const prelude = prelude_head_txt ++ prelude_math_txt ++ prelude_timer_txt ++
         prelude_hist_txt ++ prelude_filt_txt ++ prelude_display_txt ++ prelude_str_txt ++
-        prelude_table_txt ++ "const R = h.R;\n";
-    inline for (.{ math_txt, ops_txt, timer_txt, hist_txt, filt_txt, display_txt, str_txt, table_txt }) |src| {
+        prelude_table_txt ++ prelude_rng_txt ++ "const R = h.R;\n";
+    inline for (.{ math_txt, ops_txt, timer_txt, hist_txt, filt_txt, display_txt, str_txt, table_txt, rng_txt }) |src| {
         var it = std.mem.splitScalar(u8, src, '\n');
         while (it.next()) |line| {
             if (!std.mem.startsWith(u8, line, "fn z") and !std.mem.startsWith(u8, line, "pub fn z")) continue;
@@ -5349,6 +5627,49 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
     try std.testing.expect(std.mem.indexOf(u8, src, "(@compileError") == null);
 }
 
+test "codegen: §9.13 the emitted draws satisfy the two rules every fixture asserts" {
+    // Same arrangement as the scanner below: the kernels are `@embedFile`d into
+    // every device, so what is checked here is byte-for-byte what runs there.
+    //
+    // The two rules are §9.13.1/§9.13.2's, and they are the ONLY things the 25
+    // §9.13 fixtures assert — §9.13.3 leaves the stream to IEEE 1364 §17.9.3 and
+    // no clause of this LRM requires a tool to reproduce it, so there is no digit
+    // to pin. "Shall always return the same value given the same seed", and "a
+    // value is passed to the function and A DIFFERENT VALUE IS RETURNED".
+    const k = @import("rng_kernels.zig");
+    for ([_]i64{ -2147483647, -7, 0, 1, 7, 42, 2147483646 }) |sd| {
+        const n = k.zRngNext(sd);
+        try std.testing.expect(n != @as(f64, @floatFromInt(sd))); // inout: different
+        try std.testing.expectEqual(n, k.zRngNext(sd)); // repeatable
+        try std.testing.expect(n >= 0 and n < 2147483647);
+        // §9.13.1 "the random number returned is a 32-bit signed integer".
+        const r = k.zRngRand(sd);
+        try std.testing.expect(r >= -2147483648.0 and r <= 2147483647.0);
+        try std.testing.expectEqual(r, @round(r));
+        // §9.13.2's two bounds, and finiteness — which `proof.callAbstract` now
+        // asserts of the whole family, so a NaN here would be a wrong `.optimized`.
+        try std.testing.expect(k.zRngIUniform(sd, 0, 10) >= 0 and k.zRngIUniform(sd, 0, 10) <= 10);
+        try std.testing.expectEqual(k.zRngIUniform(sd, 0, 10), @round(k.zRngIUniform(sd, 0, 10)));
+        try std.testing.expect(k.zRngUniform(sd, 0.0, 10.0) >= 0.0 and k.zRngUniform(sd, 0.0, 10.0) <= 10.0);
+        try std.testing.expect(k.zRngExponential(sd, 3.0) >= 0.0);
+        try std.testing.expect(k.zRngPoisson(sd, 3.0) >= 0.0);
+        try std.testing.expect(k.zRngChiSquare(sd, 4.0) >= 0.0);
+        try std.testing.expect(k.zRngErlang(sd, 2.0, 3.0) >= 0.0);
+        try std.testing.expect(std.math.isFinite(k.zRngT(sd, 4.0)));
+        try std.testing.expect(std.math.isFinite(k.zRngNormal(sd, 0.0, 1.0)));
+    }
+    // Both signs occur, which is the half of the width sentence a one-sided
+    // generator would silently fail ("it can be positive or negative").
+    var neg = false;
+    var pos = false;
+    var sd: i64 = 1;
+    for (0..64) |_| {
+        if (k.zRngRand(sd) < 0) neg = true else pos = true;
+        sd = @intFromFloat(k.zRngNext(sd));
+    }
+    try std.testing.expect(neg and pos);
+}
+
 test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
     // The kernels are `@embedFile`d into every device, so the rows checked here
     // are byte-for-byte the code that runs there — the same arrangement
@@ -5384,6 +5705,84 @@ test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
     const hex = try std.fmt.bufPrint(k.zSBuf(1), "{x}", .{@as(i64, 4096)});
     try std.testing.expectEqual(@as(i64, 1000), k.zScanI(hex, "%d", 0));
     try std.testing.expectEqualStrings("value= 5.0000e-1", txt);
+}
+
+test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
+    // Same arrangement as the two above: the kernels are `@embedFile`d into the
+    // printing artifact, so what runs here is byte-for-byte what runs there.
+    //
+    // Every claim below is a sentence of §9.5.1/§9.5.4/§9.5.5/§9.5.7/§9.5.8, and
+    // the digits are the ones tests/fixtures/ch09_system_tasks/{07,046,049,050,
+    // 051,053,054,158,11} hold VerA to.
+    const k = @import("file_kernels.zig");
+    // The kernels resolve a path relative to the process cwd — which is exactly
+    // what makes `ch09_047_missing.dat` a claim about a DIRECTORY, and why
+    // tests/torture.zig runs each fixture in its own — so the name is what has to
+    // be unique here.
+    const path = ".zig-cache/vera-file-kernels-test.dat";
+    const absent = ".zig-cache/vera-file-kernels-absent.dat";
+
+    // §9.5.1 "the most significant bit (bit 31) of a fd is reserved and shall
+    // always be set", and "three file descriptors are pre-opened ...
+    // 32'h8000_0000, 32'h8000_0001, and 32'h8000_0002", so a fresh channel's
+    // small number is greater than 2.
+    const w = k.zFOpen(path, "w", false);
+    try std.testing.expect(w & 2147483648 != 0);
+    try std.testing.expect(w & 2147483647 > 2);
+    // §9.5.2's output side at the byte level: four bytes in, four bytes out.
+    try std.testing.expectEqual(@as(i64, 4), k.zFPut(w, "abc\n"));
+    _ = k.zFClose(w);
+
+    const r = k.zFOpen(path, "r", false);
+    try std.testing.expect(r & 2147483648 != 0);
+    // §9.5.5 "$ftell ... the offset from the beginning of the file of the current
+    // byte" — 0 before any read.
+    try std.testing.expectEqual(@as(i64, 0), k.zFTell(r));
+    // §9.5.8 "returns zero otherwise": nothing has been read, so no EOF.
+    try std.testing.expectEqual(@as(i64, 0), k.zFEof(r));
+    // §9.5.4.1 "until a newline character is read AND TRANSFERRED to str ... the
+    // number of characters read is returned in code" — 4, not the 3 a C `fgets`
+    // minus its delimiter gives.
+    try std.testing.expectEqual(@as(i64, 4), k.zFGets(r));
+    try std.testing.expectEqualStrings("abc\n", k.zFLine(4, r));
+    try std.testing.expectEqual(@as(i64, 4), k.zFTell(r));
+    // The read that runs off the end is the one §9.5.8 promises a nonzero answer
+    // for; the first need not have touched EOF.
+    try std.testing.expectEqual(@as(i64, 0), k.zFGets(r));
+    try std.testing.expect(k.zFEof(r) != 0);
+    // §9.5.5 "$fseek ... 2 sets position to EOF plus offset", and the return is a
+    // STATUS: "otherwise, code is set to 0".
+    try std.testing.expectEqual(@as(i64, 0), k.zFSeek(r, 0, 2));
+    try std.testing.expectEqual(@as(i64, 4), k.zFTell(r));
+    // "$rewind is equivalent to $fseek (fd,0,0)" — in status and in effect.
+    try std.testing.expectEqual(@as(i64, 0), k.zFSeek(r, 0, 0));
+    try std.testing.expectEqual(@as(i64, 0), k.zFTell(r));
+    // §9.5.7 "if the most recent operation did not result in an error, then the
+    // value returned shall be zero, and the string variable str shall be empty".
+    try std.testing.expectEqual(@as(i64, 0), k.zFError(r));
+    try std.testing.expectEqualStrings("", k.zFErrorStr(0, r));
+    _ = k.zFClose(r);
+
+    // §9.5.1 "if a file cannot be opened (either the file does not exist and the
+    // type specified is r ...) a zero is returned for the mcd or fd", and
+    // "applications can call $ferror to determine the cause of the most recent
+    // error".
+    const bad = k.zFOpen(absent, "r", false);
+    try std.testing.expectEqual(@as(i64, 0), bad);
+    try std.testing.expect(k.zFError(bad) != 0);
+    try std.testing.expect(k.zFErrorStr(k.zFError(bad), bad).len != 0);
+
+    // §9.5.1's other overload: "the multichannel descriptor mcd is a 32-bit
+    // integer in which a SINGLE BIT is set", bit 0 "always refers to the standard
+    // output", and bit 31 "shall always be CLEARED".
+    const mcd = k.zFOpen(path, "", true);
+    try std.testing.expect(mcd & 2147483648 == 0);
+    try std.testing.expect(mcd != 0 and mcd & (mcd - 1) == 0);
+    try std.testing.expect(mcd != 1);
+    _ = k.zFClose(mcd);
+    // "The $fopen function shall reuse channels that have been closed."
+    try std.testing.expectEqual(mcd, k.zFOpen(path, "", true));
+    _ = k.zFClose(mcd);
 }
 
 test "codegen: §9.21 the emitted table interpolator is the one the fixtures assert" {

@@ -21,7 +21,6 @@
 // rule exists to catch.
 //
 //! lrm 9.5.8
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $feof answers 0 whether or not a read has hit the end
 `include "check.vh"
 module ch09_atomic_feof(p, n);
   inout p, n; electrical p, n;

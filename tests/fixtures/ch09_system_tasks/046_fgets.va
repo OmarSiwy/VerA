@@ -18,7 +18,6 @@
 // its filename.
 //
 //! lrm 9.5.4.1
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so $fopen answers 0 and $fgets reads nothing and returns 0
 `include "check.vh"
 module ch09_atomic_fgets(p, n);
   inout p, n; electrical p, n;

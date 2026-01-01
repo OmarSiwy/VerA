@@ -121,7 +121,7 @@ here is at risk of freezing on an impossible diagnostic.
 | `10_paramset.va` | `a-1-9` | VerA reads past a `paramset` declaration and drops it; applying one needs module instantiation, which is E0204 |
 | `11_module_instantiation.va` | `a-4-1` | VerA does not implement module instantiation — an instance in a module body is rejected with E0204 |
 | `12_defparam.va` | `a-1-4`, `a-2-4` | VerA implements neither module instantiation (E0204, reported first) nor defparam (E0205) |
-| `21_indirect_contribution.va` | `a-6-10` | VerA's testbench writes `//! bias` straight into `x[]` and never solves (`src/backend/tb.zig`), so `V(out)` stays 0 and no 5.6.7 constraint is ever enforced |
+| `21_indirect_contribution.va` | `a-6-10` | Green. The LRM's own ideal opamp closed around a 1:1 feedback pair, so the §5.6.7 constraint `V(out): V(in) == 0` has a unique solution `V(out) = -V(p)`; `//! solve` leaves `out` and `in` to the testbench's Newton loop, and the tolerance is annex D's `VOLTAGE_ABSTOL` |
 
 Grouped by the defect rather than by the fixture, the five rows are **two** problems. Four
 more are kept below, struck as closed, because each was a prediction this document made

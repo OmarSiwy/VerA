@@ -45,7 +45,6 @@
 //! lrm 9.5.1
 //! lrm 9.5.5
 //! lrm 9.5.8
-//! xfail VerA has no file-descriptor surface: codegen.zig `void_tasks` lowers the whole §9.5 family to the constant `S.con(0.0)`, so the two zeros the LRM demands of a FAILED open are produced for the wrong reason and every positioning answer on the working descriptor comes back 0 as well
 `include "check.vh"
 module ch09_file_position_status(p, n);
   inout p, n; electrical p, n;

@@ -44,7 +44,7 @@
 //
 //! lrm 5.6.7.1
 //! lrm 5.6.7
-//! xfail VerA's generated testbench forces every unknown to its declared operating point instead of solving, so an indirect contribution's target cannot move: V(x), V(y) and V(z) all read 0
+//! solve
 `include "check.vh"
 module ch5_multiple_indirect(x, y, z);
   inout x, y, z; electrical x, y, z;
