@@ -23,7 +23,6 @@
 //
 //! lrm 5.9.3
 //! bias V(dt[1]) = 0.5, V(dt[2]) = 0.25, V(dt[3]) = 0.125
-//! xfail VerA has no vector nets or genvar loops: `input [1:width] dt` dies at E0208 (expected an identifier: found `[`)
 `include "check.vh"
 module ch5_genvar(out, dt);
   parameter integer width = 3;

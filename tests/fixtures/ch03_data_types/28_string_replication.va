@@ -18,7 +18,6 @@
 //
 //! lrm 3.3
 //! bias V(p) = 1.0
-//! xfail VerA's parser takes `{a, b}` but not replication: the inner `{` of `{5{"Hi"}}` is E0207
 `include "check.vh"
 module ch3_string_repl(p);
     inout p;

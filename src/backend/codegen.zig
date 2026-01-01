@@ -317,6 +317,8 @@ pub const Gen = struct {
     u_names: [][]const u8 = &.{},
     /// Sanitized Model field name per `Lower.params` entry.
     p_names: [][]const u8 = &.{},
+    /// Sanitized Model field name per `Lower.aliases` entry (§3.4.7).
+    a_names: [][]const u8 = &.{},
     /// §5.10 `Instance` field name per `Lower.held_vars` entry.
     held_names: [][]const u8 = &.{},
     /// Core field index holding each held variable's end-of-block value, or
@@ -606,6 +608,10 @@ pub const Gen = struct {
         for (self.lower.params.items, 0..) |p, i| {
             self.p_names[i] = try a.dupe(u8, naming.sanitize(&buf, p.name) catch return error.OutOfMemory);
         }
+        self.a_names = try a.alloc([]const u8, self.lower.aliases.items.len);
+        for (self.lower.aliases.items, 0..) |al, i| {
+            self.a_names[i] = try a.dupe(u8, naming.sanitize(&buf, al.name) catch return error.OutOfMemory);
+        }
 
         // §5.10 held variables. Same `<module>__<role>__<target>` grammar
         // `naming.unitName` builds, with `held` where a role word would go:
@@ -870,6 +876,34 @@ pub const Gen = struct {
                 try self.w("    {s}__given: bool = false, // §9.19 $param_given\n", .{self.p_names[i]});
             }
         }
+        // §3.4.7 aliasparam. "The aliasparam declaration creates an alternate
+        // name ... which can be used to override the value of the parameter" —
+        // so the alias is part of the model-card ABI even though it is not a
+        // parameter, and a card that only carried the original name would make
+        // `nmos2 #(.trise(5))` unspellable. It is a SECOND FIELD rather than a
+        // second name for the first because Zig has no field aliases; `derive`
+        // below folds it back onto the original, which is the point at which
+        // the two names become one storage again.
+        //
+        // The `__given` flag is unconditional here (unlike §9.19's, which is
+        // emitted only for a parameter someone asked about): it is the only
+        // thing that tells "the host overrode the alias" from "the host left
+        // the alias at the original's default", and those two have to differ.
+        for (self.lower.aliases.items, 0..) |al, i| {
+            const p = self.lower.params.items[al.param];
+            const ty = Analysis.tyOfParam(p.ty);
+            try self.w("    {s}: {s} = {s}, // §3.4.7 alias of `{s}`\n", .{
+                self.a_names[i],
+                switch (ty) {
+                    .real => "f64",
+                    .int => "i64",
+                    .str => "[]const u8",
+                },
+                try self.paramDefault(p, ty),
+                p.name,
+            });
+            try self.w("    {s}__given: bool = false,\n", .{self.a_names[i]});
+        }
         if (self.lower.params.items.len == 0) {
             try self.w("    // (the module declares no parameters)\n    _unused: u8 = 0,\n", .{});
         }
@@ -911,6 +945,15 @@ pub const Gen = struct {
             \\
         , .{});
         const body = self.out.items.len;
+        // §3.4.7 first, and that order is the rule and not a convenience: an
+        // override written through the alias has to be the original's value
+        // BEFORE a §6.3.4 dependent parameter reads it, or `dtemp` derives from
+        // the alias and everything over `dtemp` derives from the default.
+        for (self.lower.aliases.items, 0..) |al, i| {
+            try self.w("    if (model.{s}__given) model.{s} = model.{s};\n", .{
+                self.a_names[i], self.p_names[al.param], self.a_names[i],
+            });
+        }
         for (self.lower.params.items, 0..) |p, i| {
             const ty = Analysis.tyOfParam(p.ty);
             // A string parameter has no arithmetic to redo; a string localparam
@@ -1922,9 +1965,18 @@ pub const Gen = struct {
                     try self.b("{d}", .{n});
                     return;
                 }
-                // A string has no numeric value (§3.3); only its relations are
-                // defined, and `renderOp` handles those before getting here.
-                if (self.an.tyOf(v) == .str) return self.b("@as(i64, 0)", .{});
+                // §2.7: a string LITERAL used as an operand is the unsigned
+                // base-256 integer its bytes spell, which is what a §9.4
+                // numeric conversion applied to one prints — `$strobe("%d",
+                // "\n")` is 10. Lowering converts one everywhere it can see a
+                // numeric context; the format string is the one context it
+                // cannot, since the specifier is only paired with its operand
+                // here (cg_display.appendConv).
+                if (self.an.tyOf(v) == .str) return switch (def) {
+                    .str_const => |s| self.b("@as(i64, {d})", .{Lower.strToInt(s, 64)}),
+                    // Not a literal, so §3.3 leaves it with no numeric value.
+                    else => self.b("@as(i64, 0)", .{}),
+                };
                 try self.b("@as(i64, @intFromFloat(@round((", .{});
                 try self.renderValueRef(v);
                 try self.b(").val())))", .{});
@@ -2263,11 +2315,14 @@ pub const Gen = struct {
     /// `foldConst` first at EVERY node, so a subtree of literals still comes out
     /// as one folded number rather than as rendered arithmetic.
     //
-    // ponytail: the op set is what a delay/rate/initial-condition expression
-    // actually uses — arithmetic, abs, sqrt, min/max, pow. A control argument
-    // that wants `exp`/`ln`/`atan2` gets a diagnostic, not silence; add the case
-    // when a model asks. Ceiling: unlike `foldConst` this never looks through a
-    // parameter's DEFAULT, because the host overrides parameters at run time.
+    // ponytail: the op set is arithmetic, min/max, and the whole of Table 4-14
+    // and Table 4-15 — every scalar math operator, because §6.3.4 puts no
+    // restriction on which ones a dependent parameter's default may use and a
+    // missing case is SILENT there (no derive line, the field frozen at the
+    // fold-through-defaults value). What is still absent is the control flow a
+    // value can carry: `select`, `phi` and `fmod` get a diagnostic, not silence.
+    // Ceiling: unlike `foldConst` this never looks through a parameter's
+    // DEFAULT, because the host overrides parameters at run time.
     pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
         if (depth > 32) return null;
         if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
@@ -2294,6 +2349,31 @@ pub const Gen = struct {
                             .fneg, .ineg => .{ "-(", ")" },
                             .fabs, .iabs => .{ "@abs(", ")" },
                             .sqrt => .{ "@sqrt(", ")" },
+                            // §4.3.1 Table 4-14 and §4.3.2 Table 4-15 in full.
+                            // Every one is a pure f64→f64 function of a value
+                            // the host already has, so a §6.3.4 default over one
+                            // derives exactly as an arithmetic default does —
+                            // the clause puts no operator restriction on a
+                            // dependent parameter, so neither does this.
+                            .exp => .{ "@exp(", ")" },
+                            .ln => .{ "@log(", ")" },
+                            .log10 => .{ "@log10(", ")" },
+                            .expm1 => .{ "std.math.expm1(", ")" },
+                            .ln1p => .{ "std.math.log1p(", ")" },
+                            .floor => .{ "@floor(", ")" },
+                            .ceil => .{ "@ceil(", ")" },
+                            .sin => .{ "@sin(", ")" },
+                            .cos => .{ "@cos(", ")" },
+                            .tan => .{ "@tan(", ")" },
+                            .asin => .{ "std.math.asin(", ")" },
+                            .acos => .{ "std.math.acos(", ")" },
+                            .atan => .{ "std.math.atan(", ")" },
+                            .sinh => .{ "std.math.sinh(", ")" },
+                            .cosh => .{ "std.math.cosh(", ")" },
+                            .tanh => .{ "std.math.tanh(", ")" },
+                            .asinh => .{ "std.math.asinh(", ")" },
+                            .acosh => .{ "std.math.acosh(", ")" },
+                            .atanh => .{ "std.math.atanh(", ")" },
                             // An int→real widening and a reassociation barrier
                             // are both identities in the f64 domain.
                             .if_cast, .opt_barrier => .{ "", "" },
@@ -2313,6 +2393,8 @@ pub const Gen = struct {
                             .fmin, .imin => .{ "@min(", ", ", ")" },
                             .fmax, .imax => .{ "@max(", ", ", ")" },
                             .pow => .{ "std.math.pow(f64, ", ", ", ")" },
+                            .hypot => .{ "std.math.hypot(", ", ", ")" },
+                            .atan2 => .{ "std.math.atan2(", ", ", ")" },
                             else => return null,
                         };
                         const a = try self.f64Const(@enumFromInt(row.a), depth + 1) orelse return null;
@@ -2564,19 +2646,19 @@ pub const Gen = struct {
             return self.b("S.con(0.0)", .{}); // 0 degrees
         if (eq(u8, name, "$hflip") or eq(u8, name, "$vflip"))
             return self.b("S.con(1.0)", .{}); // +1
-        // §9.15 $simparam(name, fallback) — VerA answers with the fallback
-        // (or a spec-neutral default), which is exactly what the LRM licenses
-        // for a simulator that does not expose that parameter.
+        // §9.15 $simparam(name [, fallback]), in the clause's own order: the
+        // KNOWN value first, the fallback only for a name this engine does not
+        // have ("its value is returned IF param_name is not known"). The list
+        // and the values are `Lower.simparamValue`, so the name that reaches
+        // here answered is the same set that escaped E0811 at lowering.
         if (eq(u8, name, "$simparam")) {
-            if (args.len > 1) return self.b("S.con({s})", .{try self.f64Expr(args[1])});
             const nm = self.strArg(args, 0) orelse "";
-            // Table 9-27 gives `tnom` in DEGREES CELSIUS ("Default value of
-            // temperature at which model parameters were extracted"), so the
-            // conforming default is 27, not the 300.15 it used to answer — the
-            // right temperature written in the wrong unit, which a model that
-            // formed `$vt($simparam("tnom") + 273.15)` then read as 300 K too hot.
-            const dflt: f64 = if (eq(u8, nm, "gmin")) 1e-12 else if (eq(u8, nm, "tnom")) 27.0 else if (eq(u8, nm, "scale") or eq(u8, nm, "shrink") or eq(u8, nm, "sourceScaleFactor")) 1.0 else 0.0;
-            return self.b("S.con({s})", .{try self.fmtF64(dflt)});
+            if (self.lower.simparamValue(nm)) |v| return self.b("S.con({s})", .{try self.fmtF64(v)});
+            if (args.len > 1) return self.b("S.con({s})", .{try self.f64Expr(args[1])});
+            // Unknown, no fallback: E0811 already refused this compile unless
+            // the name was not a literal, in which case zero is the only answer
+            // available and the model asked for a name nothing could resolve.
+            return self.b("S.con(0.0)", .{});
         }
         // §9.15 "Table 9-28 gives a list of simulation string parameter names
         // that shall be supported by $simparam$str" — no "if they support the

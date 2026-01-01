@@ -36,7 +36,6 @@
 //
 //! lrm 4.5.3
 //! lrm 4.5.4
-//! xfail VerA does not resolve a nature identifier as an analog operator argument: `ddt(1p*V(p,n), Current)` and `idt(I(p,n), 5.0, 0, Current)` both raise E0314 "unknown identifier", with or without an explicit `include "disciplines.vams"
 //! print none
 `include "disciplines.vams"
 `include "check.vh"

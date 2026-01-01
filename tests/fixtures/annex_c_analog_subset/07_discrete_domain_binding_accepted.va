@@ -1,0 +1,35 @@
+// §7.2.1: "A discipline with a discrete domain ... is used to declare a net
+// which is part of the discrete (digital) portion of a mixed-signal design."
+// Binding a net to such a discipline is the ordinary, meaningful way to say so,
+// and §7.4.2 is where that net meets discipline resolution.
+//
+// This file USED to demand the opposite, on Annex C.4 bullet 1: "From 3.6.2.2,
+// Domain binding: the domain binding type discrete shall be an error in
+// Verilog-A." That clause is real, and it is not this tool's. VerA targets
+// Verilog-AMS, where §7.2.1 makes the binding legal, so a fixture demanding a
+// diagnostic here demanded one a conforming AMS compiler must NOT emit — it
+// would have failed VerA for obeying the standard it implements. Rewritten as
+// the positive rule rather than deleted, because the construct still needs a
+// fixture; the Verilog-A-only reading is recorded here and nowhere else.
+//
+// What is asserted is that the binding is accepted AND inert on the continuous
+// half: `q` is a natureless discrete net (Annex D.1 gives `ddiscrete` only
+// `domain discrete`), so §3.6.3 says it has no access function and no analog
+// behavior can name it — which is exactly why its presence must not disturb the
+// electrical port beside it. The oracle is §1.3.1: with the single node biased
+// at 0.75 V, V(p) is 0.75 exactly, binary-exact and unrounded.
+//
+//! lrm 7.2.1
+//! lrm 3.6.2.2
+//! lrm C.17
+//! bias V(p) = 0.75
+`include "check.vh"
+module annex_c_discrete_domain_binding_accepted(p);
+    inout p;
+    electrical p;
+    ddiscrete q;
+    analog begin
+      `CHECKX("a discrete-domain net leaves the electrical node beside it alone", V(p), 0.75);
+      I(p) <+ V(p);
+    end
+endmodule

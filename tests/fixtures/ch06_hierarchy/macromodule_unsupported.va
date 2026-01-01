@@ -23,7 +23,6 @@
 //
 //! lrm 6.2
 //! bias V(p) = 0.5
-//! xfail VerA rejects the keyword outright: E0201 "construct is not in the supported subset: `macromodule`"
 `include "check.vh"
 macromodule ch6_macromodule(p);
   inout p; electrical p;

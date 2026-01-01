@@ -16,18 +16,14 @@
 // node potentials, 0.75 - 0.25 = 0.5 V. Both operands are binary-exact, so the
 // subtraction is exact and CHECKX is the right form.
 //
-// HONEST LIMIT, so the next reader does not over-read a green tick: VerA does
-// not run discipline resolution at all — it discards `default_discipline in the
-// preprocessor and resolves any declared nature's access function against a
-// bare port regardless. Delete the directive from this file today and it still
-// compiles and still reads 0.5. So this fixture passes without discriminating,
-// and it is the spec record of the rule rather than a live check of it; 35 and
-// 36 carry the discriminating (negative) half as declared xfails. When
-// resolution lands, this file starts doing work with no edit.
+// This file DISCRIMINATES, which it did not always: delete the directive below
+// and VerA rejects the module with E0337 ("net has no discipline, so `V` names
+// nothing on it"), because `p` and `n` then reach §7.4 discipline resolution
+// with nothing to resolve. The directive is the only thing here that can give
+// them a nature. 35 and 36 pin the withdrawing half of the same rule.
 //
 //! lrm 10.2
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA discards `default_discipline in the preprocessor (marked .ignored) and runs no discipline resolution, so `p` and `n` reach lowering with no discipline at all and `V(p, n)` is now E0337 "net has no declared discipline"; the directive is the only thing that could supply one
 `default_discipline electrical
 `include "check.vh"
 module ch10_default_discipline_undeclared_net(p, n);

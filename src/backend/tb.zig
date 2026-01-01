@@ -26,6 +26,7 @@
 //! a property of the text, not of a loop nest.
 
 const std = @import("std");
+const naming = @import("naming.zig");
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
 
@@ -159,7 +160,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // name as written; `unknownName` would only strip a `V(...)` that
             // cannot be there.
             const raw_name = std.mem.trim(u8, rest[0..at], " \t");
-            const name = if (eq(kw, "psweep")) raw_name else unknownName(raw_name);
+            const name = if (eq(kw, "psweep")) raw_name else try unknownName(arena, raw_name);
             if (name.len == 0) return error.BadSyntax;
             const entry: Sweep = .{
                 .name = try arena.dupe(u8, name),
@@ -234,12 +235,29 @@ fn digits(s: []const u8) bool {
 /// `V(a)`, `x[a]` and a bare `a` all name the unknown `a`. The first two are
 /// how a Verilog-A author already writes it and how the runner indexes it; both
 /// are accepted so a fixture is not forced to learn a third spelling.
-fn unknownName(raw: []const u8) []const u8 {
+///
+/// `ix()` looks the result up in the emitted `U` enum, whose members codegen
+/// built with `naming.sanitize`, so a name that is not a legal Zig identifier
+/// has to go through the same function — a §3.6.3 vector element is `p[0]` in
+/// the source and `pZ5b0Z5d` in the enum.
+///
+/// A name that IS already a legal identifier is taken as written, and that is
+/// not an optimisation: a §5.4.2 branch-flow unknown has no source spelling at
+/// all, so a fixture that biases one writes the escaped form directly
+/// (`flowZ28pZ2cnZ29`), and sanitizing that again would escape its `Z`s.
+/// `isValidId` also rejects Zig keywords, so a net called `fn` still gets its
+/// trailing `Z`.
+fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     var s = raw;
     if (std.mem.startsWith(u8, s, "V(") and std.mem.endsWith(u8, s, ")")) s = s[2 .. s.len - 1];
     if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) s = s[2 .. s.len - 1];
     if (std.mem.startsWith(u8, s, "x[") and std.mem.endsWith(u8, s, "]")) s = s[2 .. s.len - 1];
-    return std.mem.trim(u8, s, " \t");
+    s = std.mem.trim(u8, s, " \t");
+    if (s.len == 0 or std.zig.isValidId(s)) return s;
+    // Worst case is three bytes out per byte in (`Z` plus two hex digits),
+    // plus the one `Z` a Zig-reserved word picks up.
+    const buf = try arena.alloc(u8, s.len * 3 + 1);
+    return naming.sanitize(buf, s) catch unreachable;
 }
 
 fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding)) Error!void {
@@ -251,7 +269,7 @@ fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding
         const name = std.mem.trim(u8, t[0..at], " \t");
         if (name.len == 0) return error.BadSyntax;
         try out.append(arena, .{
-            .name = try arena.dupe(u8, unknownName(name)),
+            .name = try unknownName(arena, name),
             .value = try number(t[at + 1 ..]),
         });
     }

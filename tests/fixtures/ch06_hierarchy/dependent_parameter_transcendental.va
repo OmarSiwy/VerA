@@ -3,38 +3,35 @@
 // The clause says nothing about which operators the dependent expression is
 // allowed to use, so `exp(a)` tracks `a` exactly as `2.0*a` does.
 //
-// KNOWN GAP — see the `//! xfail` below. The want is not in doubt.
-//
 // VerA emits a `derive(model: *Model)` seam that recomputes dependent
-// parameters from the CURRENT model values, which is what makes `scaled` below
-// correct. But the renderer behind it (`f64Const` in src/backend/codegen.zig)
-// only knows arithmetic, abs, sqrt, min, max and pow. A default it cannot
-// render gets NO derive line at all and silently keeps the initializer folded
-// against the DECLARED default of `a` — so `curved` freezes at exp(2.0) and an
-// override of `a` never reaches it.
+// parameters from the CURRENT model values. The renderer behind it (`f64Const`
+// in src/backend/codegen.zig) once knew only arithmetic, abs, sqrt, min, max
+// and pow; a default it could not render got NO derive line at all and silently
+// kept the initializer folded against the DECLARED default of `a`, so `curved`
+// froze at exp(2.0) and an override of `a` never reached it. This file was
+// `//! xfail` on exactly that. `f64Const` now renders the whole of Table 4-14
+// and Table 4-15, so it derives.
 //
-// The failure is silent in exactly the way that matters: the two parameters sit
-// side by side, one tracks and one does not, and nothing in the source or the
-// diagnostics says which is which. That is why this fixture asserts BOTH — a
-// fix that only made `curved` derive while breaking `scaled` would still fail.
+// The failure mode was silent in exactly the way that matters: the two
+// parameters sit side by side, one tracked and one did not, and nothing in the
+// source or the diagnostics said which was which. That is why this fixture
+// asserts BOTH — a fix that only made `curved` derive while breaking `scaled`
+// would still fail, and that is what the arithmetic half is here to catch.
 //
 // The wants are the two products written out. `a` is overridden to 3.0 below:
 //   scaled = 2.0 * 3.0 = 6.0                 (exact in binary)
 //   curved = exp(3.0)  = 20.085536923187668  (the double nearest e^3)
-// Today VerA answers 6.0 and 7.38905609893065, the latter being exp(2.0) — the
-// value `curved` folded to before the override was applied.
 //
 //! lrm 6.3.4
 //! param a = 3.0
-//! xfail codegen's f64Const renders only arithmetic, abs, sqrt, min, max and pow, so `parameter real curved = exp(a)` gets no derive line and stays folded at exp(2.0)
 `include "check.vh"
 module ch6_dependent_transcendental(p);
   inout p;
   electrical p;
   parameter real a = 2.0 from (0:inf);
-  // Arithmetic: VerA derives this one correctly.
+  // Arithmetic: the control — this half always derived.
   parameter real scaled = 2.0 * a;
-  // Transcendental: same §6.3.4 rule, no derive line emitted.
+  // Transcendental: same §6.3.4 rule, same derive line.
   parameter real curved = exp(a);
   analog begin
     `CHECKX("an arithmetic dependent parameter tracks the override", scaled, 6.0);

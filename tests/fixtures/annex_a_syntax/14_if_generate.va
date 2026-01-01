@@ -21,7 +21,6 @@
 //! lrm 6.6.2
 //! bias V(p) = 0.5
 //! print none
-//! xfail VerA rejects the `analog` keyword inside a generate block with E0209 "expected an expression: found analog"; the bare `if (e) I(p,n) <+ ...;` form it does accept is not derivable from A.4.2
 `include "check.vh"
 module annex_a_if_generate(p, n);
     inout p, n;

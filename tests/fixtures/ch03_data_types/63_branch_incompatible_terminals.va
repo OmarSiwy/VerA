@@ -18,7 +18,6 @@
 //! lrm 3.12
 //! lrm 3.11
 //! reject DiagnosticsReported
-//! xfail VerA declares a branch across an electrical net and a rotational net without complaint; lower.zig does not compare terminal disciplines
 module ch3_branch_incompatible_terminals(p, n);
     inout p, n;
     electrical p, n;

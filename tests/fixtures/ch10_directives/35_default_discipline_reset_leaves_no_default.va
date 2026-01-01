@@ -37,7 +37,7 @@
 //! lrm 7.4
 //! lrm 3.6.1
 //! reject E0501
-//! xfail VerA discards `default_discipline (preprocessor.zig marks it .ignored) and never runs discipline resolution, so it neither supplies a default nor withholds one — V() resolves on a bare port regardless
+//! xfail The RULE now fires — VerA withdraws the default and rejects this module — but with E0337 "net has no declared discipline" rather than the E0501 guessed above, so the substring does not match. Changing the expectation is a fixture decision, not a compiler one; 41 shows the same E0337 is what VerA prints for a net §7.4 resolved nothing onto
 `default_discipline electrical
 `default_discipline
 module ch10_default_discipline_reset_leaves_no_default(p, n);

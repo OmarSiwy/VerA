@@ -31,7 +31,7 @@ and macro families instead.
 | D.1 rotational `Angular_Acceleration` (`Alpha`) | *nothing* — bound into no standard discipline, never probed |
 | D.1 `discipline rotational` / `rotational_omega` | `literal_rotational_disciplines.va` — the same shared-flow shape as kinematic |
 | D.1 `idt_nature` / `ddt_nature` cross-links | `electrical_definitions.va` declares the four-way `Current`↔`Charge` / `Voltage`↔`Flux` links and they must parse for the file to run; no fixture asserts the *relationship*, because no language construct reads it back |
-| D.1 nature identifier as `ddt`/`idt`/`idtmod` tolerance argument (§5.5.3) | `nature_as_ddt_abstol_argument.va` — **xfail**: VerA rejects a nature identifier as `ddt`'s second argument (E0314 `unknown identifier: 'Voltage'`); the argument is lowered as an ordinary expression, so no nature name is in scope there |
+| D.1 nature identifier as `ddt`/`idt`/`idtmod` tolerance argument (§5.5.3) | `nature_as_ddt_abstol_argument.va` — green. The nature scope is consulted in the tolerance slot only (`Lower.abstolSlot` names the slot for each of the three operators), so a variable named after a nature still shadows it everywhere, including there |
 | D.1 `units` attribute values | *nothing asserted* — transcribed in `electrical_definitions.va`, `thermal_definitions.va`, `abstol_override_branches.va`, never read back |
 | D.1 `abstol` attribute values | *nothing asserted* — see "What is not covered" |
 | **D.2** `CONSTANTS_VAMS` guard | `disciplines_vams_guard_idempotent.va` |
@@ -69,7 +69,7 @@ never reaches an assertion.
 
 ## The xfail ledger
 
-Six fixtures state an Annex D rule the compiler under test does not yet meet. They are
+Five fixtures state an Annex D rule the compiler under test does not yet meet. They are
 the honest debt of this chapter, and they fall into three groups.
 
 1. **Natureless disciplines are not enforced** — `literal_logic_discipline.va`,
@@ -82,9 +82,10 @@ the honest debt of this chapter, and they fall into three groups.
    never diagnosed. Both directions are pinned separately because a lookup keyed on "all
    natures the discipline mentions" would pass one and fail the other. Fixing the early
    return plausibly clears all four of groups 1 and 2 at once.
-3. **Two things simply absent** — `nature_as_ddt_abstol_argument.va` (no nature name is
-   in scope in `ddt`'s second argument, E0314) and `driver_access_include.va` (D.3's file
-   is not shipped, E0126). Independent of each other and of groups 1–2.
+3. **One thing simply absent** — `driver_access_include.va` (D.3's file is not shipped,
+   E0126). Independent of groups 1–2. `nature_as_ddt_abstol_argument.va` used to sit
+   here and no longer does: §5.5.3's "the abstol attribute of a nature may also be
+   accessed simply by using the nature's identifier" is implemented.
 
 The two reject fixtures that are *not* xfail — `unbound_nature_access_rejected.va` and
 `unbound_nature_charge_rejected.va` — are the cases where the nature exists somewhere,

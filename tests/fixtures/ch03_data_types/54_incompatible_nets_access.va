@@ -30,7 +30,6 @@
 //! lrm 3.11
 //! lrm 3.11.1
 //! reject DiagnosticsReported
-//! xfail VerA resolves I(elec, shaft) across nets whose potential natures are Voltage and Angle and stamps the branch; there is no §3.11 net compatibility check in lower.zig
 discipline ch3_rot_i;
     potential Angle;
     flow Current;

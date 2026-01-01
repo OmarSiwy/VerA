@@ -8,8 +8,8 @@
 //
 // (The old version declared `electrical [0:2] p` and its reject substring
 // `identifier` fired on the VECTOR PORT, before the parser ever reached the loop.
-// Scalar ports now, so the loop is the only thing under test; vector nets are a
-// separate gap held by vector_ports_range_equal.va.)
+// Scalar ports now, so the loop is the only thing under test — and they stay
+// scalar now that vector nets do elaborate, for the same reason.)
 //
 // `code` appends a base-10 digit per copy, which records the values AND their
 // order in one integer:
@@ -26,7 +26,6 @@
 //! lrm 6.6.1
 //! lrm 6.9.1
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA's parser reads a generate block body as an analog statement, so the `analog` keyword inside `generate` dies at E0209 "expected an expression: found `analog`"
 `include "check.vh"
 module ch6_gen_down(p, n);
   inout p, n; electrical p, n; genvar i;

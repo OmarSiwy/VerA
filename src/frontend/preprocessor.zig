@@ -1,6 +1,8 @@
 //! Class 1 — Preprocessing & compiler directives.
-//! LRM ch10 (§10.4 `define/`undef, §10.5 predefined macros), §2.4 (comments),
-//! §2.8.4 (directives), annex D.1 (disciplines.vams), annex D.2 (constants.vams).
+//! LRM ch10 (§10.4 `define/`undef, §10.5 predefined macros, §10.7 `__FILE__/
+//! `__LINE__ and the IEEE 1364 `line that remaps them, §10.2
+//! `default_discipline), §2.4 (comments), §2.8.4 (directives), annex D.1
+//! (disciplines.vams), annex D.2 (constants.vams).
 //!
 //! Transformation: raw source text + include dirs → preprocessed text
 //! (macros expanded, comments stripped preserving newlines, `include inlined).
@@ -38,6 +40,14 @@ pub const Options = struct {
     /// Out-param: byte length of the prepended std-def prelude, so a caller
     /// mapping an output offset back to a user source line can subtract it.
     prelude_len: ?*u32 = null,
+    /// Out-param: every §10.2 `default_discipline event, in text-stream order,
+    /// for §7.4 discipline resolution to consult. Arena-owned like the output.
+    defaults: ?*[]const DefaultDiscipline = null,
+    /// Out-param: the IEEE 1364 §19.9 `timescale in force, or null if the
+    /// stream declared none. Read by §9.15 Table 9-27's "timeUnit" and
+    /// "timePrecision", which are the only two rows of that table whose value
+    /// comes out of the SOURCE rather than out of a simulator's preferences.
+    timescale: ?*?Timescale = null,
     /// Where diagnostics go, and where the file table and the source map are
     /// published. Required: preprocessing that nobody can hear is not useful.
     bag: *diag.Bag,
@@ -63,7 +73,60 @@ pub const Directive = enum {
     include, // IEEE 1364
     resetall, // IEEE 1364 — clears user macros (predefined ones survive)
     keywords, // §10.6 — emitted verbatim, handled by the parser
+    default_discipline, // §10.2 — parsed here, applied by discipline resolution
+    line, // IEEE 1364 §19.7 — remaps §10.7 `__LINE__` / `__FILE__`
+    timescale, // IEEE 1364 §19.9 — read back by §9.15 Table 9-27
     ignored, // parsed, consumed to end of line, no effect
+};
+
+/// §10.2 Syntax 10-1:
+///
+///   default_discipline_directive ::=
+///       `default_discipline [ discipline_identifier [ qualifier ] ]
+///   qualifier ::= integer | real | reg | wreal | wire | tri | wand | triand
+///               | wor | trior | trireg | tri0 | tri1 | supply0 | supply1
+///
+/// A CLOSED alternation of fifteen names, so anything else in that slot is a
+/// syntax error and not a second discipline (E0127).
+const qualifiers = std.StaticStringMap(void).initComptime(.{
+    .{"integer"}, .{"real"}, .{"reg"},    .{"wreal"},   .{"wire"},
+    .{"tri"},     .{"wand"}, .{"triand"}, .{"wor"},     .{"trior"},
+    .{"trireg"},  .{"tri0"}, .{"tri1"},   .{"supply0"}, .{"supply1"},
+});
+
+/// One `default_discipline (or the `resetall / bare form that withdraws one),
+/// in the order the text stream met it. §10.2 makes the directive POSITIONAL —
+/// it applies "to all discrete signals without a discipline declaration that
+/// appear in the text stream FOLLOWING the use of the directive" — so the
+/// events are published rather than a single final table, and the consumer
+/// (§7.4 discipline resolution, ir/lower.zig) looks the net's own declaration
+/// offset up against them.
+///
+/// `at` is an offset into the PREPROCESSED output, which is the one currency
+/// every stage after this one reports in (see root.zig `compileInArena`), so
+/// it compares directly against a token start.
+pub const DefaultDiscipline = struct {
+    at: u32,
+    /// Syntax 10-1's optional qualifier; "" when the directive named none.
+    qualifier: []const u8,
+    /// "" WITHDRAWS every default in force from `at` on. §10.2: "In addition
+    /// to `resetall, if this directive is used without a discipline name,
+    /// discipline resolution will not use a default discipline for nets
+    /// declared after this directive is encountered in the text stream."
+    discipline: []const u8,
+};
+
+/// IEEE Std 1364 §19.9 `` `timescale <unit> / <precision> ``, in SECONDS.
+///
+/// The analog kernel has no tick — §9.10 `$abstime` is seconds whatever this
+/// directive says, which ch10_directives/19 pins — so nothing here rescales a
+/// time base. The directive is parsed for exactly one reason: §9.15 Table 9-27
+/// makes both operands readable, "Time unit as specified in `timescale, in
+/// seconds", and they are the only two rows of that table that are a property
+/// of the SOURCE rather than of a simulator's preference file.
+pub const Timescale = struct {
+    unit: f64,
+    precision: f64,
 };
 
 pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
@@ -85,17 +148,20 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     .{ "begin_keywords", .keywords },
     .{ "end_keywords", .keywords },
 
+    // §10.2 and IEEE 1364 §19.7: both carry state past their own line, so both
+    // are parsed here and published (`Options.defaults`, `Pp.line_*`).
+    .{ "default_discipline", .default_discipline },
+    .{ "line", .line },
+
     // Accepted but intentionally ignored (consumed to end of line).
-    .{ "default_discipline", .ignored }, // §10.2  GAP: discipline resolution not applied
     .{ "default_transition", .ignored }, // §10.3  GAP: default rise/fall not retained
-    .{ "timescale", .ignored }, // digital timing — out of scope
+    .{ "timescale", .timescale }, // IEEE 1364 §19.9 — §9.15 reads it back
     .{ "default_nettype", .ignored }, // IEEE 1364
     .{ "celldefine", .ignored }, // IEEE 1364
     .{ "endcelldefine", .ignored }, // IEEE 1364
     .{ "unconnected_drive", .ignored }, // IEEE 1364
     .{ "nounconnected_drive", .ignored }, // IEEE 1364
     .{ "pragma", .ignored }, // IEEE 1364
-    .{ "line", .ignored }, // IEEE 1364  GAP: does not remap `__LINE__`
 });
 
 /// LRM §10.5. Defined for every compilation; `undef on these has no effect.
@@ -163,6 +229,9 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
         return error.PreprocessFailed;
     }
 
+    if (opts.defaults) |d| d.* = try pp.defaults.toOwnedSlice(arena);
+    if (opts.timescale) |t| t.* = pp.timescale;
+
     opts.bag.map = .{
         .segs = try pp.segs.toOwnedSlice(arena),
         // ZERO, not the prelude's newline count: `prelude_lines` corrects a
@@ -216,6 +285,25 @@ const Pp = struct {
     /// Provenance of the output so far. Appended to only, so it stays sorted
     /// by `out_start` and `SourceMap.resolve` can binary-search it.
     segs: std.ArrayList(diag.Segment) = .empty,
+    /// §10.2 events, in text-stream order. Published via `Options.defaults`.
+    defaults: std.ArrayList(DefaultDiscipline) = .empty,
+    /// IEEE 1364 §19.9. Last one wins rather than a positional event list like
+    /// `defaults`: the directive scopes to the design elements that FOLLOW it,
+    /// and VerA elaborates exactly one module, so the last `timescale before
+    /// end of stream is the one in force for it.
+    // ponytail: make it an event list the day VerA compiles two modules at once.
+    timescale: ?Timescale = null,
+    /// IEEE 1364 §19.7 `line remap, for §10.7 `__LINE__` / `__FILE__`. Null
+    /// when the current file is numbered naturally. `from` is the PHYSICAL
+    /// 1-based line the remap starts at (the one after the directive), `to`
+    /// the number §19.7 gives it, so a later line L reports `to + (L - from)`.
+    /// Both are per-file: `runFile` saves and restores them, which is exactly
+    /// §10.7's "revert to the values they had before the `include".
+    line_from: u32 = 0,
+    line_to: ?u32 = null,
+    /// `line's optional file name, which §10.7 says the directive "may change
+    /// `__FILE__` as well" with. Null ⇒ the real name of the current file.
+    file_override: ?[]const u8 = null,
     /// The file the current offsets belong to.
     cur_file_id: diag.FileId = .root,
     /// Set while rescanning a macro BODY. Offsets inside a body index the
@@ -241,6 +329,35 @@ const Pp = struct {
     fn spanAt(pp: *const Pp, start: usize, end: usize) diag.Span {
         if (pp.expand_site) |s| return .at(s);
         return .{ .start = @intCast(start), .end = @intCast(end) };
+    }
+
+    /// §10.7 `__LINE__`: "the current input line number". PHYSICAL, 1-based,
+    /// counted in the file being scanned — `stripComments` replaces every
+    /// comment with the newlines it contained precisely so this holds — then
+    /// put through the IEEE 1364 §19.7 `line remap if one is in force.
+    ///
+    /// `at` indexes the text being scanned, which inside a macro body is the
+    /// BODY and not a file; there `expand_site` is the invocation offset, and
+    /// the invocation is the only line in a real file this can honestly name.
+    fn physicalLine(pp: *const Pp, at: usize) u32 {
+        const off = pp.expand_site orelse @as(u32, @intCast(at));
+        const text = pp.opts.bag.fileText(pp.cur_file_id);
+        return @intCast(1 + std.mem.count(u8, text[0..@min(off, text.len)], "\n"));
+    }
+
+    fn currentLine(pp: *const Pp, at: usize) u32 {
+        const phys = pp.physicalLine(at);
+        const to = pp.line_to orelse return phys;
+        // Saturating: a `line whose operand is smaller than the offset it
+        // corrects for cannot produce a line 0, let alone a negative one.
+        return if (phys >= pp.line_from) to + (phys - pp.line_from) else to;
+    }
+
+    /// §10.7 `__FILE__`: "the name of the current input file". The clause makes
+    /// the spelling "implementation dependent" and says a `line directive may
+    /// replace it, so the override wins when there is one.
+    fn currentFileName(pp: *const Pp) []const u8 {
+        return pp.file_override orelse pp.opts.bag.fileName(pp.cur_file_id);
     }
 
     /// Start a diagnostic. Preprocessor offsets are FILE-LOCAL — this stage
@@ -280,6 +397,26 @@ const Pp = struct {
     fn runFile(pp: *Pp, raw: []const u8, file: []const u8, existing: ?diag.FileId) Error!void {
         const saved_id = pp.cur_file_id;
         defer pp.cur_file_id = saved_id;
+
+        // §10.7: "An `include directive changes the expansions of `__FILE__ and
+        // `__LINE__ to correspond to the included file. At the end of that file
+        // ... the expansions of `__FILE__ and `__LINE__ revert to the values
+        // they had before the `include". The included file is numbered
+        // naturally until it says otherwise, and the parent's remap comes back
+        // on the way out — nothing has to count the lines the include spliced
+        // in, because `__LINE__` is always derived from a PHYSICAL offset in
+        // whichever file is being scanned.
+        const saved_from = pp.line_from;
+        const saved_to = pp.line_to;
+        const saved_override = pp.file_override;
+        pp.line_from = 0;
+        pp.line_to = null;
+        pp.file_override = null;
+        defer {
+            pp.line_from = saved_from;
+            pp.line_to = saved_to;
+            pp.file_override = saved_override;
+        }
 
         const id = existing orelse try pp.opts.bag.addFile(file, raw);
         pp.cur_file_id = id;
@@ -494,7 +631,22 @@ fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
                 if (!e.value_ptr.predefined) try dead.append(pp.arena, e.key_ptr.*);
             }
             for (dead.items) |k| _ = pp.macros.remove(k);
+            // §10.2 opens its reset sentence with "In addition to `resetall",
+            // which makes the global reset the second way to withdraw the
+            // default discipline. An empty `discipline` is that withdrawal.
+            try pp.defaults.append(pp.arena, .{
+                .at = @intCast(pp.out.items.len),
+                .qualifier = "",
+                .discipline = "",
+            });
+            // IEEE 1364 §19.6: `resetall returns every directive to its default
+            // value, and `timescale's default is "none specified" — which is
+            // what §9.15 answers "not known" for.
+            pp.timescale = null;
         },
+        .default_discipline => try handleDefaultDiscipline(pp, text[j..end], j),
+        .line => try handleLine(pp, text[j..end], at, j),
+        .timescale => handleTimescale(pp, text[j..end]),
         .ignored => {},
         // §10.6: passed through instead of being blanked out, so the lexer and
         // parser see it. The slice carries its own newlines, so the
@@ -670,9 +822,30 @@ fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const
     const sp = pp.spanAt(at, after_name);
 
     const m = pp.macros.get(name) orelse {
-        // §10.7 — deliberately unimplemented, and worth its own message.
-        if (std.mem.eql(u8, name, "__FILE__") or std.mem.eql(u8, name, "__LINE__"))
-            return pp.fail(sp, .E0114, "`{s}", .{name});
+        // §10.7. Not in `macros` because neither has a fixed body: both are
+        // computed from where the use SITS, so they are expanded here, at the
+        // one point that still knows the file and the offset. A user `define
+        // of either name is found by the lookup above and wins, which costs
+        // nothing to allow and is the only reading §10.4 leaves open.
+        if (std.mem.eql(u8, name, "__LINE__")) {
+            // "in the form of a simple decimal number" — an integer token, not
+            // a string, so it is usable as `ln = `__LINE__;`.
+            var buf: [16]u8 = undefined;
+            try pp.put(std.fmt.bufPrint(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
+            return after_name;
+        }
+        if (std.mem.eql(u8, name, "__FILE__")) {
+            // "in the form of a string literal" — §2.7, so the quotes are part
+            // of the expansion and a '"' or '\' in the path has to be escaped
+            // or the literal ends early (Windows paths are full of the latter).
+            try pp.put("\"");
+            for (pp.currentFileName()) |c| {
+                if (c == '"' or c == '\\') try pp.put("\\");
+                try pp.out.append(pp.arena, c);
+            }
+            try pp.put("\"");
+            return after_name;
+        }
         var b = pp.failWith(sp, .E0115);
         b.msg("`{s}", .{name});
         if (diag.didYouMeanMap(pp.arena, name, pp.macros)) |near| {
@@ -901,6 +1074,131 @@ fn readInclude(pp: *Pp, path: []const u8) Error!?[]const u8 {
         }
     }
     return builtin_includes.get(std.fs.path.basename(path));
+}
+
+// ---------------------------------------------------------------------------
+// §10.2 `default_discipline, IEEE 1364 §19.7 `line
+// ---------------------------------------------------------------------------
+
+/// §10.2 Syntax 10-1. `rest` is everything after the word on one logical line;
+/// `off` is the offset `rest` starts at.
+///
+/// Nothing is applied here — the directive's effect is §7.4 discipline
+/// resolution, which needs the module's declarations and so cannot run in a
+/// text stage. What this does is PARSE it (a wrong qualifier is a syntax error
+/// the front end owes the user, and it is exactly the typo the closed list
+/// exists to catch, two adjacent identifiers being easy to duplicate) and
+/// record the event with the output offset it takes effect from.
+fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void {
+    var r: Rest = .{ .s = rest };
+    // Both operands are optional; the bare form WITHDRAWS the default.
+    const disc = r.ident() orelse "";
+    const qual = if (disc.len == 0) "" else r.ident() orelse "";
+    if (qual.len != 0 and !qualifiers.has(qual)) {
+        var b = pp.failWith(pp.spanAt(off + r.i - qual.len, off + r.i), .E0127);
+        b.msg("`{s}` is not a qualifier", .{qual});
+        b.note("Syntax 10-1 allows one of: {s}", .{"integer, real, reg, wreal, wire, tri, wand, triand, wor, trior, trireg, tri0, tri1, supply0, supply1"});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
+    // Anything after the qualifier is not in Syntax 10-1 either. Reported with
+    // the same code so the rule reads as one rule.
+    r.skipSpace();
+    if (r.i < r.s.len and std.mem.trim(u8, r.s[r.i..], " \t\r").len != 0) {
+        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0127);
+        b.msg("`{s}` follows the qualifier", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
+        b.note("Syntax 10-1 is `default_discipline [ discipline_identifier [ qualifier ] ], and nothing more", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
+    try pp.defaults.append(pp.arena, .{
+        .at = @intCast(pp.out.items.len),
+        .qualifier = qual,
+        .discipline = disc,
+    });
+}
+
+/// IEEE Std 1364 §19.9 `` `timescale <unit> / <precision> ``.
+///
+/// Both operands are on Table 19-1's closed grid — a magnitude of 1, 10 or 100
+/// and one of six unit names — so a hand-written table of six exponents is the
+/// whole conversion, and nothing here has to parse a general real.
+//
+// ponytail: a malformed operand leaves the timescale UNSET rather than raising
+// a diagnostic, so `$simparam("timeUnit")` on it reports §9.15's "not known"
+// (E0811) instead of a number nobody wrote. IEEE 1364 makes the malformed form
+// an error in its own right; no fixture demands it, and the E0811 route already
+// refuses to invent a value. Add a class-1 code here when one does.
+fn handleTimescale(pp: *Pp, rest: []const u8) void {
+    var r: Rest = .{ .s = rest };
+    const unit = timeLiteral(&r) orelse return;
+    r.skipSpace();
+    if (r.peek() != '/') return;
+    r.i += 1;
+    const precision = timeLiteral(&r) orelse return;
+    // "The time precision shall be at least as precise as the time unit"
+    // (§19.9). A card that has them backwards is not a timescale.
+    if (precision > unit) return;
+    pp.timescale = .{ .unit = unit, .precision = precision };
+}
+
+/// One IEEE 1364 Table 19-1 time literal — `1`, `10` or `100` glued to one of
+/// `s ms us ns ps fs` — as a count of SECONDS, which is the unit §9.15
+/// Table 9-27 asks for. Null (cursor undefined) on anything else.
+fn timeLiteral(r: *Rest) ?f64 {
+    r.skipSpace();
+    const start = r.i;
+    while (r.i < r.s.len and r.s[r.i] >= '0' and r.s[r.i] <= '9') r.i += 1;
+    const mag: i8 = if (std.mem.eql(u8, r.s[start..r.i], "1"))
+        0
+    else if (std.mem.eql(u8, r.s[start..r.i], "10"))
+        1
+    else if (std.mem.eql(u8, r.s[start..r.i], "100")) 2 else return null;
+    const unit = r.ident() orelse return null;
+    const units = std.StaticStringMap(i8).initComptime(.{
+        .{ "s", 0 },   .{ "ms", -3 },  .{ "us", -6 },
+        .{ "ns", -9 }, .{ "ps", -12 }, .{ "fs", -15 },
+    });
+    // Composed as ONE decimal literal and not as magnitude × unit: 100 * 1e-6
+    // is 9.999999999999999e-5, and a §9.15 reader comparing against the 1e-4
+    // it wrote would be one ulp out for a reason that is arithmetic, not
+    // timekeeping. The grid is 18 wide, so the table IS the multiplication.
+    const decades = [_]f64{
+        1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7,
+        1e-6,  1e-5,  1e-4,  1e-3,  1e-2,  1e-1,  1e0,  1e1,  1e2,
+    };
+    return decades[@intCast(mag + (units.get(unit) orelse return null) + 15)];
+}
+
+/// IEEE Std 1364 §19.7 `line <number> ["<file>"] [<level>], which §10.7 names
+/// as the way `__LINE__` (and possibly `__FILE__`) is remapped. The operand is
+/// the number of the line FOLLOWING the directive.
+///
+/// The level is accepted and dropped: it says whether the remap enters, leaves
+/// or stays in a file, which only matters to a tool that reconstructs an
+/// include stack out of `line directives. VerA has the real one.
+fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
+    var r: Rest = .{ .s = rest };
+    r.skipSpace();
+    const start = r.i;
+    while (r.i < r.s.len and r.s[r.i] >= '0' and r.s[r.i] <= '9') r.i += 1;
+    if (r.i == start)
+        return pp.fail(pp.spanAt(off, off + r.s.len), .E0128, "", .{});
+    const n = std.fmt.parseInt(u32, r.s[start..r.i], 10) catch
+        return pp.fail(pp.spanAt(off + start, off + r.i), .E0128, "`{s}` does not fit a line number", .{r.s[start..r.i]});
+
+    r.skipSpace();
+    if (r.peek() == '"') {
+        const q = r.i + 1;
+        r.i = q;
+        while (r.i < r.s.len and r.s[r.i] != '"') r.i += 1;
+        if (r.i >= r.s.len)
+            return pp.fail(pp.spanAt(off + q - 1, off + r.i), .E0128, "unterminated file name", .{});
+        pp.file_override = r.s[q..r.i];
+    }
+
+    pp.line_from = pp.physicalLine(at) + 1;
+    pp.line_to = n;
 }
 
 // ---------------------------------------------------------------------------
@@ -1505,10 +1803,51 @@ test "§10.5 predefined macros survive undef and resetall" {
     try expectPreserved("`resetall\n`ifdef __VAMS_ENABLE__\nyes\n`endif\n", &.{"yes"}, &.{});
 }
 
+test "§9.15 Table 9-27 reads `timescale back, in seconds" {
+    const T = struct {
+        /// The published timescale for `src`, which is the whole §9.15 surface:
+        /// it contributes nothing to the output text (the first row pins that).
+        fn ts(src: []const u8) !?Timescale {
+            var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+            defer arena_state.deinit();
+            var bag: diag.Bag = .init(arena_state.allocator());
+            var out: ?Timescale = null;
+            _ = try process(arena_state.allocator(), src, .{
+                .std_defs = false,
+                .timescale = &out,
+                .bag = &bag,
+            });
+            return out;
+        }
+    };
+    // Table 9-27's units column is "s", not ticks.
+    const t = (try T.ts("`timescale 1ns/1ps\n")).?;
+    try testing.expectEqual(@as(f64, 1e-9), t.unit);
+    try testing.expectEqual(@as(f64, 1e-12), t.precision);
+    // Every magnitude on IEEE 1364 Table 19-1's grid, and the coarsest unit.
+    const t2 = (try T.ts("`timescale 100us / 10 ns\n")).?;
+    try testing.expectEqual(@as(f64, 100e-6), t2.unit);
+    try testing.expectEqual(@as(f64, 10e-9), t2.precision);
+    // No directive is NOT a default: §9.15 says "as specified in `timescale",
+    // and with nothing specified the parameter is not known (E0811).
+    try testing.expectEqual(@as(?Timescale, null), try T.ts("module m; endmodule\n"));
+    // §19.6 `resetall returns it to that state.
+    try testing.expectEqual(@as(?Timescale, null), try T.ts("`timescale 1ns/1ps\n`resetall\n"));
+    // Off Table 19-1 in each of the three ways, plus §19.9's ordering rule.
+    for ([_][]const u8{
+        "`timescale 2ns/1ps\n", // magnitude
+        "`timescale 1sec/1ps\n", // unit name
+        "`timescale 1ns 1ps\n", // no slash
+        "`timescale 1ps/1ns\n", // precision coarser than the unit
+    }) |src| try testing.expectEqual(@as(?Timescale, null), try T.ts(src));
+    // The last one in the stream is the one in force (one elaborated module).
+    try testing.expectEqual(@as(f64, 1e-3), (try T.ts("`timescale 1ns/1ps\n`timescale 1ms/1us\n")).?.unit);
+}
+
 test "accepted-and-ignored directives, and rejected ones" {
     try expectPp(
-        "\n\n\n\n\n",
-        "`timescale 1ns/1ps\n`default_nettype wire\n`celldefine\n`pragma f harmless\n`line 100 \"v.va\" 0\n",
+        "\n\n\n\n",
+        "`timescale 1ns/1ps\n`default_nettype wire\n`celldefine\n`pragma f harmless\n",
     );
     try expectPp("\n\n", "`default_discipline electrical\n`default_transition 1n\n");
     // §10.6 is the exception: passed through verbatim for the parser, which is
@@ -1520,10 +1859,28 @@ test "accepted-and-ignored directives, and rejected ones" {
     // ... but still dies with an inactive `ifdef arm, like any other directive.
     try expectPp("\n\n\n", "`ifdef NOPE\n`begin_keywords \"VAMS-2.3\"\n`endif\n");
     try expectFail("`MISSING\n", .E0115); // fixture ch10 23
-    try expectFail("`__FILE__\n", .E0114); // fixture ch10 21 (§10.7 unimplemented)
-    try expectFail("`__LINE__\n", .E0114); // fixture ch10 22
     try expectFail("`nosuchdirective_or_macro\n", .E0115);
     try expectFail("`define R `R\n`R\n", .E0118); // cycle guard
+}
+
+test "§10.7 `__FILE__ and `__LINE__" {
+    // fixtures ch10 21, 22. The default `Options.file_name` is "<source>".
+    try expectPp("\"<source>\"\n", "`__FILE__\n");
+    // PHYSICAL lines, counted through the comment the stripper deleted and
+    // through a directive that collapsed to its newline.
+    try expectPp("\n\n\n4 4\n", "// c\n`define X 1\n\n`__LINE__ `__LINE__\n");
+    // fixture ch10 44: IEEE 1364 §19.7 numbers the line AFTER the directive.
+    try expectPp("\n100\n101\n", "`line 100 \"virtual.va\" 0\n`__LINE__\n`__LINE__\n");
+    try expectPp("\n\"virtual.va\"\n", "`line 100 \"virtual.va\" 0\n`__FILE__\n");
+    try expectFail("`line\n", .E0128);
+    try expectFail("`line nope\n", .E0128);
+}
+
+test "§10.2 `default_discipline Syntax 10-1" {
+    try expectPp("\n\n\n", "`default_discipline\n`default_discipline electrical\n`default_discipline electrical wire\n");
+    // fixture ch10 45: a discipline name is not one of the fifteen qualifiers.
+    try expectFail("`default_discipline electrical electrical\n", .E0127);
+    try expectFail("`default_discipline electrical wire junk\n", .E0127);
 }
 
 test "`include resolves the built-in annex D files" {

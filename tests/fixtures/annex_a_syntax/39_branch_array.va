@@ -39,7 +39,6 @@
 //! bias V(p) = 0.8
 //! bias V(n) = 0.3
 //! print none
-//! xfail VerA has no branch arrays: `branch (p, n) pair[0:1];` is E0207 "unexpected token: found `[`  expected `;`" in the branch declaration parser
 `include "check.vh"
 module annex_a_branch_array(p, n);
     inout p, n;

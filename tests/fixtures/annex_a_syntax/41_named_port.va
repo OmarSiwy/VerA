@@ -23,7 +23,6 @@
 //! bias V(inner) = 0.6
 //! bias V(n) = 0.1
 //! print none
-//! xfail VerA's header parser has no named-port form: `.ext(inner)` in a list of ports is E0208 "expected an identifier: found `.`"
 `include "check.vh"
 module annex_a_named_port(.ext(inner), n);
     inout inner, n;

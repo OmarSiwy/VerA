@@ -26,7 +26,6 @@
 //
 //! lrm 6.5.2.2
 //! bias V(p[0]) = 0.125, V(p[1]) = 0.25, V(p[2]) = 0.5, V(p[3]) = 1.0
-//! xfail VerA's parser takes no range on a port direction declaration, so `inout [0:3] p` dies at E0208 "expected an identifier: found `[`" and a conforming vector port cannot be declared at all
 `include "check.vh"
 module ch6_vector_range_equal(p);
   inout [0:3] p;

@@ -226,9 +226,18 @@ pub fn appendConv(
     // A float has no bit pattern to show in a radix conversion, and Zig's
     // `{x}` on an f64 is a hex FLOAT — not what `%h` asks for. Round it,
     // exactly like §4.2.1.1 does at any other real→integer boundary.
-    const as_int = ty != .str and (std.mem.eql(u8, verb, "b") or
+    // §2.7 makes a string literal an unsigned base-256 integer wherever it is
+    // used as an operand, and an EXPLICIT numeric conversion is such a use:
+    // `$strobe("%d", "\n")` prints 10. `%s` and the default conversion (`conv
+    // == 0`) still print the text — that is what §9.4.3 asks of them and what
+    // every `CHECK` macro's `%s` name depends on. `renderVal` does the digits.
+    const str_as_int = ty == .str and switch (conv) {
+        'd', 'b', 'o', 'h', 'x' => true,
+        else => false,
+    };
+    const as_int = str_as_int or (ty != .str and (std.mem.eql(u8, verb, "b") or
         std.mem.eql(u8, verb, "o") or std.mem.eql(u8, verb, "x") or
-        std.mem.eql(u8, verb, "c") or conv == 'd');
+        std.mem.eql(u8, verb, "c") or conv == 'd'));
     // A width (not a bare precision) is what makes std.fmt spell an
     // integer's sign; only then is the detour through `zPadInt` needed, and
     // only for the plain decimal conversion — a radix conversion has no

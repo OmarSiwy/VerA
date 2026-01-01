@@ -31,7 +31,6 @@
 // implementation would hand back.
 //
 //! lrm 9.15
-//! xfail VerA does not thread `timescale into $simparam: codegen.zig answers every unknown name with its fallback, and "timeUnit"/"timePrecision" have none here, so both come back 0.0
 `timescale 1ns/1ps
 `include "check.vh"
 module ch09_simparam_timescale(p, n);

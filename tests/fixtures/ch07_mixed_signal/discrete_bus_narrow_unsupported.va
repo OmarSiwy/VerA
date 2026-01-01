@@ -16,7 +16,7 @@
 // context merely READS it.
 //
 //! lrm 7.3.1
-//! xfail VerA has no vector nets: `reg [7:0] r` dies at E0208 in the parser, and an `initial` block is E0205
+//! xfail VerA implements no discrete context: `reg [7:0] r` is E0205 (unsupported module item) and so is the `initial` block, so nothing ever holds the grouping Table 7-1 maps
 `include "check.vh"
 module ch7_discrete_bus_narrow(p);
   inout p; electrical p;

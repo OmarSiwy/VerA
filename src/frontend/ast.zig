@@ -525,8 +525,22 @@ pub const Port = struct {
     direction: Direction = .unspecified, // §6.5.2.2
     /// §6.5.2.1 discipline identifier; `.none` ⇒ resolved by §3.9.
     discipline: StrId = .none,
-    /// §6.5.2 vector port range `[msb:lsb]`; `null` for a scalar port.
+    /// §6.5.2 vector port range `[msb:lsb]` from the port DIRECTION
+    /// declaration (`inout [0:3] p;`); `null` for a scalar port.
     range: ?Dim = null,
+    /// §6.5.2.2 the range from the port TYPE declaration (`electrical [0:3]
+    /// p;`). A separate field, not merged into `range`, because the clause's
+    /// entire content is that the two "evaluate to the same value" — a rule
+    /// with nothing left to compare once the second range has overwritten the
+    /// first. Folded and compared in lowering (E0350), which is the only place
+    /// a constant expression like `[0:4-1]` can be reduced.
+    type_range: ?Dim = null,
+    /// A.1.3 `port ::= . port_identifier ( [ port_expression ] )` — the port's
+    /// EXTERNAL name, the one an instantiation connects to; `.none` when the
+    /// port is named by the net it carries. Several consecutive ports share one
+    /// external name when the port expression is a concatenation (§6.5.1).
+    /// Only an instantiation can observe it, so nothing reads it yet.
+    external_name: StrId = .none,
     main_tok: u32 = 0,
 };
 
@@ -537,6 +551,11 @@ pub const FuncArg = struct {
     name: StrId,
     ty: Type,
     direction: Direction, // §4.7.2.3 — `.input` unless declared otherwise
+    /// The identifier token, so §4.7.1's "all formal arguments shall have an
+    /// associated block item declaration" (E0225) can point at the formal that
+    /// never got one. The verdict is only reachable once the whole item list
+    /// has been read, by which time the parser's cursor is on `endfunction`.
+    main_tok: u32 = 0,
 };
 
 /// User-defined analog function. LRM §4.7.1 (A.2.6 analog_function_declaration).

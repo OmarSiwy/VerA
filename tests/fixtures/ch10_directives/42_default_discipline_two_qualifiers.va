@@ -27,14 +27,12 @@
 // rejects a `reg` module item with E0205, LRM annex A.1.4) that has nothing to
 // do with chapter 10.
 //
-// Same honest limit as 41: VerA discards both directives in the preprocessor
-// and never runs discipline resolution, so this file passes today whichever
-// qualifier rule a tool implements, including none. It is the spec record until
-// resolution lands, at which point it discriminates with no edit.
+// Like 41, this file discriminates: swap the two qualifiers and VerA hands the
+// wire nets `ddiscrete`, whose §3.6.2.2 domain binds no nature, and `V(p, n)`
+// becomes E0501 with nothing to access. Last-wins would do the same.
 //
 //! lrm 10.2
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA discards `default_discipline in the preprocessor (marked .ignored) and never reads its qualifier, so `p` and `n` reach lowering with no discipline at all and `V(p, n)` is now E0337 "net has no declared discipline"; the wire-qualified directive is the only thing that could supply one
 `default_discipline electrical wire
 `default_discipline ddiscrete reg
 `include "check.vh"

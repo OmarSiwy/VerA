@@ -9,7 +9,6 @@
 //
 //! lrm 4.2.13
 //! reject E0317
-//! xfail VerA's parser has no replication form at all: `{2{a}}` stops at E0207 "unexpected token: found `{`" before the LHS rule is reached, so E0317 never fires. Blocked behind the same parser gap 31_replication.va records
 module ch04_replication_lhs_rejected(p, n);
     inout p, n;
     electrical p, n;

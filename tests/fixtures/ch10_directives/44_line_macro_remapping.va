@@ -36,7 +36,7 @@
 //! lrm 10.7
 //! bias V(p) = 0.75, V(n) = 0.25
 //! print none
-//! xfail VerA rejects `__LINE__ with E0114 "unsupported compiler directive", and its `line handling is a no-op that does not remap anything; §10.7 is unimplemented in the preprocessor
+// NOTE: this file's LINE COUNT is load-bearing — `line 100 must stay on line 40.
 `line 100 "virtual.va" 0
 `include "check.vh"
 module ch10_line_macro_remapping(p, n);

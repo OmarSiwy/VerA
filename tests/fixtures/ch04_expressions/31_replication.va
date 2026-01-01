@@ -8,7 +8,8 @@
 // out in its own text. The file it replaces, 31_replication_rejected.va,
 // demanded VerA's parser error instead — an inverted fixture that a conforming
 // compiler fails and only VerA passes. The requirement is written the way the
-// LRM writes it, and VerA's gap is on the `xfail` line.
+// LRM writes it; it was carried as an `xfail` until the parser grew the rule,
+// and it now runs green.
 //
 // Three of 4.2.13's four replication rules, with the widths worked out. A
 // concatenation joins BITS, so every count below is the sum of the operand
@@ -43,7 +44,6 @@
 //
 //! lrm 4.2.13
 //! bias V(p) = 0.0
-//! xfail VerA's parser has no replication form: `{4{2'b10}}` stops at E0207 "unexpected token: found `{` ... expected `}`", so none of 4.2.13's four replication rules is implemented
 `include "check.vh"
 module ch04_replication(p, n);
     inout p, n;
