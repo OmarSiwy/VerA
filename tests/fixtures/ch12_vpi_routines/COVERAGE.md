@@ -56,7 +56,7 @@ routine does.
 | `s12-32` | `43_register_analog_systf_not_va.va`, `48_systf_name_repeated_call_sites.va` | `vpi_register_analog_systf` is E0512. `48` additionally pins the *reading* of the uniqueness sentence: it constrains the registration, not the number of call sites. |
 | `s12-32-1` | — | `type`/`sysfunctype`/`compiletf`/`calltf`/`sizetf`/`derivtf`/`user_data` are `s_vpi_analog_systf_data` fields. The only sentence with a source consequence is the one importing §12.33.1, which `48` tests there. |
 | `s12-32-2` | — | `t_vpi_stf_partials` and the derivtf declaration protocol are C structures. Nothing is written in Verilog-A. |
-| `s12-32-3` | `02_analog_systf_sampler_call.va` **XFAIL** | The LRM's `sampnhold` module verbatim: an unregistered analog system *function* in expression position is legal source. Asserts only the `1e-3` parameter — §12.32.3's own listing never initialises `sampler->value` before the first callback, so no digits for `V(out)` exist to assert. |
+| `s12-32-3` | `02_analog_systf_sampler_call.va` | The LRM's `sampnhold` module verbatim: an unregistered analog system *function* in expression position is legal source, and VerA now compiles it — the call reads 0.0 under a `W0852` naming the name. Asserts only the `1e-3` parameter — §12.32.3's own listing never initialises `sampler->value` before the first callback, so no digits for `V(out)` exist to assert. |
 | `s12-33` | `44_register_systf_not_va.va` | `vpi_register_systf` is E0512. |
 | `s12-33-1` | `48_systf_name_repeated_call_sites.va` | "Callbacks … shall occur *each time* the system task or function is invoked": two call sites of one `$name` are two invocations, not a redefinition, and §5.3.1 sequences both (`seq == 7`). |
 | `s12-33-2` | — | `vlog_startup_routines` is a host link-time array. Not source. |
@@ -66,18 +66,25 @@ routine does.
 
 ## Debt ledger — `//! xfail`
 
-One fixture in this chapter states a rule VerA does not meet.
+**Empty.** No fixture in this chapter carries `//! xfail` any more.
 
-| Fixture | Section | Reason on the `//! xfail` line |
-|---|---|---|
-| `02_analog_systf_sampler_call.va` | §12.32.3 | VerA has no VPI host: an unregistered analog system function has no value, and codegen will not invent one for a contribution, so the unit collapses to `@compileError` carrying `$sampler`. |
+`02_analog_systf_sampler_call.va` was the one, and it closed the way its own
+header predicted: §2.8.3 makes a `$name` grammatical and lists the VPI as one
+of the places a system function may be defined, §12.32 hands the *application*
+a compiletf routine, and no clause makes an unregistered one an error — so
+refusing it was refusing legal source. VerA reads 0.0 and emits `W0852` at
+every call site.
 
-The marker points the run-fixture way round: the LRM *prints* this module, so
-it must compile and run green, and VerA cannot get there. It is not a pass.
-The day VerA compiles an unregistered analog system function, the run FAILs as
-an XPASS and the line must go — at which point the fixture will have proved
-only that the §12.32.3 source form is accepted. Sample-and-hold *behaviour*
-needs a registered host, and this suite has no form for one.
+That zero is not the silent substitution the backend refuses elsewhere. Where
+the LRM fixes a number, a substitute would contradict it and the unit is
+refused outright (`E0515`); an unregistered systf has no such number — this
+clause's own listing hands back an uninitialised field — so the only thing
+left to report is the absent host, and the warning reports it.
+`--deny=W0852` restores the refusal for a build that must have a host.
+
+What the fixture proves is therefore that the §12.32.3 source *form* is
+accepted, and nothing about the value. Sample-and-hold *behaviour* needs a
+registered host, and this suite has no form for one.
 
 Note the polarity, because the previous revision of `02` got it backwards. It
 demanded `//! reject` on a construct the LRM prints as its own worked example:
@@ -123,7 +130,7 @@ implementation and a C test suite, neither of which exists.
 38 fixtures. Every one appears in the table above.
 
 - `01_analog_systf_resistor_call.va`
-- `02_analog_systf_sampler_call.va` (xfail)
+- `02_analog_systf_sampler_call.va`
 - `03_chk_error_not_va.va`
 - `14_compare_objects_not_va.va`
 - `15_free_object_not_va.va`

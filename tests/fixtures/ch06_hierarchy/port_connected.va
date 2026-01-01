@@ -11,7 +11,7 @@
 // value outside an instantiation. The 1 came from `tb.zig` binding every terminal
 // of the DUT, so a conforming compiler on a host that leaves a top-level terminal
 // unbound was entitled to 0 and FAILed the file. Every want here is now the
-// LRM's, which costs an instantiation and therefore an `//! xfail`.
+// LRM's, which costs an instantiation — and §6.2.2 elaboration now supplies one.
 //
 // The second assertion is the sentence quoted above, and it is this chapter's only
 // fixture for it: `dangle` is declared in the parent and connected to nothing else
@@ -29,7 +29,6 @@
 //! lrm 6.5.6
 //! lrm 9.19
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA compiles one flat module, so a module instantiation is refused outright at E0204 "module instantiation is not supported"
 `include "check.vh"
 module ch6_port_connected_parent(p, n);
   inout p, n; electrical p, n;

@@ -23,7 +23,6 @@
 //! param m = 4
 //! lrm 3.4.7
 //! lrm 6.3.6
-//! xfail VerA's parser takes only a parameter_identifier after `aliasparam ... =`: the `$mfactor` token is E0208
 `include "check.vh"
 module ch03_aliasparam_mfactor(p, n);
     inout p, n;

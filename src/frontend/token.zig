@@ -121,6 +121,7 @@ pub const Tag = enum(u8) {
     kw_end,
     kw_generate, // §6.9
     kw_endgenerate,
+    kw_defparam, // §6.3.1 parameter_override (A.1.4)
 
     // declarations §3.x
     kw_parameter, // §3.4
@@ -606,7 +607,11 @@ const reserved_keywords = [_][]const u8{
     // unavailable as an identifier is the whole of what the word does.
     "always",             "and",           "assert",         "assign",
     "automatic",          "buf",           "bufif0",       "bufif1",
-    "cmos",               "deassign",      "defparam",     "edge",
+    // `defparam` moved OUT of this list and into a `kw_defparam` tag: §6.3.1
+    // defines the parameter_override and A.1.4 makes it a module_or_generate
+    // item, so it is a construct with a production, not a reserved spelling
+    // with nothing behind it.
+    "cmos",               "deassign",      "edge",
     "endprimitive",       "endspecify",    "endtable",     "endtask",
     "force",              "fork",          "highz0",       "highz1",
     "ifnone",             "join",          "large",        "medium",

@@ -20,7 +20,6 @@
 //
 //! lrm 3.4.7
 //! lrm 9.18
-//! xfail VerA does not accept a system function as an aliasparam target: `aliasparam m = $mfactor;` is E0208 `expected an identifier`, so §3.4.7's own printed example does not parse
 `include "check.vh"
 module ch09_aliasparam_mfactor(p, n);
   inout p, n; electrical p, n;

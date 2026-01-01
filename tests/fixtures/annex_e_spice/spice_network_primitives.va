@@ -33,7 +33,6 @@
 //! lrm E.2
 //! lrm 6.7.1
 //! bias V(out) = 1.0, V(gnd) = 0.0, V(sense) = 0.5, V(sgnd) = 0.0
-//! xfail VerA rejects module instantiation (E0204), so a Table E.1 controlled source cannot be reached
 `include "check.vh"
 module annex_e_spice_network_primitives(out, gnd, sense, sgnd);
   inout out, gnd, sense, sgnd; electrical out, gnd, sense, sgnd;

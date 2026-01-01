@@ -1895,6 +1895,9 @@ const Harness = struct {
         const toks = try Lexer.Lexer.tokenize(arena, text);
         var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &out.bag);
         out.file = try p.parseSourceFile();
+        // The annex E prelude came with `Preprocessor.process` (std_defs is on by
+        // default), so its modules are the leading entries of `file.modules`.
+        out.file.builtin_modules = Preprocessor.spice_module_count;
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
         try out.low.lowerFile();
     }

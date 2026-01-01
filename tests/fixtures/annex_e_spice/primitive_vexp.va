@@ -16,18 +16,18 @@
 // THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision of this file demanded
 // a diagnostic for the line below. That inverts the test: the LRM prints this
 // syntax as legal, so a conforming compiler would FAIL and only a compiler with
-// no SPICE support would pass. The requirement is that it compiles; the `xfail`
-// records that VerA does not, and fires the day it does.
+// no SPICE support would pass. The requirement is that it compiles, and it does:
+// VerA ships Table E.1 as ordinary module declarations in a prelude, the same
+// shape as annex D's disciplines.vams (`Preprocessor.spice_primitives`).
 //
 // It asserts nothing because it cannot: the observable is elaboration. Table
 // E.1's behaviour column belongs to the primitive's own branches, which are not
-// reachable from this module's analog block, and a `CHECK on a biased port here
+// reachable from this module's analog block, and a CHECK on a biased port here
 // would only restate the bias directive.
 //
 //! lrm E.3
 //! lrm E.1.2
 //! lrm E.2
-//! xfail VerA rejects module instantiation (E0204), so no Table E.1 primitive can be instantiated at all
 module annex_e_primitive_vexp(p, n);
   inout p, n; electrical p, n;
   vexp #(.dc(0.0), .mag(1.0), .phase(0.0), .val0(0.0), .val1(1.0), .td0(1n), .tau0(1n), .td1(2n), .tau1(1n)) x1(.p(p), .n(n));

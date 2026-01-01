@@ -15,7 +15,7 @@
 //! lrm 9.22
 //! lrm 9.23.2
 //! reject connect module
-//! xfail VerA compiles one flat analog device and lowers the whole §9.22/§9.23 driver-access family to a constant (codegen.zig driver_queries) instead of refusing the call site
+//! xfail VerA has no `connectmodule` design element and no digital driver state — the two things §9.22/§9.23 are defined over — so it cannot tell a legal call site from an illegal one; it lowers the whole driver-access family to a constant (codegen.zig driver_queries) instead of refusing the call
 module ch09_atomic_driver_next_state_connectmodule_rejected(p, n);
   inout p, n; electrical p, n;
   real info;

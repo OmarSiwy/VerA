@@ -36,13 +36,19 @@
 // hands that uninitialized field straight back through vpi_put_value(). So the
 // LRM fixes no digits for V(out) at the DC point this fixture solves, and any
 // want written for it would be invented. That is the limit of this fixture, and
-// the reason the assertion below is a parameter default: on the day VerA
-// compiles an unregistered analog system function this XPASSes having proved
-// only that the §12.32.3 source form is accepted. Sample-and-hold BEHAVIOUR
-// needs a fixture with a registered host, which this suite has no form for.
+// the reason the assertion below is a parameter default: what it proves is that
+// the §12.32.3 source form is ACCEPTED, nothing about the value. Sample-and-hold
+// BEHAVIOUR needs a fixture with a registered host, which this suite has no form
+// for.
+//
+// VerA's answer, for the record: the contribution reads 0.0 and every call site
+// gets a W0852 naming the name. That is deliberately not the silent zero the
+// compiler refuses elsewhere — where the LRM fixes a number a substitute would
+// contradict it, and here it fixes none (see the paragraph above), so the only
+// thing to report is the absent host. `--deny=W0852` turns it back into a
+// refusal for a build that must have one.
 //
 //! lrm 12.32.3
-//! xfail VerA has no VPI host: an unregistered analog system function has no value, and codegen will not invent one for a contribution, so the unit collapses to @compileError carrying $sampler
 `include "check.vh"
 module ch12_analog_systf_sampler_call(out, in);
   inout out, in; electrical out, in;

@@ -47,7 +47,6 @@
 //! lrm F.2
 //! lrm F.2.1
 //! bias a = 0.75, b = 0.25
-//! xfail VerA compiles one flat module — `annex_f_h_mid ma(a)` is refused with E0204 "module instantiation is not supported", so no signal hierarchy is ever built and the traversal never runs
 `include "check.vh"
 nature annex_f_h_pot;
   units = "V";

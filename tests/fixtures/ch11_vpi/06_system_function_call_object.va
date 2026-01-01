@@ -28,7 +28,17 @@
 // 20 is this object's other half: $temperature, off its default, pins that the
 // returned value is a real the language declares rather than a rounded int.
 //
+// THE RESIDUAL DOES NOT CARRY THE CALL, and that is deliberate. It used to read
+// `I(p,n) <+ $mfactor * V(p,n);`, which is §6.3.6's `badres` misuse letter for
+// letter: a flow contribution explicitly multiplied by $mfactor is scaled by it
+// twice, §6.3.6 says the simulator generates an error for it, and
+// ch06_hierarchy/mfactor_double_scaling_rejected.va pins that diagnostic
+// (E0912). Nothing about §11.6.16 needed the contribution to carry the call —
+// operand position is what the two checks assert, and both of their wants are
+// unchanged. The contribution is here only to give the device a residual.
+//
 //! lrm 11.6.16
+//! lrm 6.3.6
 //! lrm 2.8.3
 //! lrm 9.18
 //! bias V(p) = 1.5, V(n) = 0.25
@@ -38,6 +48,6 @@ module ch11_system_function_call_object(p, n);
   analog begin
     `CHECKX("a system function call is an operand with a value (9.18)", $mfactor, 1.0);
     `CHECKX("and it composes into the enclosing expression", $mfactor * V(p,n), 1.25);
-    I(p,n) <+ $mfactor * V(p,n);
+    I(p,n) <+ V(p,n);
   end
 endmodule

@@ -20,7 +20,6 @@
 //! lrm 6.3.1
 //! lrm 6.3
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA compiles one flat module, so the instantiation the defparam targets is refused first, at E0204 "module instantiation is not supported"; a bare defparam is E0205
 `include "check.vh"
 module ch6_defparam(p, n);
   inout p, n; electrical p, n;

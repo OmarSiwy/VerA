@@ -36,7 +36,7 @@
 //! lrm E.2.2.1
 //! lrm 6.7.1
 //! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
-//! xfail VerA rejects module instantiation (E0204), so the case-insensitive SPICE fallback is never attempted
+//! xfail E.2.1's fallback arm matches "the same name defined within SPICE", and VerA reads no SPICE netlists, so there is no case-insensitive namespace to fall back INTO: `VeRtNpN` is E0904 for the same reason `vertNPN` is in spice_model.va. The exact-match arm works (a module or a shipped Table E.1 primitive resolves by name, E.3.3), and it is the fallback this fixture pins
 `include "check.vh"
 module annex_e_spice_case_lookup(c1, b1, e1);
   inout c1, b1, e1; electrical c1, b1, e1;

@@ -54,7 +54,7 @@
 //! lrm E.2
 //! lrm 6.7.1
 //! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
-//! xfail VerA rejects module instantiation (E0204), so a SPICE model cannot be instantiated
+//! xfail E.2's models "defined within SPICE netlists" need a SPICE netlist reader, which VerA is not: there is no `.MODEL` input to a Verilog-A compilation, so `vertNPN` is declared nowhere and the instance is E0904. E.1.1 makes exactly this conditional — "IF a simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor" — and Table E.1's primitives, which ARE shipped now, do not supply it: the model card is the part that names a primitive and fixes its parameters, and it is the part that lives in the netlist
 `include "check.vh"
 module annex_e_spice_model(c1, b1, e1);
   inout c1, b1, e1; electrical c1, b1, e1;

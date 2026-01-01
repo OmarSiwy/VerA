@@ -36,7 +36,7 @@
 //
 //! lrm 9.22.4
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA has no connectmodule support at all (the file stops at NoModule before it ever reaches the ordinary module below) and so refuses the one context in which @(driver_update) is legal
+//! xfail VerA has no `connectmodule` design element (E0201 on the keyword) and no digital driver state, which is what §9.22.4 defines @(driver_update) over — the one context in which the event is legal is the one thing VerA does not have. A discrete-time scheduler, not a hierarchy gap
 `include "check.vh"
 connectmodule ch09_driver_update_connectmodule(d, a);
   input d; output a;

@@ -22,12 +22,12 @@
 // solving and a probe therefore reads the declared bias, not the source value.
 //
 // The port `p` is here only because the runner refuses a device with zero
-// terminals (README, CANNOT RUN), which would outrank the xfail and hide the
-// gap. source_driver itself has an empty port list.
+// terminals (README, CANNOT RUN), and that verdict outranks every other, so the
+// fixture would prove nothing without it. source_driver itself has an empty port
+// list.
 //
 //! lrm 5.6.8.1
 //! bias V(m) = 0.25
-//! xfail VerA's parser has no hierarchical net reference: the `.` in `V(drv.x) <+ 1.8` dies at E0207 (expected `)`), and the instantiation the path resolves through is refused at E0204 anyway
 `include "check.vh"
 module ch5_hier_contribution(p);
   parameter real vref = 1.25;

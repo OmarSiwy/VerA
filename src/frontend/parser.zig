@@ -110,6 +110,7 @@ pub const Parser = struct {
         var modules: std.ArrayList(Ast.ModuleDecl) = .empty;
         var disciplines: std.ArrayList(Ast.DisciplineDecl) = .empty;
         var natures: std.ArrayList(Ast.NatureDecl) = .empty;
+        var paramsets: std.ArrayList(Ast.ParamsetDecl) = .empty;
 
         while (true) {
             self.skipAttributes();
@@ -154,33 +155,18 @@ pub const Parser = struct {
                     };
                     try natures.append(self.arena, n);
                 },
-                // §6.4 / Syntax 6-4 `paramset`. Read past and dropped, NOT
-                // refused: annex C.8 keeps clause 6 in Verilog-A except for real
-                // valued ports, so a compilation unit may not be rejected for
-                // containing a paramset — and this one does not change a single
-                // number in the module beside it. A paramset only takes effect
-                // through an INSTANCE that names it (§6.4: "a paramset can be
-                // instantiated exactly like a module"), and VerA compiles one
-                // flat module with no instance hierarchy (E0204), so there is
-                // nothing here to select and no override to bind.
-                //
-                // ponytail: a token skip, not a parse. The body is
-                // `paramset_item_declaration`s and `paramset_statement`s whose
-                // only consumer is that instantiation; parsing them into an AST
-                // nothing reads would be scaffolding for a pass that does not
-                // exist. The day §6.4 instantiation lands, this arm is where its
-                // real parser goes — and until then §6.4's own restrictions (no
-                // behavioral code, `.name` overrides only) are unchecked, which
-                // is why the skip is silent rather than a claim of conformance.
+                // §6.4 / Syntax 6-4 `paramset`, A.1.9 paramset_declaration.
+                // Parsed for real now: §6.4 makes a paramset instantiable
+                // "exactly like a module", so its parameters and its
+                // `.name = expr;` statements are what an instance that names it
+                // elaborates to (`ir/elaborate.zig`).
                 .kw_paramset => {
-                    while (true) : (self.pos += 1) switch (self.peek()) {
-                        .eof => break,
-                        .kw_endparamset => {
-                            self.pos += 1;
-                            break;
-                        },
-                        else => {},
+                    const ps = self.parseParamset() catch |e| {
+                        try self.rethrowOom(e);
+                        self.recoverTopLevel(before);
+                        continue;
                     };
+                    try paramsets.append(self.arena, ps);
                 },
                 else => {
                     // UDPs, config/library files and connectrules are all out of
@@ -203,6 +189,7 @@ pub const Parser = struct {
         self.file.modules = modules.items;
         self.file.disciplines = disciplines.items;
         self.file.natures = natures.items;
+        self.file.paramsets = paramsets.items;
         if (self.failed) return error.ParseError;
         return self.file;
     }
@@ -300,6 +287,8 @@ pub const Parser = struct {
             .vars = b.vars.items,
             .nets = b.nets.items,
             .branches = b.branches.items,
+            .instances = b.instances.items,
+            .defparams = b.defparams.items,
             .genvars = b.genvars.items,
             .events = b.events.items,
             .functions = b.functions.items,
@@ -312,6 +301,114 @@ pub const Parser = struct {
         };
     }
 
+    /// LRM §6.4 / A.1.9 paramset_declaration.
+    ///
+    ///     paramset paramset_identifier module_or_paramset_identifier ;
+    ///         { paramset_item_declaration } { paramset_statement }
+    ///     endparamset
+    ///
+    /// §6.4: "The paramset itself contains no behavioral code; all of the
+    /// behavior is determined by the associated module" — so a paramset is a
+    /// named bundle of parameter values for that module, and everything here is
+    /// either a declaration of its OWN parameters or one `.name = expr;`
+    /// assignment to the module's.
+    ///
+    /// ponytail: A.1.9's OTHER two statement forms are read and dropped —
+    /// `paramset_local_identifier = expr ;` (§6.4.3's output variables, whose
+    /// value a host REPORTS for the instance and which §6.4.3 gives no way to
+    /// read back inside the module) and `analog_function_statement`. Nothing
+    /// downstream has an operating-point reporting path to put them in, and a
+    /// dropped statement is visible in the fixture that asks for one
+    /// (ch06_hierarchy/paramset_output_unsupported.va says so in its header).
+    /// The upgrade is an output-variable table on the emitted device, and this
+    /// loop is where the parse of it goes.
+    fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
+        const main_tok = self.pos;
+        self.pos += 1; // 'paramset'
+        const name = try self.expectIdent();
+        const target = try self.expectIdent();
+        _ = try self.expect(.semicolon);
+
+        var params: std.ArrayList(Ast.ParamDecl) = .empty;
+        var aliasparams: std.ArrayList(Ast.AliasParam) = .empty;
+        var vars: std.ArrayList(Ast.VarDecl) = .empty;
+        var overrides: std.ArrayList(Ast.ParamsetOverride) = .empty;
+
+        while (true) {
+            self.skipAttributes();
+            switch (self.peek()) {
+                .eof, .kw_endparamset => break,
+                .kw_parameter, .kw_localparam => {
+                    try self.parseParamDecl(&params);
+                    _ = try self.expect(.semicolon);
+                },
+                .kw_aliasparam => {
+                    self.pos += 1;
+                    const alias = try self.expectIdent();
+                    _ = try self.expect(.assign_eq);
+                    const t = try self.expectIdent();
+                    _ = try self.expect(.semicolon);
+                    try aliasparams.append(self.arena, .{ .alias = alias, .target = t });
+                },
+                .kw_integer, .kw_real, .kw_string, .kw_realtime, .kw_time => {
+                    try self.parseVarDecl(&vars);
+                    _ = try self.expect(.semicolon);
+                },
+                // A.1.9 `paramset_statement ::= . module_parameter_identifier =
+                // paramset_constant_expression ;` and its `. system_parameter_-
+                // identifier` sibling (§9.18's `$mfactor` and friends), told
+                // apart by the one token that spells a system name.
+                .dot => {
+                    const tok = self.pos;
+                    self.pos += 1;
+                    const is_sys = self.peek() == .system_identifier;
+                    const pname = if (is_sys) blk: {
+                        const s = try self.internTok(self.pos);
+                        self.pos += 1;
+                        break :blk s;
+                    } else try self.expectIdent();
+                    _ = try self.expect(.assign_eq);
+                    const value = try self.parseExpr();
+                    _ = try self.expect(.semicolon);
+                    try overrides.append(self.arena, .{
+                        .kind = if (is_sys) .system_param else .module_param,
+                        .name = pname,
+                        .value = value,
+                        .main_tok = tok,
+                    });
+                },
+                // The two dropped statement forms (see the doc comment). Skipped
+                // by tokens rather than parsed: the right-hand side of an output
+                // assignment may contain §6.4.3's `.module_output_variable`
+                // spelling, which is not an expression anywhere else in the
+                // language, and nothing reads the result.
+                else => while (true) : (self.pos += 1) switch (self.peek()) {
+                    .eof, .kw_endparamset => break,
+                    .semicolon => {
+                        self.pos += 1;
+                        break;
+                    },
+                    else => {},
+                },
+            }
+        }
+        _ = try self.expect(.kw_endparamset);
+        // §2.9 attributes inside a paramset decorate its declarations, and
+        // `NatureAttr` collection is per design element — drop them with the
+        // element, exactly as the module path keeps its own.
+        self.attrs.clearRetainingCapacity();
+
+        return .{
+            .name = name,
+            .target = target,
+            .params = params.items,
+            .aliasparams = aliasparams.items,
+            .vars = vars.items,
+            .overrides = overrides.items,
+            .main_tok = main_tok,
+        };
+    }
+
     /// Accumulators for one module body. Arena-owned; `.items` becomes the
     /// ModuleDecl's slices (append-only ⇒ source order is preserved).
     const Body = struct {
@@ -321,6 +418,8 @@ pub const Parser = struct {
         vars: std.ArrayList(Ast.VarDecl) = .empty,
         nets: std.ArrayList(Ast.NetDecl) = .empty,
         branches: std.ArrayList(Ast.BranchDecl) = .empty,
+        instances: std.ArrayList(Ast.Instance) = .empty, // §6.2.2
+        defparams: std.ArrayList(Ast.Defparam) = .empty, // §6.3.1
         genvars: std.ArrayList(Ast.StrId) = .empty,
         events: std.ArrayList(Ast.StrId) = .empty, // §5.10.4
         functions: std.ArrayList(Ast.FuncDecl) = .empty,
@@ -511,12 +610,47 @@ pub const Parser = struct {
                 try self.parseParamDecl(&b.params);
                 _ = try self.expect(.semicolon);
             },
+            // §6.3.1 parameter_override (A.1.4). `defparam
+            // list_of_defparam_assignments ;`, each assignment a hierarchical
+            // parameter identifier and a constant expression.
+            //
+            // Nothing is resolved here — the path names a parameter of an
+            // INSTANCE, which does not exist until elaboration, and §6.3.1's
+            // "shall be a constant expression" is over the DECLARING module's
+            // parameters. Both are `ir/elaborate.zig`'s questions, and so is the
+            // path that names nothing (E0907).
+            .kw_defparam => {
+                self.pos += 1;
+                while (true) {
+                    const tok = self.pos;
+                    const path = try self.parseDottedName();
+                    _ = try self.expect(.assign_eq);
+                    const value = try self.parseExpr();
+                    try b.defparams.append(self.arena, .{
+                        .path = path,
+                        .value = value,
+                        .main_tok = tok,
+                    });
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
+            },
             // §3.4.6 aliasparam (A.2.1.1)
             .kw_aliasparam => {
                 self.pos += 1;
                 const alias = try self.expectIdent();
                 _ = try self.expect(.assign_eq);
-                const target = try self.expectIdent();
+                // §3.4.7 prints `aliasparam m = $mfactor;` beside `aliasparam
+                // trise = dtemp;`. Syntax 3-2 puts a parameter_identifier on the
+                // right, so a §9.18 hierarchical system parameter is a form the
+                // clause states in prose only — one token tag here, not a second
+                // production. WHICH system parameters have storage to alias is
+                // `Lower.aliasSystemParam`'s question, not the grammar's.
+                const target = if (self.peek() == .system_identifier) blk: {
+                    const s = try self.internTok(self.pos);
+                    self.pos += 1;
+                    break :blk s;
+                } else try self.expectIdent();
                 _ = try self.expect(.semicolon);
                 try b.aliasparams.append(self.arena, .{ .alias = alias, .target = target });
             },
@@ -622,15 +756,16 @@ pub const Parser = struct {
             // A.2.1.3 `discipline_identifier list_of_net_identifiers ;`
             // vs A.4.1 module_instantiation — both start with an identifier.
             .identifier, .escaped_identifier => {
+                // A `#` can only be a parameter_value_assignment, and
+                // `identifier identifier` followed by `(` or `[` can only be a
+                // module_instance: A.2.1.3's net declaration puts its optional
+                // range BEFORE the name list (`electrical [0:3] bus;`, which is
+                // the `lbracket` case one line below), never after it, so no net
+                // declaration reaches a `[` in that position.
                 if (self.peekAt(1) == .hash or
-                    ((self.peekAt(1) == .identifier or self.peekAt(1) == .escaped_identifier) and
-                        self.peekAt(2) == .lparen))
-                {
-                    var d = self.failWith(self.pos, .E0204);
-                    d.help("compile the child as its own device and instantiate it in the netlist", .{});
-                    try d.emit();
-                    return error.ParseError;
-                }
+                    (self.identLike(self.pos + 1) and
+                        (self.peekAt(2) == .lparen or self.peekAt(2) == .lbracket)))
+                    return self.parseInstantiation(b);
                 // `discipline [range] names ;` — a vector net's range is
                 // rejected by the name list ("expected identifier"), which is
                 // the wording the fixtures pin.
@@ -643,6 +778,117 @@ pub const Parser = struct {
             },
             else => return self.unsupportedItem(),
         }
+    }
+
+    /// A.4.1 module_instantiation — LRM §6.2.2 (instances), §6.3 (overrides).
+    ///
+    ///     module_or_paramset_identifier [ #( ... ) ]
+    ///         name [ range ] ( port_connections ) { , name [ range ] ( ... ) } ;
+    ///
+    /// Every instance in the statement shares the ONE parameter_value_assignment
+    /// ("`integrator #(1.0) I1(...), I2(...)`" is two instances with the same
+    /// overrides), so the slice is parsed once and handed to each row.
+    ///
+    /// Nothing is resolved here: the target module may be declared later in the
+    /// file, an override's value is a constant expression over the PARENT's
+    /// parameters, and a port connection is a net reference in the parent. All
+    /// three are elaboration's questions (`ir/elaborate.zig`), which is also
+    /// where a name that resolves to nothing is diagnosed.
+    fn parseInstantiation(self: *Parser, b: *Body) Error!void {
+        const module = try self.internTok(self.pos);
+        self.pos += 1;
+
+        // §6.3 `#( list_of_parameter_assignments )`. A.4.1 gives both arms; a
+        // leading `.` is the named one, and the two may not be mixed.
+        var params: std.ArrayList(Ast.ParamOverride) = .empty;
+        if (self.eat(.hash)) {
+            _ = try self.expect(.lparen);
+            if (!self.eat(.rparen)) {
+                while (true) {
+                    const tok = self.pos;
+                    if (self.eat(.dot)) {
+                        // §6.3.6/§9.18 `.$mfactor(expr)` — A.4.1's
+                        // `parameter_identifier` covers the §9.18 system
+                        // parameters too, and §9.18 Example 1 prints
+                        // `module_b #(.$mfactor(2)) B1(p,n);`. One extra token
+                        // tag, not a second production.
+                        const name = if (self.peek() == .system_identifier)
+                            try self.internTok(self.pos)
+                        else
+                            null;
+                        if (name != null) self.pos += 1;
+                        const pname = name orelse try self.expectIdent();
+                        _ = try self.expect(.lparen);
+                        const v = if (self.peek() == .rparen) Ast.ExprId.none else try self.parseExpr();
+                        _ = try self.expect(.rparen);
+                        try params.append(self.arena, .{ .name = pname, .value = v, .main_tok = tok });
+                    } else {
+                        try params.append(self.arena, .{ .value = try self.parseExpr(), .main_tok = tok });
+                    }
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.rparen);
+            }
+        }
+
+        while (true) {
+            const name_tok = self.pos;
+            const name = try self.expectIdent();
+            const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
+            _ = try self.expect(.lparen);
+            var ports: std.ArrayList(Ast.PortConn) = .empty;
+            if (!self.eat(.rparen)) {
+                while (true) {
+                    // A.4.1.1 gives BOTH connection forms a leading
+                    // `{ attribute_instance }`, and E.3.2.1's per-port
+                    // `port_discipline` is the reason the slot exists: "it shall
+                    // only apply to either the analog primitive itself or the port
+                    // to which it is attached", and the port is a connection in
+                    // this list. Skipped, not stored, for the same reason
+                    // §2.9 attributes are skipped everywhere else — `ModuleDecl
+                    // .attrs` already collects every attr_spec in the module for
+                    // the two rules that are about an attribute alone, and the
+                    // DISCIPLINE the attribute asks for is not read from here: see
+                    // `Elaborate.primitiveAccess` for where E.3.2 is applied and
+                    // why the connected net answers it.
+                    self.skipAttributes();
+                    const tok = self.pos;
+                    if (self.eat(.dot)) {
+                        const pname = try self.expectIdent();
+                        _ = try self.expect(.lparen);
+                        // §6.2.2 "an unconnected port can be indicated either by
+                        // omitting it in the port list or by providing no
+                        // expression in the parentheses".
+                        const e = if (self.peek() == .rparen) Ast.ExprId.none else try self.parseExpr();
+                        _ = try self.expect(.rparen);
+                        try ports.append(self.arena, .{ .name = pname, .expr = e, .main_tok = tok });
+                    } else {
+                        // A.4.1 `ordered_port_connection ::= { attribute_instance
+                        // } [ expression ]` — the expression is OPTIONAL, so a
+                        // blank holds the position of a port "not to be
+                        // connected". It must still occupy a row or the list
+                        // shifts left and every later port binds to the wrong net.
+                        const e = if (self.peek() == .comma or self.peek() == .rparen)
+                            Ast.ExprId.none
+                        else
+                            try self.parseExpr();
+                        try ports.append(self.arena, .{ .expr = e, .main_tok = tok });
+                    }
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.rparen);
+            }
+            try b.instances.append(self.arena, .{
+                .module = module,
+                .name = name,
+                .range = range,
+                .params = params.items,
+                .ports = ports.items,
+                .main_tok = name_tok,
+            });
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
     }
 
     /// One shared diagnostic for everything annex C leaves out of the analog
@@ -841,6 +1087,14 @@ pub const Parser = struct {
         try b.aliasparams.appendSlice(self.arena, gb.aliasparams.items);
         try b.nets.appendSlice(self.arena, gb.nets.items);
         try b.branches.appendSlice(self.arena, gb.branches.items);
+        // §6.6.1 an instance inside a generate construct is an instance of the
+        // module: §6.6 gives the region no scope, and the unroll already named
+        // the block. It rides up with the nets for the same reason they do.
+        try b.instances.appendSlice(self.arena, gb.instances.items);
+        // §6.3.1 the same reasoning: a defparam names its target by a path that
+        // does not mention the generate block (VerA has no generate scope), so
+        // it means the same thing at module level.
+        try b.defparams.appendSlice(self.arena, gb.defparams.items);
         try b.genvars.appendSlice(self.arena, gb.genvars.items);
         try b.functions.appendSlice(self.arena, gb.functions.items);
         // A nested generate construct's block names are declarations of the
@@ -972,11 +1226,39 @@ pub const Parser = struct {
     ///
     /// ponytail: still no net_decl_assignment (`electrical n = 5.0;`), which
     /// reports through the normal `;` expectation.
+    /// §6.7 a hierarchical name in a DECLARATION position, interned as ONE
+    /// string with the source's own `.` between the parts.
+    ///
+    /// That join is the whole mechanism, and it is deliberate: `Elaborate.sep`
+    /// is the same period, so the string a `defparam` path or an Annex F.2.1
+    /// out-of-context declaration writes IS the flat name elaboration gives the
+    /// entity it names. Neither needs a path walk, and neither needs a second
+    /// representation. A name with no dot in it interns exactly as it did
+    /// before, so the ordinary declaration paths are untouched.
+    fn parseDottedName(self: *Parser) Error!Ast.StrId {
+        const first = try self.expectIdent();
+        if (self.peek() != .dot) return first;
+        var joined: std.ArrayList(u8) = .empty;
+        try joined.appendSlice(self.arena, self.file.str(first));
+        while (self.eat(.dot)) {
+            const part = try self.expectIdent();
+            try joined.append(self.arena, '.');
+            try joined.appendSlice(self.arena, self.file.str(part));
+        }
+        return self.file.intern(self.arena, joined.items);
+    }
+
     fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, is_ground: bool) Error!void {
         const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
         while (true) {
             const tok = self.pos;
-            const name = try self.expectIdent();
+            // Annex F.2.1 step 3 / §3.10 order 1: an OUT-OF-CONTEXT declaration,
+            // which the LRM prints as `electrical top.middle.bottom.sig;` and
+            // which "overrides any discipline which may be declared for sig in
+            // the module where sig was declared". The dotted name is interned
+            // whole; `findPort` below cannot match it, so it lands as a net
+            // declaration under its path and elaboration reads it as one.
+            const name = try self.parseDottedName();
             // Only the FIRST declaration binds. A port that already carries a
             // discipline gets a net entry instead, so lowering sees BOTH
             // declarations and can apply §7.4.4 (E0902) — overwriting here is
@@ -2104,6 +2386,33 @@ pub const Parser = struct {
                         };
                         try parts.append(self.arena, part);
                     }
+                    // §6.7.1, fourth bullet: "Analog user defined functions can
+                    // be accessed hierarchically." A dotted name followed by an
+                    // argument list is that, and it is a CALL — so it becomes
+                    // `.call` under the joined name rather than a `.hier_ident`
+                    // nothing could apply arguments to.
+                    //
+                    // The join is the SOURCE spelling, §6.7's own `.`, and it
+                    // coincides with the flat name elaboration gives a child's
+                    // function precisely because `Elaborate.sep` is that same
+                    // separator for that reason. If the mangling ever stops being
+                    // the path, this join and `Lower.flatName` are the two sites.
+                    if (self.peek() == .lparen) {
+                        var joined: std.ArrayList(u8) = .empty;
+                        for (parts.items, 0..) |part, i| {
+                            if (i != 0) try joined.append(self.arena, '.');
+                            try joined.appendSlice(self.arena, self.file.str(part));
+                        }
+                        const flat = try self.file.strings.intern(self.arena, joined.items);
+                        const args = try self.parseCallArgs();
+                        const off = try self.file.exprs.addExprList(self.arena, args);
+                        return self.addExpr(.{
+                            .tag = .call,
+                            .main_tok = tok,
+                            .extra = off,
+                            .str = flat,
+                        });
+                    }
                     const off = try self.file.exprs.addStrList(self.arena, parts.items);
                     return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
                 }
@@ -2147,6 +2456,23 @@ pub const Parser = struct {
             .system_identifier => {
                 const name = try self.internTok(tok);
                 self.pos += 1;
+                // §6.2.1/§6.7 Syntax 6-9 `hierarchical_identifier ::= [ $root . ]
+                // { identifier [ [ constant_expression ] ] . } identifier`.
+                // `$root` is the only system name with a `.` after it, and what
+                // it does is disambiguate: §6.2.1 "The name $root is used to
+                // unambiguously refer to a top-level instance or to an instance
+                // path starting from the root of the instantiation tree", where
+                // an unprefixed path takes the local scope first. The prefix
+                // rides along as part 0 of the path and `Lower.flatName` is where
+                // it means something — one site, and it is the site that already
+                // knows which module is the root.
+                if (self.peek() == .dot) {
+                    var parts: std.ArrayList(Ast.StrId) = .empty;
+                    try parts.append(self.arena, name);
+                    while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
+                    const off = try self.file.exprs.addStrList(self.arena, parts.items);
+                    return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
+                }
                 const args: []const Ast.ExprId = if (self.peek() == .lparen)
                     try self.parseCallArgs()
                 else
@@ -2233,12 +2559,26 @@ pub const Parser = struct {
     /// "constant" there admits a genvar, which is only constant part-way
     /// through elaboration. Lowering folds it (E0352).
     ///
-    /// ponytail: no hierarchical (`u.n`), `$root` or nature-attribute
-    /// (`p.potential.abstol`) references — those need an elaborated instance
-    /// tree. `Ast.ExprTag.hier_ident` is the shape to fill when they do.
+    /// §6.7.1 also lets a terminal be a HIERARCHICAL name: "potential and flow
+    /// access for named and unnamed branches (including port branches) can be
+    /// done hierarchically", and §5.5.4's own example probes `V(drv.a)`. Those
+    /// land in `.hier_ident`, the same tag `parsePrimary` builds for a dotted
+    /// name in a value position, and lowering resolves the path against the
+    /// elaborated design.
+    ///
+    /// ponytail: no `$root` prefix, and no index INSIDE a path (`u[0].a`). Both
+    /// are A.8.9 spellings with no fixture and no resolution rule written yet;
+    /// `hier_ident` is already the shape they would use.
     fn parseNetRef(self: *Parser) Error!Ast.ExprId {
         const tok = self.pos;
         const name = try self.expectIdent();
+        if (self.peek() == .dot) {
+            var parts: std.ArrayList(Ast.StrId) = .empty;
+            try parts.append(self.arena, name);
+            while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
+            const off = try self.file.exprs.addStrList(self.arena, parts.items);
+            return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
+        }
         const base = try self.addExpr(.{ .tag = .ident, .main_tok = tok, .str = name });
         if (self.peek() != .lbracket) return base;
         self.pos += 1;
@@ -3445,15 +3785,16 @@ test "errors are collected with locations and parsing continues" {
         \\endmodule
     ;
     const res = try parseForTest(arena, src);
-    try std.testing.expectEqual(@as(usize, 2), res.count());
-    try std.testing.expectEqual(diag.Code.E0204, res.code(0));
-    try std.testing.expectEqual(diag.Code.E0205, res.code(1));
-    try std.testing.expectEqualStrings("found always", res.msg(1));
+    // `child u(p);` is a §6.2.2 module_instantiation and parses now; only the
+    // digital `always` is outside annex C.
+    try std.testing.expectEqual(@as(usize, 1), res.count());
+    try std.testing.expectEqual(diag.Code.E0205, res.code(0));
+    try std.testing.expectEqualStrings("found always", res.msg(0));
+    try std.testing.expectEqual(@as(usize, 1), res.file.modules[0].instances.len);
 
-    // The spans still point at the offending tokens, on lines 4 and 5.
+    // The span still points at the offending token, on line 5.
     const idx = try diag.LineIndex.build(arena, src);
-    try std.testing.expectEqual(@as(u32, 4), idx.loc(res.bag.at(0).span.start).line);
-    try std.testing.expectEqual(@as(u32, 5), idx.loc(res.bag.at(1).span.start).line);
+    try std.testing.expectEqual(@as(u32, 5), idx.loc(res.bag.at(0).span.start).line);
     // Recovery kept going: the analog block after the bad items still parsed.
     try std.testing.expectEqual(@as(usize, 1), res.file.modules[0].analog.len);
 }
@@ -3487,8 +3828,11 @@ test "annex C rejections keep their pinned wording" {
         // they parse now (`electrical [3:0] p;` is four nodes), so the nodeset
         // spelling is what is left unimplemented in the same production.
         .{ .src = "module m(p); inout p; electrical p = 5.0; endmodule", .code = .E0207, .point = "expected `;`" },
-        // hierarchical net reference inside a probe (§6.8)
-        .{ .src = "module m(p); inout p; electrical p; analog I(p) <+ V(u.n); endmodule", .code = .E0207, .point = "expected `)`" },
+        // A.8.9's hierarchical net reference. `V(u.n)` USED to be this row; §6.7.1
+        // dotted terminals parse now (`parseNetRef` builds a `.hier_ident` and
+        // lowering resolves the path against the elaborated design). What is left
+        // unimplemented in the same production is an INDEX inside a path — §6.7's
+        // `adder1[5].sum` — which stops at the `.` after the bit select.
         // A.8.1 multiple concatenation USED to be a row here
         // (`b = {2{1}}` → "expected `}`"). It parses now: the count and its
         // inner concatenation unroll into the operand list, so the condition

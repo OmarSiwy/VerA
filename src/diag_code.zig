@@ -280,6 +280,13 @@ pub const Code = enum(u16) {
     /// §1.3.4.1/§1.3.4.2 a net of signal-flow discipline bound to an `inout`
     /// port. The sibling of E0425, which is about the contribution target.
     E0360,
+    /// §3.4.2 an OVERRIDDEN parameter value falls outside its declared
+    /// `from`/`exclude` value range. The sibling of E0347, which judges the
+    /// range's own bounds; this one needs a value somebody supplied, which only
+    /// §6.3 elaboration produces.
+    E0361,
+    /// §6.8 one identifier declares two items in one scope.
+    E0362,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -384,6 +391,8 @@ pub const Code = enum(u16) {
 
     // ---------------------------------------------------------------- class 8
     // System tasks and functions — lower.zig.
+    /// RETIRED — was "unsupported system function", a capability class whose
+    /// list is now empty. Not reused; see the `explain`.
     E0801,
     E0802,
     E0803,
@@ -415,16 +424,46 @@ pub const Code = enum(u16) {
     /// parameter, the uniform's start/end order, or the paramset-only
     /// `type_string`.
     E0816,
+    /// §9.16 a `$simprobe` whose instance/parameter pair resolves to nothing and
+    /// that supplied no fallback expression.
+    E0817,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
     /// §9.4 display task under a conditional — not emitted even into an exe.
     W0851,
+    /// §2.8.3/§12.32 an UNREGISTERED system function: a `$name` the language
+    /// defines nowhere, whose meaning §12.32 hands to a VPI host the emitted
+    /// artifact has none of. Reads 0.0, out loud.
+    W0852,
 
     // ---------------------------------------------------------------- class 9
-    // Hierarchy and elaboration — lower.zig.
+    // Hierarchy and elaboration — lower.zig, elaborate.zig.
     E0901,
     /// §7.4.4/F.2.1 step 3 more than one discipline declaration for one net.
     E0902,
+    // E0903 is RESERVED for annex F.2.1 step 4.b's unresolvable-discipline
+    // error, which needs the signal hierarchy VerA does not build yet
+    // (tests/fixtures/annex_f_resolution/unknown_discipline_mixed_port.va pins
+    // it). Left as a hole rather than filled in, so the fixture's `//! reject`
+    // keeps naming the rule it is about.
+    /// §6.2.2 an instance names a module (or paramset) the file never declares.
+    E0904,
+    /// §6.2.2 a module instantiates itself, directly or through a cycle.
+    E0905,
+    /// §6.2.2 the port connections do not match the module's port list.
+    E0906,
+    /// §6.3 an override names nothing the instantiated module declares.
+    E0907,
+    /// §3.4.7 a parameter and its `aliasparam` are both overridden.
+    E0908,
+    /// §6.2.2 an instance array range is not an elaboration-time constant.
+    E0909,
+    /// §6.7.1 an analog variable may not be accessed hierarchically.
+    E0910,
+    /// §6.4.2 no paramset of an overload set admits an instance's values.
+    E0911,
+    /// §6.3.6 a flow contribution is explicitly multiplied by `$mfactor`.
+    E0912,
 
     // --------------------------------------------------------------- class 10
     // Runtime / artifact contract — codegen.zig, root.zig.
@@ -908,15 +947,20 @@ pub fn info(c: Code) Info {
             ,
         },
         .E0204 => .{
-            .title = "module instantiation is not supported",
-            .lrm = "6.2.2",
+            .title = "(retired)",
+            .lrm = "",
             .explain =
-            \\VerA compiles ONE flat module into one device artifact, so
-            \\there is no elaboration step to bind a child instance's ports or
-            \\to flatten its equations into the parent's system.
+            \\"module instantiation is not supported". Retired: A.4.1
+            \\module_instantiation now parses and `ir/elaborate.zig` flattens the
+            \\instance tree into the one device VerA emits, so the condition does
+            \\not exist to report. Annex C.8 keeps clause 6 hierarchy inside the
+            \\Verilog-A subset, which made refusing an instance a refusal of part
+            \\of the subset.
             \\
-            \\Inline the child's behaviour, or compile it as its own device and
-            \\instantiate it in the netlist instead of in Verilog-A.
+            \\What replaced it: E0904 (the instance names no module), E0905 (the
+            \\instantiation is recursive), E0906 (the port connections do not
+            \\match the port list) and E0907 (an override names no parameter).
+            \\The number is not reused.
             ,
         },
         .E0205 => .{
@@ -2198,6 +2242,45 @@ pub fn info(c: Code) Info {
             \\E0425.
             ,
         },
+        .E0361 => .{
+            .title = "overridden parameter value is outside its range",
+            .lrm = "3.4.2",
+            .explain =
+            \\LRM 3.4.2: "The parameter value shall be within the range from the
+            \\smallest value specified to the largest value specified", and an
+            \\`exclude` removes a value or an interval from what is left.
+            \\
+            \\This is the half of 3.4.2 that needs a VALUE. A declared default is
+            \\judged only for whether its own bounds are well formed (E0347) —
+            \\6.3 makes the interesting value the one an INSTANCE supplied, and a
+            \\module compiled on its own has no instance. The check therefore runs
+            \\on parameters whose value came from a `#(...)` override, which is
+            \\where a model card meets a model's declared legal range.
+            \\
+            \\3.4.2 states the error at simulation time; VerA elaborates the
+            \\instance at compile time, so it is reported here.
+            ,
+        },
+        .E0362 => .{
+            .title = "identifier is declared twice in one scope",
+            .lrm = "6.8",
+            .explain =
+            \\LRM 6.8: "An identifier shall be used to declare only one item
+            \\within a scope. This rule means it is illegal to declare two or more
+            \\variables which have the same name, or to name a task the same as a
+            \\variable within the same module, or to give an instance the same name
+            \\as the name of the net connected to its output."
+            \\
+            \\SHADOWING IS NOT THIS. 6.8 lists what opens a scope — modules, named
+            \\blocks, analog functions, generate blocks — and an inner scope may
+            \\reuse an outer name freely. Only two declarations at the SAME level
+            \\are this error, because the second one has no way to be reached.
+            \\
+            \\What VerA checks is the first clause of that sentence: two variable
+            \\declarations of one name in one module or one block. Rename one of
+            \\them, or delete it if it was a repeat of the same declaration.
+            ,
+        },
 
         // ------------------------------------------------------------ class 4
         .E0401 => .{
@@ -3164,22 +3247,25 @@ pub fn info(c: Code) Info {
 
         // ------------------------------------------------------------ class 8
         .E0801 => .{
-            .title = "unsupported system function",
-            .lrm = "9",
+            .title = "(retired)",
+            .lrm = "",
             .explain =
-            \\This ch9 system function has no meaning for a compiled device
-            \\artifact, which computes residuals and charges for a host solver
-            \\and owns neither a simulation session nor an RNG stream.
+            \\"unsupported system function". Retired: it was a CAPABILITY CLASS —
+            \\one code for every ch9 function VerA declined to implement — and the
+            \\list is now empty, so the diagnostic could not fire.
             \\
-            \\Deliberately rejected rather than stubbed: `$random`, `$arandom`
-            \\and the `$dist_*`/`$rdist_*` family (LRM 9.13), because silently
-            \\returning a constant would make a model that looks stochastic
-            \\behave deterministically. `$simprobe` (LRM 9.16) needs a session
-            \\to ask.
+            \\Each name left it for the same reason. `$table_model` (LRM 9.21) got
+            \\an interpolator (E0815 covers what it can compile). `$random`,
+            \\`$arandom` and the `$dist_*`/`$rdist_*` family (LRM 9.13) turned out
+            \\to be pure functions of an inout seed, so a draw cannot vary between
+            \\Newton iterations at one point. `$simprobe` (LRM 9.16) is defined for
+            \\the analog context by Table 9-13, and its unresolvable case has a
+            \\value whenever the clause's fallback argument is supplied — E0817 is
+            \\what is left of it, the case with no fallback.
             \\
-            \\`$table_model` (LRM 9.21) used to be on this list and no longer is:
-            \\the isoline interpolator exists (see E0815 for the schemes it
-            \\implements).
+            \\A function this compiler cannot host now gets a code that names the
+            \\rule: E0806 for a digital-only name (LRM 9.2), E0808 for a spelling
+            \\the language does not define. The number is not reused.
             ,
         },
         .E0802 => .{
@@ -3489,6 +3575,29 @@ pub fn info(c: Code) Info {
             \\stream, so it is meaningful only inside a 6.4 paramset.
             ,
         },
+        .E0817 => .{
+            .title = "$simprobe resolves to nothing and has no fallback",
+            .lrm = "9.16",
+            .explain =
+            \\    $simprobe ( inst_name , param_name [, expression] )
+            \\
+            \\LRM 9.16: "If either the inst_name or param_name cannot be resolved,
+            \\and the optional expression is not supplied, then an error shall be
+            \\generated. If the optional expression is supplied, its value will be
+            \\returned in lieu of raising an error." This is the first sentence.
+            \\
+            \\VerA resolves the pair as one flat name — `inst_name.param_name` —
+            \\against the elaborated design, which is the same identity every 6.7
+            \\out-of-module reference uses: a flattened child's parameter is named
+            \\by its hierarchical path. So the names that resolve are the ones a
+            \\path could reach from this device.
+            \\
+            \\A name built at run time cannot resolve here. That is what the third
+            \\argument is for, and supplying it is also what makes a probe of
+            \\something OUTSIDE this device — a sibling instance the compiler never
+            \\sees — a legal call with a defined value.
+            ,
+        },
         .E0815 => .{
             .title = "$table_model data source or control string",
             .lrm = "9.21",
@@ -3588,15 +3697,68 @@ pub fn info(c: Code) Info {
             \\what makes the line diffable against an expected transcript.
             ,
         },
+        .W0852 => .{
+            .title = "unregistered system function reads 0.0",
+            .lrm = "12.32.3",
+            .explain =
+            \\This `$name` is not a Chapter 9 system function and not an Annex D
+            \\or §4.5 operator. LRM 2.8.3 still makes it grammatical, and lists
+            \\"defined using the VPI as described in Clause 11 and Clause 12" as
+            \\one of the places a system function may come from — §12.32's
+            \\vpi_register_analog_systf() is that place, and it hands the
+            \\APPLICATION a compiletf routine so the application, not the
+            \\compiler, decides what the name means.
+            \\
+            \\So the source is legal and VerA may not reject it. §12.32.3's own
+            \\illustration is a contribution:
+            \\
+            \\    V(out) <+ $sampler(V(in), period);
+            \\
+            \\VerA emits a self-contained artifact and links no VPI host, so
+            \\there is nothing to ask. It reads 0.0.
+            \\
+            \\WHY 0.0 IS ALLOWED HERE AND NOWHERE ELSE. Everywhere else a
+            \\substitute value would contradict a number the LRM fixes, so the
+            \\unit is refused outright (E0515, the filter families) rather than
+            \\quietly made wrong. An unregistered systf has no such number: the
+            \\language defines no value for it at all — §12.32.3's listing never
+            \\even initializes sampler->value before the first update callback,
+            \\and hands that field straight back through vpi_put_value(). There
+            \\is no correct result to be wrong about, only an absent host.
+            \\
+            \\That is not a licence to be silent, which is what this warning is
+            \\for: a misspelled `$abstmie` would otherwise read 0.0 with nothing
+            \\said. One warning per call site, naming the name.
+            \\
+            \\  --deny=W0852    refuse the unit instead (the old behaviour)
+            \\  --allow=W0852   silence it for a model you know needs a host
+            ,
+        },
 
         // ------------------------------------------------------------ class 9
         .E0901 => .{
-            .title = "hierarchical name in a flat module",
-            .lrm = "6.8",
+            .title = "hierarchical name names nothing in the elaborated design",
+            .lrm = "6.7",
             .explain =
-            \\A dotted name reaches into another scope in the instance tree.
-            \\VerA compiles one flat module with no children (see E0204), so
-            \\there is no tree to walk.
+            \\A dotted name that resolves to no net, parameter or constant.
+            \\
+            \\This is NOT "hierarchy is unsupported" any more — that was E0204,
+            \\retired. §6.2.2 instantiation elaborates and `ir/elaborate.zig`
+            \\flattens the tree, and because a flattened entity's name IS its
+            \\hierarchical path (`Elaborate.sep`), resolving a §6.7 reference is
+            \\the ordinary lookup under the joined name. So this fires when the
+            \\path is simply wrong: a misspelled instance name, an instance that
+            \\was never declared, or a name that exists in a sibling rather than
+            \\the module named.
+            \\
+            \\It is deliberately not an implicit net either. §3.6.5 creates one
+            \\for an undeclared SIMPLE name in this module; a path naming nothing
+            \\names no net anywhere in the design, and inventing one would turn a
+            \\typo into a floating node.
+            \\
+            \\Two neighbours draw the boundary: E0910 is a path that resolves to
+            \\a child's VARIABLE, which §6.7.1 forbids outright, and E0904 is an
+            \\instance whose MODULE does not exist.
             ,
         },
         .E0902 => .{
@@ -3622,6 +3784,147 @@ pub fn info(c: Code) Info {
             \\different segments, they need different nets.
             ,
         },
+        .E0904 => .{
+            .title = "instance names no module",
+            .lrm = "6.2.2",
+            .explain =
+            \\A module_instantiation's module_or_paramset_identifier has to name a
+            \\module (or paramset) declared somewhere in the compilation unit.
+            \\A.1.2 puts no order on the descriptions of a source_text, so the
+            \\definition may follow the use — but it has to exist.
+            \\
+            \\VerA compiles one file at a time; a child in another file has to be
+            \\`include`d, or the parent has to be compiled with it.
+            ,
+        },
+        .E0905 => .{
+            .title = "recursive module instantiation",
+            .lrm = "6.2.2",
+            .explain =
+            \\A module instantiates itself, directly or around a cycle. Verilog-AMS
+            \\elaboration builds a finite instance TREE, so a cycle has no
+            \\elaboration: each level would create another level forever.
+            \\
+            \\This is not a depth limit being hit by a deep design — the cycle is
+            \\reported by name, with the instance path that closes it.
+            ,
+        },
+        .E0906 => .{
+            .title = "port connections do not match the module's ports",
+            .lrm = "6.2.2",
+            .explain =
+            \\Either the ordered connection list is longer than the module's port
+            \\list, or a named connection names a port the module does not
+            \\declare, or the two forms are mixed in one list.
+            \\
+            \\6.2.2 permits FEWER connections than ports: an omitted port and a
+            \\blank one are both "not to be connected", and 9.19
+            \\`$port_connected` returns 0 for them. What it does not permit is a
+            \\connection with no port to attach to.
+            ,
+        },
+        .E0907 => .{
+            .title = "override names no parameter of the module",
+            .lrm = "6.3",
+            .explain =
+            \\A `#(...)` parameter value assignment either names a parameter by
+            \\name (`.gain(2.0)`) or supplies values "in the order of their
+            \\declaration". A name that is not a parameter of the instantiated
+            \\module overrides nothing, and an ordered list longer than the
+            \\module's parameter list has values with nowhere to go.
+            \\
+            \\A `localparam` (3.4.5) is deliberately not overridable, so naming
+            \\one here is this error too.
+            ,
+        },
+        .E0908 => .{
+            .title = "a parameter and its aliasparam are both overridden",
+            .lrm = "3.4.7",
+            .explain =
+            \\3.4.7: "It shall be an error to specify a value for both the
+            \\original parameter and its alias in the same module instantiation
+            \\or paramset."
+            \\
+            \\An aliasparam is a second NAME for one storage location, not a
+            \\second parameter, so two overrides are two values for one thing and
+            \\the LRM does not pick a winner. Delete one.
+            ,
+        },
+        .E0909 => .{
+            .title = "instance array range is not an elaboration-time constant",
+            .lrm = "6.2.2",
+            .explain =
+            \\`name_of_module_instance ::= module_instance_identifier [ range ]`
+            \\creates one instance per element, so both bounds have to be known
+            \\when the instance tree is built.
+            \\
+            \\VerA's elaboration folds integer literals and the arithmetic over
+            \\them. A bound that reads a parameter is not yet supported: the
+            \\parameter table is built by lowering, which runs after this pass.
+            ,
+        },
+        .E0910 => .{
+            .title = "analog variable accessed hierarchically",
+            .lrm = "6.7.1",
+            .explain =
+            \\LRM 6.7.1, fifth bullet: "It shall be an error to access analog
+            \\variables hierarchically."
+            \\
+            \\The neighbouring bullets in the same list expressly PERMIT it for
+            \\branch potentials and flows, for parameters and for analog user
+            \\defined functions, so the prohibition is about variables
+            \\specifically: a variable is per-evaluation state of one module's
+            \\analog block, and reading it from outside makes the answer depend on
+            \\which block ran first — which nothing in Clause 5 orders.
+            \\
+            \\A parameter or a branch probe of the same instance is legal. If the
+            \\value really has to cross the boundary, it is an output of the
+            \\module, not a variable of it.
+            ,
+        },
+        .E0911 => .{
+            .title = "no paramset admits this instance's parameter values",
+            .lrm = "6.4.2",
+            .explain =
+            \\LRM 6.4.2 lets several paramsets share one name — "multiple
+            \\paramsets can be declared using the same paramset_identifier" — and
+            \\has the elaborator "choose an appropriate paramset from the set that
+            \\shares a given name for every instance that references that name".
+            \\That is BINNING: one paramset per geometry range, and the instance's
+            \\dimensions pick the bin.
+            \\
+            \\Every candidate here was ruled out. VerA applies two of the clause's
+            \\criteria: an override must name a parameter the paramset declares,
+            \\and every parameter's value — overridden or defaulted — must lie
+            \\within that paramset's own declared `from`/`exclude` ranges. So
+            \\either an override is misspelled for this set, or the instance falls
+            \\in a gap between the bins.
+            ,
+        },
+        .E0912 => .{
+            .title = "flow contribution scaled by $mfactor twice",
+            .lrm = "6.3.6",
+            .explain =
+            \\LRM 6.3.6, first bullet: "All contributions to a branch flow
+            \\quantity in the analog block shall be multiplied by $mfactor", and
+            \\the clause adds that "Verilog-AMS does not provide a method to
+            \\disable" it. The scaling is the simulator's, and it always happens.
+            \\
+            \\So an explicit `* $mfactor` (or `/ $mfactor`) in the contributed
+            \\value cannot be an opt-out — it is the clause's own `badres`
+            \\example, of which 6.3.6 says: "the contributed current would be
+            \\multiplied by $mfactor twice, once by the explicit multiplication
+            \\and once by the automatic scaling rule. The simulator will generate
+            \\an error for this module."
+            \\
+            \\READING $mfactor is always legal. The clause's companion example
+            \\`parares` uses it in a guard — `if (r/$mfactor < 1e-3)` — and says
+            \\no error is generated there. Only a multiplicative factor in the
+            \\value being contributed is this error, and only for a FLOW: a
+            \\potential contribution is not scaled automatically, so there is
+            \\nothing for a factor to double.
+            ,
+        },
 
         // ----------------------------------------------------------- class 10
         .E1001 => .{
@@ -3633,9 +3936,13 @@ pub fn info(c: Code) Info {
             \\is a header — include it from a module instead of compiling it.
             \\
             \\If the file DOES contain a design element, it is one VerA does
-            \\not compile: `connectmodule`, `connectrules`, `macromodule`,
-            \\`primitive`, `library` and `paramset` are all outside annex C.
-            \\The earlier diagnostics name which one.
+            \\not compile: `connectmodule`, `connectrules`, `primitive` and
+            \\`library` have no parser. The earlier diagnostics name which one.
+            \\
+            \\A `paramset` is NOT one of them any more (LRM 6.4), but it is not a
+            \\module either: it is a bundle of parameter values FOR a module, so a
+            \\file of paramsets alone still has no device to compile. Compile the
+            \\file that declares the module and instantiate the paramset from it.
             ,
         },
         .E1002 => .{

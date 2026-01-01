@@ -28,7 +28,6 @@
 //! lrm C.8
 //! lrm 6.3.2
 //! print none
-//! xfail VerA does not implement module instantiation — an instance in a module body is rejected with E0204
 `include "check.vh"
 module annex_a_module_instantiation(p, n);
     inout p, n;

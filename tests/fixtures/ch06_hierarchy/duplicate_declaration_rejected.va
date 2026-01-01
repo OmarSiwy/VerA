@@ -17,13 +17,14 @@
 // boundary between the two cases, and without it a compiler with no scope table at
 // all — one map, last writer wins — passes both shadow fixtures.
 //
-// No `//! reject <code>`: VerA has no diagnostic here, so there is no code to name.
-// `DiagnosticsReported` is the weakest form that still demands a rejection;
-// tighten it to the E-code the day one exists.
+// The reject line is E0362, the code for this rule, as this header asked for
+// while the generic `DiagnosticsReported` stood in for it. The check is over ONE
+// DECLARATION LIST, which is what keeps the two shadow fixtures above legal: a
+// list is the declarations of a single scope, so an inner scope reusing an outer
+// name never reaches it.
 //
 //! lrm 6.8
-//! reject DiagnosticsReported
-//! xfail VerA accepts two declarations of one identifier in a single scope; the second `real value;` is silently ignored
+//! reject E0362
 module ch6_duplicate_declaration(p);
   inout p; electrical p;
   real value;

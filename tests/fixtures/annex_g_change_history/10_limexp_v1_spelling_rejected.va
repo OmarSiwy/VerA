@@ -10,9 +10,11 @@
 // NO CODE IS PINNED, and that is deliberate. The LRM's position is that the NAME
 // does not exist: `$limexp` is absent from Table 9-11 and from A.8.2, so the
 // conforming diagnosis is an unknown function, not "unsupported". E0801
-// "unsupported system function" would be the wrong rule — it is VerA's
-// capability class for ch9 functions it declines to implement (§9.13 $random,
-// §9.16 $simprobe) — and it is also not the code this gap would close under:
+// "unsupported system function" would have been the wrong rule — it was VerA's
+// capability class for ch9 functions it declined to implement, and it is now
+// RETIRED, its list having emptied out (§9.13's draws and §9.16 $simprobe both
+// turned out to be implementable) — and it is also not the code this gap would
+// close under:
 // VerA aliases the spelling in codegen (`$limexp` beside `limexp`), and deleting
 // that alias drops the call into codegen's abort path, not into a diagnostic at
 // all. Naming a code VerA will never emit here is how an xfail outlives its gap:

@@ -23,15 +23,17 @@
 // rejection attaches to E.3.1 by the shape of the argument list rather than by
 // name.
 //
-// HONEST CEILING, doubled here. VerA answers with E0204 "module instantiation is
-// not supported", cited to §6.2.2 — the flat-module limit, not E.3.1 — and since
-// VerA rejects every instantiation the diagnostic would be identical for
-// `foo k1(a, b);`. What this fixture buys is that the coupling form never
-// compiles; separating "refused as an E.3.1 primitive" from "refused as
-// hierarchy", or from "undefined module", needs a dedicated diagnostic code.
+// HONEST CEILING, doubled here. VerA answers with E0904, "instance names no
+// module" (§6.2.2), which is literally true — nothing declares
+// `mutual_inductor`, here or in the prelude, because E.3.1 excludes it — and is
+// also what `foo k1(a, b);` gets. What this fixture buys is that the coupling
+// form never compiles; separating "refused as an E.3.1 primitive" from "refused
+// as an undefined module" needs a dedicated diagnostic code. It used to pin
+// E0204, "module instantiation is not supported", which was the flat-module limit
+// and is now retired.
 //
 //! lrm E.3.1
-//! reject E0204
+//! reject E0904
 module annex_e_unsupported_mutual_inductor(p, n);
   inout p, n; electrical p, n;
   // l1 and l2 are the names of two INDUCTOR INSTANCES — E.3.1's "passing an

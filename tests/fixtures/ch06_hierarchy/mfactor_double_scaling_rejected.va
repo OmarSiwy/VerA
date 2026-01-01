@@ -22,13 +22,17 @@
 // and not multiplied into the output — and is mfactor_conditional_only.va. It is
 // the negative control: a check added for this file must not reject that one.
 //
-// No `//! reject <code>`: VerA has no diagnostic for this at all, so there is no
-// code to name yet. `DiagnosticsReported` is the weakest form that still demands a
-// rejection; tighten it to the E-code the day one exists.
+// The reject line is E0912, the code for this rule, as this header asked for
+// while the generic `DiagnosticsReported` stood in for it. The predicate behind
+// the code is the clause's sentence read literally — the CONTRIBUTED VALUE is a
+// product in which $mfactor is a factor, for a FLOW. That is what separates this
+// file from `parares`, where the read is in a guard; from a potential
+// contribution, which §6.3.6 does not scale automatically; and from
+// mfactor.va's `I(p) <+ V(p) + 0.0*$mfactor`, where the contributed value is
+// V(p) and the factor multiplies an addend, not the current.
 //
 //! lrm 6.3.6
-//! reject DiagnosticsReported
-//! xfail VerA does not detect $mfactor double-scaling: badres compiles with no diagnostic at all
+//! reject E0912
 module badres(a, b);
   inout a, b;
   electrical a, b;

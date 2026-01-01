@@ -12,16 +12,16 @@ bottom, not in the table. The other five cite Annex F and **all five are
 currently met by the compiler under test, and the reason is the same in four of
 the five files. Discipline resolution operates on an elaborated *signal* — a chain
 of net segments joined through ports — and VerA is a flat single-module compiler
-that refuses `module instantiation is not supported` (E0204) before any hierarchy
+that refused `module instantiation is not supported` (E0204, now retired) before any hierarchy
 exists. The fifth (`conflicting_declarations.va`) needs no hierarchy and still
 fails: the conflict is accepted silently.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
-| `sF-1` | resolution semantics are 7.4's; this annex prints *a possible* algorithm, and other conforming algorithms are allowed | `hierarchy_resolution.va` (`//! lrm F.1`) — **`//! xfail`**. F.1 states no rule that can fail on its own; the cite is the fixture's argument that its design is one where F.2.1 and F.2.2 provably cannot disagree, so the assertion is about 7.4's semantics and not about an algorithm choice |
-| `sF-2` | parent = upper connection, child = lower connection; post-order depth-first traversal; continuous passed up the hierarchy | `hierarchy_resolution.va` (`//! lrm F.2`) — **`//! xfail`**. Three segments deep, one declaration at the leaf, `Hpot`/`Hflw` access names so the top segment cannot resolve by accident. Post-order only; the top-down traversal *definition* in the same section has no fixture |
-| `sF-2-1` | default algorithm: elaborate → in-context declarations → out-of-context declarations → conflict is an error → depth-first classify and resolve → insert converters | step 3 error, both halves: `conflicting_declarations.va` (in-context) and `conflicting_ooc_declarations.va` (out-of-context), both `//! reject E0902`, both **`//! xfail`**. Step 3 legal override: `out_of_context_declaration.va` — **`//! xfail`**. Step 4.b single-discipline bullet: `hierarchy_resolution.va` — **`//! xfail`**. Step 4.b unknown-with-mixed-port bullet: `unknown_discipline_mixed_port.va` (`//! reject E0903`) — **`//! xfail`**. Steps 1, 2 and the final insertion step have no fixture of their own |
-| `sF-2-2` | alternate expanded analog algorithm: same first pass, then a *top-down* pass over nets left unknown or marked digital by step 4, then insertion | shared text only. `conflicting_declarations.va`, `conflicting_ooc_declarations.va`, `out_of_context_declaration.va` and `unknown_discipline_mixed_port.va` each carry `//! lrm F.2.2` because the steps they pin are printed word-for-word in both algorithms — each header says so. **F.2.2 step 5, the top-down pass that is the entire difference between the two algorithms, has no fixture.** All four cites are xfail besides |
+| `sF-1` | resolution semantics are 7.4's; this annex prints *a possible* algorithm, and other conforming algorithms are allowed | `hierarchy_resolution.va` (`//! lrm F.1`) — green. F.1 states no rule that can fail on its own; the cite is the fixture's argument that its design is one where F.2.1 and F.2.2 provably cannot disagree, so the assertion is about 7.4's semantics and not about an algorithm choice |
+| `sF-2` | parent = upper connection, child = lower connection; post-order depth-first traversal; continuous passed up the hierarchy | `hierarchy_resolution.va` (`//! lrm F.2`) — green. Three segments deep, one declaration at the leaf, `Hpot`/`Hflw` access names so the top segment cannot resolve by accident. Post-order only; the top-down traversal *definition* in the same section has no fixture |
+| `sF-2-1` | default algorithm: elaborate → in-context declarations → out-of-context declarations → conflict is an error → depth-first classify and resolve → insert converters | step 3 error, both halves: `conflicting_declarations.va` (in-context, lowering's own E0902) and `conflicting_ooc_declarations.va` (out-of-context, elaboration's — a duplicate KEY in the out-of-context table, since §3.10 makes two declarations at one precedence level illegal whether or not the disciplines are compatible), both `//! reject E0902`, both green. Step 3 legal override: `out_of_context_declaration.va` — green. Step 4.b single-discipline bullet: `hierarchy_resolution.va` — green. Step 4.b unknown-with-mixed-port bullet: `unknown_discipline_mixed_port.va` (`//! reject E0903`) — still **`//! xfail`**, and permanently so short of a second simulation domain. Steps 1, 2 and the final insertion step have no fixture of their own |
+| `sF-2-2` | alternate expanded analog algorithm: same first pass, then a *top-down* pass over nets left unknown or marked digital by step 4, then insertion | shared text only. `conflicting_declarations.va`, `conflicting_ooc_declarations.va`, `out_of_context_declaration.va` and `unknown_discipline_mixed_port.va` each carry `//! lrm F.2.2` because the steps they pin are printed word-for-word in both algorithms — each header says so. **F.2.2 step 5, the top-down pass that is the entire difference between the two algorithms, has no fixture.** Three of the four cites are green now; `unknown_discipline_mixed_port.va` is the exception |
 
 Fixture-name audit, 7 files, all mapped above or below: `conflicting_declarations.va`,
 `conflicting_ooc_declarations.va`, `continuous_discipline.va`,
@@ -30,20 +30,20 @@ Fixture-name audit, 7 files, all mapped above or below: `conflicting_declaration
 
 ## The xfail ledger
 
-Every Annex F fixture in this folder runs and fails. Each names a concrete defect,
-so the row disappears the day the defect does.
+One Annex F fixture in this folder still runs and fails. The rest of this ledger is
+kept, struck through in prose, because the reason each row gave was the reason it closed.
 
 | Fixture | Section it serves | Reason |
 |---|---|---|
-| `conflicting_declarations.va` | `sF-2-1`, `sF-2-2` step 3 (in-context half) | VerA has no conflicting-discipline diagnostic. Two declarations for one net are accepted silently — zero diagnostics, exit 0. E0902 is *reserved* for this rule in class 9 of `src/diag_code.zig`; E0901 is the last code implemented, so nothing emits it. The reject line is a code and not `DiagnosticsReported` on purpose: a generic pattern would XPASS on the first unrelated diagnostic VerA ever learns to emit here |
-| `conflicting_ooc_declarations.va` | `sF-2-1`, `sF-2-2` step 3 (out-of-context half) | The parser stops at the `.` of a dotted net declaration with E0207 "expected `;`" and refuses the instances with E0204, so no hierarchy is elaborated. Both the out-of-context declaration *form* and the step-3 conflict check are missing. Shares the reserved E0902 — the two halves of one sentence are one rule |
-| `out_of_context_declaration.va` | `sF-2-1` step 3, legal override | Same parser wall: E0207 on the dotted name, E0204 on the instances. §3.10 precedence order 1 is not implemented. The fixture is built so a compiler that silently keeps the order-2 local declaration fails to *build* rather than passing by accident — `annex_f_x` names `Xpot`/`Xflw`, `annex_f_y` names `Ypot`/`Yflw`, and the assertion calls `Ypot` |
-| `hierarchy_resolution.va` | `sF-1`, `sF-2`, `sF-2-1` step 4.b | `annex_f_h_mid ma(a)` is refused with E0204, so no signal hierarchy is ever built and the traversal never runs |
-| `unknown_discipline_mixed_port.va` | `sF-2-1` 4.b bullet 4, `sF-2-2` 4.b and 5.b | E0204 on the instantiations plus E0201/E1001 on the `connectmodule` and `connectrules` design elements, so step 4 never runs. E0903 is reserved for the unresolvable-plus-mixed-port error next to E0902; nothing emits it |
+| `conflicting_declarations.va` | `sF-2-1`, `sF-2-2` step 3 (in-context half) | Green: E0902 exists and lowering emits it for one net with two declarations |
+| `conflicting_ooc_declarations.va` | `sF-2-1`, `sF-2-2` step 3 (out-of-context half) | Green: a dotted net declaration parses (interned as one path string) and elaboration refuses a second one for the same segment with E0902 — the same code as the in-context half, because it is one sentence and one rule |
+| `out_of_context_declaration.va` | `sF-2-1` step 3, legal override | Green, and it built rather than passing by accident: `annex_f_x` names `Xpot`/`Xflw`, `annex_f_y` names `Ypot`/`Yflw`, and the assertion calls `Ypot`, which only exists if §3.10 order 1 really replaced the leaf's local declaration |
+| `hierarchy_resolution.va` | `sF-1`, `sF-2`, `sF-2-1` step 4.b | Green. Flattening collapses every segment of one signal into a single node, so F.2's parent/child relation IS the port binding: a segment that declares a discipline gives it to the signal and an undeclared parent inherits it (`Elaborate.resolveDiscipline`). The known ceiling is TWO declared segments of one signal, which is §3.11's compatibility rule and not this one |
+| `unknown_discipline_mixed_port.va` | `sF-2-1` 4.b bullet 4, `sF-2-2` 4.b and 5.b | Still xfail, and the blocker is not a hierarchy one: E0201 on the `connectmodule` keyword. Without a `connectmodule` and a `connectrules` block there is no mixed-port connection to be unresolvable about, and having them means a discrete-time domain — driver state and an event scheduler. E0903 stays reserved for the rule |
 
-Two reserved codes, three `//! reject` fixtures. Neither code exists in
-`src/diag_code.zig` yet — that is the point of reserving them rather than betting
-the fixture on a message fragment.
+One reserved code left, E0903, and one fixture behind it. E0902 was the other and it
+exists now — which is what reserving a code rather than betting the fixture on a
+message fragment is for: the fixture's `//! reject` line never had to change.
 
 ## What this annex needs that no fixture supplies
 

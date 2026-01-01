@@ -18,7 +18,6 @@
 //! lrm 6.2.2
 //! lrm 6.5.6
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA compiles one flat module, so a module instantiation is refused outright at E0204 "module instantiation is not supported"
 `include "check.vh"
 module ch6_blank_ordered_parent(p, n);
   inout p, n; electrical p, n;

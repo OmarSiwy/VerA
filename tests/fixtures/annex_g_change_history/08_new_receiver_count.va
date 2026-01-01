@@ -26,11 +26,11 @@
 // NO CODE IS PINNED. VerA has no diagnostic for a connectmodule-only function
 // used outside one, so there is no stable code to name, and guessing at one is
 // how an xfail gets stuck: pin the wrong code and the XPASS never fires when the
-// gap closes under a different code. E0801 "unsupported system function" in
-// particular is the WRONG rule — it is VerA's capability class for functions it
-// declines to implement at all (§9.13 $random, §9.16 $simprobe), and it fires
-// on the NAME in any context, whereas the LRM's rule is about the context and
-// makes the identical call legal in the digital part of a connectmodule.
+// gap closes under a different code. A capability class is in particular the
+// WRONG rule — it fires on the NAME in any context, whereas the LRM's rule is
+// about the CONTEXT and makes the identical call legal in the digital part of a
+// connectmodule. (VerA had one such class, E0801; it is retired, because every
+// name on its list turned out to be implementable after all.)
 // `DiagnosticsReported` is honest: this module's only defect is the call, so any
 // diagnostic at all means someone diagnosed it.
 //

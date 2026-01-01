@@ -51,7 +51,7 @@
 //! lrm F.2.1
 //! lrm F.2.2
 //! reject E0903
-//! xfail VerA compiles one flat module — `annex_f_a_leaf la(sig)` is refused with E0204 "module instantiation is not supported" and the connectmodule/connectrules design elements with E0201/E1001, so no signal hierarchy is ever built and step 4 never runs
+//! xfail VerA has no `connectmodule` or `connectrules` design element (E0201), which §7.4/F.2 step 4 needs to have a mixed-port connection at all; E0903 is reserved for the rule and nothing emits it. The ordinary instances now elaborate
 discipline annex_f_a; domain continuous; enddiscipline
 discipline annex_f_b; domain continuous; enddiscipline
 discipline annex_f_dig; domain discrete; enddiscipline
