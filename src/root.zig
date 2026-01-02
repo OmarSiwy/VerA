@@ -418,11 +418,18 @@ fn compileInArena(
         error.ParseError => {
             // The parser recovers at top level, so a diagnosed parse still
             // tells us whether a §6.2 `module` was found at all. When it was
-            // not — the file held only constructs outside annex C
-            // (`connectmodule`, `connectrules`, `macromodule`, `library`,
-            // `primitive`, `paramset`) — NoModule is the outcome the caller
-            // acts on; the precise reason is already in the bag. The prelude's
-            // own modules do not count: they are never what was asked for.
+            // not — the file held only design elements VerA has no parser for
+            // (`connectrules`, `library`, `primitive`) or none that make a device
+            // (`paramset`) — NoModule is the outcome the caller acts on; the
+            // precise reason is already in the bag. The prelude's own modules do
+            // not count: they are never what was asked for.
+            //
+            // `connectmodule` and `macromodule` are NOT on that list: both are
+            // alternatives of A.1.2's `module_keyword`, both parse, and both land
+            // in `file.modules`. A file of nothing but connect modules still has
+            // no device, but that is decided later and for a different reason —
+            // §7.6 makes a connect module the insertion phase's to place, so
+            // `elaborate.pickTop` never picks one and raises NoModule from there.
             if (p.file.modules.len <= builtins) return error.NoModule;
             return error.CompileFailed;
         },

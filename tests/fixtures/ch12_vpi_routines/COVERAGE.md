@@ -127,7 +127,8 @@ implementation and a C test suite, neither of which exists.
 
 ## Literal fixture inventory
 
-38 fixtures. Every one appears in the table above.
+38 `.va` files: 35 carry a `//! reject` arm, 3 run and assert, and NONE is `//! xfail`
+(grep-measured over this directory). Every one appears in the table above.
 
 - `01_analog_systf_resistor_call.va`
 - `02_analog_systf_sampler_call.va`

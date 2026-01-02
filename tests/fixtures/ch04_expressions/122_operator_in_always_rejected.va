@@ -10,7 +10,6 @@
 //
 //! lrm 4.5.15
 //! reject E0422
-//! xfail VerA refuses `always` wholesale at E0205 "unsupported module item" (annex A.1.4), so the parse dies before the 4.5.15 analog-operator rule is ever reached; E0422 never fires here
 module ch04_operator_in_always_rejected(p, n);
     inout p, n;
     electrical p, n;

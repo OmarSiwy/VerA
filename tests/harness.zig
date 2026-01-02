@@ -146,6 +146,19 @@ pub const Verdict = enum {
     /// Did not behave as the fixture said — and the fixture said so in advance
     /// with `//! xfail`. The rule is real, this compiler does not meet it yet.
     /// Not a pass either.
+    ///
+    /// A second, much narrower reason lands here too, and the REASON TEXT is the
+    /// only thing that tells them apart: the clause the fixture transcribes is
+    /// CONDITIONAL and its condition is false for this tool, so the fixture
+    /// states a requirement that never bound it. Annex E's SPICE-netlist family
+    /// is the whole of that set today (E.1.1 makes the family conditional on the
+    /// simulator reading SPICE at all, and E.1.2 says whether it does "is solely
+    /// determined by the authors of the simulator"). Those fixtures stay in the
+    /// suite rather than being deleted for two reasons: they DO bind a tool that
+    /// reads netlists, and `owns_xfail` already means the marker is ignored for
+    /// anyone but VerA; and the XPASS rule still guards the real defect on this
+    /// side, which would be resolving an instance of an undeclared module
+    /// silently instead of diagnosing it.
     xfail,
 };
 
@@ -350,7 +363,11 @@ fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
             "  `//! xfail` line (printed with the reason above). Not a pass — nothing\n" ++
             "  was proved. The day it starts meeting it the run FAILs with an XPASS,\n" ++
             "  so the marker cannot outlive the limitation and quietly hide a\n" ++
-            "  regression. (`--strict` fails on these.)\n",
+            "  regression. (`--strict` fails on these.)\n" ++
+            "  A few reasons say something narrower — that the clause is CONDITIONAL\n" ++
+            "  and its condition does not hold for this tool (annex E's SPICE-netlist\n" ++
+            "  family, E.1.1 \"if a simulator ... is also able to read SPICE netlists\").\n" ++
+            "  Those are not a debt: read the reason, not the tally.\n",
         .{ c.xfail, compiler.name, compiler.name },
     );
 }
@@ -619,20 +636,21 @@ pub const AssertionCheck = union(enum) {
 /// sin(0.5), 1e-15)` passes in any compiler, correct or not, and this rejects it.
 pub fn checkAssertions(source: []const u8) AssertionCheck {
     var found = false;
-    var rest = source;
-    while (std.mem.indexOf(u8, rest, "`CHECK")) |at| {
-        rest = rest[at..];
-        const open = std.mem.indexOfScalar(u8, rest, '(') orelse break;
-        const close = matchParen(rest, open) orelse break;
+    var scan: MacroScan = .{ .src = source };
+    while (scan.next()) |call| {
+        const rest = source[call.at..];
+        const open = call.open - call.at;
+        // An unbalanced `(` is a syntax error the compile will report; it is not
+        // this lint's business, and it must not abandon the CHECKs after it.
+        const close = matchParen(rest, open) orelse continue;
         const site = trimLine(rest[0..@min(close + 1, rest.len)]);
 
         // `CHECKEQ` is the marked relational form: its want is another
         // expression on purpose, so the literal rule does not apply to it.
-        const relational = std.mem.startsWith(u8, rest, "`CHECKEQ");
+        const relational = std.mem.eql(u8, call.name, "CHECKEQ");
 
         var args: [8][]const u8 = undefined;
         const n = splitArgs(rest[open + 1 .. close], &args);
-        rest = rest[close + 1 ..];
         // NAME, GOT, WANT[, TOL] — every CHECK* form puts the want third.
         if (n < 3) continue;
         found = true;
@@ -650,6 +668,89 @@ pub fn checkAssertions(source: []const u8) AssertionCheck {
         }
     }
     return if (found) .ok else .none;
+}
+
+/// Finds each `CHECK*` macro CALL at CODE level — outside comments and outside
+/// string literals. It exists because the two-`indexOf` scan it replaces was
+/// wrong in two ways that both let unrelated text decide a fixture's verdict:
+///
+///   - it took the next `(` ANYWHERE downstream of the macro name, so a `CHECK`
+///     with no argument list at all borrowed the parenthesis of whatever came
+///     next — including prose. Wave 5 flipped six fixtures' verdicts merely by
+///     lengthening an `//! xfail` string, which is a scanner defect and not a
+///     fixture one;
+///   - it did not know what a comment was, and 35 fixtures name these macros in
+///     their header paragraphs ("so this is `CHECKX` and not a tolerance").
+///     Those mentions were scanned as invocations, and one of them — the
+///     `CHECKEQ(..., code, $fseek(fd,0,0), 0)` quoted in ch09/051_rewind.va —
+///     has four arguments, so it reached the literal rule.
+///
+/// §10.3's usage is `` `identifier ``, and an actual-argument list belongs to
+/// that token: the `(` follows the name with at most horizontal white space
+/// between. That is the whole grammar of a call, and nothing else is one.
+const MacroScan = struct {
+    src: []const u8,
+    i: usize = 0,
+
+    const Call = struct {
+        /// Spelling without the backtick, so `CHECKEQ` is compared and not
+        /// prefix-matched — `CHECKEQX` would be a different macro.
+        name: []const u8,
+        /// Index of the backtick, where a quoted site starts.
+        at: usize,
+        /// Index of the `(` that opens the actual arguments.
+        open: usize,
+    };
+
+    fn next(s: *MacroScan) ?Call {
+        while (s.i < s.src.len) {
+            switch (s.src[s.i]) {
+                '/' => if (s.i + 1 < s.src.len) switch (s.src[s.i + 1]) {
+                    '/' => {
+                        s.i = std.mem.indexOfScalarPos(u8, s.src, s.i, '\n') orelse s.src.len;
+                        continue;
+                    },
+                    '*' => {
+                        const end = std.mem.indexOfPos(u8, s.src, s.i + 2, "*/");
+                        s.i = if (end) |e| e + 2 else s.src.len;
+                        continue;
+                    },
+                    else => {},
+                },
+                // A string literal holds a CHECK's own NAME argument, and names
+                // quote code: `CHECKX("`CHECKEQ would be vacuous here", …)`.
+                '"' => {
+                    s.i += 1;
+                    while (s.i < s.src.len and s.src[s.i] != '"') : (s.i += 1) {
+                        if (s.src[s.i] == '\\') s.i += 1;
+                    }
+                },
+                '`' => {
+                    const at = s.i;
+                    var j = at + 1;
+                    while (j < s.src.len and isIdentChar(s.src[j])) j += 1;
+                    var k = j;
+                    while (k < s.src.len and (s.src[k] == ' ' or s.src[k] == '\t')) k += 1;
+                    s.i = j; // always progress: `j > at`, even for a bare backtick
+                    const name = s.src[at + 1 .. j];
+                    if (std.mem.startsWith(u8, name, "CHECK") and
+                        k < s.src.len and s.src[k] == '(')
+                    {
+                        s.i = k;
+                        return .{ .name = name, .at = at, .open = k };
+                    }
+                    continue;
+                },
+                else => {},
+            }
+            s.i += 1;
+        }
+        return null;
+    }
+};
+
+fn isIdentChar(c: u8) bool {
+    return c == '_' or c == '$' or std.ascii.isAlphanumeric(c);
 }
 
 /// Drop redundant outer parentheses, so `(V(a,b))` and `V(a,b)` compare equal.
@@ -801,6 +902,42 @@ test "an assertion whose want is the got cannot fail" {
     try std.testing.expect(checkAssertions(
         \\`CHECKEQ("vacuous", V(a, b), V(a, b), 0.0);
     ) == .tautology);
+}
+
+test "the assertion lint reads code, not prose" {
+    // THE DEFECT: the name with no argument list borrowed a `(` from downstream,
+    // so a fixture's verdict depended on unrelated text after it. Both of these
+    // used to read as one four-argument call spanning the whole snippet.
+    try std.testing.expect(checkAssertions(
+        \\// so this assertion is `CHECKX and not a tolerance.
+        \\I(p, n) <+ ddt(V(p, n), 1.0);
+    ) == .none);
+    try std.testing.expect(checkAssertions(
+        \\// An earlier revision wrote `CHECKEQ(y, expected_y) here.
+        \\`CHECKX("real", V(p, n), 0.5);
+    ) == .ok);
+    // A comment naming the macro is not an invocation even when it does quote a
+    // full argument list — 35 fixtures do this in their headers.
+    try std.testing.expect(checkAssertions(
+        \\// It WAS `CHECKEQ("x", code, $fseek(fd, 0, 0), 0), which asserted nothing.
+    ) == .none);
+    try std.testing.expect(checkAssertions(
+        \\/* `CHECK("sin", sin(0.5), sin(0.5), 1e-15); */
+    ) == .none);
+    // A name argument may quote a macro; the quote is data.
+    try std.testing.expect(checkAssertions(
+        \\`CHECKX("`CHECKEQ(V(a,b), V(a,b)) would be vacuous", V(a, b), 0.5);
+    ) == .ok);
+    // §10.3 allows horizontal white space before the actual arguments, but a
+    // newline ends the usage: the name would be a macro taking no arguments.
+    try std.testing.expect(checkAssertions(
+        \\`CHECKX ("spaced", V(a, b), 0.5);
+    ) == .ok);
+    // An unbalanced paren is the compiler's error to report, and must not hide
+    // the real defect after it.
+    try std.testing.expect(checkAssertions(
+        \\`CHECKX("truncated", V(a, b, 0.5);
+    ) == .none);
 }
 
 test "lrm cites sort like a contents page, not like strings" {

@@ -7,11 +7,13 @@ HTML section-ID audit: `sE-1` `sE-1-1` `sE-1-2` `sE-2` `sE-2-1` `sE-2-2` `sE-2-2
 `sE-4` `sE-4-1` `sE-4-2`, plus the two table anchors `table-e-1` and `table-e-2`.
 Nineteen sections. Annex E is normative.
 
-Forty fixtures live in this folder. `zig build torture -- annex_e_spice` reports
-**21/40 behaving as they say they do, 16 asserting nothing, and 3 `//! xfail`** — nothing
-fails. (The 9/31 this paragraph used to quote, and every "all xfail" below it, was written
-when nothing here could elaborate. Counts elsewhere in this file are stale in the same
-direction and are left for the scheduled re-census; the ROWS say what is true.)
+Forty-one fixtures live in this folder. `zig build torture -- annex_e_spice` reports
+**38/41 behaving as they say they do, 0 asserting nothing, and 3 `//! xfail`** — nothing
+fails. (The 9/31 and the 21/40 this paragraph used to quote were written when nothing here
+could elaborate, and then when the row-map fixtures elaborated but asserted nothing. Every
+`primitive_*.va` now carries digits from Table E.1's own Behavior column or, for the rows
+whose Behavior column is blank, from the interface the table does fix. Counts elsewhere in
+this file may still be stale; the ROWS say what is true.)
 
 Almost every sentence in this annex is about *instantiating* something (a primitive, a
 model, a subcircuit, a paramset bin) inside a Verilog-AMS module, and all three layers of
@@ -30,14 +32,26 @@ on the tool ("if a simulator which supports Verilog-AMS HDL is also able to read
 netlists of a particular flavor"), so the antecedent is false and a `.MODEL`/`.SUBCKT`
 front end is a second language, not a conformance fix.
 
+**The verdict on those three is now recorded on the fixtures themselves, and it is NOT
+"debt".** Their `//! xfail` reasons used to read as "VerA needs a SPICE netlist reader",
+which states a requirement VerA is failing; that framing is wrong, because E.1.1's sentence
+is one IMPLICATION with the whole family inside its consequent, and E.1.2's first bullet
+hands the antecedent to the implementer outright — SPICE compatibility "is solely determined
+by the authors of the simulator". Each reason now leads with that, each header carries the
+argument, all three cite `//! lrm E.1.1` and `//! lrm E.1.2`, and the harness's own XFAIL
+summary names this narrower case so the tally cannot contradict the reasons. The marker is
+KEPT rather than removed for two reasons that survive the verdict: `//! xfail` is ignored for
+every compiler but VerA, so for a tool that does read netlists these are ordinary
+requirements; and the XPASS rule still guards the defect that is genuinely VerA's, which
+would be resolving an instance of a module declared nowhere instead of raising E0904.
+
 ### How a fixture that cannot elaborate still states a requirement
 
 An `//! xfail` on a fixture that asserts nothing is worthless: the day the primitives ship
 it XPASSes by merely COMPILING, the marker is deleted, and no one has checked that the
-`resistor` actually stamped 1 kΩ. That day came, and this is why it was worth writing the
-fixtures this way: sixteen of them still assert nothing and are reported as such on every
-run, while the ones below assert the ELECTRICAL requirement,
-and the way in is **§6.7.1**, which is cited by thirteen of them:
+`resistor` actually stamped 1 kΩ. That day came, the sixteen row-map fixtures spent one
+release green-and-empty being reported as such on every run, and they now carry digits.
+The way in is **§6.7.1**, cited by twenty-nine files here:
 
 > Potential and flow access for named and unnamed branches (including port branches) can
 > be done hierarchically. […] Access of parameters can be done hierarchically.
@@ -58,22 +72,24 @@ and `Tau` for `rotational`, `Omega` for `rotational_omega` — which does not ty
 any other discipline). Each fixture's header says which of these it uses and why the
 others were unavailable.
 
-Fourteen of the nineteen sections have at least one fixture. Of the five that do not,
-three (`sE-1`, `sE-2-2`, `sE-4`) are prose or bare headings that state no rule; two
-(`sE-1-1`, `sE-3-2-2`) are real gaps and are listed at the bottom.
+Fifteen of the nineteen sections have at least one fixture. Of the four that do not, three
+(`sE-1`, `sE-2-2`, `sE-4`) are prose or bare headings that state no rule; one (`sE-3-2-2`) is
+a real gap and is listed at the bottom. `sE-1-1` left that list when the three SPICE-netlist
+fixtures started citing it: the section it was missing a fixture for is the section that
+settles their verdict, so it is cited where the verdict is recorded.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
 | `sE-1` | motivation for SPICE compatibility | none, and none is owed. The section states no requirement — it explains why the annex exists. No fixture carries `//! lrm E.1` |
-| `sE-1-1` | if a tool reads a flavor of SPICE, anything instantiable in that flavor is instantiable in a module | **no fixture.** `spice_model.va` argues E.1.1 in its header prose but does not cite it on a `//! lrm` line. See the gap list — the rule is conditional on an implementation choice VerA has not made |
-| `sE-1-2` | four axes of incompatibility; the testable one is "primitives **shall**, and parameters and ports **can**, be named", and Table E.1 fixes the names | 20 fixtures cite it: the 16 `primitive_bjt/capacitor/diode/iexp/inductor/ipulse/ipwl/isine/jfet/mesfet/tline/vccs/vcvs/vexp/vpulse/vpwl.va`, plus `passive_named_ports.va`, `spice_semiconductor_primitives.va`, `spice_source_primitives.va`, `primitive_named_ports.va`. **All green.** The last four read every named parameter back through the instance (6.7.1) against its own literal, and write their named port lists in REVERSE Table E.1 order, so a tool that silently connected by position moves a digit; the sixteen `primitive_*.va` assert nothing and prove only that the row's interface is spelled and elaborates |
-| `sE-2` | SPICE primitives behave like built-in primitives; models and subcircuits are treated as module definitions; all aspects implementation-dependent | `primitive_*.va` (the 16 above), `spice_model.va`, `spice_subcircuit.va`, `spice_network_primitives.va`, `spice_passive_primitives.va`. The primitive half is **green**; `spice_model.va` and `spice_subcircuit.va` stay **`//! xfail`** on the "defined within SPICE netlists" half — those two objects live in a netlist VerA does not read |
+| `sE-1-1` | if a tool reads a flavor of SPICE, anything instantiable in that flavor is instantiable in a module | `spice_model.va`, `spice_subcircuit.va`, `spice_case_lookup.va` — all three now cite it, and it is the section that decides their verdict rather than one they fail. The sentence is a single implication and VerA falsifies its antecedent, so the three are **`//! xfail` and NOT debt**; each reason says that in those words. Nothing can be green here, because a passing fixture for E.1.1 would need a SPICE netlist to instantiate FROM |
+| `sE-1-2` | four axes of incompatibility; the testable one is "primitives **shall**, and parameters and ports **can**, be named", and Table E.1 fixes the names | 20 fixtures cite it: the 16 `primitive_bjt/capacitor/diode/iexp/inductor/ipulse/ipwl/isine/jfet/mesfet/tline/vccs/vcvs/vexp/vpulse/vpwl.va`, plus `passive_named_ports.va`, `spice_semiconductor_primitives.va`, `spice_source_primitives.va`, `primitive_named_ports.va`. **All green.** The last four read every named parameter back through the instance (6.7.1) against its own literal, and write their named port lists in REVERSE Table E.1 order, so a tool that silently connected by position moves a digit; the seventeen `primitive_*.va` do the same for their own row, and each also evaluates its Behavior column (or, for a blank one, its port order) against a literal |
+| `sE-2` | SPICE primitives behave like built-in primitives; models and subcircuits are treated as module definitions; all aspects implementation-dependent | `primitive_*.va` (the 17 above), `spice_model.va`, `spice_subcircuit.va`, `spice_network_primitives.va`, `spice_passive_primitives.va`. The primitive half is **green**; `spice_model.va` and `spice_subcircuit.va` stay **`//! xfail`** on the "defined within SPICE netlists" half — those two objects live in a netlist VerA does not read |
 | `sE-2-1` | exact-case match first; on no exact match, match the SPICE name regardless of case | `spice_case_lookup.va` — `VeRtNpN mixed_case(c1, b1, e1);`, with the three nets biased apart and the resolved object's `c`/`b`/`e` read back, so a successful fallback has to land on E.2.2.1's NPN and not merely on something. **`//! xfail`**: the EXACT-match arm works (a module, then a shipped primitive, resolve by name — see `sE-3-3`), but the fallback matches "the same name defined within SPICE" and there is no SPICE namespace to fall back into |
 | `sE-2-2` | "This subsection shows some examples." | none, and none is owed — the heading carries no text of its own. The three numbered examples below it are each covered |
 | `sE-2-2-1` | the `vertNPN` model instantiated by order (`Q1`) and by name (`Q2`), with the optional `s` port defaulted by omission | `spice_model.va` (`vertNPN q1(c1, b1, e1)` — ordered, three ports, `s` omitted) and `primitive_named_ports.va` (`bjt #(.area(2.0)) q1(.s(s1), .e(e1), .b(b1), .c(c1))` — named, and deliberately not in table order). `primitive_named_ports.va` is **green** against the shipped `bjt`; `spice_model.va` stays **`//! xfail`** because `vertNPN` is a model card, not a primitive. The named form with `s` *omitted*, which is literally what `Q2` does, has no fixture |
 | `sE-2-2-2` | subcircuit `ecpOsc` referenced from a module; instance name not constrained to start with `X` | `spice_subcircuit.va` — `ecpOsc osc1(out, gnd);`, and `osc1` is the NOTE's point. The `.SUBCKT ECPOSC (OUT GND)` interface is asserted: `V(osc1.out, osc1.gnd)` against a bias that makes a reversed ordered connection read the opposite sign. **`//! xfail`** — `ecpOsc` is a `.SUBCKT`, and VerA reads no SPICE netlist |
-| `sE-2-2-3` | the `ecpOsc` body rewritten with native primitives: `vsine`, `isine`, `inductor`, `capacitor`, `resistor` | `primitive_capacitor.va`, `primitive_inductor.va`, `primitive_isine.va`, `passive_named_ports.va`, `spice_passive_primitives.va`, `spice_source_primitives.va` — one per primitive the example uses. **All green.** The example as a *whole module* is not reproduced anywhere |
-| `sE-3` | Table E.1 names are required; connection by order follows the listed order; port default discipline `electrical`, direction `inout`; diode/bjt/mosfet/jfet/mesfet usable directly in a `paramset` | 26 fixtures cite it — the 16 `primitive_*.va`, the four `spice_*_primitives.va`, `passive_named_ports.va`, `primitive_named_ports.va`, the three `port_discipline` files, and `spice_binning.va` (whose `paramset annex_e_bin mosfet;` is the last paragraph's rule). **All green.** The ordering half has digits behind it: `spice_passive_primitives.va` and `spice_network_primitives.va` bias their nets apart and read the primitive's own branch back, so a transposed positional list fails instead of elaborating quietly. Neither the `electrical` default nor the `inout` default is asserted by anything — see the gap list |
+| `sE-2-2-3` | the `ecpOsc` body rewritten with native primitives: `vsine`, `isine`, `inductor`, `capacitor`, `resistor` | `primitive_capacitor.va`, `primitive_inductor.va`, `primitive_isine.va`, `primitive_vsine.va`, `passive_named_ports.va`, `spice_passive_primitives.va`, `spice_source_primitives.va` — one per primitive the example uses. **All green.** The example as a *whole module* is not reproduced anywhere |
+| `sE-3` | Table E.1 names are required; connection by order follows the listed order; port default discipline `electrical`, direction `inout`; diode/bjt/mosfet/jfet/mesfet usable directly in a `paramset` | 27 fixtures cite it — the 17 `primitive_*.va`, the four `spice_*_primitives.va`, `passive_named_ports.va`, `primitive_named_ports.va`, the three `port_discipline` files, and `spice_binning.va` (whose `paramset annex_e_bin mosfet;` is the last paragraph's rule). **All green.** The ordering half has digits behind it: `spice_passive_primitives.va` and `spice_network_primitives.va` bias their nets apart and read the primitive's own branch back, so a transposed positional list fails instead of elaborating quietly. Neither the `electrical` default nor the `inout` default is asserted by anything — see the gap list |
 | `sE-3-1` | `ccvs`, `cccs` and mutual inductors are **not** supported, because instance names cannot be passed as parameters | `unsupported_ccvs.va`, `unsupported_cccs.va`, `unsupported_mutual_inductor.va` — all three `//! reject E0904`, all three **green**, and now for the RIGHT reason: the prelude ships every supported row and deliberately ships none of these three, so E0904 here is E.3.1's rule and not a blanket refusal |
 | `sE-3-2` | three-level precedence: `port_discipline` attribute, then resolution, then `electrical` | `primitive_discipline.va`, `primitive_mixed_discipline_override.va`. Both **green**, and observable through the ACCESS FUNCTIONS the discipline supplies — `Theta`/`Tau` for `rotational`, `Omega` for `rotational_omega`, `V`/`I` for `electrical` — since a spelling that belongs to the wrong discipline does not type-check. HOW: after the flatten a connected port IS the parent's net (Ruling E), so the discipline is that net's and the prelude's nature-neutral `V`/`I` is rewritten to its access functions (`Elaborate.primitiveAccess`). That collapses levels 1 and 2 of the precedence into one answer, which is why both files declare the attribute and the net together; an attribute on an UNCONNECTED primitive port still falls to level 3 |
 | `sE-3-2-1` | `port_discipline` string attribute on a primitive instance, on a primitive port, or both; **ignored** on non-primitive modules and their ports | instance form: `primitive_discipline.va`. Port form: `primitive_port_discipline.va`. Combined form, the LRM's `vcvs` motor: `primitive_mixed_discipline_override.va`. All three **green**; the per-port form needed A.4.1.1's `{attribute_instance}` in a connection list, which the parser now skips. The ignore-on-other-modules half: `port_discipline_ignored_on_module.va` — **green**, and the half that is structural rather than checked: `Unit.primitive` is what gates the rewrite, and it is false for every module the user wrote. Nothing checks that the value must be a valid discipline of domain `continuous` |
@@ -122,13 +138,24 @@ down, and both sides compile.
 
 ## The xfail ledger
 
-Three of forty fixtures run and fail, and they are ONE reason wearing three hats: the
+Three of forty-one fixtures run and fail, and they are ONE reason wearing three hats: the
 object the instance names is defined in a SPICE netlist, and VerA reads none. E.1.1 guards
 the whole family with "if a simulator which supports Verilog-AMS HDL is also able to read
 SPICE netlists of a particular flavor", so this is a missing FRONT END for a second
 language, not a missing rule of Verilog-AMS. Shipping Table E.1 did not and could not close
 them: a primitive is what a `.MODEL` card *parameterizes*, and the card is the part that
 lives in the netlist.
+
+**These three are the one part of this ledger that is not a debt, and the reasons now say
+so.** A ledger entry means "VerA owes this". E.1.1's sentence is an implication whose
+antecedent VerA falsifies, and E.1.2's first bullet says the antecedent is the implementer's
+to choose — "whether a particular Verilog-AMS simulator is SPICE compatible, and with which
+particular variant of SPICE it is compatible, is solely determined by the authors of the
+simulator" — so nothing is owed. They keep the marker because it still binds a tool that
+DOES read netlists (`//! xfail` is honoured only for VerA) and because XPASS still guards
+VerA against resolving an instance of an undeclared module silently. The rows below are
+therefore "why nothing can be green", not "what to implement next": the fix is a SPICE
+netlist reader, and writing one is out of scope by decision and not by capacity.
 
 | Reason | Sections it blocks | Fixtures (3) |
 |---|---|---|
@@ -159,12 +186,15 @@ real controlling branch, and nothing needs to while the instantiation itself is 
 
 An empty cell above is a real gap, and these are the gaps:
 
-- **E.1.1, the scope rule.** Nothing cites it, and it is now the ONLY thing keeping three
-  fixtures red. The sentence is guarded by "if a simulator which supports Verilog-AMS HDL is
-  also able to read SPICE netlists of a particular flavor" — VerA reads no SPICE netlist, so
-  the antecedent is false and the rule is vacuous rather than violated. That is a language
-  boundary, not debt: closing it means a `.MODEL`/`.SUBCKT` parser, which is a second front
-  end and a separate project.
+- **E.1.1 is no longer on this list.** It is cited now, by the three fixtures whose verdict
+  it settles (`spice_model.va`, `spice_subcircuit.va`, `spice_case_lookup.va`), and it was
+  never a gap in the sense the rest of this list means: the sentence is guarded by "if a
+  simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a
+  particular flavor", VerA reads none, so the antecedent is false and the rule is vacuous
+  rather than violated. Closing it means a `.MODEL`/`.SUBCKT` parser — a second front end and
+  a separate project — and no fixture here can be green on it, because passing would require
+  a SPICE netlist to instantiate FROM. It is recorded as a verdict, on the fixtures, and not
+  as work.
 - **E.3.2.2 in full.** Zero fixtures, zero cites, and now PARTLY implemented without one,
   which is the worse of the two states. What exists: the connected net's discipline is what
   a primitive's ports take (`Elaborate.primitiveAccess`), which is the clause's outcome for
@@ -177,24 +207,27 @@ An empty cell above is a real gap, and these are the gaps:
   every row, so VerA meets the sentence — but every fixture also declares its OWN nets
   `electrical` and its own ports `inout`, so nothing here would notice a tool that
   defaulted differently, and nothing would notice the prelude losing an `inout` either.
-- **The Behavior column of Table E.1, seventeen rows of it.** Two rows are evaluated:
-  `resistor` (`spice_passive_primitives.va`, and again in the rotational natures in the
-  two `port_discipline` files) and `vcvs` (`spice_network_primitives.va`). The rest are
-  not — the `iexp` piecewise exponential, the `ipulse`/`vpulse` five-segment waveform with
-  its `t0..t4` definitions, the `ipwl`/`vpwl` interpolation, the fourteen-parameter AM/FM
-  sine, the `capacitor`/`inductor` integrals, the `tline` (blank in the LRM anyway).
-  Two reasons, and they are different. The `diode`/`bjt`/`mosfet`/`jfet`/`mesfet` rows
-  have an EMPTY behavior column and E.2 makes them "implementation dependent", so there is
-  nothing to evaluate and those fixtures assert port association and parameter binding
-  instead; `tline` is empty too and the prelude says at its site why it stays that way. The
-  source rows ARE implemented in the prelude and are unasserted for a harness reason: a
-  `vsine`, `vexp`, `vpulse` or `vpwl` forces a potential, and a harness that imposes every
-  unknown rather than solving reads back its own `//! bias` — the waveform needs `//! solve`
-  and `//! time`, not an operating point. That is now the cheapest work left in this folder:
-  the prelude's equations are unverified code, and a wrong `ipulse` edge would pass today.
-  The one temperature-dependent row that is left, `resistor` with nonzero tc1/tc2, is
-  blocked by the LRM: the annex writes a bare `T` and fixes no reference temperature, so
-  `passive_named_ports.va` deliberately asserts naming and not current.
+- **The Behavior column of Table E.1 — thirteen of the thirteen non-blank rows are now
+  evaluated, and what is left is what the LRM does not say.** `resistor`
+  (`spice_passive_primitives.va`, and again in the rotational natures in the two
+  `port_discipline` files) and `vcvs` (`spice_network_primitives.va`, and
+  `primitive_vcvs.va`) were first; `capacitor`, `inductor`, `iexp`, `vexp`, `ipulse`,
+  `vpulse`, `ipwl`, `vpwl`, `isine`, `vsine` and `vccs` followed, each in its own
+  `primitive_*.va`, each with a want a reader can derive from the printed row. A voltage
+  row needs `//! solve` — a harness that imposed every unknown would read back its own
+  `//! bias` — and a piecewise row needs several INSTANCES at one `//! time`, because two
+  unnamed branches over one net pair still share an accumulator here
+  (`ch05_analog_behavior/two_named_branches.va`). Three residues, all of them the LRM's:
+  the `diode`/`bjt`/`mosfet`/`jfet`/`mesfet` and `tline` rows have an EMPTY Behavior column
+  and E.2 makes them "implementation dependent", so those fixtures pin port order and
+  parameter names and say in their headers why they pin nothing else; the `inductor` row is
+  printed as `I = l * integral(V)` where the physics divides, so `primitive_inductor.va`
+  uses l = 1 — the one value at which both readings agree — and declines to decide it; and
+  `resistor` with nonzero tc1/tc2 is blocked because the annex writes a bare `T` and fixes
+  no reference temperature, so `passive_named_ports.va` asserts naming and not current.
+  One mechanical gap is named at the site instead of papered over: `ipwl`/`vpwl` pin the
+  pairing of `wave` but not that `i` STRIDES by two, since a one-at-a-time walk lands on
+  the same segment last (see the headers).
 - **E.2.2.1's named form with the optional port omitted.** The LRM's `Q2` is
   `vertNPN Q2 (.c(c2), .b(b2), .e(e));` — named *and* defaulting `s`. Both fixtures on
   this example supply all four names or drop to ordered connection. The interaction of
@@ -220,7 +253,7 @@ An empty cell above is a real gap, and these are the gaps:
 
 ## Fixture-name audit
 
-Forty files, all mapped above: `limit_fet.va`, `limit_fetlim_missing_vth.va`,
+Forty-one files, all mapped above: `limit_fet.va`, `limit_fetlim_missing_vth.va`,
 `limit_pnj.va`, `limit_pnjlim_missing_args.va`, `limit_vds.va`, `mfactor_subcircuit.va`,
 `passive_named_ports.va`, `port_discipline_ignored_on_module.va`,
 `primitive_bjt.va`, `primitive_capacitor.va`, `primitive_diode.va`,
@@ -229,22 +262,22 @@ Forty files, all mapped above: `limit_fet.va`, `limit_fetlim_missing_vth.va`,
 `primitive_mesfet.va`, `primitive_mixed_discipline_override.va`,
 `primitive_named_ports.va`, `primitive_port_discipline.va`,
 `primitive_tline.va`, `primitive_vccs.va`, `primitive_vcvs.va`, `primitive_vexp.va`,
-`primitive_vpulse.va`, `primitive_vpwl.va`, `spice_binning.va`,
+`primitive_vpulse.va`, `primitive_vpwl.va`, `primitive_vsine.va`, `spice_binning.va`,
 `spice_case_lookup.va`, `spice_model.va`, `spice_name_shadow.va`,
 `spice_network_primitives.va`, `spice_passive_primitives.va`,
 `spice_semiconductor_primitives.va`, `spice_source_primitives.va`,
 `spice_subcircuit.va`, `unsupported_cccs.va`, `unsupported_ccvs.va`,
 `unsupported_mutual_inductor.va`.
 
-Nineteen fixtures carry `//! bias`; none carries `//! analysis` or `//! temp`, and none
-carries `//! time` or `//! solve` — which is why no source row's waveform is checked. Five
-carry a `//! reject` line: three `E0904` (E.3.1's unsupported trio) and two
-`DiagnosticsReported` (the `$limit` arity pair). All five are green.
+Thirty-two fixtures carry `//! bias`, ten `//! analysis`, ten `//! time` and six
+`//! solve` — the last three are what evaluating a source row costs. None carries
+`//! temp`, which is the `resistor` tc1/tc2 gap above. Five carry a `//! reject` line:
+three `E0904` (E.3.1's unsupported trio) and two `DiagnosticsReported` (the `$limit` arity
+pair). All five are green.
 
-Sixteen fixtures still assert nothing, and they are exactly the `primitive_*.va` row-map
-set for the rows whose Behavior column is empty or whose value only a solver can produce.
-They ARE reported by a plain run now — they compile and execute, so a transcript exists and
-the runner names each one — and `--strict` fails on them. Closing that is the next piece of
-work in this folder, and the pattern to copy is in `spice_passive_primitives.va`:
-`//! bias`, then `6.7.1` out-of-module access to the primitive's own branch and parameters,
-with the want derived from Table E.1.
+No fixture in this folder asserts nothing. The pattern every `primitive_*.va` follows is
+`spice_passive_primitives.va`'s: `//! bias` (plus `//! time`/`//! solve` where the row is a
+waveform or a potential), then §6.7.1 out-of-module access to the primitive's OWN branch and
+parameters, with the want a literal derived from Table E.1. Each one was checked by mutating
+the prelude equation it covers and confirming the fixture goes red; the one mutation that
+did NOT show up, an `ipwl` stride, is written down in the gap list rather than left implied.

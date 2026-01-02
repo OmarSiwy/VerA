@@ -161,6 +161,15 @@ fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
     // instantiATORS below — a primitive that grew a child would be an edge like
     // any other — which is why only the outer loop is narrowed.
     for (ctx.file.userModules()) |*m| {
+        // §7.6: a connect module is what the INSERTION PHASE puts on a mixed
+        // net — "the disciplines of mixed nets are determined prior to the
+        // connect module insertion phase" — not a design root. VerA does no
+        // insertion, so nothing instantiates one and every connect module in
+        // the file looks like a root here; picking one as the device would
+        // elaborate a bridge as if the user had asked for it. Skipped in both
+        // loops below, which makes a file of nothing but connect modules the
+        // `NoModule` it already was when the keyword was a syntax error.
+        if (m.is_connect) continue;
         var instantiated = false;
         for (mods) |*other| {
             for (other.instances) |inst| {
@@ -179,7 +188,8 @@ fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
     }
     // Every module is instantiated by some module, so the graph is all cycles.
     // Start at the first and let E0905 name the one that closes.
-    return &ctx.file.userModules()[0];
+    for (ctx.file.userModules()) |*m| if (!m.is_connect) return m;
+    return error.NoModule;
 }
 
 // ---------------------------------------------------------------------------
@@ -409,6 +419,20 @@ const Flatten = struct {
                     continue;
                 };
             };
+            // §7.6/§7.7: a connect module is placed by the connect module
+            // INSERTION PHASE, selected by a `connect` specification statement —
+            // "the designer can choose and specialize those in the design via the
+            // connect specification statements". It is not a child a module names.
+            // Refused rather than inlined because inlining one would be silently
+            // WRONG in a way the reader cannot see: the flatten carries analog
+            // blocks and drops `discrete` ones, so a bridge's continuous half
+            // would be stamped into the device with its digital half missing.
+            if (child.is_connect) {
+                try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`, and §7.6 has the insertion phase place it on a mixed net", .{
+                    self.str(child.name),
+                });
+                continue;
+            }
             for (stack.items) |on_stack| if (on_stack == child.name) {
                 try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
                     self.str(child.name), path, self.str(inst.name),
@@ -1387,7 +1411,11 @@ const Flatten = struct {
                 n.rhs = try self.cloneExpr(x.rhs(e));
                 n.extra = @intFromEnum(try self.cloneExpr(third));
             },
-            .event_posedge, .event_negedge => n.lhs = try self.cloneExpr(x.lhs(e)),
+            // A.6.5 `driver_update expression` sits with the digital edges: one
+            // signal operand. Unreachable in practice — it only occurs in a
+            // connect module, which is never instantiated (`pickTop`) and so
+            // never cloned — but the shape is the shape.
+            .event_posedge, .event_negedge, .event_driver_update => n.lhs = try self.cloneExpr(x.lhs(e)),
             .event_initial_step, .event_final_step => {}, // §5.10.2 analysis NAMES
             .branch_access, .port_access => {
                 // §4.4 `str` is the ACCESS function (`V`, `I`), not a name in
@@ -1816,4 +1844,30 @@ test "an instance naming no module is E0904" {
     );
     try std.testing.expectError(error.DiagnosticsReported, elaborate(f.ctx()));
     try std.testing.expectEqual(diag.Code.E0904, f.bag.at(0).code);
+}
+
+test "a connect module is neither the top nor a child (§7.6)" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer f.deinit();
+
+    // Declared FIRST and instantiated by nobody, so "the first module nothing
+    // instantiates" would pick it. §7.6 makes it the insertion phase's to place.
+    try parse(&f,
+        \\connectmodule bridge(a, d); inout a, d; electrical a; endmodule
+        \\module top(p); inout p; electrical p; analog I(p) <+ V(p); endmodule
+    );
+    const design = try elaborate(f.ctx());
+    try std.testing.expectEqualStrings("top", f.file.str(design.top.name));
+
+    // And naming one in an instantiation is E0913 rather than a silent inline:
+    // the flatten carries analog blocks and drops `discrete` ones, so inlining a
+    // bridge would stamp its continuous half with its digital half missing.
+    var g: Fixture = .{ .arena = .init(std.testing.allocator) };
+    defer g.deinit();
+    try parse(&g,
+        \\connectmodule bridge(a, d); inout a, d; electrical a, d; endmodule
+        \\module top(p); inout p; electrical p; bridge u(p, p); analog I(p) <+ V(p); endmodule
+    );
+    try std.testing.expectError(error.DiagnosticsReported, elaborate(g.ctx()));
+    try std.testing.expectEqual(diag.Code.E0913, g.bag.at(0).code);
 }

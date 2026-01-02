@@ -1,5 +1,72 @@
 # Conformance plan
 
+## STATUS: the plan is executed. This document is now the record of it.
+
+All seven waves have run. Measured from the tree, not carried forward — every number
+below is `zig build torture` output or a grep over `tests/fixtures`:
+
+| | baseline (when this plan was written) | now |
+|---|---|---|
+| fixtures | 1150 | **1152** |
+| behave as they say they do | 812 | **1144** |
+| XFAIL | 337 | **7** |
+| CANNOT RUN | 1 | **1** |
+| FAIL | 0 | **0** |
+| compile and assert nothing | 16 | **0** |
+
+The seven remaining XFAILs, by folder, with what each is:
+
+- `annex_e_spice/{spice_model,spice_subcircuit,spice_case_lookup}.va` — **not a debt.** E.1.1
+  guards the whole SPICE-netlist family with "IF a simulator … is also able to read SPICE
+  netlists", and E.1.2 hands the antecedent to the implementer ("solely determined by the
+  authors of the simulator"). VerA reads one language and no netlist, so the antecedent is
+  false and these state no requirement that binds it. The marker is kept because `//! xfail`
+  is honoured only for VerA — they are ordinary requirements for a tool that DOES read
+  netlists — and because XPASS guards against silently resolving an undeclared module.
+  **Do not close these by implementing a SPICE netlist reader.**
+- `annex_f_resolution/unknown_discipline_mixed_port.va` — F.2 step 4.b's multi-candidate arm:
+  `resolveDiscipline` keeps the FIRST declared discipline of a signal's segments instead of
+  collecting the SET. E0903 is reserved and unemitted for exactly this. `connectrules` is
+  also still E0201. Needs neither hierarchy (it exists) nor a digital engine (this fixture
+  demands an error, not an execution).
+- `ch05_analog_behavior/two_named_branches.va` — branch identity is fixed; what is left is
+  that VerA lowers a branch-flow READ at its statement position and this file's CHECKs
+  precede its two `<+` lines. Closing it means evaluating a §9.4 task's operands after the
+  block (§9.4.1 converged reporting) — a change to every display task, not to branches.
+- `ch07_mixed_signal/discrete_bus_{narrow,31}_unsupported.va` — blocked by a **contradiction
+  inside the suite**, not by a missing capability: `reg [7:0] r` and `initial r = 8'hff`
+  parse and are recorded, but four green fixtures pin `reject E0205` on a constant assignment
+  in an `initial` block, three of them arguing under C.7/C.9 that the refusal IS conformance.
+  No implementation satisfies these two and those four at once. Re-verdicting is an owner
+  decision, not work.
+
+What the plan got wrong, recorded because the errors are more useful than the hits:
+
+1. **Three "sites" were misdiagnosed and the Notes below already say so** — the modulo bug
+   that was unary-minus folding, the casex/casez diagnostic that could never fire, and
+   `transition()` mislabelled as a chapter-10 gap. All three notes were right and all three
+   epics closed on the corrected diagnosis.
+2. **Wave 7's "reclassify, do not implement" was wrong on five of its own fixtures.** They
+   were not blocked on a digital scheduler; they were MASKED by E0205, and making that
+   refusal *recover* instead of bail let the real rules fire (E0422/E0430/E0431/E0432).
+3. **The driver-access family (9 fixtures) needed no connectmodule and no driver state.**
+   Every one is a *reject* fixture: §9.22 paragraph 3 makes driver access legal only inside a
+   connect module, so refusing every call site VerA can reach is the conforming behaviour
+   (E0818). The plan's own risk field asked whether they were in scope; the answer was that
+   the question did not arise.
+4. **`connectmodule` needed only to PARSE.** A.1.2's `module_keyword ::= module | macromodule
+   | connectmodule` is one parser arm. No digital event routing, no driver state, no second
+   codegen path.
+5. **Per-epic fixture counts were never accurate** and the Notes said so (+/-3). The drift was
+   larger than that in both directions; several chapters' COVERAGE.md aggregates were off by
+   more than a factor of two (ch06 claimed 40 xfails against 28 measured, ch03 36 against 14,
+   ch09 78 against 65). Every COVERAGE.md has since been re-censused by grep.
+
+The plan body below is unedited except where a sentence became factually false; those are
+marked in place. Read it as history and as the site index, not as a work list.
+
+---
+
 Generated from the torture suite's own `//! xfail` reasons, one audit agent per LRM
 chapter, each verifying the reason against the source rather than trusting it.
 Baseline `zig build torture`: **812/1150 pass, 337 XFAIL, 1 CANNOT RUN, 0 FAIL**.
@@ -107,7 +174,7 @@ Alone in its wave on purpose. 47 fixtures. It rewrites the assumption that src/i
 ### Wave 6 — cumulative 333/337
 
 
-27 fixtures that were individually cheap all along and only ever blocked on elaboration. Once the hierarchy exists these fan out cleanly: defparam and paramset in the parser plus override resolution; hierarchical names in parsePrimary and parseNetNames; Annex F resolution as its own post-elaboration pass; driver access as a separate connectmodule codegen path. CONTENTION: Annex F resolution and $mfactor propagation both read the elaborated tree but write different tables. The driver-access family (9 of the 27) is a second codegen path and should be evaluated for scope before it is built.
+27 fixtures that were individually cheap all along and only ever blocked on elaboration. Once the hierarchy exists these fan out cleanly: defparam and paramset in the parser plus override resolution; hierarchical names in parsePrimary and parseNetNames; Annex F resolution as its own post-elaboration pass; driver access as a separate connectmodule codegen path. CONTENTION: Annex F resolution and $mfactor propagation both read the elaborated tree but write different tables. The driver-access family (9 of the 27) is a second codegen path and should be evaluated for scope before it is built. **[FALSE, corrected in wave 6: the driver-access family is nine REJECT fixtures. §9.22 paragraph 3 makes those functions legal only inside a connect module, so refusing every call site the compiler can reach is the conforming behaviour and needs no codegen path at all — the rule went into lowering as E0818 and the `driver_queries` constant 0 was deleted.]**
 
 
 | epic | fixtures | effort |
@@ -597,9 +664,9 @@ Not work — a bookkeeping decision. These 4 fixtures document LRM rules that ar
 - **Fixtures** 27 (ch06_hierarchy, annex_a_syntax, annex_e_spice, annex_f_resolution, ch09_system_tasks, ch08_scheduling)
 - **Effort** architectural
 - **Depends on** Module instantiation and hierarchy elaboration
-- **Site** All blocked on elaboration existing. defparam at parser.zig:433 plus hierarchical parameter binding; paramset declaration and §6.4.2 range-based binning selection at instance elaboration; hierarchical identifiers (`u.gain`, `$root.top.x`) in parsePrimary (~1200) plus out-of-context dotted net declarations in parseNetNames:470-487; $mfactor propagation and double-scaling detection; the Annex F post-order depth-first discipline resolution with continuous-over-discrete precedence, conflicting out-of-context declarations, and the mixed-port unknown-discipline error; gate/switch primitives at parser.zig:426; and the whole connectmodule driver-access family (codegen.zig:2640-2644 stubs all seven to 0, @(driver_update) is unparsed), which additionally needs a second codegen path for digital-to-analog bridge code.
+- **Site** All blocked on elaboration existing. defparam at parser.zig:433 plus hierarchical parameter binding; paramset declaration and §6.4.2 range-based binning selection at instance elaboration; hierarchical identifiers (`u.gain`, `$root.top.x`) in parsePrimary (~1200) plus out-of-context dotted net declarations in parseNetNames:470-487; $mfactor propagation and double-scaling detection; the Annex F post-order depth-first discipline resolution with continuous-over-discrete precedence, conflicting out-of-context declarations, and the mixed-port unknown-discipline error; gate/switch primitives at parser.zig:426; and the whole connectmodule driver-access family (codegen.zig:2640-2644 stubs all seven to 0, @(driver_update) is unparsed). **[BOTH HALVES NOW FALSE. The stubs are deleted, not made unreachable: legality is decidable at the call SITE, so lowering refuses the eight names with E0818. `connectmodule`/`endmodule` and A.6.5's `driver_update expression` parse — one `module_keyword` arm and one `parseEventTerm` arm — and `elaborate.pickTop` skips connect modules per §7.6. No second codegen path was built or needed; a connect module is recorded and never lowered.]**
 - **Why here** Twenty-seven fixtures that are all cheap-to-medium individually and all unreachable until elaboration lands. Listed as one epic because sequencing them separately before wave 5 would be fiction.
-- **Risk** The Annex F traversal order is specified precisely but post-order DFS over a dynamically discovered signal graph fails silently when wrong. Connectmodules are a genuinely separate abstraction (digital event routing, driver state) and may deserve to stay out of scope even after hierarchy lands — that is 9 of the 27.
+- **Risk** The Annex F traversal order is specified precisely but post-order DFS over a dynamically discovered signal graph fails silently when wrong. Connectmodules are a genuinely separate abstraction (digital event routing, driver state) and may deserve to stay out of scope even after hierarchy lands — that is 9 of the 27. **[The risk was real and the scoping was wrong. Nine of those fixtures ask VerA to REFUSE the call, not to perform it, so no abstraction was needed. The tenth (`38_driver_update_connectmodule.va`) needs the keyword to PARSE and says so at length in its own header: its only CHECK is on a branch potential in a separate ordinary module and the connect module is never instantiated. Real driver access, if it ever lands, is an optional-contract-decl (the `display`/`u_abstol`/§9.5 shape) with the HOST supplying the per-net driver list — not a scheduler inside VerA.]**
 
 ### 52. Out of Verilog-A scope (initial/always blocks, digital reg, both-contexts assignment)
 
@@ -609,6 +676,7 @@ Not work — a bookkeeping decision. These 4 fixtures document LRM rules that ar
 - **Site** src/frontend/parser.zig:434 rejects `initial`, `always` and `reg` as unsupported module items. The rules these fixtures document (§4.5.15 forbids analog operators in initial/always; §5.2.1 forbids reading digital values from analog initial; §7.2.2 forbids assigning one variable in both contexts) are all MASKED by the earlier subset rejection, and every auditor said so explicitly.
 - **Why here** Four fixtures that are conformance records, not actionable gaps. They require a digital scheduler and event kernel — a second simulation domain — which is outside the Verilog-A subset VerA targets.
 - **Risk** None if left alone. These should arguably be reclassified from XFAIL to 'out of subset' so the XFAIL count reflects real work.
+- **[WRONG, and this was the plan's biggest single error. None of these needed a digital scheduler. Each states a real rule that VerA never REACHED because `always`/`initial`/`reg` died at E0205 first. Making the E0205 report add to the diagnostic bag instead of setting `Parser.failed` lets the body parse through the ANALOG statement production and be judged: §4.5.15 fires as E0422, §4.7.3 as E0430, §5.2.1 as E0431 and §7.2.2 as E0432. Five fixtures closed with no execution model, no event queue and no delta cycles, and 24 green fixtures that pin E0205 together with the words `initial`/`always`/`reg` kept the exact diagnostic they pin. The two `discrete_bus_*` fixtures did NOT close, and not for want of capability — see STATUS above.]**
 
 ## Notes
 
@@ -627,11 +695,11 @@ SITES REPORTED AS NOT FOUND OR UNVERIFIED. The ch05 auditor could not confirm im
 DISPUTED LRM CLAIMS. (a) 31_begin_keywords_unterminated.va: the ch10 auditor argues E0137 is wrong, that §10.6's 'even across source code file boundaries' means an unclosed `begin_keywords is legal at EOF, and that a previous author misread the clause. I agree with the fixture, but this inverts a deliberate check — worth a second reading before deleting it. (b) 40_access_name_shadow.va: the ch03 auditor concluded VerA's current E0209 behaviour is actually LRM-compliant once §3.13.2 shadowing is understood, and that the fixture may be testing that shadowing is permitted rather than that access succeeds. The fixture's intent is unclear; clarify it before writing code. (c) 118_modulo_negative_divisor.va: not a modulo bug at all — the range analysis in src/ir/analysis.zig does not fold unary minus on literals, so `-3` widens to full s64 and E0601 fires spuriously. The fix is in range analysis, not in modulo lowering. (d) driver_access.vams: the omission at preprocessor.zig:868 has an explicit source comment declaring it out of scope, but Annex D is normative. Adding it is trivial; it does drag digital driver-access macros into a compiler that refuses digital driver access.
 
 GENUINELY OPEN DESIGN QUESTIONS, unresolved by this audit.
-1. RNG and convergence (19 fixtures). When may a random draw advance? Per Newton iteration destroys the residual's determinism and the solve never converges; per operating point requires a reset boundary in the Kernel contract that does not exist. The blanket refusal at lower.zig:2444 is the only currently self-consistent rule. Cheap partial: move the rejection to AFTER argument checking and six of the nineteen (the pure reject fixtures 115/116/117/150/151/166) pass while the RNG stays refused.
-2. Where does I/O live (19 fixtures)? A compiled device has no host file table. Threading descriptors through the Kernel changes the simulator-device contract in tools/contract.zig. The alternative — I/O happens in the generated testbench, not the evaluation kernel — is cheaper but does not match what the fixtures ask for.
-3. Signal-flow sources in a nodal system (3 fixtures). §1.3.4 guarantees mixed conservative/signal-flow modules work, but a signal-flow port is only meaningful when connected to a conservative node in a parent — which requires hierarchy. How a signal-flow source enters the matrix in a flat module is not specified by the LRM and not decided here.
-4. Does the test harness solve or evaluate (4 fixtures)? src/backend/tb.zig:389 writes bias values into x[] and never iterates. Three auditors independently hit this. Either add a Newton loop (large, changes how every fixture validates) or declare the harness an evaluator and retarget the four constraint fixtures. This is a policy call, not an engineering one.
-5. Elaboration shape (74 fixtures downstream). Does elaboration inline-and-flatten child modules so the existing flat MIR survives unchanged, or does the MIR gain a hierarchy concept? Every consumer of src/ir/mir.zig depends on the answer. Inline-and-flatten is the lazy path and probably right for a device compiler, but it forecloses hierarchical name access at runtime (§6.7) and $simprobe.
-6. Connectmodules (10 fixtures: driver access plus @(driver_update)). Even with hierarchy, these need digital event routing and driver state management — a second codegen path. Worth deciding explicitly whether they are in scope rather than inheriting them as hierarchy dependents.
+1. RNG and convergence (19 fixtures). When may a random draw advance? Per Newton iteration destroys the residual's determinism and the solve never converges; per operating point requires a reset boundary in the Kernel contract that does not exist. The blanket refusal at lower.zig:2444 is the only currently self-consistent rule. Cheap partial: move the rejection to AFTER argument checking and six of the nineteen (the pure reject fixtures 115/116/117/150/151/166) pass while the RNG stays refused. **[ANSWERED, all 19: the premise was right and the conclusion was wrong. §9.13.1/§9.13.2 make the seed a SOURCE VARIABLE — "a value is passed to the function and a different value is returned" — so a variate is a pure function of that variable's incoming value and is automatically fixed for the whole Newton loop at one operating point. Lowering splits one source call into two pure calls over the seed. The seedless forms have no such variable, so their "internal seed" is an `Instance` latch advanced by `updateState` on the ACCEPTED step and read only by `eval` — the boundary the contract already had. The four argument-rule negatives reject at E0816, per-argument, so they fire whether or not the family is supported.]**
+2. Where does I/O live (19 fixtures)? A compiled device has no host file table. Threading descriptors through the Kernel changes the simulator-device contract in tools/contract.zig. The alternative — I/O happens in the generated testbench, not the evaluation kernel — is cheaper but does not match what the fixtures ask for. **[ANSWERED, all 19, and the "alternative" turned out to BE what the fixtures ask for. The descriptor table is a HOST facility (`src/backend/file_kernels.zig`) carried only by the printing artifact, and every §9.5 call is sequenced in that artifact's per-accepted-point phase — the same optional `display` decl §9.4's prints go through, which §9.5.2 ("$fdisplay … the same as $display") and §9.5.9 ("the file write operations shall not be performed unless the iteration is accepted") both point at. `eval` never opens, reads or writes, which is what keeps the residual a pure function of x. A device compiled for a solver has no such phase, so its `$fopen` answers 0 — and §9.5.1 reserves exactly that for a file that cannot be opened, so the degraded path is conformant and not a stub.]**
+3. Signal-flow sources in a nodal system (3 fixtures). §1.3.4 guarantees mixed conservative/signal-flow modules work, but a signal-flow port is only meaningful when connected to a conservative node in a parent — which requires hierarchy. How a signal-flow source enters the matrix in a flat module is not specified by the LRM and not decided here. **[ANSWERED without needing the parent. §1.3.4.1's potential-only net needed no special case at all — the ordinary branch relation reduces to it, the KCL row at the net being `ib = 0`. §1.3.4.2's flow-only net gets `codegen.zig flowOnlySignalFlowNet`: the node's one unknown IS its flow, so the row is `x[n] − c` and not a KCL injection. `signalFlowNet`'s blanket refusal is gone.]**
+4. Does the test harness solve or evaluate (4 fixtures)? src/backend/tb.zig:389 writes bias values into x[] and never iterates. Three auditors independently hit this. Either add a Newton loop (large, changes how every fixture validates) or declare the harness an evaluator and retarget the four constraint fixtures. This is a policy call, not an engineering one. **[ANSWERED: the Newton loop was added, and NO fixture was retargeted. `tb.zig` iterates on the residual the device stamps, and a new `//! solve` directive says which unknowns are the device's to determine — `//! bias` still pins what it names, `//! solve` frees only the rest, so a fixture needing one terminal grounded and another solved writes both lines. `unknownName` additionally takes `I(p,n)`, `I(a)` and `I(<a>)` onto §5.4.2/§5.4.3's own unknowns, so a port flow is expressible as a precondition. 17 fixtures still write the old mangled `flowZ28pZ2cnZ29` spelling; that is behaviour-neutral portability debt, not a gap.]**
+5. Elaboration shape (74 fixtures downstream). Does elaboration inline-and-flatten child modules so the existing flat MIR survives unchanged, or does the MIR gain a hierarchy concept? Every consumer of src/ir/mir.zig depends on the answer. Inline-and-flatten is the lazy path and probably right for a device compiler, but it forecloses hierarchical name access at runtime (§6.7) and $simprobe. **[ANSWERED: inline-and-flatten, in `src/ir/elaborate.zig`, and the foreclosure did not happen. §6.7 out-of-module references resolve because flattening interns the dotted path as one name (`Lower.flatName`, which also strips `$root.` and the top module's own name and is where §6.2.1's local-scope-first rule lives), and a path that does not resolve is E0901. `$simprobe` is a name lookup in the flattened design, not a walk of a live netlist, and is green. The flat MIR survived unchanged.]**
+6. Connectmodules (10 fixtures: driver access plus @(driver_update)). Even with hierarchy, these need digital event routing and driver state management — a second codegen path. Worth deciding explicitly whether they are in scope rather than inheriting them as hierarchy dependents. **[ANSWERED, and the premise was wrong: none of the ten needed either. Nine ask for a REFUSAL (E0818 at lowering, §9.22 paragraph 3) and the tenth needs the keyword to parse. Deciding explicitly was the right instinct; the deciding was done by reading the ten fixtures rather than the audit.]**
 
-ONE CORRECTION TO A RANKING INPUT. Several auditors marked pure-validation epics 'blocked_by' a parent that only supplies shared state (e.g. every Table 9-x radix-variant reject 'blocked by' analog-context restrictions). Those are not real dependencies on separate work — they are the same epic reported at two granularities, which is why the ch09 chapter appears to have 40+ features when it has about 15. I merged rather than sequenced them; the ch09 raw output overstates its feature count by roughly 2x for this reason.
+ONE CORRECTION TO A RANKING INPUT. Several auditors marked pure-validation epics 'blocked_by' a parent that only supplies shared state (e.g. every Table 9-x radix-variant reject 'blocked by' analog-context restrictions). Those are not real dependencies on separate work — they are the same epic reported at two granularities, which is why the ch09 chapter appears to have 40+ features when it has about 15. I merged rather than sequenced them; the ch09 raw output overstates its feature count by roughly 2x for this reason. **[The merge was right and the ch09 outcome confirms it: what looked like 40+ features and 65–78 xfails was four walls and a short tail, and closing a wall took eleven to twenty-five fixtures green at once. ch09 now carries zero xfails.]**

@@ -12,6 +12,9 @@ conditions. Each row below says which fixture pins that fact and which
 `//! lrm` cite makes the connection; where no fixture does, the cell is empty
 on purpose.
 
+27 `.va` files: 2 carry a `//! reject` arm, 25 run and assert, and NONE is `//! xfail`
+(grep-measured over this directory).
+
 | Documentation id | Fixture or disposition |
 |---|---|
 | `s11-1` | Scope statement for Clauses 11 and 12. No rule. |

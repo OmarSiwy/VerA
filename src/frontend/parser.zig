@@ -58,6 +58,12 @@ pub const Parser = struct {
     /// for module scope, so the position is the only thing that tells them
     /// apart. See `parseFuncDecl`, E0226 and E0227.
     in_analog_fn: bool = false,
+    /// Inside a §7.6 `connectmodule` body. Two things read it: `parseDiscrete`,
+    /// because a connect module is the one design element whose body has the
+    /// discrete context LEGALLY (§7.2.2), so E0205 must not fire there; and
+    /// `parseEventTerm`, because A.6.5's `driver_update` is a digital event and
+    /// §9.22 paragraph 3 puts the whole driver family inside a connect module.
+    in_connect_module: bool = false,
     /// §6.6 nesting depth of generate REGIONS and generate CONSTRUCT bodies,
     /// counted together because the two grammar gates it feeds care about the
     /// same thing — being anywhere below a `generate`. Syntax 6-8's
@@ -131,7 +137,13 @@ pub const Parser = struct {
                 // made the keyword a way of defining a module. VerA takes the
                 // "no differently" option, so the two spellings are one arm and
                 // nothing downstream can tell them apart.
-                .kw_module, .kw_macromodule => {
+                // …and `connectmodule`, the third alternative of the same
+                // production (§7.6, Syntax 7-4). It is a module_declaration in
+                // every respect the grammar states — same header, same items,
+                // same `endmodule` — so it is the same arm, and the ONE thing
+                // that distinguishes it is recorded on the decl rather than
+                // here: see `Ast.ModuleDecl.is_connect`.
+                .kw_module, .kw_macromodule, .kw_connectmodule => {
                     const m = self.parseModule() catch |e| {
                         try self.rethrowOom(e);
                         self.recoverTopLevel(before);
@@ -243,8 +255,13 @@ pub const Parser = struct {
     /// then module items.
     pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         const main_tok = self.pos;
-        self.pos += 1; // 'module' | 'macromodule'
+        const is_connect = self.peek() == .kw_connectmodule;
+        self.pos += 1; // 'module' | 'macromodule' | 'connectmodule'
         const name = try self.expectIdent();
+
+        const saved_connect = self.in_connect_module;
+        self.in_connect_module = is_connect;
+        defer self.in_connect_module = saved_connect;
 
         var b: Body = .{};
         // A.1.2 `module_identifier [ module_parameter_port_list ] list_of_ports`
@@ -293,11 +310,13 @@ pub const Parser = struct {
             .events = b.events.items,
             .functions = b.functions.items,
             .analog = b.analog.items,
+            .discrete = b.discrete.items,
             // §2.9 — every attr_spec seen since the last module. Attributes
             // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
             // collected by `parseSource` and belong to this module too, which is
             // why the list is cleared at the end and not at the start.
             .attrs = attrs,
+            .is_connect = is_connect,
         };
     }
 
@@ -424,6 +443,7 @@ pub const Parser = struct {
         events: std.ArrayList(Ast.StrId) = .empty, // §5.10.4
         functions: std.ArrayList(Ast.FuncDecl) = .empty,
         analog: std.ArrayList(Ast.AnalogBlock) = .empty,
+        discrete: std.ArrayList(Ast.DiscreteBlock) = .empty, // A.6.2, §7.2.2
         /// §6.6.1/§6.6.2 every named generate block of the module, with the
         /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
         /// is a declaration of a scope nothing downstream can reach yet
@@ -710,14 +730,21 @@ pub const Parser = struct {
                 try self.parseNetNames(b, disc, false);
             },
             // A.2.1.3 `reg [ range ] list_of_variable_identifiers ;` — §7.3.1's
-            // discrete net. Still E0205: VerA has no discrete context, and a
-            // dozen fixtures pin that code together with the word `reg`.
+            // discrete net. Still E0205: VerA has no digital execution model, so
+            // nothing ever drives the grouping, and a dozen fixtures pin that
+            // code together with the word `reg`.
             //
-            // §7.3.1 Table 7-1's width rule is judged HERE, on the way out,
-            // because there is no later place to judge it: a parse error stops
-            // the pipeline before lowering runs, so a `reg` declaration never
-            // reaches the constant folder. That is also the ceiling — see
-            // `literalWidth`.
+            // REPORTED, THEN DECLARED ANYWAY. The names go into `b.vars` as
+            // integers — Table 7-1's own mapping for a bit grouping read from a
+            // continuous context — so that the §5.2.1 and §7.2.2 rules stated
+            // about a discrete-owned VARIABLE can be reached at all. Bailing
+            // here instead left every later mention of the name to arrive as a
+            // second, meaningless "undeclared identifier". See `reportItem` for
+            // why the report does not set `failed`.
+            //
+            // §7.3.1 Table 7-1's width rule is judged HERE, on the way past,
+            // because the parser is the only stage that sees the declared range:
+            // nothing below this point keeps a bit width.
             .kw_reg => {
                 const tok = self.pos;
                 self.pos += 1;
@@ -727,8 +754,24 @@ pub const Parser = struct {
                         if (w > 31) _ = self.failAt(tok, .E0222, "{d} bits", .{w}) catch {};
                     }
                 }
-                return self.failAt(tok, .E0205, "found {s}", .{self.found(tok)});
+                try self.reportItem(tok);
+                while (true) {
+                    const name_tok = self.pos;
+                    try b.vars.append(self.arena, .{
+                        .name = try self.expectIdent(),
+                        .ty = .integer,
+                        .main_tok = name_tok,
+                    });
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
             },
+            // A.4.1 `gate_instantiation ::= … | pass_switchtype
+            // pass_switch_instance { , pass_switch_instance } ;`
+            .kw_tran, .kw_rtran => try self.parsePassSwitch(),
+            // A.6.2 `initial_construct` / `always_construct` — §7.2.2's discrete
+            // context.
+            .kw_initial, .kw_always => try self.parseDiscrete(b),
             // §5.2 analog construct / §4.7.1 analog function
             .kw_analog => try self.parseAnalog(b),
             // A.4.2 generate_region — transparent, per §6.6's "there is no
@@ -891,11 +934,104 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
     }
 
-    /// One shared diagnostic for everything annex C leaves out of the analog
-    /// subset at module scope: digital `initial`/`always`, gate and UDP
-    /// instantiations, `defparam`, `task`, `specify`, `reg`, generate-case …
+    /// One shared diagnostic for everything VerA leaves out at module scope:
+    /// gate and UDP instantiations, `task`, `specify`, generate-case …
     fn unsupportedItem(self: *Parser) Error {
         return self.failAt(self.pos, .E0205, "found {s}", .{self.found(self.pos)});
+    }
+
+    /// The SAME E0205, reported without setting `failed` — so the file is still
+    /// refused (the bag holds an error, and `root.zig` reads `bag.failed()`) but
+    /// `parseSourceFile` does not raise `ParseError`, and stage 4 therefore still
+    /// runs over the recorded AST.
+    ///
+    /// That distinction is the whole of why `reg`/`initial`/`always` are parsed
+    /// at all. A construct VerA cannot execute is still a construct the LRM
+    /// states rules ABOUT — §4.5.15 bars an analog operator from an `initial`
+    /// block, §4.7.3 bars an analog function call from outside the analog
+    /// context, §5.2.1 bars a digital value from an `analog initial` block,
+    /// §7.2.2 bars a variable from being assigned in both contexts — and while
+    /// the keyword was a hard syntax error not one of those four could ever
+    /// fire. A modeller writing `initial x = ddt(V(p,n));` was told the block was
+    /// unsupported and never told the expression was illegal in it.
+    fn reportItem(self: *Parser, tok: u32) Error!void {
+        const span = lexer.tokenSpan(self.src, self.starts, tok);
+        try self.bag.add(.parse, .E0205, span, "found {s}", .{self.found(tok)});
+    }
+
+    /// A.4.1 `pass_switchtype pass_switch_instance { , pass_switch_instance } ;`
+    /// with `pass_switchtype ::= tran | rtran` and `pass_switch_instance ::=
+    /// [ name_of_gate_instance ] ( inout_terminal , inout_terminal )` — no
+    /// strength and no delay, which is why this is the one gate family with a
+    /// production here and not E0205.
+    ///
+    /// ACCEPTED AND NOT MODELLED, OUT LOUD (W0250). §8.5.3.5 puts switch
+    /// processing in the discrete simulation cycle: a pass switch propagates
+    /// LOGIC values and strengths between its terminals, so there is no equation
+    /// for a compiled analog device to stamp, and inventing one — a zero-volt
+    /// source between the terminals, say — would pin a convention the LRM does
+    /// not state instead of a requirement. Dropping it silently is the other
+    /// wrong answer: a module whose two nets a switch was meant to tie stamps as
+    /// if the switch were absent. So the instance is parsed, the terminals are
+    /// checked to be net references, and the warning says the connection carries
+    /// nothing. `--deny=W0250` turns it into a refusal for a model that cannot
+    /// afford the omission.
+    // ponytail: nothing is recorded, because nothing consumes it. The upgrade
+    // path is the same one §7.6 insertion needs — a digital half in `Flatten` —
+    // and until that exists an AST field would only be dead weight.
+    fn parsePassSwitch(self: *Parser) Error!void {
+        const main_tok = self.pos;
+        self.pos += 1;
+        try self.bag.add(
+            .parse,
+            .W0250,
+            lexer.tokenSpan(self.src, self.starts, main_tok),
+            "{s} switch primitive",
+            .{self.found(main_tok)},
+        );
+        while (true) {
+            // A.4.1 makes the instance name optional, and the fixture's `tran
+            // (a, b);` uses that arm. `(` after the name tells the two apart.
+            if (self.identLike(self.pos)) self.pos += 1;
+            _ = try self.expect(.lparen);
+            _ = try self.parseNetRef();
+            _ = try self.expect(.comma);
+            _ = try self.parseNetRef();
+            _ = try self.expect(.rparen);
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
+    }
+
+    /// A.6.2 `initial_construct ::= initial statement` /
+    /// `always_construct ::= always statement` — §7.2.2's DISCRETE context.
+    ///
+    /// Refused (E0205) and then parsed anyway; see `reportItem`. The body goes
+    /// through `parseStmt`, the ANALOG statement production, which is exact for
+    /// the assignment forms §7.2.2 and §7.3.2 use and a syntax error for
+    /// everything a digital process adds — a delay, `<=`, `force`/`release`,
+    /// `fork`. That is the ceiling and it is the right one: those need an event
+    /// queue and delta cycles, which is a simulator, not a compiler pass.
+    ///
+    /// NOT refused inside a §7.6 `connectmodule`. That is the one design element
+    /// whose whole purpose is the discrete side of a mixed net, and §9.22.4's
+    /// `always @(driver_update clock)` is legal nowhere else — §9.22 paragraph 3:
+    /// "Driver access functions can only be called from connect modules." A
+    /// compiler that refused it would be refusing the only conforming spelling.
+    /// Nothing has to EXECUTE for that acceptance to be honest: VerA does no
+    /// §7.6 insertion, so a connect module is never instantiated (see
+    /// `elaborate.pickTop`) and its body is recorded and never lowered.
+    fn parseDiscrete(self: *Parser, b: *Body) Error!void {
+        const main_tok = self.pos;
+        const is_always = self.peek() == .kw_always;
+        self.pos += 1;
+        if (!self.in_connect_module) try self.reportItem(main_tok);
+        const body = try self.parseStmtNoNull();
+        try b.discrete.append(self.arena, .{
+            .is_always = is_always,
+            .body = body,
+            .main_tok = main_tok,
+        });
     }
 
     // -----------------------------------------------------------------------
@@ -1097,6 +1233,10 @@ pub const Parser = struct {
         try b.defparams.appendSlice(self.arena, gb.defparams.items);
         try b.genvars.appendSlice(self.arena, gb.genvars.items);
         try b.functions.appendSlice(self.arena, gb.functions.items);
+        // §6.6 gives a generate block no scope, so an `initial`/`always` inside
+        // one is in the module's discrete context (§7.2.2) and its body's rules
+        // are the module's. It has already been refused at its own token.
+        try b.discrete.appendSlice(self.arena, gb.discrete.items);
         // A nested generate construct's block names are declarations of the
         // scope they sit in and this one is not it — §6.6.2's rule is about "the
         // same scope", and VerA has no generate scope to hold them, so they ride
@@ -1259,6 +1399,23 @@ pub const Parser = struct {
             // whole; `findPort` below cannot match it, so it lands as a net
             // declaration under its path and elaboration reads it as one.
             const name = try self.parseDottedName();
+            // §3.6.3.2 / Syntax 3-6 `net_decl_assignment ::= ams_net_identifier =
+            // expression` — a NODESET value: "the initializer shall be a
+            // constant_expression and will be used as a nodeset value for the
+            // potential of the net BY THE ANALOG SOLVER". Not an assignment and
+            // not a clamp, so dropping it changes no answer the device computes;
+            // it only withholds an initial guess from the host. `ground` has no
+            // such form (Syntax 3-7 gives it `list_of_net_identifiers`), so the
+            // `=` there is still E0207.
+            //
+            // ponytail: parsed and dropped, because there is nowhere to put it —
+            // the solver is the HOST's, and a nodeset is an input to it. The
+            // upgrade path is the optional-contract-decl shape (`display`,
+            // `u_abstol`): one `nodeset` decl the host may read. Until then two
+            // rules of this clause have no consumer to check them and are
+            // deliberately unchecked here: "shall be a constant_expression", and
+            // "nets of non-continuous disciplines" may not have one at all.
+            if (!is_ground and self.eat(.assign_eq)) _ = try self.parseExpr();
             // Only the FIRST declaration binds. A port that already carries a
             // discipline gets a net entry instead, so lowering sees BOTH
             // declarations and can apply §7.4.4 (E0902) — overwriting here is
@@ -2074,6 +2231,17 @@ pub const Parser = struct {
     /// `parsePrimary`.
     fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
         const tok = self.pos;
+        // A.6.5 `event_expression ::= … | driver_update expression` — DIGITAL,
+        // and it appears in `event_expression`, never in
+        // `analog_event_expression`, so it is legal only in the discrete context
+        // of a §7.6 connect module (§9.22 paragraph 3). Outside one the keyword
+        // falls through to `parseExpr` and is the ordinary "expected an
+        // expression" — a keyword is not an identifier (§2.8.2).
+        if (self.in_connect_module and self.peek() == .kw_driver_update) {
+            self.pos += 1;
+            const sig = try self.parseExpr();
+            return self.addExpr(.{ .tag = .event_driver_update, .main_tok = tok, .lhs = sig });
+        }
         const tag: Ast.ExprTag = switch (self.peek()) {
             .kw_initial_step => .event_initial_step,
             .kw_final_step => .event_final_step,
@@ -2566,11 +2734,26 @@ pub const Parser = struct {
     /// name in a value position, and lowering resolves the path against the
     /// elaborated design.
     ///
-    /// ponytail: no `$root` prefix, and no index INSIDE a path (`u[0].a`). Both
-    /// are A.8.9 spellings with no fixture and no resolution rule written yet;
-    /// `hier_ident` is already the shape they would use.
+    /// §6.7 Syntax 6-9 puts the `$root .` prefix on the SAME production, so a
+    /// probe terminal takes it too: `V($root.global_supply.vdd)` is what §7.8.6's
+    /// supply-sensitive connect module is written with. It rides along as part 0
+    /// of the path, exactly as `parsePrimary` does it for a value position, and
+    /// `Lower.flatName` is the one place that strips it.
+    ///
+    /// ponytail: no index INSIDE a path (`u[0].a`) — an A.8.9 spelling with no
+    /// fixture and no resolution rule written yet; `hier_ident` is already the
+    /// shape it would use.
     fn parseNetRef(self: *Parser) Error!Ast.ExprId {
         const tok = self.pos;
+        if (self.peek() == .system_identifier and self.tags[self.pos + 1] == .dot) {
+            const root = try self.internTok(self.pos);
+            self.pos += 1;
+            var parts: std.ArrayList(Ast.StrId) = .empty;
+            try parts.append(self.arena, root);
+            while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
+            const off = try self.file.exprs.addStrList(self.arena, parts.items);
+            return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
+        }
         const name = try self.expectIdent();
         if (self.peek() == .dot) {
             var parts: std.ArrayList(Ast.StrId) = .empty;
@@ -3271,6 +3454,24 @@ fn isBasedDigitByte(c: u8) bool {
 fn scanNumberEnd(src: []const u8, start: u32) u32 {
     var i = start;
     while (i < src.len and (std.ascii.isDigit(src[i]) or src[i] == '_')) i += 1;
+    // §2.6.1's join between the SIZE token and the base_format token, which
+    // `lexer.lexNumber` makes across white space so that the clause's "it shall
+    // be legal to macro substitute these three tokens" is usable. Unlike the
+    // lexer this scanner runs on a token whose tag is already decided, so the
+    // base character has to be checked here: a `.int_literal` followed by white
+    // space and `'{` is §4.2.14's assignment pattern and ends at the digits.
+    if (i < src.len and std.ascii.isWhitespace(src[i])) {
+        var q = i;
+        while (q < src.len and std.ascii.isWhitespace(src[q])) q += 1;
+        if (q < src.len and src[q] == '\'') {
+            var b = q + 1;
+            if (b < src.len and (src[b] == 's' or src[b] == 'S')) b += 1;
+            if (b < src.len) switch (std.ascii.toLower(src[b])) {
+                'b', 'o', 'd', 'h' => i = q,
+                else => {},
+            };
+        }
+    }
     if (i < src.len and src[i] == '\'') {
         i += 1;
         if (i < src.len and (src[i] == 's' or src[i] == 'S')) i += 1;
@@ -3789,7 +3990,9 @@ test "errors are collected with locations and parsing continues" {
     // digital `always` is outside annex C.
     try std.testing.expectEqual(@as(usize, 1), res.count());
     try std.testing.expectEqual(diag.Code.E0205, res.code(0));
-    try std.testing.expectEqualStrings("found always", res.msg(0));
+    // Backticked now: `always` has its own `kw_always` tag, so the "found ..."
+    // half is `Tag.quoted` rather than a slice of the source (see `found`).
+    try std.testing.expectEqualStrings("found `always`", res.msg(0));
     try std.testing.expectEqual(@as(usize, 1), res.file.modules[0].instances.len);
 
     // The span still points at the offending token, on line 5.
@@ -3824,10 +4027,18 @@ test "annex C rejections keep their pinned wording" {
         // the production `# ( parameter_declaration { , parameter_declaration } )`
         // with no such elision, so a bare type ends the list at the `(`.
         .{ .src = "module m #(real a = 1) (p); endmodule", .code = .E0207, .point = "expected `)`" },
-        // A.2.4 net_decl_assignment. §3.6.3 vector nets USED to be this row;
-        // they parse now (`electrical [3:0] p;` is four nodes), so the nodeset
-        // spelling is what is left unimplemented in the same production.
-        .{ .src = "module m(p); inout p; electrical p = 5.0; endmodule", .code = .E0207, .point = "expected `;`" },
+        // A.2.4 net_decl_assignment. §3.6.3 vector nets USED to be this row, then
+        // the scalar nodeset spelling was; both parse now (`electrical [3:0] p;`
+        // is four nodes, and `electrical p = 5.0;` takes the §3.6.3.2 initializer
+        // and drops it). What is left unimplemented in the same production is the
+        // clause's BUS form, `electrical [0:4] bus = '{2.3,4.5,,6.0}` — whose
+        // "null value in the constant array indicates that no nodeset value is
+        // being specified for this element" has no operand for A.8.3 to parse.
+        .{
+            .src = "module m(p); inout p; electrical [0:4] p = '{2.3,4.5,,6.0}; endmodule",
+            .code = .E0209,
+            .point = "",
+        },
         // A.8.9's hierarchical net reference. `V(u.n)` USED to be this row; §6.7.1
         // dotted terminals parse now (`parseNetRef` builds a `.hier_ident` and
         // lowering resolves the path against the elaborated design). What is left

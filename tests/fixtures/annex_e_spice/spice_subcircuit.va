@@ -36,12 +36,28 @@
 // THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision demanded a diagnostic
 // for the LRM's own worked example.
 //
+// WHOM IT BINDS, WHICH IS NOT VERA. E.1.1's sentence is one implication with this
+// whole family inside its consequent: "it states IF a simulator which supports
+// Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor,
+// THEN certain objects defined in that flavor of SPICE netlist can be referenced
+// from within a Verilog-AMS HDL structural description." `ECPOSC` is an object
+// defined in a netlist. VerA reads no netlist, so the antecedent is false and the
+// consequent requires nothing of it — and E.1.2's first bullet says so outright:
+// SPICE compatibility "is solely determined by the authors of the simulator".
+// This file describes a SECOND INPUT LANGUAGE, not a rule VerA breaks. It stays,
+// and stays `xfail`, because it does bind a tool that reads netlists (the marker
+// is ignored for every compiler but VerA) and because XPASS still guards VerA
+// against resolving an instance of a module declared nowhere. spice_model.va
+// carries the argument in full; do not close it by writing a netlist reader.
+//
 //! lrm E.2.2.2
 //! lrm E.2
 //! lrm E.2.1
+//! lrm E.1.1
+//! lrm E.1.2
 //! lrm 6.7.1
 //! bias V(out) = 1.0, V(gnd) = 0.25
-//! xfail E.2's subcircuits "defined within SPICE netlists" need a SPICE netlist reader, which VerA is not: there is no `.SUBCKT` input to a Verilog-A compilation, so `ecpOsc` is declared nowhere and the instance is E0904. Table E.1's primitives are shipped now and are not what is missing — the subcircuit BODY is, and it is written in SPICE. E.1.1 makes netlist reading conditional on the tool; VerA reads one language
+//! xfail NOT A DEBT — the clause is conditional and its condition is false for VerA: E.2's subcircuits are "defined within SPICE netlists", VerA reads one language and no netlist, so `.SUBCKT ECPOSC` is not an object that exists, `ecpOsc` is declared nowhere and E0904 is the right answer rather than a failure to meet a requirement (E.1.1's implication; E.1.2's "solely determined by the authors of the simulator"). Table E.1's primitives are shipped and are not what is missing — the subcircuit BODY is, and it is written in SPICE. Kept rather than removed because it still binds a tool that DOES read netlists and because XPASS guards VerA against silently resolving an undeclared module
 `include "check.vh"
 module annex_e_spice_subcircuit(out, gnd);
   inout out, gnd; electrical out, gnd;

@@ -114,9 +114,31 @@ pub const Lexer = struct {
         self.skipUnsignedNumber(); // `size`, or the whole integer/mantissa
 
         // §2.6.1 sized based constant: size ' [s|S] base digits.
-        if (self.peek(0) == '\'') {
-            // Not a base_format (e.g. `2'{`): the number ends before the quote.
-            return self.lexBasedTail() orelse .int_literal;
+        //
+        // White space may sit between the SIZE and the apostrophe. §2.6.1 forbids
+        // it in exactly one place — "the apostrophe character and the base format
+        // character shall not be separated by any white space" — and permits it in
+        // exactly one more ("the unsigned number token shall immediately follow
+        // the base format, optionally preceded by white space"), so the join
+        // between the first and second of the clause's "up to three tokens" is
+        // governed only by its last sentence: "it shall be legal to macro
+        // substitute these three tokens". A macro body cannot be pasted onto its
+        // call site, so `8 `BASE `DIGITS` arrives at the lexer as `8 'h A5` with
+        // white space at BOTH joins; refusing the first one makes the permission
+        // unusable. Footnote 1's "embedded spaces are illegal" is attached to the
+        // productions that spell a single token (`size`, `unsigned_number`, the
+        // `*_base`s), not to the concatenation of the three.
+        {
+            var i = self.pos;
+            while (i < self.src.len and std.ascii.isWhitespace(self.src[i])) i += 1;
+            if (i < self.src.len and self.src[i] == '\'') {
+                const save = self.pos;
+                self.pos = i;
+                // Not a base_format (e.g. `2 '{`): the number ends before the
+                // white space, which goes back to the stream untouched.
+                if (self.lexBasedTail()) |tag| return tag;
+                self.pos = save;
+            }
         }
 
         // §2.6.2: a decimal point needs at least one digit on EACH side, so
@@ -156,13 +178,13 @@ pub const Lexer = struct {
     /// the apostrophe. Returns null (cursor untouched) if this is not a
     /// base_format.
     ///
-    /// White space is legal between the base format and the digits and NOWHERE
-    /// else in the number: §2.6.1 says "the unsigned number token shall
-    /// immediately follow the base format, optionally preceded by white space",
-    /// and five of the clause's own examples are written that way (`'h 837FF`,
-    /// `5 'D 3`, `-8 'd 6`, `32 'h 12ab_f001`). The space before the base format
-    /// (`8 'h`) is already covered because the size is a separate scan; the
-    /// space INSIDE the apostrophe group (`8 ' h`) is not, and stays illegal.
+    /// White space is legal between the base format and the digits: §2.6.1 says
+    /// "the unsigned number token shall immediately follow the base format,
+    /// optionally preceded by white space", and five of the clause's own examples
+    /// are written that way (`'h 837FF`, `5 'D 3`, `-8 'd 6`, `32 'h 12ab_f001`).
+    /// The space between the SIZE and the apostrophe (`8 'h`) is `lexNumber`'s to
+    /// skip, and it does. The space INSIDE the apostrophe group (`8 ' h`) is the
+    /// one §2.6.1 names as illegal and stays illegal.
     /// The whitespace ends up inside the token's text span, so `parseInt` skips
     /// it in exactly the same place.
     fn lexBasedTail(self: *Lexer) ?token.Tag {
@@ -732,6 +754,15 @@ test "numbers: bases, reals, scale factors (§2.6)" {
     try expectTags("8'd -6", &.{ .invalid, .minus, .int_literal, .eof });
     // A quote that is not a base_format leaves the number intact.
     try expectTags("2'{1}", &.{ .int_literal, .apostrophe_lbrace, .int_literal, .rbrace, .eof });
+    // §2.6.1 "it shall be legal to macro substitute these three tokens": after
+    // §10.3 substitution the three arrive separated by white space, and the size
+    // still joins to the base format. Both spacings are ONE literal.
+    try expectTags("8 'h A5", &.{ .int_literal, .eof });
+    try expectTags("32\n'h 12ab_f001", &.{ .int_literal, .eof });
+    try std.testing.expectEqual(@as(i64, 0xa5), (try parseInt("8 'h A5")).value);
+    // …and the white space before an assignment pattern is NOT joined: `'{` is
+    // not a base_format, so the number ends at its digits (§4.2.14).
+    try expectTags("2 '{1}", &.{ .int_literal, .apostrophe_lbrace, .int_literal, .rbrace, .eof });
 }
 
 test "strings (§2.7)" {

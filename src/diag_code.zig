@@ -164,6 +164,10 @@ pub const Code = enum(u16) {
     /// parser is the only stage that can tell a `generate_block`'s name from a
     /// §5.3.2 statement label, so it is the only stage that can judge this.
     E0230,
+    /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
+    /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
+    /// the parser is the only stage that ever sees a gate instantiation.
+    W0250,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
@@ -329,6 +333,15 @@ pub const Code = enum(u16) {
     /// compatible: a different number of dimensions, a different number of
     /// elements in one of them, or a different element type.
     E0429,
+    /// §4.7.3/§7.3.7 an analog user-defined function called from the discrete
+    /// context — an `initial` or `always` block.
+    E0430,
+    /// §5.2.1 a discrete-owned (digital) value read from an `analog initial`
+    /// block.
+    E0431,
+    /// §7.2.2 a variable assigned in BOTH the continuous and the discrete
+    /// context.
+    E0432,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -427,6 +440,8 @@ pub const Code = enum(u16) {
     /// §9.16 a `$simprobe` whose instance/parameter pair resolves to nothing and
     /// that supplied no fallback expression.
     E0817,
+    /// §9.22/§9.23 a driver access function called outside a connect module.
+    E0818,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
     /// §9.4 display task under a conditional — not emitted even into an exe.
@@ -464,6 +479,8 @@ pub const Code = enum(u16) {
     E0911,
     /// §6.3.6 a flow contribution is explicitly multiplied by `$mfactor`.
     E0912,
+    /// §7.6/§7.7 a connect module is instantiated by name.
+    E0913,
 
     // --------------------------------------------------------------- class 10
     // Runtime / artifact contract — codegen.zig, root.zig.
@@ -1394,6 +1411,39 @@ pub fn info(c: Code) Info {
             \\through direct nesting — an `else if` chain.
             \\
             \\Rename the block, or rename the declaration it shadows.
+            ,
+        },
+        .W0250 => .{
+            .title = "switch primitive accepted, and it stamps nothing",
+            .lrm = "A.4.1",
+            .explain =
+            \\`tran` and `rtran` are A.4.1's `pass_switchtype`, and the source is
+            \\legal: A.1.4 makes `gate_instantiation` a module_or_generate_item,
+            \\so the module around it compiles and its analog block runs.
+            \\
+            \\What the instance does NOT do is contribute to the device. LRM
+            \\8.5.3.5 puts switch processing in the DISCRETE simulation cycle: a
+            \\pass switch propagates logic values and strengths between its two
+            \\terminals, and the LRM gives it no continuous behavior at all. So
+            \\there is no equation to stamp, and writing one anyway — a zero-volt
+            \\source across the terminals is the obvious guess — would freeze a
+            \\convention of VerA's into a model as if the standard had asked for
+            \\it.
+            \\
+            \\This warning exists because the other option is worse. Dropping the
+            \\instance in silence gives you a device in which the two nets the
+            \\switch was meant to tie are simply unconnected, and nothing in the
+            \\output says so.
+            \\
+            \\  --deny=W0250    refuse the module instead, for a model whose
+            \\                  answer depends on the switch conducting
+            \\  --allow=W0250   silence it, for a switch that only matters to the
+            \\                  digital half a host simulator runs
+            \\
+            \\The rest of A.4.1's gate types are still E0205, and deliberately:
+            \\an `and` gate or a `pullup` COMPUTES a value, so accepting one and
+            \\modelling nothing would be a wrong answer rather than an absent
+            \\connection.
             ,
         },
 
@@ -2657,6 +2707,67 @@ pub fn info(c: Code) Info {
             \\there is no truncating or padding form of this statement.
             ,
         },
+        .E0430 => .{
+            .title = "analog function called outside the analog context",
+            .lrm = "4.7.3",
+            .explain =
+            \\LRM 4.7.3: an analog user-defined function "shall only be called
+            \\within the analog context, either from an analog block or from
+            \\within another analog user-defined function". LRM 7.3.7 states the
+            \\mixed-signal half: an analog function is not available to a
+            \\discrete process.
+            \\
+            \\The restriction follows from what an analog function IS. LRM 4.7.1
+            \\denies it access functions, filters and contribution statements
+            \\precisely so that it is a pure value computation ON THE ANALOG
+            \\SOLVER'S TIMELINE. An `initial` block runs once before the solve
+            \\and an `always` block runs on the digital kernel's own events, so
+            \\neither has a timepoint at which the function's value is defined.
+            \\
+            \\Move the call into the analog block, or into another analog
+            \\function that the analog block calls.
+            ,
+        },
+        .E0431 => .{
+            .title = "digital value read from an analog initial block",
+            .lrm = "5.2.1",
+            .explain =
+            \\LRM 5.2.1: "Additionally, digital values cannot be accessed from
+            \\the analog initial block as they have not yet been assigned when
+            \\the analog initial block is executed."
+            \\
+            \\The rule is about ORDER, not about types. LRM 7.2.2 gives a
+            \\variable the domain of the context that assigns it, so a variable
+            \\written by an `initial` or `always` block is digital-owned; the
+            \\analog initial block runs before any digital process has run, so
+            \\such a read has no value to return and would silently produce the
+            \\type's zero.
+            \\
+            \\Read it from the ordinary analog block instead — LRM 7.3.1 Table
+            \\7-1 defines that direction — or make the value a parameter or a
+            \\localparam if it is genuinely constant.
+            ,
+        },
+        .E0432 => .{
+            .title = "variable assigned in both contexts",
+            .lrm = "7.2.2",
+            .explain =
+            \\LRM 7.2.2: "A given variable can be assigned values only in one
+            \\context or the other, but not in both. The domain of a variable is
+            \\that of the context from which its value is assigned", stated again
+            \\two paragraphs later as "It shall be an error to assign to a given
+            \\variable in both contexts."
+            \\
+            \\The two contexts are the CONTINUOUS one (statements in an `analog`
+            \\block) and the DISCRETE one (statements in an `initial` or `always`
+            \\block). A variable written from both has no domain, so no rule in
+            \\clause 7 can say when its value is defined or which kernel owns its
+            \\storage.
+            \\
+            \\Pick one writer. Reading a variable from the other context stays
+            \\legal, and is what LRM 7.3.1 Table 7-1 is the conversion table for.
+            ,
+        },
 
         // ------------------------------------------------------------ class 5
         .E0501 => .{
@@ -3575,6 +3686,39 @@ pub fn info(c: Code) Info {
             \\stream, so it is meaningful only inside a 6.4 paramset.
             ,
         },
+        .E0818 => .{
+            .title = "driver access function outside a connect module",
+            .lrm = "9.22",
+            .explain =
+            \\LRM 9.22, paragraph 3, both sentences: "The driver access functions
+            \\described here only access drivers found in ordinary modules and not
+            \\to those found in connect modules. Driver access functions can only
+            \\be called from connect modules." 9.23 fences its four supplementary
+            \\functions the same way and one step tighter — they are "supported in
+            \\the digital context of connectmodules" — and Table 9-19 gives every
+            \\member of both families "Supported in analog context of
+            \\connectmodule: No".
+            \\
+            \\The two sentences are not in tension: the functions REPORT on
+            \\drivers found in ordinary modules, but they may only be CALLED from
+            \\a connect module. So the call site alone decides this, with no
+            \\netlist, no elaboration and no driver: an ordinary `module` is not a
+            \\`connectmodule`, and a call in one is illegal on sight.
+            \\
+            \\VerA has no `connectmodule` design element, so EVERY call site in a
+            \\file VerA can compile is outside one and this diagnostic fires on
+            \\every one of them. That is the conforming behaviour, not a
+            \\limitation standing in for one: the alternative VerA used to ship
+            \\was to answer the constant 0, and a plausible wrong number is the
+            \\worst thing a compiler can hand back — 9.22.2/9.22.3/9.23.x take a
+            \\driver_index "between 0 and N-1", which for N = 0 is an EMPTY range
+            \\with no element 0 to have a value.
+            \\
+            \\When VerA grows connect modules the rule does not move: it narrows
+            \\from "no module has drivers" to "this module is not a connect
+            \\module", which is the same test on a wider language.
+            ,
+        },
         .E0817 => .{
             .title = "$simprobe resolves to nothing and has no fallback",
             .lrm = "9.16",
@@ -3925,6 +4069,32 @@ pub fn info(c: Code) Info {
             \\nothing for a factor to double.
             ,
         },
+        .E0913 => .{
+            .title = "a connect module cannot be instantiated by name",
+            .lrm = "7.6",
+            .explain =
+            \\A `connectmodule` is accepted — LRM A.1.2 makes it the third
+            \\alternative of `module_keyword`, so it declares a module — but it is
+            \\not a module you instantiate. LRM 7.7: "Any number of connect
+            \\modules can be defined. The designer can choose and specialize those
+            \\in the design via the connect specification statements", and 7.8 has
+            \\the tool insert the chosen one AUTOMATICALLY at each mixed port.
+            \\7.6's own note that "the disciplines of mixed nets are determined
+            \\prior to the connect module insertion phase" puts that insertion
+            \\after discipline resolution, which is nothing a source can spell.
+            \\
+            \\A connect module is therefore never elaborated on its own account
+            \\either: a source_text whose only design element is one has no device
+            \\to compile (E1001).
+            \\
+            \\Refusing this rather than inlining it is deliberate. A connect module
+            \\bridges a discrete side, and its digital half lives in `initial` /
+            \\`always` blocks that VerA records and does not execute. Inlining one
+            \\would stamp its continuous half into the device with the digital half
+            \\silently absent — a plausible-looking wrong device, which is worse
+            \\than a refusal that names the reason.
+            ,
+        },
 
         // ----------------------------------------------------------- class 10
         .E1001 => .{
@@ -3935,9 +4105,14 @@ pub fn info(c: Code) Info {
             \\file holds only `discipline`, `nature` or `` `define `` items, it
             \\is a header — include it from a module instead of compiling it.
             \\
-            \\If the file DOES contain a design element, it is one VerA does
-            \\not compile: `connectmodule`, `connectrules`, `primitive` and
-            \\`library` have no parser. The earlier diagnostics name which one.
+            \\If the file DOES contain a design element, it is one that is not a
+            \\device. `connectrules`, `primitive` and `library` have no parser at
+            \\all, and the earlier diagnostics name which one. A `connectmodule`
+            \\parses and is accepted (LRM 7.6, A.1.2's third `module_keyword`) but
+            \\is still not a device: LRM 7.6 makes it the bridge the connect
+            \\module INSERTION PHASE places on a mixed net, so it is instantiated
+            \\by the tool and never elaborated on its own. Put the module that
+            \\uses it in the same compilation.
             \\
             \\A `paramset` is NOT one of them any more (LRM 6.4), but it is not a
             \\module either: it is a bundle of parameter values FOR a module, so a

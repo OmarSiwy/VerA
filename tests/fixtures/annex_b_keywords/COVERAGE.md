@@ -41,7 +41,7 @@ passing on whichever token the parser tripped over first.
 | `09_specify_keywords.va` | A.7.1 specify blocks | 7 |
 | `10_task_control_keywords.va` | A.2.7 / A.6 task, process, procedural control | 12 |
 | `11_macromodule_keyword.va` | `macromodule` alone | 1 |
-| `13_assert_reserved.va` | `assert` alone — **`//! xfail`** | 1 |
+| `13_assert_reserved.va` | `assert` alone | 1 |
 | `14_include_reserved.va` | `include` alone, bare rather than post-backtick | 1 |
 | `16_reserved_math_functions.va` | §4.3.1 / §4.3.2 math | 15 |
 | `17_reserved_analog_operators.va` | §4.5 operators, §5.10 events, §4.4/§4.6 noise and analysis | 26 |
@@ -95,16 +95,18 @@ prove without shadowing), and `.../20_net_resolution_reserved.va`. All four cite
 
 ## The xfail ledger
 
-**One fixture in this folder.** Compiling `real <keyword>;` for all 217 spellings against
-the current build, exactly two compile clean, and both carry a marker:
+EMPTY — grep finds no `//! xfail` in this directory, and all 217 spellings of Table B.1
+are reserved. The two rows this section held are kept because they name the shape of the
+defect, which is the one an implementation re-introduces by adding a keyword to the
+grammar and forgetting the lexer table:
 
-| Fixture | Spelling | Reason |
+| Fixture | Spelling | What was wrong |
 |---|---|---|
-| `13_assert_reserved.va` | `assert` | Absent from `reserved_keywords` in `src/frontend/token.zig`, so it lexes as an ordinary identifier and `real assert;` compiles clean. The spelling Verilog-AMS 2.4 reserves and never spends — no statement, no system function, no Annex A production — which is exactly why an implementation forgets it. Reservedness is the only thing about `assert` that *can* be tested |
-| (`annex_c_analog_subset/20_net_resolution_reserved.va`) | `net_resolution` | Same defect, same table, different folder: VerA reserves the other nine C.16 words and not this one. Listed here because the Annex B ledger is incomplete without it |
+| `13_assert_reserved.va` | `assert` | Was absent from `reserved_keywords` in `src/frontend/token.zig`, so it lexed as an ordinary identifier and `real assert;` compiled clean. The spelling Verilog-AMS 2.4 reserves and never spends — no statement, no system function, no Annex A production — which is exactly why an implementation forgets it. Reservedness is the only thing about `assert` that *can* be tested, and it is pinned now (`//! reject E0208`, plus the substring `assert`) |
+| (`annex_c_analog_subset/20_net_resolution_reserved.va`) | `net_resolution` | Same defect, same table, different folder: VerA reserved the other nine C.16 words and not this one. Green now, same code. Listed here because the Annex B ledger would be incomplete without it |
 
-The other 26 fixtures in this folder run green (`zig build torture -- annex_b_keywords`:
-26/27, 1 XFAIL). A green census row is worth what it costs — near zero for `endmodule`,
+All 27 fixtures in this folder are green (`zig build torture -- annex_b_keywords`: 27/27).
+A green census row is worth what it costs — near zero for `endmodule`,
 rather more for `abstol`, `access`, `units`, `from`, `exclude` and `inf`, which read
 perfectly well as ordinary identifiers and which an implementation is tempted to look up
 ad hoc inside a `nature` body instead of reserving in the lexer.

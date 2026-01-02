@@ -10,6 +10,11 @@ zig build exhaustive -- 04_         # only the fixtures matching `04_`
 zig build exhaustive -- --bless     # (re)write them, then READ the diff
 ```
 
+45 `.va` files: none carries a `//! reject` arm, none carries `//! xfail`, and every one
+runs and asserts (grep-measured over this directory). A reject fixture would be a category
+error here — this folder judges transcripts, so a file that never produces one has nothing
+to check.
+
 ## What a fixture looks like
 
 ```verilog

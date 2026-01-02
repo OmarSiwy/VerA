@@ -31,12 +31,30 @@
 // THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision demanded a diagnostic
 // for a lookup E.2.1 requires to succeed.
 //
+// WHOM IT BINDS, WHICH IS NOT VERA — AND THIS IS THE CLEAREST OF THE THREE,
+// because E.2.1's own words name the namespace it falls back into: "the mixed-case
+// name shall match the same name DEFINED WITHIN SPICE regardless of the case." A
+// tool that reads no SPICE has no such namespace, so the `shall` has no object to
+// range over. It sits inside E.1.1's consequent with the rest of the family ("IF a
+// simulator ... is also able to read SPICE netlists of a particular flavor, THEN
+// certain objects defined in that flavor of SPICE netlist can be referenced"), and
+// E.1.2 hands the antecedent to the implementer: SPICE compatibility "is solely
+// determined by the authors of the simulator". Note that the FIRST arm — exact
+// case-sensitive match against a Verilog-AMS definition — is unconditional and
+// VerA meets it; the fixture pins only the fallback. It stays, and stays `xfail`,
+// because it does bind a tool that reads netlists (the marker is ignored for every
+// compiler but VerA) and because XPASS still guards VerA against resolving an
+// instance of a module declared nowhere. spice_model.va carries the argument in
+// full; do not close it by writing a netlist reader.
+//
 //! lrm E.2.1
 //! lrm E.3.3
 //! lrm E.2.2.1
+//! lrm E.1.1
+//! lrm E.1.2
 //! lrm 6.7.1
 //! bias V(c1) = 1.0, V(b1) = 0.75, V(e1) = 0.25
-//! xfail E.2.1's fallback arm matches "the same name defined within SPICE", and VerA reads no SPICE netlists, so there is no case-insensitive namespace to fall back INTO: `VeRtNpN` is E0904 for the same reason `vertNPN` is in spice_model.va. The exact-match arm works (a module or a shipped Table E.1 primitive resolves by name, E.3.3), and it is the fallback this fixture pins
+//! xfail NOT A DEBT — the clause is conditional and its condition is false for VerA. E.2.1's fallback arm matches "the same name defined within SPICE", VerA reads no SPICE netlists, so there is no case-insensitive namespace to fall back INTO and the `shall` has no object to range over: `VeRtNpN` is E0904 for the same reason `vertNPN` is in spice_model.va, and that is the right answer rather than a failure to meet a requirement (E.1.1's implication; E.1.2's "solely determined by the authors of the simulator"). The unconditional first arm — exact case-sensitive match against a Verilog-AMS definition — works, and it is the fallback this fixture pins. Kept rather than removed because it still binds a tool that DOES read netlists and because XPASS guards VerA against silently resolving an undeclared module
 `include "check.vh"
 module annex_e_spice_case_lookup(c1, b1, e1);
   inout c1, b1, e1; electrical c1, b1, e1;

@@ -8,7 +8,6 @@
 // 0xA5 = 10*16 + 5 = 165.
 //! lrm 2.6.1
 //! lrm 10.3
-//! xfail VerA lexes a based number before macro expansion can rejoin the three tokens, so `8 `BASE `DIGITS` stops at E0207 "expected `;`" on the expanded `'h` (src/frontend/lexer.zig)
 `include "check.vh"
 `define BASE 'h
 `define DIGITS A5

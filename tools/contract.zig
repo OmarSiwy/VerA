@@ -8,12 +8,23 @@
 //! member may be declared here before the engine consumes it. A member with no
 //! LRM justification and no consumer is not a roadmap item — it is deleted.
 //!
-//! The register of what is declared-but-unconsumed, and of the rules this
-//! interface does NOT yet carry, is `tests/lrm-rules/*.tsv` (`zig build ledger`):
-//! bucket `B` is exactly "a .va can exercise this rule, it fits the artifact
-//! model, and no member here carries it" — 45 rules across 13 proposed members
-//! as of the audit. Earlier revisions of this header pointed at a `VerA/TODO.md`
-//! that does not exist in the repo.
+//! THERE IS NO SEPARATE REGISTER of what is declared-but-unconsumed, and this
+//! header no longer claims one. Two earlier revisions each cited a file that has
+//! never existed in this repo — first a `VerA/TODO.md`, then a
+//! `tests/lrm-rules/*.tsv` with a `zig build ledger` step to print it — and the
+//! second was written into the paragraph that congratulated itself for deleting
+//! the first. A pointer to a file nobody can open is worse than no pointer: it
+//! reads as evidence that the gap is tracked somewhere.
+//!
+//! What IS tracked, and where, without duplicating it here:
+//!   - a member declared here and not yet consumed says so in ITS OWN comment,
+//!     at the declaration, naming the clause that requires it. That is the only
+//!     place the fact cannot drift away from;
+//!   - the rules the COMPILER does not carry are the `//! xfail` lines in
+//!     tests/fixtures/**.va, which the torture run prints and which FAIL the run
+//!     the day they come true — a ledger that cannot go stale, unlike a table;
+//!   - the wave/epic plan those xfails are worked off in is
+//!     docs/conformance-plan.md.
 //!
 //! This file only CHECKS the contract; it provides no scalar implementation.
 //! Physics is written generic over an opaque scalar S:
@@ -254,11 +265,19 @@ pub fn validate(comptime D: type) void {
         // comptime and a parameter is not. Those collapse to the parameter's
         // spec default today; this hook is the upgrade path.
         //
-        // It is NOT for digital drivers. VerA compiles a flat analog device with
-        // no digital drivers or receivers — codegen hardwires the §9.22
-        // `$driver_*` family to 0 for exactly that reason — and no generated
-        // device has ever written a logic output here. The comment that used to
-        // claim otherwise was the only assertion of digital support in this file.
+        // It is NOT for digital drivers, and there is no driver state anywhere in
+        // this contract: no generated device has ever written a logic output
+        // here. The §9.22 `$driver_*` family does not reach a device at all —
+        // §9.22 confines those calls to connect modules, so lowering refuses
+        // every one of them (E0818). This comment used to cite codegen's
+        // hardwire-to-0 for the family as the reason, i.e. it recorded a wrong
+        // answer as a design decision; the answer is gone.
+        //
+        // If driver access is ever supported it arrives as an OPTIONAL DECL on
+        // this contract, the shape `display`, `u_abstol` and the §9.5 I/O
+        // interface already use, with the HOST supplying the per-net driver list
+        // — a compiler does not need a digital scheduler to ask its simulator a
+        // question. Not a State field, and not this hook.
         expectFn(D, "initState", fn (*const D.Model, *D.Instance) D.State);
         expectFn(D, "updateState", fn (*const D.Model, *D.Instance, [n]f64, *D.State) UpdateResult);
         if (@hasDecl(D, "stateCtl"))

@@ -19,7 +19,6 @@
 //! lrm 4.7.3
 //! reject scale
 //! reject analog
-//! xfail VerA refuses `initial` wholesale at E0205 "unsupported module item" (annex A.1.4), so the parse dies before the 4.7.3 calling-context rule is reached
 module ch04_function_called_outside_analog_rejected(p, n);
     inout p, n;
     electrical p, n;

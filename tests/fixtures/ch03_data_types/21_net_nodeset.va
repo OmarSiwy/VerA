@@ -14,7 +14,6 @@
 //
 //! lrm 3.6.3.2
 //! bias V(p) = 3.0, V(node) = 2.0, V(n) = 0.0
-//! xfail VerA's parser has no net_decl_assignment: the `=` in `electrical node = 5.0;` is E0207
 `include "check.vh"
 module ch03_net_nodeset(p, n);
     inout p, n;

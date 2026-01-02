@@ -110,13 +110,26 @@ pub const Tag = enum(u8) {
     // module & source-text structure §6.2, §6.4, annex A.1
     kw_module,
     kw_macromodule,
+    // A.1.2 `module_keyword ::= module | macromodule | connectmodule`. §7.6
+    // gives a connect module the module_declaration production and nothing
+    // else, so its terminator is `endmodule` like the other two spellings —
+    // annex B reserves `endconnectrules` and there is no `endconnectmodule`.
+    // Moved out of `reserved_keywords` for the reason `always` and `defparam`
+    // were: it names a design element with a production, and a spelling-only
+    // reserved tag cannot be dispatched on.
+    kw_connectmodule,
     kw_endmodule,
     kw_paramset,
     kw_endparamset,
     kw_function,
     kw_endfunction,
     kw_analog, // §5.2
-    kw_initial, // 'analog initial' §5.2
+    kw_initial, // 'analog initial' §5.2, and A.6.2 initial_construct
+    // A.6.2 `always_construct ::= always statement`. Moved out of
+    // `reserved_keywords` for the reason `defparam` was: it has a PRODUCTION
+    // now, so the parser has somewhere to dispatch it (see `parseDiscrete`),
+    // and a spelling-only reserved tag cannot be dispatched on.
+    kw_always,
     kw_begin,
     kw_end,
     kw_generate, // §6.9
@@ -157,6 +170,21 @@ pub const Tag = enum(u8) {
     kw_unsigned,
     kw_scalared,
     kw_vectored,
+
+    // A.4.1 `pass_switchtype ::= tran | rtran`, the unconditional bidirectional
+    // switch. Moved out of `reserved_keywords` for the reason `always` and
+    // `connectmodule` were: `gate_instantiation` is a module_or_generate_item
+    // (A.1.4), so these are constructs the parser dispatches and not spellings
+    // with nothing behind them. Both stay reserved — they are on the
+    // 1364-1995 list, which `keyword_intro` keys by spelling.
+    //
+    // The rest of A.4.1's gate types have no tag: they are still `.kw_reserved`
+    // and still E0205. What separates them is not effort but §6.2.2's meaning —
+    // an `and` gate computes a logic value, so accepting one and modelling
+    // nothing would be a wrong answer, while `tran` and `rtran` add no equation
+    // of their own (see `parsePassSwitch`).
+    kw_tran,
+    kw_rtran,
 
     // disciplines & natures §3.6, §3.9, annex D
     kw_discipline,
@@ -205,6 +233,12 @@ pub const Tag = enum(u8) {
     kw_above, // §5.10.4
     kw_timer, // §5.10.5
     kw_absdelta, // §5.10.6
+    // A.6.5 `event_expression ::= … | driver_update expression` — a DIGITAL
+    // event, so it is not in `isEventFunction` and never reachable from an
+    // analog block; §9.22.4 defines it, and §9.22 paragraph 3 confines the
+    // whole family to a connect module. Out of `reserved_keywords` because it
+    // has a production (`parseEventTerm`).
+    kw_driver_update,
 
     // analog operators & filters §4.5
     kw_ddt,
@@ -596,8 +630,13 @@ const KV = struct { []const u8, Tag };
 /// Keeping them in the map is what makes them unusable as identifiers (annex B).
 const reserved_keywords = [_][]const u8{
     // annex C.16 — not used by Verilog-A
-    "connect",            "connectmodule", "connectrules",   "driver_update",
-    "endconnectrules",    "merged",        "net_resolution", "resolveto",
+    // `connectmodule` and `driver_update` moved OUT of this list and into
+    // `kw_connectmodule` / `kw_driver_update`: A.1.2 makes the first a
+    // module_keyword and A.6.5 makes the second an event_expression, so both
+    // are constructs the parser dispatches. They stay reserved — this list is
+    // only about which spellings have nothing behind them.
+    "connect",            "connectrules",  "endconnectrules", "merged",
+    "net_resolution",     "resolveto",
     "split",              "wreal",
     // digital behavior / structural §IEEE1364
     //
@@ -605,7 +644,13 @@ const reserved_keywords = [_][]const u8{
     // B.1 reserves the spelling and Verilog-AMS 2.4 then spends it on nothing
     // — no statement, no system function, no production in annex A. Being
     // unavailable as an identifier is the whole of what the word does.
-    "always",             "and",           "assert",         "assign",
+    // `always` moved OUT of this list and into a `kw_always` tag, exactly as
+    // `defparam` did below: A.6.2 gives `always_construct` a production and
+    // §7.2.2 gives its body a CONTEXT, so it is a construct the parser
+    // dispatches, not a spelling with nothing behind it. It stays reserved —
+    // `keyword_intro` is keyed by spelling, and "always" is still on the
+    // 1364-1995 list.
+    "and",                "assert",        "assign",
     "automatic",          "buf",           "bufif0",       "bufif1",
     // `defparam` moved OUT of this list and into a `kw_defparam` tag: §6.3.1
     // defines the parameter_override and A.1.4 makes it a module_or_generate
@@ -620,10 +665,15 @@ const reserved_keywords = [_][]const u8{
     "pmos",               "posedge",       "primitive",    "pull0",
     "pull1",              "pulldown",      "pullup",       "pulsestyle_ondetect",
     "pulsestyle_onevent", "rcmos",         "release",      "rnmos",
-    "rpmos",              "rtran",         "rtranif0",     "rtranif1",
+    // `tran` and `rtran` moved OUT of this list and into `kw_tran` / `kw_rtran`:
+    // A.4.1's `pass_switchtype` has a production and A.1.4 makes
+    // `gate_instantiation` a module_or_generate_item. The `tranif`/`rtranif`
+    // spellings below stay here — a pass ENABLE switch is a three-terminal gate
+    // whose conduction is a logic value, which is a different construct.
+    "rpmos",              "rtranif0",      "rtranif1",
     "showcancelled",      "small",         "specify",      "specparam",
     "strong0",            "strong1",       "table",        "task",
-    "tran",               "tranif0",       "tranif1",      "wait",
+    "tranif0",            "tranif1",       "wait",
     "weak0",              "weak1",         "xnor",         "xor",
     // configuration / library (IEEE 1364 clause 13)
     "cell",               "config",        "design",       "endconfig",

@@ -18,10 +18,25 @@
 // 3m and 7m are 3e-3 and 7e-3 (§2.6.2), neither exact in binary, so the flows
 // are checked relatively; the potentials are exact and are checked as such.
 //
+// THE COLLAPSE THIS FILE WAS WRITTEN FOR IS GONE, and what is left is a second
+// defect the old xfail reason hid. Two named branches over one pair now retain
+// their values separately — `two_named_branches_retain_separately.va` pins that,
+// on §5.4.3 Example 1's own `branch (a, c) i_diode, junc_cap;` shape, reading
+// after the contributions. What still fails here is the POSITION of the reads:
+// the four CHECKs sit above the two `<+` lines, and VerA answers a branch-flow
+// read out of the accumulator as it stands at that statement, per §5.6.1.2's
+// sequentially-stated retention. This file asks for §5.4.2.2's reading instead —
+// "both the potential and the flow of a source branch are accessible in
+// expressions anywhere in the module" — under which the flow of a flow source is
+// a property of the whole block and not of a prefix of it. §9.4.1 says the same
+// of the reporting: "$strobe provides the ability to display simulation data
+// when the simulator has converged on a solution for all nodes". The fixture is
+// not weakened to match VerA: nothing here is reordered.
+//
 //! lrm 5.4.1
 //! lrm 5.4.2.2
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail VerA collapses two named branches over one net pair into a single unnamed branch with one shared flow unknown, so I(a) and I(b) both read 0 instead of their own contributed values
+//! xfail the shared accumulator is fixed (each named branch retains its own value now); what is left is that VerA lowers a branch-flow READ at its statement position, and these CHECKs precede the two `<+` lines, so §5.6.1.2's "previously retained value" is still nothing there and I(a)/I(b) read 0. §5.4.2.2's "accessible ... anywhere in the module" needs a display operand evaluated after the block (§9.4.1 converged reporting), which is a lowering change to every §9.4 task and not a branch-identity one
 `include "check.vh"
 module ch5_two_branches(p, n);
   inout p, n; electrical p, n;

@@ -4,25 +4,31 @@ Source: `docs/VAMS-LRM/ch6-hierarchy.html`, read section by section.
 
 HTML section-ID audit: `s6.1` `s6.2` `s6.2.1` `s6.2.2` `s6.3` `s6.3.1` `s6.3.2` `s6.3.3` `s6.3.4` `s6.3.5` `s6.3.6` `s6.4` `s6.4.1` `s6.4.2` `s6.4.3` `s6.5` `s6.5.1` `s6.5.2` `s6.5.2.1` `s6.5.2.2` `s6.5.3` `s6.5.4` `s6.5.5` `s6.5.6` `s6.5.7` `s6.5.7.1` `s6.5.7.2` `s6.5.8` `s6.6` `s6.6.1` `s6.6.2` `s6.6.2.1` `s6.6.3` `s6.7` `s6.7.1` `s6.8` `s6.9` `s6.9.1` `s6.9.2` `s6.9.3` `s6.9.4`.
 
-Twenty-nine of the forty-one sections carry a fixture that asserts something about
-that section. Twelve do not, and their rows are empty rather than filled with a
-plausible name. Eighty-two `.va` files live here; **forty of them are
-`//! xfail`**, which is the highest ratio in the suite and is the honest reading of
-this chapter: Clause 6 is about *hierarchy*, and VerA compiles exactly one flat
-module. Every fixture that needs a second module instance fails at the module
-instantiation, before the rule it was written for is ever reached.
+Thirty-three of the forty-one sections carry a fixture that asserts something about
+that section (row-counted from the table below). Eight do not, and their rows are empty rather than filled with a
+plausible name. Eighty-two `.va` files live here: **24 carry a `//! reject` arm, 58 run
+and assert, and NONE is `//! xfail`** (grep-measured over this directory). This paragraph
+used to say forty of the eighty-two were xfail — "the highest ratio in the suite" — on the
+grounds that Clause 6 is about *hierarchy* and VerA compiled exactly one flat module, so
+every fixture needing a second instance died at the instantiation before its rule was
+reached. That is dead: `ir/elaborate.zig` flattens the instance tree, E0204 is retired, and
+this is now the largest single closure in the suite. Note also that the forty was never
+measured — 28 was the number in the tree when the claim was written.
 
-An `//! xfail` here is a fixture the LRM says should pass and this compiler fails.
-A plain `//! reject` is a fixture whose *rejection* is correct conformance and
-which VerA already gets right — nine of them do, and several say in their own
-headers that they arrive at the right verdict by the wrong road (a parse boundary
-rather than the semantic rule). The table below marks the road where it differs
+One fixture here is CANNOT RUN rather than pass: `module_definition.va`, which has no port
+list at all (A.1.2 permits it), so the device contract has nothing to stamp. That is a host
+limitation and not a conformance result; `--strict` fails on it so it cannot be carried
+quietly.
+
+A `//! reject` fixture here is one whose *rejection* is correct conformance, and several
+say in their own headers that they arrive at the right verdict by the wrong road (a parse
+boundary rather than the semantic rule). The table below marks the road where it differs
 from the rule.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
 | `s6.1` | overview: modules embedded in modules, communicating through ports | — no fixture. Every normative sentence here is restated in 6.2–6.5 and tested there; the section itself has no separate oracle |
-| `s6.2` | `module`/`endmodule`, module items, the two header forms | `module_definition.va` (no port list at all), `nonansi_ports.va` (bare `list_of_ports` + body direction declarations), `output_port.va` (ANSI header), `multiple_analog_blocks.va`, `port_direction_not_a_port_rejected.va` (`//! reject E0206` — a direction declaration may only name a header port; VerA diagnoses this *at the rule*), `ansi_port_redeclared_rejected.va` — **`//! xfail`**: VerA silently folds a body redeclaration of an ANSI port onto the header one. Both remaining header forms are green: `parameter_port_list.va` (A.1.3 `module_parameter_port_list`, two header parameters at their declared defaults with `$param_given` 0) and `macromodule_unsupported.va` (§6.2's interchangeable keyword — the name is now a misnomer) |
+| `s6.2` | `module`/`endmodule`, module items, the two header forms | `module_definition.va` (no port list at all), `nonansi_ports.va` (bare `list_of_ports` + body direction declarations), `output_port.va` (ANSI header), `multiple_analog_blocks.va`, `port_direction_not_a_port_rejected.va` (`//! reject E0206` — a direction declaration may only name a header port; VerA diagnoses this *at the rule*), `ansi_port_redeclared_rejected.va` — green (`//! reject E0218`): a body redeclaration of an ANSI port is refused rather than silently folded onto the header one. Both remaining header forms are green: `parameter_port_list.va` (A.1.3 `module_parameter_port_list`, two header parameters at their declared defaults with `$param_given` 0) and `macromodule_unsupported.va` (§6.2's interchangeable keyword — the name is now a misnomer) |
 | `s6.2.1` | top-level modules and `$root` | `top_level_module.va` (nothing instantiates it: `$mfactor` = 1.0, `$param_given` = 0), `root_reference_unsupported.va` — green: `$root.` parses as part 0 of a `hier_ident` and `Lower.flatName` drops it (plus the top module's own name, §6.7's "absolute name" spelling), which is what makes the unprefixed path take the LOCAL scope and the prefixed one the root |
 | `s6.2.2` | module instantiation, instance arrays, several instances per statement | all nine GREEN now that `ir/elaborate.zig` flattens the instance tree: `module_instantiation_unsupported.va`, `multiple_instances_unsupported.va` (`first(p,n), second(n,p)` in one statement), `instance_array_unsupported.va` (`u[0:1]`), `named_port_instantiation_unsupported.va`, `parameterized_instantiation_unsupported.va`, `named_parameter_instantiation_unsupported.va`, `blank_ordered_connection_unsupported.va`, `empty_named_connection_unsupported.va`, `omitted_named_connection_unsupported.va`. The two last-named files say in their own headers what they still do NOT assert: the instance COUNT, which needs a read-back of what a child stamped |
 | `s6.3` | the three override mechanisms | `three_dependent_parameters.va` is the only run-and-pass fixture citing it, and it covers the *dependence* half. `parameterized_instantiation_unsupported.va` and `named_parameter_instantiation_unsupported.va` are green (order and name); `defparam_unsupported.va` is green too: §6.3.1's precedence over an instance assignment holds. `parameter_default.va` is the no-override baseline but cites `3.4`, not this clause |
@@ -39,7 +45,7 @@ from the rule.
 | `s6.5` | ports interconnect module instances | — parent sentence, now reached: 6.5.4–6.5.6 below all run |
 | `s6.5.1` | Syntax 6-5: `port_expression` may be a net, a bit select, a part select or a concatenation; `.port_id(expr)` in the header | — no fixture. Every header in this folder uses the simple-identifier form. The concatenation, sub-range and `.name(expr)` header forms are written nowhere |
 | `s6.5.2` | type and direction of each header port are declared in the body | `nonansi_ports.va`, `ansi_ports.va` (the other header form), `port_direction_not_a_port_rejected.va` (`//! reject E0206`) |
-| `s6.5.2.1` | a port's type is its discipline; an undeclared-discipline port is structural-only | `typed_ports.va` (`electrical` and `thermal` on one module, `V()` and `Temp()`), `ansi_ports.va`, `input_port.va`, `inout_port.va`; `untyped_port_behavioral_use_rejected.va` — **`//! xfail`**: VerA accepts `V(q)` on a port that has a direction but no discipline, with no diagnostic |
+| `s6.5.2.1` | a port's type is its discipline; an undeclared-discipline port is structural-only | `typed_ports.va` (`electrical` and `thermal` on one module, `V()` and `Temp()`), `ansi_ports.va`, `input_port.va`, `inout_port.va`; `untyped_port_behavioral_use_rejected.va` — green (`//! reject DiagnosticsReported`): `V(q)` on a port that has a direction but no discipline is diagnosed |
 | `s6.5.2.2` | `input`/`output`/`inout`; Syntax 6-7's direction-declaration shape; identical ranges across the two declarations | `port_directions.va` (all three in one module), `input_port.va`, `output_port.va`, `inout_port.va`, `ansi_ports.va`; `real_port_unsupported.va` (`//! reject E0208` — `real` is neither a `net_type` nor `wreal`, so the source has no production even in full AMS), `vector_ports.va` (`//! reject E0350` — the clause's own printed error case, `[3:0]` against `[0:3]`), `vector_ports_range_equal.va` (the clause's own printed VALID case, `[0:3]` against `[0:4-1]`, which passes because both bounds are FOLDED before they are compared). The two together are the whole clause, and they differ only in whether the folded bounds agree |
 | `s6.5.3` | real-valued ports via net type `wreal` | — no fixture, deliberately. `real_port_unsupported.va` says in its own header that it does *not* reach this clause: pinning it needs `input wreal x;`, which is legal AMS, so a rejection fixture would be inverted for any AMS compiler |
 | `s6.5.4` | connection by ordered list follows the definition's port order | `module_instantiation_unsupported.va`, `port_connected.va`, `multiple_instances_unsupported.va`, `instance_array_unsupported.va`, `blank_ordered_connection_unsupported.va` (a blank element, `u(p, , n)`) — all green. None cites this id; credited on content |
@@ -47,7 +53,7 @@ from the rule.
 | `s6.5.6` | `$port_connected` | `port_connected.va`, `blank_ordered_connection_unsupported.va`, `empty_named_connection_unsupported.va`, `omitted_named_connection_unsupported.va` — all green. The three ways a port can be left unconnected are each written down and each runs; the 1 for a net with no other connections is pinned separately |
 | `s6.5.7` | ports on one net shall be of compatible disciplines | — no fixture. Needs two instances on a shared net |
 | `s6.5.7.1` | matching size rule: port width equals net width at the connection | — no fixture. `vector_ports.va` is *not* this rule: it compares a port's own two declarations against each other (6.5.2.2), not a port against the net it is connected to. The previous version of this file credited it here; that was wrong |
-| `s6.5.7.2` | discipline of an undeclared interconnect signal | — no fixture here. The resolution machinery is `tests/fixtures/annex_f_resolution/`; instantiation reaches it now, and `hierarchy_resolution.va` is **`//! xfail`** on the §7.4 traversal itself |
+| `s6.5.7.2` | discipline of an undeclared interconnect signal | — no fixture here. The resolution machinery is `tests/fixtures/annex_f_resolution/`; instantiation reaches it now and `annex_f_resolution/hierarchy_resolution.va` is green on the §7.4 traversal itself |
 | `s6.5.8` | a node's abstol is the smallest over all disciplines on it | — no fixture. `typed_ports.va` has two disciplines but on two *separate* ports, with no shared node and no abstol assertion, so it does not reach this rule either |
 | `s6.6` | generate regions, and what a generate block may contain | `generate_region.va` (`//! reject E0221` — Syntax 6-8 has no bare `generate_block` directly in a region; rejection at the rule). Green behavioural coverage: `generate_if*.va`, `generate_loop*.va`, `generate_implicit_localparam.va`, `generate_direct_nesting.va` (a generate block holds `module_or_generate_item`s, so `analog` inside one is fine), and `generate_implicit_region_unsupported.va`, which is `generate_if.va` with the two keywords deleted and pins §6.6's "no semantic difference". The three validation rules of the clause now diagnose at the rule: `generate_parameter_declaration_rejected.va` (`//! reject E0229` — `module_or_generate_item` admits `localparam` and no `parameter`; the gate is keyed on the keyword so the permitted form still elaborates), `generate_nested_region_rejected.va` (E0228 — one counter over regions AND construct bodies, so "may only occur directly within a module" is checked in both directions, and the inner region is then parsed transparently so the file reports this rule alone), `generate_nonconstant_rejected.va` (E0428 — the scheme must be a constant expression; a `parameter` is one, a module variable is not) |
 | `s6.6.1` | loop generate: genvar, the three-part scheme, the implicit localparam, the instance array name | `generate_mismatched_genvar_rejected.va` (`//! reject E0419`), `generate_nonconstant_init_rejected.va` (E0417), `generate_nonconstant_condition_rejected.va` (E0418), `genvar_init_self_reference_rejected.va` (E0417), `generate_nonterminating_rejected.va` (E0420), `genvar_outside_loop_rejected.va` (E0314 — right verdict, adjacent reason: VerA never puts a genvar in the analog scope). Green: `generate_loop.va`, `generate_loop_descending.va`, `generate_two_loops.va`, `generate_implicit_localparam.va` — the last pins the implicit localparam, which falls out of `Lower.tryUnrollFor` binding the genvar as a constant for the duration of each unrolled copy. `generate_array_name_conflict_rejected.va` (`//! reject E0230` — the instance array name is a declaration of the module scope, so it collides with `real g;`; checked at the end of the module, because the colliding declaration may follow the construct). This row is the one place in the chapter where the reject side is genuinely healthy: six codes fire at the rule |
@@ -65,26 +71,46 @@ from the rule.
 
 ## The xfail ledger
 
-Forty of the eighty-two fixtures run and fail. They are not forty
-independent defects — they are five, and the fixtures are the receipts. Each group
-disappears in one commit.
+EMPTY — grep finds no `//! xfail` in this directory. It held the largest count in the suite
+and its own headline claim was that those rows were not independent defects but five, "and
+the fixtures are the receipts". That prediction held: all five closed, and eleven to fifteen
+fixtures went green per commit rather than one at a time. Kept as the record, with the
+measured counts rather than the ones the rows carried:
 
-| Cause | Count | Fixtures |
+| Cause | Fixtures it held | How it closed |
 |---|---|---|
-| **E0904 — the instance names no module.** E0204 "module instantiation is not supported" USED to be this row, with 15 fixtures behind it; `ir/elaborate.zig` flattens the instance tree now and E0204 is retired, so eleven of the fifteen are green. Nothing is left in this row: the paramset declaration is parsed and selected (§6.4/§6.4.2) and `defparam` has a production, so all fifteen are green. E0904 now means what it says — an instance naming a module the file never declares. (Count as recorded before the pass landed; the re-census is scheduled.) | 15 | green now: `paramset_unsupported.va`, `paramset_overload_unsupported.va`, `paramset_output_unsupported.va`, `defparam_unsupported.va`, `module_instantiation_unsupported.va`, `multiple_instances_unsupported.va`, `instance_array_unsupported.va`, `named_port_instantiation_unsupported.va`, `parameterized_instantiation_unsupported.va`, `named_parameter_instantiation_unsupported.va`, `blank_ordered_connection_unsupported.va`, `empty_named_connection_unsupported.va`, `omitted_named_connection_unsupported.va`, `port_connected.va`, `mfactor_propagation_unsupported.va` |
-| **Missing semantic check — VerA accepts what the LRM forbids.** No diagnostic at all is produced. The worst failure mode in the set: a wrong model compiles clean. | 4 | still blocked: `ansi_port_redeclared_rejected.va` (ANSI port redeclared in the body), `untyped_port_behavioral_use_rejected.va` (`V()` on a discipline-less port). Green now: `duplicate_declaration_rejected.va` (E0362, §6.8) and `mfactor_double_scaling_rejected.va` (E0912, §6.3.6). (Count as recorded before this wave; the re-census is scheduled.) The six generate rules that used to be in this row — the two block-name collisions, the instance-array collision, the nested region, the non-constant scheme and the `parameter` declaration — now diagnose at E0228/E0229/E0230/E0428 |
-| **E0207 — no `$root` prefix.** Closed: `$root` is one arm in `parsePrimary`'s system-identifier case and one prefix strip in `Lower.flatName`, which is also where §6.2.1's local-scope-first rule lives. (Count as recorded before the pass landed.) | 4 | green now: `root_reference_unsupported.va`, `oomr_branch_probe_unsupported.va`, `oomr_parameter_unsupported.va`, `oomr_function_unsupported.va` |
-| **Assorted single parser/codegen gaps**, one fixture each. | 1 | `dependent_parameter_transcendental.va` (`codegen`'s `f64Const` has no `exp`, so a transcendental dependent parameter stays frozen at its default) |
+| **E0204 "module instantiation is not supported."** The wall the whole chapter stood behind. | 15 | `ir/elaborate.zig` flattens the instance tree and E0204 is RETIRED (never to be reused). Eleven went green on that alone; the other four had a second gap behind the same wall, each of which closed too — the paramset declaration is parsed and selected (§6.4/§6.4.2) and `defparam` has a production. E0904 now means only what it says: an instance naming a module the file never declares |
+| **Missing semantic check — VerA accepted what the LRM forbids.** A wrong model compiling clean, the worst failure mode in the set. | 4 + 6 | All green. `ansi_port_redeclared_rejected.va` (E0218), `untyped_port_behavioral_use_rejected.va` (`DiagnosticsReported`), `duplicate_declaration_rejected.va` (E0362, §6.8), `mfactor_double_scaling_rejected.va` (E0912, §6.3.6). The six generate rules that shared this row — the two block-name collisions, the instance-array collision, the nested region, the non-constant scheme and the `parameter` declaration — diagnose at E0228/E0229/E0230/E0428 |
+| **E0207 — no `$root` prefix.** | 4 | `$root` is one arm in `parsePrimary`'s system-identifier case and one prefix strip in `Lower.flatName`, which is also where §6.2.1's local-scope-first rule lives: `root_reference_unsupported.va`, `oomr_branch_probe_unsupported.va`, `oomr_parameter_unsupported.va`, `oomr_function_unsupported.va` |
+| **Assorted single parser/codegen gaps**, one fixture each. | 1 | `dependent_parameter_transcendental.va` — `codegen`'s `f64Const` had no `exp`, so a transcendental dependent parameter stayed frozen at its default. It runs and asserts now |
+
+**Twenty-three filenames in this folder still end in `_unsupported`** and none of the
+constructs they name is unsupported any more — every one of the twenty-three is green
+(grep-counted: `ls *_unsupported.va | wc -l` is 23). Two are `//! reject` fixtures whose
+rejection is correct conformance — `real_port_unsupported.va` (E0208) and
+`external_genblk_reference_unsupported.va` (`DiagnosticsReported`) — and the other
+twenty-one run and assert. The names are the largest remaining misinformation in this folder; renaming
+them is behaviour-neutral and touches every header that cross-references them, which is why
+no wave has spent the edit.
 
 ## Reject polarity: the right verdict by the wrong road
 
-Nine fixtures carry `//! reject` without `//! xfail` — VerA already gets them
-right. Four of those nine reach the verdict through a diagnostic that has nothing to
-do with the rule, and each says so in its own header:
+**Twenty-four** fixtures carry `//! reject` (grep-measured), and every one of them passes:
+their rejection IS the conformance. One reaches the verdict through a diagnostic that has
+nothing to do with the rule, and says so in its own header:
 
 - `real_port_unsupported.va` — E0208 at the port direction declaration: `real` is neither a `net_type` nor `wreal`, so the parser has no shape there and everything else stops.
-- `external_genblk_reference_unsupported.va` — §6.6.2 forbids the hierarchical path; VerA refuses the `.` (E0207).
-- `oomr_in_parameter_declaration_rejected.va` and `oomr_variable_read_rejected.va` — also E0207 on the `.`, which is exactly why they must sit next to `oomr_parameter_unsupported.va` and `oomr_branch_probe_unsupported.va`: today *one* diagnostic covers both the permitted and the forbidden case, and the day hierarchical names resolve, these two must keep failing while their three siblings start passing.
+
+Three used to be in that list and no longer are, and the reason is the prediction this
+section made. `external_genblk_reference_unsupported.va`,
+`oomr_in_parameter_declaration_rejected.va` and `oomr_variable_read_rejected.va` all
+refused the `.` itself (E0207), which is why they had to sit next to
+`oomr_parameter_unsupported.va` and `oomr_branch_probe_unsupported.va`: *one* diagnostic
+covered both the permitted and the forbidden case, and "the day hierarchical names resolve,
+these two must keep failing while their three siblings start passing." That day came. All
+three now fail at **E0901** — the name does not resolve in the instance tree — which is the
+rule, while the three siblings run. `external_genblk_...` pins the phase label rather than
+E0901 and so needed no edit.
 
 The ones that diagnose at the rule are `port_direction_not_a_port_rejected.va`
 (E0206), `vector_ports.va` (E0350 — §6.5.2.2's own comparison, on folded bounds;
@@ -103,8 +129,10 @@ is the same answer a compiler with no genvar concept at all would give.
 
 ## `$mfactor`: what the passing fixtures do and do not pin
 
-VerA lowers `$mfactor` to the constant 1.0. It carries no instance multiplicity and
-performs no automatic scaling of flow contributions, flow probes, or noise. At the
+VerA carries `$mfactor` as an instance expression, not as the constant 1.0 — the flatten
+multiplies it down the chain, which is what `mfactor_propagation_unsupported.va` pins. What
+it still does NOT do is automatically scale flow contributions, flow probes or noise by it;
+that is left to the host. At the
 top of the hierarchy Table 9-29 fixes `$mfactor` at exactly 1.0, so the run
 fixtures — `mfactor.va`, `mfactor_flow_contribution.va`, `mfactor_flow_probe.va`,
 `mfactor_conditional_only.va`, `mfactor_flow_noise.va`, `mfactor_potential_noise.va`

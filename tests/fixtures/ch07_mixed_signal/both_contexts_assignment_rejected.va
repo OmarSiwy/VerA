@@ -10,17 +10,17 @@
 // by one paragraph and as an out-of-block discrete assignment by the other, so
 // provoking the rule that way would test the ambiguity instead of the rule.
 //
-// The rule is MASKED, not exercised. Writing the violation needs a discrete
-// process, and C.7 removes it — "No digital behavior or events are supported in
-// Verilog-A" — so the `initial` block dies as an unsupported module item
-// (E0205) before any variable has a domain to conflict over. Filed as an honest
-// record of an unreachable clause rather than as a live check; when a digital
-// context exists, this file must reject for the reason below.
+// The rule is now EXERCISED rather than masked. VerA still cannot EXECUTE the
+// `initial` block and still says so (E0205, at the keyword), but it parses the
+// body and judges it, so the conflict is reported at the analog assignment that
+// causes it. Reaching it needed no digital engine: the clause decides a
+// variable's domain from WHERE ITS ASSIGNMENT IS WRITTEN, not from anything that
+// happens at run time, so both contexts' target sets are readable off the
+// source.
 //
 //! lrm 7.2.2
 //! lrm C.7
 //! reject assigned in both contexts
-//! xfail the §7.2.2 both-contexts rule is masked: VerA rejects the `initial` block itself at E0205 first
 module ch7_both_contexts(p);
   inout p; electrical p;
   real sampled;

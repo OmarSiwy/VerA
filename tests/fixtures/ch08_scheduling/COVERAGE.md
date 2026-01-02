@@ -11,10 +11,16 @@ plausible name. Two thirds of this chapter — 8.4's mixed-signal cycle and all 
 simulation cycle from 8.2 is only applicable to Verilog-AMS HDL") and C.7 ("No
 digital behavior or events are supported in Verilog-A"). Eleven `//! reject`
 fixtures inventory those source forms. They pin the diagnostic and nothing else:
-VerA refuses the `always`/`initial`/`assign` module item before reading its body,
-so the queue regions, delays and boundary rounding that are the actual content of
-those clauses are never reached. A reject fixture is not coverage of the clause
-its construct belongs to, and it is not credited as such below.
+VerA still refuses the `always`/`initial`/`assign` module item (E0205), so the queue
+regions, delays and boundary rounding that are the actual content of those clauses are
+never reached. What HAS changed is that the refusal recovers instead of bailing — the body
+is parsed through the analog statement production and judged against §7.2.2, §4.5.15 and
+§4.7.3 — so some of these files now raise a second, real diagnostic beside the E0205 they
+pin. That does not make any of them coverage of the scheduling clause its construct belongs
+to, and none is credited as such below.
+
+30 `.va` files: 11 carry a `//! reject` arm, 19 run and assert, and NONE is `//! xfail`
+(grep-measured over this directory).
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
@@ -43,24 +49,23 @@ its construct belongs to, and it is not credited as such below.
 | `s8-5-3-2` | procedural continuous assign/deassign/force/release | — `procedural_assign_unsupported.va`, `procedural_deassign_unsupported.va`, `procedural_force_unsupported.va`, `procedural_release_unsupported.va`, `procedural_continuous_unsupported.va`; all masked at the `reg`/`initial`/`always` module item |
 | `s8-5-3-3` | blocking assignment delay and event control timing | — `blocking_timing_unsupported.va`; the three timing forms are inside a refused `initial` block |
 | `s8-5-3-4` | nonblocking update region | — `nonblocking_unsupported.va`; refused at `always` |
-| `s8-5-3-5` | bidirectional switch processing | — `switch_primitive_unsupported.va` is **`//! xfail`** for a *Clause 6* instantiation gap, not for this clause; switch processing is digital-cycle and stays out of scope even once instantiation lands |
+| `s8-5-3-5` | bidirectional switch processing | — `switch_primitive_accepted.va` pins A.4.1's *syntax*, not this clause: `tran (a, b);` is accepted and warned about (W0250, "stamps nothing"), and the module's analog block still runs. Switch processing itself is digital-cycle and stays out of scope, so there is nothing here to credit even now that the construct parses |
 | `s8-5-3-6` | explicit D2A events, region 1b | — |
 | `s8-5-3-7` | analog macro-process events, region 3b | — queue placement is a host property; `analog_macro_process.va` covers only the 8.1 definition |
 
 ## The xfail ledger
 
-One fixture in this folder runs and fails. It names a concrete defect with a
-file, so the row disappears the day the defect does. `above_initial_event.va`
+Empty. No fixture in this folder is `//! xfail`. `switch_primitive_*.va` used to
+sit here and does not any more: A.4.1's `pass_switchtype` parses, and a `tran`
+instance is accepted with a W0250 saying it contributes nothing to the device —
+8.5.3.5 gives a pass switch only a discrete-cycle meaning, so there is no
+continuous equation for the row to be waiting on. `above_initial_event.va`
 used to sit here for §5.10.3.2 and does not any more: `above()` is edge-
 triggered now, and the clause's initialisation case is the `__prev = 0.0` the
 history field starts at. `analog_initial_parameter_sweep.va` used to sit here for
 §5.2.1's "shall be re-executed" and does not any more: the `analog initial` guard
 is its own predicate, set on the first evaluation of every sub-task, where
 `initial_step` is Table 5-1's first point of the whole analysis.
-
-| Fixture | Section it would serve | Reason |
-|---|---|---|
-| `switch_primitive_unsupported.va` | none (`//! lrm A.4.1`, `C.8`) | VerA rejects gate/switch primitive instantiation with E0205 — it is a flat single-module compiler with no instance or primitive instantiation at all. A.4.1 admits `tran`, so a conforming Verilog-A compiler accepts the source; the earlier `//! reject E0205` form of this file had the polarity inverted. |
 
 ## Fixtures in this folder that cite Chapter 5, not Chapter 8
 
