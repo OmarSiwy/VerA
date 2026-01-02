@@ -125,21 +125,6 @@ const Failure = struct {
 
 const Attempt = union(enum) { ok, failed: Failure };
 
-/// Does this `zig build-exe` failure mean the ENGINE declined the device, rather
-/// than the device being broken?
-///
-/// Exactly one refusal is known: `contract.validate` demands `num_ports` in
-/// `1..|U|`, and a module with no port list — legal, Annex A.1.2 makes the port
-/// list optional — lowers to zero terminals. VerA compiled it correctly; there is
-/// simply nothing for the host to stamp it into.
-///
-/// Matched on that one message and no other, because every OTHER way the
-/// generated testbench can fail to compile is a real codegen bug that must stay
-/// loud. A blanket "build failed => not our problem" would swallow them all.
-fn refusedByContract(build_output: []const u8) bool {
-    return std.mem.indexOf(u8, build_output, "num_ports must be in 1..|U|") != null;
-}
-
 // ---------------------------------------------------------------------------
 // The reject half: the expected behavior is a diagnostic
 // ---------------------------------------------------------------------------
@@ -151,7 +136,7 @@ fn verifyRejected(
     d: vera.tb.Directives,
     w: *Io.Writer,
 ) !Result {
-    var attempt = try compileFixture(gpa, f, source);
+    var attempt = try compileFixture(gpa, f, source, d);
     defer switch (attempt) {
         .ok => {},
         .failed => |*bad| {
@@ -183,7 +168,7 @@ fn verifyRejected(
 /// Zig errors and get synthetic names, matching the vocabulary the fixtures use:
 ///   `DiagnosticsReported`  — compiled, but a stage reported a message.
 ///   `GeneratedCompileError` — codegen deliberately emitted `@compileError`.
-fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8) !Attempt {
+fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !Attempt {
     var diags: vera.diag.Bag = .init(gpa);
     // `.debug` (not `.lint`) so stage 6 runs: some fixtures are rejected by
     // codegen emitting `@compileError`, which `.lint` would never see.
@@ -191,6 +176,8 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8) !Attem
         .file_name = f.path,
         .include_dirs = &.{ f.dir, options.fixture_root },
         .diags = &diags,
+        // Annex E.2: the fixture's `//! spice` cards, read as a netlist.
+        .spice_netlist = d.spice,
     }) catch |err| {
         if (err == error.OutOfMemory) {
             diags.deinit(gpa);
@@ -339,6 +326,7 @@ fn runAndCheck(
         .diags = &diags,
         .lint = levels,
         .display = .emit,
+        .spice_netlist = d.spice,
     }) catch |err| {
         try w.print("FAIL {s}: did not compile: {t}\n", .{ f.path, err });
         vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
@@ -373,16 +361,16 @@ fn runAndCheck(
     };
     defer built.deinit(gpa);
     const bin = switch (built) {
+        // EVERY build failure is a bug, with no excused case. There used to be
+        // one: `contract.validate` refused `num_ports == 0`, so the legal portless
+        // module of §6.2 compiled and then had nowhere to run, which is what the
+        // harness's `cannot_run` verdict was built for. The guard was stale rather
+        // than right — the testbench has had a Newton solve since wave 4, and a
+        // device with zero terminals and one internal node has a residual it can
+        // solve — so relaxing it deleted the only known refusal along with the
+        // pattern match that excused it. Do not add the excuse back for a message
+        // you have not first tried to make impossible.
         .failed => |text| {
-            if (refusedByContract(text)) {
-                try w.print(
-                    "CANNOT RUN {s}: the device contract refuses this module —\n" ++
-                        "  no port list (Annex A.1.2), so `num_ports` is 0 and there is nothing\n" ++
-                        "  to stamp. VerA compiled it; the engine will not host it.\n",
-                    .{f.path},
-                );
-                return .{ .cannot_run = "no port list, so the device has zero terminals" };
-            }
             try w.print(
                 "FAIL {s}: the generated testbench does not compile — an ENGINE bug:\n{s}\n",
                 .{ f.path, text },
@@ -487,19 +475,6 @@ fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8) ![
         else => try text.appendSlice(gpa, "<testbench did not exit normally>\n"),
     }
     return text.toOwnedSlice(gpa);
-}
-
-test "only the contract's refusal is excused; any other build error still fails" {
-    try std.testing.expect(refusedByContract(
-        \\tools/contract.zig:212:9: error: annex_d_magnetic.device.num_ports must be in 1..|U|
-    ));
-    // A genuine codegen bug that breaks the testbench must stay loud.
-    try std.testing.expect(!refusedByContract(
-        \\device.zig:88:5: error: expected type 'f64', found '@TypeOf(null)'
-    ));
-    try std.testing.expect(!refusedByContract(
-        \\tools/contract.zig:206:9: error: ex.U must be a dense enum(u8) with values 0..n-1
-    ));
 }
 
 test "verdicts are counted, and a malformed one is not a pass" {

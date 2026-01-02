@@ -10,10 +10,11 @@
 // by one paragraph and as an out-of-block discrete assignment by the other, so
 // provoking the rule that way would test the ambiguity instead of the rule.
 //
-// The rule is now EXERCISED rather than masked. VerA still cannot EXECUTE the
-// `initial` block and still says so (E0205, at the keyword), but it parses the
-// body and judges it, so the conflict is reported at the analog assignment that
-// causes it. Reaching it needed no digital engine: the clause decides a
+// The rule is now EXERCISED rather than masked. VerA accepts the `initial` block
+// (its body is a constant assignment, which is the shape
+// digital_initial_accepted.va documents), so the ONLY diagnostic this file
+// produces is the one it is about: the conflict, reported at the analog
+// assignment that causes it. Reaching it needed no digital engine: the clause decides a
 // variable's domain from WHERE ITS ASSIGNMENT IS WRITTEN, not from anything that
 // happens at run time, so both contexts' target sets are readable off the
 // source.

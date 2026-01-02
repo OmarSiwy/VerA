@@ -15,17 +15,17 @@
 // permits it — `r` is assigned in the discrete context only, and the continuous
 // context merely READS it.
 //
-//! lrm 7.3.1
-// WHY THIS IS STILL XFAIL, AND WHAT BLOCKS IT. `reg [7:0] r;` and `initial r =
-// 8'hff;` now parse and are recorded — the declaration becomes an integer, which
-// is Table 7-1's own mapping — and nothing about the arithmetic below is
-// missing. What blocks the file is the SUITE: four green fixtures pin `//! reject
-// E0205` on the identical construct, a constant assignment in a digital
-// `initial` block. Accepting this file necessarily fails all four. See the xfail
-// line for the list; re-verdicting them is an owner decision about whether annex
-// C binds VerA, and not something an implementation change can settle.
+// HOW THE DIGITAL DRIVER IS HONOURED WITHOUT A DIGITAL KERNEL. The `initial`
+// block is a body of constant assignments, and §7.2.2's first sentence — "the
+// domain of a variable is that of the context from which its value is assigned"
+// — is enough on its own to say what `r` holds: the discrete context owns it,
+// §7.2.2 forbids the continuous context to assign it too, the block runs once
+// before the analysis, so `r` is 8'hff for the whole analysis. VerA lowers that
+// into `r`'s initial value; anything a digital process would need a schedule for
+// is E0433. See digital_initial_accepted.va for the rule itself.
 //
-//! xfail blocked by a contradiction inside the suite, not by a missing capability: `reg [7:0] r` and `initial r = 8'hff` parse and are recorded now, but annex_c_analog_subset/13_digital_initial_rejected.va, ch07_mixed_signal/digital_initial_unsupported.va, ch07_mixed_signal/discrete_real_from_analog_unsupported.va and ch08_scheduling/analog_digital_initial_order_unsupported.va are all green and all pin `reject E0205` on a constant assignment in an `initial` block — three of them arguing that the refusal IS conformance under C.7/C.9 — so no implementation satisfies this fixture and those four at once
+//! lrm 7.3.1
+//! lrm 7.2.2
 `include "check.vh"
 module ch7_discrete_bus_narrow(p);
   inout p; electrical p;

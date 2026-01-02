@@ -31,8 +31,10 @@
 // empty form — a module with no ports at all. It is legal, it is here for that
 // production alone, and it contributes no assertion; it must PARSE, nothing
 // more. It is written second on purpose: a device is elaborated from the FIRST
-// module in the file, and a module with zero terminals is the README's
-// CANNOT RUN case, which would swallow the whole fixture.
+// module in the file, and a portless one has no port to bias or probe, so this
+// fixture's own assertions would have nothing to stand on. (It used to be the
+// README's CANNOT RUN case as well, which would have swallowed the whole file;
+// that verdict is retired — ch06_hierarchy/module_definition.va now runs.)
 //
 //! lrm A.1.2
 //! lrm A.1.3

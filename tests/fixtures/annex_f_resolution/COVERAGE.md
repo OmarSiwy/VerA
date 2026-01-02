@@ -1,6 +1,6 @@
 # Annex F coverage
 
-Source: `docs/VAMS-LRM/annex-f-resolution.html`, read section by section.
+Source: `docs/annex-f-resolution.html`, read section by section.
 
 HTML section-ID audit: `sF-1` `sF-2` `sF-2-1` `sF-2-2`. Four sections, and Annex F
 is normative.

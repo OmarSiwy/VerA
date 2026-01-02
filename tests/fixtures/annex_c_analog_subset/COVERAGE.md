@@ -1,6 +1,6 @@
 # Annex C coverage
 
-Source: `docs/VAMS-LRM/annex-c-veriloga.html`, read in full.
+Source: `docs/annex-c-veriloga.html`, read in full.
 
 HTML section-ID audit: `sC-1` `sC-2` `sC-3` `sC-4` `sC-5` `sC-6` `sC-7` `sC-8` `sC-9` `sC-10` `sC-11` `sC-12` `sC-13` `sC-14` `sC-15` `sC-16` `sC-17` `sC-18` `sC-19` `sC-20`.
 
@@ -21,10 +21,10 @@ its filename. Sections with no fixture in this directory say so.
 | C.4 Data types | Clause 3 applies except: discrete domain binding, `wreal`, `` `default_discipline `` | `08_wreal_rejected.va` (passes). Bullets 1 and 3 both had their verdicts INVERTED once the project settled that VerA targets Verilog-AMS and not the subset: `07_discrete_domain_binding_accepted.va` (was `07_..._rejected`, now the §7.2.1 rule) and `09_default_discipline_accepted.va` (was `09_..._rejected`, now §10.2's own binding — the directive is the module's only source of a discipline, so a tool that parses and discards it reaches E0337 and asserts nothing). What survives of bullet 3 is `18_no_discipline_rejected.va` — green, `//! reject discipline`: a module that declares *no* discipline anywhere has no potential to probe under any dialect |
 | C.5 Expressions | Clause 4 applies except `===` and `!==` | `10_case_equality_rejected.va` (`===`), `17_case_inequality.va` (`!==`). Both operands integer on purpose, so §4.2.1's real-operand rule cannot satisfy the arm instead |
 | C.6 Analog signals | §5.4 applies, no exception | `01_analog_only_device.va` — an inclusion with no carve-out can only be stated as a §5.4.1 access that must work, so the two-argument probe `V(p, n)` is the fixture |
-| C.7 Analog behavior | Clause 5 applies except digital behavior/events and `casex`/`casez` | `11_casex_rejected.va` and `12_casez_rejected.va` (both green, `//! reject E0416` — the C.7-specific code, reachable now), `13_digital_initial_rejected.va`, `14_digital_always_rejected.va`, `21_digital_event_control_rejected.va` (`posedge`, `negedge`), `22_nonblocking_assign_rejected.va` (`<=`), `23_continuous_assign_rejected.va` (`assign`), `25_digital_procedural_rejected.va` (`fork`, `join`, `wait`). Positive side: `05_analog_event.va` and `19_named_event_in_subset.va` — the §5.10.4 named event is on the analog side of the C.7 line and now works |
+| C.7 Analog behavior | Clause 5 applies except digital behavior/events and `casex`/`casez` | `11_casex_rejected.va` and `12_casez_rejected.va` (both green, `//! reject E0416` — the C.7-specific code, reachable now). Bullet 1's `initial` half was INVERTED and has been re-verdicted, for the reason bullets C.4/1 and C.4/3 were: `13_digital_initial_accepted.va` (was `13_..._rejected`) now asserts §7.2.2's own first sentence instead of demanding a diagnostic no conforming AMS compiler may emit. Its `always` half stays a rejection but no longer on C.7's authority — `14_digital_always_rejected.va` pins VerA's ceiling, an `always` block whose value would be a function of §8.5's simulation cycle. Then `21_digital_event_control_rejected.va` (`posedge`, `negedge`), `22_nonblocking_assign_rejected.va` (`<=`), `23_continuous_assign_rejected.va` (`assign`), `25_digital_procedural_rejected.va` (`fork`, `join`, `wait`). Positive side: `05_analog_event.va` and `19_named_event_in_subset.va` — the §5.10.4 named event is on the analog side of the C.7 line and now works |
 | C.8 Hierarchical structures | Clause 6 applies except real value ports (§6.5.3) | `15_real_value_port_rejected.va` (`input wreal`), `28_real_value_output_port_rejected.va`, `29_real_value_inout_port_rejected.va`. One file per direction because the diagnostic reads "found wreal" and cannot tell them apart. The hierarchy C.8 *keeps* has no fixture here; `annex_a_syntax/11_module_instantiation.va` and `ch07_mixed_signal/hierarchy_unsupported.va` cite C.8 for it |
 | C.9 Mixed signal | Clause 7 applies to Verilog-AMS HDL only | `24_connectrules_rejected.va` (the `connectrules … endconnectrules` declaration) — still E0201, legitimately: `connectrules` has no parser. `26_connectmodule_is_not_a_device.va` (was `26_connectmodule_rejected.va`) **no longer cites C.9 at all**: the same settlement that rewrote `07` applies here, so A.1.2's `module_keyword ::= module | macromodule | connectmodule` binds VerA and the declaration is ACCEPTED. What is left of that file is a §6.2 verdict — a source_text of one connect module declares no device, E1001 — and it says so in full. The rest of Clause 7 is `ch07_mixed_signal`, which cites C.9 from ten fixtures, two of which (`connectmodule_accepted.va`, `supply_hierarchical_connectmodule.va`) were inverted for the same reason |
-| C.10 Scheduling semantics | analog simulation cycle applies; §8.2 mixed-signal cycle does not | none here. `ch08_scheduling/analog_digital_initial_order_unsupported.va` is the only fixture in the tree that cites C.10 |
+| C.10 Scheduling semantics | analog simulation cycle applies; §8.2 mixed-signal cycle does not | none here. `ch08_scheduling/analog_digital_initial_order.va` (was `_unsupported`) is the only fixture in the tree that cites C.10, and it is green and positive now: both initial constructs run, the analog block reads 1.0 + 1 |
 | C.11 System tasks and functions | Clause 9 tasks applicable in the analog context apply | none here, and no fixture anywhere cites C.11. No `$`-task appears in this directory outside a comment |
 | C.12 Compiler directives | Clause 10 applies to both | none here, and no fixture anywhere cites C.12. The only directive in this directory is the *forbidden* `` `default_discipline `` of `09` |
 | C.13 Using VPI routines | Clause 11 applies to both | none, and no fixture anywhere cites C.13 |
@@ -61,8 +61,8 @@ prove them.
 
 ## The debt ledger
 
-EMPTY — grep finds no `//! xfail` in this directory: 31 files, 23 with a `//! reject`
-arm, 8 that run and assert. The five rows it held closed three different ways, and the
+EMPTY — grep finds no `//! xfail` in this directory: 31 files, 22 with a `//! reject`
+arm, 9 that run and assert. The five rows it held closed three different ways, and the
 distinction matters more than the count, because two of them closed by being WRONG:
 
 | Fixture | Rule stated | How it closed |

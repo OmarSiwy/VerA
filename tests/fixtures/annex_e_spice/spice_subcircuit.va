@@ -36,19 +36,29 @@
 // THIS IS A RUN FIXTURE, NOT A REJECT. An earlier revision demanded a diagnostic
 // for the LRM's own worked example.
 //
-// WHOM IT BINDS, WHICH IS NOT VERA. E.1.1's sentence is one implication with this
-// whole family inside its consequent: "it states IF a simulator which supports
-// Verilog-AMS HDL is also able to read SPICE netlists of a particular flavor,
-// THEN certain objects defined in that flavor of SPICE netlist can be referenced
-// from within a Verilog-AMS HDL structural description." `ECPOSC` is an object
-// defined in a netlist. VerA reads no netlist, so the antecedent is false and the
-// consequent requires nothing of it — and E.1.2's first bullet says so outright:
-// SPICE compatibility "is solely determined by the authors of the simulator".
-// This file describes a SECOND INPUT LANGUAGE, not a rule VerA breaks. It stays,
-// and stays `xfail`, because it does bind a tool that reads netlists (the marker
-// is ignored for every compiler but VerA) and because XPASS still guards VerA
-// against resolving an instance of a module declared nowhere. spice_model.va
-// carries the argument in full; do not close it by writing a netlist reader.
+// WHERE THE NETLIST COMES FROM. E.1.1 is one implication with this whole family
+// inside its consequent: "IF a simulator which supports Verilog-AMS HDL is also
+// able to read SPICE netlists of a particular flavor, THEN certain objects
+// defined in that flavor of SPICE netlist can be referenced from within a
+// Verilog-AMS HDL structural description." `ECPOSC` is an object defined in a
+// netlist, so the fixture supplies one: the `//! spice` lines below are E.2.2.2's
+// netlist verbatim — the .SUBCKT header with its parenthesised port list, the two
+// device cards inside it, the .ENDS — and the compiler under test does the
+// reading. E.1.2's first bullet leaves the recognised flavor to "the authors of
+// the simulator", and the flavor read here is declarations only: the `.SUBCKT`
+// header becomes the module, and `VA`/`R1` are SKIPPED rather than refused,
+// because a reader that mines a netlist for interfaces is not claiming to
+// simulate it.
+//
+// SO THE SYNTHESIZED MODULE HAS AN EMPTY BODY, and that is the ceiling this file
+// sits exactly on top of. What E.2 requires is that the subcircuit be "treated as
+// a module definition", and a definition is an interface plus a body; the
+// interface is here, in order, and the body is written in SPICE. An instance of
+// it therefore contributes no equations — under `//! solve` it would be an open
+// circuit — which is precisely why this fixture imposes both potentials with
+// `//! bias` and asserts nothing about the nodes inside. See the paragraph above:
+// on a conforming tool those nodes would read 5 V and this harness would still
+// read 0, so the assertion this file does NOT make is not one it is missing.
 //
 //! lrm E.2.2.2
 //! lrm E.2
@@ -57,7 +67,10 @@
 //! lrm E.1.2
 //! lrm 6.7.1
 //! bias V(out) = 1.0, V(gnd) = 0.25
-//! xfail NOT A DEBT — the clause is conditional and its condition is false for VerA: E.2's subcircuits are "defined within SPICE netlists", VerA reads one language and no netlist, so `.SUBCKT ECPOSC` is not an object that exists, `ecpOsc` is declared nowhere and E0904 is the right answer rather than a failure to meet a requirement (E.1.1's implication; E.1.2's "solely determined by the authors of the simulator"). Table E.1's primitives are shipped and are not what is missing — the subcircuit BODY is, and it is written in SPICE. Kept rather than removed because it still binds a tool that DOES read netlists and because XPASS guards VerA against silently resolving an undeclared module
+//! spice .SUBCKT ECPOSC (OUT GND)
+//! spice VA VCC GND 5
+//! spice R1 B1 GND 10K
+//! spice .ENDS ECPOSC
 `include "check.vh"
 module annex_e_spice_subcircuit(out, gnd);
   inout out, gnd; electrical out, gnd;

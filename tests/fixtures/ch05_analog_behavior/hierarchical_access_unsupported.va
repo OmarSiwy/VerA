@@ -25,9 +25,13 @@
 // probe that stamped into the local branch, or an unnamed branch created in the
 // child instead of here, moves it.
 //
-// The port `p` is here only because the runner refuses a device with zero
-// terminals (README, CANNOT RUN) and that verdict outranks every other, so the
-// fixture would prove nothing without it. signal_monitor itself has no port list.
+// The port `p` is not in signal_monitor, which has no port list. It arrived here
+// because the device contract refused a device with zero terminals, and it stays
+// because it is now load-bearing for a different reason: it is what the child
+// instance `drv` is wired to, and the §5.5.4 reference under test is a reference
+// into that instance. (The contract no longer refuses one — see
+// ch06_hierarchy/module_definition.va — so a portless variant would run today,
+// but it would have no child to read from.)
 //
 //! lrm 5.5.4
 //! bias V(a) = 0.5

@@ -1,6 +1,6 @@
 # Chapter 4 coverage
 
-Source: `docs/VAMS-LRM/ch4-expressions.html`, read in full through Section 4.7.3.
+Source: `docs/ch4-expressions.html`, read in full through Section 4.7.3.
 149 `.va` fixtures, of which 52 are `//! reject`, 97 run and assert, and NONE is
 `//! xfail` (grep-measured over the directory; the "31 xfail, 19 of them also rejects"
 this line used to give was measured before waves 1–6).

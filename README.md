@@ -42,10 +42,12 @@ Both implemented backends emit Zig that imports the `contract` module
 is the codegen target; a simulator embedding VerA imports the same file, so there
 is one definition of the ABI and no copy to drift.
 
-The format is written up in [`docs/device-contract.md`](docs/device-contract.md)
-— required and optional decls, the scalar `S` protocol a host must implement,
-and what ends up in the `.so`. Read it before writing a host or a hand-written
-device.
+The format is written up in the header of [`tools/contract.zig`](tools/contract.zig)
+itself — required and optional decls, the scalar `S` protocol a host must
+implement, and the rules physics code follows. Read it before writing a host or a
+hand-written device; it sits beside `validate()`, which enforces every claim it
+makes, so the two cannot drift. (This paragraph used to point at a
+`docs/device-contract.md` that has never been committed.)
 
 ## Backend 3, and why it is not here yet
 
@@ -92,8 +94,8 @@ zig build torture -- --strict   # fixtures that assert nothing FAIL instead of w
 zig build conformance    # the same fixtures against OpenVAF (nix develop .#conformance)
 ```
 
-`docs/VAMS-LRM/` is the Verilog-AMS LRM, chapter and annex, which the fixture
-tree in `tests/fixtures/` is organized to mirror.
+`docs/*.html` is the Verilog-AMS LRM, one file per chapter and annex, which the
+fixture tree in `tests/fixtures/` is organized to mirror.
 
 ## What is actually verified
 
@@ -120,20 +122,26 @@ Now a fixture asserts against a number a human derived from the LRM, and
 expression would let VerA supply its own expectation. See
 `tests/fixtures/README.md`.
 
-A passing fixture is still not a claim that VerA is right where the fixture
-itself records debt: 60 rejections the LRM does not sanction open with a `DEBT`
-banner naming the rule they violate. They stay green on purpose — a suite exists
-to notice change, and a permanently-red fixture notices nothing.
+A passing fixture is still not a claim that VerA is right where the fixture itself
+records debt: a rejection the LRM does not sanction opens with a `DEBT` banner
+naming the rule it violates. Three are left, down from 60 — the rest became real
+requirements over seven waves. They stay green on purpose: a suite exists to
+notice change, and a permanently-red fixture notices nothing.
 
-Known blocker: a module with no port list is legal per Annex A.1.2 and compiles,
-but `contract.validate` refuses the emitted device with `num_ports must be in
-1..|U|`, so ~29 fixtures cannot be run at all until that is fixed in the engine.
+Current, measured on this tree: **1150/1152 behave as they say they do, 2 XFAIL,
+0 FAIL**, and no fixture asserts nothing. `/TODO.md` says what the two are and why
+they are still open.
 
-## VerA vs OpenVAF on the same 1150 fixtures
+## VerA vs OpenVAF on the same fixtures — a wave-1 SNAPSHOT
+
+**Every number in this section is from `bb2f60c`, when the suite was 1150 files and
+VerA scored 812.** VerA's column is now 1150/1152 (above); OpenVAF's has not been
+re-measured, and re-measuring one column alone would break the only thing the
+table is good for, which is that both were scored by one judge on one tree. Re-run
+`nix develop .#conformance` then `zig build conformance` before quoting it.
 
 `openvaf-r` 2e06643 (OpenVAF-reloaded), `zig build conformance`, against `zig
-build torture` on the same tree. Both scored by the same judge, which is the only
-reason the two columns can be put side by side at all.
+build torture` on the same tree.
 
 | | VerA | OpenVAF |
 |---|---|---|
@@ -165,13 +173,14 @@ not compile, **311** it refuses that the LRM prints as legal (one of those by
 running until a 30 s timeout, on `ch10_directives/46_macro_formal_must_be_simple_identifier.va`).
 The 129 it conforms to and VerA does not are concentrated in `ch09_system_tasks`
 (32), `ch03_data_types` (21), `ch04_expressions` (17) and `ch06_hierarchy` (11) —
-that list is VerA's work queue. 128 of them are already carried as an `//! xfail`
-with its reason; the last is `ch06_hierarchy/module_definition.va`, the no-port-list
-blocker above.
+that list was VerA's work queue, and it has since been worked off: 128 of the 129
+were carried as an `//! xfail` with a reason, and the last was
+`ch06_hierarchy/module_definition.va`, which had no port list and could not run at
+all. Two xfails remain in the whole suite.
 
 Neither number is a quality score for the other compiler: OpenVAF is a compact
 model compiler for a simulator, and a large share of its 311 refusals are
 constructs it deliberately does not implement (module instantiation, most of
 chapter 9's file and display tasks, the mixed-signal chapter) rather than bugs.
-What the table is for is that the same 1150 files now measure both, so "VerA
-conforms here" is a claim with an outside check on it.
+What the table is for is that the same files measure both, so "VerA conforms here"
+is a claim with an outside check on it.

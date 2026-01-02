@@ -22,7 +22,7 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    _ = b.addModule("contract", .{
+    const contract_mod = b.addModule("contract", .{
         .root_source_file = b.path("tools/contract.zig"),
         .target = target,
         .optimize = optimize,
@@ -62,6 +62,14 @@ pub fn build(b: *std.Build) void {
     const run_va_test = b.addRunArtifact(b.addTest(.{ .root_module = vera_mod }));
     b.step("test-va", "Run the Verilog-A engine tests").dependOn(&run_va_test.step);
     test_step.dependOn(&run_va_test.step);
+
+    // `contract` is a module root of its own and NOTHING in this build imports it
+    // — generated device code does, at its own build time — so `test-va` collects
+    // zero of its tests. They ran nowhere until this step existed, which is how a
+    // stale `num_ports` guard survived two waves of the engine growing past it.
+    const run_contract_test = b.addRunArtifact(b.addTest(.{ .root_module = contract_mod }));
+    b.step("test-contract", "Run the device-contract validation tests").dependOn(&run_contract_test.step);
+    test_step.dependOn(&run_contract_test.step);
 
     // =======================================================================
     // The conformance suite over tests/fixtures/**/*.va, run against TWO

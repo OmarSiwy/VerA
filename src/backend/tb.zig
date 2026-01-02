@@ -112,6 +112,23 @@ pub const Directives = struct {
     /// `//! print none` leaves the transcript to the model's own `$strobe`s,
     /// which is what a fixture that tests §9.4 formatting wants.
     print_residual: bool = true,
+    /// `//! spice <one netlist line>`, one per line, joined with newlines in
+    /// source order: SPICE netlist text this fixture is compiled AGAINST.
+    ///
+    /// Annex E.2's model and subcircuit declarations are objects defined in a
+    /// netlist, and E.1.1's requirement is conditional on the tool reading one —
+    /// so a fixture for that clause has to be able to hand one over. This is the
+    /// channel, and it is a TRANSPARENT one: the line carries the annex's card
+    /// verbatim, `+` continuations and all, and the compiler does the reading
+    /// (`spice_cards.synthesize`). Nothing here pre-digests it into names and
+    /// ports, because a pre-digested interface would close the fixture while
+    /// skipping the premise the fixture is about.
+    ///
+    /// It is a comment like every other directive (§2.4), so a .va using it is
+    /// still compilable by another tool — which for this family is the point:
+    /// such a tool reads the netlist off its own command line and the cards here
+    /// document which netlist that must be.
+    spice: []const u8 = "",
     /// `//! reject <substring>`, one per line. Non-empty makes this a REJECT
     /// fixture: it must NOT compile, and every substring here must appear
     /// somewhere in the resulting diagnostic. A fixture that cannot run states
@@ -155,6 +172,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var psweeps: std.ArrayList(Sweep) = .empty;
     var reject: std.ArrayList([]const u8) = .empty;
     var lrm: std.ArrayList([]const u8) = .empty;
+    var spice: std.ArrayList([]const u8) = .empty;
     var saw_time = false;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
@@ -207,6 +225,11 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // commas and must not be split on either.
             if (rest.len == 0) return error.BadSyntax;
             try reject.append(arena, try arena.dupe(u8, rest));
+        } else if (eq(kw, "spice")) {
+            // Verbatim, including a leading `+`: the reader joins continuations
+            // itself, so what it sees is the card as the annex prints it.
+            if (rest.len == 0) return error.BadSyntax;
+            try spice.append(arena, try arena.dupe(u8, rest));
         } else if (eq(kw, "lrm")) {
             if (!validSection(rest)) return error.BadLrmSection;
             try lrm.append(arena, try arena.dupe(u8, rest));
@@ -234,6 +257,9 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.psweeps = psweeps.items;
     d.reject = reject.items;
     d.lrm = lrm.items;
+    // One text blob, in source order: `spice_cards` wants netlist text, not a
+    // list of lines, and joining here keeps the continuation rule in one place.
+    if (spice.items.len != 0) d.spice = try std.mem.join(arena, "\n", spice.items);
     return d;
 }
 

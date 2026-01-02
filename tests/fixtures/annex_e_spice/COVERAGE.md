@@ -1,6 +1,6 @@
 # Annex E coverage
 
-Source: `docs/VAMS-LRM/annex-e-spice.html`, read section by section.
+Source: `docs/annex-e-spice.html`, read section by section.
 
 HTML section-ID audit: `sE-1` `sE-1-1` `sE-1-2` `sE-2` `sE-2-1` `sE-2-2` `sE-2-2-1`
 `sE-2-2-2` `sE-2-2-3` `sE-3` `sE-3-1` `sE-3-2` `sE-3-2-1` `sE-3-2-2` `sE-3-3` `sE-3-4`
@@ -8,7 +8,7 @@ HTML section-ID audit: `sE-1` `sE-1-1` `sE-1-2` `sE-2` `sE-2-1` `sE-2-2` `sE-2-2
 Nineteen sections. Annex E is normative.
 
 Forty-one fixtures live in this folder. `zig build torture -- annex_e_spice` reports
-**38/41 behaving as they say they do, 0 asserting nothing, and 3 `//! xfail`** — nothing
+**41/41 behaving as they say they do, 0 asserting nothing and 0 `//! xfail`** — nothing
 fails. (The 9/31 and the 21/40 this paragraph used to quote were written when nothing here
 could elaborate, and then when the row-map fixtures elaborated but asserted nothing. Every
 `primitive_*.va` now carries digits from Table E.1's own Behavior column or, for the rows
@@ -25,25 +25,39 @@ named connection, §6.7.1 hierarchical access and their diagnostics from the cod
 already implements them. `{attribute_instance}` in a connection list (A.4.1.1) parses, so
 E.3.2.1's per-port `port_discipline` form is accepted too.
 
-The three that remain xfail are one blocker, and it is not a gap in the analog language:
-`spice_model.va`, `spice_subcircuit.va` and `spice_case_lookup.va` all name an object
-defined in a SPICE NETLIST, and VerA reads no SPICE netlist. E.1.1 makes that conditional
-on the tool ("if a simulator which supports Verilog-AMS HDL is also able to read SPICE
-netlists of a particular flavor"), so the antecedent is false and a `.MODEL`/`.SUBCKT`
-front end is a second language, not a conformance fix.
+The last three closed by making E.1.1's ANTECEDENT true rather than by arguing about it.
+`spice_model.va`, `spice_subcircuit.va` and `spice_case_lookup.va` each name an object
+defined in a SPICE NETLIST, and E.1.1 conditions the whole family on the tool: "if a
+simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a particular
+flavor". VerA now is, for one flavor: `//! spice <one netlist line>` hands a fixture's cards
+to the compiler verbatim (`src/backend/tb.zig`), and `src/frontend/spice_cards.zig` reads
+`.MODEL` and `.SUBCKT` out of them and emits a Verilog-AMS module for each into the same
+prepended-text channel Table E.1 already uses. So E.2's "the subcircuits and models contained
+within the SPICE netlist are treated as module definitions" is met by them BEING module
+definitions, and every clause about a module applies to them from the code that already
+implements it.
 
-**The verdict on those three is now recorded on the fixtures themselves, and it is NOT
-"debt".** Their `//! xfail` reasons used to read as "VerA needs a SPICE netlist reader",
-which states a requirement VerA is failing; that framing is wrong, because E.1.1's sentence
-is one IMPLICATION with the whole family inside its consequent, and E.1.2's first bullet
-hands the antecedent to the implementer outright — SPICE compatibility "is solely determined
-by the authors of the simulator". Each reason now leads with that, each header carries the
-argument, all three cite `//! lrm E.1.1` and `//! lrm E.1.2`, and the harness's own XFAIL
-summary names this narrower case so the tally cannot contradict the reasons. The marker is
-KEPT rather than removed for two reasons that survive the verdict: `//! xfail` is ignored for
-every compiler but VerA, so for a tool that does read netlists these are ordinary
-requirements; and the XPASS rule still guards the defect that is genuinely VerA's, which
-would be resolving an instance of a module declared nowhere instead of raising E0904.
+**What that does and does not buy.** E.2's noun phrase is "subcircuits and models", and the
+reader reads exactly those two declarations: device cards, `.TRAN`, `.PARAM` and `.INCLUDE`
+are skipped in silence rather than diagnosed, because a reader that mines a netlist for
+interfaces is not claiming to simulate it. A `.MODEL` wrapper takes its ports from the Table
+E.1 primitive its type names, which is E.2.2.1 verbatim ("the ports and parameters of the
+bjt are determined by the bjt primitive itself and not by the model statement"), and drops
+the card's `BF`/`IS`/`VAF` — Table E.1 declares no such parameters and its bjt Behavior
+column is empty, so this annex writes down no equation for them to enter. A `.SUBCKT` module
+has an EMPTY body, because a subcircuit body is device cards in SPICE; it contributes no
+equations, so under `//! solve` an instance of one is an open circuit. E.1.2's first bullet
+is what makes all of this a choice rather than a shortfall: SPICE compatibility "is solely
+determined by the authors of the simulator", and the flavor chosen here is named at the site.
+
+Ingest lower-cases every identifier (E.2.1 first sentence: SPICE is case-insensitive), which
+is what lets `elaborate.findModule` implement E.2.1's second sentence as one
+`eqlIgnoreCase` pass scoped to the netlist-derived range and reached only after both exact
+passes fail — E.3.3's "in case of a name match with differences in case, the module or
+paramset does not interfere with the SPICE primitive ... but the resolution method described
+in E.2.1 shall apply". Whether a netlist `.MODEL resistor` should shadow Table E.1's own
+`resistor` is UNSPECIFIED by the annex (E.3.3 orders user-module against SPICE object, not
+two SPICE objects); primitive-first is chosen and commented, and no fixture pins it.
 
 ### How a fixture that cannot elaborate still states a requirement
 
@@ -81,20 +95,20 @@ settles their verdict, so it is cited where the verdict is recorded.
 | HTML id | Rule | Fixtures |
 |---|---|---|
 | `sE-1` | motivation for SPICE compatibility | none, and none is owed. The section states no requirement — it explains why the annex exists. No fixture carries `//! lrm E.1` |
-| `sE-1-1` | if a tool reads a flavor of SPICE, anything instantiable in that flavor is instantiable in a module | `spice_model.va`, `spice_subcircuit.va`, `spice_case_lookup.va` — all three now cite it, and it is the section that decides their verdict rather than one they fail. The sentence is a single implication and VerA falsifies its antecedent, so the three are **`//! xfail` and NOT debt**; each reason says that in those words. Nothing can be green here, because a passing fixture for E.1.1 would need a SPICE netlist to instantiate FROM |
+| `sE-1-1` | if a tool reads a flavor of SPICE, anything instantiable in that flavor is instantiable in a module | `spice_model.va`, `spice_subcircuit.va`, `spice_case_lookup.va` — all three now cite it, and it is the section that decides their verdict rather than one they fail. The sentence is a single implication and VerA falsifies its antecedent, and all three are now **green**: each carries the annex's own cards on `//! spice` lines, which is a fixture MAKING the antecedent true rather than asserting it. The clause is met for the flavor named in `spice_cards.zig` — `.MODEL` and `.SUBCKT` declarations — and for no other |
 | `sE-1-2` | four axes of incompatibility; the testable one is "primitives **shall**, and parameters and ports **can**, be named", and Table E.1 fixes the names | 20 fixtures cite it: the 16 `primitive_bjt/capacitor/diode/iexp/inductor/ipulse/ipwl/isine/jfet/mesfet/tline/vccs/vcvs/vexp/vpulse/vpwl.va`, plus `passive_named_ports.va`, `spice_semiconductor_primitives.va`, `spice_source_primitives.va`, `primitive_named_ports.va`. **All green.** The last four read every named parameter back through the instance (6.7.1) against its own literal, and write their named port lists in REVERSE Table E.1 order, so a tool that silently connected by position moves a digit; the seventeen `primitive_*.va` do the same for their own row, and each also evaluates its Behavior column (or, for a blank one, its port order) against a literal |
-| `sE-2` | SPICE primitives behave like built-in primitives; models and subcircuits are treated as module definitions; all aspects implementation-dependent | `primitive_*.va` (the 17 above), `spice_model.va`, `spice_subcircuit.va`, `spice_network_primitives.va`, `spice_passive_primitives.va`. The primitive half is **green**; `spice_model.va` and `spice_subcircuit.va` stay **`//! xfail`** on the "defined within SPICE netlists" half — those two objects live in a netlist VerA does not read |
-| `sE-2-1` | exact-case match first; on no exact match, match the SPICE name regardless of case | `spice_case_lookup.va` — `VeRtNpN mixed_case(c1, b1, e1);`, with the three nets biased apart and the resolved object's `c`/`b`/`e` read back, so a successful fallback has to land on E.2.2.1's NPN and not merely on something. **`//! xfail`**: the EXACT-match arm works (a module, then a shipped primitive, resolve by name — see `sE-3-3`), but the fallback matches "the same name defined within SPICE" and there is no SPICE namespace to fall back into |
+| `sE-2` | SPICE primitives behave like built-in primitives; models and subcircuits are treated as module definitions; all aspects implementation-dependent | `primitive_*.va` (the 17 above), `spice_model.va`, `spice_subcircuit.va`, `spice_network_primitives.va`, `spice_passive_primitives.va`. All **green**: the primitive half through the Table E.1 prelude, and the "defined within SPICE netlists" half through the `//! spice` cards, which become module declarations in the same channel. The subcircuit's BODY is still not read, and `spice_subcircuit.va` says so at the site |
+| `sE-2-1` | exact-case match first; on no exact match, match the SPICE name regardless of case | `spice_case_lookup.va` — `VeRtNpN mixed_case(c1, b1, e1);`, with the three nets biased apart and the resolved object's `c`/`b`/`e` read back, so a successful fallback has to land on E.2.2.1's NPN and not merely on something. **green**: the exact-match arm is two passes (a module, then a shipped primitive — see `sE-3-3`) and the fallback is a third, `eqlIgnoreCase` over the netlist-derived modules only. It carries the same `//! spice` card as `spice_model.va` on purpose, so the two files differ in exactly one thing: the case of the name written in Verilog-AMS |
 | `sE-2-2` | "This subsection shows some examples." | none, and none is owed — the heading carries no text of its own. The three numbered examples below it are each covered |
-| `sE-2-2-1` | the `vertNPN` model instantiated by order (`Q1`) and by name (`Q2`), with the optional `s` port defaulted by omission | `spice_model.va` (`vertNPN q1(c1, b1, e1)` — ordered, three ports, `s` omitted) and `primitive_named_ports.va` (`bjt #(.area(2.0)) q1(.s(s1), .e(e1), .b(b1), .c(c1))` — named, and deliberately not in table order). `primitive_named_ports.va` is **green** against the shipped `bjt`; `spice_model.va` stays **`//! xfail`** because `vertNPN` is a model card, not a primitive. The named form with `s` *omitted*, which is literally what `Q2` does, has no fixture |
-| `sE-2-2-2` | subcircuit `ecpOsc` referenced from a module; instance name not constrained to start with `X` | `spice_subcircuit.va` — `ecpOsc osc1(out, gnd);`, and `osc1` is the NOTE's point. The `.SUBCKT ECPOSC (OUT GND)` interface is asserted: `V(osc1.out, osc1.gnd)` against a bias that makes a reversed ordered connection read the opposite sign. **`//! xfail`** — `ecpOsc` is a `.SUBCKT`, and VerA reads no SPICE netlist |
+| `sE-2-2-1` | the `vertNPN` model instantiated by order (`Q1`) and by name (`Q2`), with the optional `s` port defaulted by omission | `spice_model.va` (`vertNPN q1(c1, b1, e1)` — ordered, three ports, `s` omitted) and `primitive_named_ports.va` (`bjt #(.area(2.0)) q1(.s(s1), .e(e1), .b(b1), .c(c1))` — named, and deliberately not in table order). Both **green**: `primitive_named_ports.va` against the shipped `bjt`, and `spice_model.va` against a `vertNPN` synthesized from its `//! spice` card, whose ports are the `bjt` primitive's exactly as this section requires. The named form with `s` *omitted*, which is literally what `Q2` does, has no fixture |
+| `sE-2-2-2` | subcircuit `ecpOsc` referenced from a module; instance name not constrained to start with `X` | `spice_subcircuit.va` — `ecpOsc osc1(out, gnd);`, and `osc1` is the NOTE's point. The `.SUBCKT ECPOSC (OUT GND)` interface is asserted: `V(osc1.out, osc1.gnd)` against a bias that makes a reversed ordered connection read the opposite sign. **green** — `ecpOsc` resolves to the module synthesized from this fixture's own `.SUBCKT` card, case-insensitively per E.2.1 |
 | `sE-2-2-3` | the `ecpOsc` body rewritten with native primitives: `vsine`, `isine`, `inductor`, `capacitor`, `resistor` | `primitive_capacitor.va`, `primitive_inductor.va`, `primitive_isine.va`, `primitive_vsine.va`, `passive_named_ports.va`, `spice_passive_primitives.va`, `spice_source_primitives.va` — one per primitive the example uses. **All green.** The example as a *whole module* is not reproduced anywhere |
 | `sE-3` | Table E.1 names are required; connection by order follows the listed order; port default discipline `electrical`, direction `inout`; diode/bjt/mosfet/jfet/mesfet usable directly in a `paramset` | 27 fixtures cite it — the 17 `primitive_*.va`, the four `spice_*_primitives.va`, `passive_named_ports.va`, `primitive_named_ports.va`, the three `port_discipline` files, and `spice_binning.va` (whose `paramset annex_e_bin mosfet;` is the last paragraph's rule). **All green.** The ordering half has digits behind it: `spice_passive_primitives.va` and `spice_network_primitives.va` bias their nets apart and read the primitive's own branch back, so a transposed positional list fails instead of elaborating quietly. Neither the `electrical` default nor the `inout` default is asserted by anything — see the gap list |
 | `sE-3-1` | `ccvs`, `cccs` and mutual inductors are **not** supported, because instance names cannot be passed as parameters | `unsupported_ccvs.va`, `unsupported_cccs.va`, `unsupported_mutual_inductor.va` — all three `//! reject E0904`, all three **green**, and now for the RIGHT reason: the prelude ships every supported row and deliberately ships none of these three, so E0904 here is E.3.1's rule and not a blanket refusal |
 | `sE-3-2` | three-level precedence: `port_discipline` attribute, then resolution, then `electrical` | `primitive_discipline.va`, `primitive_mixed_discipline_override.va`. Both **green**, and observable through the ACCESS FUNCTIONS the discipline supplies — `Theta`/`Tau` for `rotational`, `Omega` for `rotational_omega`, `V`/`I` for `electrical` — since a spelling that belongs to the wrong discipline does not type-check. HOW: after the flatten a connected port IS the parent's net (Ruling E), so the discipline is that net's and the prelude's nature-neutral `V`/`I` is rewritten to its access functions (`Elaborate.primitiveAccess`). That collapses levels 1 and 2 of the precedence into one answer, which is why both files declare the attribute and the net together; an attribute on an UNCONNECTED primitive port still falls to level 3 |
 | `sE-3-2-1` | `port_discipline` string attribute on a primitive instance, on a primitive port, or both; **ignored** on non-primitive modules and their ports | instance form: `primitive_discipline.va`. Port form: `primitive_port_discipline.va`. Combined form, the LRM's `vcvs` motor: `primitive_mixed_discipline_override.va`. All three **green**; the per-port form needed A.4.1.1's `{attribute_instance}` in a connection list, which the parser now skips. The ignore-on-other-modules half: `port_discipline_ignored_on_module.va` — **green**, and the half that is structural rather than checked: `Unit.primitive` is what gates the rewrite, and it is false for every module the user wrote. Nothing checks that the value must be a valid discipline of domain `continuous` |
 | `sE-3-2-2` | with no attribute, take the discipline from `vpiLoConn` of other instances on the net segment; incompatible → 3.11 error; none continuous → `electrical` | **no fixture.** No file in this folder cites `E.3.2.2` on a `//! lrm` line or anywhere in prose |
-| `sE-3-3` | an HDL module or paramset always wins over a SPICE object of the *exact* same name; a case-differing name does not interfere; a warning shall be issued | `spice_name_shadow.va` — **green**: a module actually *named* `resistor`, with `r` and `V(p,n)` read out of it, proving the Table E.1 name is not reserved. Its own header states how far that reaches: the harness compiles one `.va` with no companion SPICE netlist, so there is no second definition to be preferred over and no instantiation site to observe the preference at. It is now also the live test of the RULE and not just of the name: the prelude declares `resistor`, the fixture declares its own, and `Elaborate.findModule` searches the user's modules before the prelude — so a regression here silently swaps one module for another. `spice_case_lookup.va` covers the case-differing half and is **`//! xfail`** (no SPICE namespace). The mandated warning has no fixture, and E.3.3 says `may` for the primitive case |
+| `sE-3-3` | an HDL module or paramset always wins over a SPICE object of the *exact* same name; a case-differing name does not interfere; a warning shall be issued | `spice_name_shadow.va` — **green**: a module actually *named* `resistor`, with `r` and `V(p,n)` read out of it, proving the Table E.1 name is not reserved. Its own header states how far that reaches: the harness compiles one `.va` with no companion SPICE netlist, so there is no second definition to be preferred over and no instantiation site to observe the preference at. It is now also the live test of the RULE and not just of the name: the prelude declares `resistor`, the fixture declares its own, and `Elaborate.findModule` searches the user's modules before the prelude — so a regression here silently swaps one module for another. `spice_case_lookup.va` covers the case-differing half and is **green**: it supplies a netlist, so there is a namespace for E.2.1's fallback to search, and `findModule` searches it strictly last. The mandated warning has no fixture, and E.3.3 says `may` for the primitive case |
 | `sE-3-4` | Table E.2 names `fetlim`, `pnjlim`, `vdslim` usable as the string argument of `$limit()` (9.17.3) | `limit_fet.va`, `limit_pnj.va`, `limit_vds.va` — all three **green**, all three `//! bias` with a `CHECK` on the returned value. Arity: `limit_fetlim_missing_vth.va` and `limit_pnjlim_missing_args.va`, both `//! reject DiagnosticsReported`, both **green** |
 | `sE-4` | "This section highlights some other issues" | none, and none is owed |
 | `sE-4-1` | multiplicity factor on module-defined subcircuits via `$mfactor` (6.3.6) | `mfactor_subcircuit.va` — **green**. Pins Table 9-29's top-level value, `$mfactor == 1.0` exactly, in a module declaring no parameters. Partial by construction: `$mfactor_specified * $mfactor_hier` needs a hierarchy, and the header says so |
@@ -138,30 +152,23 @@ down, and both sides compile.
 
 ## The xfail ledger
 
-Three of forty-one fixtures run and fail, and they are ONE reason wearing three hats: the
-object the instance names is defined in a SPICE netlist, and VerA reads none. E.1.1 guards
-the whole family with "if a simulator which supports Verilog-AMS HDL is also able to read
-SPICE netlists of a particular flavor", so this is a missing FRONT END for a second
-language, not a missing rule of Verilog-AMS. Shipping Table E.1 did not and could not close
-them: a primitive is what a `.MODEL` card *parameterizes*, and the card is the part that
-lives in the netlist.
+**Empty.** It held three entries, all one reason wearing three hats — the object the instance
+names is defined in a SPICE netlist, and VerA read none — and the reason is now false rather
+than excused. `//! spice` plus `src/frontend/spice_cards.zig` make E.1.1's antecedent true
+for `.MODEL` and `.SUBCKT` declarations, so:
 
-**These three are the one part of this ledger that is not a debt, and the reasons now say
-so.** A ledger entry means "VerA owes this". E.1.1's sentence is an implication whose
-antecedent VerA falsifies, and E.1.2's first bullet says the antecedent is the implementer's
-to choose — "whether a particular Verilog-AMS simulator is SPICE compatible, and with which
-particular variant of SPICE it is compatible, is solely determined by the authors of the
-simulator" — so nothing is owed. They keep the marker because it still binds a tool that
-DOES read netlists (`//! xfail` is honoured only for VerA) and because XPASS still guards
-VerA against resolving an instance of an undeclared module silently. The rows below are
-therefore "why nothing can be green", not "what to implement next": the fix is a SPICE
-netlist reader, and writing one is out of scope by decision and not by capacity.
-
-| Reason | Sections it blocks | Fixtures (3) |
+| Was blocked on | Sections | Now |
 |---|---|---|
-| no `.MODEL` input, so the model name is declared nowhere (E0904) | `sE-2-2-1`, `sE-2` | `spice_model.va` |
-| no `.SUBCKT` input, so the subcircuit name is declared nowhere (E0904) | `sE-2-2-2`, `sE-2` | `spice_subcircuit.va` |
-| E.2.1's fallback matches "the same name defined within SPICE"; there is no SPICE namespace to match in (E0904) | `sE-2-1`, `sE-3-3` | `spice_case_lookup.va` |
+| no `.MODEL` input, so the model name was declared nowhere (E0904) | `sE-2-2-1`, `sE-2` | `spice_model.va` green: the card synthesizes `vertnpn` with the `bjt` primitive's ports |
+| no `.SUBCKT` input, so the subcircuit name was declared nowhere (E0904) | `sE-2-2-2`, `sE-2` | `spice_subcircuit.va` green on the INTERFACE; the body is still not read, and it says so |
+| E.2.1's fallback matches "the same name defined within SPICE", with no SPICE namespace to match in | `sE-2-1`, `sE-3-3` | `spice_case_lookup.va` green: one `eqlIgnoreCase` pass over the netlist-derived modules, after both exact passes |
+
+What is genuinely still out of scope is one line down from those: a netlist SIMULATOR. No
+device card is read, no `.SUBCKT` body, no `.PARAM` expression, no `.INCLUDE`/`.LIB`, no
+dialect tokenizer. Each ceiling is written at its site in `spice_cards.zig`, and the two
+fixtures that stand closest to one (`spice_subcircuit.va`'s silent internal nodes,
+`spice_model.va`'s dropped `BF`/`IS`) name it in their own headers rather than leaving a
+reader to infer it from a green run.
 
 The `$limit` arity pair (`limit_fetlim_missing_vth.va`, `limit_pnjlim_missing_args.va`)
 carries `//! reject DiagnosticsReported` and is green; it was the other debt in this folder

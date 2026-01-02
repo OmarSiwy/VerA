@@ -1,6 +1,6 @@
 # Annex G coverage
 
-Source: `docs/VAMS-LRM/annex-g-changes.html`, read section by section.
+Source: `docs/annex-g-changes.html`, read section by section.
 
 HTML section-ID audit: `sG-1` `sG-2` `sG-2-1` `sG-2-2` `sG-2-3` `sG-2-4`. Six sections,
 and Annex G is **informative**.

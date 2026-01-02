@@ -1,6 +1,6 @@
 # Chapter 1 coverage
 
-Source: `docs/VAMS-LRM/ch1-intro.html`, read section by section against the 25 `.va` files
+Source: `docs/ch1-intro.html`, read section by section against the 25 `.va` files
 actually in this directory.
 
 HTML section-ID audit: `s1-1` `s1-2` `s1-3` `s1-3-1` `s1-3-1-1` `s1-3-1-2` `s1-3-2` `s1-3-3`

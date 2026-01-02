@@ -8,23 +8,24 @@
 //! member may be declared here before the engine consumes it. A member with no
 //! LRM justification and no consumer is not a roadmap item — it is deleted.
 //!
-//! THERE IS NO SEPARATE REGISTER of what is declared-but-unconsumed, and this
-//! header no longer claims one. Two earlier revisions each cited a file that has
-//! never existed in this repo — first a `VerA/TODO.md`, then a
-//! `tests/lrm-rules/*.tsv` with a `zig build ledger` step to print it — and the
-//! second was written into the paragraph that congratulated itself for deleting
-//! the first. A pointer to a file nobody can open is worse than no pointer: it
-//! reads as evidence that the gap is tracked somewhere.
-//!
-//! What IS tracked, and where, without duplicating it here:
+//! What is tracked, and where:
 //!   - a member declared here and not yet consumed says so in ITS OWN comment,
 //!     at the declaration, naming the clause that requires it. That is the only
 //!     place the fact cannot drift away from;
 //!   - the rules the COMPILER does not carry are the `//! xfail` lines in
 //!     tests/fixtures/**.va, which the torture run prints and which FAIL the run
 //!     the day they come true — a ledger that cannot go stale, unlike a table;
-//!   - the wave/epic plan those xfails are worked off in is
+//!   - the ceilings the waves shipped DELIBERATELY, which no xfail line can
+//!     state because no fixture fails on them, are /TODO.md;
+//!   - the wave/epic history those xfails were worked off in is
 //!     docs/conformance-plan.md.
+//!
+//! Two earlier revisions of this header each cited a register that did not exist
+//! — first a `VerA/TODO.md`, then a `tests/lrm-rules/*.tsv` with a `zig build
+//! ledger` step — and a third then claimed no register existed at all, which had
+//! stopped being true: /TODO.md was committed in wave 1 and is the file the first
+//! of those was reaching for. Check the path before you cite it; a pointer to a
+//! file nobody can open reads as evidence that the gap is tracked somewhere.
 //!
 //! This file only CHECKS the contract; it provides no scalar implementation.
 //! Physics is written generic over an opaque scalar S:
@@ -130,7 +131,7 @@ pub fn NoiseGen(comptime D: type) type {
 /// currents/conductances. corr_with pairs correlated generators (BSIM4
 /// tnoiMod, PSP igid); real coefficient until a reference demands complex.
 ///
-/// NOTE (tests/lrm-rules, bucket B "+noisePsd"): this parametric form cannot express
+/// NOTE: this parametric form cannot express
 /// §4.6.4.3 `noise_table` / §4.6.4.4 `noise_table_log`, which are piecewise
 /// PSD-vs-frequency. It is superseded by `noisePsd(x, m, i, f) -> [k]f64`
 /// once codegen emits it; the two changes land together.
@@ -170,7 +171,7 @@ pub const Complex = struct {
 /// ones transcendental in s: `absdelay`/`transition` (e^-s·td), `zi_*`
 /// (e^sT), and `ac_stim`'s phase. A RATIONAL response (`laplace_*`) does NOT
 /// belong here — it is realizable as internal unknowns with real G/C, which is
-/// correct in tran/ac/noise/pss/pz alike; see tests/lrm-rules.
+/// correct in tran/ac/noise/pss/pz alike.
 pub const AcStamp = struct {
     row: u8,
     col: ?u8 = null,
@@ -220,9 +221,18 @@ pub fn validate(comptime D: type) void {
         @compileError(name ++ ".U must be a dense enum(u8) with values 0..n-1");
     const n = nU(D);
 
+    // Ports come first in `U` (codegen orders them that way), so num_ports is a
+    // prefix length and the only real bound is `np <= n`. ZERO is legal: §6.2
+    // makes the port list OPTIONAL and Annex A.1.2 admits `module identifier ;`,
+    // so a device with no terminals and only internal unknowns is a well-formed
+    // compilation unit. Its residual is solvable — every equation it contributes
+    // is over its own private nodes — and elaboration can instantiate it as a
+    // child that contributes those equations to the parent. Nothing downstream
+    // needs np >= 1: the limiter mask (`u >= num_ports`) and the port/internal
+    // split in codegen both degenerate correctly at 0.
     const np: usize = D.num_ports;
-    if (np == 0 or np > n)
-        @compileError(name ++ ".num_ports must be in 1..|U|");
+    if (np > n)
+        @compileError(name ++ ".num_ports must be <= |U|");
 
     validateDefaultedStruct(D, "Model");
     validateDefaultedStruct(D, "Instance");
@@ -433,7 +443,7 @@ fn rejectStrayPubDecls(comptime D: type) void {
         // from them because the real-valued residual cannot carry it. The name
         // embeds the module, so it cannot be in the list above.
         //
-        // NOTE (tests/lrm-rules, §4.5.11/12): this exemption is
+        // NOTE (§4.5.11/12): this exemption is
         // scheduled for removal. `laplace_*` is rational and belongs in the
         // matrix as internal unknowns; `zi_*` is transcendental and belongs in
         // `acStamp`. Neither needs a public coefficient table. The exemption
@@ -711,6 +721,8 @@ const MockAll = struct {
     };
 
     pub const u_kinds = [n_u]UnknownKind{ .voltage, .voltage };
+    // §3.6.1.2 electrical potential's abstol, both unknowns being voltages.
+    pub const u_abstol = [n_u]f64{ 1e-6, 1e-6 };
     pub const mc_param = "g";
     pub const constant: Constant = .{ .g = true };
     pub const noise_gens = [_]NoiseGen(Self){.{ .row = 0, .col = 1, .kind = .thermal }};
@@ -777,6 +789,29 @@ test "validate: every contract member at once (allowlist cannot drift)" {
         if (!@hasDecl(MockAll, k))
             @compileError("allowed_pub_decls has `" ++ k ++ "` but MockAll does not declare it");
     };
+}
+
+/// §6.2's optional port list, in device form: no terminals, one internal
+/// unknown. This is what tests/fixtures/ch06_hierarchy/module_definition.va
+/// lowers to (`module m; electrical p; analog I(p) <+ V(p); endmodule`), and it
+/// used to be a `num_ports must be in 1..|U|` compile error — a stale guard that
+/// predated the host being able to Newton-solve a device's private nodes.
+const MockNoPorts = struct {
+    pub const U = enum(u8) { p };
+    pub const num_ports: usize = 0;
+    const n_u = nU(@This());
+
+    pub const Model = struct { g: f64 = 1.0 };
+    pub const Instance = struct {};
+
+    pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, _: *const Instance, _: f64) [n_u]S {
+        return .{x[0].scale(model.g)};
+    }
+};
+
+test "validate: a module with no port list (§6.2 optional, A.1.2)" {
+    comptime validate(MockNoPorts);
+    try testing.expectEqual(@as(usize, 0), MockNoPorts.num_ports);
 }
 
 test "validate: switch (state in Instance + attempt + limit)" {

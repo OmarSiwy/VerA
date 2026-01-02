@@ -25,8 +25,7 @@
 //!   - the assertion lint (`checkAssertions`): a want that is not a numeric
 //!     literal is a FIXTURE defect, and it is one in every compiler;
 //!   - the verdict algebra: xfail inverts a failure into `xfail` and a success
-//!     into a hard FAIL, `cannot_run` outranks both, `--strict` fails on
-//!     anything that is not a pass;
+//!     into a hard FAIL, `--strict` fails on anything that is not a pass;
 //!   - the parallel walk, the slot buffering, the tally, `--coverage`.
 //!
 //! Comparing two runs is `diff`: the walk is sorted, the report names each
@@ -37,7 +36,7 @@
 //!   zig build torture                     # VerA, every fixture
 //!   zig build conformance                 # OpenVAF, every fixture
 //!   zig build torture -- ch04             # only paths matching `ch04`
-//!   zig build torture -- --strict         # unasserted, cannot-run and xfail FAIL
+//!   zig build torture -- --strict         # unasserted and xfail FAIL
 //!   zig build torture -- --coverage       # every cited LRM section and who cites it
 //!   zig build torture -- -j1              # one at a time, streaming; for debugging
 
@@ -83,11 +82,6 @@ pub const Result = union(enum) {
     /// actually runs a model can return this; for the rest, a fixture that
     /// compiles has said all it can say.
     unasserted,
-    /// The fixture is correct, the compiler is correct, and the HOST still will
-    /// not run it. Not a conformance result in either direction, so it is not a
-    /// pass and it is not a failure — see the verdict table below. The string is
-    /// the short reason, for the summary.
-    cannot_run: []const u8,
 };
 
 /// One compiler, plugged in.
@@ -140,25 +134,19 @@ pub const Verdict = enum {
     /// Compiled, ran, and asserted NOTHING. Green under a suite that only looks
     /// for a crash, and the reason this harness exists.
     unasserted,
-    /// A host limitation, not a conformance result. Distinct from `fail`
-    /// because the fixture's author has no move to make.
-    refused,
     /// Did not behave as the fixture said — and the fixture said so in advance
     /// with `//! xfail`. The rule is real, this compiler does not meet it yet.
     /// Not a pass either.
     ///
-    /// A second, much narrower reason lands here too, and the REASON TEXT is the
-    /// only thing that tells them apart: the clause the fixture transcribes is
-    /// CONDITIONAL and its condition is false for this tool, so the fixture
-    /// states a requirement that never bound it. Annex E's SPICE-netlist family
-    /// is the whole of that set today (E.1.1 makes the family conditional on the
-    /// simulator reading SPICE at all, and E.1.2 says whether it does "is solely
-    /// determined by the authors of the simulator"). Those fixtures stay in the
-    /// suite rather than being deleted for two reasons: they DO bind a tool that
-    /// reads netlists, and `owns_xfail` already means the marker is ignored for
-    /// anyone but VerA; and the XPASS rule still guards the real defect on this
-    /// side, which would be resolving an instance of an undeclared module
-    /// silently instead of diagnosing it.
+    /// ONE reason only, and that is deliberate. A second used to be admitted — a
+    /// fixture whose clause is CONDITIONAL on something false for this tool, so
+    /// the requirement never bound it, with Annex E's SPICE-netlist family
+    /// (E.1.1: "if a simulator is also able to read SPICE netlists") as the whole
+    /// of that set. Those three fixtures pass now: VerA reads `.MODEL` and
+    /// `.SUBCKT` cards (src/frontend/spice_cards.zig), which made the antecedent
+    /// true instead of arguing about whom it bound. Nothing else in the suite was
+    /// ever in that category, so an xfail here means one thing: a real
+    /// requirement this compiler does not meet yet.
     xfail,
 };
 
@@ -166,7 +154,6 @@ const Counts = struct {
     passed: usize = 0,
     failed: usize = 0,
     unasserted: usize = 0,
-    refused: usize = 0,
     xfail: usize = 0,
 
     fn add(c: *Counts, v: Verdict) void {
@@ -174,7 +161,6 @@ const Counts = struct {
             .pass => c.passed += 1,
             .fail => c.failed += 1,
             .unasserted => c.unasserted += 1,
-            .refused => c.refused += 1,
             .xfail => c.xfail += 1,
         }
     }
@@ -327,7 +313,7 @@ pub fn run(init: std.process.Init, fixture_root: []const u8, compiler: Compiler)
     try summarize(compiler, counts, fixtures.len, w);
     try w.flush();
     return if (counts.failed == 0 and
-        !(strict and (counts.unasserted != 0 or counts.refused != 0 or counts.xfail != 0))) 0 else 1;
+        !(strict and (counts.unasserted != 0 or counts.xfail != 0))) 0 else 1;
 }
 
 fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
@@ -349,25 +335,13 @@ fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
             "  from check.vh with an independently derived want. (`--strict` fails on these.)\n",
         .{ c.unasserted, compiler.name },
     );
-    if (c.refused != 0) try w.print(
-        "  {d} CANNOT RUN — a known HOST limitation, not a fixture defect and not a\n" ++
-            "  conformance result: each is printed above with its reason. Not counted as\n" ++
-            "  a pass, because nothing was proved. Do not edit the fixture to make it\n" ++
-            "  run — that changes what it tests. (`--strict` fails on these, so the\n" ++
-            "  limitation cannot be quietly carried forever.)\n",
-        .{c.refused},
-    );
     if (c.xfail != 0) try w.print(
         "  {d} XFAIL — the fixture is right and {s} is not: it states a real LRM\n" ++
             "  requirement that {s} is known not to meet yet, and said so on its\n" ++
             "  `//! xfail` line (printed with the reason above). Not a pass — nothing\n" ++
             "  was proved. The day it starts meeting it the run FAILs with an XPASS,\n" ++
             "  so the marker cannot outlive the limitation and quietly hide a\n" ++
-            "  regression. (`--strict` fails on these.)\n" ++
-            "  A few reasons say something narrower — that the clause is CONDITIONAL\n" ++
-            "  and its condition does not hold for this tool (annex E's SPICE-netlist\n" ++
-            "  family, E.1.1 \"if a simulator ... is also able to read SPICE netlists\").\n" ++
-            "  Those are not a debt: read the reason, not the tally.\n",
+            "  regression. (`--strict` fails on these.)\n",
         .{ c.xfail, compiler.name, compiler.name },
     );
 }
@@ -508,7 +482,7 @@ fn judge(
             for (d.lrm) |section| try w.print(" §{s}", .{section});
             try w.print("\n", .{});
         },
-        .pass, .unasserted, .refused => {},
+        .pass, .unasserted => {},
     }
     return verdict;
 }
@@ -597,17 +571,20 @@ fn decide(
             try w.writeAll(aw.written());
             return .fail;
         },
-        // Neither of these is a conformance answer, so neither is touched by the
-        // marker: `unasserted` proves nothing, so it cannot show a gap is
-        // closed, and `cannot_run` is the HOST's limitation, which outranks the
-        // compiler's. Both keep their own report.
+        // Not a conformance answer, so the marker does not touch it: `unasserted`
+        // proves nothing, so it cannot show a gap is closed. It keeps its own
+        // report.
+        //
+        // There used to be a third verdict beside it, `cannot_run` — the fixture
+        // is right, the compiler is right, and the HOST still will not run it. It
+        // is gone because it had exactly one producer, the device contract's
+        // refusal of a module with no port list (§6.2 makes the port list
+        // optional), and that refusal was a stale guard rather than a real
+        // limitation. Nothing in either runner can report a host limitation
+        // today; re-add the verdict when something can, not before.
         .unasserted => {
             try w.writeAll(aw.written());
             return .unasserted;
-        },
-        .cannot_run => {
-            try w.writeAll(aw.written());
-            return .refused;
         },
     }
 }

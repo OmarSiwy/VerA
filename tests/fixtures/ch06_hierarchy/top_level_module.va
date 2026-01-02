@@ -22,7 +22,7 @@
 // 0.75, exact in binary; its sibling param_given_absent.va pins the predicate
 // itself and this file pins that being top-level is what makes it 0.
 //
-// The portless form of this module is module_definition.va, which cannot run.
+// The portless form of this module is module_definition.va, which runs now.
 //
 //! lrm 6.2.1
 //! bias V(p) = 0.375

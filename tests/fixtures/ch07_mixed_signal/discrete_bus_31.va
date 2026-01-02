@@ -16,14 +16,15 @@
 // permits it — `r` is assigned in the discrete context only, and the continuous
 // context merely READS it.
 //
-//! lrm 7.3.1
-// Blocked for exactly the reason discrete_bus_narrow_unsupported.va is, and by
-// the same four fixtures — the §7.3.1 width test already works (E0222 fires only
-// above 31, so this 31-bit declaration is accepted as legal), and the `initial`
-// block now parses; what cannot happen is the file COMPILING, because four green
-// fixtures require a constant assignment in an `initial` block to be refused.
+// The §7.3.1 WIDTH half is judged separately and by the parser, which is the
+// only stage that sees a declared range: E0222 stays silent at 31 and fires at
+// 32 (discrete_bus_over31_rejected.va). What is left for this file is the
+// MAPPING, and it is the same one discrete_bus_narrow.va pins one octave down —
+// see that file for how a constant `initial` block reaches the continuous
+// context with no digital kernel under it.
 //
-//! xfail blocked by a contradiction inside the suite, not by a missing capability: `reg [30:0] r` is accepted as a legal width and `initial r = 31'h7fffffff` parses, but annex_c_analog_subset/13_digital_initial_rejected.va, ch07_mixed_signal/digital_initial_unsupported.va, ch07_mixed_signal/discrete_real_from_analog_unsupported.va and ch08_scheduling/analog_digital_initial_order_unsupported.va are all green and all pin `reject E0205` on a constant assignment in an `initial` block, so no implementation satisfies this fixture and those four at once
+//! lrm 7.3.1
+//! lrm 7.2.2
 `include "check.vh"
 module ch7_discrete_bus_31(p);
   inout p; electrical p;

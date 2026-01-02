@@ -1,6 +1,6 @@
 # Chapter 11 coverage
 
-Source: `docs/VAMS-LRM/ch11-vpi.html`, read section by section.
+Source: `docs/ch11-vpi.html`, read section by section.
 
 HTML section-ID audit: `s11-1` `s11-2` `s11-2-1` `s11-2-2` `s11-2-3` `s11-3` `s11-3-1` `s11-3-2` `s11-4` `s11-5` `s11-5-1` `s11-5-2` `s11-5-3` `s11-6` `s11-6-1` `s11-6-2` `s11-6-3` `s11-6-4` `s11-6-5` `s11-6-6` `s11-6-7` `s11-6-8` `s11-6-9` `s11-6-10` `s11-6-11` `s11-6-12` `s11-6-13` `s11-6-14` `s11-6-15` `s11-6-16` `s11-6-17` `s11-6-18` `s11-6-19` `s11-6-20` `s11-6-21` `s11-6-22` `s11-6-23` `s11-6-24` `s11-6-25`. 39 ids, 19 with a fixture.
 
