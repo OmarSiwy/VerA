@@ -1,0 +1,426 @@
+//! The instrument. Every performance claim about VerA is graded here.
+//!
+//! Before this file existed, two waves shipped speedup numbers (6.9×, 28.2%)
+//! measured against a synthetic that no longer exists, and nothing in the tree
+//! could refute either. So the rule is now mechanical: no performance claim
+//! lands in a commit message, a comment or TODO.md that this step cannot print.
+//!
+//! FOUR PHASES, ON SEAMS THAT ALREADY EXISTED. The bench adds no API to the
+//! engine and no hook inside it — it calls the same four entry points an
+//! embedder calls, in the same order `root.zig`'s pipeline does:
+//!
+//!   pp        `Preprocessor.process`                          text → text
+//!   lint      `vera.compileSourceOpts(gpa, src, .lint, .{})`  text → MIR
+//!   codegen   `result.generateDevice()`                       MIR → device.zig
+//!   rewrite   `orchestrator.writeTree` a SECOND time          device.zig → 0 bytes
+//!
+//! EACH ROW IS A PREFIX OF THE NEXT, not a slice of it, because each stage needs
+//! the one above it and there is no seam that resumes a compilation from the
+//! middle. So a row is "everything up to and including this", and the cost OF a
+//! stage is a subtraction the reader does: `lint - pp` is lex+parse+lower+prove,
+//! `codegen - lint` is stage 6. Reporting them cumulatively is what keeps the
+//! bench free of an engine hook — the alternative is four entry points that
+//! exist for no reason but to be timed, which is the API the doctrine deletes.
+//!
+//! A CURVE, NEVER A SINGLE NUMBER. `gen` emits a .va whose size is a parameter,
+//! and each of its three axes is swept 1 → 4096 with the other two pinned at 1.
+//! A slope is what settles a scope argument: "this scan is O(n²) and n is a
+//! netlist" and "this scan is flat to 4096" are the same wall-clock number at
+//! n = 8 and opposite conclusions, and only the sweep tells them apart. The
+//! 1152 fixtures run as a fourth case because they are the only workload the
+//! project's scope actually guarantees exists.
+//!
+//! IT CAN FAIL, which is the difference between an instrument and a decoration.
+//! A step that asserts nothing prevents nothing, and a wall-clock number cannot
+//! be asserted — it is a property of the machine, not of the compiler. So the
+//! DETERMINISTIC quantities produced by the same pass are `expect`ed:
+//!
+//!   - the second `writeTree` returns 0 (orchestrator.zig:202-206's claim, and
+//!     the whole basis of the incremental story, made falsifiable);
+//!   - `device.text.len` and `mir.defs.len` per generated shape, against the
+//!     table below.
+//!
+//! Neither can drift with the machine, so `zig build bench` doubles as a
+//! size-regression test — and `expected` moving is a diff a reviewer must sign,
+//! which is the point.
+//!
+//! NO MACHINE-READABLE SIDE CHANNEL, for the reason harness.zig:31-34 gives:
+//! a second output format is a second thing to keep true. The output is one TSV
+//! line per (case, n, phase) on stdout, sorted by construction, so comparing two
+//! runs is `diff` and nothing else. There is no committed artifact and no
+//! `--bless`: the timings are the machine's and belong to whoever ran it.
+//!
+//! N = 25 is what makes the fixture batch the expensive half: 1152 compilations
+//! times 25 is four of the five minutes a full run costs, and the sweep on its
+//! own is under one. So the batch has a filter, and it is the reason for it —
+//! `-- gen` is the one to run while iterating on a slope.
+//!
+//!   zig build bench                   # both; ~5 min, of which ~4 is `fixtures`
+//!   zig build bench -- gen            # the generated sweep only; ~50 s
+//!   zig build bench -- fixtures       # the 1152 fixtures as one batch
+
+const std = @import("std");
+const vera = @import("vera");
+const harness = @import("harness.zig");
+const options = @import("bench_options");
+
+const Io = std.Io;
+const Allocator = std.mem.Allocator;
+
+/// N, and the estimator is the MIN over it. The min is right here because every
+/// source of noise on a shared machine is additive — a preempted run is slower
+/// than a clean one and never faster — so the minimum is the closest sample to
+/// "what this code costs", where a mean would mostly measure the load average of
+/// whoever ran it.
+///
+/// The clock is `Io.Timestamp.now(io, .awake)`: `std.time.Timer` no longer
+/// exists on 0.16 (std/time.zig is unit constants and `epoch` now), and
+/// `.awake` is the CLOCK_MONOTONIC it wrapped.
+const reps = 25;
+
+/// The sweep. Powers of eight, so a doubling and a squaring are visibly
+/// different shapes across four steps rather than two.
+const sweep = [_]u32{ 1, 8, 64, 512, 4096 };
+
+/// The generated cases. Each pins the other two axes at 1, so a bend in one
+/// column is attributable to one axis.
+const Axis = enum { contrib, vals, inst };
+
+// ---------------------------------------------------------------------------
+// The generator
+// ---------------------------------------------------------------------------
+
+/// Emit a .va with `n_contrib` contributions, `n_vals` chained reals and
+/// `n_inst` instances. Everything is LIVE: the value chain terminates in the
+/// contributions and the contributions terminate in the top module's ports, so
+/// nothing here measures the speed at which VerA deletes dead code.
+fn gen(w: *Io.Writer, n_contrib: u32, n_vals: u32, n_inst: u32) Io.Writer.Error!void {
+    try w.writeAll(
+        \\module bench_leaf(a, b);
+        \\  inout a, b;
+        \\  electrical a, b;
+        \\  parameter real gain = 1.0;
+        \\  analog begin
+        \\
+    );
+    for (0..n_vals) |i| try w.print("    real v{d};\n", .{i});
+    try w.writeAll("    v0 = V(a, b) * gain;\n");
+    for (1..n_vals) |i| try w.print("    v{d} = v{d} * 1.5 + 0.25;\n", .{ i, i - 1 });
+    for (0..n_contrib) |i| try w.print(
+        "    I(a, b) <+ gain * v{d} * {d}.0;\n",
+        .{ n_vals - 1, i + 1 },
+    );
+    try w.writeAll(
+        \\  end
+        \\endmodule
+        \\
+        \\module bench_top(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\
+    );
+    for (0..n_inst) |i| try w.print("  bench_leaf i{d}(p, n);\n", .{i});
+    try w.writeAll("endmodule\n");
+}
+
+fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
+    var aw: Io.Writer.Allocating = .init(gpa);
+    errdefer aw.deinit();
+    try gen(
+        &aw.writer,
+        if (axis == .contrib) n else 1,
+        if (axis == .vals) n else 1,
+        if (axis == .inst) n else 1,
+    );
+    return aw.toOwnedSlice();
+}
+
+// ---------------------------------------------------------------------------
+// The assertions — the half of this file that can fail
+// ---------------------------------------------------------------------------
+
+/// `device.text.len` and `mir.defs.len` for every generated shape, in `sweep`
+/// order. These are pure functions of the source, so they are the same on every
+/// machine and in every optimize mode; a change here is a change in what VerA
+/// emits, and it must be explained in the commit that moves it.
+///
+/// MEASURED on this tree, not predicted: the numbers came out of this bench.
+const Shape = struct { device: usize, defs: usize };
+const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
+    .contrib = .{
+        .{ .device = 11313, .defs = 8 },
+        .{ .device = 11895, .defs = 35 },
+        .{ .device = 16540, .defs = 258 },
+        .{ .device = 54963, .defs = 2050 },
+        .{ .device = 372478, .defs = 16386 },
+    },
+    .vals = .{
+        .{ .device = 11313, .defs = 8 },
+        .{ .device = 11572, .defs = 24 },
+        .{ .device = 13644, .defs = 136 },
+        .{ .device = 30220, .defs = 1032 },
+        .{ .device = 162828, .defs = 8200 },
+    },
+    .inst = .{
+        .{ .device = 11313, .defs = 8 },
+        .{ .device = 12776, .defs = 50 },
+        .{ .device = 24804, .defs = 386 },
+        .{ .device = 123596, .defs = 3074 },
+        .{ .device = 934236, .defs = 24578 },
+    },
+});
+
+
+/// Compile one generated shape and hold it to `expected`. Shared by the bench
+/// run (every point of the sweep) and by the unit test below (the two cheap
+/// points), so the assertion has exactly one spelling.
+fn checkShape(gpa: Allocator, axis: Axis, i: usize) !void {
+    const src = try genSource(gpa, axis, sweep[i]);
+    defer gpa.free(src);
+
+    var result = try vera.compileSourceOpts(gpa, src, .lint, .{});
+    defer result.deinit();
+    const device = try result.generateDevice();
+
+    const want = expected[@intFromEnum(axis)][i];
+    try std.testing.expectEqual(want.defs, result.mir.defs.len);
+    try std.testing.expectEqual(want.device, device.len);
+}
+
+// ---------------------------------------------------------------------------
+// The phases
+// ---------------------------------------------------------------------------
+
+const Phase = enum { pp, lint, codegen, rewrite };
+
+/// `bytes` is what the phase HANDLED, and it differs per phase because the
+/// phases do: preprocessed text out of `pp`, the same text in for `lint`,
+/// device text out of `codegen`, and bytes actually hit on disk for `rewrite`
+/// — which is the one that is asserted, because it must be 0.
+const Sample = struct { min_ns: u64, bytes: u64 };
+
+/// One compilation input: the source and the include path it needs. A fixture
+/// carries its own directory (`check.vh` lives next to it); a generated source
+/// needs neither.
+const Input = struct {
+    source: []const u8,
+    dir: ?[]const u8 = null,
+
+    fn opts(self: Input, dirs: *[2][]const u8) vera.Options {
+        const d = self.dir orelse return .{};
+        dirs.* = .{ d, options.fixture_root };
+        return .{ .include_dirs = dirs };
+    }
+};
+
+/// Run `phase` over every input once and return the bytes it handled.
+///
+/// `keep`, when supplied, receives every `CompileResult` instead of freeing it,
+/// so `measure` can read the clock BEFORE the teardown runs — a compilation
+/// arena is one `munmap` but a device text is a `free` of up to a megabyte, and
+/// timing it would attribute the allocator's cost to codegen. It must already
+/// have capacity for `inputs.len`, because a reallocation inside the timed
+/// region would be the very thing it exists to keep out.
+///
+/// The batch case passes `null` and eats the teardown, deliberately: 1152
+/// simultaneously live compilation arenas cost more in page faults and RSS than
+/// the teardown they would remove, which is a bigger measurement error than the
+/// one being avoided. The sweep — where the headline slopes come from — is one
+/// input, so it always gets the honest form.
+///
+/// `doNotOptimizeAway` on the two values a release build could otherwise prove
+/// unused (`result.mir`, the device length) is what stops it from deleting the
+/// work being timed.
+///
+/// Errors are SWALLOWED, not propagated: 415 of the 1152 fixtures conform by
+/// being refused, and a refusal costs real time in exactly the phases this
+/// measures. Skipping them would bias the batch towards the code that compiles.
+fn runPhase(
+    gpa: Allocator,
+    io: Io,
+    phase: Phase,
+    inputs: []const Input,
+    work_dir: []const u8,
+    keep: ?*std.ArrayList(vera.CompileResult),
+) !u64 {
+    var bytes: u64 = 0;
+    for (inputs) |in| {
+        var dirs: [2][]const u8 = undefined;
+        const o = in.opts(&dirs);
+
+        if (phase == .pp) {
+            var arena: std.heap.ArenaAllocator = .init(gpa);
+            defer arena.deinit();
+            var bag = vera.diag.Bag.init(arena.allocator());
+            const text = vera.Preprocessor.process(arena.allocator(), in.source, .{
+                .include_dirs = o.include_dirs,
+                .std_defs = o.std_defs,
+                .bag = &bag,
+            }) catch continue;
+            std.mem.doNotOptimizeAway(text.len);
+            bytes += text.len;
+            continue;
+        }
+
+        var owned = vera.compileSourceOpts(gpa, in.source, .lint, o) catch continue;
+        var result = &owned;
+        if (keep) |k| {
+            k.appendAssumeCapacity(owned);
+            result = &k.items[k.items.len - 1];
+        }
+        defer if (keep == null) result.deinit();
+
+        std.mem.doNotOptimizeAway(result.mir);
+        if (phase == .lint) {
+            bytes += result.source.len;
+            continue;
+        }
+
+        const device = result.generateDevice() catch continue;
+        std.mem.doNotOptimizeAway(device.len);
+        if (phase == .codegen) {
+            bytes += device.len;
+            continue;
+        }
+
+        // The rewrite phase: prime the tree, then write it AGAIN, which is the
+        // no-op recompile the whole incremental story rests on. The second call
+        // must return a write count of 0 — that is orchestrator.zig:202-206's
+        // claim, and it is why the byte column for this phase is 0.
+        const o_orch: vera.orchestrator.Options = .{
+            .work_dir = work_dir,
+            .name = "bench",
+            .optimize = .Debug,
+            .backend = .self_hosted,
+            .modules = &.{},
+        };
+        _ = try vera.orchestrator.writeTree(io, gpa, o_orch, result.device);
+        const writes = try vera.orchestrator.writeTree(io, gpa, o_orch, result.device);
+        try std.testing.expectEqual(@as(usize, 0), writes);
+    }
+    return bytes;
+}
+
+fn measure(
+    gpa: Allocator,
+    io: Io,
+    phase: Phase,
+    inputs: []const Input,
+    work_dir: []const u8,
+) !Sample {
+    // See `runPhase`: only the one-input sweep holds its results past the clock.
+    var kept: std.ArrayList(vera.CompileResult) = .empty;
+    defer {
+        for (kept.items) |*r| r.deinit();
+        kept.deinit(gpa);
+    }
+    const keep: ?*std.ArrayList(vera.CompileResult) = if (inputs.len == 1) &kept else null;
+    if (keep) |k| try k.ensureTotalCapacity(gpa, reps);
+
+    var min: u64 = std.math.maxInt(u64);
+    var bytes: u64 = 0;
+    for (0..reps) |_| {
+        const t0: Io.Timestamp = .now(io, .awake);
+        bytes = try runPhase(gpa, io, phase, inputs, work_dir, keep);
+        const ns = t0.durationTo(.now(io, .awake)).nanoseconds;
+        min = @min(min, @as(u64, @intCast(@max(ns, 0))));
+    }
+    return .{ .min_ns = min, .bytes = bytes };
+}
+
+fn emit(w: *Io.Writer, case: []const u8, n: u32, phase: Phase, s: Sample) !void {
+    try w.print("{s}\t{d}\t{t}\t{d}\t{d}\n", .{ case, n, phase, s.min_ns, s.bytes });
+}
+
+// ---------------------------------------------------------------------------
+
+pub fn main(init: std.process.Init) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var do_gen = true;
+    var do_fixtures = true;
+    var args = init.minimal.args.iterate();
+    _ = args.skip();
+    while (args.next()) |a| {
+        if (std.mem.eql(u8, a, "gen")) do_fixtures = false //
+        else if (std.mem.eql(u8, a, "fixtures")) do_gen = false //
+        else {
+            var e_buf: [256]u8 = undefined;
+            var e = Io.File.stderr().writer(io, &e_buf);
+            try e.interface.print("bench: unknown argument `{s}`\n", .{a});
+            try e.interface.flush();
+            return 2;
+        }
+    }
+
+    var out_buf: [1 << 16]u8 = undefined;
+    var stdout = Io.File.stdout().writer(io, &out_buf);
+    const w = &stdout.interface;
+    defer w.flush() catch {};
+
+    try w.writeAll("case\tn\tphase\tmin_ns\tbytes\n");
+
+    if (do_gen) {
+        for (std.enums.values(Axis)) |axis| {
+            for (sweep, 0..) |n, i| {
+                try checkShape(gpa, axis, i);
+                const src = try genSource(arena, axis, n);
+                const inputs = [_]Input{.{ .source = src }};
+                const work = try std.fmt.allocPrint(arena, "{s}/gen", .{options.work_root});
+                for (std.enums.values(Phase)) |p| {
+                    try emit(w, @tagName(axis), n, p, try measure(gpa, io, p, &inputs, work));
+                }
+                try w.flush();
+            }
+        }
+    }
+
+    if (do_fixtures) {
+        // Read every fixture ONCE, outside every timer: this case measures the
+        // compiler on 1152 small files, not the page cache.
+        const fixtures = try harness.collect(arena, io, options.fixture_root, null);
+        const inputs = try arena.alloc(Input, fixtures.len);
+        for (fixtures, inputs) |f, *in| in.* = .{
+            .source = try Io.Dir.cwd().readFileAlloc(io, f.path, arena, .limited(1 << 20)),
+            .dir = f.dir,
+        };
+        const work = try std.fmt.allocPrint(arena, "{s}/fixtures", .{options.work_root});
+        for (std.enums.values(Phase)) |p| {
+            try emit(w, "fixtures", @intCast(inputs.len), p, try measure(gpa, io, p, inputs, work));
+        }
+    }
+
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+
+// The two cheap points of every axis, in `zig build test`. The sweep's tail is
+// seconds, which is why `bench` is not in `test` — but the table above is a
+// size regression on the emitted device, and a size regression that is only
+// checked when someone remembers to run `bench` is not checked.
+test "generated shapes emit the expected device and MIR size" {
+    for (std.enums.values(Axis)) |axis| {
+        for (0..2) |i| try checkShape(std.testing.allocator, axis, i);
+    }
+}
+
+test "gen emits every axis it is asked for" {
+    var aw: Io.Writer.Allocating = .init(std.testing.allocator);
+    defer aw.deinit();
+    try gen(&aw.writer, 3, 2, 4);
+    const text = aw.written();
+
+    // The axes are independent: asking for 3 contributions must not also change
+    // how many instances or values come out.
+    try std.testing.expectEqual(@as(usize, 3), std.mem.count(u8, text, "I(a, b) <+"));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, text, "    real v"));
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, text, "  bench_leaf i"));
+    // The chain terminates in the contribution, so nothing generated is dead.
+    try std.testing.expect(std.mem.indexOf(u8, text, "gain * v1 * 1.0;") != null);
+}
