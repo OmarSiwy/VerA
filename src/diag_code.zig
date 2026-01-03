@@ -497,9 +497,39 @@ pub const Code = enum(u16) {
     }
 };
 
-/// Documentation for a code. Exhaustive by construction: adding a `Code`
-/// without an arm here is a compile error, which is the point.
+/// Documentation for a code — one indexed load, no jump table.
+///
+/// `Code`'s values are dense (0..N-1, asserted below), so the lookup is
+/// `table[@intFromEnum(c)]`. `table` is built at COMPTIME by evaluating the
+/// exhaustive switch in `infoOf` once per code, which is what keeps both
+/// properties at once: the switch still refuses to compile when a code arrives
+/// without an arm, and it still binds a code to its text BY NAME, so no entry
+/// can slide onto the wrong code the way a hand-written array literal allows.
+/// The switch itself never reaches the binary — in a Debug build it was 16.8 KB
+/// of `.text` for what is now a load.
 pub fn info(c: Code) Info {
+    return table[@intFromEnum(c)];
+}
+
+const table = build: {
+    const fields = @typeInfo(Code).@"enum".fields;
+    // Density is what makes a tag value usable as an index. Codes are never
+    // renumbered and retired ones keep their slot (see RULES above), so this
+    // holds by construction — it is asserted rather than assumed because the
+    // indexing above is silently wrong if it ever stops holding.
+    for (fields, 0..) |f, i| {
+        if (f.value != i) @compileError("Code values must be dense: " ++ f.name ++ " is out of sequence");
+    }
+    @setEvalBranchQuota(100 * fields.len);
+    var t: [fields.len]Info = undefined;
+    for (fields) |f| t[f.value] = infoOf(@enumFromInt(f.value));
+    break :build t;
+};
+
+/// The catalogue proper. Exhaustive by construction: adding a `Code` without an
+/// arm here is a compile error, which is the point. Called only by `table`'s
+/// comptime initializer, so it costs nothing at runtime.
+fn infoOf(c: Code) Info {
     return switch (c) {
         // ------------------------------------------------------------ class 1
         .E0101 => .{
@@ -4184,14 +4214,10 @@ test "every code has info and a well-formed name" {
     }
 }
 
-test "codes are unique and ordered by class" {
-    const std = @import("std");
-    @setEvalBranchQuota(200_000);
-    const fields = @typeInfo(Code).@"enum".fields;
-    inline for (fields, 0..) |f, i| {
-        inline for (fields[i + 1 ..]) |g| {
-            try std.testing.expect(f.value != g.value);
-            try std.testing.expect(!std.mem.eql(u8, f.name, g.name));
-        }
-    }
-}
+// A "codes are unique" test used to sit here: 235 x 235 unrolled comparisons of
+// every field value and name against every other, costing 38 MB of test binary
+// and 1.2 s of build to assert two things the language already guarantees —
+// duplicate enum field NAMES are a compile error, and auto-numbered VALUES are
+// unique by construction. It could never fail. What is worth asserting is
+// DENSITY, since that is what `info`'s indexing rests on and it is not
+// guaranteed by anything; `table` does that with one comptime loop.
