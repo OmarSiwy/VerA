@@ -17,15 +17,15 @@
 //!     the day they come true — a ledger that cannot go stale, unlike a table;
 //!   - the ceilings the waves shipped DELIBERATELY, which no xfail line can
 //!     state because no fixture fails on them, are /TODO.md;
-//!   - the wave/epic history those xfails were worked off in is
-//!     docs/conformance-plan.md.
+//!   - the wave/epic history those xfails were worked off in is `git log`.
 //!
-//! Two earlier revisions of this header each cited a register that did not exist
-//! — first a `VerA/TODO.md`, then a `tests/lrm-rules/*.tsv` with a `zig build
-//! ledger` step — and a third then claimed no register existed at all, which had
-//! stopped being true: /TODO.md was committed in wave 1 and is the file the first
-//! of those was reaching for. Check the path before you cite it; a pointer to a
-//! file nobody can open reads as evidence that the gap is tracked somewhere.
+//! Three earlier revisions of this header each cited a register that did not
+//! exist — first a `VerA/TODO.md`, then a `tests/lrm-rules/*.tsv` with a `zig
+//! build ledger` step, then a `docs/conformance-plan.md` — and a fourth claimed
+//! no register existed at all, which had stopped being true: /TODO.md was
+//! committed in wave 1 and is the file the first of those was reaching for.
+//! Check the path before you cite it; a pointer to a file nobody can open reads
+//! as evidence that the gap is tracked somewhere.
 //!
 //! This file only CHECKS the contract; it provides no scalar implementation.
 //! Physics is written generic over an opaque scalar S:

@@ -12,7 +12,7 @@ rather than left to be read as current:
 - the `CANNOT RUN` verdict it explained: retired. See
   [README.md](README.md#the-retired-cannot-run-verdict);
 - `tests/audit/*--WORKORDER.json`, the 550-item audit it pointed at: deleted once
-  the epics it fed were worked off. `docs/conformance-plan.md` is the history;
+  the epics it fed were worked off. `git log` is the history;
 - the 290 orphaned `.expected-error.txt` sidecars: gone, all of them. The
   README's "no sidecar files" is now true rather than aspirational;
 - the two VerA bugs it named (`ch09_system_tasks/06_display_formats.va` failing

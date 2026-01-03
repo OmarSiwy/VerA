@@ -4981,10 +4981,9 @@ test "codegen: §5.6.1.2 reactive split emits q(), §4.2.12 select stays lazy" {
     try std.testing.expect(std.mem.indexOf(u8, src, "fn cap__common__core(") != null);
     // §4.2.3/§4.2.12 laziness (proof.zig's CODEGEN OBLIGATION): the `ln` must
     // sit INSIDE the arm, never in a preceding `const`. Matching a bare `if (`
-    // is deliberate — `?:` lowers to a CFG diamond (`lowerTernary`), a `select`
-    // that `ifconv` fused back would render as the expression `(if (c) a else
-    // b)`, and BOTH satisfy the obligation. What must never happen is `.log()`
-    // ahead of the guard.
+    // is deliberate — `?:` lowers to a CFG diamond (`lowerTernary`) and a
+    // `select` renders as the expression `(if (c) a else b)`, and BOTH satisfy
+    // the obligation. What must never happen is `.log()` ahead of the guard.
     const unit = src[std.mem.indexOf(u8, src, "fn cap__common__core(").?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
     const guard = std.mem.indexOf(u8, body, "if (").?;

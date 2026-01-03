@@ -10,10 +10,10 @@ wave 7:
 zig build test: 207/207
 ```
 
-The waves are done. `docs/conformance-plan.md` has the per-wave history with the
-measured numbers beside the estimates. This file is the register of what is left
-and — mostly — of the ceilings the waves shipped **deliberately**, which no
-`//! xfail` line can state because no fixture fails on them.
+The waves are done; `git log` carries the per-wave history. This file is the
+register of what is left and — mostly — of the ceilings the waves shipped
+**deliberately**, which no `//! xfail` line can state because no fixture fails
+on them.
 
 Two things to know about how to read it. Every number above is a measurement, not
 a carry-forward: re-run the suite rather than trusting this paragraph. And
