@@ -215,7 +215,12 @@ fn writeIfChanged(
 /// VerA builds no change-detection of its own here: `writeIfChanged` is a
 /// content compare, and everything past the write is `zig`'s job
 /// (02-incremental.html — "delegated, we do no hashing of our own").
-fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !usize {
+///
+/// PUBLIC for the one caller that is not `compileRelease`/`ResidentChild`:
+/// `tests/bench.zig` times a no-op rewrite as its fourth phase, and asserts the
+/// return is 0. That is the claim two paragraphs up, made falsifiable from
+/// outside this file; the alternative was a bench that spawns `zig` to reach it.
+pub fn writeTree(io: Io, gpa: Allocator, o: Options, device: codegen.Output) !usize {
     const cwd: Io.Dir = .cwd();
     try cwd.createDirPath(io, o.work_dir);
     var dir = try cwd.openDir(io, o.work_dir, .{});

@@ -175,4 +175,45 @@ pub fn build(b: *std.Build) void {
     if (b.args) |a| run_external.addArgs(a);
     b.step("conformance", "Run the fixtures against another Verilog-A compiler")
         .dependOn(&run_external.step);
+
+    // Same reason `test-contract` exists: this module was built ONLY as the
+    // `conformance` executable, and `conformance` needs OpenVAF on PATH, so its
+    // tests ran on no machine that had not installed a foreign compiler. A test
+    // that only runs behind an optional dependency is a test that rots.
+    const run_external_test = b.addRunArtifact(b.addTest(.{ .root_module = external_mod }));
+    test_step.dependOn(&run_external_test.step);
+
+    // =======================================================================
+    // The instrument. `zig build bench` prints one TSV line per (case, n,
+    // phase); see tests/bench.zig for what the four phases are and why the
+    // sweep is a curve rather than a number.
+    //
+    // NOT in `test`, for the same reason `torture` is not: the 4096-point of
+    // the sweep and the 1152-fixture batch are seconds each, times N=25. But
+    // the bench's own unit tests ARE — the emitted-size table is a size
+    // regression on the device, and a regression check that runs only when
+    // someone remembers to run `bench` is not a check.
+    //
+    //   zig build bench                # the sweep and the fixture batch
+    //   zig build bench -- gen         # the generated sweep only
+    //   zig build bench -- fixtures    # the 1152 fixtures as one batch
+    const bench_opts = b.addOptions();
+    bench_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
+    bench_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-bench"));
+    const bench_mod = b.createModule(.{
+        .root_source_file = b.path("tests/bench.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "vera", .module = vera_mod }},
+    });
+    bench_mod.addOptions("bench_options", bench_opts);
+    const run_bench = b.addRunArtifact(b.addExecutable(.{
+        .name = "vera-bench",
+        .root_module = bench_mod,
+    }));
+    if (b.args) |a| run_bench.addArgs(a);
+    b.step("bench", "Time the four compile phases over a size sweep").dependOn(&run_bench.step);
+
+    const run_bench_test = b.addRunArtifact(b.addTest(.{ .root_module = bench_mod }));
+    test_step.dependOn(&run_bench_test.step);
 }
