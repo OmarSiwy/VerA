@@ -35,19 +35,14 @@ both the flatten hot loop and Annex F.2 (waves 11, 13). Deletion is the harvest,
 
 **Nothing else may start.** Dependencies: none.
 
-1. **`src/frontend/parser.zig` is dirty** (MEASURED: `git status --short` = one `M`, +5 lines).
-   It is a half-done T0.6 routing real-literal parsing through `lexer.parseReal` with the old
-   body renamed `deadParseReal`. Land it or stash it.
-   - `zig build test` on the working tree: **204/205 MEASURED**, failing at
-     `src/backend/codegen.zig:5526` — `transition(...)` pins `0.0000000022000000000000003`,
-     the reroute emits `0.0000000022`.
-   - `TODO.md:10` says `207/207`. Stale against both columns.
-   - **The bless is a decision, not a rubber stamp**: is `2.2n` mantissa×scale (`2.2 * 1e-9`,
-     0x…5271) or one `parseFloat("2.2e-9")` (0x…5270)? §2.6.2's own words ("24.7K, which
-     indicates 24.7 multiplied by 10 to the third power") say the former; `lexer.zig:586`
-     rounds once, which is the latter. `src/backend/codegen.zig:5502` is the tree's **only**
-     pin on that decode (MEASURED: grep). Whoever lands T0.6 writes one asserted case naming
-     the chosen rule, then re-blesses. Silent re-blessing is how a numeric regression ships.
+1. ~~**`src/frontend/parser.zig` is dirty**~~ **DONE.** T0.6 landed: round-once, per open
+   question 1's default. The parser's `mantissa * siScale(...)` is gone and the real-literal
+   path is `lexer.parseReal`; the two duplicated scanners and the 104-line `TestLex` went with
+   it (−250 lines net). The rule is asserted, with its §2.6.2 argument, in lexer.zig's
+   "§2.6.2 a scale factor rounds ONCE" test, and `codegen.zig`'s `transition(V(p,n), 0, 2.2n)`
+   case is re-blessed to `0.0000000022` with a comment pointing at it.
+   MEASURED after: `zig build test` **206/206** (205 + the new asserted case), torture
+   **1150/1152, 2 XFAIL, 0 FAIL** — unchanged. `TODO.md:10`'s count is now the measured one.
 2. **`tests/external.zig:247` runs in no step.** `build.zig` has three `test_step.dependOn`
    calls (run_va_test, run_contract_test, run_torture_test); external is built only as the
    `conformance` executable. One line after the conformance block, matching the shape already
@@ -430,12 +425,10 @@ needs a reason written down here, in TODO.md §2's style.
 
 The original framing of each, with the evidence that produced the recommendation:
 
-1. **What is the correct decode of `2.2n`?** Mantissa×scale (`2.2 * 1e-9`) or one `parseFloat`
-   of the joined text? They differ by 1 ULP, `codegen.zig:5502` is the only pin, and T0.6 changes
-   the answer. §2.6.2's wording ("24.7 multiplied by 10 to the third power") supports
-   mantissa×scale; `lexer.zig:586`'s round-once is the stronger numeric.
-   **Default: adopt round-once, re-bless `:5502`, and add one asserted case naming the rule** —
-   it is a strengthening the LRM does not forbid, and it deletes a second decoder.
+1. ~~**What is the correct decode of `2.2n`?**~~ **ANSWERED: round-once**, and landed (wave 8
+   item 1). One `parseFloat` of the joined text. A strengthening §2.6.2 does not forbid, and it
+   deleted the second decoder. The rule is now asserted rather than implied — see lexer.zig's
+   "§2.6.2 a scale factor rounds ONCE" test.
 2. **Is `|U| ≤ 256` a permanent ceiling or a bug?** `codegen.zig:861` hardcodes `enum(u8)` and
    `tools/contract.zig` makes it normative, so widening is an ABI change to a shipped promise.
    **Default: permanent — refuse at `emitTopology` with a new diag code and a reject fixture**,
