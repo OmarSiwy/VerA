@@ -1,0 +1,41 @@
+// THIS FIXTURE PINS AN ENGINE CEILING, AND IT PINS IT FROM THE ENFORCING SIDE.
+// The LRM puts no bound on how many nodes a module may have: §6.5.2's vector
+// port is "a port can be declared as a vector" with the range folded from
+// constant expressions, and nothing in §1.3.1 or §3.6.3 caps the set of solver
+// unknowns. So the refusal below is NOT a conformance claim — VerA's emitted
+// device declares its unknowns as `pub const U = enum(u8)` and
+// `tools/contract.zig`'s `isDenseEnum` requires exactly that tag type, which
+// fixes the ceiling at 256 for anything compiled through this contract.
+//
+// WHY IT IS A FIXTURE AND NOT ONLY A TODO.md §3 ROW. §3 says a fixture standing
+// over a ceiling turns it into a bug. This one does not stand over it: it stands
+// ON it. What it asserts is that crossing the boundary is DIAGNOSED against the
+// .va, not emitted and left to detonate later. Before this file, `--emit-zig`
+// exited 0 on a 257-unknown model and the host's build then died with
+//
+//     error: enum tag value '256' too large for type 'u8'
+//         busZ5b256Z5d, // port
+//
+// at a line of generated Zig, in a cache directory, with nothing naming the
+// model that produced it. A wrong artifact that exits 0 is the failure mode this
+// suite exists to catch; a refusal that names the model is the conforming answer
+// available to a compiler with a `u8`-tagged contract.
+//
+// THE BOUNDARY IS EXACT AND WAS MEASURED. `inout [0:255] bus` is 256 unknowns
+// and compiles, and the emitted device type-checks against `tools/contract.zig`.
+// `[0:256]` is 257 and is E1003. The count is unknowns, not nets: §6.5.2 expands
+// the vector to one per element, and a §5.6 POTENTIAL contribution would add a
+// branch-flow unknown of its own — which is why the body below contributes a
+// flow (`I(...)`) and adds nothing to the count.
+//
+// A compiler whose device carries a wider unknown index accepts this file, and
+// that is not a defect in either direction: E1003's `lrm` field is empty because
+// there is no clause behind it.
+//
+//! lrm 6.5.2
+//! reject E1003
+module ch6_unknown_ceiling(bus);
+  inout [0:256] bus;
+  electrical [0:256] bus;
+  analog I(bus[0]) <+ 0.0;
+endmodule
