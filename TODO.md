@@ -141,8 +141,12 @@ deleted."*
 ## 3. Ceilings shipped deliberately
 
 Every one is marked `ponytail:` at its site with an upgrade path, and none has a
-fixture behind it — a fixture appearing over any of these turns it from a ceiling
-into a bug. Grouped by area; the file is the authority, this is the index.
+fixture standing OVER it — a fixture that fails because of one of these turns it
+from a ceiling into a bug. A `//! reject` fixture standing ON one is the opposite
+and is welcome: it pins that the ceiling is diagnosed against the `.va` rather
+than left to the host, which is the only thing that makes "deliberate" checkable.
+Exactly one row has one today (`|U| ≤ 256`, below).
+Grouped by area; the file is the authority, this is the index.
 
 ### Solver / testbench (`src/backend/tb.zig`)
 - No gmin stepping, no source stepping, no continuation. Nothing needed it.
@@ -237,6 +241,14 @@ into a bug. Grouped by area; the file is the authority, this is the index.
   file. Two modules with a directive between them both see the second.
 
 ### Device contract (`tools/contract.zig`)
+- **`|U| ≤ 256`**, because `U` is an `enum(u8)` and `isDenseEnum` requires that
+  tag type. `emitTopology` refuses past it with **E1003** rather than emitting an
+  artifact whose 257th member is `enum tag value '256' too large for type 'u8'`
+  in the *host's* build. Upgrade path is `enum(u16)`, and it is an ABI break: the
+  tag type and `isDenseEnum` move together and every linked host recompiles.
+  `ch06_hierarchy/vector_port_unknown_ceiling_rejected.va` stands ON this row,
+  not over it — it asserts the refusal, which is the ceiling working. Boundary
+  measured exact: 256 unknowns emit and type-check, 257 is E1003.
 - `num_ports` is bounded above by `|U|` and no longer below by 1: §6.2 makes the
   port list optional. `zig build test-contract` is where its tests run — they ran
   nowhere until wave 7 wired the step, which is how the old guard survived two

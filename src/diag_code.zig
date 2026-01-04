@@ -490,6 +490,8 @@ pub const Code = enum(u16) {
     // Runtime / artifact contract — codegen.zig, root.zig.
     E1001,
     E1002,
+    /// The device's `U` is `enum(u8)`, so it holds at most 256 unknowns.
+    E1003,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -4189,6 +4191,31 @@ fn infoOf(c: Code) Info {
             \\and the node names; this one overflowed the fixed name buffer.
             \\
             \\Shorten the module or node names involved.
+            ,
+        },
+        .E1003 => .{
+            .title = "more solver unknowns than the device contract can hold",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. The emitted device declares
+            \\its solver unknowns as `pub const U = enum(u8)`, and
+            \\`tools/contract.zig`'s `isDenseEnum` requires exactly that tag
+            \\type, so a device carries at most 256 of them — ports (LRM 6.5)
+            \\first, then LRM 3.6.3 internal nets, then LRM 5.4.2 branch-flow
+            \\unknowns.
+            \\
+            \\The refusal is here rather than in the host's build because the
+            \\alternative was silence: the 257th member is `enum tag value '256'
+            \\too large for type 'u8'`, an error against a line of GENERATED Zig
+            \\with nothing pointing back at the model that produced it.
+            \\
+            \\The bound is on the device VerA emits, not on the circuit a host
+            \\may solve — instantiate this module several times, or split it, and
+            \\each instance stamps its own rows into the host's matrix.
+            \\
+            \\Note the count is not the net count: LRM 6.5.2 expands a vector port
+            \\to one unknown per element, and every LRM 5.6 potential contribution
+            \\adds a branch-flow unknown for its own current.
             ,
         },
     };

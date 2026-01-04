@@ -55,6 +55,9 @@ pub const Error = std.mem.Allocator.Error || error{
     /// Never truncated: truncation would break the injectivity two distinct
     /// units rely on.
     NameTooLong,
+    /// More than 256 solver unknowns, which `U`'s `enum(u8)` tag cannot spell.
+    /// Reported as E1003 by `emitTopology`; see the ceiling argued there.
+    TooManyUnknowns,
 };
 
 const none_u32 = std.math.maxInt(u32);
@@ -856,6 +859,26 @@ pub const Gen = struct {
     /// this enum, and ports come first so the host's terminal order is the
     /// module header order.
     fn emitTopology(self: *Gen) Error!void {
+        // The 257th member is `enum tag value '256' too large for type 'u8'` —
+        // an error in the HOST's build, at a line of generated Zig, with nothing
+        // naming the .va that produced it. Refuse here instead, where the model
+        // is still in hand. `--emit-zig` exited 0 on this for seven waves.
+        //
+        // ponytail: |U| <= 256 is a PERMANENT ceiling, not a pending widening.
+        // `enum(u16)` is the upgrade path and it is an ABI break: `isDenseEnum`
+        // (tools/contract.zig) requires the `u8` tag, so the tag type and that
+        // predicate move together, and every host that already links a device
+        // recompiles. Registered in TODO.md §3 under the device contract.
+        if (self.u_names.len > 256) {
+            if (self.diags) |bag| try bag.add(
+                .codegen,
+                .E1003,
+                .{},
+                "this module needs {d} solver unknowns; the emitted `U` is an enum(u8) and holds 256",
+                .{self.u_names.len},
+            );
+            return error.TooManyUnknowns;
+        }
         try self.w("/// Solver unknowns: §6.5 ports first, then §3.6.3 internal nets,\n", .{});
         try self.w("/// then §5.4.2 branch-flow unknowns.\n", .{});
         try self.w("pub const U = enum(u8) {{\n", .{});
@@ -2935,7 +2958,16 @@ pub const Gen = struct {
         // §9.5 the descriptor family. Real kernels only in the display unit (see
         // `emitting_display`); rendered but discarded in any other unit of the
         // same artifact, so the slice `callArgIsValue` asked for is consumed.
-        if (self.display == .emit and Lower.isFileCall(name)) {
+        //
+        // NOT gated on the display mode, and that is the point: `buildJobs`
+        // queues a display unit only under `.emit`, so `emitting_display` is
+        // already false throughout a `.drop` build and every §9.5 name lands in
+        // `emitFileCallDropped` — the one place that answers with the type
+        // `Analysis.callTy` gave the call. Gating here instead sent them to
+        // `void_tasks`' blanket `S.con(0.0)`, which put an `S` in the `i64` slot
+        // §9.5.1 says a descriptor is: `const t0: i64 = S.con(0.0);`, `--emit-zig`
+        // exit 0, and the failure deferred to whoever compiled the device.
+        if (Lower.isFileCall(name)) {
             if (!self.emitting_display) return self.emitFileCallDropped(name, args);
             return cg_display.emitFileCall(self, name, args, @intFromEnum(inst));
         }
@@ -3115,25 +3147,24 @@ pub const Gen = struct {
         if (eq(u8, name, "$sscanf$str")) return self.emitScan("zScanS", args, .str);
         // §9.4/§9.7 display and control tasks: void. Lowering keeps them as
         // calls; their result is never read, so this only fires if a model
-        // assigns one.
+        // assigns one — and every one of these is real-valued (`Analysis.callTy`
+        // types nothing here `.int`), which is what makes ONE answer correct for
+        // the whole list.
         //
-        // The §9.5 names are here too, and NOT as a stub: this is the answer a
-        // device with no host file table has to give. §9.5.1 reserves zero — "if a
-        // file cannot be opened … a zero is returned for the mcd or fd" — and a
-        // device compiled for a solver has no `display` decl, hence no per-point
-        // phase a descriptor operation could be sequenced in, hence genuinely no
-        // file it could have opened. The artifact that DOES have one took the
-        // `Lower.isFileCall` branch above and never reaches this list.
+        // The §9.5 descriptor family is NOT here. It used to be, for the case
+        // where a device carries no host file table — but that answer is
+        // `emitFileCallDropped`'s, which reads `callTy` and returns `@as(i64, 0)`
+        // for the eight integer-valued names §9.5.1 defines a descriptor as. The
+        // blanket `S.con(0.0)` below typed them real and the two disagreed.
+        // `Lower.isFileCall` above now claims every §9.5 spelling in BOTH display
+        // modes, so nothing in that family reaches this list.
         const void_tasks = [_][]const u8{
-            "$display",       "$displayb",   "$displayo",   "$displayh",
-            "$write",         "$writeb",     "$writeo",     "$writeh",
-            "$strobe",        "$strobeb",    "$strobeo",    "$strobeh",
-            "$monitor",       "$monitoron",  "$monitoroff", "$debug",
-            "$fdisplay",      "$fwrite",     "$fstrobe",    "$fmonitor",
-            "$fopen",         "$fclose",     "$fflush",     "$fgets",
-            "$fscanf",        "$rewind",     "$fseek",      "$ftell",
-            "$feof",          "$ferror",     "$finish",     "$stop",
-            "$fatal",         "$error",      "$warning",    "$info",
+            "$display",       "$displayb",  "$displayo",   "$displayh",
+            "$write",         "$writeb",    "$writeo",     "$writeh",
+            "$strobe",        "$strobeb",   "$strobeo",    "$strobeh",
+            "$monitor",       "$monitoron", "$monitoroff", "$debug",
+            "$finish",        "$stop",      "$fatal",      "$error",
+            "$warning",       "$info",
             "$discontinuity", "$bound_step",
         };
         for (void_tasks) |t| {
@@ -3199,6 +3230,12 @@ pub const Gen = struct {
     /// two have to agree. The alternative, teaching `callArgIsValue` which unit it
     /// is being asked about, would thread the display flag through `UnitPlan`'s
     /// whole marking pass to save four characters of generated text.
+    ///
+    /// The whole of a `display == .drop` build is "not the display unit", so this
+    /// is also every §9.5 call in a device. `callArgIsValue` marks nothing live
+    /// there, which agrees the other way round: no slot is declared, and there is
+    /// nothing to consume. What matters in both modes is the TYPE below — the
+    /// caller's slot is `Analysis.callTy`'s, and §9.5's descriptors are integers.
     fn emitFileCallDropped(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
         _ = args; // `UnitPlan.dispHere` did not mark them: there is nothing here to read them
         // §9.5.1 reserves 0 for `$fopen`'s failure, §9.5.4.1 for "an error occurs
@@ -5349,6 +5386,52 @@ test "codegen: §9.4 display tasks are void by default and print on request" {
     try std.testing.expect(std.mem.indexOf(u8, exe, "\"no newline\"") != null);
     // §9.7.3 the severity is a prefix, not something a reader must infer.
     try std.testing.expect(std.mem.indexOf(u8, exe, "ERROR: bad") != null);
+}
+
+test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the executable" {
+    // THE BUG THIS PINS. `emitSysCall`'s §9.5 branch used to be gated on
+    // `display == .emit`, so in a device the eight descriptor-RETURNING names
+    // fell through to `void_tasks`' blanket `S.con(0.0)` — while
+    // `Analysis.callTy` types every one of them `.int` and therefore declared
+    // the slot `i64`. The emitted line was `const t0: i64 = S.con(0.0);`,
+    // `--emit-zig` exited 0, and the failure landed in the HOST's build as
+    // `expected type 'i64', found 'Dual'` against generated Zig in a cache
+    // directory. `emitFileCallDropped` already switched on `callTy`; the gate
+    // was all that kept it from running.
+    //
+    // `fd` FEEDS THE RESIDUAL on purpose. A descriptor whose value nothing reads
+    // gets no slot, so the wrong type would be merely absent instead of wrong —
+    // which is why this is the one shape that observes it.
+    //
+    // THE SUITE CANNOT GRADE THIS. `tests/torture.zig` compiles every fixture
+    // with `.display = .emit` (there is no `//!` directive for the mode), so a
+    // `.va` cannot reach the `.drop` path at all. This test is the grader.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module fdev(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  integer fd;
+        \\  analog begin
+        \\    fd = $fopen("nope.txt");
+        \\    I(p, n) <+ V(p, n) * (fd + 1);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    // §9.5.1 "a zero is returned for the mcd or fd" — as an INTEGER. A device has
+    // no host file table, so zero is the answer and not a stub.
+    const dev = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, dev, ": i64 = @as(i64, 0);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, dev, ": i64 = S.con(") == null);
+    // No kernel came with it: `buildPrelude` gates the descriptor table on
+    // `display == .emit`, and a call to `zFOpen` here would not resolve.
+    try std.testing.expect(std.mem.indexOf(u8, dev, "zFOpen") == null);
+
+    // The printing artifact is unchanged — it still opens the file for real.
+    const exe = try h.genDisplay(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, exe, "zFOpen") != null);
 }
 
 test "codegen: §9.4 a display unit that reads an operator input opens the cache" {
