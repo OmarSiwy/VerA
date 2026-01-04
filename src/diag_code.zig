@@ -492,6 +492,9 @@ pub const Code = enum(u16) {
     E1002,
     /// The device's `U` is `enum(u8)`, so it holds at most 256 unknowns.
     E1003,
+    /// §3.4 a parameter whose default has no compile-time value and no
+    /// `derive()` line either, so the model card field ships as 0.
+    W1050,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -4216,6 +4219,30 @@ fn infoOf(c: Code) Info {
             \\Note the count is not the net count: LRM 6.5.2 expands a vector port
             \\to one unknown per element, and every LRM 5.6 potential contribution
             \\adds a branch-flow unknown for its own current.
+            ,
+        },
+        .W1050 => .{
+            .title = "parameter default has no compile-time value",
+            .lrm = "3.4.1",
+            .explain =
+            \\LRM 3.4.1 makes a parameter's default a `constant_expression`. This
+            \\one is not: it reads a quantity only the simulator has, such as
+            \\9.10's `$temperature` or 9.18's `$simparam`. There is nothing to
+            \\fold, so the generated `Model` field initializer is 0.
+            \\
+            \\That is not always wrong — the host writes the model card and can
+            \\put the real value in the field before the first solve. It IS
+            \\wrong if you expected `Model{}` alone to be usable, because a
+            \\temperature of 0 K or a gmin of 0 will not converge.
+            \\
+            \\A default that is an arithmetic expression over OTHER parameters
+            \\does not reach here: 6.3.4 makes it a `derive()` line, and calling
+            \\`derive` after writing the card gives it its value.
+            \\
+            \\Fix it by giving the parameter a constant default and reading the
+            \\simulator quantity in the analog block instead, where 9.10 and
+            \\9.18 say it is evaluated. Or take the field as the host's to
+            \\write, and `--allow=W1050`.
             ,
         },
     };
