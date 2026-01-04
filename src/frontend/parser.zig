@@ -2870,10 +2870,10 @@ pub const Parser = struct {
     /// stores only {tag,start}.
     fn parseNumber(self: *Parser) Error!Ast.ExprId {
         const tok = self.pos;
-        const text = self.tokenText(tok);
         self.pos += 1;
 
         if (self.tags[tok] == .int_literal) {
+            const text = self.gluedNumberText(tok);
             // §2.6.1 decoding — size truncation, the `s` two's-complement form
             // and `_` — lives in `lexer.parseInt` so there is exactly ONE
             // decoder. A second one here silently returned 65535 for `8'hFFFF`
@@ -2899,29 +2899,62 @@ pub const Parser = struct {
             return self.file.exprs.addInt(self.arena, tok, lit.value);
         }
 
-        var buf: [128]u8 = undefined;
-        if (text.len > buf.len) {
-            return self.failAt(tok, .E0134, "", .{});
-        }
-        // §2.6: underscores are ignored everywhere in a number.
-        var n: usize = 0;
-        for (text) |c| {
-            if (c == '_') continue;
-            buf[n] = c;
-            n += 1;
-        }
-        const clean = buf[0..n];
-
-        // §2.6.2 real: optional trailing scale factor.
-        var mantissa = clean;
-        var scale: f64 = 1.0;
-        if (n > 0) if (siScale(clean[n - 1])) |s| {
-            scale = s;
-            mantissa = clean[0 .. n - 1];
+        const text = self.tokenText(tok);
+        // §2.6.2 decoding — `_` removal and the Table 2-1 scale factor — lives
+        // in `lexer.parseReal` for the same reason §2.6.1 lives in `parseInt`:
+        // exactly ONE decoder. The second one here computed `mantissa * scale`,
+        // which rounds twice (once for the mantissa, once for the product) and
+        // disagreed with the tested decoder on 2376 of the 9990 two-digit
+        // scaled literals by 1 ulp. `parseReal` joins the text and rounds once.
+        const v = lexer.parseReal(text) catch |e| return switch (e) {
+            error.LiteralTooLong => self.failAt(tok, .E0134, "", .{}),
+            else => self.failAt(tok, .E0133, "`{s}`", .{text}),
         };
-        const v = std.fmt.parseFloat(f64, mantissa) catch
-            return self.failAt(tok, .E0133, "`{s}`", .{text});
-        return self.file.exprs.addReal(self.arena, tok, v * scale);
+        return self.file.exprs.addReal(self.arena, tok, v);
+    }
+
+    /// The span `lexer.parseInt` has to see to name a MALFORMED §2.6.1 second
+    /// form — normally just the token, occasionally the token plus the one
+    /// glued to it.
+    ///
+    /// §2.6.1's second form "shall be composed of up to three tokens — an
+    /// optional size constant, an apostrophe character (') followed by a base
+    /// format character, and the digits". The lexer stops the number exactly
+    /// where the clause stops it, so the three forms the clause itself calls
+    /// illegal arrive as a well-formed literal plus a separate token: `4' h5`
+    /// (no white space is allowed between the apostrophe and the base format),
+    /// `8'y11` (`y` is not one of the eight legal base letters) and Example 1's
+    /// `4af` ("hexadecimal format requires 'h"). Reporting "expected `;`" about
+    /// a form the LRM labels illegal — and offering to insert the semicolon
+    /// mid-number — is the wrong message, so when the next token begins
+    /// EXACTLY where this one ended, the user wrote one number and the decoder
+    /// gets to say which rule it broke.
+    ///
+    /// Adjacency is the whole test: `4 af` really is two things with an
+    /// operator missing between them and keeps that message. `.apostrophe_lbrace`
+    /// is deliberately not in the set — `2'{1}` is §4.2.14's assignment
+    /// pattern, where the apostrophe is legal and is not a base format.
+    fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
+        const text = self.tokenText(tok);
+        const start = self.starts[tok];
+        const next = self.starts[tok + 1]; // the stream always ends in `.eof`
+        if (next != start + text.len) return text;
+        switch (self.tags[tok + 1]) {
+            // Only when the glued text is spelled ENTIRELY in digits of some
+            // base — that is what makes it a number with the base format left
+            // out. `1g` is not, and 56_scale_factor_alphabet_rejected.va says
+            // exactly why: §2.6.2's scale_factor alphabet has no `g`, so `1g`
+            // "is the integer 1 followed by an identifier" and E0207 is the
+            // truth about it.
+            .identifier => for (self.tokenText(tok + 1)) |c| {
+                if (!lexer.isBasedDigit(c, 16)) return text;
+            },
+            // Only an apostrophe: a stray backtick is the preprocessor's, and
+            // gluing it would decode as a four-state digit and say so (E0130).
+            .invalid => if (self.src[next] != '\'') return text,
+            else => return text,
+        }
+        return self.src[start .. next + self.tokenText(tok + 1).len];
     }
 
     /// A.8.1, both brace forms at once:
@@ -3112,31 +3145,22 @@ pub const Parser = struct {
     }
 
     /// Source text of a token. `token.Stored` has no length (DOD: recompute,
-    /// don't store), so the lexeme is re-scanned from `start` — the tag says
-    /// which scanner to use, so this is a switch, not a re-lex.
+    /// don't store), so the lexeme is re-scanned from `start` — by the LEXER,
+    /// which is what makes it exact: `lexer.tokenEnd` re-runs `next()`, and
+    /// `next()` is a pure function of (src, pos) (see lexer.zig's header).
+    ///
+    /// A parser-side copy of the scanners used to live here and it had drifted:
+    /// its escaped-identifier arm stopped at white space, where §2.8.1 and
+    /// `lexer.lexEscapedIdentifier` stop at any byte outside printable ASCII
+    /// 33–126 — so a non-ASCII byte (a UTF-8 comment character pasted into a
+    /// name) ended the identifier for the lexer and not for the parser, and the
+    /// two disagreed about where the next token began.
     fn tokenText(self: *const Parser, i: u32) []const u8 {
-        const start = self.starts[i];
-        const src = self.src;
-        return switch (self.tags[i]) {
-            // §2.8 / §2.8.3
-            .identifier, .system_identifier, .kw_reserved => src[start..scanIdentEnd(src, start)],
-            // §2.8.1 escaped identifier: `\` then non-whitespace; the `\` is
-            // not part of the name.
-            .escaped_identifier => blk: {
-                var e = start + 1;
-                while (e < src.len and !std.ascii.isWhitespace(src[e])) e += 1;
-                break :blk src[start + 1 .. e];
-            },
-            .int_literal, .real_literal => src[start..scanNumberEnd(src, start)],
-            .string_literal => blk: {
-                var e = start + 1;
-                while (e < src.len and src[e] != '"') : (e += 1) {
-                    if (src[e] == '\\' and e + 1 < src.len) e += 1;
-                }
-                break :blk src[start..@min(e + 1, src.len)];
-            },
-            else => |t| token.Tag.lexeme(t) orelse src[start..@min(start + 1, src.len)],
-        };
+        const lx: lexer.Lexer = .{ .src = self.src };
+        const text = lx.tokenText(self.starts[i]);
+        // §2.8.1: the `\` opens the identifier but is not part of the name.
+        // The terminator is not in the span, so only the head is stripped.
+        return if (self.tags[i] == .escaped_identifier) text[1..] else text;
     }
 
     // -----------------------------------------------------------------------
@@ -3448,203 +3472,13 @@ fn isTerminator(t: token.Tag) bool {
     };
 }
 
-/// §2.8 identifier body: letters, digits, `_` and `$`.
-fn scanIdentEnd(src: []const u8, start: u32) u32 {
-    var i = start;
-    if (i < src.len and (src[i] == '$' or src[i] == '`')) i += 1;
-    while (i < src.len and (std.ascii.isAlphanumeric(src[i]) or src[i] == '_' or src[i] == '$')) {
-        i += 1;
-    }
-    return i;
-}
-
-/// §2.6.1 / §2.6.2 number lexeme end: `[size] ' [s] base digits`, or decimal
-/// with an optional fraction and an optional exponent OR SI scale factor.
-/// Any byte that could be a based digit in SOME base, plus the four-state ones.
-/// Deliberately base-blind: the token has to carry `4'b012` whole so
-/// `lexer.parseInt` can name the out-of-range digit instead of the parser
-/// silently ending the number one byte early.
-fn isBasedDigitByte(c: u8) bool {
-    return std.ascii.isHex(c) or c == 'x' or c == 'X' or c == 'z' or c == 'Z' or c == '?';
-}
-
-fn scanNumberEnd(src: []const u8, start: u32) u32 {
-    var i = start;
-    while (i < src.len and (std.ascii.isDigit(src[i]) or src[i] == '_')) i += 1;
-    // §2.6.1's join between the SIZE token and the base_format token, which
-    // `lexer.lexNumber` makes across white space so that the clause's "it shall
-    // be legal to macro substitute these three tokens" is usable. Unlike the
-    // lexer this scanner runs on a token whose tag is already decided, so the
-    // base character has to be checked here: a `.int_literal` followed by white
-    // space and `'{` is §4.2.14's assignment pattern and ends at the digits.
-    if (i < src.len and std.ascii.isWhitespace(src[i])) {
-        var q = i;
-        while (q < src.len and std.ascii.isWhitespace(src[q])) q += 1;
-        if (q < src.len and src[q] == '\'') {
-            var b = q + 1;
-            if (b < src.len and (src[b] == 's' or src[b] == 'S')) b += 1;
-            if (b < src.len) switch (std.ascii.toLower(src[b])) {
-                'b', 'o', 'd', 'h' => i = q,
-                else => {},
-            };
-        }
-    }
-    if (i < src.len and src[i] == '\'') {
-        i += 1;
-        if (i < src.len and (src[i] == 's' or src[i] == 'S')) i += 1;
-        if (i < src.len) i += 1; // base character
-        // §2.6.1: "the unsigned number token shall immediately follow the base
-        // format, optionally preceded by white space". `lexer.lexBasedTail`
-        // skips it the same way and for the same reason; the skip is rolled
-        // back when no digit follows, so `8'h +` still ends at the base format.
-        var after_ws = i;
-        while (after_ws < src.len and std.ascii.isWhitespace(src[after_ws])) after_ws += 1;
-        if (after_ws < src.len and isBasedDigitByte(src[after_ws])) i = after_ws;
-        while (i < src.len and (isBasedDigitByte(src[i]) or src[i] == '_')) i += 1;
-        return i;
-    }
-    if (i + 1 < src.len and src[i] == '.' and std.ascii.isDigit(src[i + 1])) {
-        i += 1;
-        while (i < src.len and (std.ascii.isDigit(src[i]) or src[i] == '_')) i += 1;
-    }
-    if (i < src.len and (src[i] == 'e' or src[i] == 'E')) {
-        var j = i + 1;
-        if (j < src.len and (src[j] == '+' or src[j] == '-')) j += 1;
-        if (j < src.len and std.ascii.isDigit(src[j])) {
-            while (j < src.len and std.ascii.isDigit(src[j])) j += 1;
-            return j;
-        }
-    }
-    if (i < src.len and siScale(src[i]) != null) i += 1;
-    return i;
-}
-
-/// §2.6.2 scale_factor ::= T | G | M | K | k | m | u | n | p | f | a
-fn siScale(c: u8) ?f64 {
-    return switch (c) {
-        'T' => 1e12,
-        'G' => 1e9,
-        'M' => 1e6,
-        'K', 'k' => 1e3,
-        'm' => 1e-3,
-        'u' => 1e-6,
-        'n' => 1e-9,
-        'p' => 1e-12,
-        'f' => 1e-15,
-        'a' => 1e-18,
-        else => null,
-    };
-}
-
 // ---------------------------------------------------------------------------
-// Self-check. A throwaway lexer (enough of §2.5–§2.8 for these sources) drives
-// the real parser, so the check exercises the grammar, not a mock.
+// Self-check. The REAL lexer drives the real parser, so the check exercises the
+// grammar against the token stream the engine actually produces. A throwaway
+// second lexer lived here and its own comment admitted it was weaker — no §2.6.1
+// based numbers, no §2.7 strings, no §10.6 directives — so every test that
+// needed one of those had to opt into a second entry point.
 // ---------------------------------------------------------------------------
-
-const TestLex = struct {
-    tags: std.ArrayList(token.Tag) = .empty,
-    starts: std.ArrayList(u32) = .empty,
-
-    /// Longest-match symbol table, derived from `Tag.lexeme` so it can never
-    /// drift from token.zig.
-    const symbols = blk: {
-        @setEvalBranchQuota(20_000);
-        const fields = @typeInfo(token.Tag).@"enum".fields;
-        var list: [fields.len]struct { []const u8, token.Tag } = undefined;
-        var n = 0;
-        for (fields) |f| {
-            const t: token.Tag = @enumFromInt(f.value);
-            if (token.isKeyword(t)) continue;
-            const lex = token.Tag.lexeme(t) orelse continue;
-            list[n] = .{ lex, t };
-            n += 1;
-        }
-        // Longest first, so `<+` beats `<` and `**` beats `*`.
-        var out = list[0..n].*;
-        for (0..out.len) |a| for (a + 1..out.len) |b| {
-            if (out[b][0].len > out[a][0].len) {
-                const tmp = out[a];
-                out[a] = out[b];
-                out[b] = tmp;
-            }
-        };
-        const frozen = out;
-        break :blk frozen;
-    };
-
-    fn run(gpa: std.mem.Allocator, src: []const u8) !TestLex {
-        var self: TestLex = .{};
-        var i: u32 = 0;
-        outer: while (i < src.len) {
-            if (std.ascii.isWhitespace(src[i])) {
-                i += 1;
-                continue;
-            }
-            if (std.mem.startsWith(u8, src[i..], "//")) {
-                while (i < src.len and src[i] != '\n') i += 1;
-                continue;
-            }
-            if (std.mem.startsWith(u8, src[i..], "/*")) {
-                i += 2;
-                while (i + 1 < src.len and !std.mem.startsWith(u8, src[i..], "*/")) i += 1;
-                i = @min(i + 2, @as(u32, @intCast(src.len)));
-                continue;
-            }
-            if (src[i] == '\\') { // §2.8.1 escaped identifier
-                const esc = i;
-                i += 1;
-                while (i < src.len and !std.ascii.isWhitespace(src[i])) i += 1;
-                try self.push(gpa, .escaped_identifier, esc);
-                continue;
-            }
-            const start = i;
-            if (std.ascii.isDigit(src[i])) {
-                i = scanNumberEnd(src, i);
-                const text = src[start..i];
-                const is_real = std.mem.indexOfScalar(u8, text, '\'') == null and
-                    (std.mem.indexOfAny(u8, text, ".eE") != null or siScale(text[text.len - 1]) != null);
-                try self.push(gpa, if (is_real) .real_literal else .int_literal, start);
-                continue;
-            }
-            if (std.ascii.isAlphabetic(src[i]) or src[i] == '_') {
-                i = scanIdentEnd(src, i);
-                const tag = token.keyword_map.get(src[start..i]) orelse .identifier;
-                try self.push(gpa, tag, start);
-                continue;
-            }
-            if (src[i] == '$') {
-                i = scanIdentEnd(src, i);
-                try self.push(gpa, .system_identifier, start);
-                continue;
-            }
-            if (src[i] == '"') {
-                i += 1;
-                while (i < src.len and src[i] != '"') : (i += 1) {
-                    if (src[i] == '\\') i += 1;
-                }
-                i += 1;
-                try self.push(gpa, .string_literal, start);
-                continue;
-            }
-            for (symbols) |sym| {
-                if (std.mem.startsWith(u8, src[i..], sym[0])) {
-                    try self.push(gpa, sym[1], start);
-                    i += @intCast(sym[0].len);
-                    continue :outer;
-                }
-            }
-            try self.push(gpa, .invalid, start);
-            i += 1;
-        }
-        try self.push(gpa, .eof, @intCast(src.len));
-        return self;
-    }
-
-    fn push(self: *TestLex, gpa: std.mem.Allocator, tag: token.Tag, start: u32) !void {
-        try self.tags.append(gpa, tag);
-        try self.starts.append(gpa, start);
-    }
-};
 
 const TestResult = struct {
     file: Ast.SourceFile,
@@ -3671,19 +3505,6 @@ fn newBag(arena: std.mem.Allocator, src: []const u8) !*diag.Bag {
 }
 
 fn parseForTest(arena: std.mem.Allocator, src: []const u8) !TestResult {
-    const lx = try TestLex.run(arena, src);
-    const bag = try newBag(arena, src);
-    var p = Parser.init(arena, src, lx.tags.items, lx.starts.items, bag);
-    const file = p.parseSourceFile() catch |e| switch (e) {
-        error.ParseError => p.file,
-        else => return e,
-    };
-    return .{ .file = file, .bag = bag };
-}
-
-/// Same, but through the REAL lexer — `TestLex` has no §10.6 directive tokens
-/// and no §2.6.1 number scanner.
-fn lexParseForTest(arena: std.mem.Allocator, src: []const u8) !TestResult {
     var list = try lexer.Lexer.tokenize(arena, src);
     const bag = try newBag(arena, src);
     var p = Parser.init(arena, src, list.items(.tag), list.items(.start), bag);
@@ -3711,7 +3532,7 @@ test "§10.6 begin_keywords picks which annex B words are reserved" {
         \\endmodule
         \\`end_keywords
     ;
-    const a = try lexParseForTest(arena, ok);
+    const a = try parseForTest(arena, ok);
     try std.testing.expectEqual(@as(usize, 0), a.count());
     try std.testing.expectEqualStrings("sin", a.file.str(a.file.modules[0].ports[0].name));
 
@@ -3723,13 +3544,13 @@ test "§10.6 begin_keywords picks which annex B words are reserved" {
         \\endmodule
         \\`end_keywords
     ;
-    const b = try lexParseForTest(arena, bad);
+    const b = try parseForTest(arena, bad);
     try std.testing.expect(b.count() > 0);
     try std.testing.expectEqual(diag.Code.E0208, b.code(0));
     try std.testing.expectEqualStrings("found `sin`", b.msg(0));
 
     // The set is restored by `end_keywords, so `sin` is reserved again after.
-    const c = try lexParseForTest(arena,
+    const c = try parseForTest(arena,
         \\`begin_keywords "1364-1995"
         \\`end_keywords
         \\module m(sin);
@@ -3738,21 +3559,21 @@ test "§10.6 begin_keywords picks which annex B words are reserved" {
     try std.testing.expect(c.count() > 0);
 
     // §10.6: only these five specifiers exist.
-    const d = try lexParseForTest(arena, "`begin_keywords \"1800-2017\"\n`end_keywords\n");
+    const d = try parseForTest(arena, "`begin_keywords \"1800-2017\"\n`end_keywords\n");
     try std.testing.expectEqual(diag.Code.E0135, d.code(0));
     try std.testing.expectEqualStrings("`1800-2017`", d.msg(0));
 
     // Unbalanced. An open `begin_keywords at end of file is NOT an error:
     // §10.6 scopes the directive "even across source code file boundaries",
     // so the set simply carries on into whatever is compiled next.
-    const e = try lexParseForTest(arena, "`begin_keywords \"VAMS-2.3\"\nmodule m; endmodule\n");
+    const e = try parseForTest(arena, "`begin_keywords \"VAMS-2.3\"\nmodule m; endmodule\n");
     try std.testing.expectEqual(@as(usize, 0), e.count());
     // The other way round has no such reading.
-    const f = try lexParseForTest(arena, "`end_keywords\n");
+    const f = try parseForTest(arena, "`end_keywords\n");
     try std.testing.expectEqual(diag.Code.E0136, f.code(0));
 
     // §10.6: "can only be specified outside of a design element".
-    const g = try lexParseForTest(arena,
+    const g = try parseForTest(arena,
         \\module m;
         \\`begin_keywords "1364-2005"
         \\endmodule
@@ -3778,7 +3599,7 @@ test "§2.6.1 based literals decode to the right VALUE, not just to a token" {
         \\  end
         \\endmodule
     ;
-    const res = try lexParseForTest(arena, src);
+    const res = try parseForTest(arena, src);
     try std.testing.expectEqual(@as(usize, 0), res.count());
 
     const body = res.file.modules[0].analog[0].body;
@@ -3803,7 +3624,7 @@ test "§4.2.13 a sized-constant concatenation joins BITS" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const res = try lexParseForTest(arena,
+    const res = try parseForTest(arena,
         \\module m;
         \\  integer a, b, c;
         \\  analog begin
@@ -3831,15 +3652,15 @@ test "§4.2.13 a sized-constant concatenation joins BITS" {
     }
 
     // "Unsized constant numbers shall not be allowed in concatenations."
-    const unsized = try lexParseForTest(arena, "module m; integer a; analog a = {1'b1, 3}; endmodule");
+    const unsized = try parseForTest(arena, "module m; integer a; analog a = {1'b1, 3}; endmodule");
     try std.testing.expectEqual(diag.Code.E0216, unsized.code(0));
     // §3.2.1: 33 bits does not fit an integer, and must not wrap silently.
-    const wide = try lexParseForTest(arena, "module m; integer a; analog a = {16'h0, 16'h0, 1'b1}; endmodule");
+    const wide = try parseForTest(arena, "module m; integer a; analog a = {16'h0, 16'h0, 1'b1}; endmodule");
     try std.testing.expectEqual(diag.Code.E0217, wide.code(0));
     try std.testing.expectEqualStrings("at least 33 bits wide", wide.msg(0));
     // A brace list with no sized operand stays a `.concat` (§4.5.11 filter
     // coefficients spell their vector that way).
-    const coeffs = try lexParseForTest(arena, "module m; real a; analog a = laplace_nd(1.0, {1,0}, {1,1}); endmodule");
+    const coeffs = try parseForTest(arena, "module m; real a; analog a = laplace_nd(1.0, {1,0}, {1,1}); endmodule");
     try std.testing.expectEqual(@as(usize, 0), coeffs.count());
 }
 
@@ -3848,7 +3669,7 @@ test "§4.2.13 replication unrolls into the operand list" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    const res = try lexParseForTest(arena,
+    const res = try parseForTest(arena,
         \\module m;
         \\  integer a, b, c;
         \\  analog begin
@@ -3880,13 +3701,13 @@ test "§4.2.13 replication unrolls into the operand list" {
     // §3.3 Table 3-3: "multiplier ... can be nonconstant" for a string result,
     // so a non-literal count is NOT a parse error — it keeps its node and
     // lowering repeats the string.
-    const nonconst = try lexParseForTest(arena, "module m; integer i; string s; analog s = {i{\"Hi\"}}; endmodule");
+    const nonconst = try parseForTest(arena, "module m; integer i; string s; analog s = {i{\"Hi\"}}; endmodule");
     try std.testing.expectEqual(@as(usize, 0), nonconst.count());
 
     // A.8.1's assignment-pattern replication, §4.2.14's own `'{5{0.0}}`, is a
     // different brace and a different meaning: five ELEMENTS, not five copies
     // of a bit pattern.
-    const pat = try lexParseForTest(arena, "module m; parameter real d[0:4] = '{5{0.0}}; endmodule");
+    const pat = try parseForTest(arena, "module m; parameter real d[0:4] = '{5{0.0}}; endmodule");
     try std.testing.expectEqual(@as(usize, 0), pat.count());
     try std.testing.expectEqual(@as(usize, 5), pat.file.exprs.args(pat.file.modules[0].params[0].default).len);
 }
@@ -4253,7 +4074,7 @@ test "a missing terminator suggests inserting it after the PREVIOUS token" {
         \\  end
         \\endmodule
     ;
-    const res = try lexParseForTest(arena, src);
+    const res = try parseForTest(arena, src);
     try std.testing.expectEqual(diag.Code.E0207, res.code(0));
 
     var nbuf: [diag.max_children]diag.Note = undefined;
@@ -4270,13 +4091,11 @@ test "a missing terminator suggests inserting it after the PREVIOUS token" {
     // NAME, and no fix can invent one. The port branch `branch (<p>) b` used to
     // be this example and parses now (§3.12.1); a NUMBER where the
     // list_of_branch_identifiers goes is the same production still wanting a name.
-    const named = try lexParseForTest(arena, "module m(p); inout p; electrical p; branch (p) 7; endmodule");
+    const named = try parseForTest(arena, "module m(p); inout p; electrical p; branch (p) 7; endmodule");
     try std.testing.expectEqual(diag.Code.E0208, named.code(0));
     try std.testing.expectEqual(@as(u32, 0), named.bag.at(0).n_notes);
 }
 
-// Needs the REAL lexer: `TestLex` has no §2.7 string scanner, so it never
-// produces the `.invalid` token this diagnostic is built from.
 test "§2.7 a string may not span lines, however it is continued" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -4289,7 +4108,7 @@ test "§2.7 a string may not span lines, however it is continued" {
         .{ .src = "module m; analog $strobe(\"a\nb\"); endmodule", .notes = 1 },
     };
     for (cases) |c| {
-        const res = try lexParseForTest(arena, c.src);
+        const res = try parseForTest(arena, c.src);
         try std.testing.expect(res.count() > 0);
         try std.testing.expectEqual(diag.Code.E0138, res.code(0));
         try std.testing.expectEqualStrings(
