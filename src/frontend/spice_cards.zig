@@ -36,9 +36,21 @@
 //! `elaborate.findModule`, and it makes the rule apply to PORT spellings too:
 //! `.SUBCKT ECPOSC (OUT GND)` is reachable as `osc1.out` because the port is
 //! named `out` by the time the parser sees it.
+//!
+//! A NAME THAT IS A KEYWORD IS SPELLED §2.8.1. SPICE has no reserved words, so
+//! `.SUBCKT AMP (INPUT OUTPUT)` and `.MODEL WIRE NPN` are ordinary cards while
+//! `input`, `output` and `wire` are annex B keywords. Synthesizing them bare
+//! puts an E0208 on a line the user never wrote, which contradicts the premise
+//! above — so `spell` writes them as escaped identifiers, which §2.8.2 says are
+//! never keywords. It is a spelling and not a rename: §2.8.1 makes neither the
+//! backslash nor the terminating white space part of the identifier, so the
+//! name is unchanged for `elaborate.findModule` and for §6.7.1, and E.3
+//! connects the ports by ORDER, so the escape never has to be typed to make a
+//! connection.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const token = @import("token.zig");
 
 /// Prelude text plus how many module declarations it holds. The count is what
 /// `Ast.SourceFile.netlist_modules` records; it cannot be derived at comptime the
@@ -162,6 +174,9 @@ fn emitCard(
     const name = it.next() orelse return false;
     if (!isIdent(name)) return false;
     for (seen.items) |s| if (std.mem.eql(u8, s, name)) return false;
+    // `seen` keeps the bare name — the escape is a spelling of it, not another
+    // name, so two cards named `wire` are still a repeat.
+    const decl = try spell(arena, name);
 
     if (is_model) {
         const type_ = it.next() orelse return false;
@@ -186,19 +201,19 @@ fn emitCard(
             \\endmodule
             \\
             \\
-        , .{ name, row.ports, row.ports, row.ports, row.prim, row.ports });
+        , .{ decl, row.ports, row.ports, row.ports, row.prim, row.ports });
     } else {
         // `.SUBCKT name p1 p2 ... [params: k=v]` — ports up to the first thing
         // that is not a node name.
         var ports: std.ArrayList([]const u8) = .empty;
         while (it.next()) |t| {
             if (!isIdent(t)) break; // `params:`, `k=v`, a number, ...
-            try ports.append(arena, t);
+            try ports.append(arena, try spell(arena, t));
         }
         // A.1.2 makes the port list optional, so a portless `.SUBCKT` is a legal
         // module — and an empty `electrical ;` would not be.
         if (ports.items.len == 0) {
-            try out.print(arena, "module {s};\nendmodule\n\n", .{name});
+            try out.print(arena, "module {s};\nendmodule\n\n", .{decl});
         } else {
             const list = try std.mem.join(arena, ", ", ports.items);
             // EMPTY BODY. The subcircuit's contents are device cards written in
@@ -214,7 +229,7 @@ fn emitCard(
                 \\endmodule
                 \\
                 \\
-            , .{ name, list, list, list });
+            , .{ decl, list, list, list });
         }
     }
     try seen.append(arena, name);
@@ -230,6 +245,25 @@ fn isIdent(t: []const u8) bool {
     if (!std.ascii.isAlphabetic(t[0]) and t[0] != '_') return false;
     for (t) |c| if (!std.ascii.isAlphanumeric(c) and c != '_') return false;
     return true;
+}
+
+/// How `t` has to be WRITTEN to declare it here. `isIdent` above is §2.7 SHAPE
+/// only, and shape is not enough: a SPICE netlist has no reserved words, so a
+/// perfectly ordinary card can name a node `INPUT` or a model `WIRE`. Those
+/// spellings become keywords the moment they are lowered into Verilog-AMS text,
+/// and the diagnostic lands on a synthesized line with no author.
+///
+/// §2.8.1's escape is the LRM's own answer, and it is the whole fix: an escaped
+/// identifier "can include any printable ASCII character", §2.8.2 lists what is
+/// a keyword and an escaped identifier is not among them, and neither the
+/// leading `\` nor the terminating white space is part of the NAME — so
+/// `elaborate.findModule`, §6.5.4's connection by order and §6.7.1's dotted
+/// probe all still see `wire` and `input`. The trailing space is the §2.8.1
+/// terminator and is load-bearing: `,` and `)` are printable ASCII and would
+/// otherwise be scanned INTO the identifier.
+fn spell(arena: Allocator, t: []const u8) Allocator.Error![]const u8 {
+    if (token.keyword_map.get(t) == null) return t;
+    return std.fmt.allocPrint(arena, "\\{s} ", .{t});
 }
 
 // ---------------------------------------------------------------------------
@@ -276,6 +310,28 @@ test "a .MODEL card becomes a module with the primitive's ports, a .SUBCKT with 
     // subcircuit contribute nothing.
     try std.testing.expect(std.mem.indexOf(u8, s.text, "bf") == null);
     try std.testing.expect(std.mem.indexOf(u8, s.text, "vcc") == null);
+}
+
+test "a card naming a keyword is declared as a §2.8.1 escaped identifier" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.SUBCKT AMP (INPUT OUTPUT)
+        \\.ENDS AMP
+        \\.MODEL WIRE NPN BF=80
+    );
+    try std.testing.expectEqual(@as(u32, 2), s.modules);
+    // The terminator is the point: `\input,` would scan the comma into the
+    // name (§2.8.1 ends at white space, and `,` is printable ASCII).
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "module amp(\\input , \\output );") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical \\input , \\output ;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "module \\wire (c, b, e, s);") != null);
+    // A name that is not a keyword is not escaped — the escape is for the
+    // collision, not for every synthesized name.
+    const plain = try synthesize(arena, ".SUBCKT PAD IN OUT\n.ENDS\n");
+    try std.testing.expect(std.mem.indexOf(u8, plain.text, "module pad(in, out);") != null);
 }
 
 test "an unrecognised model type, a repeat and an empty netlist all contribute nothing" {
