@@ -43,6 +43,14 @@ pub const ParamInfo = struct {
     ranges: []const Ast.ValueRange = &.{},
     /// §3.4.5 localparam: not part of the model card ABI.
     is_local: bool = false,
+    /// §3.4 "the value under the DECLARED defaults" — `constEval` of the
+    /// declaration, kept because it is the number the emitted `Model` field
+    /// initializer has to carry and it cannot always be recovered from
+    /// `default`. §4.2.12's `?:` lowers to a CFG diamond and a phi
+    /// (`lowerTernary`), which no value-level fold over the MIR can see
+    /// through; this fold ran over the AST, before the diamond existed.
+    /// `null` when the default is not a constant expression at all.
+    folded: ?Const = null,
 };
 
 /// Class 4 — a branch (pair of nodes carrying a flow/potential). LRM §3.12.
@@ -2480,7 +2488,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
     };
 
-    try self.addParam(name, ty, default, decl.ranges, decl.is_local, decl.main_tok);
+    try self.addParam(name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
 }
 
 /// §3.4.2: "The parameter value shall be within the range from the smallest
@@ -2598,7 +2606,7 @@ fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, fo
 fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom!bool {
     if (!std.mem.eql(u8, target, "$mfactor")) return false;
     self.mfactor_param = @intCast(self.params.items.len);
-    try self.addParam(alias, .real, try self.fconst(1.0), &.{}, false, Mir.no_tok);
+    try self.addParam(alias, .real, try self.fconst(1.0), .{ .real = 1.0 }, &.{}, false, Mir.no_tok);
     return true;
 }
 
@@ -2607,6 +2615,7 @@ fn addParam(
     name: []const u8,
     ty: Ast.Type,
     default: Mir.Value,
+    folded: ?Const,
     ranges: []const Ast.ValueRange,
     is_local: bool,
     tok: u32,
@@ -2617,6 +2626,7 @@ fn addParam(
         .tok = tok, // §3.4.2 diagnostics point back at the declaration
         .ty = ty,
         .default = default,
+        .folded = folded, // §3.4 the value under the declared defaults
         .ranges = ranges, // §3.4.2 — MUST reach proof.zig
         .is_local = is_local,
     });
@@ -2669,7 +2679,13 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
             const tv = try self.lowerExpr(elem);
             break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
         };
-        try self.addParam(try self.elemName(name, idx), ty, default, decl.ranges, decl.is_local, decl.main_tok);
+        // §3.4.4 an omitted element is the type's zero; anything else folds
+        // through the declared defaults exactly as a scalar's does.
+        const folded: ?Const = if (elem == .none)
+            (if (astTy(ty) == .real) Const{ .real = 0 } else Const{ .int = 0 })
+        else
+            self.constEval(elem);
+        try self.addParam(try self.elemName(name, idx), ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
     }
 }
 
@@ -7704,7 +7720,12 @@ pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
 }
 
 /// ch9 return types. Everything not listed is real (§9.14/§9.15 dominate).
-fn sysFuncTy(name: []const u8) Ty {
+///
+/// `pub` for one consumer: analysis.zig's "sysFuncTy and callTy agree" test.
+/// The two type the same call from opposite sides of the MIR and their comments
+/// have said MUST AGREE since both were written; the test is what turns that
+/// into something a build can fail on.
+pub fn sysFuncTy(name: []const u8) Ty {
     const ints = [_][]const u8{
         "$param_given", "$port_connected", // §9.19
         "$test$plusargs", "$value$plusargs", // §9.12
@@ -7719,6 +7740,12 @@ fn sysFuncTy(name: []const u8) Ty {
         // those calls before it becomes a `call`, so no MIR node carries the name
         // and there is nothing left to type. A row here would be a type for an
         // expression that cannot exist.
+        // §9.20 "The return value for both system functions shall be one (1) if
+        // the alias was successfully created and zero (0) otherwise" — a status,
+        // not a measurement. Typed real, the §4.1.9 status assignment forced an
+        // int→real→int round trip through the `integer` slot and `status << 1`
+        // collected a false E0322 on legal code.
+        "$analog_node_alias", "$analog_port_alias",
         // §9.5.4.2 the scan count, and the item flavour whose destination is an
         // integer variable. Synthetic names `lowerScan` builds; the flavour name
         // IS the type, so this and `analysis.callTy` agree by construction.
