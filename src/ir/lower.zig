@@ -5533,6 +5533,15 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
 /// §9.5.4.2's conversion codes, and nothing else. True when the format was
 /// refused. The suppression `*` and the maximum field width are part of the
 /// specification and are read past here; `str_kernels.zScan` implements them.
+///
+/// CASE-SENSITIVE, unlike §9.4.3's display table. Table 9-22 spells every
+/// display conversion twice ("%h or %H"); §9.5.4.2's code table spells each
+/// scan code once, in lower case, and says "if an invalid conversion character
+/// follows the %, the results of the operation are implementation dependent".
+/// A `toLower` here let `%D` past the check and straight into `zScan`, which
+/// compares the raw byte, matches nothing, and returns zero items — no
+/// diagnostic and no data. Refusing is the implementation-dependent result
+/// worth having.
 fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
     var i: usize = 0;
     while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
@@ -5545,7 +5554,7 @@ fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
         if (fmt[i] == '*') i += 1;
         while (i < fmt.len and fmt[i] >= '0' and fmt[i] <= '9') i += 1;
         if (i >= fmt.len) break;
-        const conv = std.ascii.toLower(fmt[i]);
+        const conv = fmt[i];
         i += 1;
         if (std.mem.indexOfScalar(u8, "dohxbcfegs", conv) != null) continue;
         var b = self.errWith(tok, .E0813);

@@ -409,8 +409,18 @@ pub fn translateFormat(
         if (i >= src.len) break;
         const conv = std.ascii.toLower(src[i]);
         i += 1;
-        // §9.4.4 `%m` names the enclosing module and consumes no operand.
-        if (conv == 'm') {
+        // §9.4.3 `%m` names the enclosing module. `%l` is the SAME class —
+        // "for each % character (except %m, %% and %l) … a corresponding
+        // expression argument shall be supplied" — so it must not consume one
+        // either; `lower.checkFormatPairing` counts it that way, and a `%l`
+        // that ate an operand here slid every later conversion by one.
+        //
+        // Table 9-22 wants "library.cell". VerA compiles a source file, not a
+        // library-mapped design — there is no §13-of-1364 library map to bind
+        // against and no CLI surface that could supply one — so the library
+        // component is empty and the cell is the module, which is the same
+        // text `%m` gives.
+        if (conv == 'm' or conv == 'l') {
             try fmt.appendSlice(a, g.mir.name);
             continue;
         }
@@ -446,7 +456,7 @@ pub fn appendConv(
         'c' => "c",
         's' => "s",
         'e' => "e",
-        'd', 'f', 'g', 'r', 't', 'u', 'z', 'l', 'v' => "d",
+        'd', 'f', 'g', 'r', 't', 'u', 'z', 'v' => "d",
         else => if (ty == .str) "s" else "d",
     };
     // A float has no bit pattern to show in a radix conversion, and Zig's

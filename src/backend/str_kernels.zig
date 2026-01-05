@@ -171,7 +171,14 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
                 item.r = @floatFromInt(item.i);
                 item.s = src[si..end];
             },
-            else => return out, // an unreachable code: lower.zig refused it (E0813)
+            // NOT unreachable: `lower.checkScanFormat` only runs when the
+            // format argument CONST-FOLDS to a string, so a format held in a
+            // string variable or built at run time arrives here unchecked.
+            // §9.5.4.2 makes an invalid conversion character "implementation
+            // dependent"; the choice here is to stop the scan, which reports
+            // the items assigned so far rather than counting one that was
+            // never converted.
+            else => return out,
         }
         if (end == si) return out; // nothing matched
         si = end;
