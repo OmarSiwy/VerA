@@ -1,2 +1,5 @@
 .zig-cache/
 zig-out/
+
+# Agent worktrees (git worktree add) — never part of the tree.
+.claude/

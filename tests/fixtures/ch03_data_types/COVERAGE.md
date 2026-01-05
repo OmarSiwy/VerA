@@ -4,10 +4,15 @@ Source: `docs/ch3-datatypes.html`, read in full through Section 3.13.4.
 
 HTML section-ID audit: `s3-1` `s3-2` `s3-2-1` `s3-3` `s3-4` `s3-4-1` `s3-4-2` `s3-4-3` `s3-4-4` `s3-4-5` `s3-4-6` `s3-4-7` `s3-4-8` `s3-5` `s3-6` `s3-6-1` `s3-6-1-1` `s3-6-1-2` `s3-6-1-3` `s3-6-2` `s3-6-2-1` `s3-6-2-2` `s3-6-2-3` `s3-6-2-4` `s3-6-2-5` `s3-6-2-6` `s3-6-2-7` `s3-6-3` `s3-6-3-1` `s3-6-3-2` `s3-6-4` `s3-6-5` `s3-7` `s3-8` `s3-9` `s3-10` `s3-11` `s3-11-1` `s3-12` `s3-12-1` `s3-13` `s3-13-1` `s3-13-2` `s3-13-3` `s3-13-4` — 45 IDs, of which 3 (`s3-1`, `s3-6`, `s3-13`) are bare parent headings with no rule of their own.
 
-96 `.va` files: 46 run and assert, 50 are rejections, and NONE is `//! xfail`
-(grep-measured: 96 files, 50 with a `//! reject` line, 0 with a `//! xfail` line — the
+97 `.va` files: 47 run and assert, 50 are rejections, and NONE is `//! xfail`
+(grep-measured: 97 files, 50 with a `//! reject` line, 0 with a `//! xfail` line — the
 45/50 this line used to give was off by one in each direction, and the 31/23/41 before that
 was never true of the tree it described).
+
+Measured on the MERGE, not carried from a branch. Two parallel waves each added one fixture
+here — `81_parameter_default_over_parameter.va` and `81_from_range_without_bracket.va` — and
+each correctly wrote 96 against its own tree, so git kept one edit and the count silently
+lost a file. Re-grep after any merge touching this directory.
 No `xf:` marker is left in the table: every row that carried one is green, and each says
 what it pins. The full ledger is below.
 
