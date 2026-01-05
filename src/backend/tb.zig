@@ -1175,6 +1175,8 @@ test "§5.4.2 `I(...)` names the flow unknown, not the node potential" {
         \\//! bias V(a) = 1.0
         \\//! bias I(b) = 0.125
         \\//! sweep I(<c>) = 0, 1
+        \\//! sweep I(a,b) = 0.25
+        \\//! bias V(d[1]) = 2.0
         \\module m(a, b, c); endmodule
     );
     // `V(a)` is the node; the two `I` forms are the unknowns lower.zig's
@@ -1182,6 +1184,21 @@ test "§5.4.2 `I(...)` names the flow unknown, not the node potential" {
     try testing.expectEqualStrings("a", d.bias[0].name);
     try testing.expectEqualStrings("flowZ28bZ2cgndZ29", d.bias[1].name);
     try testing.expectEqualStrings("flowZ28Z3ccZ3eZ29", d.sweeps[0].name);
+    // The other two spellings a fixture has to be able to write down: §5.4.2's
+    // two-terminal branch, which is the ONLY unknown with no source spelling at
+    // all, and a §6.5.2 vector element, whose name is `vecElem`'s `b[i]` and
+    // never an invented `b__i`. Both must land on the member `emitTopology`
+    // prints — see codegen.zig's "the `U` block is the SPELLING contract" test,
+    // which pins the other end of the same two strings.
+    try testing.expectEqualStrings("flowZ28aZ2cbZ29", d.sweeps[1].name);
+    try testing.expectEqualStrings("dZ5b1Z5d", d.bias[2].name);
+    // ASYMMETRY, pinned because it is surprising and not because it is right:
+    // `sweep` splits on the FIRST `=`, so the comma inside `I(a,b)` survives,
+    // while `bias`/`param` split on commas first and the same branch is
+    // unwritable there. A fixture biasing a two-terminal branch flow spells the
+    // sanitized member directly, which is what
+    // ch05_analog_behavior/single_terminal_branch.va already does.
+    try testing.expectError(error.BadSyntax, parse(arena_state.allocator(), "//! bias I(a,b) = 0.25\n"));
 }
 
 test "directives: a typo is an error, not a silently skipped test" {
