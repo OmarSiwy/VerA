@@ -21,6 +21,11 @@
 //! ONE limited solution vector that `eval`, `q` and the convergence test all
 //! read. That is why `converged` is a device verdict and not a host guess.
 //!
+//! The limiters themselves are `backend/limit_kernels.zig`, `@embedFile`d by
+//! codegen (`limit_txt`) and `@import`ed by its tests — one source, so the
+//! shapes the tests pin are the shapes the device runs. They were a string
+//! literal here until wave 10, which is why nothing could call them.
+//!
 //! Free functions over `*Gen`, like `cg_display.zig` and `cg_filters.zig`:
 //! Zig cannot extend a struct across files.
 
@@ -341,83 +346,3 @@ fn emitSeed(g: *Gen) Error!void {
     }
     try g.w("    return s;\n}}\n\n", .{});
 }
-
-// ----------------------------------------------------------------- helpers
-
-/// The SPICE3 limiters, transcribed from ngspice `src/spicelib/devices/devsup.c`
-/// — which is what the `"pnjlim"`/`"fetlim"`/`"limvds"` identifiers in a `.va`
-/// name. Emitted only into `device.zig`, and only when a model uses them: no
-/// unit body can call these, because `$limit` renders as the identity there.
-pub const helpers_txt =
-    \\/// SPICE3 `DEVpnjlim`: damp a p-n junction's exponential. `vt` is the
-    \\/// junction's thermal voltage and `vcrit` the bias where its exponential
-    \\/// starts to outrun Newton, i.e. `vt*ln(vt/(sqrt(2)*is))`.
-    \\fn zPnjlim(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
-    \\    var vnew = vnew0;
-    \\    if (vnew > vcrit and @abs(vnew - vold) > vt + vt) {
-    \\        if (vold > 0.0) {
-    \\            // The guard above makes |arg| > 2, so both logs take a
-    \\            // strictly positive argument.
-    \\            const arg = (vnew - vold) / vt;
-    \\            vnew = if (arg > 0.0)
-    \\                vold + vt * (2.0 + @log(arg - 2.0))
-    \\            else
-    \\                vold - vt * (2.0 + @log(2.0 - arg));
-    \\        } else {
-    \\            vnew = vt * @log(vnew / vt);
-    \\        }
-    \\    } else if (vnew < 0.0) {
-    \\        const arg = if (vold > 0.0) -vold - 1.0 else 2.0 * vold - 1.0;
-    \\        if (vnew < arg) vnew = arg;
-    \\    }
-    \\    return vnew;
-    \\}
-    \\
-    \\/// SPICE3 `DEVfetlim`: keep a gate bias from stepping across threshold in
-    \\/// one Newton iteration. `vto` is the threshold voltage.
-    \\fn zFetlim(vnew0: f64, vold: f64, vto: f64) f64 {
-    \\    var vnew = vnew0;
-    \\    const vtsthi = @abs(2.0 * (vold - vto)) + 2.0;
-    \\    const vtstlo = vtsthi * 0.5 + 2.0;
-    \\    const vtox = vto + 3.5;
-    \\    const delv = vnew - vold;
-    \\    if (vold >= vto) {
-    \\        if (vold >= vtox) {
-    \\            if (delv <= 0.0) { // going off
-    \\                if (vnew >= vtox) {
-    \\                    if (-delv > vtstlo) vnew = vold - vtstlo;
-    \\                } else vnew = @max(vnew, vto + 2.0);
-    \\            } else { // staying on
-    \\                if (delv >= vtsthi) vnew = vold + vtsthi;
-    \\            }
-    \\        } else { // middle region
-    \\            vnew = if (delv <= 0.0) @max(vnew, vto - 0.5) else @min(vnew, vto + 4.0);
-    \\        }
-    \\    } else { // off
-    \\        if (delv <= 0.0) {
-    \\            if (-delv > vtsthi) vnew = vold - vtsthi;
-    \\        } else {
-    \\            const vtemp = vto + 0.5;
-    \\            if (vnew <= vtemp) {
-    \\                if (delv > vtstlo) vnew = vold + vtstlo;
-    \\            } else vnew = vtemp;
-    \\        }
-    \\    }
-    \\    return vnew;
-    \\}
-    \\
-    \\/// SPICE3 `DEVlimvds`: bound a drain-source step. Takes no model data —
-    \\/// the numbers are the algorithm.
-    \\fn zLimvds(vnew0: f64, vold: f64) f64 {
-    \\    var vnew = vnew0;
-    \\    if (vold >= 3.5) {
-    \\        if (vnew > vold) {
-    \\            vnew = @min(vnew, 3.0 * vold + 2.0);
-    \\        } else if (vnew < 3.5) vnew = @max(vnew, 2.0);
-    \\    } else {
-    \\        vnew = if (vnew > vold) @min(vnew, 4.0) else @max(vnew, -0.5);
-    \\    }
-    \\    return vnew;
-    \\}
-    \\
-;
