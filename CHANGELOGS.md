@@ -42,9 +42,43 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
-### Wave 9 — the five host-visible bugs (IN FLIGHT at time of writing)
+### Wave 9 — the five host-visible bugs — `4d6207c`
 
-Dispatched to four disjoint worktrees. See "In flight" below.
+**Suite: 215/215 · torture 1155/1157 (2 XFAIL, 0 FAIL) · test-contract green.**
+Five fixtures added, all passing (1152 → 1157 total).
+
+Four agents in parallel worktrees. All five bugs share one property, which is why seven waves
+of conformance work never saw them: **the suite grades VerA's own testbench**, so a defect
+living in the artifact handed to a host is structurally outside its view.
+
+| Bug | Before | After |
+|---|---|---|
+| `\|U\| > 256` | `--emit-zig` exit 0; **host's** build dies on `enum tag value '256' too large for type 'u8'` | E1003 at `emitTopology`, exit 1. Boundary measured exact: 256 emits and passes `--check`, 257 refuses |
+| `--display=drop` | `const t0: i64 = S.con(0.0);` — **nine ch09 fixtures shipped devices no host could compile, while scoring green** | `const t0: i64 = @as(i64, 0);` |
+| SPICE keyword nodes | `.SUBCKT AMP (INPUT OUTPUT)` → E0208 in a file the user never wrote | spelled as §2.8.1 escaped identifiers; Annex E.3 connects by order so the spelling is never typed |
+| Parameter defaults | 9 of 9 assertions `got=0`, exit 0, no diagnostic | 9 of 9 pass |
+| `sysFuncTy`/`callTy` | the pair whose comment says "MUST agree" disagreed on two rows | agreement is now a looping test, not a hope |
+
+Plus two trust-boundary one-liners: `parameter real p = 1 from 5;` reached a debug `assert`
+(**UB rather than a panic in ReleaseFast** — undefined behaviour driven by a source file), and
+a string parameter drew two spurious W0651.
+
+**Agent corrections to my spec, all verified:**
+- I estimated the `sysFuncTy` change would touch "~6 fixtures". Measured: **2**. The agent swept
+  `--emit-zig` over all 1152 fixtures with both binaries and diffed — exact, and cheaper than
+  the full torture run I claimed it justified.
+- My prescribed fix for the parameter fold was **insufficient**. Lifting arms into the MIR
+  folder fixes `(1 << w) - 1` and `(w > 2)` — the two cases I reproduced — but leaves
+  `(w > 2) ? 5 : 6` at 0, because `lowerTernary` builds a CFG diamond and a phi, not a
+  `select`, so a MIR value-fold can never see it. Needed `ParamInfo.folded` carried from
+  lowering.
+- I said to route the `from 5` assert to "the existing E0210". The agent opened E0210, found it
+  says *"expected `)`"* — which does not state this condition — and correctly used E0207
+  instead, citing my own rule back at me.
+- **No fixture can grade `--display=drop`.** `torture.zig` hardcodes `.display = .emit` and
+  `tb.Directives` has no field for the mode. That is *precisely why* nine ch09 fixtures shipped
+  broken devices for seven waves. The grader is a codegen unit test instead.
+- WAVE-PLAN's "`annex_e_spice` stays 42/42" was off by one; that group was **41/41** before.
 
 ### Wave 8 — the instrument, and the number decode — `b47ed53`
 
@@ -145,11 +179,16 @@ Kept because a plan whose errors are invisible is worse than one with none.
 
 ## In flight
 
-- **Wave 9** (`wo713y9ei`) — four worktrees: codegen emit bugs (`|U|>256` uncompilable artifact,
-  `--display=drop` type mismatch), SPICE keyword node names, the parameter-default fold
-  miscompile + `sysFuncTy`/`callTy` disagreement, and two trust-boundary one-liners.
+- **Wave 10** (`wx8hci0o9`) — characterization, bought BEFORE waves 11/13 spend the structure.
+  Three worktrees: node-identity pins (wave 11's grader), `cg_limit` → a real
+  `limit_kernels.zig` + the `zBilin` D>=2 test, and two one-token defects (`%l` operand
+  disagreement, `$sscanf` case-folding on one side only).
+  Acceptance this wave is unusually strict, deliberately: **every test must come with a named
+  one-line mutation that makes it FAIL, applied and shown.** A test that cannot be made to fail
+  on demand proves nothing. Agents are told to DROP such a test and report it as a finding about
+  the code rather than pad the count.
 
-**Verified miscompiles being fixed in wave 9** (both reproduced by hand on this tree):
+**The two miscompiles that motivated wave 9** (reproduced by hand before the fix):
 
 ```verilog
 parameter integer w   = 4;
@@ -164,13 +203,14 @@ And `codegen.zig:861` emits `pub const U = enum(u8)` with nothing bounding `u_na
 
 Both were invisible to the suite for seven waves because **the suite grades VerA's own
 testbench** — bugs living in the artifact handed to a host are structurally outside its view.
+Both are fixed and pinned as of `4d6207c`.
 
 ---
 
 ## Queue
 
-10 characterization → 11 node identity → 12 surface deletion (~975 lines) → 13 device physics →
-14 allocation sweep → MIR row 25 B → 9 B (Air-style `tags`+`data`+`Ref`).
+11 node identity → 12 surface deletion (~975 lines) → 13 device physics → 14 allocation sweep →
+MIR row 25 B → 9 B (Air-style `tags`+`data`+`Ref`).
 
 Plus the unscheduled prelude-caching wave from §4 above, which is the largest measured win
 currently known.
