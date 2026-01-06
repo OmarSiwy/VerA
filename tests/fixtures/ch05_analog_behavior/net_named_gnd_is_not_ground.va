@@ -20,26 +20,25 @@
 // that number is. 1e-3 is not exact in binary, hence `CHECK` with an absolute
 // tolerance well under the difference being claimed.
 //
-// WHY THIS IS AN `xfail` AND NOT THE OTHER TWO VERDICTS. It is not `//! reject`:
-// nothing in the LRM forbids a net called `gnd`, so demanding a diagnostic would
-// invert the fixture (README.md, "Written the other way ... a conforming compiler
-// fails it, and only VerA passes"). And it is not a green fixture pinning what
-// VerA prints today: the `want` column is a number a human derived from the LRM,
-// and recording +1 mA for a branch the LRM puts at -1 mA is exactly the frozen
-// wrong answer README.md's "the `want` is a literal" section exists to kill. The
-// LRM's numbers, plus a written statement of what VerA does not do, is the one
-// honest shape.
+// WHY THIS IS NOT `//! reject`: nothing in the LRM forbids a net called `gnd`,
+// so demanding a diagnostic would invert the fixture (README.md, "Written the
+// other way ... a conforming compiler fails it, and only VerA passes"). Every
+// `want` below is a number derived from the clauses cited above, not a
+// transcript of what VerA prints.
 //
-// SCOPE: dc only, and it stands on no TODO.md §3 ceiling. The three other CHECKs
-// pass today — the topology, the solve and the reference potential are all right;
-// the single defect is the identity of one unknown.
+// It SHIPPED as `//! xfail`, and the reason was one sentence: two spellings,
+// one unknown. Wave 11 split node identity from node spelling — a §5.4.2 branch
+// is keyed on its NODE PAIR in `lower.flow_unknowns`, and codegen asks that
+// table rather than re-deriving `flow(a,gnd)` and matching it as a string — so
+// the last two CHECKs now hold and the marker is gone.
+//
+// SCOPE: dc only, and it stands on no TODO.md §3 ceiling.
 //
 //! lrm 1.3.1.1
 //! lrm 5.4.1
 //! lrm 5.4.2.2
 //! analysis dc
 //! solve
-//! xfail VerA keys a §5.4.2 branch-flow unknown on the STRING `flow(<hi>,<lo>)` (lower.zig `flowUnknown`), and `nodeName` spells the reference node `gnd`, so a net whose own name is `gnd` produces the same key: `I(a)` and `I(a,gnd)` intern to one unknown and the second read returns the first branch's current
 `include "check.vh"
 module ch5_gnd_named_net;
   electrical a;

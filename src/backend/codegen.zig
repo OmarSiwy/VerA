@@ -598,19 +598,25 @@ pub const Gen = struct {
             // the same topology: a source in the branch whose current is its
             // own unknown.
             if (c.access != .potential and c.kind != .indirect) continue;
-            const nm = try std.fmt.allocPrint(a, "flow({s},{s})", .{
-                self.lower.nodeName(c.hi), self.lower.nodeName(c.lo),
-            });
             // Reuse the §5.4.2 slot lowering already allocated because the model
             // PROBES I(a,b) — unless an earlier contribution is already driving
             // it. §5.6.7.1 permits several indirect contributions to one branch,
             // and each is a separate source with a separate current.
-            var found: u32 = none_u32;
-            for (self.lower.node_order.items, 0..) |n, k| {
-                if (std.mem.eql(u8, n, nm)) found = @intCast(k);
-            }
+            //
+            // Asked for by the NODE PAIR, which is the identity §5.4.1 gives the
+            // branch. This used to format `flow(hi,lo)` and scan `node_order`
+            // for a string match, which made it the fourth place that re-derived
+            // structure from a spelling — and the one that survived the key
+            // split in lowering: §1.3.1.1's reference node prints `gnd`, so on a
+            // module with a plain net called `gnd` the branches (a, reference)
+            // and (a, gnd) matched each other's slot and V(a) and V(a,gnd) drove
+            // one current.
+            var found: u32 = if (self.lower.flow_unknowns.get(.{ .hi = c.hi, .lo = c.lo })) |u| u else none_u32;
             if (found != none_u32 and self.uIsDriven(found, i)) found = none_u32;
             if (found == none_u32) {
+                const nm = try std.fmt.allocPrint(a, "flow({s},{s})", .{
+                    self.lower.nodeName(c.hi), self.lower.nodeName(c.lo),
+                });
                 found = base + @as(u32, @intCast(extra.items.len));
                 try extra.append(a, try self.freshUName(nm, extra.items));
             }
@@ -960,7 +966,11 @@ pub const Gen = struct {
 
     pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
         if (i >= self.lower.node_order.items.len) return true; // codegen-added branch current
-        if (std.mem.startsWith(u8, self.lower.node_order.items[i], "flow(")) return true;
+        // §5.4.2/§5.4.3. An array read: lowering records the kind where it
+        // creates the slot. It used to be `startsWith("flow(")`, which §2.8.1
+        // makes a lie — a net declared `\flow(p,n)` IS the identifier
+        // `flow(p,n)` and was classified as a current.
+        if (self.lower.node_kind.items[i] != .net) return true;
         // §1.3.4.2 a flow signal-flow net has no potential ("Potential for such
         // a node is not defined"), so its ONE unknown is a flow even though it
         // is a plain node with a plain name. Everything that asks this question
@@ -976,32 +986,27 @@ pub const Gen = struct {
     /// after §3.6.2.3's per-discipline override — which is why it is read off
     /// `DisciplineInfo` and not off the nature table.
     ///
-    /// A §5.4.2 branch-flow unknown has no discipline of its own (`internNode`
+    /// A §5.4.2 branch-flow unknown has no discipline of its own (`appendNode`
     /// gives it `""`), so its tolerance comes from the discipline at its HIGH
-    /// node — the one whose name `flowUnknown`/`portFlowUnknown` spelled into
-    /// the unknown's own name. Reading it back out of that name is exact rather
-    /// than a guess: both spellings are `"flow(" ++ nodeName(hi) ++ …`, and
-    /// `nodeName` is what `node_voltages` is keyed by.
+    /// node — which `Lower.NodeKind` carries as the slot's payload. It used to
+    /// be recovered by parsing `flow(a,b)` back apart, which is a guess about a
+    /// spelling and not a fact about the unknown, and which a node name holding
+    /// a `,` or a `>` (both legal inside a §2.8.1 escaped identifier) got wrong.
+    ///
+    /// A §1.3.4.2 flow-only net is `.net` and its own node already, so it falls
+    /// straight through to `flow_abstol`.
     ///
     /// The two fallbacks are annex D's own defaults for `Voltage` and `Current`
     /// (`VOLTAGE_ABSTOL` 1e-6, `CURRENT_ABSTOL` 1e-12), reached only by an
     /// unknown whose net never got a discipline — a §3.5 implicit net in a file
     /// with no `default_discipline`, which cannot be contributed to anyway.
     fn abstolOf(self: *const Gen, i: u32) f64 {
-        const names = self.lower.node_order.items;
         const flow = self.isFlowUnknown(i);
         var idx: u16 = @intCast(i);
-        // Only a `flow(...)`-SPELLED unknown needs its node recovered from its
-        // name; a §1.3.4.2 flow-only net is its own node already, so it falls
-        // straight through to `flow_abstol` below.
-        if (flow and i < names.len and std.mem.startsWith(u8, names[i], "flow(")) {
-            const name = names[i];
-            // `flow(a,b)` -> `a`; `flow(<p>)` -> `p`.
-            var inner = name["flow(".len .. name.len - 1];
-            if (inner.len >= 2 and inner[0] == '<') inner = inner[1 .. inner.len - 1];
-            if (std.mem.indexOfScalar(u8, inner, ',')) |c| inner = inner[0..c];
-            idx = self.lower.node_voltages.get(inner) orelse return 1e-12;
-        }
+        if (i < self.lower.node_kind.items.len) switch (self.lower.node_kind.items[i]) {
+            .net => {},
+            .branch_flow, .port_flow => |n| idx = n,
+        };
         if (idx == Lower.ground or idx >= self.lower.node_disciplines.items.len)
             return if (flow) 1e-12 else 1e-6;
         const info = self.lower.disciplines.get(self.lower.node_disciplines.items[idx]) orelse
