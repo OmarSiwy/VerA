@@ -65,25 +65,42 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const token = @import("frontend/token.zig");
+// THE PUBLIC SURFACE IS THE FIVE NAMES BELOW MARKED `pub`, AND NOTHING ELSE.
+//
+// A stage that is `pub` here is a promise to whoever links `vera`: its decls
+// cannot be renamed without breaking them. The other sixteen were `pub` for no
+// reason anyone recorded, and MEASURED across every `@import("vera")` in this
+// tree (`src/cli.zig`, `tests/`) the only module names actually referenced are
+// these five — `Preprocessor` (tests/bench.zig times stage 1 on its own),
+// `diag`, `codegen`, `orchestrator`, `tb`. Everything else is reachable through
+// `compileSource` / `CompileResult` / `buildArtifact`, which is the intended
+// door.
+//
+// A private `const` is still a full module: it is imported, analysed, tested
+// (see the two tests at the bottom, which name these consts directly) and freely
+// usable by every driver in this file. The only thing it is not is nameable as
+// `vera.Lower` from outside. If an out-of-tree embedder ever needs one, the
+// compile error is loud and the revert is one keyword — which is exactly why
+// this is a `const`/`pub const` question and not an architecture question.
+const token = @import("frontend/token.zig");
 pub const Preprocessor = @import("frontend/preprocessor.zig");
-pub const Lexer = @import("frontend/lexer.zig");
-pub const Ast = @import("frontend/ast.zig");
-pub const Parser = @import("frontend/parser.zig");
-pub const Mir = @import("ir/mir.zig");
-pub const Analysis = @import("ir/analysis.zig");
-pub const Ssa = @import("ir/ssa.zig");
-pub const Elaborate = @import("ir/elaborate.zig");
-pub const Lower = @import("ir/lower.zig");
-pub const proof = @import("ir/proof.zig");
+const Lexer = @import("frontend/lexer.zig");
+const Ast = @import("frontend/ast.zig");
+const Parser = @import("frontend/parser.zig");
+const Mir = @import("ir/mir.zig");
+const Analysis = @import("ir/analysis.zig");
+const Ssa = @import("ir/ssa.zig");
+const Elaborate = @import("ir/elaborate.zig");
+const Lower = @import("ir/lower.zig");
+const proof = @import("ir/proof.zig");
 pub const diag = @import("diag.zig");
-pub const diag_code = @import("diag_code.zig");
-pub const naming = @import("backend/naming.zig");
+const diag_code = @import("diag_code.zig");
+const naming = @import("backend/naming.zig");
 pub const codegen = @import("backend/codegen.zig");
-pub const UnitPlan = @import("backend/unit_plan.zig");
-pub const cg_display = @import("backend/cg_display.zig");
-pub const cg_filters = @import("backend/cg_filters.zig");
-pub const eval_batch = @import("backend/eval_batch.zig");
+const UnitPlan = @import("backend/unit_plan.zig");
+const cg_display = @import("backend/cg_display.zig");
+const cg_filters = @import("backend/cg_filters.zig");
+const eval_batch = @import("backend/eval_batch.zig");
 pub const orchestrator = @import("backend/orchestrator.zig");
 pub const tb = @import("backend/tb.zig");
 
@@ -137,11 +154,12 @@ pub const Error = codegen.Error || error{
 // allocators, and five conversion sites in this file that each turned a
 // different currency (a line, a byte, a token index, a MIR instruction) into a
 // line/col — one of which could not, and reported proof errors at 0:0.
-
-pub const Bag = diag.Bag;
-pub const Code = diag.Code;
-pub const Severity = diag.Severity;
-pub const Level = diag.Level;
+//
+// There is no `pub const Bag = diag.Bag;` here either. Four such aliases stood
+// where `diag` itself is already `pub`, and MEASURED across every
+// `@import("vera")` in this tree nothing spelled any of them — including this
+// file, which says `diag.Bag` throughout. A second spelling of one type is a
+// second thing to keep in step; `vera.diag.Bag` is the one door.
 
 // ---------------------------------------------------------------------------
 // Options
