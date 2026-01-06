@@ -68,8 +68,26 @@ pub fn build(b: *std.Build) void {
     // zero of its tests. They ran nowhere until this step existed, which is how a
     // stale `num_ports` guard survived two waves of the engine growing past it.
     const run_contract_test = b.addRunArtifact(b.addTest(.{ .root_module = contract_mod }));
-    b.step("test-contract", "Run the device-contract validation tests").dependOn(&run_contract_test.step);
+    const contract_step = b.step("test-contract", "Run the device-contract and source-tree guards");
+    contract_step.dependOn(&run_contract_test.step);
     test_step.dependOn(&run_contract_test.step);
+
+    // The source-tree guards ride the same step and are a SEPARATE module on
+    // purpose: `contract_mod` is compiled into every generated device, so it may
+    // not import build options and may not assume a source tree exists. See
+    // tools/source_guards.zig's header.
+    const guard_opts = b.addOptions();
+    guard_opts.addOption([]const u8, "repo_root", b.pathFromRoot("."));
+    guard_opts.addOption([]const u8, "src_root", b.pathFromRoot("src"));
+    const guard_mod = b.createModule(.{
+        .root_source_file = b.path("tools/source_guards.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    guard_mod.addOptions("guard_options", guard_opts);
+    const run_guard_test = b.addRunArtifact(b.addTest(.{ .root_module = guard_mod }));
+    contract_step.dependOn(&run_guard_test.step);
+    test_step.dependOn(&run_guard_test.step);
 
     // =======================================================================
     // The conformance suite over tests/fixtures/**/*.va, run against TWO

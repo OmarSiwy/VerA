@@ -75,6 +75,13 @@ pub const SsaBuilder = struct {
     /// `defs[place * block_stride + block]`, `absent` (= 0) where unwritten and
     /// `@intFromEnum(value) + 1` where written — see `absent` for the bias.
     ///
+    /// CORPUS for every number below: the 38 foundry models in the ARPice host
+    /// repo (`../ARPice/src/devices/models`; `VERA_MODELS` overrides the path),
+    /// NOT vendored here — `hisimhv_va`/`hisim2_va` are HiSIM_HV and HiSIM2, and
+    /// the four the RSS row runs over come from that set. No fixture in
+    /// `tests/fixtures` is anywhere near this size, so re-measuring needs the
+    /// models fetched first.
+    ///
     /// DOD: this was a `HashMap<u64=(place<<32|block), Value>` justified as
     /// "sparse by construction". Measured, it is not sparse — on `hisimhv_va` it
     /// holds 2,114,902 live entries over 1978 places × 5646 blocks = 11.2 M cells
@@ -255,7 +262,8 @@ pub const SsaBuilder = struct {
     /// BOTH axes grow geometrically. Widening the block axis re-strides every row;
     /// adding a place appends rows and moves nothing, but growing it exactly would
     /// still re-allocate per place. Exact growth on either axis is quadratic — it
-    /// was measured on the block axis at 4.6 GB and 4× slower.
+    /// was measured on the block axis at 4.6 GB and 4× slower, on the foundry
+    /// corpus `defs` names (not vendored here; see its CORPUS note).
     fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!u32 {
         const p = @intFromEnum(place);
         const b = @intFromEnum(block);

@@ -17,8 +17,8 @@
 //!             → lower.zig + ssa.zig → mir.zig (classes 3,4,5,7,9) AST → MIR
 //!             → proof.zig          (class 6) MIR → per-unit finiteness verdict
 //!  backend/   → codegen.zig+naming (classes 4,5,8,10) MIR → device.zig
-//!             → orchestrator.zig   (ch.2/5) device.zig → .so (+ GPU kernels)
-//!             runtime: eval_batch.zig (ch.4) SIMD device evaluation
+//!             → orchestrator.zig  (§8.3 ABI) device.zig → .so (+ GPU kernels)
+//!             runtime: eval_batch.zig (§8.3) SIMD device evaluation
 //!
 //! `frontend/` and `ir/` are shared by all targets; only `backend/` differs. The
 //! split exists so a second frontend lowering into this MIR, or a second backend
@@ -32,6 +32,14 @@
 //! their being real files: what the tests check is byte-for-byte what runs in
 //! the device. `filter_kernels.zig` was registered here as the one exception
 //! until wave 10 gave `zBilin` its test.
+//!
+//! That register is THIS block, it is machine-read, and it is EMPTY. An
+//! exception is one `//! ORPHAN: <path under src/> — <why>` line here;
+//! `tools/source_guards.zig` parses them as the allowlist for its "every
+//! `src/backend/*.zig` is reachable from a root" test, and fails the build on a
+//! backend file that is neither reachable nor listed. Do not add a line to
+//! silence it without the `<why>`: an orphan that stayed silent is how
+//! `eval_batch.zig` reached 702 lines nothing could call.
 //!
 //! DOD ground rules that hold in EVERY file here:
 //!   - SoA (MultiArrayList / flat Buf), never array-of-structs across a hot loop.
@@ -529,7 +537,7 @@ pub const UpdateStatus = enum {
 pub const Update = struct {
     unit: Unit,
     /// Bumped on every recompile. The artifact path is versioned by it so the
-    /// host dlopens a fresh inode (ch.5).
+    /// host dlopens a fresh inode — orchestrator.zig's CRATE BOUNDARY.
     generation: u32,
     status: UpdateStatus,
     /// device.zig. Empty for `.lint`. Borrowed from the unit's arena — valid
@@ -542,7 +550,9 @@ pub const Update = struct {
 /// change invalidates even when the .va file itself is untouched.
 ///
 /// This is deliberately whole-unit, not fine-grained: per-declaration change
-/// detection is delegated to `zig` through stable naming (ch.2). All this layer
+/// detection is delegated to `zig` through stable naming — naming.zig's header
+/// is the argument. (It read "(ch.2)" until wave 12: LRM ch.2 is lexical
+/// conventions, so the pointer resolved and was still wrong.) All this layer
 /// buys is skipping a frontend that already runs in microseconds — its real job
 /// is proving the no-op-edit determinism invariant.
 pub const Compilation = struct {

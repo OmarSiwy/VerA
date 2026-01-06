@@ -49,7 +49,8 @@ const naming = @import("naming.zig");
 const assert = std.debug.assert;
 
 pub const Error = std.mem.Allocator.Error || error{
-    /// proof.zig rejected the model; codegen is gated on it (03-codegen.html).
+    /// proof.zig rejected the model; codegen is gated on it — `generate`
+    /// returns this before emitting a byte. See proof.zig's CONTRACT header.
     DomainErrors,
     /// A source identifier whose structural key exceeds `naming.max_name_len`.
     /// Never truncated: truncation would break the injectivity two distinct
@@ -291,7 +292,7 @@ pub const Gen = struct {
     prelude: []const u8 = "",
     helpers: []const u8 = "",
 
-    // ---- the shared core (03-codegen.html#hoisting) ----
+    // ---- the shared core ("WHY THIS EXISTS", further down this struct) ----
     /// Every unit function to emit, resolved before any of them is written.
     jobs: []Job = &.{},
     /// Position of this Value in the core's returned struct, or `none_u32`.
@@ -407,12 +408,17 @@ pub const Gen = struct {
     // same core: `hisimhv_va` measured 1 220 929 emitted values across 58 units
     // of which 22 214 distinct values appear in two or more — 190 MB of output
     // from 614 K of source.
+    // CORPUS: `hisimhv_va` is one of the 38 foundry models in the ARPice host
+    // repo (`../ARPice/src/devices/models`; `VERA_MODELS` overrides the path).
+    // NOT vendored here and no fixture is within three orders of magnitude of
+    // it, so every number in this block needs that checkout to re-measure.
     //
-    // 03-codegen.html chose that deliberately ("anonymous shared subexpressions
-    // are recomputed, not promoted to hidden shared decls … this keeps every
-    // unit independently skippable"). The justification does not hold, and the
-    // same document concedes it two paragraphs earlier for NAMED units: "zig's
-    // dependency graph dirties consumers correctly when such a unit changes".
+    // Recomputing the shared subexpressions per unit was the ORIGINAL shape and
+    // it was deliberate: an anonymous subexpression was never promoted to a
+    // hidden shared decl, so that every unit stayed independently skippable by
+    // `zig -fincremental`. That justification does not hold, and naming.zig's
+    // header already concedes the same point for NAMED units — `zig` tracks a
+    // declaration by name and dirties its consumers correctly when it changes.
     // A shared declaration is therefore BETTER for incrementality, not worse —
     // one declaration to re-analyse instead of 58 copies of it — and the units'
     // own tails stay independently skippable either way.
@@ -444,6 +450,8 @@ pub const Gen = struct {
     //   prove a 60 000-line two-pointer function `readonly willreturn`. Merging
     //   is therefore a runtime fix, not a size optimisation: one core per
     //   `eval`, one per `q`.
+    //   CORPUS: `vbic13_4t` is the public VBIC 1.3 four-terminal reference
+    //   Verilog-A, from the same 38-model set — likewise not vendored here.
     //
     // WHAT IS LOST. The per-unit `@setFloatMode` — see `common_mode`. Nothing
     // else: `contract.zig` exposes only `eval`/`q`, and engine.zig (:511, :534,
@@ -2245,11 +2253,11 @@ pub const Gen = struct {
 
     /// LRM §4. Constants → `S.con(literal)`, parameters → `model.<name>`, node
     /// probes → `x[@intFromEnum(U.<node>)]`, instruction results → the
-    /// UNIT-LOCAL slot name (never `v{MIR index}` — 03-codegen.html).
+    /// UNIT-LOCAL slot name (never `v{MIR index}` — naming.zig's ABSOLUTE RULE).
     fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
         const i = @intFromEnum(v);
         // Hoisted: computed once by the common declaration, read here out of the
-        // cache the body opened with (03-codegen.html#hoisting).
+        // cache the body opened with — see "the shared core" in `Plan`.
         if (i < self.an.nv and self.plan.cached(v)) return self.b("c.f{d}", .{self.lo_idx[i]});
         if (i < self.an.nv and self.plan.slot[i] != none_u32) {
             self.probeUse(self.plan.slot[i]);

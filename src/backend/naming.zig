@@ -336,8 +336,8 @@ fn assignDisambig(units: []Unit) void {
 //
 // ponytail: an analog-operator target is just its callee name ("ddt"), so N
 // ddt's in one module collide and take disambig 0..N-1 — inserting one in the
-// middle shifts the later ones (bounded local re-Sema, the documented
-// trade-off in 03-codegen.html). Qualifying the target with the enclosing
+// middle shifts the later ones — bounded local re-Sema, which is the trade-off
+// this file's header states. Qualifying the target with the enclosing
 // contribution would shrink the groups, but lower.zig does not record which
 // contribution a call belongs to; add that link there first.
 
