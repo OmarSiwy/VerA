@@ -42,6 +42,52 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
+### Wave 11 — identity from structure, not from the printed name — `91f6e03`
+
+**Suite: 221/221 · torture 1160/1162 (2 XFAIL, 0 FAIL) · test-contract green.**
+The `gnd` XFAIL wave 10 opened is **closed**, so XFAIL goes 3 → 2. It XPASSed first, and an
+XPASS fails the run — the protocol working exactly as designed.
+
+`node_voltages` was one string key space holding user nets, §5.4.2 branch flows, §5.4.3 port
+flows, §6.5.2 vector elements and §6.7 flattened paths, with three comments claiming collisions
+were impossible. Now: a `NodeKind` union carrying the tolerance node as payload, a
+`FlowKey{hi,lo}` map so a branch is keyed on its node **pair**, and `node_voltages` holding nets
+only — which is what every one of its callers already meant. `codegen.isFlowUnknown` is an array
+read instead of `startsWith("flow(")`; `abstolOf` reads a payload instead of re-parsing
+`flow(a,b)` back apart.
+
+**Two plan errors found by building it — the first would have silently sunk the wave:**
+
+1. **There is a FOURTH site.** `codegen.buildNames` formats `flow(hi,lo)` and matches it against
+   `node_order` *as a string* to find lowering's slot. After the key split landed in lowering the
+   fixture was **still XFAIL** — both branches format `flow(a,gnd)`, so the aliasing simply moved
+   down to the codegen layer. My plan listed three sites plus `tb`.
+2. **A `{kind,name}` composite key does not close the hole**, which my acceptance criterion
+   implicitly assumed it would. Splitting identity from spelling makes two slots legitimately
+   want *one* spelling — the reference node and a net called `gnd` — and the emitted `U` has one
+   member per slot. A spelling uniquifier is required, not optional.
+
+The escaping was also cheaper than I specified: done in `parser.internTok`, all five join sites
+are correct unchanged, so `elaborate.zig`'s diff is 14 lines of comment and `lower.flatName` is
+untouched.
+
+**Zero transcript diffs, proven not asserted**: all 1161 fixtures emitted by a pre-change binary
+saved before any edit, and by the post-change binary. Exactly two files differ — the fixture
+under test (one line: which unknown `I(a,gnd)` reads) and the new one.
+
+Wave 12's documentation half landed alongside: 11 dangling `.html` citations and 7 `(ch.N)`
+parentheticals retargeted individually, plus **`tools/source_guards.zig`** — two guards, each
+demonstrated failing on a planted violation. Guard (b) walks the real import graph from both
+roots and is what makes a 702-line orphan structurally unrepeatable rather than a one-time
+cleanup. Citations in this repo are now machine-checked.
+
+**A correction I owe:** I told the agent to add provenance to `// CORPUS:` lines. Those do not
+exist — `grep -rn "CORPUS" src/ tools/ tests/` returns 0 hits. I passed that claim on from the
+audit without verifying it. The agent found the *real* provenance in git history instead
+(`git log -S`, deleted `tests/baseline.sh`): the 38 foundry models live in the ARPice host repo
+at `../ARPice/src/devices/models`. One number — `unit_plan.zig`'s 14,930 of 16,242 temps — has
+no attributable model, and the comment now says that rather than implying a source.
+
 ### Wave 10 — characterization, and the pins bite — `94bf67c`
 
 **Suite: 219/219 · torture 1158/1161 (3 XFAIL, 0 FAIL) · test-contract green.** +4 fixtures.
@@ -218,16 +264,13 @@ Kept because a plan whose errors are invisible is worse than one with none.
 
 ## In flight
 
-- **Wave 11** (`w1zbpvmt1`) — node identity split from node spelling, graded by the pins wave 10
-  just bought. `lower.zig`'s `node_voltages` is one string key space holding user nets, §5.4.2
-  branch flows, §5.4.3 port flows, §6.5.2 vector elements and §6.7 flattened paths; three
-  comments claim collisions are impossible and §2.8.1 makes them possible.
-  Its acceptance is unusually literal: the `net_named_gnd` XFAIL must XPASS and then lose its
-  marker in the same commit, and **zero transcript diffs outside the fixtures under test**,
-  PROVEN by emitting every fixture with the old and new binaries and diffing — not asserted.
-  Running alongside it, in a disjoint file group: wave 12's documentation half (the dangling
-  `.html` citation sweep, the `// CORPUS:` dataset provenance, and two `test-contract` guards —
-  one of which is what makes a 702-line orphan like `eval_batch.zig` unrepeatable).
+- **Waves 12 + 13** (`wqasulp0q`) — deletion and device physics, in disjoint file groups.
+  Wave 12 is one agent working a FIXED ORDER (privatize → delete `eval_batch.zig` → delete
+  `root.Compilation` → re-verify citations), because four of its items edit `src/root.zig` and a
+  cheapest-first sort does the cheap one three times. Wave 13 is `disc_of` built two-slot (NOT
+  `getOrPut` — first-wins is XFAIL-1's blocker verbatim), the `proof.verdict` per-contribution
+  memset, T0.5's duplicate dominator build, the purely-reactive-contribution eval row, and
+  per-contribution noise generator keying.
 
 **The two miscompiles that motivated wave 9** (reproduced by hand before the fix):
 
