@@ -28,7 +28,9 @@ pointer to it too.
 ## 1. The remaining XFAILs — deliberately left, with their blast radius
 
 All are real requirements VerA does not meet. None was missed; each was costed
-and the cost lands outside a chapter.
+and the cost lands outside a chapter. A struck-through heading is one that has
+since been paid: the entry stays, because what its estimate got WRONG is the most
+useful thing on the page for the next one.
 
 ### `annex_f_resolution/unknown_discipline_mixed_port.va`
 
@@ -63,26 +65,34 @@ cheaper than closing it safely, and that is why it is still open. Its sibling
 `two_named_branches_retain_separately.va` pins the part that IS fixed, so a
 regression in branch identity still fails loudly.
 
-### `ch05_analog_behavior/net_named_gnd_is_not_ground.va`
+### ~~`ch05_analog_behavior/net_named_gnd_is_not_ground.va`~~ — LANDED, wave 11
 
-Added deliberately, ahead of the fix rather than after the discovery: a net
-*named* `gnd` that is not *declared* `ground` aliases two different branches onto
-one solver unknown. `flowUnknown` (`src/ir/lower.zig`) builds the key by
-formatting `nodeName(hi)` and `nodeName(lo)` into `flow(<hi>,<lo>)`, `nodeName`
-spells the §1.3.1.1 reference node `gnd`, and `internNode` dedupes by that
-string — so `I(a)` and `I(a,gnd)` intern to one `u16` and the second read
-returns the first branch's current. Wrong Jacobian, exit 0, no diagnostic.
+A net *named* `gnd` that is not *declared* `ground` used to alias two different
+branches onto one solver unknown: `flowUnknown` built the key by formatting
+`nodeName(hi)`/`nodeName(lo)` into `flow(<hi>,<lo>)`, `nodeName` spells the
+§1.3.1.1 reference node `gnd`, and `internNode` deduped by that string, so `I(a)`
+and `I(a,gnd)` interned to one `u16`. Wrong Jacobian, exit 0, no diagnostic.
 
-**Blast radius:** `node_voltages` is one string key space holding four kinds of
-name (user nets, §5.4.2 branch flows, §5.4.3 port flows, §6.5.2 vector elements,
-plus §6.7 flattened paths), and the fix is to key it on `{kind, name}` rather
-than on `name`. The narrow repair — spelling ground `"0"` instead of `"gnd"` —
-is a one-line change that passes this fixture and is still wrong: it respells
-every emitted `U` member, `nodeName` has ~20 callers that are user-facing
-diagnostic text, and it churns `tb.zig`'s directive parser and the two fixtures
-that already write `flowZ28pZ2cgndZ29` by hand. The spellings a key split must
-leave byte-identical are pinned in codegen.zig's "the `U` block is the SPELLING
-contract" test and in tb.zig's `//! bias`/`//! sweep` test.
+Fixed by keying identity on structure instead of spelling. A §5.4.2 branch is now
+keyed on its NODE PAIR (`Lower.flow_unknowns`), a §5.4.3 port flow on its port
+(`port_probes`, consulted before the name), and `node_voltages` holds NETS only;
+`Lower.node_kind` records what each `node_order` slot IS, so
+`codegen.isFlowUnknown` is an array read and `abstolOf` reads the tolerance node
+off the tag instead of parsing `flow(a,b)` back apart.
+
+**What the blast radius above got wrong**, which is the part worth keeping. There
+was a FOURTH site, and it is the one that kept the fixture red after the key
+split landed: `codegen.buildNames` formats `flow(hi,lo)` for every §5.6 potential
+contribution and matches it against `node_order` as a STRING to find the unknown
+lowering already allocated. It now asks `flow_unknowns` for the pair. And
+splitting identity from spelling makes two slots able to want ONE spelling — the
+reference node and a plain net both print `gnd` — which no composite key fixes,
+since the emitted `U` has one member per slot; `Lower.uniqueSpelling` suffixes
+the later one, on the `#k` convention `codegen.freshUName` already used.
+
+MEASURED: every fixture emitted with `--display=emit --emit-zig` before and after
+is byte-identical except this one, whose single changed line is which unknown
+`I(a,gnd)` reads.
 
 ---
 
@@ -248,6 +258,22 @@ Grouped by area; the file is the authority, this is the index.
 - §4.7.2 function-local `parameter` declarations fold into `consts` and are not
   restored on exit, so a module parameter of the same name stays shadowed for the
   rest of the module. This is the file's one deferral with no site of its own.
+- §6.5.2 a vector element and a §2.8.1 escaped identifier share the NET
+  namespace. `vecElem` scalarises `electrical [1:0] b` into nets literally named
+  `b[1]`/`b[0]` — the spelling the source uses, deliberately, so a diagnostic, a
+  `//!` binding and the emitted `U` member all name the same thing — and the LRM
+  gives an element no name of its own to use instead. So `electrical [0:0] b;
+  electrical \b[0] ;` declares two nets and gets one, reported as a false E0902
+  (§7.4.4 second discipline declaration). Wave 11 split branch flows out of this
+  key space and deliberately did **not** split elements out: they ARE nets under
+  §3.6.3, every consumer downstream of scalarisation treats them as nets, and the
+  only cheap repair is a spelling change — which the same wave was forbidden to
+  make, since `b[0]` is pinned from both ends by codegen.zig's "the `U` block is
+  the SPELLING contract" test and tb.zig's `//! bias V(d[1])`.
+  **Upgrade path:** a `vec_elem` discriminator alongside `NodeKind`, keying
+  `node_voltages` on `{is_element, name}`; the cost is not the key, it is
+  threading "am I an element?" through the eight sites that intern or look up a
+  net name, and it buys one diagnostic on a program nobody writes.
 
 ### Proof / range analysis (`src/ir/proof.zig`)
 - Immediate widening loses loop-carried bounds.

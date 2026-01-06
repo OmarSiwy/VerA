@@ -307,6 +307,24 @@ fn digits(s: []const u8) bool {
 /// (`flowZ28pZ2cnZ29`), and sanitizing that again would escape its `Z`s.
 /// `isValidId` also rejects Zig keywords, so a net called `fn` still gets its
 /// trailing `Z`.
+///
+/// WHY THIS STAYS A TEXT→TEXT MAPPING, after wave 11 keyed the unknowns on
+/// `{kind, node pair}` and took the same re-derivation out of `codegen`. There
+/// is no `Lower` here to ask: `parse` runs on the fixture's `//!` lines with an
+/// arena and nothing else (its tests call it on a string), and the answer is
+/// consumed by `ix()`, which resolves a name against the emitted `U` enum at the
+/// runner's COMPILE time. So this file cannot hold a node index, only a member
+/// name, and the convention above is the whole interface. What pins the two ends
+/// together is codegen.zig's "the `U` block is the SPELLING contract" test and
+/// this file's own §5.4.2 test, which spell the same members from both sides.
+///
+/// One residual, and it is the directive language's, not lowering's: `I(a)` on a
+/// module that ALSO has a plain net called `gnd` is ambiguous here, because
+/// `flow(a,gnd)` is what both (a, reference) and (a, gnd) print before
+/// `uniqueSpelling` suffixes the later one. Such a fixture writes the member as
+/// `emitTopology` prints it. See `ch05_analog_behavior/
+/// net_named_gnd_is_not_ground.va`, which reads both currents in the model
+/// instead and needs no binding at all.
 fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     var s = raw;
     if (std.mem.startsWith(u8, s, "V(") and std.mem.endsWith(u8, s, ")")) s = s[2 .. s.len - 1];
@@ -328,19 +346,44 @@ fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     return naming.sanitize(buf, s) catch unreachable;
 }
 
+/// `name = value` pairs, split on TOP-LEVEL commas.
+///
+/// Top-level, because §5.4.2's two-terminal branch flow is spelled `I(a,b)` and
+/// its comma separates the access function's ARGUMENTS, not two bindings. A
+/// plain `splitScalar(',')` cut it in half, so `//! bias I(a,b) = 0.25` was
+/// `error.BadSyntax` while `//! sweep I(a,b) = 0.25` — which splits on the first
+/// `=` and never sees the comma — worked. That asymmetry was a consequence of
+/// this parser, not a decision about the directive language: `bias` and `sweep`
+/// now spell an unknown the same way.
+///
+/// Only `(` nests. A `//!` name is an access function over identifiers, and the
+/// one other bracket a fixture writes — a §6.5.2 element, `d[1]` — cannot
+/// contain a comma.
 fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding)) Error!void {
-    var it = std.mem.splitScalar(u8, rest, ',');
-    while (it.next()) |item| {
-        const t = std.mem.trim(u8, item, " \t");
-        if (t.len == 0) continue;
-        const at = std.mem.indexOfScalar(u8, t, '=') orelse return error.BadSyntax;
-        const name = std.mem.trim(u8, t[0..at], " \t");
-        if (name.len == 0) return error.BadSyntax;
-        try out.append(arena, .{
-            .name = try unknownName(arena, name),
-            .value = try number(t[at + 1 ..]),
-        });
-    }
+    var depth: u32 = 0;
+    var start: usize = 0;
+    for (rest, 0..) |ch, i| switch (ch) {
+        '(' => depth += 1,
+        ')' => depth -|= 1,
+        ',' => if (depth == 0) {
+            try oneBinding(arena, rest[start..i], out);
+            start = i + 1;
+        },
+        else => {},
+    };
+    try oneBinding(arena, rest[start..], out);
+}
+
+fn oneBinding(arena: Allocator, item: []const u8, out: *std.ArrayList(Binding)) Error!void {
+    const t = std.mem.trim(u8, item, " \t");
+    if (t.len == 0) return;
+    const at = std.mem.indexOfScalar(u8, t, '=') orelse return error.BadSyntax;
+    const name = std.mem.trim(u8, t[0..at], " \t");
+    if (name.len == 0) return error.BadSyntax;
+    try out.append(arena, .{
+        .name = try unknownName(arena, name),
+        .value = try number(t[at + 1 ..]),
+    });
 }
 
 fn parseNumbers(arena: Allocator, rest: []const u8) Error![]const f64 {
@@ -1192,13 +1235,19 @@ test "§5.4.2 `I(...)` names the flow unknown, not the node potential" {
     // which pins the other end of the same two strings.
     try testing.expectEqualStrings("flowZ28aZ2cbZ29", d.sweeps[1].name);
     try testing.expectEqualStrings("dZ5b1Z5d", d.bias[2].name);
-    // ASYMMETRY, pinned because it is surprising and not because it is right:
-    // `sweep` splits on the FIRST `=`, so the comma inside `I(a,b)` survives,
-    // while `bias`/`param` split on commas first and the same branch is
-    // unwritable there. A fixture biasing a two-terminal branch flow spells the
-    // sanitized member directly, which is what
-    // ch05_analog_behavior/single_terminal_branch.va already does.
-    try testing.expectError(error.BadSyntax, parse(arena_state.allocator(), "//! bias I(a,b) = 0.25\n"));
+    // Wave 10 pinned this as `error.BadSyntax` — `bias`/`param` split on commas
+    // before anything else, so the comma inside `I(a,b)` cut the binding in half
+    // and the one unknown with no source spelling was unwritable on two of the
+    // three directives that take one. Wave 11 decided it rather than documenting
+    // it: `parseBindings` splits on TOP-LEVEL commas, so the same access
+    // function means the same thing on every directive.
+    const d2 = try parse(arena_state.allocator(), "//! bias I(a,b) = 0.25, V(z) = 3\n");
+    try testing.expectEqualStrings("flowZ28aZ2cbZ29", d2.bias[0].name);
+    try testing.expectEqual(@as(f64, 0.25), d2.bias[0].value);
+    try testing.expectEqualStrings("z", d2.bias[1].name);
+    // A binding with no `=` is still an error, and the top-level split must not
+    // have swallowed that check with the comma.
+    try testing.expectError(error.BadSyntax, parse(arena_state.allocator(), "//! bias I(a,b)\n"));
 }
 
 test "directives: a typo is an error, not a silently skipped test" {
