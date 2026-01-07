@@ -210,7 +210,31 @@ Grouped by area; the file is the authority, this is the index.
 
 ### Analog operators (`src/backend/codegen.zig`, `cg_filters.zig`)
 - `absdelay`: fixed 32-sample history with linear interpolation.
-- No `noisePsd` hook emitted; thermal-off-the-Jacobian fallback only.
+- No `noisePsd` hook emitted, so the host is left with the fallback that reads
+  4kT·g off the Jacobian it already has — which covers **`.thermal` only**.
+  Nothing in a Jacobian yields §4.6.4.2's `kf·I^af / f^ef`, so a `.flicker` row
+  in `noise_gens` is topology the host is told about and a PSD it must decline.
+  Three §4.6.4 shapes reach `noise_gens` as NOTHING, deliberately:
+  - §4.6.4.3/.4 `noise_table`/`noise_table_log` have no `NoiseGen.kind` tag.
+    Adding one is blocked from the other end: `tools/contract.zig`'s `PsdTerm`
+    is a parametric white/flicker form that "cannot express" a piecewise
+    PSD-vs-frequency table, and its own note says the tag and the replacement
+    hook "land together". Refusing the call instead is not available either —
+    `ch04_expressions/27_noise_sources.va` asserts all four are accepted and
+    read zero outside a small-signal analysis.
+  - A source assigned to a variable and then contributed
+    (`x = white_noise(k); I(a,b) <+ x;`) exports nothing: `noiseKindsOf` walks
+    the contributed EXPRESSION, and by then the source is an ident.
+    `ch04_expressions/27_noise_sources.va` and `38_correlated_noise.va` are
+    both that shape, and 38 is §4.6.4.6 CORRELATED noise, which is precisely
+    what the table's shared-`source` design exists to express — so this is the
+    one of the three worth paying for. It needs the noise source tracked as a
+    value through lowering, not a tag on the contribution.
+  - A generator on a branch both of whose ends are ground, since §1.3.1.1
+    leaves it no row or column to name.
+  What is FIXED as of wave 13: the generators are a SET per contribution
+  (`Lower.NoiseKinds`), so a branch carrying a thermal source and a flicker
+  source exports both. It used to export whichever `<+` came last.
 - §5.10.3.3 `enable` honoured only where it folds.
 - The residual is real, so a matching small-signal analysis contributes the
   phasor's real part.

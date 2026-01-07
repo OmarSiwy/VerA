@@ -3780,28 +3780,51 @@ pub const Gen = struct {
     }
 
     /// §4.6.4 noise generator topology. The PSD itself is left to the host's
-    /// Jacobian-derived fallback.
+    /// Jacobian-derived fallback, which covers `.thermal` ONLY: 4kT·g is read
+    /// off the conductance the Jacobian already carries, and there is nothing
+    /// in a Jacobian from which §4.6.4.2's `kf·I^af / f^ef` could be derived.
+    /// So a `.flicker` row here is topology the host is told about and a PSD it
+    /// must decline — which is still strictly better than the row being absent,
+    /// because absent means the model never declared the source.
+    ///
+    /// ONE ENTRY PER GENERATOR, not per contribution. §4.6.4's own shape is
+    /// several sources on one branch, and `Lower.NoiseKinds` is a set for that
+    /// reason; iterating it here is what makes the thermal source of
+    /// `combined/13_noise_temperature_analysis.va` reach the table at all.
+    ///
+    /// Three §4.6.4 shapes are deliberately NOT in this table, and TODO.md §3
+    /// carries them rather than leaving them to be rediscovered: §4.6.4.3/.4
+    /// `noise_table`/`noise_table_log` have no tag (`tools/contract.zig`'s
+    /// `NoiseGen.kind` and `PsdTerm` "land together"), and a source assigned to
+    /// a variable that is then contributed exports nothing, because the walk
+    /// below is over the contributed EXPRESSION.
+    ///
     // ponytail: no `noisePsd` hook. Emitting one means running a third variant
     // of each unit (white_noise(p) → p) against the plain-f64 scalar `R`; the
     // machinery for that is already here (see `rscalar_txt`), it just needs a
     // per-contribution noise unit.
     fn emitNoiseTable(self: *Gen) Error!void {
-        var n: u32 = 0;
+        var n: usize = 0;
         for (self.lower.contributions.items) |c| {
-            if (c.noise_kind != null and !(c.hi == Lower.ground and c.lo == Lower.ground)) n += 1;
+            if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
+            n += c.noise_kinds.count();
         }
         if (n == 0) return;
         try self.w("/// §4.6.4 noise sources declared by the model.\npub const noise_gens = [_]contract.NoiseGen(Self){{\n", .{});
         for (self.lower.contributions.items) |c| {
-            const kind = c.noise_kind orelse continue;
             if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
             // §1.3.1.1 ground is not an unknown: a to-ground generator is
             // spelled row == col.
             const row = if (c.hi != Lower.ground) c.hi else c.lo;
             const col = if (c.lo != Lower.ground) c.lo else row;
-            try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s} }},\n", .{
-                self.u_names[row], self.u_names[col], @tagName(kind),
-            });
+            // Set-iteration order is `NoiseKind`'s declaration order, which is
+            // §4.6.4.1 before §4.6.4.2 and therefore stable across builds.
+            var it = c.noise_kinds.iterator();
+            while (it.next()) |kind| {
+                try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s} }},\n", .{
+                    self.u_names[row], self.u_names[col], @tagName(kind),
+                });
+            }
         }
         try self.w("}};\n\n", .{});
     }
@@ -5180,6 +5203,37 @@ test "codegen: a §5.6 potential contribution gets its own branch-current unknow
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const u_kinds") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".sub(c);") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const num_ports: usize = 2;") != null);
+}
+
+test "codegen: §4.6.4 two noise sources on one branch export TWO generators" {
+    var h: Harness = undefined;
+    // The clause's own shape: "multiple noise contributions to a single branch
+    // are combined". `combined/13_noise_temperature_analysis.va` writes exactly
+    // this, and a single-valued tag made the flicker statement overwrite the
+    // thermal one — deleting from `noise_gens` the ONE generator the documented
+    // Jacobian-derived fallback can actually compute.
+    try Harness.run(std.testing.allocator,
+        \\module rnoise(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real rs = 1000.0;
+        \\  analog begin
+        \\    I(p, n) <+ V(p, n) / rs;
+        \\    I(p, n) <+ white_noise(1.6e-23 / rs, "thermal");
+        \\    I(p, n) <+ flicker_noise(1e-20, 1.0, "flicker");
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .thermal }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .flicker }") != null);
+    // §4.6.4.1 before §4.6.4.2 — the set iterates in declaration order, so the
+    // table is stable across builds and a host may index it positionally.
+    try std.testing.expect(
+        std.mem.indexOf(u8, src, ".kind = .thermal }").? <
+            std.mem.indexOf(u8, src, ".kind = .flicker }").?,
+    );
 }
 
 test "codegen: §5.6.7 indirect contribution is a nullor row, ASYMMETRIC-safe" {
