@@ -18,7 +18,11 @@
 //!             → proof.zig          (class 6) MIR → per-unit finiteness verdict
 //!  backend/   → codegen.zig+naming (classes 4,5,8,10) MIR → device.zig
 //!             → orchestrator.zig  (§8.3 ABI) device.zig → .so (+ GPU kernels)
-//!             runtime: eval_batch.zig (§8.3) SIMD device evaluation
+//!
+//! The pipeline ENDS at the .so. There is no runtime stage here: §8.3's
+//! simulation cycle — assemble, factor, iterate — belongs to the host that
+//! dlopens the artifact, and VerA's contribution to its speed is the code it
+//! emits, not a loop of its own. `tools/contract.zig` is the whole promise.
 //!
 //! `frontend/` and `ir/` are shared by all targets; only `backend/` differs. The
 //! split exists so a second frontend lowering into this MIR, or a second backend
@@ -39,7 +43,8 @@
 //! `src/backend/*.zig` is reachable from a root" test, and fails the build on a
 //! backend file that is neither reachable nor listed. Do not add a line to
 //! silence it without the `<why>`: an orphan that stayed silent is how
-//! `eval_batch.zig` reached 702 lines nothing could call.
+//! `eval_batch.zig` reached 702 lines nothing could call, and wave 12 deleted
+//! it for exactly that.
 //!
 //! DOD ground rules that hold in EVERY file here:
 //!   - SoA (MultiArrayList / flat Buf), never array-of-structs across a hot loop.
@@ -65,25 +70,41 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-pub const token = @import("frontend/token.zig");
+// THE PUBLIC SURFACE IS THE FIVE NAMES BELOW MARKED `pub`, AND NOTHING ELSE.
+//
+// A stage that is `pub` here is a promise to whoever links `vera`: its decls
+// cannot be renamed without breaking them. The other sixteen were `pub` for no
+// reason anyone recorded, and MEASURED across every `@import("vera")` in this
+// tree (`src/cli.zig`, `tests/`) the only module names actually referenced are
+// these five — `Preprocessor` (tests/bench.zig times stage 1 on its own),
+// `diag`, `codegen`, `orchestrator`, `tb`. Everything else is reachable through
+// `compileSource` / `CompileResult` / `buildArtifact`, which is the intended
+// door.
+//
+// A private `const` is still a full module: it is imported, analysed, tested
+// (see the two tests at the bottom, which name these consts directly) and freely
+// usable by every driver in this file. The only thing it is not is nameable as
+// `vera.Lower` from outside. If an out-of-tree embedder ever needs one, the
+// compile error is loud and the revert is one keyword — which is exactly why
+// this is a `const`/`pub const` question and not an architecture question.
+const token = @import("frontend/token.zig");
 pub const Preprocessor = @import("frontend/preprocessor.zig");
-pub const Lexer = @import("frontend/lexer.zig");
-pub const Ast = @import("frontend/ast.zig");
-pub const Parser = @import("frontend/parser.zig");
-pub const Mir = @import("ir/mir.zig");
-pub const Analysis = @import("ir/analysis.zig");
-pub const Ssa = @import("ir/ssa.zig");
-pub const Elaborate = @import("ir/elaborate.zig");
-pub const Lower = @import("ir/lower.zig");
-pub const proof = @import("ir/proof.zig");
+const Lexer = @import("frontend/lexer.zig");
+const Ast = @import("frontend/ast.zig");
+const Parser = @import("frontend/parser.zig");
+const Mir = @import("ir/mir.zig");
+const Analysis = @import("ir/analysis.zig");
+const Ssa = @import("ir/ssa.zig");
+const Elaborate = @import("ir/elaborate.zig");
+const Lower = @import("ir/lower.zig");
+const proof = @import("ir/proof.zig");
 pub const diag = @import("diag.zig");
-pub const diag_code = @import("diag_code.zig");
-pub const naming = @import("backend/naming.zig");
+const diag_code = @import("diag_code.zig");
+const naming = @import("backend/naming.zig");
 pub const codegen = @import("backend/codegen.zig");
-pub const UnitPlan = @import("backend/unit_plan.zig");
-pub const cg_display = @import("backend/cg_display.zig");
-pub const cg_filters = @import("backend/cg_filters.zig");
-pub const eval_batch = @import("backend/eval_batch.zig");
+const UnitPlan = @import("backend/unit_plan.zig");
+const cg_display = @import("backend/cg_display.zig");
+const cg_filters = @import("backend/cg_filters.zig");
 pub const orchestrator = @import("backend/orchestrator.zig");
 pub const tb = @import("backend/tb.zig");
 
@@ -137,11 +158,12 @@ pub const Error = codegen.Error || error{
 // allocators, and five conversion sites in this file that each turned a
 // different currency (a line, a byte, a token index, a MIR instruction) into a
 // line/col — one of which could not, and reported proof errors at 0:0.
-
-pub const Bag = diag.Bag;
-pub const Code = diag.Code;
-pub const Severity = diag.Severity;
-pub const Level = diag.Level;
+//
+// There is no `pub const Bag = diag.Bag;` here either. Four such aliases stood
+// where `diag` itself is already `pub`, and MEASURED across every
+// `@import("vera")` in this tree nothing spelled any of them — including this
+// file, which says `diag.Bag` throughout. A second spelling of one type is a
+// second thing to keep in step; `vera.diag.Bag` is the one door.
 
 // ---------------------------------------------------------------------------
 // Options
@@ -188,7 +210,7 @@ pub const Options = struct {
 /// AST stores all hold an `Allocator` whose `ptr` is the ArenaAllocator's
 /// address, so moving the ArenaAllocator by value into this struct would
 /// dangle every one of them. Keeping a pointer makes the result freely movable
-/// (into a `Compilation` unit row, out of a function, …).
+/// — out of the function that built it, into a caller's own table, …
 pub const CompileResult = struct {
     gpa: Allocator,
     arena: *std.heap.ArenaAllocator,
@@ -222,8 +244,9 @@ pub const CompileResult = struct {
         self.* = undefined;
     }
 
-    /// Stage 6. Idempotent — the generated text is cached on the result, which
-    /// is what makes a `Compilation` cache hit free.
+    /// Stage 6. Idempotent — the generated text is cached on the result, so a
+    /// caller that asks twice (the CLI does: once to write, once to hand to the
+    /// orchestrator) pays codegen once.
     pub fn generateDevice(self: *CompileResult) codegen.Error![]const u8 {
         return (try self.generateOutput()).text;
     }
@@ -520,220 +543,6 @@ pub fn buildArtifact(
 }
 
 // ---------------------------------------------------------------------------
-// Compilation — incremental frontend cache
-// ---------------------------------------------------------------------------
-
-/// Stable, dense handle for a source unit. Never reused; a unit's handle
-/// survives every edit, which is what lets a caller key its own state off it.
-pub const Unit = enum(u32) { _ };
-
-pub const UpdateStatus = enum {
-    /// The preprocessed bytes were byte-identical: stages 2–6 did not run.
-    cached,
-    /// Stages 1–6 re-ran; `generation` was bumped.
-    compiled,
-};
-
-pub const Update = struct {
-    unit: Unit,
-    /// Bumped on every recompile. The artifact path is versioned by it so the
-    /// host dlopens a fresh inode — orchestrator.zig's CRATE BOUNDARY.
-    generation: u32,
-    status: UpdateStatus,
-    /// device.zig. Empty for `.lint`. Borrowed from the unit's arena — valid
-    /// until the next `update` of THIS unit.
-    generated: []const u8,
-};
-
-/// Session-scoped frontend cache. Dirtiness is decided on the PREPROCESSED
-/// bytes, so a macro or `include
-/// change invalidates even when the .va file itself is untouched.
-///
-/// This is deliberately whole-unit, not fine-grained: per-declaration change
-/// detection is delegated to `zig` through stable naming — naming.zig's header
-/// is the argument. (It read "(ch.2)" until wave 12: LRM ch.2 is lexical
-/// conventions, so the pointer resolved and was still wrong.) All this layer
-/// buys is skipping a frontend that already runs in microseconds — its real job
-/// is proving the no-op-edit determinism invariant.
-pub const Compilation = struct {
-    gpa: Allocator,
-    units: std.MultiArrayList(UnitRow) = .empty,
-    /// name → Unit. Lookup-only: never iterated (determinism).
-    by_name: std.StringHashMapUnmanaged(Unit) = .empty,
-    /// Cache misses since init. Benchmarks read it.
-    rebuilds: u64 = 0,
-
-    /// SoA even though the table is cold — one row per source file — because
-    /// the whole engine holds that shape and the row is mostly pointers.
-    const UnitRow = struct {
-        /// gpa-owned; also the diagnostic file name.
-        name: []const u8,
-        /// BLAKE3 of the preprocessed bytes + the target byte.
-        fingerprint: [32]u8,
-        generation: u32,
-        /// `null` after a failed update — a stale result must never be served.
-        result: ?CompileResult,
-        /// Borrowed from `result.device_zig` (gpa-owned by the result).
-        generated: []const u8,
-        /// The unit's diagnostics, gpa-owned and detached.
-        ///
-        /// WHY THE CACHE HAS TO CARRY THESE: stages 2–6 do not run on a hit, so
-        /// without a replay a cached unit would report NOTHING — an edit
-        /// elsewhere in the project would make a model's W0650 finiteness
-        /// warning silently vanish and come back. Warnings are the reason this
-        /// matters: a cached ERROR cannot happen (a failed update drops the
-        /// result), but a cached SUCCESS carrying warnings is the normal case.
-        diags: diag.Bag,
-    };
-
-    pub fn init(gpa: Allocator) Compilation {
-        return .{ .gpa = gpa };
-    }
-
-    pub fn deinit(self: *Compilation) void {
-        const names = self.units.items(.name);
-        const results = self.units.items(.result);
-        const diags = self.units.items(.diags);
-        for (names, results, diags) |name, *res, *d| {
-            if (res.*) |*r| r.deinit();
-            d.deinit(self.gpa);
-            self.gpa.free(name);
-        }
-        self.units.deinit(self.gpa);
-        self.by_name.deinit(self.gpa);
-        self.* = .{ .gpa = self.gpa };
-    }
-
-    pub fn unitOf(self: *const Compilation, name: []const u8) ?Unit {
-        return self.by_name.get(name);
-    }
-
-    /// Registers `name` if new. The handle is the row index.
-    pub fn addUnit(self: *Compilation, name: []const u8) Allocator.Error!Unit {
-        if (self.by_name.get(name)) |u| return u;
-        const owned = try self.gpa.dupe(u8, name);
-        errdefer self.gpa.free(owned);
-        const unit: Unit = @enumFromInt(self.units.len);
-        try self.units.append(self.gpa, .{
-            .name = owned,
-            .fingerprint = @splat(0),
-            .generation = 0,
-            .result = null,
-            .generated = "",
-            .diags = .init(self.gpa),
-        });
-        errdefer _ = self.units.pop();
-        try self.by_name.put(self.gpa, owned, unit);
-        return unit;
-    }
-
-    pub fn result(self: *Compilation, unit: Unit) ?*CompileResult {
-        const slot = &self.units.items(.result)[@intFromEnum(unit)];
-        return if (slot.*) |*r| r else null;
-    }
-
-    pub fn generationOf(self: *const Compilation, unit: Unit) u32 {
-        return self.units.items(.generation)[@intFromEnum(unit)];
-    }
-
-    /// Stages 1–6 for one source unit, skipped wholesale when the preprocessed
-    /// bytes are unchanged. On failure the unit's cached result is dropped and
-    /// the error is returned; diagnostics land in `opts.diags`.
-    pub fn update(
-        self: *Compilation,
-        name: []const u8,
-        source: []const u8,
-        target: Target,
-        opts: Options,
-    ) Error!Update {
-        const unit = try self.addUnit(name);
-        const idx = @intFromEnum(unit);
-
-        var o = opts;
-        o.file_name = self.units.items(.name)[idx];
-
-        // Stage 1 runs unconditionally: it IS the fingerprint.
-        const arena_state = try newArena(self.gpa);
-        var bag = diag.Bag.init(arena_state.allocator());
-        bag.levels = o.lint;
-        var defaults: []const Preprocessor.DefaultDiscipline = &.{};
-        var transitions: []const Preprocessor.DefaultTransition = &.{};
-        var timescale: ?Preprocessor.Timescale = null;
-        var netlist_modules: u32 = 0;
-        const text = preprocess(arena_state, source, o, &bag, &defaults, &transitions, &timescale, &netlist_modules) catch |err| {
-            try finish(self.gpa, o, &bag);
-            freeArena(self.gpa, arena_state);
-            return err;
-        };
-
-        var fp: [32]u8 = undefined;
-        var hasher = std.crypto.hash.Blake3.init(.{});
-        hasher.update(&.{@intFromEnum(target)});
-        hasher.update(text);
-        hasher.final(&fp);
-
-        if (self.units.items(.result)[idx] != null and
-            std.mem.eql(u8, &self.units.items(.fingerprint)[idx], &fp))
-        {
-            // Stages 2–6 did not run, so `bag` is empty. Replay what the unit
-            // reported when it WAS compiled, or a cached success would look
-            // like a warning-free one.
-            freeArena(self.gpa, arena_state);
-            if (o.diags) |out| {
-                out.* = self.units.items(.diags)[idx];
-                try out.detach(self.gpa); // deep-copies; the stored bag is untouched
-            }
-            return .{
-                .unit = unit,
-                .generation = self.units.items(.generation)[idx],
-                .status = .cached,
-                .generated = self.units.items(.generated)[idx],
-            };
-        }
-
-        // Miss. Drop the stale result first: nothing may observe a result that
-        // does not match the source we are about to compile.
-        if (self.units.items(.result)[idx]) |*old| old.deinit();
-        self.units.items(.result)[idx] = null;
-        self.units.items(.generated)[idx] = "";
-
-        var res = compileInArena(self.gpa, arena_state, text, target, o, &bag, defaults, transitions, timescale, netlist_modules) catch |err| {
-            try finish(self.gpa, o, &bag);
-            freeArena(self.gpa, arena_state);
-            return err;
-        };
-        const denied = bag.failed();
-
-        // Keep the unit's own copy BEFORE `finish` moves the bag out to the
-        // caller. Both are deep copies of the same arena-backed original.
-        var stored = bag;
-        try stored.detach(self.gpa);
-        self.units.items(.diags)[idx].deinit(self.gpa);
-        self.units.items(.diags)[idx] = stored;
-
-        try finish(self.gpa, o, &bag);
-        if (denied) {
-            res.deinit();
-            return error.CompileFailed;
-        }
-        errdefer res.deinit();
-        const generated = if (target == .lint) "" else try res.generateDevice();
-
-        self.units.items(.result)[idx] = res;
-        self.units.items(.generated)[idx] = generated;
-        self.units.items(.fingerprint)[idx] = fp;
-        self.units.items(.generation)[idx] +%= 1;
-        self.rebuilds += 1;
-        return .{
-            .unit = unit,
-            .generation = self.units.items(.generation)[idx],
-            .status = .compiled,
-            .generated = generated,
-        };
-    }
-};
-
-// ---------------------------------------------------------------------------
 // Shared helpers
 // ---------------------------------------------------------------------------
 
@@ -777,7 +586,6 @@ test {
     _ = UnitPlan;
     _ = cg_display;
     _ = cg_filters;
-    _ = eval_batch;
     _ = orchestrator;
     _ = diag;
     _ = diag_code;
@@ -902,68 +710,6 @@ test "lint levels: --deny promotes a warning into a hard failure" {
     }
 }
 
-test "Compilation: a cache hit replays the unit's warnings" {
-    const gpa = std.testing.allocator;
-    var comp: Compilation = .init(gpa);
-    defer comp.deinit();
-
-    const src =
-        \\module amp(a, c); inout a, c; electrical a, c;
-        \\  analog I(a, c) <+ exp(V(a, c));
-        \\endmodule
-        \\
-    ;
-
-    var first: diag.Bag = .init(gpa);
-    defer first.deinit(gpa);
-    const a = try comp.update("amp.va", src, .lint, .{ .diags = &first });
-    try std.testing.expectEqual(UpdateStatus.compiled, a.status);
-    try std.testing.expectEqual(@as(u32, 1), first.warn_count);
-
-    // Byte-identical source: stages 2–6 are skipped entirely...
-    var second: diag.Bag = .init(gpa);
-    defer second.deinit(gpa);
-    const b = try comp.update("amp.va", src, .lint, .{ .diags = &second });
-    try std.testing.expectEqual(UpdateStatus.cached, b.status);
-
-    // ...but the diagnostics must not vanish with them. A warning that blinks
-    // out because an unrelated file was edited is worse than no warning.
-    try std.testing.expectEqual(@as(u32, 1), second.warn_count);
-    try std.testing.expectEqual(first.at(0).code, second.at(0).code);
-    try std.testing.expectEqualStrings(first.at(0).message, second.at(0).message);
-    // Deep copy, not a share: the two bags deinit independently.
-    try std.testing.expect(first.at(0).message.ptr != second.at(0).message.ptr);
-}
-
-test "Compilation: unchanged source is a cache hit, generation stable" {
-    const gpa = std.testing.allocator;
-    var comp: Compilation = .init(gpa);
-    defer comp.deinit();
-
-    const first = try comp.update("res.va", test_resistor, .lint, .{});
-    try std.testing.expectEqual(UpdateStatus.compiled, first.status);
-    try std.testing.expectEqual(@as(u32, 1), first.generation);
-
-    const second = try comp.update("res.va", test_resistor, .lint, .{});
-    try std.testing.expectEqual(UpdateStatus.cached, second.status);
-    try std.testing.expectEqual(first.unit, second.unit);
-    try std.testing.expectEqual(first.generation, second.generation);
-    try std.testing.expectEqual(@as(u64, 1), comp.rebuilds);
-
-    // A macro-only edit changes the preprocessed bytes ⇒ must recompile.
-    const via_macro = "`define R 1000.0\n" ++
-        \\module res(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  parameter real r = `R from (0.0:inf);
-        \\  analog I(p, n) <+ V(p, n) / r;
-        \\endmodule
-    ;
-    const third = try comp.update("res.va", via_macro, .lint, .{});
-    try std.testing.expectEqual(UpdateStatus.compiled, third.status);
-    try std.testing.expectEqual(@as(u32, 2), third.generation);
-}
-
 test "determinism: a no-op recompile reproduces identical device.zig" {
     const gpa = std.testing.allocator;
     var a = try compileSource(gpa, test_resistor, .debug);
@@ -986,7 +732,7 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // `compileInArena` without anything noticing. A pub fn with no caller is not
 // type-checked; this is what keeps that from being discovered by an embedder.
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ @This(), token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, eval_batch, orchestrator }) |stage| {
+    inline for (.{ @This(), token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }

@@ -4,7 +4,10 @@
 //!
 //! DOD: emit into a `std.MultiArrayList(token.Stored)` (SoA columns). Store only
 //! tag + start offset; recompute token end on demand (`tokenEnd`). Stay scalar —
-//! .va files are small (KBs); SIMD loses here (that budget goes to eval_batch.zig).
+//! .va files are small (KBs), so a vector scan spends more on setup and on its
+//! scalar tail than it saves. The vector width that matters to a Verilog-A user
+//! is the DEVICE's evaluation loop, and that loop is the host's code, compiled
+//! from what codegen emits; nothing in this repo runs it.
 //!
 //! `next()` is a PURE function of (src, pos): it reads no lexer state beyond the
 //! cursor and mutates nothing else. That is what makes `tokenEnd` exact — it just
