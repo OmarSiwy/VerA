@@ -3623,20 +3623,46 @@ pub const Gen = struct {
 
         for (self.lower.contributions.items, 0..) |c, i| {
             const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
-            if (val == .f_zero) continue;
+            // A zero half normally contributes nothing, and §5.6.1.3's
+            // `discardOpposite` relies on that: it writes `.f_zero` to BOTH
+            // `acc.resist` and `acc.react`, so a discarded contribution still
+            // emits no row at all, in either residual.
+            //
+            // ONE shape is an exception, and it is the inductor. A §5.6
+            // POTENTIAL contribution's resistive row is `V(hi) - V(lo) - c`,
+            // which is the DEFINING equation of its branch flow unknown, and
+            // that same row is where the unknown enters KCL at hi and lo
+            // (§1.3.1.2). `V(l) <+ L*ddt(I(l))` has `resist_val == .f_zero`
+            // and a live `react_val`, so skipping it left the flow column with
+            // no pivot and the inductor's current out of every node equation —
+            // exit 0, no diagnostic. The row is still needed; only `c` is zero,
+            // and at DC `V(hi) - V(lo) = 0` is exactly what an inductor is.
+            const live = if (react) val != .f_zero else
+                val != .f_zero or (c.access == .potential and self.an.rv(c.react_val) != .f_zero);
+            if (!live) continue;
             self.uses_x = true;
-            self.uses_model = true;
-            self.uses_inst = true;
-            if (!opened) {
-                opened = true;
-                try self.ind(1);
-                try self.b("const m = core(S, x, model, inst);\n", .{});
+            // `model`/`inst` are read through `core` alone, so a residual whose
+            // every live row has a zero value never opens one — and an unused
+            // parameter is a compile error in the HOST's build, not here.
+            if (val != .f_zero) {
+                self.uses_model = true;
+                self.uses_inst = true;
+                if (!opened) {
+                    opened = true;
+                    try self.ind(1);
+                    try self.b("const m = core(S, x, model, inst);\n", .{});
+                }
             }
             stamps += 1;
             try self.ind(1);
             try self.b("{{\n", .{});
             try self.ind(2);
-            try self.b("const c = m.f{d};\n", .{self.lo_idx[@intFromEnum(val)]});
+            // `.f_zero` is rendered inline, never planned into `core` (see
+            // `planCommon`), so there is no `m.f<k>` to read for it.
+            if (val == .f_zero)
+                try self.b("const c = S.con(0.0);\n", .{})
+            else
+                try self.b("const c = m.f{d};\n", .{self.lo_idx[@intFromEnum(val)]});
             if (c.kind == .indirect) {
                 // §5.6.7 nullor: `out` is driven by a source whose current is
                 // the unknown `ib`, and the row is the CONSTRAINT alone —
