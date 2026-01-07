@@ -18,7 +18,11 @@
 //!             → proof.zig          (class 6) MIR → per-unit finiteness verdict
 //!  backend/   → codegen.zig+naming (classes 4,5,8,10) MIR → device.zig
 //!             → orchestrator.zig  (§8.3 ABI) device.zig → .so (+ GPU kernels)
-//!             runtime: eval_batch.zig (§8.3) SIMD device evaluation
+//!
+//! The pipeline ENDS at the .so. There is no runtime stage here: §8.3's
+//! simulation cycle — assemble, factor, iterate — belongs to the host that
+//! dlopens the artifact, and VerA's contribution to its speed is the code it
+//! emits, not a loop of its own. `tools/contract.zig` is the whole promise.
 //!
 //! `frontend/` and `ir/` are shared by all targets; only `backend/` differs. The
 //! split exists so a second frontend lowering into this MIR, or a second backend
@@ -39,7 +43,8 @@
 //! `src/backend/*.zig` is reachable from a root" test, and fails the build on a
 //! backend file that is neither reachable nor listed. Do not add a line to
 //! silence it without the `<why>`: an orphan that stayed silent is how
-//! `eval_batch.zig` reached 702 lines nothing could call.
+//! `eval_batch.zig` reached 702 lines nothing could call, and wave 12 deleted
+//! it for exactly that.
 //!
 //! DOD ground rules that hold in EVERY file here:
 //!   - SoA (MultiArrayList / flat Buf), never array-of-structs across a hot loop.
@@ -100,7 +105,6 @@ pub const codegen = @import("backend/codegen.zig");
 const UnitPlan = @import("backend/unit_plan.zig");
 const cg_display = @import("backend/cg_display.zig");
 const cg_filters = @import("backend/cg_filters.zig");
-const eval_batch = @import("backend/eval_batch.zig");
 pub const orchestrator = @import("backend/orchestrator.zig");
 pub const tb = @import("backend/tb.zig");
 
@@ -795,7 +799,6 @@ test {
     _ = UnitPlan;
     _ = cg_display;
     _ = cg_filters;
-    _ = eval_batch;
     _ = orchestrator;
     _ = diag;
     _ = diag_code;
@@ -1004,7 +1007,7 @@ test "determinism: a no-op recompile reproduces identical device.zig" {
 // `compileInArena` without anything noticing. A pub fn with no caller is not
 // type-checked; this is what keeps that from being discovered by an embedder.
 test "every top-level pub decl of every stage type-checks" {
-    inline for (.{ @This(), token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, eval_batch, orchestrator }) |stage| {
+    inline for (.{ @This(), token, Preprocessor, Lexer, Ast, Parser, Mir, Analysis, Ssa, Elaborate, Lower, proof, naming, codegen, UnitPlan, cg_display, cg_filters, orchestrator }) |stage| {
         std.testing.refAllDecls(stage);
     }
 }

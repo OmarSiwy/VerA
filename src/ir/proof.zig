@@ -13,7 +13,8 @@
 //!     exact same set of models — no mode-specific semantics. Nothing in this
 //!     file reads a target.
 //!   - NO runtime domain checks are emitted anywhere. Proof-or-error only. This
-//!     is what keeps the Release eval branch-free and vectorizable (eval_batch).
+//!     is what keeps the emitted `eval` branch-free, and therefore what lets the
+//!     host's compiler vectorize it across instances.
 //!   - VerA is SPEC-FAITHFUL: `exp` (domain "All x", §4.3.2) is NEVER
 //!     rejected — the LRM permits inf and makes `limexp` (§4.5.13) optional.
 //!     Unprovable-finite units simply get `.strict` (below), not a rejection.
@@ -1503,7 +1504,8 @@ const Prover = struct {
     ///
     /// A unit that is not provably finite is LEGAL and compiles; it just
     /// compiles with `@setFloatMode(.strict)` instead of `.optimized`, which
-    /// costs reassociation, fusion and vectorisation in the batch evaluator.
+    /// costs reassociation, fusion and vectorisation when the host compiles the
+    /// emitted unit function.
     /// The engine never rejects such a model and never silently inserts a clamp
     /// or a `limexp` (see the SPEC-FAITHFUL note in the file header) — so the
     /// only honest thing left to do is TELL the user, name the value that broke
