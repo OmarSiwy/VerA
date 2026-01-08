@@ -42,6 +42,51 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
+### Waves 12 + 13 — −950 lines, and two premises that were wrong — `7290679`
+
+**Suite: 216/216 · torture 1162/1164 (2 XFAIL, 0 FAIL) · test-contract green.**
+Test count *falls* 221 → 216 because the deletions took their own tests with them (4 inside
+`eval_batch.zig` grading its own `TestDiode`, 2 for `root.Compilation`, +1 new).
+
+**Wave 12 deleted 950 lines of Zig** in the mandated order — privatize, then `eval_batch.zig`
+(702 lines publishing a second, incompatible device ABI no host could use), then
+`root.Compilation`, then re-verify citations. The order matters: four items edit `src/root.zig`,
+and a cheapest-first sort does the cheap one three times.
+
+Three plan errors, all caught by building it:
+- **`pub` had to stay on five names, not four.** `tests/bench.zig` calls
+  `vera.Preprocessor.process` to time stage 1 — and wave 8 created that file *after* the
+  "only four are reachable" measurement was taken.
+- **`pub const FloatMode` must NOT be added.** I insisted the commit would not compile without
+  it; both uses spell `proof.FloatMode`, qualified through a const that stays in scope after
+  losing `pub`. Adding it would have landed a pub member with no consumer — in the commit whose
+  subject is deleting exactly those.
+- **My acceptance criterion was unsatisfiable as written.** "Zero emitted device text changed" is
+  impossible when `str_kernels.zig` is `@embedFile`d byte-for-byte into every §9.5-using device,
+  so removing its citation to a just-deleted file *necessarily* moves emitted bytes. The
+  checkable criterion is zero emitted **code** changed: measured 0 of 740 by comment-stripped
+  diff.
+
+Both deletions' measured prose is preserved in TODO.md §2 with its numbers — the batch
+evaluator's 14 wrong CSR cells and 3.05 vs 3.04 ms, and the three design answers the incremental
+cache had already bought — so the next person re-derives neither.
+
+**Wave 13's headline is that its own premise was wrong.** Two-slot `disc_of` does *not* decide
+XFAIL-1: Annex F.2 step 4.b's candidate list is **domain-filtered, not arrival-ordered**, and the
+mixed-port bullet needs a segment from the *other* domain. The fixture's signal has three
+segments `{continuous, continuous, discrete}`; two arrival slots hold the two continuous ones and
+drop the discrete witness the error is *about*. It would have "passed" only because that fixture
+happens to instantiate its continuous leaves first — a member with no consumer **and** a shape
+that has to change again. The agent kept a single `StrId` and wrote XFAIL-1's three real
+remaining costs into §1.
+
+Likewise my `grep "ddt(I("` = 0 understated item 4's blast radius: the real predicate is "a
+potential contribution whose *resistive* half is zero", which `V(out) <+ ddt(V(dt[k]))` also
+satisfies — so `analog_genvar_loop.va` was **already standing on the bug and passing**.
+
+Measured, not estimated: `declaredDiscipline` on a 20,001-instance chain, `vera --check`
+**8.10 s → 7.49 s** (−7.5%), with the run-to-run spread collapsing (10.22/8.10 → 7.50/7.49).
+
 ### Wave 11 — identity from structure, not from the printed name — `91f6e03`
 
 **Suite: 221/221 · torture 1160/1162 (2 XFAIL, 0 FAIL) · test-contract green.**
@@ -264,13 +309,13 @@ Kept because a plan whose errors are invisible is worse than one with none.
 
 ## In flight
 
-- **Waves 12 + 13** (`wqasulp0q`) — deletion and device physics, in disjoint file groups.
-  Wave 12 is one agent working a FIXED ORDER (privatize → delete `eval_batch.zig` → delete
-  `root.Compilation` → re-verify citations), because four of its items edit `src/root.zig` and a
-  cheapest-first sort does the cheap one three times. Wave 13 is `disc_of` built two-slot (NOT
-  `getOrPut` — first-wins is XFAIL-1's blocker verbatim), the `proof.verdict` per-contribution
-  memset, T0.5's duplicate dominator build, the purely-reactive-contribution eval row, and
-  per-contribution noise generator keying.
+- **Wave 14** (`wqjgnewy2`) — the allocation sweep against standing rule 0, plus the prelude
+  re-expansion (§4 above), which is the largest measured win in the tree and which no earlier
+  wave scheduled. Both agents are under a hard constraint: **no performance claim without a
+  `zig build bench` number.** A change that measures neutral is an acceptable result — report the
+  number and justify on allocation-count or clarity instead. Items 1–3 of the allocation sweep
+  are expected to be below the noise floor, and the agent is told that "this is not measurable,
+  and here is why it is still right" is the expected outcome rather than a failure.
 
 **The two miscompiles that motivated wave 9** (reproduced by hand before the fix):
 
