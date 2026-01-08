@@ -129,11 +129,32 @@ pub fn build(
     mir: *const Mir,
     lower: *const Lower,
 ) Error!Analysis {
+    var self = try buildStructure(arena, mir, lower);
+    try self.buildValueTypes();
+    return self;
+}
+
+/// The structural half alone: alias snapshot, CFG, dominator tree, natural
+/// loops, per-block pools. Everything `vty` and the hoisted value columns are
+/// NOT.
+///
+/// A second constructor rather than a flag, because it has a second caller with
+/// a different need: `proof.zig` runs at root.zig's stage 5, BEFORE codegen
+/// builds its own `Analysis` at stage 6, so it cannot share one — and a prover
+/// has no use for "how would this Value be spelled in the emitted struct".
+/// MEASURED with `zig build bench`, `contrib n=4096` lint phase, min of 25:
+/// 111.7 ms before the share, 117.1 ms if proof calls the full `build` (+4.8%,
+/// all of it `buildValueTypes` running twice per compile), 110.8 ms through
+/// this entry point.
+pub fn buildStructure(
+    arena: std.mem.Allocator,
+    mir: *const Mir,
+    lower: *const Lower,
+) Error!Analysis {
     var self: Analysis = .{ .arena = arena, .mir = mir, .lower = lower };
     self.nv = @intCast(mir.defs.len + Mir.Value.first_dynamic);
     try self.buildAlias();
     try self.buildCfg();
-    try self.buildValueTypes();
     return self;
 }
 
