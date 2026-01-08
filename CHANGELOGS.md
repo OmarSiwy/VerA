@@ -17,13 +17,21 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
    look for it. `git revert` or a split is one command if you want it back or want it separate.
    Four dangling pointers to it are fixed (TODO.md, tests/fixtures/TODO.md, tools/contract.zig).
 
-2. **An unmerged worktree exists: `worktree-agent-a0033e63105e5f22e` at `6afca59`**, subject
+2. **`git stash` is repo-global across worktrees and TWO AGENTS COLLIDED ON IT.** One agent
+   took a clean baseline with `git stash && bench && git stash pop` and its pop restored a
+   *different* agent's in-progress work into its tree. Both recovered (a patch copy is at
+   `/tmp/other_agent_didyoumean.patch`; I verified the stash list is empty and the two branches
+   are disjoint before merging). No work was lost, but the failure mode is silent and would have
+   been much worse during a deletion wave. **Rule going forward: agents must not use `git stash`
+   while others are running — use a patch file.**
+
+3. **An unmerged worktree exists: `worktree-agent-a0033e63105e5f22e` at `6afca59`**, subject
    "Device fixes: inductor flux sign, kinduc M, tline Bergeron, switch edges, diode pnjlim,
    LTRA sections". Not mine, not merged into `refactor/frontend-ir-backend`. It overlaps wave
    13's device-physics items (specifically the inductor work), so if it is real work you want,
    tell me and I will merge it BEFORE wave 13 rather than have an agent redo it.
 
-3. **You asked about sub-linear complexity; wave 12 deletes the only thing that could deliver
+4. **You asked about sub-linear complexity; wave 12 deleted the only thing that could deliver
    it.** A compiler cannot beat O(N) on a fresh compile — it must read every byte. The only
    route to sub-linear *per edit* is an incremental frontend cache, and that is `root.Compilation`
    (`src/root.zig`, ~273 lines), which wave 12 deletes as having no consumer. I am proceeding
@@ -31,16 +39,57 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
    itself), but recording it here because rebuilding it later against the new bench would be a
    deliberate wave, not an accident.
 
-4. **The largest measured win found so far is not scheduled in any wave.** A ~200-byte one-module
-   `.va` costs 0.69 ms of preprocessing and emits 11,791 bytes, nearly all of it Annex D.2 + D.1
-   + Table E.1 re-expanded from scratch every compilation. Across the fixture batch that is
-   **909 ms of the 2.58 s to MIR — 35% of the frontend on small files is a byte-identical
-   prelude.** This is a constant-factor win, which is the only kind available (see §3). I intend
-   to schedule it as its own wave once the current sequence lands. Not started.
+5. **DONE — the prelude win landed in wave 14.** Measured 902.5 ms → 181.9 ms on the `pp` phase
+   (4.96×), −27% to MIR, output byte-identical. The estimate here said 909 ms; the honest figure
+   is 716 ms, because 186 ms of stage 1 is genuinely user text and macro re-puts. Left in this
+   list only so the trail from "found, unscheduled" to "measured, landed" is visible.
 
 ---
 
 ## Landed
+
+### Wave 14 — the prelude runs once, and a near-miss miscompile — `35a60f2`
+
+**Suite: 217/217 · torture 1162/1164 (2 XFAIL, 0 FAIL) · test-contract green.**
+
+Measured on the merge with `zig build bench -- fixtures`, **output bytes byte-identical**:
+
+| phase | before | after | delta |
+|---|---|---|---|
+| pp | 902.5 ms | **181.9 ms** | −720.6 ms (**4.96×**) |
+| lint | 2699.5 ms | **1969.0 ms** | −730.5 ms (−27%) |
+| codegen | 2905.9 ms | 2202.5 ms | −703.4 ms |
+
+Annex D.2 + D.1 + Table E.1 were re-expanded from scratch on every compilation. They depend on
+`std_defs` alone, so they now run once per process into a snapshot and are replayed. **The honest
+number is 716 ms, not the 909 ms my estimate implied** — 79% of stage 1 was prelude; 186 ms
+remains for user text, the memcpy and ~90 macro re-puts.
+
+**The design I specified would have shipped a silent miscompile.** I said to cache the prelude
+*bytes* and `@memcpy` them. The bytes are the smallest part of what those three `runFile` calls
+produce — they also install ~90 `constants.vams` macros, three `diag.Bag` file registrations, and
+`SourceMap` segments that name their file **by index into `Bag.files`**. Caching bytes alone
+compiles, passes the determinism test, and **loses `` `M_PI `` for every model in the tree.**
+
+Worse, and the reason the commit adds a test: **the existing determinism test cannot catch this
+class of bug.** It compares two `process` runs, and after the change both take the cached path —
+so a snapshot that dropped the macros is byte-identical in both and passes. I had called that
+test "your first-line guard that a cache did not alias." It is not. The new test re-runs the
+prelude the long way and compares text, segments, macro set *and* file registrations.
+
+Also spent five known bounds statically per standing rule 0. The two that matter are reported as
+**counts, not times**, because they are per-diagnostic and below the bench noise floor — which is
+the honest way to state them. `placed` drops one arena alloc per rendered diagnostic; and
+`didYouMeanMap`'s comment claimed its collect was needed "so the tie-break sees every candidate",
+but the tie-break is a running minimum over a total order and **a test already asserted the
+order-independence** — one alloc per suggestion at 11 call sites, gone. `editDistance` scratch
+1560 B → 195 B, losing two ~520-byte row copies per input character. Where a bound is *not*
+proved, it is now named as a ceiling instead of assumed.
+
+Other corrections: `std.once` does not exist in Zig 0.16 (I specified it); `include_dirs` is not
+part of the prelude key, so this is a snapshot keyed on nothing rather than a cache — which is
+what keeps it inside standing rule 0 instead of becoming the unbounded cache the rule warns
+about.
 
 ### Waves 12 + 13 — −950 lines, and two premises that were wrong — `7290679`
 
@@ -309,13 +358,7 @@ Kept because a plan whose errors are invisible is worse than one with none.
 
 ## In flight
 
-- **Wave 14** (`wqjgnewy2`) — the allocation sweep against standing rule 0, plus the prelude
-  re-expansion (§4 above), which is the largest measured win in the tree and which no earlier
-  wave scheduled. Both agents are under a hard constraint: **no performance claim without a
-  `zig build bench` number.** A change that measures neutral is an acceptable result — report the
-  number and justify on allocation-count or clarity instead. Items 1–3 of the allocation sweep
-  are expected to be below the noise floor, and the agent is told that "this is not measurable,
-  and here is why it is still right" is the expected outcome rather than a failure.
+Nothing. The queued sequence (waves 8–14) is complete. See "What is left" below.
 
 **The two miscompiles that motivated wave 9** (reproduced by hand before the fix):
 
