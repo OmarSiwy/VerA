@@ -909,7 +909,7 @@ fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []const
         }
         var b = pp.failWith(sp, .E0115);
         b.msg("`{s}", .{name});
-        if (diag.didYouMeanMap(pp.arena, name, pp.macros)) |near| {
+        if (diag.didYouMeanMap(name, pp.macros)) |near| {
             // `sp` spans the whole use INCLUDING the backtick, so the rewrite
             // has to put one back — `suggestHere` would eat it.
             const repl = try std.fmt.allocPrint(pp.arena, "`{s}", .{near});
