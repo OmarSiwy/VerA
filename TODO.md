@@ -42,11 +42,39 @@ over it never fires. `E0903` is reserved and unemitted for exactly this verdict 
 do not reuse the code.
 
 **Blast radius:** per-net discipline SETS in the elaboration core, plus a
-`connectrules` parser (`connectrules` is still `E0201`). Discipline resolution is
-consulted at port bindings today (§3.11, see §3 below); a set-valued resolution
-changes what every one of those bindings compares. The `connectmodule`s in the
-fixture parse and are accepted since wave 6, so the parse half is done and the
+`connectrules` parser (`connectrules` is still `E0201`). A set-valued resolution
+changes what every port binding compares. The `connectmodule`s in the fixture
+parse and are accepted since wave 6, so the parse half is done and the
 resolution half is the work.
+
+**RE-COSTED, wave 13**, after replacing `declaredDiscipline`'s linear scan with
+the `Flatten.disc_of` map — the change this was expected to ride on. It does not
+ride on it, and the three reasons are what the next attempt should budget for.
+
+1. **A second slot does not decide it.** The obvious widening is
+   `{first, other}`, filled in arrival order. Step 4.b's candidate list is not
+   arrival-ordered, it is DOMAIN-FILTERED — "more than one candidate whose
+   domain matches" — and the fourth bullet under it needs a segment from the
+   *other* domain to call the connection mixed. This fixture's signal has three
+   declared segments, `{annex_f_a: continuous, annex_f_b: continuous,
+   annex_f_dig: discrete}`; two arrival slots hold `{a, b}` and drop the
+   discrete witness the error is about. It reaches the right answer only
+   because the source happens to instantiate its two continuous leaves first,
+   which is an accident of the fixture, not an implementation. The shape that
+   decides it is domain-partitioned: two continuous candidates plus one
+   discrete witness, and a domain lookup per net insertion to fill them.
+2. **`connectrules` must be accepted and dropped**, past E0201 — the fixture's
+   own header argues why that is conformant here (§7.7.1 insertion, not §7.7.2
+   resolution, so the block cannot match either way and dropping it changes no
+   verdict). That is parser work, not elaboration work, and it is the item that
+   makes this a multi-file change.
+3. **The mixed-port predicate has no implementation at all.** Nothing in
+   `elaborate.zig` asks what DOMAIN a discipline is in; `Ast.DisciplineDecl`
+   carries it and `primitiveAccess` is the only site that looks a discipline up
+   by name today.
+
+None of the three is hard; together they are days, and none of them is the map.
+`E0903` stays reserved and unemitted — do not reuse the code.
 
 ### `ch05_analog_behavior/two_named_branches.va`
 
@@ -256,8 +284,14 @@ Grouped by area; the file is the authority, this is the index.
 ### Elaboration (`src/ir/elaborate.zig`)
 - §6.4.2 paramset tie-breaking: first survivor wins.
 - A bound that cannot be folded counts as admissible.
-- §3.11 discipline compatibility consulted at **port bindings only**.
-- Two declarations of one identifier: first wins.
+- Two declarations of one identifier: **first wins**. `resolveDiscipline`
+  early-returns once a flat net has any declared discipline, so a second
+  declared segment of one signal is never compared against the first. §7.4.4's
+  duplicate-declaration half is caught downstream (E0902, in lowering); what is
+  missing is Annex F.2.1 step 4.b's multi-candidate arm, and that is XFAIL-1 in
+  §1 above, with its cost. Wave 13's `Flatten.disc_of` map replaced the linear
+  scan under this and deliberately did **not** widen the value: two
+  arrival-ordered slots do not decide 4.b either (see §1).
 - An undeclared net used only in a child body is **not renamed**, so two instances
   would share it.
 - §6.5.7.1 vector-net distribution across an instance array: absent.
