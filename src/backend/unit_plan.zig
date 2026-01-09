@@ -48,6 +48,48 @@
 //! `loop_recompute` is the exception: it is indexed by BLOCK, not by value, so
 //! the live set cannot name its cells and `analyze` resets it in full.
 //!
+//! ### AND IN THIS TREE THE RESET LOOP RUNS ZERO ITERATIONS
+//!
+//! Measured, ReleaseFast, every fixture, by counting `analyzeUnitOnce` and
+//! printing `live.items.len` on entry: **739 of the 1164 fixtures reach codegen,
+//! each calls `analyze` exactly ONCE, and `live` is empty at all 739 resets.**
+//! `emitUnits` only calls `emitUnit` for a `job.is_display` job, so under the
+//! default `--display=drop` the shared core is the whole emission and there is
+//! no second unit to inherit anything. `--display=emit` adds exactly one
+//! `emitUnit` call — the only non-empty reset that exists here (live = 28 on
+//! `exhaustive/102_loops.va`).
+//!
+//! The scheme is not dead: it is what keeps the CORPUS models (~105 units) off
+//! O(units x values). But nothing in this tree exercises it, so the "a field
+//! added here MUST be cleared" hazard above has NO test coverage — read that as
+//! a reason to be careful, not as permission to simplify.
+//!
+//! ## THE SIDE TABLES STAY `[]bool` — MEASURED; do not pack them into a bitset
+//!
+//! Same run, sampling `nb`/`nv` at every `analyzeUnitOnce`:
+//!
+//!     nb (blocks) median 1   mean 3.0   p99 25    max 103
+//!     nv (values) median 38  mean 49.5  p99 213   max 929
+//!
+//! `loop_recompute`, `blk_work`, `blk_phi` and `dead_branch` are therefore ONE
+//! BYTE long in the median compilation and 103 bytes at the largest fixture in
+//! the tree. `needed` and `inlined` are 38 bytes and 929 bytes. Every read of
+//! all six is a random probe by block or value index; the only whole-array
+//! operations are the `@memset(.., false)` clears, and there is no set union or
+//! intersection over any of them — which is the one thing a bitset does for
+//! free. Converting them buys 87 bytes at the worst block table and charges a
+//! shift and a mask on every probe in the emitter's hottest walk.
+//!
+//! A bitset also cannot obsolete the partial reset above, which was the
+//! interesting question: three of the five tables that loop clears
+//! (`eager_use`, `arm_use`, `slot`) are `[]u32`, so a full clear stays
+//! O(units x values) no matter how `needed` and `inlined` are stored.
+//!
+//! Where a whole-array clear IS the cost, the tool is a generation stamp, not a
+//! bitset — `proof.verdict` already does this: `seen[i] == u` reuses the slice
+//! index as the stamp and clears the array once instead of once per
+//! contribution. That works on `[]u32` too, which a bitset does not.
+//!
 //! ## `analyze` IS A FIXPOINT, NOT A PASS
 //!
 //! `markRecomputedLoops` can discover that a §5.9 loop this unit re-runs owns
