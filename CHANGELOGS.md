@@ -11,6 +11,24 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## ⚠ Needs your eye — nothing here is blocking, all of it is reversible
 
+0. **EVERY PERFORMANCE NUMBER IN THIS FILE BEFORE WAVE 16 IS A DEBUG BUILD.** `build.zig`'s
+   `bench_mod` takes the default `optimize`, so `zig build bench` measures **Debug** unless you
+   pass `-Doptimize=ReleaseFast`. Nothing in the TSV output says which. The same tree, same
+   command, reports `lint 1969020854` or `lint 247334891` — **an 8× ambiguity with no label.**
+
+   The shipping numbers, measured on `ee1f864`:
+
+   | phase | Debug | **ReleaseFast** |
+   |---|---|---|
+   | pp | 181.9 ms | **19.7 ms** |
+   | lint (→MIR) | 1969.0 ms | **247.3 ms** |
+   | codegen | 2202.5 ms | 267.2 ms |
+
+   So frontend-to-MIR over 1,164 fixtures is **247 ms — 212 µs per file**, not 2 s. The wave-14
+   prelude win is real and the *ratio* holds (4.96× on `pp`), but every absolute figure I quoted
+   overnight is ~8× too large. Wave 16 is fixing the instrument so this cannot recur, and
+   re-labelling the affected figures. I should have caught this the first time I ran the bench.
+
 1. **`docs/conformance-plan.md` (745 lines) is deleted, and its deletion rode in `6bb63ba`.**
    It was already staged as deleted in your working tree before I started, so I did not decide
    this — but I did bundle it into a commit about `ifconv`, which is not where a reader would
