@@ -37,8 +37,8 @@
 //!
 //!   - the second `writeTree` returns 0 (orchestrator.zig:202-206's claim, and
 //!     the whole basis of the incremental story, made falsifiable);
-//!   - `device.text.len` and `mir.defs.len` per generated shape, against the
-//!     table below.
+//!   - `device.text.len`, `mir.defs.len` and `mir.insts.len` per generated
+//!     shape, against the table below.
 //!
 //! Neither can drift with the machine, so `zig build bench` doubles as a
 //! size-regression test — and `expected` moving is a diff a reviewer must sign,
@@ -46,9 +46,12 @@
 //!
 //! NO MACHINE-READABLE SIDE CHANNEL, for the reason harness.zig:31-34 gives:
 //! a second output format is a second thing to keep true. The output is one TSV
-//! line per (case, n, phase) on stdout, sorted by construction, so comparing two
-//! runs is `diff` and nothing else. There is no committed artifact and no
-//! `--bless`: the timings are the machine's and belong to whoever ran it.
+//! line per (case, n, phase) on stdout — preceded by one line per (case, n) of
+//! MIR FOOTPRINT, which is a different quantity and so gets its own heading
+//! rather than a second meaning for `bytes` — sorted by construction, so
+//! comparing two runs is `diff` and nothing else. There is no committed
+//! artifact and no `--bless`: the timings are the machine's and belong to
+//! whoever ran it.
 //!
 //! N = 25 is what makes the fixture batch the expensive half: 1152 compilations
 //! times 25 is four of the five minutes a full run costs, and the sweep on its
@@ -66,6 +69,12 @@ const options = @import("bench_options");
 
 const Io = std.Io;
 const Allocator = std.mem.Allocator;
+
+/// `root.zig` does not re-export `Mir` (wave 12 privatised it, and decision 4
+/// says a loud compile error is the desired signal). The type is still
+/// reachable through the result that carries it, which is the seam an embedder
+/// already has — so this needs no new `pub`.
+const Mir = @typeInfo(@FieldType(vera.CompileResult, "mir")).pointer.child;
 
 /// N, and the estimator is the MIN over it. The min is right here because every
 /// source of noise on a shared machine is additive — a preempted run is slower
@@ -139,34 +148,35 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 // The assertions — the half of this file that can fail
 // ---------------------------------------------------------------------------
 
-/// `device.text.len` and `mir.defs.len` for every generated shape, in `sweep`
-/// order. These are pure functions of the source, so they are the same on every
-/// machine and in every optimize mode; a change here is a change in what VerA
-/// emits, and it must be explained in the commit that moves it.
+/// `device.text.len`, `mir.defs.len` and `mir.insts.len` for every generated
+/// shape, in `sweep` order. These are pure functions of the source, so they are
+/// the same on every machine and in every optimize mode; a change here is a
+/// change in what VerA emits, and it must be explained in the commit that
+/// moves it.
 ///
 /// MEASURED on this tree, not predicted: the numbers came out of this bench.
-const Shape = struct { device: usize, defs: usize };
+const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 11313, .defs = 8 },
-        .{ .device = 11895, .defs = 35 },
-        .{ .device = 16540, .defs = 258 },
-        .{ .device = 54963, .defs = 2050 },
-        .{ .device = 372478, .defs = 16386 },
+        .{ .device = 11313, .defs = 8, .insts = 5 },
+        .{ .device = 11895, .defs = 35, .insts = 26 },
+        .{ .device = 16540, .defs = 258, .insts = 194 },
+        .{ .device = 54963, .defs = 2050, .insts = 1538 },
+        .{ .device = 372478, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 11313, .defs = 8 },
-        .{ .device = 11572, .defs = 24 },
-        .{ .device = 13644, .defs = 136 },
-        .{ .device = 30220, .defs = 1032 },
-        .{ .device = 162828, .defs = 8200 },
+        .{ .device = 11313, .defs = 8, .insts = 5 },
+        .{ .device = 11572, .defs = 24, .insts = 19 },
+        .{ .device = 13644, .defs = 136, .insts = 131 },
+        .{ .device = 30220, .defs = 1032, .insts = 1027 },
+        .{ .device = 162828, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 11313, .defs = 8 },
-        .{ .device = 12776, .defs = 50 },
-        .{ .device = 24804, .defs = 386 },
-        .{ .device = 123596, .defs = 3074 },
-        .{ .device = 934236, .defs = 24578 },
+        .{ .device = 11313, .defs = 8, .insts = 5 },
+        .{ .device = 12776, .defs = 50, .insts = 40 },
+        .{ .device = 24804, .defs = 386, .insts = 320 },
+        .{ .device = 123596, .defs = 3074, .insts = 2560 },
+        .{ .device = 934236, .defs = 24578, .insts = 20480 },
     },
 });
 
@@ -174,7 +184,7 @@ const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 
 /// Compile one generated shape and hold it to `expected`. Shared by the bench
 /// run (every point of the sweep) and by the unit test below (the two cheap
 /// points), so the assertion has exactly one spelling.
-fn checkShape(gpa: Allocator, axis: Axis, i: usize) !void {
+fn checkShape(gpa: Allocator, axis: Axis, i: usize) !Footprint {
     const src = try genSource(gpa, axis, sweep[i]);
     defer gpa.free(src);
 
@@ -184,7 +194,68 @@ fn checkShape(gpa: Allocator, axis: Axis, i: usize) !void {
 
     const want = expected[@intFromEnum(axis)][i];
     try std.testing.expectEqual(want.defs, result.mir.defs.len);
+    try std.testing.expectEqual(want.insts, result.mir.insts.len);
     try std.testing.expectEqual(want.device, device.len);
+    return .of(result.mir);
+}
+
+// ---------------------------------------------------------------------------
+// The MIR footprint — the other half of a size regression
+// ---------------------------------------------------------------------------
+
+/// What one compilation's MIR actually costs in bytes, by column.
+///
+/// `mir.zig` is a set of `MultiArrayList`s, so a row costs the SUM of its
+/// field sizes and not `@sizeOf(Row)` (25 vs 28 for `InstRow`, 9 vs 16 for
+/// `ValueRow` — measured by `soaBytes` below rather than asserted, so it
+/// tracks the struct). The two dedup maps and the interner are excluded on
+/// purpose: they are build-time scratch that `deinit` drops, and no proposed
+/// layout change touches them. What is counted is exactly the surface an
+/// Air-shaped rewrite would move.
+const Footprint = struct {
+    insts: u64 = 0,
+    defs: u64 = 0,
+    blocks: u64 = 0,
+    extra: u64 = 0,
+
+    /// Bytes a `MultiArrayList(T)` spends per element: the sum of the field
+    /// sizes, which is what `capacityInBytes` multiplies by.
+    fn soaBytes(comptime T: type) u64 {
+        comptime var n: u64 = 0;
+        inline for (std.meta.fields(T)) |f| n += @sizeOf(f.type);
+        return n;
+    }
+
+    const inst_b = soaBytes(Mir.InstRow);
+    const def_b = soaBytes(Mir.ValueRow) + @sizeOf(Mir.Value); // + alias slot
+    const block_b = soaBytes(Mir.BlockRow);
+
+    fn of(m: *const Mir) Footprint {
+        return .{
+            .insts = m.insts.len,
+            .defs = m.defs.len,
+            .blocks = m.blocks.len,
+            .extra = m.extra.items.len,
+        };
+    }
+
+    fn add(self: *Footprint, o: Footprint) void {
+        self.insts += o.insts;
+        self.defs += o.defs;
+        self.blocks += o.blocks;
+        self.extra += o.extra;
+    }
+
+    fn bytes(self: Footprint) u64 {
+        return self.insts * inst_b + self.defs * def_b +
+            self.blocks * block_b + self.extra * @sizeOf(u32);
+    }
+};
+
+fn emitFootprint(w: *Io.Writer, case: []const u8, n: u32, f: Footprint) !void {
+    try w.print("{s}\t{d}\t{d}\t{d}\t{d}\t{d}\t{d}\n", .{
+        case, n, f.insts, f.defs, f.blocks, f.extra, f.bytes(),
+    });
 }
 
 // ---------------------------------------------------------------------------
@@ -363,12 +434,47 @@ pub fn main(init: std.process.Init) !u8 {
     const w = &stdout.interface;
     defer w.flush() catch {};
 
-    try w.writeAll("case\tn\tphase\tmin_ns\tbytes\n");
+    // The footprint table first, and it is a separate pass rather than a column
+    // on the timing table: `bytes` there is what a PHASE handled, which is text
+    // for three of the four phases, and overloading it would make two different
+    // quantities share a heading. One compile per shape, outside every timer.
+    try w.writeAll("case\tn\tinsts\tdefs\tblocks\textra\tmir_bytes\n");
+    if (do_gen) for (std.enums.values(Axis)) |axis| {
+        for (sweep, 0..) |n, i| {
+            try emitFootprint(w, @tagName(axis), n, try checkShape(gpa, axis, i));
+        }
+    };
+
+    // Read every fixture ONCE, outside every timer: the batch case measures the
+    // compiler on 1152 small files, not the page cache.
+    var fixture_inputs: []Input = &.{};
+    if (do_fixtures) {
+        const fixtures = try harness.collect(arena, io, options.fixture_root, null);
+        fixture_inputs = try arena.alloc(Input, fixtures.len);
+        for (fixtures, fixture_inputs) |f, *in| in.* = .{
+            .source = try Io.Dir.cwd().readFileAlloc(io, f.path, arena, .limited(1 << 20)),
+            .dir = f.dir,
+        };
+        var total: Footprint = .{};
+        var max_bytes: u64 = 0;
+        for (fixture_inputs) |in| {
+            var dirs: [2][]const u8 = undefined;
+            var r = vera.compileSourceOpts(gpa, in.source, .lint, in.opts(&dirs)) catch continue;
+            defer r.deinit();
+            const f: Footprint = .of(r.mir);
+            total.add(f);
+            max_bytes = @max(max_bytes, f.bytes());
+        }
+        try emitFootprint(w, "fixtures", @intCast(fixture_inputs.len), total);
+        try w.print("# largest single fixture MIR: {d} bytes\n", .{max_bytes});
+    }
+    try w.flush();
+
+    try w.writeAll("\ncase\tn\tphase\tmin_ns\tbytes\n");
 
     if (do_gen) {
         for (std.enums.values(Axis)) |axis| {
-            for (sweep, 0..) |n, i| {
-                try checkShape(gpa, axis, i);
+            for (sweep) |n| {
                 const src = try genSource(arena, axis, n);
                 const inputs = [_]Input{.{ .source = src }};
                 const work = try std.fmt.allocPrint(arena, "{s}/gen", .{options.work_root});
@@ -381,17 +487,10 @@ pub fn main(init: std.process.Init) !u8 {
     }
 
     if (do_fixtures) {
-        // Read every fixture ONCE, outside every timer: this case measures the
-        // compiler on 1152 small files, not the page cache.
-        const fixtures = try harness.collect(arena, io, options.fixture_root, null);
-        const inputs = try arena.alloc(Input, fixtures.len);
-        for (fixtures, inputs) |f, *in| in.* = .{
-            .source = try Io.Dir.cwd().readFileAlloc(io, f.path, arena, .limited(1 << 20)),
-            .dir = f.dir,
-        };
         const work = try std.fmt.allocPrint(arena, "{s}/fixtures", .{options.work_root});
         for (std.enums.values(Phase)) |p| {
-            try emit(w, "fixtures", @intCast(inputs.len), p, try measure(gpa, io, p, inputs, work));
+            const s = try measure(gpa, io, p, fixture_inputs, work);
+            try emit(w, "fixtures", @intCast(fixture_inputs.len), p, s);
         }
     }
 
@@ -406,7 +505,7 @@ pub fn main(init: std.process.Init) !u8 {
 // checked when someone remembers to run `bench` is not checked.
 test "generated shapes emit the expected device and MIR size" {
     for (std.enums.values(Axis)) |axis| {
-        for (0..2) |i| try checkShape(std.testing.allocator, axis, i);
+        for (0..2) |i| _ = try checkShape(std.testing.allocator, axis, i);
     }
 }
 

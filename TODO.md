@@ -266,6 +266,88 @@ index, so a node with k devices takes k contributions. That shared summation is
 the whole reason the stamp is `+=`. Scalar is the answer; if a host ever asks,
 this paragraph is the starting point, not a blank page.
 
+### An Air-shaped `Mir.InstRow` — measured, and it is three orders of magnitude off
+
+The proposal was to replace `mir.zig`'s 7-column `InstRow` with Zig's `Air`
+shape (`tags: []Opcode` + an 8-byte `data` union + `extra: []u32`, `tok` split
+out cold, `Ref = enum(u32)` folding the Value space into the instruction index).
+The sizes it quoted are right. **The conclusion does not follow**, and
+`zig build bench` is why.
+
+**What a row costs** (`@sizeOf` per column, this tree): `InstRow` is 25 B/inst in
+its `MultiArrayList` (28 as a struct); `ValueRow` is 9 B plus a 4 B `alias` slot.
+The bench prints it — `zig build bench` now emits a footprint table before the
+timing table, and `insts` joined `defs`/`device` in `expected`, so the number
+cannot drift unsigned.
+
+**What VerA actually compiles.** MEASURED, whole fixture corpus in one line:
+
+    case      n     insts   defs    blocks  extra   mir_bytes
+    fixtures  1164  20804   27924   2195    22800   991872
+    # largest single fixture MIR: 44432 bytes
+
+All 1,164 fixtures together are **992 KB** of MIR and the largest single one is
+**44 KB**. This machine's L2 is 32 MB. The whole corpus is 3 % of L2; one fixture
+is L1-resident. There is no bandwidth problem to fix. The audit's "553 KB for a
+6,007-line model" reproduces (the bench's `contrib n=4096`, ~4,100 lines, is
+520 KB) — but that model is a *bench input*, twelve times larger than anything
+in the tree, which is the synthetic-only measurement this file already burned
+two waves on.
+
+**What the time is.** MEASURED, `bench -- gen`, min of 25, ReleaseFast, `lint`
+minus `pp` (= lex+parse+lower+prove):
+
+| axis | n=1 | n=4096 | insts at 4096 | marginal |
+|---|---|---|---|---|
+| contrib | 177.5 µs | 8.41 ms | 12,290 | **670 ns/inst** |
+| vals | 191.0 µs | 10.35 ms | 8,195 | **1,241 ns/inst** |
+| inst | 187.6 µs | 19.47 ms | 20,480 | **942 ns/inst** |
+
+Linear in instruction count on all three axes (contrib 512→4096 is 8.0× the
+instructions for 7.3× the time), so the shape is settled and only the constant is
+in question — and the constant is ~0.7–1.2 µs, i.e. several thousand cycles, per
+38 B of MIR. Take the most generous possible accounting of the row layout: 30
+full sequential passes over every byte at L2 bandwidth is ≈7 ns/inst, **1 % of
+lint**, and the Air shape removes at most 45 % of that. Run-to-run noise on the
+fixture batch is 1.3 % (lint 1969.0 ms in wave 14, 1994.2 ms re-measured here on
+an unchanged tree). **The entire theoretical win is below the instrument's noise
+floor.**
+
+For the workload the project's scope guarantees it is worse than that. A fixture
+is a *fixed cost*: n=1 is 177 µs of lint producing **237 bytes** of MIR, and the
+batch divides out to 211.7 µs/fixture (ReleaseFast, lint 246.4 ms / 1,164)
+against an n=1 constant of 183.3 µs — **87 % of fixture-batch lint is a
+per-compilation constant that no MIR layout can touch** (Debug agrees: 1,164 ×
+1.51 ms = 1.76 s of a measured 1.99 s). If lint is ever to get faster, that
+constant is the target:
+wave 14 cached the prelude's *preprocessing* (`pp` 902.5 → 181.9 ms) but every
+compilation still lexes, parses and lowers the same ~11.8 KB of expanded Annex
+D/E text. MEASURED end-to-end: `vera --lint` on a 6-line model is 3,189 µs/run,
+and 2,235 µs/run with `--no-std-defs`.
+
+**And `Ref` folding is not the local change it looks like.** The Value space is
+the index of nine side arrays *outside* `mir.zig`, every one sized
+`nv = mir.defs.len + Value.first_dynamic`: `analysis.alias`/`vty`/`def_block`,
+`unit_plan.needed`/`eager_use`/`arm_use`/`inlined`/`slot`, `codegen.lo_idx` —
+27 B per Value, **twice** the 13 B (`ValueRow` + alias slot) the fold sets out to
+delete. Renumbering Values renumbers all nine, and `codegen.zig:2261-2262` is
+`if (i < self.an.nv and self.plan.slot[i] != none_u32) return self.b("c.f{d}",
+...)`: an off-by-one in the fold does not trap, it names a different cached slot
+in the emitted device. Silent miscompile, in the artifact the host builds.
+
+**The `tok` column split is half-true and the wrong half.** `instRow` really is
+`insts.get`, which reads all 7 columns (`mir.zig:673-675`) — but the hot walks
+already do not use it: `analysis.zig:103-106` hoists `i_op`/`i_res` as raw column
+slices with a comment saying exactly why. The only remaining all-column reader is
+`instData`, which decodes one instruction and immediately switches on its class.
+`tok` also has a job — class-6 diagnostics report at a real line and column
+because of it, and fixtures pin those locations.
+
+**Decision: do not refactor.** Reconsider only if the bench's footprint line ever
+shows a single compilation whose MIR exceeds L2 — at 44 KB today that is a
+700-fold change in what VerA is asked to compile, and it would arrive as a
+netlist, which `TODO.md` §2 already puts out of scope.
+
 ---
 
 ## 3. Ceilings shipped deliberately
