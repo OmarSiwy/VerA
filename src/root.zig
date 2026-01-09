@@ -407,11 +407,28 @@ fn compileInArena(
     const arena = arena_state.allocator();
 
     // --- stage 2: lex (class 1) ---------------------------------------------
-    var tokens = try Lexer.Lexer.tokenize(arena, text);
+    // The annex D.2/D.1/E.1 prelude is a fixed byte prefix of `text` whenever
+    // `std_defs` is on, so its tokens are lexed once per PROCESS and memcpy'd
+    // in — see `Preprocessor.preludeTokens`. MEASURED (ReleaseFast, min of 500,
+    // the 6-line resistor below): 47.6 µs of a 155 µs `.lint` compilation was
+    // re-lexing those 11,512 bytes.
+    var tokens = try Lexer.Lexer.tokenizeSeeded(arena, text, try Preprocessor.preludeTokens(opts.std_defs));
     const tags = tokens.items(.tag);
     const starts = tokens.items(.start);
 
     // --- stage 3: parse (class 2) -------------------------------------------
+    // ponytail: the prelude is RE-PARSED every compilation, and stage 2's seed
+    // stops at the token stream. MEASURED (ReleaseFast, min of 500, the 6-line
+    // resistor below): parsing the prelude's 2,623 tokens is 91.9 µs, against
+    // 47.6 µs to lex them — so this is the larger half of the same constant and
+    // it is still being paid. The upgrade path is a snapshot of the four things
+    // the prelude leaves in the parser — `Ast.SourceFile`'s stores,
+    // `Parser.access_names`, the four decl lists and `pos` — cloned into the
+    // compilation arena and parsed on from token `seed.tags.len`. It is not the
+    // ten-line change stage 2 was: `StrId` is an index into `SourceFile.strings`,
+    // so the clone has to make the prelude's ids a genuine PREFIX of the
+    // compilation's, and a `ModuleDecl` handed out of a process-lifetime arena
+    // must be provably never written. See TODO.md §3, Parser.
     var p = Parser.Parser.init(arena, text, tags, starts, bag);
     const file = try arena.create(Ast.SourceFile);
     // Annex E — the shipped Table E.1 primitives are the first declarations in
