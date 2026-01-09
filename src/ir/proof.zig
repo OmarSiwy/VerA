@@ -390,6 +390,12 @@ const Prover = struct {
     // --- SoA, indexed by @intFromEnum(Mir.Value) ---
     iv: []Interval = &.{},
     /// SOUNDNESS MODEL: "is a finite IEEE double", recorded at definition time.
+    ///
+    /// `[]bool`, MEASURED: nv median 38, p99 213, max 929 over the 1164
+    /// fixtures, and every access is a random probe by value index (`isFinite`,
+    /// the transfer functions, `verdict`'s slice walk). One byte load. A
+    /// `bit_set` saves 33 bytes in the median compilation and charges a shift
+    /// and a mask for it — see unit_plan.zig's "THE SIDE TABLES STAY `[]bool`".
     finite: []bool = &.{},
     /// Use count, for the single-use test that scopes a §4.2.12 select guard.
     uses: []u32 = &.{},
@@ -413,6 +419,8 @@ const Prover = struct {
     /// The CFG, dominator tree and natural loops — built by `analysis.zig`,
     /// which is the file that owns them. Read-only here.
     an: Analysis = undefined,
+    /// `[]bool` for the same measured reason as `finite`: nb median 1, max 103,
+    /// and `walkBlock` probes it one block at a time.
     visited_block: []bool = &.{},
 
     /// Where every class-6 diagnostic goes. Shared with the other stages.

@@ -67,6 +67,17 @@ dom_kids: [][]u32 = &.{},
 /// instead of an idom walk (`none_u32` = block not in the tree).
 dom_in: []u32 = &.{},
 dom_out: []u32 = &.{},
+/// Per-block, and probed ONE BLOCK AT A TIME — the `dom_kids` filters below,
+/// `unit_plan.edgeAct`, the natural-loop walk. There is no whole-array set
+/// union or intersection over either of them anywhere.
+///
+/// `[]bool` on purpose, and MEASURED (ReleaseFast, all 1164 fixtures, block
+/// count sampled at every `prepare`): nb median 1, mean 2.9, p99 25, max 103.
+/// So each of these is ONE BYTE in the median compilation. A `bit_set` would
+/// add a shift and a mask to every probe to save 87 bytes at the largest
+/// fixture in the tree — a loss on speed and on readability at once. See
+/// unit_plan.zig's "THE SIDE TABLES STAY `[]bool`" for the full argument; it
+/// covers all ten of these tables and this is two of them.
 is_merge: []bool = &.{},
 is_loop: []bool = &.{},
 /// The OUTERMOST loop header whose natural loop contains this block, or
