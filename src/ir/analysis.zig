@@ -290,6 +290,11 @@ fn buildCfg(self: *Analysis) Error!void {
             pred_count[s] += 1;
         }
     }
+    // SIMD TRIAGE — REJECTED on N, and the margin is three orders of magnitude.
+    // MEASURED over the 745 fixtures that compile: median `mir.blocks.len` is
+    // 1, p75 1, p90 7, p99 25, max 103. `preds` is a slice-of-slices, so the
+    // `.len` fields are not even contiguous; making them so would buy a loop
+    // whose median trip count is one.
     for (0..nb) |bi| self.is_merge[bi] = self.preds[bi].len > 1;
     self.is_merge[0] = false; // entry is never re-entered
 
@@ -479,7 +484,10 @@ fn buildValueTypes(self: *Analysis) Error!void {
     self.vty = try a.alloc(VTy, self.nv); // `nv` was set in `prepare`
     self.def_block = try a.alloc(u32, self.nv);
     @memset(self.def_block, none_u32);
-    for (self.vty) |*t| t.* = .real;
+    // No `vty` prefill: the base pass below assigns EVERY index in `0..nv`
+    // unconditionally (every arm of its switch yields a value, and `vty.len ==
+    // nv`), so a `.real` prefill was a second full pass writing bytes nothing
+    // ever read. See this wave's SIMD triage note above the base pass.
 
     for (0..self.nb) |bi| {
         for (self.blockInstsFlat(@intCast(bi))) |inst| {
@@ -490,6 +498,21 @@ fn buildValueTypes(self: *Analysis) Error!void {
     }
 
     // Base pass: constants and opcodes decide themselves.
+    //
+    // SIMD TRIAGE — REJECTED, and here is the measurement so it is not re-asked.
+    // It looks like a lane op (`DefKind` u8 in, `VTy` u8 out, no cross-element
+    // dependency), but it is not one, for two independent reasons:
+    //   - ELEMENT MIX. MEASURED over the 745 fixtures that compile: of 27,924
+    //     values, 69.3% are `inst_result` and 2.2% are `param_ref` — the two
+    //     arms that gather (`instOp`/`callTy`, `lower.params.items[p].ty`).
+    //     Only 28.5% of lanes are the pure kind→VTy map, so 5 in 7 elements
+    //     need a scalar fix-up whatever the load looks like.
+    //   - N. MEASURED: median `mir.defs.len` is 26 (nv 38), p99 198, max 917.
+    //     `suggestVectorLength(u8)` is 32 here, so the median fixture is one
+    //     partial vector. The skill's floor is a few hundred elements.
+    // Cost, MEASURED with callgrind over the same corpus (lint + codegen,
+    // ReleaseFast): this whole function is ~0.04% of pipeline instructions;
+    // analysis.zig + proof.zig + mir.zig together are 1.08%.
     var v: u32 = 0;
     while (v < self.nv) : (v += 1) {
         const val: Mir.Value = @enumFromInt(v);
