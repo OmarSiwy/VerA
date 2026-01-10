@@ -392,9 +392,145 @@ pub const Stored = struct {
     start: u32,
 };
 
-/// Keyword lookup. LRM §2.8.2 / annex B. Comptime-built, O(1), no allocation.
+/// Keyword lookup. LRM §2.8.2 / annex B. Comptime-built, no allocation.
 /// Derived from `Tag` — see the naming invariant in the file header.
+///
+/// NOT O(1), and not a hash map: read `std/static_string_map.zig`. It buckets
+/// the keys by LENGTH (`len_indexes[str.len]`, and a `min_len`/`max_len`
+/// prefilter before that) and then LINEARLY SCANS the bucket, comparing
+/// byte-at-a-time. With 217 keywords the five-byte bucket holds 39 of them, so
+/// an ordinary five-byte identifier is compared against all 39 before the miss
+/// is known. So this is the DEFINITION and the reference; `lookupKeyword` is
+/// what the lexer calls, and it reaches the same keys through their first byte.
 pub const keyword_map = std.StaticStringMap(Tag).initComptime(keyword_kvs);
+
+/// Lane count for the bucket scan, from the target — never hardcoded. `null`
+/// on a target with no useful `u8` vector, and then the scalar loop is the
+/// whole implementation.
+const kw_lanes = std.simd.suggestVectorLength(u8);
+
+/// The FIRST BYTE of each keyword, in `keyword_map.keys()` order — 217 bytes,
+/// four cache lines, against the 3,472 bytes of `[]const u8` headers the map's
+/// own scan walks to read the same information.
+///
+/// MEASURED from the table itself: 217 keywords, lengths 2..19, 23 distinct
+/// first bytes, 118 of the 23×18 (first byte, length) pairs occupied, at most 6
+/// keywords in any one pair. `StaticStringMap` already buckets by length, so
+/// the first byte is the dimension it is missing and this is the whole of it.
+///
+/// Padded by one lane with 0, which no keyword starts with, so a full-width
+/// load at any index below `keys().len` is in bounds and the extra lanes cannot
+/// match. That is what lets the chunk loop below run past a bucket's end and
+/// mask, instead of needing a second scalar loop for every bucket's tail.
+const kw_first: [keyword_map.keys().len + (kw_lanes orelse 1)]u8 = blk: {
+    var t = [_]u8{0} ** (keyword_map.keys().len + (kw_lanes orelse 1));
+    for (keyword_map.keys(), 0..) |k, i| t[i] = k[0];
+    break :blk t;
+};
+
+/// Longest keyword, from the table. `kw_len_start[L]..kw_len_start[L+1]` is the
+/// run of keys of length L, which exists only because `StaticStringMap` sorts
+/// its keys by length — the loop below `@compileError`s if a stdlib change ever
+/// stops it doing that, rather than silently mis-slicing the runs.
+const kw_max_len = blk: {
+    var m: usize = 0;
+    for (keyword_map.keys()) |k| m = @max(m, k.len);
+    break :blk m;
+};
+
+const kw_len_start: [kw_max_len + 2]u16 = blk: {
+    const keys = keyword_map.keys();
+    for (keys[1..], keys[0 .. keys.len - 1]) |b, a| {
+        if (b.len < a.len) @compileError("StaticStringMap no longer sorts keys by length");
+    }
+    var t: [kw_max_len + 2]u16 = undefined;
+    var i: usize = 0;
+    for (&t, 0..) |*slot, len| {
+        while (i < keys.len and keys[i].len < len) i += 1;
+        slot.* = i;
+    }
+    break :blk t;
+};
+
+/// LRM §2.8.2 / annex B. What the lexer calls: `keyword_map.get(name)`, reached
+/// through the first byte instead of by walking the whole length bucket.
+///
+/// `keyword_map` stays the reference — the tags and spellings come out of it,
+/// the index into `kw_first` IS its key index, and the differential test below
+/// asserts this function agrees with `get` on every keyword, every near miss of
+/// one, and 20,000 random spellings.
+///
+/// WHY THIS IS HAND-ROLLED and not `std.mem.indexOfScalarPos`. That is the
+/// stdlib's SIMD scan and it was tried first (rung 3 of the ladder), but it
+/// cannot reach its vector path here: `findScalarPos` needs `2*block_len < len`
+/// — >64 bytes on AVX2 — and the biggest bucket is 39, so it runs its byte loop,
+/// which is no cheaper than the map's own walk over ~13 keys. One masked block
+/// is. MEASURED, three implementations over identical work (callgrind, total Ir,
+/// `vera --lint` on `annex_e_spice/primitive_vsine.va` WITHOUT `-I`, which stops
+/// at the missing `check.vh` and therefore lexes the prelude and nothing else —
+/// a lexer microbenchmark with no parser in it):
+///
+///     keyword_map.get                              2,240,522
+///     + a (first byte, length) bitmask in front    2,191,152   −2.2%
+///     std.mem.indexOfScalarPos over the bucket     2,163,929   −3.4%
+///     the masked block below                       2,092,721   −6.6%
+///
+/// The bitmask is the cheap idea and it is the one that failed: the prelude's
+/// identifiers are mostly keywords or keyword-shaped, so ~80% of them passed the
+/// filter and paid for it. A filter only helps misses; shortening the walk helps
+/// hits too, and the prelude is nearly all hits.
+///
+/// MEASURED on a WHOLE compilation (callgrind, ReleaseFast -Dcpu=x86_64_v3,
+/// `vera --emit-zig -I tests/fixtures annex_e_spice/primitive_vpulse.va`):
+/// 7,911,240 → 7,618,237 Ir, −3.7%, of which the lookup itself is 501,720 →
+/// 208,663 (−58%: 87,246 here, 42,083 more inside `Lexer.next`, 79,334 in
+/// `std.mem.eql` — that last is now the biggest half and is where the next
+/// bite is, if there is ever a reason to take it). Before this it was the
+/// single largest entry in the profile at 6.34%.
+///
+/// MEASURED end to end (`zig build bench -Doptimize=ReleaseFast -- fixtures`,
+/// min of 25, best of 3 runs): `lint` 181.2 → 170.6 ms, `codegen` 199.4 → 188.0
+/// ms, both −5.8%; `pp` unchanged, as it must be — it never lexes.
+pub fn lookupKeyword(name: []const u8) ?Tag {
+    // One compare rejects the empty string and everything longer than the
+    // longest keyword; `name[0]` is in bounds after it.
+    if (name.len -% 1 >= kw_max_len) return null;
+    const lo: usize = kw_len_start[name.len];
+    const hi: usize = kw_len_start[name.len + 1];
+
+    if (kw_lanes) |lanes| {
+        const V = @Vector(lanes, u8);
+        const Mask = std.meta.Int(.unsigned, lanes);
+        const needle: V = @splat(name[0]);
+        var i = lo;
+        while (i < hi) : (i += lanes) {
+            const block: V = kw_first[i..][0..lanes].*;
+            var m: Mask = @bitCast(block == needle);
+            // Lanes past this bucket belong to the next length and must not
+            // match. The padding covers the lanes past the table itself.
+            const valid = hi - i;
+            if (valid < lanes) m &= (@as(Mask, 1) << @intCast(valid)) - 1;
+            while (m != 0) : (m &= m - 1) {
+                const k = i + @ctz(m);
+                if (std.mem.eql(u8, keyword_map.keys()[k], name)) return keyword_map.values()[k];
+            }
+        }
+        return null;
+    }
+    return lookupKeywordScalar(name, lo, hi);
+}
+
+/// The reference implementation, and the fallback on a target with no vectors.
+/// Kept because the vector loop above is only correct if it agrees with this on
+/// every input — which is what the differential test checks.
+fn lookupKeywordScalar(name: []const u8, lo: usize, hi: usize) ?Tag {
+    for (kw_first[lo..hi], lo..) |first, i| {
+        if (first == name[0] and std.mem.eql(u8, keyword_map.keys()[i], name)) {
+            return keyword_map.values()[i];
+        }
+    }
+    return null;
+}
 
 // ---- §10.6 `begin_keywords: which words are RESERVED ----------------------
 
@@ -814,6 +950,58 @@ test "keyword_map: spelling round-trips through lexeme" {
     // Not keywords: system function names (§2.8.3) and ordinary identifiers.
     try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("temperature"));
     try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("V"));
+}
+
+test "lookupKeyword: differential against keyword_map, which stays the reference" {
+    // Every spelling is checked three ways: the vector loop that ships, the
+    // scalar reference next to it, and `keyword_map.get`, which is §2.8.2's
+    // actual definition. A miscompare here is a silent miscompile — a keyword
+    // read as an identifier, or the reverse.
+    const check = struct {
+        fn all(s: []const u8) !void {
+            const want = keyword_map.get(s);
+            try std.testing.expectEqual(want, lookupKeyword(s));
+            if (s.len >= 1 and s.len <= kw_max_len) {
+                const lo: usize = kw_len_start[s.len];
+                const hi: usize = kw_len_start[s.len + 1];
+                try std.testing.expectEqual(want, lookupKeywordScalar(s, lo, hi));
+            }
+        }
+    }.all;
+
+    // 1. Every keyword is still found. This is the only way the scan can be
+    //    WRONG in the direction that matters: a missed keyword changes the
+    //    parse of legal source.
+    for (keyword_map.keys()) |key| try check(key);
+
+    // 2. Random spellings. Lengths sweep 0 .. 3× the lane count (32 lanes on
+    //    x86_64_v3 → 0..96), so every bucket boundary, the empty case and
+    //    everything past the longest keyword are exercised.
+    var prng: std.Random.DefaultPrng = .init(0x2820); // §2.8, §2.0
+    const rand = prng.random();
+    var buf: [3 * 64 + 2]u8 = undefined;
+    const max_len = 3 * (kw_lanes orelse 32);
+    const alphabet = "abcdefghijklmnopqrstuvwxyz_0123456789ABZ";
+    for (0..20_000) |_| {
+        const len = rand.intRangeAtMost(usize, 0, max_len);
+        for (buf[0..len]) |*b| b.* = alphabet[rand.uintLessThan(usize, alphabet.len)];
+        try check(buf[0..len]);
+    }
+    try check("");
+    try check("\xffodule");
+    try check("m" ** 32);
+
+    // 3. Near misses, where a scan that stops one lane early actually shows up:
+    //    every keyword with one byte dropped, one appended, and its first byte
+    //    replaced by one no keyword starts with.
+    for (keyword_map.keys()) |key| {
+        @memcpy(buf[0..key.len], key);
+        try check(buf[0 .. key.len - 1]);
+        buf[key.len] = '_';
+        try check(buf[0 .. key.len + 1]);
+        buf[0] = 'q';
+        try check(buf[0..key.len]);
+    }
 }
 
 test "§10.6 keyword sets nest, and the intro table cannot drift from annex B" {
