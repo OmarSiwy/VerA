@@ -104,6 +104,57 @@ pub const Parser = struct {
         };
     }
 
+    /// Everything a parse of a leading run of tokens leaves behind, so a later
+    /// parse of a longer token stream that BEGINS WITH THAT RUN can resume from
+    /// it instead of redoing it. Built once per process for the annex D/E
+    /// prelude — see `Preprocessor.preludeAst`, which owns the snapshot, states
+    /// why the prelude is always that leading run, and asserts that the fields
+    /// NOT listed here are all still at their `init` values when the prefix
+    /// parse ends (`kw_set`, `kw_stack`, `attrs`, the three flags and the two
+    /// depths: a design element that opened one has closed it by `endmodule`).
+    ///
+    /// A field added to `Parser` that a prefix parse can leave dirty is a field
+    /// that must be added here too; the equivalence test at the bottom of
+    /// `preprocessor.zig` is what catches the omission.
+    pub const Seed = struct {
+        /// Stores and decl lists. See `Ast.SourceFile.seedFrom` for which half
+        /// is copied and which is borrowed, and why the borrow is sound.
+        file: Ast.SourceFile,
+        /// §3.6.1.4 access names in effect at the seam. A list rather than the
+        /// map itself: the set is 16 names, and re-`put`ting 16 keys is cheaper
+        /// than cloning a hash map (MEASURED: cloning the 154-entry interner
+        /// map is 3.4 µs, i.e. ~22 ns/entry, ReleaseFast, min of 500).
+        access_names: []const []const u8,
+        /// Token index the prefix parse stopped on — its `.eof`, which is the
+        /// first token of the resumed parse.
+        pos: u32,
+        /// §6.6.2 outermost-construct identity, monotonic over the whole file.
+        gen_construct: u32,
+    };
+
+    /// `init`, then resume from `seed` instead of from nothing. `null` seed is
+    /// exactly `init` (the `--no-std-defs` path, and every direct caller in the
+    /// tests).
+    pub fn initSeeded(
+        arena: std.mem.Allocator,
+        src: []const u8,
+        tags: []const token.Tag,
+        starts: []const u32,
+        bag: *diag.Bag,
+        seed: ?*const Seed,
+    ) std.mem.Allocator.Error!Parser {
+        var p = init(arena, src, tags, starts, bag);
+        const s = seed orelse return p;
+        // The caller promises `tags` begins with the run `s` was parsed from —
+        // `root.zig` gets that from the same `Prelude` that seeded the lexer.
+        std.debug.assert(s.pos < tags.len);
+        p.pos = s.pos;
+        p.gen_construct = s.gen_construct;
+        try p.file.seedFrom(arena, &s.file);
+        for (s.access_names) |n| try p.access_names.put(arena, n, {});
+        return p;
+    }
+
     // -----------------------------------------------------------------------
     // A.1.2 source_text
     // -----------------------------------------------------------------------
@@ -113,10 +164,16 @@ pub const Parser = struct {
         try self.access_names.put(self.arena, "V", {});
         try self.access_names.put(self.arena, "I", {});
 
+        // Seeded (`initSeeded`) these already hold the prefix's declarations, in
+        // source order; unseeded all four are empty and this is four no-ops.
         var modules: std.ArrayList(Ast.ModuleDecl) = .empty;
         var disciplines: std.ArrayList(Ast.DisciplineDecl) = .empty;
         var natures: std.ArrayList(Ast.NatureDecl) = .empty;
         var paramsets: std.ArrayList(Ast.ParamsetDecl) = .empty;
+        try modules.appendSlice(self.arena, self.file.modules);
+        try disciplines.appendSlice(self.arena, self.file.disciplines);
+        try natures.appendSlice(self.arena, self.file.natures);
+        try paramsets.appendSlice(self.arena, self.file.paramsets);
 
         while (true) {
             self.skipAttributes();

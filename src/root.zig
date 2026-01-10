@@ -417,19 +417,16 @@ fn compileInArena(
     const starts = tokens.items(.start);
 
     // --- stage 3: parse (class 2) -------------------------------------------
-    // ponytail: the prelude is RE-PARSED every compilation, and stage 2's seed
-    // stops at the token stream. MEASURED (ReleaseFast, min of 500, the 6-line
-    // resistor below): parsing the prelude's 2,623 tokens is 91.9 µs, against
-    // 47.6 µs to lex them — so this is the larger half of the same constant and
-    // it is still being paid. The upgrade path is a snapshot of the four things
-    // the prelude leaves in the parser — `Ast.SourceFile`'s stores,
-    // `Parser.access_names`, the four decl lists and `pos` — cloned into the
-    // compilation arena and parsed on from token `seed.tags.len`. It is not the
-    // ten-line change stage 2 was: `StrId` is an index into `SourceFile.strings`,
-    // so the clone has to make the prelude's ids a genuine PREFIX of the
-    // compilation's, and a `ModuleDecl` handed out of a process-lifetime arena
-    // must be provably never written. See TODO.md §3, Parser.
-    var p = Parser.Parser.init(arena, text, tags, starts, bag);
+    // The same prefix again: the prelude's AST is parsed once per PROCESS and
+    // the compilation resumes at the token after it — see
+    // `Preprocessor.preludeAst`, which carries the soundness argument (the ids
+    // are already a prefix by insertion order; the decls are never written, so
+    // they are shared rather than copied). MEASURED (ReleaseFast, min of 500,
+    // the 6-line resistor below): parsing the prelude's 2,574 tokens was 82.7 µs
+    // of a 109.7 µs `.lint`, against 47.6 µs to lex them. Both seeds come from
+    // the same snapshot and are gated on the same `std_defs`, which is what
+    // makes "`tags` begins with the prelude's run" true for stage 3 as well.
+    var p = try Parser.Parser.initSeeded(arena, text, tags, starts, bag, try Preprocessor.preludeAst(opts.std_defs));
     const file = try arena.create(Ast.SourceFile);
     // Annex E — the shipped Table E.1 primitives are the first declarations in
     // `text`, so they are the first entries of `file.modules`. See

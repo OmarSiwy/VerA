@@ -1008,6 +1008,41 @@ pub const SourceFile = struct {
         self.* = .empty;
     }
 
+    /// Start from a file that is a PREFIX of this one — see `parser.Seed`.
+    ///
+    /// The four stores are COPIED, because every stage below the parser appends
+    /// to them (`elaborate.Flatten` clones expressions and interns flat names).
+    /// A copy keeps every id valid: `ExprId`, `StmtId`, `StrId` and the
+    /// `exprs.pool` offsets are all "index into an append-only column", so a
+    /// prefix copy means the prefix's ids denote the same rows they denoted in
+    /// `src` and everything appended after them gets fresh ones.
+    ///
+    /// The four DECL slices are BORROWED, not copied. That is sound because
+    /// nothing below the parser writes one: every reader takes `*const`
+    /// (MEASURED: `*Ast.ModuleDecl` and friends appear nowhere outside
+    /// `parser.zig`'s own `findPort`), and `Flatten` builds new decls with new
+    /// allocations rather than editing the ones it inlines — its `cloneExpr`
+    /// docstring states that invariant ("Every row is appended, never mutated").
+    ///
+    /// `self` must be `.empty`: this seeds a parse, it does not merge two files.
+    pub fn seedFrom(self: *SourceFile, gpa: std.mem.Allocator, src: *const SourceFile) !void {
+        std.debug.assert(self.strings.strings.items.len == 0);
+        std.debug.assert(self.exprs.nodes.len == 0);
+        std.debug.assert(self.stmts.items.len == 0);
+        self.strings.strings = try src.strings.strings.clone(gpa);
+        self.strings.map = try src.strings.map.clone(gpa);
+        self.exprs.nodes = try src.exprs.nodes.clone(gpa);
+        self.exprs.pool = try src.exprs.pool.clone(gpa);
+        self.exprs.reals = try src.exprs.reals.clone(gpa);
+        self.exprs.ints = try src.exprs.ints.clone(gpa);
+        self.stmts = try src.stmts.clone(gpa);
+        self.stmt_toks = try src.stmt_toks.clone(gpa);
+        self.modules = src.modules;
+        self.disciplines = src.disciplines;
+        self.natures = src.natures;
+        self.paramsets = src.paramsets;
+    }
+
     /// Append a statement; both columns stay in lockstep.
     pub fn addStmt(self: *SourceFile, gpa: std.mem.Allocator, s: Stmt, main_tok: u32) !StmtId {
         const id: u32 = @intCast(self.stmts.items.len);

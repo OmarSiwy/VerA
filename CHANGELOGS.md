@@ -69,6 +69,88 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
+### Wave 19 — the prelude is PARSED once per process, and the brief's hard part was not hard
+
+**Suite: 224/224 green** (222 + the long-way-round AST equivalence test + a third source guard).
+**Torture: 1162/1164, 2 XFAIL, 0 FAIL** — the full run, not a filtered one, because this changes
+the AST every later stage reads. **Corpus: byte-identical.** All 1164 fixtures emitted through
+`--emit-zig` with the old and new ReleaseFast binaries, stdout *and* stderr, 9.4 MB, zero
+differing bytes.
+
+Waves 14 and 16 made the annex D/E prelude's TEXT and TOKENS once-per-process. Stage 3 still
+walked the same 2,574 tokens into the same AST on every compilation. It does not any more:
+`Preprocessor.preludeAst` extends the same snapshot with what parsing them leaves behind, and
+`Parser.initSeeded` resumes at the token after it.
+
+MEASURED, `zig build bench -Doptimize=ReleaseFast -- fixtures`, 1164 fixtures, min of 25, best of
+3 runs each side. **Every byte column and the whole MIR footprint table are identical before and
+after** (`991872` MIR bytes, `9105324` lint bytes, `9440767` codegen bytes):
+
+| phase | before | after | delta |
+|---|---|---|---|
+| pp | 17.57 ms | 17.36 ms | (noise) |
+| **lint** | **170.32 ms** | **76.97 ms** | **−54.8%** |
+| codegen | 189.86 ms | 93.53 ms | −50.7% |
+| rewrite | 251.06 ms | 144.66 ms | −42.4% |
+
+Per fixture, ReleaseFast: **146.3 µs → 66.2 µs**. In-process on `root.zig`'s 6-line resistor
+(min of 500), parsing the prelude alone was **82.7 µs of a 109.7 µs `.lint`**; what replaces it —
+cloning 777 expression rows, 63 statements, 154 interned names and their map, and 19+16+11
+declarations — is ~13 µs on a cold arena.
+
+**The question the brief said had to be answered before any cache was written, answered.** No
+prelude-derived AST data is mutated after parse. `ExprStore` exposes no setter at all (`add`,
+`addReal`, `addInt`, `addList` — `nodes.set` and `nodes.items(...)[i] =` appear nowhere in the
+tree), so the brief's warning about "reserve-and-backpatch patterns in parser.zig" is aimed at a
+hazard that does not exist; `elaborate.Flatten.cloneExpr` says so in its own docstring ("Every
+row is appended, never mutated") and it is true. And every reader of a declaration below the
+parser takes `*const` — `*Ast.ModuleDecl` occurs exactly once in the tree, in `parser.zig`'s own
+`findPort`.
+
+**So two of the three things that made this "a wave, not a patch" were not real.**
+
+1. **The `StrId` prefix needed no engineering.** TODO.md §3 said the clone "must make the
+   prelude's ids a genuine prefix of the compilation's (or `intern` must consult two tables)".
+   Verified rather than trusted: `intern` assigns `id = strings.items.len`, the parser walks
+   tokens in source order, the prelude is the byte prefix, and nothing interns ahead of
+   `parseSourceFile` (`access_names`' "V"/"I" go into a separate `void` set). The ids are
+   *already* 0..N-1 identically on every compilation. It is a consequence of insertion order.
+2. **The declarations are not cloned into the compilation arena — they are SHARED.** §3's upgrade
+   path said to clone them. Since nothing writes one, the four decl arrays are borrowed straight
+   out of the process-lifetime arena and only the append-only stores are copied. That is most of
+   why the copy is 13 µs and not 40.
+3. **Seeding the interner map is not the problem the brief thought.** It said "cloning it may
+   cost more than the parse it saves. MEASURE that before committing to a shape." MEASURED,
+   ReleaseFast, min of 500: `map.clone` of the 154-entry table is **3.4 µs** against **82.7 µs**
+   of parse — a factor of 24 from being a problem. Re-interning all 154 from scratch is 10.1 µs
+   and also fine. The two-table `intern` the brief and §3 both float would have put a branch in
+   every name lookup in every stage to save 3.4 µs; it is not built.
+
+**The test is still the point, and the guard is new.** `test "the prelude AST snapshot parses
+exactly what parsing the whole text produces"` parses the whole preprocessed buffer from token 0
+with no seed — the long way — and compares the seeded result in full: every interned string AND
+its id AND its map entry, every column of every `ExprStore` row, `pool`/`reals`/`ints`, the
+statement pool, all four declaration arrays *to their leaves*, and the parser state that is not
+in the `SourceFile` (`access_names`, `pos`, `gen_construct`). Two inputs, with and without an
+annex E.2 netlist. The leaf comparison is by REFLECTION, not a hand-written field list: ~20
+structs of slices, and a hand-written comparator goes stale the day someone adds a field, which
+is the exact defect the test exists to prevent. Demonstrated FAILing on five planted mutations,
+each reverted: a dropped access name, a dropped prelude module, a dropped `exprs.reals` column, a
+`pos` off by one, and an un-cloned interner map.
+
+And because "nothing below the parser writes a declaration" is now a **memory-safety** premise
+across a process-lifetime borrow — and no test in this tree can see it break (the equivalence
+test compares two parses, the determinism test compares two runs that both take the cached path,
+and a fixture sweep runs one compilation per process) — `tools/source_guards.zig` gains guard
+(c): no `*ModuleDecl`/`*NatureDecl`/`*DisciplineDecl`/`*ParamsetDecl` outside `parser.zig` and
+`ast.zig`. Guarding those four is enough for everything under them, because Zig propagates
+`const` through field access. Demonstrated FAILing on a planted `fn planted(m: *Ast.ModuleDecl)`
+in `elaborate.zig`, reverted.
+
+Stage 1 now imports stage 3, for one reason stated at the import: the snapshot carries the parse
+of the same three files under the same "keyed on nothing" argument, and wave 16 already settled
+that there is no second place to put it that does not need a second copy of that argument.
+
 ### Wave 18 — the preprocessor copies runs, not bytes
 
 **Suite: 221/221 green** (219 + two differential tests). **Corpus: byte-identical.** All 1164
@@ -722,13 +804,16 @@ Filtered torture green: `annex_d` 27/27, `annex_e` 42/42, `ch02_lexical` 60/60,
 
 The queued sequence (waves 8–16) is **complete**. Every item is landed or measured-and-refused.
 
-**The one thing I would do next, and the number is now the honest one:** cache the prelude's
-*parsing*. After wave 16 the per-compilation constant is **103.6 µs** (a whole `.lint` of the
-6-line resistor is 112.6 µs), and **91.9 µs of it — 89% — is stage 3**. Over the fixture batch
-that is ~107 ms of the 183 ms `lint` phase. It is strictly harder than the token seed, and
-TODO.md §3 (Parser) says exactly why: a `StrId` is an index into `SourceFile.strings`, so the
-prelude's ids have to become a genuine prefix of the compilation's, and a `ModuleDecl` borrowed
-out of a process-lifetime arena has to be provably never written. That is a wave, not a patch.
+~~**The one thing I would do next:** cache the prelude's *parsing*.~~ **DONE — wave 19.** The
+whole prelude constant (text, tokens, AST) is now once per process: batch `lint` 170.3 → 77.0 ms,
+146.3 → 66.2 µs per fixture, ReleaseFast, output byte-identical. Two of the three reasons this
+was costed as "a wave, not a patch" turned out not to be real — the `StrId` prefix falls out of
+insertion order and needs no engineering, and the declarations are shared rather than cloned
+because nothing below the parser writes one. See the wave 19 entry.
+
+**There is no obvious next perf item.** What is left of a `.lint` on a 6-line model is the model.
+The next honest measurement would be of a PDK-shaped input (one subckt, dozens of instances),
+which wave 8's curve was built to take and which nothing in the fixture corpus is.
 
 **Refused, with numbers, so nobody re-derives them** (all now in TODO.md §2): the Air-shaped MIR
 row (below the noise floor); a batch/SIMD evaluator inside VerA (14 wrong CSR cells, 3.05 vs

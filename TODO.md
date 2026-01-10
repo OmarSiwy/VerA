@@ -335,7 +335,12 @@ empty program. IN-PROCESS, ReleaseFast, min of 500, `root.zig`'s 6-line resistor
 so the cacheable constant was **146.4 µs = 69% of the 211.7 µs/fixture batch**,
 not 87% — the 87% counts the n=1 model's own cost as constant too, which it is,
 but nothing can cache it. Split of the 146.4 µs: pp 2.7, lex 47.6, parse 91.9,
-lower+prove ~4. Wave 16 took the lex half; the parse half is a §3 ceiling.
+lower+prove ~4. Wave 16 took the lex half; **wave 19 took the parse half**, and
+the whole prelude constant is now once per process — batch `lint` 170.3 → 77.0 ms
+(ReleaseFast, `bench -- fixtures`, 1164), 146.3 → 66.2 µs per fixture. The row
+this paragraph is arguing against is unaffected either way: the MIR layout's
+theoretical win was below the noise floor when the constant was 146 µs and it
+still is now that it is gone.
 
 **And `Ref` folding is not the local change it looks like.** The Value space is
 the index of nine side arrays *outside* `mir.zig`, every one sized
@@ -465,24 +470,20 @@ Grouped by area; the file is the authority, this is the index.
   The upgrade path is the optional-contract-decl shape (`display`, `u_abstol`):
   one `nodeset` decl the host may read. `ch03_data_types/21_net_nodeset.va` is
   green and pins the part that matters — the net is NOT clamped to the value.
-- **The annex D/E prelude is re-parsed on every compilation.** Wave 14 cached its
-  preprocessing and wave 16 its TOKENS (`Preprocessor.preludeTokens`), but stage 3
-  still walks the same 2,623 tokens into the same AST every time. MEASURED,
-  ReleaseFast, min of 500, `root.zig`'s 6-line resistor: a whole `.lint` is
-  112.6 µs, of which **91.9 µs is parsing the prelude** and 9.0 µs is the model —
-  i.e. the remaining per-compilation constant is 103.6 µs and the parse is 89% of
-  it. Over the 1164-fixture batch that is ~107 ms of the 183 ms `lint` phase.
-  **Upgrade path**, at `root.zig`'s stage-3 `ponytail:`: snapshot the four things
-  the prelude leaves behind — `Ast.SourceFile`'s stores, `Parser.access_names`,
-  the four top-level decl lists, and `pos` — into the same process-lifetime arena
-  the prelude text lives in, clone them into the compilation arena, and parse on
-  from token `seed.tags.len`. **Why it is not the ten-line change the token seed
-  was:** a `StrId` is an index into `SourceFile.strings`, so the clone must make
-  the prelude's ids a genuine prefix of the compilation's (or `intern` must
-  consult two tables); and a `ModuleDecl` borrowed out of a process-lifetime
-  arena must be provably never written by elaboration, which nothing checks
-  today. Its long-way-round test is the same shape as the token one — parse the
-  whole text from token 0 and compare every store, column by column.
+- ~~**The annex D/E prelude is re-parsed on every compilation.**~~ **CLOSED by
+  wave 19** (`Preprocessor.preludeAst`), and the three stages of the prelude
+  constant — text, tokens, AST — are now all once-per-process. MEASURED,
+  ReleaseFast, `bench -- fixtures`, 1164 fixtures, every byte column and the
+  whole footprint table identical: `lint` **170.3 → 77.0 ms** (−54.8%),
+  146.3 → 66.2 µs per fixture. Two things this row USED to say were wrong and are
+  recorded here because they were the reasons it was costed as hard:
+  the `StrId` prefix needed no engineering (ids are `id = column.len` at insert
+  and the prelude is parsed first, so they are already 0..N-1 identically), and
+  the decls are not cloned into the compilation arena at all — nothing below the
+  parser writes one, so they are SHARED, which `tools/source_guards.zig`'s third
+  guard now keeps true. What IS copied per compilation is the append-only stores,
+  ~13 µs of the 82.7 µs parse it replaces. Remaining headroom on this seam: none
+  worth a wave — what is left of `.lint` on a 6-line model is the model.
 - Vector ranges fold literals only; `[W-1:0]` does not.
 - No `$root` prefix and no index inside a hierarchical path (`u[0].a`).
 - Instance-array unrolling capped at 32 bits — a guard, not a rule.
