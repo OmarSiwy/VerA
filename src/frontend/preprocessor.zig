@@ -320,12 +320,19 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
 /// of comments plus ~12 KB of output — the bound is those three literals, and
 /// nothing at runtime can add a fourth.
 ///
-/// MEASURED, `zig build bench -- fixtures` on this tree, before → after:
+/// MEASURED, `zig build bench -- fixtures` on this tree, before → after, **in
+/// DEBUG** — that invocation takes the default `-Doptimize`, which is Debug, and
+/// the run predates the bench printing its mode:
 /// `pp` 902.5 ms → 186.0 ms and `lint` 2.700 s → 1.970 s over the 1164-fixture
 /// batch, with every byte column identical. Re-expanding it was 79% of stage 1
 /// and 27% of everything up to MIR, because a 200-byte model still paid for
 /// 11,791 bytes of shipped prelude (`bench -- gen`, `contrib n=1`: 0.69 ms of
 /// `pp`, of which 0.08 ms is now the whole phase).
+///
+/// The shipping figures for the SAME batch, `bench -Doptimize=ReleaseFast --
+/// fixtures`: `pp` 19.5 ms, `lint` 247.0 ms — i.e. `pp` is 7.9% of lint, which
+/// is the proportion this snapshot has to keep true. The `before` column cannot
+/// be re-measured in any mode: that code is gone.
 ///
 /// WHAT IT HOLDS is everything the three `runFile` calls wrote into `Pp`:
 /// the output bytes, the source-map segments, the macros, and the `Bag` file

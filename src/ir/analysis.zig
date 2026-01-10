@@ -153,10 +153,13 @@ pub fn build(
 /// a different need: `proof.zig` runs at root.zig's stage 5, BEFORE codegen
 /// builds its own `Analysis` at stage 6, so it cannot share one — and a prover
 /// has no use for "how would this Value be spelled in the emitted struct".
-/// MEASURED with `zig build bench`, `contrib n=4096` lint phase, min of 25:
-/// 111.7 ms before the share, 117.1 ms if proof calls the full `build` (+4.8%,
-/// all of it `buildValueTypes` running twice per compile), 110.8 ms through
-/// this entry point.
+/// MEASURED with `zig build bench`, `contrib n=4096` lint phase, min of 25,
+/// **in DEBUG** (the run predates the bench printing its mode, and `zig build
+/// bench` with no `-Doptimize` is Debug; ReleaseFast is ~12× smaller — the same
+/// point is 8.80 ms there): 111.7 ms before the share, 117.1 ms if proof calls
+/// the full `build` (+4.8%, all of it `buildValueTypes` running twice per
+/// compile), 110.8 ms through this entry point. The claim is the +4.8% ratio,
+/// which is a comparison within one mode and does not move with it.
 pub fn buildStructure(
     arena: std.mem.Allocator,
     mir: *const Mir,

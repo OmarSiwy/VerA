@@ -202,19 +202,37 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_external_test.step);
 
     // =======================================================================
-    // The instrument. `zig build bench` prints one TSV line per (case, n,
+    // The instrument. `zig build bench` prints one TSV line per (mode, case, n,
     // phase); see tests/bench.zig for what the four phases are and why the
     // sweep is a curve rather than a number.
     //
     // NOT in `test`, for the same reason `torture` is not: the 4096-point of
-    // the sweep and the 1152-fixture batch are seconds each, times N=25. But
+    // the sweep and the 1164-fixture batch are seconds each, times N=25. But
     // the bench's own unit tests ARE — the emitted-size table is a size
     // regression on the device, and a regression check that runs only when
     // someone remembers to run `bench` is not a check.
     //
-    //   zig build bench                # the sweep and the fixture batch
-    //   zig build bench -- gen         # the generated sweep only
-    //   zig build bench -- fixtures    # the 1152 fixtures as one batch
+    // RELEASEFAST IS THE NUMBER THAT MEANS ANYTHING — it is what ships. This
+    // module takes the tree's `-Doptimize`, which defaults to Debug, and Debug
+    // is ~8x slower (fixture-batch `lint`: 1959.5 ms Debug, 247.0 ms
+    // ReleaseFast, same commit). An entire wave of figures was quoted in Debug
+    // because the TSV did not say which mode it was, so the mode is now column
+    // 1 of the timing table.
+    //
+    // This step deliberately does NOT force ReleaseFast on itself, despite the
+    // default being a trap. `-O` is per MODULE (std.Build.Module appends one
+    // per module), and the code being timed lives in `vera_mod`: overriding
+    // only `bench_mod` would time a ReleaseFast harness driving a Debug engine
+    // — a third number that is neither of the two anyone wants — and would make
+    // `builtin.mode` inside bench.zig, which is what prints the label, describe
+    // the harness rather than the engine. Doing it honestly means a second
+    // `vera` module built at a different mode than everything else `zig build`
+    // produces. Printing the mode costs one column and closes the same hole.
+    //
+    //   zig build bench -Doptimize=ReleaseFast              # what ships
+    //   zig build bench                                     # Debug, ~8x slower
+    //   zig build bench -Doptimize=ReleaseFast -- gen       # the sweep only
+    //   zig build bench -Doptimize=ReleaseFast -- fixtures  # the 1164 fixtures
     const bench_opts = b.addOptions();
     bench_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
     bench_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-bench"));
@@ -230,7 +248,11 @@ pub fn build(b: *std.Build) void {
         .root_module = bench_mod,
     }));
     if (b.args) |a| run_bench.addArgs(a);
-    b.step("bench", "Time the four compile phases over a size sweep").dependOn(&run_bench.step);
+    b.step(
+        "bench",
+        "Time the four compile phases over a size sweep (USE -Doptimize=ReleaseFast: " ++
+            "that is the shipping number; the default Debug is ~8x slower)",
+    ).dependOn(&run_bench.step);
 
     const run_bench_test = b.addRunArtifact(b.addTest(.{ .root_module = bench_mod }));
     test_step.dependOn(&run_bench_test.step);
