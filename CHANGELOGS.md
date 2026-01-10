@@ -69,6 +69,81 @@ The rule is TODO.md's: re-run the suite rather than trusting this file.
 
 ## Landed
 
+### Wave 18 — the preprocessor copies runs, not bytes
+
+**Suite: 221/221 green** (219 + two differential tests). **Corpus: byte-identical.** All 1164
+fixtures emitted through `--emit-zig` with the old and new ReleaseFast binaries and `cmp`d —
+10.8 MB of device text and diagnostics, zero differing bytes. Filtered torture green:
+`ch10_directives` 47/47, `ch02_lexical` 60/60, `annex_d` 27/27, `annex_e` 42/42.
+
+`scan`'s ordinary-character path was `try pp.out.append(pp.arena, c)` — one capacity-checked
+byte at a time — and `stripComments` and `putNewlines` had the same shape. All three now find
+the next byte that matters and copy the whole run.
+
+**MEASURED, ReleaseFast, `zig build bench -Doptimize=ReleaseFast -- fixtures`, 1164 fixtures,
+two runs each:**
+
+| phase | before | after |
+|---|---|---|
+| **pp** | 19.20 / 19.83 / 19.90 ms | **16.83 / 16.89 ms** (**−13.5%**) |
+| lint | 180.2 / 180.8 / 181.0 ms | 184.7 / 185.1 ms (+2.3%) |
+| codegen | 199.4 / 199.7 ms | 203.3 / 203.4 ms (+1.9%) |
+
+**MEASURED, callgrind, `vera --lint -I tests/fixtures annex_e_spice/primitive_vsine.va`:**
+4,287,821 → 3,355,232 Ir (**−21.7%** of the whole compile). With `--no-std-defs`, which removes
+the once-per-process prelude build and leaves the marginal per-file cost: 1,022,839 → 897,115
+(**−12.3%**). `preprocessor.scan` went 9.95% → 2.60% and `Pp.runFile` 5.74% → 0.79%;
+`ArrayList(u8).append` was 7.86% and is now 0.02%.
+
+**The `lint`/`codegen` +2% is a code-layout artifact, not work, and here is the evidence.**
+The output is byte-identical over the whole corpus, so nothing downstream can be doing anything
+different. Instructions retired for exactly that path fell 12.3%. And the delta moves with
+inlining alone: marking `findStop` `noinline` — which changes no work whatsoever — moved `lint`
+from 184.3 to 182.9 ms while `pp` stayed at 17.4. A separate probe pinned `lint` at 184.3 ms
+while `pp` swung between 17.0 and 19.1 ms, which rules out the preprocessor's allocation
+trajectory as the cause. I could not recover the 2%; it is recorded here rather than hidden.
+
+Two errors in the brief that produced this wave, both found by reproducing its profile:
+
+1. **`std.mem.indexOfAnyPos` is NOT SIMD in Zig 0.16.** The brief called it "already
+   SIMD-accelerated" and rung 3 of the ladder. It is `mem.findAnyPos` (`std/mem.zig:1347`), a
+   plain nested scalar loop doing one compare per (byte, needle) pair. Only the single-needle
+   `findScalarPos` and `countScalar` are vectorized. This was measured, not just read: the
+   stdlib version of the `scan` change moved `pp` from 19.20 to 19.30 ms — **nothing** — because
+   three scalar compares per byte cancel exactly what the bulk `appendSlice` wins. The
+   hand-written version of the same call moved it to 17.0. So `findStop` is hand-rolled, with
+   the scalar loop kept as its tail, its no-vector fallback, and the differential test's
+   reference.
+2. **The prelude is not scanned per compilation.** The brief said the byte loop runs over "BOTH
+   the ~11.8 KB expanded Annex D/E prelude AND the user's text". `replayStdDefs` `appendSlice`s
+   the prelude out of a process-lifetime snapshot in one `memcpy`; `scan` sees it once per
+   process, in `buildPrelude`. The brief's profile was a single-file CLI run, where that
+   once-per-process cost is the whole profile — it reproduces to the digit (10.89 / 10.45 /
+   9.95 / 8.78 / 7.86 / 5.74, total 4,287,821 vs the quoted 4,288,438) — but in the 1164-fixture
+   batch it is amortised to nothing. The real per-compilation N is the user's source: 1.79 MB
+   over 1164 files, **median 1339 bytes**, max 7.3 KB.
+
+And the triage number the brief did not ask for, which turned out to be the one that decides the
+design: **N is the RUN, not the file.** Measured over the fixtures, runs between `scan`'s stops
+are median 23 bytes and runs between `stripComments`' stops are median 6, so with 32 `u8` lanes
+the *median* call never enters the vector block. It pays anyway, because the distribution is
+what matters and not its middle: 91% and 89% of the *bytes* sit in runs of 32 or more. That
+number is in `findStop`'s doc comment so the next person does not have to re-derive it.
+
+Dependency class, stated because it is the whole design: the outer loop is a **chain** — where
+the next run starts depends on what the last one ended at — but the inner question, "where is
+the next byte that matters", has no dependency between positions at all. Only the inner question
+is vectorized.
+
+`emitting()` is respected unchanged: the bulk path is
+`if (pp.emitting()) put(run) else putNewlines(run)`, which is exactly what the byte loop did,
+because in an emitting arm `'\n'` is an ordinary byte and in a dead one it is the only byte
+kept. `'\n'` is therefore deliberately not a stop. Neither is `'/'`: `scan` runs on
+comment-stripped text, so no comment survives to be found there — the brief's suggested stop set
+included it. `put` and `putNewlines` maintain no per-byte state (`physicalLine` recounts
+newlines from the file text on demand, and `resync` appends a segment per directive, not per
+byte), so a run-copy has nothing extra to update.
+
 ### Wave 16 — the instrument now says which mode it measured in
 
 **Suite: 217/217 green.**

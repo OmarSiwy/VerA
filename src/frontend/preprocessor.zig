@@ -560,8 +560,17 @@ const Pp = struct {
         try pp.out.appendSlice(pp.arena, bytes);
     }
 
+    /// Drop `span`'s text but keep its line count, so a dead `ifdef arm and a
+    /// collapsed directive both leave the output as long, in LINES, as the
+    /// input they replaced. Every diagnostic location downstream depends on it.
+    ///
+    /// Written as count-then-fill rather than the byte loop it replaces:
+    /// `std.mem.count` with a one-byte needle IS `mem.countScalar`, which is
+    /// vectorized in the stdlib (`std/mem.zig:1653`), and `appendNTimes` is one
+    /// capacity check plus a `@memset`. The scalar reference lives in the
+    /// "putNewlines counts the same newlines as the byte loop" test below.
     fn putNewlines(pp: *Pp, span: []const u8) Error!void {
-        for (span) |c| if (c == '\n') try pp.out.append(pp.arena, '\n');
+        try pp.out.appendNTimes(pp.arena, '\n', std.mem.count(u8, span, "\n"));
     }
 
     /// A file-local span for `[start, end)` of the text being scanned.
@@ -761,7 +770,9 @@ fn stripComments(pp: *Pp, src: []const u8) Error![]const u8 {
             continue;
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '/') {
-            while (i < src.len and src[i] != '\n') i += 1;
+            // §2.4: to the end of the line. `indexOfScalarPos` IS vectorized in
+            // the stdlib (`std/mem.zig:1241`), unlike the set-valued `findAnyPos`.
+            i = std.mem.indexOfScalarPos(u8, src, i, '\n') orelse src.len;
             continue;
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '*') {
@@ -780,18 +791,31 @@ fn stripComments(pp: *Pp, src: []const u8) Error![]const u8 {
             // operator `<=`, both with no diagnostic. One byte of whitespace
             // fixes both, and it always fits: the comment it replaces is at
             // least the four bytes of `/**/`.
-            var lines: usize = 0;
-            for (src[start..i]) |b| {
-                if (b != '\n') continue;
-                out.appendAssumeCapacity('\n');
-                lines += 1;
+            const lines = std.mem.count(u8, src[start..i], "\n");
+            if (lines == 0) {
+                out.appendAssumeCapacity(' ');
+            } else {
+                out.appendNTimesAssumeCapacity('\n', lines);
             }
-            if (lines == 0) out.appendAssumeCapacity(' ');
             i += 2;
             continue;
         }
-        out.appendAssumeCapacity(c);
-        i += 1;
+        // Ordinary text: copy the whole run up to the next byte the branches
+        // above care about, in one `appendSlice`. Same chain-outside /
+        // scan-inside split as `scan`.
+        //
+        // `src[i]` is neither `"` nor `\` — both `continue` above — but it CAN
+        // be a `/` that starts neither comment: at end of file, or before an
+        // ordinary byte. That is the `end == i` case, and stepping one byte is
+        // cheaper than teaching the stop set to exclude it.
+        const end = findStop(src, i, "\"\\/");
+        if (end == i) {
+            out.appendAssumeCapacity(c);
+            i += 1;
+        } else {
+            out.appendSliceAssumeCapacity(src[i..end]);
+            i = end;
+        }
     }
     return out.items;
 }
@@ -799,6 +823,52 @@ fn stripComments(pp: *Pp, src: []const u8) Error![]const u8 {
 // ---------------------------------------------------------------------------
 // Main scan
 // ---------------------------------------------------------------------------
+
+/// The three bytes `scan` branches on: a §2.7 string, a §2.8.1 escaped
+/// identifier, and a §10 directive or macro use. Everything else is ordinary.
+const scan_stops = "\"\\`";
+
+/// First index at or after `from` whose byte is in `stops`, else `text.len`.
+///
+/// `std.mem.indexOfAnyPos` is the stdlib answer and would be the right rung of
+/// the ladder, but in Zig 0.16 it is `mem.findAnyPos`, a plain nested scalar
+/// loop doing one compare per (byte, needle) pair — `std/mem.zig:1347`, no
+/// `@Vector` anywhere. Only the SINGLE-needle `findScalarPos` and `countScalar`
+/// are vectorized, and neither takes a set. Hence the shape, hand-written:
+/// splat each stop, OR the compare masks, count trailing zeros for the lane.
+///
+/// The scalar loop under the vector block is the tail, the fallback on a target
+/// with no vectors, and the reference the differential test below compares
+/// against. Do not delete it.
+///
+/// N here is the RUN, not the file. MEASURED over the 1164 fixtures: runs
+/// between `scan`'s stops are median 23 bytes, mean 72, and runs between
+/// `stripComments`' stops are median 6, mean 27 — so with 32 u8 lanes the
+/// MEDIAN call never enters the vector block at all. It still pays, because
+/// the length distribution is what matters and not its middle: 91% and 89% of
+/// the BYTES respectively sit in runs of 32 or more.
+fn findStop(text: []const u8, from: usize, comptime stops: []const u8) usize {
+    var i = from;
+    if (std.simd.suggestVectorLength(u8)) |lanes| {
+        const V = @Vector(lanes, u8);
+        const Mask = std.meta.Int(.unsigned, lanes);
+        while (i + lanes <= text.len) : (i += lanes) {
+            const block: V = text[i..][0..lanes].*;
+            var hit: Mask = 0;
+            inline for (stops) |stop| {
+                const splat: V = @splat(stop);
+                hit |= @as(Mask, @bitCast(block == splat));
+            }
+            if (hit != 0) return i + @ctz(hit);
+        }
+    }
+    while (i < text.len) : (i += 1) {
+        inline for (stops) |stop| {
+            if (text[i] == stop) return i;
+        }
+    }
+    return i;
+}
 
 /// `text` is already comment-stripped. Copies bytes to `out`, handling
 /// directives (§10) and macro uses (§10.4). In an inactive conditional arm
@@ -840,13 +910,22 @@ fn scan(pp: *Pp, text: []const u8) Error!void {
             continue;
         }
 
-        if (!pp.emitting()) {
-            if (c == '\n') try pp.out.append(pp.arena, '\n');
-            i += 1;
-            continue;
-        }
-        try pp.out.append(pp.arena, c);
-        i += 1;
+        // Ordinary text: everything up to the next byte the three branches
+        // above care about is copied verbatim, in one `appendSlice`.
+        //
+        // The OUTER loop is a chain — where the next run starts depends on what
+        // the last one ended at — but the INNER question, "where is the next
+        // interesting byte", has no dependency between positions at all, and
+        // that inner question is the whole of what `findStop` answers.
+        //
+        // '\n' is deliberately NOT interesting: in an emitting arm it is an
+        // ordinary byte to be copied, and in a dead one `putNewlines` finds it
+        // again with a vectorized count. '/' is not interesting either — this
+        // text is post-`stripComments`, so no comment survives to be found.
+        const end = findStop(text, i, scan_stops);
+        if (pp.emitting()) try pp.put(text[i..end]) else try pp.putNewlines(text[i..end]);
+        // `text[i]` is none of the three, so `end > i`: the loop always moves.
+        i = end;
     }
 }
 
@@ -2508,6 +2587,71 @@ fn expectFail(src: []const u8, code: diag.Code) !void {
     try testing.expect(e.span.end <= bag.fileText(e.file.?).len);
     // The title carries the condition; the message may not repeat it.
     try testing.expect(std.mem.indexOf(u8, e.message, "LRM") == null);
+}
+
+test "findStop agrees with the scalar loop it replaced, at every tail boundary" {
+    // The reference: the loop `scan` and `stripComments` used to run inline,
+    // one byte at a time. `findStop`'s vector block must never disagree with it.
+    const scalar = struct {
+        fn find(text: []const u8, from: usize, comptime stops: []const u8) usize {
+            var i = from;
+            while (i < text.len) : (i += 1) {
+                for (stops) |s| if (text[i] == s) return i;
+            }
+            return i;
+        }
+    }.find;
+
+    const lanes = std.simd.suggestVectorLength(u8) orelse 16;
+    var prng: std.Random.DefaultPrng = .init(0x5eed);
+    const rand = prng.random();
+    // Every length from the empty slice through three full vectors, so both
+    // tail boundaries and the no-vector-iteration case are covered.
+    var buf: [3 * 64 + 1]u8 = undefined;
+    for (0..3 * lanes + 1) |len| {
+        for (0..64) |_| {
+            // A byte set that hits the stops often enough to land one in every
+            // lane position, and rarely enough to leave long ordinary runs.
+            for (buf[0..len]) |*b| b.* = switch (rand.uintLessThan(u8, 10)) {
+                0 => '"',
+                1 => '\\',
+                2 => '`',
+                3 => '/',
+                4 => '\n',
+                else => 'a' + rand.uintLessThan(u8, 26),
+            };
+            const text = buf[0..len];
+            // Sweep `from` too: `scan` never calls this at offset 0 only.
+            for (0..len + 1) |from| {
+                try testing.expectEqual(scalar(text, from, scan_stops), findStop(text, from, scan_stops));
+                try testing.expectEqual(scalar(text, from, "\"\\/"), findStop(text, from, "\"\\/"));
+            }
+        }
+    }
+}
+
+test "putNewlines emits exactly the newlines the byte loop it replaced did" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag: diag.Bag = .init(arena);
+
+    var prng: std.Random.DefaultPrng = .init(0xf00d);
+    const rand = prng.random();
+    var buf: [200]u8 = undefined;
+    for (0..buf.len + 1) |len| {
+        for (buf[0..len]) |*b| b.* = if (rand.uintLessThan(u8, 4) == 0) '\n' else 'x';
+        const span = buf[0..len];
+
+        // The reference: `for (span) |c| if (c == '\n') append('\n');`
+        var want: usize = 0;
+        for (span) |c| want += @intFromBool(c == '\n');
+
+        var pp: Pp = .{ .arena = arena, .opts = .{ .bag = &bag } };
+        try pp.putNewlines(span);
+        try testing.expectEqual(want, pp.out.items.len);
+        for (pp.out.items) |c| try testing.expectEqual(@as(u8, '\n'), c);
+    }
 }
 
 test "§2.4 comments vanish, newlines do not — but the separator survives" {
