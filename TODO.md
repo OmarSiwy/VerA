@@ -528,6 +528,25 @@ Grouped by area; the file is the authority, this is the index.
 
 ### Lexer (`src/frontend/lexer.zig`)
 - Left padding with `x`/`z` is unrepresentable.
+- **A token is lexed more than once.** `next()` is pure in (src, pos), so
+  `tokenEnd`/`tokenText` recover a token's extent by re-running the scanner —
+  and `parser.zig` does that at 19 sites. The DOD trade is deliberate (`Stored`
+  stays 5 bytes and no `len` column exists), but it means a per-identifier cost
+  is paid several times per token: MEASURED, that is why cutting the keyword
+  lookup moved `lint` by 5.8% when the lexer only scans ~450 bytes per
+  compilation. Upgrade path is a `len` column, i.e. the thing the file header
+  refuses; do not take it without a measurement that says the re-lex, not the
+  lookup, is what costs.
+- **The interner hashes what the lexer already walked, and the two cannot be
+  merged cheaply.** `Ast.StringInterner.intern` wyhashes every identifier's text
+  after the lexer has scanned it byte by byte. MEASURED (callgrind, ReleaseFast
+  -Dcpu=x86_64_v3, a whole `--emit-zig` of `annex_e_spice/primitive_vpulse.va`):
+  all of `Wyhash.hash` is 121,766 Ir of 7,618,237 — **1.6%**, and part of that is
+  the preprocessor's macro map, not the interner. Note the keyword test hashes
+  NOTHING (`std.StaticStringMap` computes no hash at all — see `token.zig`), so
+  there is no second hash to eliminate; the only saving available is passing a
+  hash from lexing to interning, which would make `lexer.zig` know about
+  `ast.zig`. It knows nothing about it today and that is worth more than 1.6%.
 
 ### Preprocessor (`src/frontend/preprocessor.zig`)
 - A malformed `` `timescale `` operand leaves the timescale **unset** rather than
