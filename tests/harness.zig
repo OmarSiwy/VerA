@@ -37,11 +37,16 @@
 //!   zig build conformance                 # OpenVAF, every fixture
 //!   zig build torture -- ch04             # only paths matching `ch04`
 //!   zig build torture -- --strict         # unasserted and xfail FAIL
-//!   zig build torture -- --coverage       # every cited LRM section and who cites it
+//!   zig build torture -- --coverage       # LRM clauses cited, one-sided and uncited
 //!   zig build torture -- -j1              # one at a time, streaming; for debugging
 
 const std = @import("std");
 const vera = @import("vera");
+/// `fixture_root` and `docs_root`, from `build.zig`. They are the SUITE's and
+/// not a runner's: both runners walk the same fixtures and cite the same LRM,
+/// so a runner that could disagree about either would be judging a different
+/// suite while reporting under the same verdict vocabulary.
+const options = @import("suite_options");
 
 const Io = std.Io;
 
@@ -230,7 +235,7 @@ fn numeric(a: []const u8, prefix: []const u8) ?usize {
 }
 
 /// A runner's whole `main`: hand over the process and the compiler.
-pub fn run(init: std.process.Init, fixture_root: []const u8, compiler: Compiler) !u8 {
+pub fn run(init: std.process.Init, compiler: Compiler) !u8 {
     const gpa = init.gpa;
     const io = init.io;
 
@@ -258,17 +263,17 @@ pub fn run(init: std.process.Init, fixture_root: []const u8, compiler: Compiler)
     var stderr = Io.File.stderr().writer(io, &stderr_buf);
     const w = &stderr.interface;
 
-    const fixtures = try collect(arena, io, fixture_root, filter);
+    const fixtures = try collect(arena, io, options.fixture_root, filter);
     if (fixtures.len == 0) {
-        try w.print("{s}: no fixtures under {s}\n", .{ compiler.name, fixture_root });
+        try w.print("{s}: no fixtures under {s}\n", .{ compiler.name, options.fixture_root });
         try w.flush();
         return 1;
     }
 
     if (coverage) {
-        try reportCoverage(arena, io, fixtures, w);
+        const ok = try reportCoverage(arena, io, options.docs_root, fixtures, w);
         try w.flush();
-        return 0;
+        return if (ok) 0 else 1;
     }
 
     var counts: Counts = .{};
@@ -346,16 +351,47 @@ fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
     );
 }
 
-/// `--coverage`: every `//! lrm` cite in the run, sorted, with the fixtures
-/// citing it.
+/// `--coverage`: the cited set, the UNCITED set, and the cites that name no
+/// clause at all — all three against `docs/*.html`, which is the LRM this suite
+/// is written from.
 ///
-/// It cannot say a clause is UNcited — nothing here has the LRM's table of
-/// contents, and inventing one would be a second document to drift. What it
-/// does is make the cited set mechanical: greppable, diffable, and countable,
-/// which is the check a "we cover chapter 4" claim currently has no way to
-/// back up.
-fn reportCoverage(arena: std.mem.Allocator, io: Io, fixtures: []const Fixture, w: *Io.Writer) !void {
-    const Cite = struct { section: []const u8, path: []const u8 };
+/// This used to be the cited half alone, and said so: "it cannot say a clause is
+/// UNcited — nothing here has the LRM's table of contents, and inventing one
+/// would be a second document to drift." The objection was right and the
+/// conclusion was not. `docs/` IS the specification; reading the contents page
+/// out of it at run time invents nothing and cannot drift, because there is no
+/// second copy to keep true. Without it "the suite is comprehensive" is an
+/// opinion — a citation list can only ever be evidence about the questions
+/// somebody already thought to ask.
+///
+/// A cite also carries a POLARITY, because "is this clause tested?" is two
+/// questions. A `//! reject` fixture proves the compiler refuses what the clause
+/// forbids; every other fixture proves it accepts, runs and computes what the
+/// clause requires. Conforming to a clause by only ever refusing it is the
+/// failure mode a cited/uncited count cannot see, and it is not hypothetical
+/// here — `$simprobe`, the `zi_*` non-zero-tau forms and the whole §9.22 family
+/// are diagnosed and never implemented. So the report separates `+` from `-`
+/// and names the one-sided clauses.
+///
+/// A one-sided clause is NOT automatically a gap: a clause that states no error
+/// has nothing to reject, and one that only forbids has nothing to run. Which is
+/// why this prints the list and does not score it — the judgement is per clause
+/// and belongs to whoever reads the LRM sentence.
+///
+/// Returns whether every cite resolved. An unresolved cite is a FIXTURE defect
+/// of the same family the format already fails on (a cite that is not a section
+/// number), so it is the one thing here that decides an exit code. An uncited or
+/// one-sided clause is a work item, not a defect, and does not.
+fn reportCoverage(
+    arena: std.mem.Allocator,
+    io: Io,
+    docs_root: []const u8,
+    fixtures: []const Fixture,
+    w: *Io.Writer,
+) !bool {
+    const clauses = try lrmClauses(arena, io, docs_root);
+
+    const Cite = struct { section: []const u8, path: []const u8, reject: bool };
     var cites: std.ArrayList(Cite) = .empty;
     var citing: usize = 0;
     for (fixtures) |f| {
@@ -364,7 +400,11 @@ fn reportCoverage(arena: std.mem.Allocator, io: Io, fixtures: []const Fixture, w
         // proper; a coverage report is not the place to fail on it.
         const d = vera.tb.parse(arena, source) catch continue;
         if (d.lrm.len != 0) citing += 1;
-        for (d.lrm) |s| try cites.append(arena, .{ .section = s, .path = f.path });
+        for (d.lrm) |s| try cites.append(arena, .{
+            .section = s,
+            .path = f.path,
+            .reject = d.reject.len != 0,
+        });
     }
     std.mem.sort(Cite, cites.items, {}, struct {
         fn lt(_: void, a: Cite, b: Cite) bool {
@@ -372,6 +412,17 @@ fn reportCoverage(arena: std.mem.Allocator, io: Io, fixtures: []const Fixture, w
             return sectionLessThan(a.section, b.section);
         }
     }.lt);
+
+    // Which of the two claims a clause has a fixture for: `pos` is a fixture
+    // that must COMPILE, RUN and print `ok=1` — the clause's requirement met —
+    // and `neg` is a `//! reject` — its prohibition diagnosed.
+    const Sides = struct { pos: bool = false, neg: bool = false };
+    var cited: std.StringHashMapUnmanaged(Sides) = .empty;
+    for (cites.items) |c| {
+        const g = try cited.getOrPut(arena, c.section);
+        if (!g.found_existing) g.value_ptr.* = .{};
+        if (c.reject) g.value_ptr.neg = true else g.value_ptr.pos = true;
+    }
 
     var sections: usize = 0;
     var prev: []const u8 = "";
@@ -381,11 +432,328 @@ fn reportCoverage(arena: std.mem.Allocator, io: Io, fixtures: []const Fixture, w
             prev = c.section;
             sections += 1;
         }
+        // `+` accepts and computes, `-` refuses. Per fixture and not per clause,
+        // so the line that answers "which fixture proves the OTHER half?" is
+        // the fixture's own.
+        try w.print("  {s} {s}\n", .{ if (c.reject) "-" else "+", c.path });
+    }
+
+    // The cites that name nothing in the LRM. Sorted with everything else, so
+    // this walk is over the same array and only has to skip what resolved.
+    var unresolved: usize = 0;
+    prev = "";
+    for (cites.items) |c| {
+        if (clauses.get(c.section) != null) continue;
+        if (!std.mem.eql(u8, c.section, prev)) {
+            if (unresolved == 0) try w.print(
+                "\nUNRESOLVED — a `//! lrm` cite naming no clause in {s}. Either the\n" ++
+                    "clause is spelled wrong or it is a table or figure number, which is a\n" ++
+                    "different numbering space (Table G.7 lives under clause G.1).\n",
+                .{docs_root},
+            );
+            try w.print("§{s}\n", .{c.section});
+            prev = c.section;
+            unresolved += 1;
+        }
         try w.print("  {s}\n", .{c.path});
     }
-    try w.print("\n{d} LRM section(s) cited by {d} of {d} fixtures\n", .{
-        sections, citing, fixtures.len,
+
+    // The three work lists, in one walk of the contents page. Titles are printed
+    // because a bare number is not a work item and "§7.8.2" plus "Signal
+    // segmentation" is.
+    var uncited: std.ArrayList(Clause) = .empty;
+    var pos_only: std.ArrayList(Clause) = .empty;
+    var neg_only: std.ArrayList(Clause) = .empty;
+    var it = clauses.valueIterator();
+    while (it.next()) |cl| {
+        const s = cited.get(cl.id) orelse {
+            try uncited.append(arena, cl.*);
+            continue;
+        };
+        if (s.pos and !s.neg) try pos_only.append(arena, cl.*);
+        if (s.neg and !s.pos) try neg_only.append(arena, cl.*);
+    }
+    const byId = struct {
+        fn lt(_: void, a: Clause, b: Clause) bool {
+            return sectionLessThan(a.id, b.id);
+        }
+    }.lt;
+    for ([_]*std.ArrayList(Clause){ &uncited, &pos_only, &neg_only }) |l|
+        std.mem.sort(Clause, l.items, {}, byId);
+
+    if (neg_only.items.len != 0) {
+        try w.print(
+            "\nREFUSED ONLY — every fixture citing these is a `//! reject`. The\n" ++
+                "compiler is held to what the clause FORBIDS and to nothing it requires,\n" ++
+                "which a passing score reads exactly like implementing it. Where the\n" ++
+                "clause does require something, this is where the suite is thinnest.\n",
+            .{},
+        );
+        for (neg_only.items) |cl| try w.print("§{s} {s}  ({s})\n", .{ cl.id, cl.title, cl.file });
+    }
+    if (pos_only.items.len != 0) {
+        try w.print(
+            "\nACCEPTED ONLY — no `//! reject` fixture cites these, so nothing pins\n" ++
+                "what the clause rules OUT. A clause that states no error has nothing to\n" ++
+                "reject and belongs here; one whose text says `shall not` or `is an\n" ++
+                "error` does not.\n",
+            .{},
+        );
+        for (pos_only.items) |cl| try w.print("§{s} {s}  ({s})\n", .{ cl.id, cl.title, cl.file });
+    }
+    if (uncited.items.len != 0) {
+        try w.print("\nUNCITED — no fixture names these at all:\n", .{});
+        for (uncited.items) |cl| try w.print("§{s} {s}  ({s})\n", .{ cl.id, cl.title, cl.file });
+    }
+
+    const n = clauses.count();
+    try w.print(
+        "\n{d} of {d} LRM clauses cited, by {d} of {d} fixtures\n" ++
+            "  {d} tested both ways · {d} accepted only · {d} refused only · {d} uncited\n",
+        .{
+            n - uncited.items.len,      n,
+            citing,                     fixtures.len,
+            n - uncited.items.len - pos_only.items.len - neg_only.items.len,
+            pos_only.items.len,         neg_only.items.len,
+            uncited.items.len,
+        },
+    );
+    if (unresolved != 0) try w.print("{d} cite(s) resolve to no clause\n", .{unresolved});
+    return unresolved == 0;
+}
+
+/// One numbered clause of the LRM, as `docs/*.html` spells it.
+pub const Clause = struct {
+    /// `4.2.1`, `A.8.3`, `B` — the spelling a `//! lrm` line uses.
+    id: []const u8,
+    /// `Operators with real operands`.
+    title: []const u8,
+    /// `ch4-expressions.html`.
+    file: []const u8,
+};
+
+/// The LRM's table of contents, read out of `docs/*.html` at run time.
+///
+/// Headings are recovered from the RENDERED TEXT and not from an `id=` anchor,
+/// because the chapters do not agree on markup and the anchors are not
+/// complete: ch4 tags every heading (`<h3 id="s4-2-1">4.2.1 …</h3>`), ch5
+/// carries its headings as bare lines and has three anchors in the whole file,
+/// and Annex A prefixes its ids with `a-` instead of `s`. Text is the one form
+/// all of them share. MEASURED on this tree: text alone finds 616 clauses,
+/// anchors alone find 475, and the union finds nothing text does not.
+fn lrmClauses(
+    arena: std.mem.Allocator,
+    io: Io,
+    docs_root: []const u8,
+) !std.StringHashMapUnmanaged(Clause) {
+    var out: std.StringHashMapUnmanaged(Clause) = .empty;
+    var dir = try Io.Dir.cwd().openDir(io, docs_root, .{ .iterate = true });
+    defer dir.close(io);
+
+    var names: std.ArrayList([]const u8) = .empty;
+    var walker = try dir.walk(arena);
+    while (try walker.next(io)) |e| {
+        if (e.kind != .file) continue;
+        if (!std.mem.endsWith(u8, e.basename, ".html")) continue;
+        // The frameset, not a chapter: every number on it is a link to one.
+        if (std.mem.eql(u8, e.basename, "index.html")) continue;
+        try names.append(arena, try arena.dupe(u8, e.path));
+    }
+    // `walk` order is explicitly undefined and first-wins below, so a clause
+    // number occurring in two files would otherwise be attributed at random.
+    std.mem.sort([]const u8, names.items, {}, struct {
+        fn lt(_: void, a: []const u8, b: []const u8) bool {
+            return std.mem.lessThan(u8, a, b);
+        }
+    }.lt);
+
+    for (names.items) |name| {
+        const prefix = clausePrefix(std.fs.path.basename(name)) orelse continue;
+        const html = try dir.readFileAlloc(io, name, arena, .limited(4 << 20));
+        const text = try renderText(arena, html);
+        var lines = std.mem.splitScalar(u8, text, '\n');
+        while (lines.next()) |raw| {
+            const h = splitHeading(std.mem.trim(u8, raw, " \t\r")) orelse continue;
+            if (!underPrefix(h.id, prefix)) continue;
+            // First wins: a heading is declared once and cross-referenced many
+            // times, and the declaration comes first in a chapter's own file.
+            const g = try out.getOrPut(arena, h.id);
+            if (!g.found_existing) g.value_ptr.* = .{ .id = h.id, .title = h.title, .file = name };
+        }
+    }
+    return out;
+}
+
+/// Which chapter or annex a file declares: `ch9-system.html` -> `9`,
+/// `annex-a-syntax.html` -> `A`. Null for a file that declares neither.
+///
+/// A heading declares a clause of ITS OWN file, and requiring that is what
+/// separates a heading from a cross-reference that happens to open a paragraph.
+/// Two families of false clause were reaching the report without it, and
+/// neither is a spelling problem a looser line test could have caught: ch9
+/// opens a paragraph with "§17.9.3 of IEEE Std 1364 Verilog contains the
+/// C-code…", which is a clause of a DIFFERENT STANDARD, and Annex G's change
+/// tables list ch7 subclause numbers with "(subclause deleted in v2.3)" where a
+/// title would go.
+fn clausePrefix(basename: []const u8) ?[]const u8 {
+    if (std.mem.startsWith(u8, basename, "ch")) {
+        const dash = std.mem.indexOfScalar(u8, basename, '-') orelse return null;
+        const n = basename[2..dash];
+        if (n.len == 0 or n.len > 2) return null;
+        for (n) |c| if (!std.ascii.isDigit(c)) return null;
+        return n;
+    }
+    if (std.mem.startsWith(u8, basename, "annex-") and basename.len > 6) {
+        const letter = std.ascii.toUpper(basename[6]);
+        if (letter < 'A' or letter > 'H') return null;
+        if (basename[7] != '-') return null;
+        // Uppercased, so the slice cannot be into `basename`. The set is small
+        // and fixed, so it is a table rather than an allocation.
+        return switch (letter) {
+            'A' => "A", 'B' => "B", 'C' => "C", 'D' => "D",
+            'E' => "E", 'F' => "F", 'G' => "G", 'H' => "H",
+            else => unreachable,
+        };
+    }
+    return null;
+}
+
+/// Is `id` the clause `prefix` names, or one beneath it? `1` covers `1.3.1` and
+/// NOT `10.2`, which is why this is not `startsWith` on its own.
+fn underPrefix(id: []const u8, prefix: []const u8) bool {
+    if (std.mem.eql(u8, id, prefix)) return true;
+    return id.len > prefix.len and
+        std.mem.startsWith(u8, id, prefix) and
+        id[prefix.len] == '.';
+}
+
+/// Split a rendered line into a clause number and its title, or null.
+///
+///     `4.2.1 Operators with real operands`  -> { "4.2.1", "Operators with…" }
+///     `A.8.3 Expressions`                   -> { "A.8.3", "Expressions" }
+///     `Annex B (normative) List of keywords`-> { "B", "(normative) List of…" }
+///
+/// A NUMERIC id needs at least two components. Chapter 2 prints sized literals
+/// one per line — `32 'h 12ab_f001`, `8 'd -6  // this is illegal syntax` — and
+/// every one of them is a heading under a looser rule. An annex LETTER may
+/// stand alone: Annex B and Annex H have no numbered subclauses at all, and
+/// fixtures cite them as `B` and `H`.
+///
+/// The title is not inspected beyond being non-empty, deliberately. Requiring a
+/// capital drops §5.10.3.1 `cross function`, and every rule that guesses at
+/// prose costs a real clause to buy a false one.
+fn splitHeading(line: []const u8) ?struct { id: []const u8, title: []const u8 } {
+    // `Annex B (normative) List of keywords`. Annexes B and H have no numbered
+    // subclauses at all and fixtures cite them by bare letter, so the annex
+    // title itself has to be a clause.
+    //
+    // The `(` is load-bearing, not decoration: every annex title carries its
+    // normative status in parentheses, and without requiring it the rule also
+    // matches Annex C's PROSE — "Annex E defines the SPICE compatibility for
+    // both …" opens a paragraph, and a paragraph starts a line here because
+    // every tag renders as one.
+    const annex = "Annex ";
+    if (std.mem.startsWith(u8, line, annex) and line.len > annex.len + 2) {
+        const letter = line[annex.len];
+        const rest = std.mem.trim(u8, line[annex.len + 1 ..], " \t");
+        if (letter >= 'A' and letter <= 'H' and line[annex.len + 1] == ' ' and
+            rest.len != 0 and rest[0] == '(') return .{
+            .id = line[annex.len .. annex.len + 1],
+            .title = rest,
+        };
+    }
+    const sp = std.mem.indexOfAny(u8, line, " \t") orelse return null;
+    const title = std.mem.trim(u8, line[sp..], " \t");
+    if (title.len < 3) return null;
+    if (!isClauseId(line[0..sp])) return null;
+    return .{ .id = line[0..sp], .title = title };
+}
+
+fn isClauseId(id: []const u8) bool {
+    var parts = std.mem.splitScalar(u8, id, '.');
+    const first = parts.next().?;
+    const lettered = first.len == 1 and first[0] >= 'A' and first[0] <= 'H';
+    if (!lettered) {
+        if (first.len == 0 or first.len > 2 or first[0] == '0') return false;
+        for (first) |c| if (!std.ascii.isDigit(c)) return false;
+    }
+    var components: usize = 1;
+    while (parts.next()) |p| {
+        // No component is zero or zero-padded, which is what separates a clause
+        // number from a row of a numeric table: ch9 prints `1.0   1.0   1.5`.
+        if (p.len == 0 or p[0] == '0') return false;
+        for (p) |c| if (!std.ascii.isDigit(c)) return false;
+        components += 1;
+    }
+    return lettered or components >= 2;
+}
+
+/// Render HTML to text well enough to find a heading on a line of its own.
+///
+/// Every tag becomes a NEWLINE rather than nothing, so `<h3 id="…">4.2.1 Foo</h3>`
+/// lands as its own line instead of being glued to the paragraph before it —
+/// which is what makes the leading-`4.2.1` test mean "this line IS the heading"
+/// rather than "this line mentions §4.2.1", and is why a cross-reference
+/// ("see the discussion in 4.5.15") does not become a clause.
+fn renderText(arena: std.mem.Allocator, html: []const u8) ![]u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.ensureTotalCapacity(arena, html.len);
+    var i: usize = 0;
+    while (i < html.len) {
+        switch (html[i]) {
+            '<' => {
+                i = (std.mem.indexOfScalarPos(u8, html, i, '>') orelse html.len - 1) + 1;
+                out.appendAssumeCapacity('\n');
+            },
+            '&' => {
+                const end = std.mem.indexOfScalarPos(u8, html, i, ';') orelse {
+                    out.appendAssumeCapacity(html[i]);
+                    i += 1;
+                    continue;
+                };
+                // A heading's separator is the whole reason this is here: the
+                // annexes write `A.8.3&nbsp;Expressions`, and left as bytes
+                // that is one token with no space in it.
+                const name = html[i + 1 .. end];
+                // Anything not listed keeps its `&` and is walked as text: the
+                // only job here is that a heading's number and its title end up
+                // separated by something `indexOfAny(" \t")` can find.
+                if (entity(name)) |repl| {
+                    out.appendSliceAssumeCapacity(repl);
+                    i = end + 1;
+                } else {
+                    out.appendAssumeCapacity('&');
+                    i += 1;
+                }
+            },
+            // U+00A0 as UTF-8. Same job as `&nbsp;` and the same chapters use
+            // both.
+            0xC2 => {
+                if (i + 1 < html.len and html[i + 1] == 0xA0) {
+                    out.appendAssumeCapacity(' ');
+                    i += 2;
+                } else {
+                    out.appendAssumeCapacity(html[i]);
+                    i += 1;
+                }
+            },
+            else => {
+                out.appendAssumeCapacity(html[i]);
+                i += 1;
+            },
+        }
+    }
+    return out.items;
+}
+
+fn entity(name: []const u8) ?[]const u8 {
+    const table = std.StaticStringMap([]const u8).initComptime(.{
+        .{ "nbsp", " " },  .{ "#160", " " }, .{ "amp", "&" },
+        .{ "lt", "<" },    .{ "gt", ">" },   .{ "quot", "\"" },
+        .{ "apos", "'" },  .{ "#39", "'" },  .{ "mdash", "-" },
+        .{ "ndash", "-" },
     });
+    return table.get(name);
 }
 
 /// Order cites the way the LRM's contents page does: numerically per component,
@@ -925,4 +1293,90 @@ test "lrm cites sort like a contents page, not like strings" {
     try std.testing.expect(sectionLessThan("12", "A.1")); // chapters before annexes
     try std.testing.expect(sectionLessThan("A.1.2", "B"));
     try std.testing.expect(!sectionLessThan("5.8", "5.8"));
+}
+
+test "a heading is a clause; a cross-reference is not" {
+    // The shapes the chapters actually use.
+    try std.testing.expectEqualStrings("4.2.1", splitHeading("4.2.1 Operators with real operands").?.id);
+    try std.testing.expectEqualStrings("Operators with real operands", splitHeading("4.2.1 Operators with real operands").?.title);
+    try std.testing.expectEqualStrings("A.8.3", splitHeading("A.8.3 Expressions").?.id);
+    // §5.10.3.1 is `cross function`, lowercase. Requiring a capital would drop it.
+    try std.testing.expectEqualStrings("5.10.3.1", splitHeading("5.10.3.1 cross function").?.id);
+    // Annexes B and H have no numbered subclauses, so the annex title is the clause.
+    try std.testing.expectEqualStrings("B", splitHeading("Annex B (normative) List of keywords").?.id);
+    // …and Annex C's PROSE opens the same way. The parenthesis is the difference.
+    try std.testing.expect(splitHeading("Annex E defines the SPICE compatibility for both.") == null);
+
+    // A chapter-2 sized literal is not clause 32, and a numeric table row is
+    // not clause 1.0.
+    try std.testing.expect(splitHeading("32 'h 12ab_f001") == null);
+    try std.testing.expect(splitHeading("1.0   1.0   1.5") == null);
+    // A bare chapter number is covered by its subclauses, and `9.` is not a clause.
+    try std.testing.expect(splitHeading("9. System tasks and functions") == null);
+
+    // A heading declares a clause of its own file. `17.9.3` is a clause of IEEE
+    // 1364, quoted in chapter 9; `7.10.5` is a row of an Annex G change table.
+    try std.testing.expectEqualStrings("9", clausePrefix("ch9-system.html").?);
+    try std.testing.expectEqualStrings("A", clausePrefix("annex-a-syntax.html").?);
+    try std.testing.expect(clausePrefix("index.html") == null);
+    try std.testing.expect(!underPrefix("17.9.3", "9"));
+    try std.testing.expect(!underPrefix("7.10.5", "G"));
+    try std.testing.expect(underPrefix("1.3.1", "1"));
+    try std.testing.expect(!underPrefix("10.2", "1")); // not a prefix match on digits
+}
+
+test "html renders to text a heading can be found in" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Every tag becomes a newline, so a heading is on a line of its own even
+    // when it is glued to the paragraph before it in the source.
+    const t = try renderText(arena, "<p>text</p><h3 id=\"s4-2-1\">4.2.1 Foo</h3>");
+    var found = false;
+    var lines = std.mem.splitScalar(u8, t, '\n');
+    while (lines.next()) |l| {
+        const h = splitHeading(std.mem.trim(u8, l, " \t\r")) orelse continue;
+        try std.testing.expectEqualStrings("4.2.1", h.id);
+        found = true;
+    }
+    try std.testing.expect(found);
+
+    // The annexes separate a number from its title with `&nbsp;`, which left as
+    // bytes is one token with no space in it.
+    const nb = try renderText(arena, "A.8.3&nbsp;Expressions");
+    try std.testing.expectEqualStrings("A.8.3", splitHeading(nb).?.id);
+    // …and with a raw U+00A0, in the same document.
+    const raw = try renderText(arena, "A.8.3\u{00a0}Expressions");
+    try std.testing.expectEqualStrings("A.8.3", splitHeading(raw).?.id);
+    // An entity this does not know keeps its `&` and stays text.
+    try std.testing.expectEqualStrings("a&circ;b", try renderText(arena, "a&circ;b"));
+}
+
+test "the LRM's contents page is readable, and is the one in docs/" {
+    // The guard that matters: a markup change in `docs/` that silently emptied
+    // the table would turn `--coverage` into "everything is covered" — the
+    // exact false green the whole report exists to prevent.
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Reads twenty files and nothing else, so the single-threaded `Io` the rest
+    // of the tree reaches for in the same situation is enough here too.
+    const io = Io.Threaded.global_single_threaded.io();
+
+    var clauses = try lrmClauses(arena, io, options.docs_root);
+    // A floor, not the count: the count is what `--coverage` prints and it must
+    // be free to move as `docs/` is corrected. 500 is far below the 611 this
+    // tree finds and far above what any partial parse would leave.
+    try std.testing.expect(clauses.count() > 500);
+    try std.testing.expectEqualStrings(
+        "Operators with real operands",
+        clauses.get("4.2.1").?.title,
+    );
+    // Chapter 5 carries its headings as bare lines and has three `id=` anchors
+    // in the whole file, which is why this reads text and not anchors.
+    try std.testing.expectEqualStrings("cross function", clauses.get("5.10.3.1").?.title);
+    // A clause of IEEE 1364 quoted in chapter 9 is not a clause of this LRM.
+    try std.testing.expect(clauses.get("17.9.3") == null);
 }

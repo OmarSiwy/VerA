@@ -124,8 +124,18 @@ pub fn build(b: *std.Build) void {
         "contract",
         "Root of the `contract` module the generated devices import",
     ) orelse b.pathFromRoot("tools/contract.zig");
+    // The two directories the SUITE is about, shared by both runners because
+    // `tests/harness.zig` reads them and the harness is the shared judge: a
+    // runner that could disagree about which fixtures to walk, or about which
+    // LRM their `//! lrm` lines cite, would be grading a different suite under
+    // the same verdict vocabulary. `docs` is read by `--coverage`, to diff the
+    // cited clauses against the contents page — until it could, nothing checked
+    // that a cite named a clause that exists.
+    const suite_opts = b.addOptions();
+    suite_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
+    suite_opts.addOption([]const u8, "docs_root", b.pathFromRoot("docs"));
+
     const torture_opts = b.addOptions();
-    torture_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
     torture_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-tb"));
     torture_opts.addOption([]const u8, "contract", contract_path);
     torture_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
@@ -150,6 +160,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "vera", .module = vera_mod }},
     });
     torture_mod.addOptions("torture_options", torture_opts);
+    torture_mod.addOptions("suite_options", suite_opts);
     const run_torture = b.addRunArtifact(b.addExecutable(.{
         .name = "vera-torture",
         .root_module = torture_mod,
@@ -172,7 +183,6 @@ pub fn build(b: *std.Build) void {
     //   zig build conformance
     //   zig build -Dconformance-cc="timeout 30 openvaf-r --dry-run" conformance -- ch04
     const external_opts = b.addOptions();
-    external_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/fixtures"));
     external_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-conformance"));
     external_opts.addOption([]const u8, "cc", b.option(
         []const u8,
@@ -186,6 +196,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "vera", .module = vera_mod }},
     });
     external_mod.addOptions("external_options", external_opts);
+    external_mod.addOptions("suite_options", suite_opts);
     const run_external = b.addRunArtifact(b.addExecutable(.{
         .name = "vera-conformance",
         .root_module = external_mod,

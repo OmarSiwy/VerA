@@ -39,7 +39,7 @@
 // NON-NORMATIVE function — a conforming compiler may not have $receiver_count at
 // all and would then diagnose an unknown system function, under its own code.
 //
-//! lrm G.7
+//! lrm G.1
 //! lrm 9.22
 //! reject DiagnosticsReported
 module annex_g_receiver_count(p, n);

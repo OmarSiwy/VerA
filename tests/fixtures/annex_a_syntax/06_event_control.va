@@ -29,6 +29,7 @@
 // that runs one of the two scoped analyses.
 //
 //! lrm A.6.5
+//! lrm 5.10.3
 //! lrm 5.10.2
 //! lrm 5.10.3.2
 //! bias V(p) = 2.0

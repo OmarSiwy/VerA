@@ -1,0 +1,37 @@
+// §3.6.2.7: "Like natures, a discipline can specify user-defined attributes."
+// A discipline declares a custom attribute `max_voltage` with a constant value,
+// demonstrating that discipline declarations accept user-defined attributes.
+//
+//! lrm 3.6.2.7
+//! bias V(p) = 1.0
+//! lrm A.1.7
+//! xfail VerA refuses a user-defined attribute in a DISCIPLINE (E0213) while accepting one in a NATURE, and the LRM is not self-consistent here: §3.6.2.7 says "like natures, a discipline can specify user-defined attributes", but A.1.7 gives discipline_item exactly three productions -- nature_binding, discipline_domain_binding, nature_attribute_override (`potential.abstol = ...`) -- and none of them admits a bare `attr = value;`. The parser follows the grammar. Deciding this needs a reading of which text governs, not a code change; if A.1.7 wins, delete this fixture and say so
+`include "check.vh"
+
+nature ch3267_voltage;
+    units = "V";
+    access = V;
+    abstol = 1u;
+endnature
+
+nature ch3267_current;
+    units = "A";
+    access = I;
+    abstol = 1p;
+endnature
+
+discipline ch3267_with_attr;
+    potential ch3267_voltage;
+    flow ch3267_current;
+    max_voltage = 48.0;
+enddiscipline
+
+module ch3267_discipline_user_attribute(p, n);
+    inout p, n;
+    ch3267_with_attr p, n;
+
+    analog begin
+        `CHECKX("a discipline with a user-defined attribute can be declared and used", V(p, n), 1.0);
+        I(p, n) <+ V(p, n) / 1000.0;
+    end
+endmodule

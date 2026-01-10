@@ -18,7 +18,7 @@
 // 9-11 lists both as supported in the analog context. §9.14 makes them aliases
 // of the §4.3.1 operators, so a compiler may implement either kernel.
 //
-//! lrm G.7
+//! lrm G.1
 //! lrm 4.3.1
 //! lrm 9.14
 //! bias V(p) = 0.5, V(n) = 0

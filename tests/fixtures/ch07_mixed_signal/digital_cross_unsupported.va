@@ -8,6 +8,7 @@
 // module item and the rejection is conformance, not debt. Nothing in a
 // Verilog-A tool has a digital time tick for the event to be scheduled onto.
 //
+//! lrm 7.3.5
 //! lrm 7.3.6.1
 //! lrm C.7
 //! reject E0205

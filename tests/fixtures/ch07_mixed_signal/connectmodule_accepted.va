@@ -46,6 +46,7 @@
 //! lrm 7.6
 //! lrm C.9
 //! lrm C.16
+//! lrm 7.5
 //! bias V(p) = 0.75
 `include "check.vh"
 connectmodule ch7_a2d(a, d);

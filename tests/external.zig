@@ -42,6 +42,9 @@ const std = @import("std");
 const vera = @import("vera");
 const harness = @import("harness.zig");
 const options = @import("external_options");
+/// The two directories the SUITE owns, shared with `harness.zig` and the other
+/// runner: which fixtures to walk, and which LRM their `//! lrm` lines cite.
+const suite = @import("suite_options");
 
 const Io = std.Io;
 const Fixture = harness.Fixture;
@@ -54,7 +57,7 @@ pub fn main(init: std.process.Init) !u8 {
     var cc: External = .{
         .argv = try splitCommand(arena_state.allocator(), options.cc),
     };
-    return harness.run(init, options.fixture_root, .{
+    return harness.run(init, .{
         // The command AS WRITTEN, not `argv[0]`: with `-Dconformance-cc="timeout
         // 30 openvaf-r --dry-run"` the first word is `timeout`, and a report
         // headed `timeout: 779/1150` names the wrong program.
@@ -93,7 +96,7 @@ const External = struct {
         try argv.appendSlice(arena, self.argv);
         // Both dirs, so `check.vh` resolves whether the compiler looks beside
         // the wrapper or beside the fixture.
-        try argv.appendSlice(arena, &.{ "-I", options.fixture_root, "-I", f.dir, root });
+        try argv.appendSlice(arena, &.{ "-I", suite.fixture_root, "-I", f.dir, root });
 
         const run = try capture(gpa, io, argv.items);
         defer gpa.free(run.output);

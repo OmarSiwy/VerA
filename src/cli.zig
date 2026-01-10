@@ -38,6 +38,15 @@
 //!                          backend — and a W0850 naming every dropped call.
 //!                          `emit` lowers them to `std.debug.print` and gives
 //!                          the device a `display()` entry point.
+//!   --jac-f32              emit `pub const jac_f32 = true`: this device
+//!                          tolerates a host scalar S whose DERIVATIVE half is
+//!                          single precision. Emitted arithmetic is UNCHANGED —
+//!                          `eval` is already generic over S and touches it only
+//!                          through f64-boundary primitives, so the width is the
+//!                          host's to pick and this only records the permission.
+//!                          The residual stays f64; only the Jacobian degrades,
+//!                          which under inexact Newton costs iterations and not
+//!                          the converged answer.
 //!   --contract PATH        root of the `contract` module (--check, --emit-so,
 //!                          --emit-exe)
 //!   --dyn PATH             root of the `dyn` module (--emit-so)
@@ -75,6 +84,8 @@ const usage_text =
     \\  --emit-exe              build a runnable Verilog-A testbench; print its path
     \\  --run                   --emit-exe, then run it
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
+    \\  --jac-f32               mark the device as tolerating an f32 Jacobian
+
     \\  --contract PATH         root of the `contract` module
     \\  --dyn PATH              root of the `dyn` module (--emit-so)
     \\  --work-dir DIR          scratch + artifact directory (--emit-so)
@@ -122,6 +133,7 @@ pub fn main(init: std.process.Init) !u8 {
     var emit_exe = false;
     var run_exe = false;
     var display: vera.codegen.Display = .drop;
+    var jac_f32 = false;
     var contract_path: ?[]const u8 = null;
     var dyn_path: ?[]const u8 = null;
     var work_dir: ?[]const u8 = null;
@@ -166,6 +178,8 @@ pub fn main(init: std.process.Init) !u8 {
             display = .emit;
         } else if (std.mem.eql(u8, arg, "--display=drop")) {
             display = .drop;
+        } else if (std.mem.eql(u8, arg, "--jac-f32")) {
+            jac_f32 = true;
         } else if (std.mem.eql(u8, arg, "--contract")) {
             contract_path = args.next() orelse return missing(err, "--contract", "a path");
         } else if (std.mem.eql(u8, arg, "--dyn")) {
@@ -287,6 +301,7 @@ pub fn main(init: std.process.Init) !u8 {
         .lint = levels,
         .proof = .{ .unknown_bound = unknown_bound },
         .display = display,
+        .jac_f32 = jac_f32,
     }) catch |e| switch (e) {
         // A diagnosed failure has already said everything useful; the Zig error
         // name would only add noise.

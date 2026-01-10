@@ -454,7 +454,17 @@ pub fn isBasedDigit(c: u8, radix: u8) bool {
 /// LRM §2.6.2 Table 2-1 — scaled notation, as the exponent it stands for.
 /// `M` is 1e6 and `m` is 1e-3; `K` and `k` are both 1e3. This table exists
 /// exactly once; nothing else in the engine may re-spell it.
-fn scaleExp(c: u8) ?[]const u8 {
+///
+/// It is an EXPONENT and not a multiplier, and that is the load-bearing part.
+/// `200u` becomes the text `200e-6`, which `parseFloat` rounds once, to
+/// 2.0000000000000000e-4. Multiplying instead — `200.0 * 1e-6` — rounds twice
+/// and lands on 1.9999999999999998e-4, a different double for the same
+/// spelling. `src/backend/tb.zig` did exactly that for two years, so a `//!
+/// time 200u` line and a `200u` written in the model were not equal, and a
+/// fixture guarding an assertion with `$abstime < 200u` never reached its last
+/// timepoint: the check passed vacuously at every point, including the one it
+/// existed for. Public for that consumer; do not add a third spelling.
+pub fn scaleExp(c: u8) ?[]const u8 {
     return switch (c) {
         'T' => "e12",
         'G' => "e9",

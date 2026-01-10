@@ -40,6 +40,20 @@
 //! expm1/log1p are primitives and not exp(x)-1 / log(1+x): §4.3.1 Table 4-14
 //! names the C library forms precisely because those two compositions cancel.
 //!
+//! THE WIDTHS INSIDE S ARE THE HOST'S, NOT THE DEVICE'S. Every member of that
+//! primitive set takes and returns `f64` at the boundary — `con(f64)`,
+//! `scale(f64)`, `addC(f64)`, `val() f64`, `ddxAt(usize) f64` — and physics code
+//! may not open S up, so a host is free to carry the derivative half of a dual
+//! in `f32` while the value half stays `f64`. That is the inexact-Newton
+//! construction: the converged answer is fixed by the accuracy of the RESIDUAL,
+//! and an approximate Jacobian costs iterations rather than correctness. On a
+//! consumer GPU it is the whole game — sm_89 runs f32 at 69x its f64 rate.
+//!
+//! A device opts in with `pub const jac_f32 = true` (VerA's `--jac-f32`).
+//! Absent, the host must assume f64: a model whose unknowns span more than
+//! f32's ~7 digits can lose a Newton direction outright, and only the physics
+//! knows that. The permission is per DEVICE for exactly that reason.
+//!
 //! RULES for physics code:
 //!   - Everything not depending on x (param prep, temperature, geometry)
 //!     stays plain f64. Only x-dependent chains use S ops.
@@ -110,11 +124,25 @@ const sim_state_fields = [_]SimStateField{
 };
 
 /// §4.6.4 noise generator topology. Position k of `noise_gens` names one
-/// INJECTION: generator `source`'s output enters the (row, col) branch scaled
-/// by `coeff`. Several entries may share a `source` — that is exactly LRM
-/// §4.6.4.6 correlated noise (one generator, several contributions), and it is
-/// why correlation is expressed here rather than as a coefficient between two
-/// independent generators.
+/// generator of `kind` on the (row, col) branch. That is the whole of it, and
+/// what it CANNOT say is worth as much to a host as what it can.
+///
+/// **§4.6.4.6 correlated noise is not expressible.** The clause's mechanism is
+/// "using the output of one noise function for more than one noise source", so
+/// expressing it needs entries that can SHARE a generator — a `source` field,
+/// and a `coeff` for the scaling each contribution applies. Neither exists.
+/// Two `.thermal` rows on two branches are today indistinguishable from two
+/// independent generators, and a host reading this table has no way to know
+/// which it has.
+///
+/// This docstring described `source` and `coeff` as if they were fields for
+/// several revisions. They never were. If they are added, the fixture that
+/// grades them is
+/// `tests/fixtures/ch04_expressions/150_noise_source_through_variable.va`,
+/// which is XFAIL on the lowering half of the same gap — a noise source reached
+/// through a variable exports nothing at all — and those two halves land
+/// together: tracking the source as a value through lowering is what produces
+/// the identity a `source` field would name.
 pub fn NoiseGen(comptime D: type) type {
     const n = nU(D);
     return struct {
@@ -153,6 +181,57 @@ pub const OpVar = struct {
     name: []const u8,
     units: []const u8 = "",
     desc: []const u8 = "",
+};
+
+/// §2.8.3 + §12.32: one `$name` the compiler could not resolve, which §2.8.3
+/// says may be "defined using the VPI as described in Clause 11 and Clause 12".
+/// Position k of `systf_calls` is what position k of `SystfHost.call` answers.
+///
+/// Keyed by NAME and not by call site, because that is what
+/// `vpi_register_analog_systf()` registers: "the task or function name shall be
+/// unique in the domain in which it is registered". Two calls to one `$name`
+/// are one entry and one binding.
+///
+/// The name is the whole entry, and §12.32's own structure is why. Its other
+/// fields — `type` (vpiAnalogSysTask/SysFunc), `sysfunctype`
+/// (vpiIntFunc/vpiRealFunc), `sizetf` — are the APPLICATION's declaration of
+/// what it registered, not facts a compiler that has never seen the
+/// registration can report. A struct rather than a bare `[]const u8` so they
+/// have somewhere to land if a host ever needs them; per this file's own rule,
+/// none is added before a consumer asks.
+pub const Systf = struct {
+    /// `$sampnhold`, with the `$`. §12.32: "first character shall be `$`".
+    name: []const u8,
+};
+
+/// The VPI application, as the device sees it. Written into `Instance.systf` by
+/// the host; `validateHost` is what makes it non-optional for a device that
+/// declares any `systf_calls`.
+///
+/// WHY VALUE-PLUS-PARTIALS AND NOT `fn (k, args: []S) S`. `eval` is generic
+/// over S and gets instantiated at least twice — a plain f64 for the residual,
+/// a derivative-carrying dual for the Jacobian — and a function POINTER cannot
+/// be generic over S. So the boundary has to be concrete, which means the host
+/// returns the value and its partials separately and the device rebuilds the
+/// dual from them.
+///
+/// That is not a workaround: it is §12.22.1 "Derivatives for analog system
+/// task/functions" and §12.32's `derivtf` / `p_vpi_stf_partials`, arrived at
+/// from the opposite direction. A systf inside a contribution is inside the
+/// residual, and the residual must stay a pure function of `x` or the host's
+/// own Newton iteration cannot converge — which is the same invariant that
+/// keeps §9.5 file I/O and `$random` out of `eval`. A value with no derivative
+/// would break it; a value WITH its derivative does not.
+pub const SystfHost = struct {
+    /// The application's own state — `s_vpi_analog_systf_data.user_data`.
+    ctx: *anyopaque,
+    /// §12.32 `calltf` and §12.22.1 `derivtf` in one call. Returns the value at
+    /// `args` and writes d(value)/d(args[j]) into `partials[j]`.
+    ///
+    /// `partials` is exactly `args.len` long and is NOT zeroed on entry: an
+    /// application that leaves an entry alone is claiming a derivative it did
+    /// not compute. Write every slot, zero included.
+    call: *const fn (ctx: *anyopaque, k: usize, args: []const f64, partials: []f64) f64,
 };
 
 /// Rectangular complex, for the small-signal stamp. Plain struct rather than
@@ -242,6 +321,11 @@ pub fn validate(comptime D: type) void {
     // (comptime S, [n]S, *const Model, *const Instance, f64).
     validatePhysicsFn(D, "eval");
     if (@hasDecl(D, "q")) validatePhysicsFn(D, "q");
+
+    // Optional permission, not a shape: the WIDTH of S is the host's, and this
+    // only says which widths this device's physics tolerates.
+    if (@hasDecl(D, "jac_f32") and @TypeOf(D.jac_f32) != bool)
+        @compileError(@typeName(D) ++ ".jac_f32 must be a bool");
 
     // Voltage limiting (pnjlim/fetlim) and cold-start seeding (SPICE
     // MODEINITJCT). seed returns absolute local voltages written into a
@@ -344,6 +428,21 @@ pub fn validate(comptime D: type) void {
     expectArray(D, "op_vars", OpVar);
     requireWith(D, "op_vars", "opValues");
 
+    // §2.8.3/§12.32 unresolved `$name`s. There is no device-side hook to pair
+    // this table with — the implementation is the HOST's, which is the whole
+    // point — so what is checked here is only that the device can be reached:
+    // `eval` reads the binding off `Instance`, so a device that names a systf
+    // and has nowhere to read it from could not be built at all. `validateHost`
+    // is the other half, and the host is what calls it.
+    expectArray(D, "systf_calls", Systf);
+    if (@hasDecl(D, "systf_calls") and D.systf_calls.len != 0) {
+        if (!@hasField(D.Instance, "systf"))
+            @compileError(name ++ ": declares systf_calls but Instance has no `systf` field " ++
+                "for the host to bind — see contract.SystfHost");
+        if (@FieldType(D.Instance, "systf") != ?*const SystfHost)
+            @compileError(name ++ ".Instance.systf must be `?*const contract.SystfHost`");
+    }
+
     validateMcParam(D);
 
     // LRM 6.3.4 / 3.4.5: parameters whose value is an expression over OTHER
@@ -372,6 +471,38 @@ pub fn validate(comptime D: type) void {
     rejectStrayPubDecls(D);
 }
 
+/// The other half of `validate`, and the only check aimed at the HOST rather
+/// than the device. A simulator embedding VerA calls it once per device it
+/// links, beside `validate(D)`.
+///
+/// `validate(D)` cannot ask this. It runs where the DEVICE is defined, and at
+/// that point the host does not exist yet — a `.va` compiled to a `.so` does
+/// not know which simulator will load it. So the requirement "somebody must
+/// implement this" can only be enforced where the two meet, which is here.
+///
+/// WHAT IT REFUSES, and why that is the right severity. A device declaring
+/// `systf_calls` contains a `$name` whose value is the application's to supply.
+/// With no binding there is no value — not a wrong one, an absent one — and the
+/// residual would read a number nothing computed. §12.32.3's own sampnhold
+/// listing never initializes `sampler->value` before its first update callback,
+/// so the language fixes no default to fall back to. Failing the host's build
+/// is the only outcome that cannot be mistaken for a working device.
+///
+/// `vera`'s own testbench binds a stub rather than being exempt from this — see
+/// `src/backend/tb.zig`. An exemption for the tool's own host is how a seam
+/// stops being tested.
+pub fn validateHost(comptime H: type, comptime D: type) void {
+    if (!@hasDecl(D, "systf_calls") or D.systf_calls.len == 0) return;
+    const d = @typeName(D);
+    const h = @typeName(H);
+    if (!@hasDecl(H, "systf")) @compileError(h ++ " must declare `systf` — " ++ d ++
+        " calls " ++ D.systf_calls[0].name ++ ", which §2.8.3 leaves to a VPI application, " ++
+        "and this host binds none. See contract.SystfHost.");
+    if (@TypeOf(@field(H, "systf")) != fn (*const D.Model) ?*const SystfHost and
+        @TypeOf(@field(H, "systf")) != *const fn (*const D.Model) ?*const SystfHost)
+        @compileError(h ++ ".systf must be `fn (*const Model) ?*const contract.SystfHost`");
+}
+
 const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "U", {} },
     .{ "num_ports", {} },
@@ -386,6 +517,10 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "updateState", {} },
     .{ "stateCtl", {} },
     .{ "State", {} },
+    // Single-precision-Jacobian permission — see `validateJacF32` and the S
+    // note in the header. Optional; absent means f64, which is the default a
+    // host must assume.
+    .{ "jac_f32", {} },
     // Runtime analysis kind exported by generated devices for the analysis()
     // builtin; the host engine sets Instance.analysis_kind per pass. Its
     // ordinals are checked against `AnalysisKind` by `validateSimState`.
@@ -426,6 +561,10 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "acStamp", {} },
     .{ "op_vars", {} },
     .{ "opValues", {} },
+    // §2.8.3/§12.32 the `$name`s left to a VPI application. Pub because the
+    // HOST reads it — to know what it has to bind, and `validateHost` to refuse
+    // when it has not.
+    .{ "systf_calls", {} },
     .{ "mc_param", {} },
     .{ "derive", {} },
     .{ "precompute", {} },
@@ -490,9 +629,13 @@ fn requireWith(comptime D: type, comptime decl: []const u8, comptime needs: []co
         @compileError(@typeName(D) ++ ": `" ++ decl ++ "` requires `" ++ needs ++ "`");
 }
 
-fn hasF32Field(comptime T: type, comptime name: []const u8) bool {
+/// A numeric parameter field of either width. BOTH are live: this generator
+/// emits `f64` parameters, while a device written by hand straight against this
+/// contract may still declare `f32`. The host reaches them through a tagged
+/// `ParamRef`, so neither width is privileged here either.
+fn hasFloatField(comptime T: type, comptime name: []const u8) bool {
     for (@typeInfo(T).@"struct".fields) |f| {
-        if (std.mem.eql(u8, f.name, name) and f.type == f32) return true;
+        if (std.mem.eql(u8, f.name, name) and (f.type == f32 or f.type == f64)) return true;
     }
     return false;
 }
@@ -547,6 +690,17 @@ fn isValueType(comptime T: type) bool {
     // Model blob, so copying the slice through init_model/ProtoStore is safe;
     // numeric setParam/collectParams intentionally ignore it.
     if (T == []const u8) return true;
+    // The VPI binding (§2.8.3/§12.32), and the only pointer INTO THE HOST this
+    // rule admits. It is not POD and is deliberately not treated as such: the
+    // host writes it, the host owns what it points at, and the device only ever
+    // calls through it. Nothing copies an `Instance` across a process boundary —
+    // the `.so` seam copies `Model` blobs, which is what the rule above is
+    // about — so a host-lifetime pointer here outlives every use of it.
+    //
+    // Named rather than admitted by shape: `isValueType` returning true for
+    // pointers in general would let a device hold one in `Model`, which the
+    // loader DOES copy, and that is the bug this whole check exists to stop.
+    if (T == ?*const SystfHost) return true;
     return switch (@typeInfo(T)) {
         .float, .int, .bool => true,
         // Integer-backed enums are fixed-size POD (e.g. Instance.analysis_kind).
@@ -566,13 +720,13 @@ fn isDenseEnum(comptime E: type) bool {
 }
 
 /// Optional per-device declaration: `pub const mc_param = "resist";`
-/// Names the principal value parameter (Instance or Model f32 field) that
+/// Names the principal value parameter (Instance or Model float field) that
 /// Monte Carlo varies. Validated here so a typo fails at compile time.
 fn validateMcParam(comptime D: type) void {
     if (!@hasDecl(D, "mc_param")) return;
-    if (!hasF32Field(D.Instance, D.mc_param) and !hasF32Field(D.Model, D.mc_param))
+    if (!hasFloatField(D.Instance, D.mc_param) and !hasFloatField(D.Model, D.mc_param))
         @compileError(@typeName(D) ++ ".mc_param '" ++ D.mc_param ++
-            "' is not an f32 field of Model or Instance");
+            "' is not a float field of Model or Instance");
 }
 
 // ============================================================================
@@ -707,6 +861,7 @@ const MockAll = struct {
     pub const num_ports: usize = 2;
     pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
     pub const State = struct { flips: u32 = 0 };
+    pub const jac_f32 = true;
 
     pub const Model = struct { g: f32 = 1e-3 };
     pub const Instance = struct {
@@ -718,6 +873,7 @@ const MockAll = struct {
         is_initial_step: bool = false,
         is_final_step: bool = false,
         bound_step: f64 = std.math.inf(f64),
+        systf: ?*const SystfHost = null,
     };
 
     pub const u_kinds = [n_u]UnknownKind{ .voltage, .voltage };
@@ -728,6 +884,7 @@ const MockAll = struct {
     pub const noise_gens = [_]NoiseGen(Self){.{ .row = 0, .col = 1, .kind = .thermal }};
     pub const ac_stamps = [_]AcStamp{ .{ .row = 0, .col = 1 }, .{ .row = 1 } };
     pub const op_vars = [_]OpVar{.{ .name = "gd", .units = "S" }};
+    pub const systf_calls = [_]Systf{.{ .name = "$sampnhold" }};
 
     pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
         const i = x[0].sub(x[1]).scale(@as(f64, m.g));
@@ -789,6 +946,35 @@ test "validate: every contract member at once (allowlist cannot drift)" {
         if (!@hasDecl(MockAll, k))
             @compileError("allowed_pub_decls has `" ++ k ++ "` but MockAll does not declare it");
     };
+}
+
+test "validateHost: a systf is the host's to bind, and only when there is one" {
+    // MockR names no `$name`, so any host will do — including one that has
+    // never heard of VPI. That is the common case and it must stay free.
+    comptime validateHost(struct {}, MockR);
+
+    // MockAll calls `$sampnhold`, so a host linking it must answer for it.
+    const Sim = struct {
+        var app: SystfHost = .{ .ctx = undefined, .call = zero };
+        fn zero(_: *anyopaque, _: usize, _: []const f64, partials: []f64) f64 {
+            @memset(partials, 0);
+            return 0;
+        }
+        pub fn systf(_: *const MockAll.Model) ?*const SystfHost {
+            return &app;
+        }
+    };
+    comptime validateHost(Sim, MockAll);
+
+    // The value-plus-partials boundary reassembles into a dual: a term is
+    // `p_j * (arg_j - arg_j.val())`, whose VALUE is zero and whose DERIVATIVE
+    // is p_j·d(arg_j), so adding it to `S.con(v)` grafts the host's partial on
+    // without disturbing the value. Checked here on the plain-f64 side, where
+    // every such term must vanish exactly.
+    var partials: [1]f64 = .{7.5};
+    const v = Sim.app.call(Sim.app.ctx, 0, &.{0.25}, &partials);
+    try std.testing.expectEqual(@as(f64, 0), v);
+    try std.testing.expectEqual(@as(f64, 0), partials[0]); // written, not left at 7.5
 }
 
 /// §6.2's optional port list, in device form: no terminals, one internal

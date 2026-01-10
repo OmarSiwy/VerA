@@ -8,7 +8,7 @@
 //           3*0.4 = 1.2, so the source residual is 0.75 - 1.2 = -0.45.
 //
 //! lrm 5.4.1
-//! lrm 4.4.1
+//! lrm 4.4
 //! bias V(p) = 1.0, V(n) = 0.25, V(c) = 0.4
 `include "check.vh"
 module ch5_ctrl_v(p, n, c);
