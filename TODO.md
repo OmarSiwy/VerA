@@ -309,9 +309,10 @@ in question — and the constant is ~0.7–1.2 µs, i.e. several thousand cycles
 38 B of MIR. Take the most generous possible accounting of the row layout: 30
 full sequential passes over every byte at L2 bandwidth is ≈7 ns/inst, **1 % of
 lint**, and the Air shape removes at most 45 % of that. Run-to-run noise on the
-fixture batch is 1.3 % (lint 1969.0 ms in wave 14, 1994.2 ms re-measured here on
-an unchanged tree). **The entire theoretical win is below the instrument's noise
-floor.**
+fixture batch is 1.3 % (lint 1969.0 ms **(Debug)** in wave 14, 1994.2 ms **(Debug)**
+re-measured here on an unchanged tree — both taken before `bench` printed its mode;
+the ReleaseFast batch is 247.0 ms). **The entire theoretical win is below the
+instrument's noise floor.**
 
 For the workload the project's scope guarantees it is worse than that. A fixture
 is a *fixed cost*: n=1 is 177 µs of lint producing **237 bytes** of MIR, and the
@@ -320,10 +321,15 @@ against an n=1 constant of 183.3 µs — **87 % of fixture-batch lint is a
 per-compilation constant that no MIR layout can touch** (Debug agrees: 1,164 ×
 1.51 ms = 1.76 s of a measured 1.99 s). If lint is ever to get faster, that
 constant is the target:
-wave 14 cached the prelude's *preprocessing* (`pp` 902.5 → 181.9 ms) but every
+wave 14 cached the prelude's *preprocessing* (`pp` 902.5 → 181.9 ms, **both Debug**;
+ReleaseFast `pp` on this tree is 19.5 ms) but every
 compilation still lexes, parses and lowers the same ~11.8 KB of expanded Annex
 D/E text. MEASURED end-to-end: `vera --lint` on a 6-line model is 3,189 µs/run,
-and 2,235 µs/run with `--no-std-defs`.
+and 2,235 µs/run with `--no-std-defs`. Both are **ReleaseFast** (the Debug binary
+is 16.1 ms/run) — but both are a shell loop and so both contain `fork`+`exec`,
+measured at **1.32 ms/run** by looping `vera --version`. Net of it, wave 16 gets
+**0.76 ms vs 0.18 ms** per fresh process (ReleaseFast, min of two 500-run loops):
+the prelude's *parsing* is the majority of a one-shot compile, not 30% of it.
 
 **And `Ref` folding is not the local change it looks like.** The Value space is
 the index of nine side arrays *outside* `mir.zig`, every one sized
