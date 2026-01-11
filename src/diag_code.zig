@@ -1129,14 +1129,21 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0215 => .{
-            .title = "expected an operand",
-            .lrm = "4.2.10",
+            .title = "(retired)",
+            .lrm = "",
             .explain =
-            \\An operand was required and the token found cannot begin one.
+            \\"expected an operand". Retired: a parser-recovery artifact that
+            \\named no rule — it fired for ANY token that cannot begin an
+            \\operand, and by dying first it made the codes that DO state a
+            \\rule unreachable. Its one documented customer was reduction xor,
+            \\which A.8.6 now parses so that lowering can report the real
+            \\4.2.10/annex-C rule as E0320 (see parseUnary's note and
+            \\ch04_expressions/07_reduction_xor_rejected.va, which pinned the
+            \\replacement).
             \\
-            \\If the token is `^`, `~^` or `^~`: reduction xor is outside the
-            \\analog subset (see E0320), and the parser reports the missing
-            \\operand rather than guessing which of the two was meant.
+            \\What replaced it: E0209 for a token that genuinely cannot begin
+            \\an expression, E0320/E0416 where this artifact was the accidental
+            \\messenger. The number is not reused.
             ,
         },
         .E0216 => .{
@@ -3213,12 +3220,23 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0608 => .{
-            .title = "argument of tan is at a pole",
-            .lrm = "4.3.2",
+            .title = "(retired)",
+            .lrm = "",
             .explain =
-            \\tan(x) is undefined at odd multiples of pi/2, where cos(x) is
-            \\zero. The prover reports only an argument it can show lands on a
-            \\pole.
+            \\"argument of tan is at a pole". Retired: 4.3.2 makes tan
+            \\undefined at odd multiples of pi/2, but those are irrational
+            \\points and every IEEE double is rational, so no representable
+            \\argument — not even a compile-time constant — is ever provably
+            \\AT a pole. The reject arm of the prover's three-way domain split
+            \\(proof.zig, checkDomain) is empty by construction, and an
+            \\argument range that merely SPANS a pole contains pole-free
+            \\points, so rejecting it would violate the straddle policy: such
+            \\a tan is accepted and the unit compiles `.strict`, where the
+            \\near-pole value is a defined IEEE result (W0650 reports the
+            \\cost). A code that cannot fire is a lie in the catalogue.
+            \\
+            \\Nothing replaced it; the condition does not exist to report.
+            \\The number is not reused.
             ,
         },
         .E0609 => .{
@@ -4195,14 +4213,23 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E1002 => .{
-            .title = "generated identifier is too long",
+            .title = "(retired)",
             .lrm = "",
             .explain =
-            \\An engine limit, not a language rule. Code generation builds a
-            \\structural key per unit from the module name, the access function
-            \\and the node names; this one overflowed the fixed name buffer.
+            \\"generated identifier is too long". Retired: the condition is
+            \\real — code generation builds a structural key per unit from the
+            \\module name, the role and the target, and a key can overflow the
+            \\fixed name buffer (never truncated: truncation would break the
+            \\injectivity two distinct units rely on) — but no diagnostic with
+            \\this code is ever built. The refusal is codegen's
+            \\error.NameTooLong, which the CLI prints as "codegen failed:
+            \\NameTooLong" with the input path; shortening the module or node
+            \\names involved is still the fix. A catalogue entry for a code
+            \\that never renders only misleads `--explain`.
             \\
-            \\Shorten the module or node names involved.
+            \\If codegen ever reports the overflow through the bag, with a
+            \\source location, that report takes a NEW number. This one is not
+            \\reused.
             ,
         },
         .E1003 => .{
