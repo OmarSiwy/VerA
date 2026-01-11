@@ -133,6 +133,25 @@ vty: []VTy = &.{},
 /// proof are read-only passes over a finished Mir.
 alias: []Mir.Value = &.{},
 
+/// Per Value: is this quantity independent of EVERY §4.4 probe, so that its
+/// derivative vanishes structurally? Read through `dFree`, which resolves the
+/// alias first.
+///
+/// This is contract.zig's own rule for physics code — "everything not
+/// depending on x (param prep, temperature, geometry) stays plain f64; only
+/// x-dependent chains use S ops" — made available to the generator, which was
+/// the one writer of device code not following it.
+///
+/// It is worth a pass because `@setFloatMode(.strict)` forbids folding a
+/// multiply by a literal zero. A dual holding `splat(0)` therefore pays n_u
+/// real multiplies and an n_u-wide add at every operation it touches, and that
+/// arithmetic survives into the PTX (ARPice docs/gpu-device-eval.md §9.6).
+///
+/// Conservative in one direction only: `false` is always sound, so a call (an
+/// analog operator carries its argument's derivative) and a probe are `false`
+/// without further inspection.
+dfree: []bool = &.{},
+
 /// Everything above, in dependency order. `nv` first: `buildCfg`'s phi/stmt
 /// filters already call `rv`, and `nv` derives only from `mir.defs.len`.
 pub fn build(
@@ -142,6 +161,7 @@ pub fn build(
 ) Error!Analysis {
     var self = try buildStructure(arena, mir, lower);
     try self.buildValueTypes();
+    try self.buildDfree();
     return self;
 }
 
@@ -576,6 +596,86 @@ fn buildValueTypes(self: *Analysis) Error!void {
 
 pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
     return self.vty[@intFromEnum(v)];
+}
+
+// -------------------------------------------------- the derivative lattice --
+
+/// Fill `dfree`. Two points, one lattice: everything starts derivative-free
+/// and a `false` spreads from the probes outwards, so the fixpoint is monotone
+/// and cannot oscillate. Value order is definition order except across a back
+/// edge, which is why this iterates rather than sweeping once — a loop-carried
+/// phi needs the round after its body.
+fn buildDfree(self: *Analysis) Error!void {
+    self.dfree = try self.arena.alloc(bool, self.nv);
+    @memset(self.dfree, true);
+    var changed = true;
+    while (changed) {
+        changed = false;
+        var v: u32 = 0;
+        while (v < self.nv) : (v += 1) {
+            if (!self.dfree[v] or self.defDfree(@enumFromInt(v))) continue;
+            self.dfree[v] = false;
+            changed = true;
+        }
+    }
+}
+
+/// One step of the lattice: is `val` derivative-free GIVEN the current answer
+/// for its operands? Every opcode is a function of its operands, so a result
+/// depends on a probe exactly when one of its operands does.
+fn defDfree(self: *const Analysis, val: Mir.Value) bool {
+    switch (self.mir.valueDef(self.rv(val))) {
+        // §4.4 access functions ARE the derivative — everything else inherits.
+        .block_param => return false,
+        .undef, .float_const, .int_const, .str_const, .param_ref => return true,
+        .inst_result => |inst| {
+            const row = self.mir.instRow(inst);
+            switch (Mir.opClass(row.op)) {
+                .branch, .jump => return false, // no result to speak of
+                // A call inherits from its ARGUMENTS and from nothing else.
+                // That holds for the whole of §4.5 — `ddt`, `idt`, `slew`,
+                // `transition` and the filters all propagate the derivative of
+                // the expression handed to them — and for ch9, where a systf's
+                // partials arrive through `SystfHost.call`. The one thing that
+                // would break it is a call reading a §4.4 probe the argument
+                // list does not name, and codegen has exactly one place that
+                // can spell a probe (`renderValueRef`'s `block_param` arm), so
+                // no rendering of a call reaches one.
+                //
+                // Not an optimisation for its own sake: `$temperature` is a
+                // call, so without this EVERY temperature-dependent parameter
+                // in a compact model is derivative-carrying — which is most of
+                // the prep in mos9 and all of it in BSIM4.
+                .call => {
+                    for (self.mir.instData(inst).call.args) |arg| {
+                        if (!self.dFree(arg)) return false;
+                    }
+                    return true;
+                },
+                .unary => return self.dFree(@enumFromInt(row.a)),
+                .binary => return self.dFree(@enumFromInt(row.a)) and
+                    self.dFree(@enumFromInt(row.b)),
+                // §4.2.12: the CONDITION does not matter. It selects between
+                // arms rather than entering the value, so a conditional over
+                // two constants is constant however x steers it — the same
+                // reading `renderInst` already takes when it emits a Zig `if`.
+                .ternary => return self.dFree(@enumFromInt(row.b)) and
+                    self.dFree(@enumFromInt(row.c)),
+                .phi => {
+                    const d = self.mir.instData(inst).phi;
+                    for (0..d.count) |k| {
+                        if (!self.dFree(self.mir.phiPair(inst, @intCast(k)).value)) return false;
+                    }
+                    return true;
+                },
+            }
+        },
+    }
+}
+
+/// Does `v`'s derivative vanish structurally? See `dfree`.
+pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
+    return self.dfree[@intFromEnum(self.rv(v))];
 }
 
 /// Is this block inside some loop's natural body?
