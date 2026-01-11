@@ -3,7 +3,7 @@
 Source: `docs/ch10-directives.html`, read section by section.
 
 HTML section-ID audit: `s10-1` `s10-2` `s10-3` `s10-4` `s10-5` `s10-6` `s10-7`.
-Seven ids, seven with at least one fixture. 47 files, numbered 01–48 with 20
+Seven ids, seven with at least one fixture. 50 files, numbered 01–51 with 20
 missing — `20_resetall_clears_macro.va` was deleted, not renamed, because it
 asserted that `resetall` undefines a text macro and nothing in the LRM says so
 (`resetall` appears exactly twice: the 10.1 table row and 10.2's reset
@@ -47,6 +47,9 @@ three of those are not in Table 10-1 at all, and the fourth is in `19`.
 | `s10-4` | `list_of_formal_arguments`, actual-argument text substitution | `05_define_function.va` (compound actual, bracketing pinned by 2.25 vs 2.0) |
 | `s10-4` | backslash-newline continuation of the macro text | `06_define_multiline.va` |
 | `s10-4` | a macro text may itself use a macro | `07_nested_macros.va` |
+| `s10-4` | a nested invocation in an ACTUAL argument is not recursion (1364's rule is about the TEXT) | `49_nested_macro_argument.va` — arguments expand before substitution; used to be a false E0118 "MAX -> MAX" |
+| `s10-4` | actual-argument brackets must MATCH their openers; `]` cannot close `(` | `51_mismatched_macro_argument_bracket.va` (`//! reject E0120`; one shared depth counter used to accept it) |
+| `s10-4` | the escaped-name production reaches `` `undef ``/`` `ifdef ``/`` `ifndef ``/`` `elsif `` (and 10.2's discipline slot), not just `` `define `` | `50_escaped_names_in_directives.va` — also cites 10.2 |
 | `s10-4` | `` `undef `` removes a user macro | `08_undef_conditional.va` |
 | `s10-4` | use of an undefined macro is illegal (1364 §19.3.1) | `23_undefined_macro.va` (`//! reject E0115`) |
 | `s10-4` | Syntax 10-3: the NAME is `identifier`, so unrestricted by prefix | `15_define_vams_prefixed_name.va` — a hard must-compile on a **contested reading**, bet deliberately against `34`; no xfail to hide behind |
