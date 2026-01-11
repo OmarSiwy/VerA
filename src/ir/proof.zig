@@ -604,6 +604,15 @@ const Prover = struct {
                 iv.hi_open = r.lo_inclusive;
             }
         }
+        // §3.2.1 fixes the `integer` type at 32 bits, so a MODEL-CARD integer
+        // can never hold an infinity regardless of what ranges the user wrote
+        // (or did not write). Without this meet an unranged `parameter integer`
+        // seeded ⊤/non-finite and dragged its whole unit to `.strict`, with a
+        // W0650 blaming whatever probe shared the expression. The transfer
+        // functions already know this for integer RESULTS (`integerIv`); this
+        // is the same fact for integer SOURCES.
+        if (info.ty == .integer)
+            iv = iv.meet(.{ .lo = -2147483648.0, .hi = 2147483647.0 });
         return iv;
     }
 
@@ -1113,8 +1122,18 @@ const Prover = struct {
             else => null,
         };
         if (monotone) |f| {
-            const lo = apply(f, a.lo);
-            const hi = apply(f, a.hi);
+            const lo = f(a.lo);
+            const hi = f(a.hi);
+            // AUDIT (same class as the pow/fdiv corner holes): a NaN endpoint
+            // here means the operand STRADDLES the function's domain edge —
+            // ln(-1), sqrt(-4), asin(2), acosh(0.5)… — and the in-domain
+            // branch's range is then NOT spanned by these two endpoints
+            // (sqrt over [-4,9] is [0,3], but the old NaN→+inf fold claimed
+            // [3,+inf]: wrong-NARROW, which can fabricate a downstream domain
+            // verdict). checkDomain has already refused to prove this operand,
+            // so the only honest interval is ⊤. Endpoints AT the edge stay
+            // exact and wide: ln(0) = -inf, atanh(1) = +inf are not NaN.
+            if (math.isNan(lo) or math.isNan(hi)) return .{ .iv = .top, .finite = false };
             const iv: Interval = .{
                 .lo = @min(lo, hi),
                 .hi = @max(lo, hi),
@@ -1132,12 +1151,21 @@ const Prover = struct {
                 .hi_open = a.lo_open,
             }, .finite = af },
             .fabs => .{ .iv = absIv(a), .finite = af },
-            // §4.3.2 acos is DECREASING on [-1,1].
-            .acos => .{ .iv = .{ .lo = apply(&mAcos, a.hi), .hi = apply(&mAcos, a.lo) }, .finite = af },
+            // §4.3.2 acos is DECREASING on [-1,1]. Same straddle rule as the
+            // monotone path above: an out-of-domain endpoint (acos(2) = NaN)
+            // voids the endpoint claim — the old +inf fold even produced an
+            // EMPTY interval (lo=+inf > hi) for a high-straddling operand,
+            // which vacuously "proved" every downstream domain.
+            .acos => blk: {
+                const lo = mAcos(a.hi);
+                const hi = mAcos(a.lo);
+                if (math.isNan(lo) or math.isNan(hi)) break :blk .{ .iv = .top, .finite = false };
+                break :blk .{ .iv = .{ .lo = lo, .hi = hi }, .finite = af };
+            },
             // §4.3.2 cosh: even, grows — bounded only if |x| is bounded.
             .cosh => blk: {
                 const m = absIv(a);
-                const iv: Interval = .{ .lo = 1, .hi = apply(&mCosh, m.hi) };
+                const iv: Interval = .{ .lo = 1, .hi = mCosh(m.hi) };
                 break :blk .{ .iv = iv, .finite = af and iv.bounded() };
             },
             .sin, .cos => .{ .iv = .{ .lo = -1, .hi = 1 }, .finite = af },
@@ -1182,7 +1210,17 @@ const Prover = struct {
                 // `@setFloatMode(.optimized)`, whose `ninf` assertion it then
                 // violates — silent, Release-only UB.
                 if (!y.excludesZero()) return .{ .iv = .top, .finite = false };
-                const iv = combine(x, y, divOp);
+                // A §3.4.2 PUNCTURE (`exclude 0` on a sign-spanning range)
+                // proves the divisor NONZERO but not ONE-SIGNED, and corner
+                // combination is sound for `/` only on a one-signed divisor:
+                // 1/y over [-10,10]\{0} is (-inf,-0.1] ∪ [0.1,+inf), a set no
+                // corner attains — the corners 1/±10 fabricate its COMPLEMENT
+                // [-0.1,0.1], and that lie once discharged a `ln` domain proof
+                // whose argument was NaN at run time. The nonzero fact still
+                // stands for FINITENESS (0/0 and x/0 are impossible; ±inf only
+                // via genuine overflow, which is SOUNDNESS MODEL 3, same as any
+                // other nonzero divisor) — only the interval claim is void.
+                const iv = if (y.gt(0) or y.lt(0)) combine(x, y, divOp) else Interval.top;
                 return .{ .iv = iv, .finite = f and (assume or iv.bounded()) };
             },
             // §4.2.4 modulus: |result| < |divisor|, sign of the dividend.
@@ -1195,7 +1233,7 @@ const Prover = struct {
                 return .{ .iv = iv, .finite = f };
             },
             .pow => {
-                const iv = combine(x, y, powOp);
+                const iv = powIv(x, y);
                 return .{ .iv = iv, .finite = f and iv.bounded() };
             },
             .hypot => {
@@ -1260,9 +1298,25 @@ const Prover = struct {
                 if (x.isEmpty() or y.isEmpty()) return true;
                 if (x.gt(0)) return true; // x > 0, all y
                 if (x.ge(0) and y.gt(0)) return true; // x = 0, y > 0
+                // The two PROVABLE violations of Table 4-14's domain — E0609,
+                // held to the same three-way standard as E0602–E0607: reject
+                // only when EVERY admitted value pair violates.
+                //   x == 0 always, y < 0 always: pow is +inf on every
+                //   execution — "if x = 0, all y > 0". Checked BEFORE the
+                //   integer-exponent accept, whose clause is the x < 0 row and
+                //   does not rescue a zero base. (y = 0 is left alone: IEEE
+                //   pow(0,0) = 1, the same leniency `x/0.0` gets.)
+                if (x.lo == 0 and x.hi == 0 and !x.nonzero and y.lt(0))
+                    return self.violated(inst, .E0609, "pow() exponent", d.rhs, y, "must be >= 0 — the base is provably zero", "constrain the exponent with `from [0:inf)`, or the base with `exclude 0`");
                 if (self.provablyInteger(d.rhs)) return true; // x < 0, integer y
-                // A negative base with a non-integer exponent is NaN, which is
-                // IEEE-defined under `.strict`. Unprovable -> forfeit finiteness.
+                //   x < 0 always, y fractional always: pow is NaN on every
+                //   execution — "if x < 0, all integer y".
+                if (x.lt(0) and provablyNonInteger(y))
+                    return self.violated(inst, .E0609, "pow() exponent", d.rhs, y, "must be an integer — the base is provably negative", "use `pow(abs(x), y)` with an explicit sign, or constrain the base with `from [0:inf)`");
+                // Straddling either clause (a base that MIGHT be negative, an
+                // exponent that MIGHT be fractional) is NaN-capable but not
+                // provably violating: IEEE-defined under `.strict`, so accept
+                // and forfeit finiteness.
                 return false;
             },
             .tan_poles => { // §4.3.2, x != n(pi/2), n odd
@@ -1282,6 +1336,14 @@ const Prover = struct {
                 // An interval spanning a pole still contains pole-free points, so
                 // "provably always at a pole" is not decidable here. Unprovable
                 // -> `.strict`, where the pole yields a defined IEEE infinity.
+                //
+                // E0608 ("argument of tan is at a pole") is RETIRED on exactly
+                // this ground: a pole is a measure-zero set of IRRATIONAL
+                // points, and every double is rational, so even a point
+                // interval is never provably AT one — the reject arm of the
+                // three-way split is empty and the code could never honestly
+                // fire (rejecting a straddling range instead would violate the
+                // checkDomain straddle policy).
                 return false;
             },
             else => {},
@@ -1326,6 +1388,14 @@ const Prover = struct {
             },
             else => unreachable,
         }
+    }
+
+    /// §4.3.1 Table 4-14's E0609 direction: the exponent interval fits inside
+    /// ONE integer-free open cell (k, k+1), so every value it admits is
+    /// fractional. The conservative failure mode is "not provable", which
+    /// keeps a possibly-integer exponent on the accept-as-`.strict` path.
+    fn provablyNonInteger(iv: Interval) bool {
+        return iv.bounded() and @floor(iv.lo) == @floor(iv.hi) and iv.lo != @floor(iv.lo);
     }
 
     /// §4.3.1 Table 4-14 pow with a negative base needs "all integer y".
@@ -1681,12 +1751,10 @@ fn opLabel(op: Mir.Opcode) []const u8 {
     };
 }
 
-// --- endpoint arithmetic: NaN (inf-inf, 0*inf, 0/0) folds to the wide side ---
-
-fn apply(f: *const fn (f64) f64, x: f64) f64 {
-    const r = f(x);
-    return if (math.isNan(r)) math.inf(f64) else r;
-}
+// --- endpoint arithmetic: NaN (inf-inf) folds to the wide side. A UNARY NaN
+// endpoint is never folded any more: it means "operand straddles the domain
+// edge" and the transfer answers ⊤ (see the monotone path) — the old fold to
+// +inf sat on the WRONG side for ln/sqrt/asin and produced narrow intervals.
 
 fn addLo(a: f64, b: f64) f64 {
     const r = a + b;
@@ -1708,9 +1776,61 @@ fn powOp(a: f64, b: f64) f64 {
     return math.pow(f64, a, b);
 }
 
+/// §4.3.1 Table 4-14 pow(x,y) over a box. Corner combination is sound only
+/// where pow is monotone in each argument separately, which fails in exactly
+/// the ways a negative base admits:
+///   - even integer exponent: interior MINIMUM at x = 0 (corners pow(±2,2)=4
+///     fabricated [4,4] where the truth is [0,4] — and from that lie both a
+///     wrong `.optimized` sqrt(pow(x,2)-1) and a wrong E0602 reject of
+///     ln(2-pow(x,2)) were derived);
+///   - non-integer exponent: pow(neg, frac) is NaN (§4.3.1's "if x < 0, all
+///     integer y"), which corners at integer endpoints never see;
+///   - negative exponent: pole at x = 0, and IEEE pow(+0,-odd) = +inf is the
+///     WRONG side of the two-sided pole a base interval reaching 0 straddles.
+fn powIv(x: Interval, y: Interval) Interval {
+    // x >= 0: pow = exp(y·ln x) is monotone in x for fixed y and in y for
+    // fixed x, so box extrema sit at corners; IEEE fills the x = 0 edge
+    // (pow(0,neg)=+inf, pow(0,0)=1) on the corners too. `combine`'s NaN guard
+    // covers the exotic corners.
+    if (x.ge(0)) return combine(x, y, powOp);
+    // Base can be negative: only an exponent pinned to ONE known integer k
+    // supports any claim (an integer-valued RANGE mixes parities, and a
+    // possibly-fractional exponent means possible NaN) — else ⊤.
+    const k = y.lo;
+    if (!(y.lo == y.hi and math.isFinite(k) and k == @trunc(k))) return .top;
+    if (k >= 0) {
+        // Even k: x^k = |x|^k exactly, monotone in |x|; absIv restores the
+        // interior 0 a sign-spanning base reaches. Odd k: monotone on all of R.
+        // (Doubles >= 2^53 are all even integers, so @mod stays honest there.)
+        if (@mod(k, 2) == 0) {
+            const m = absIv(x);
+            return .{ .lo = powOp(m.lo, k), .hi = powOp(m.hi, k) };
+        }
+        return .{ .lo = powOp(x.lo, k), .hi = powOp(x.hi, k) };
+    }
+    // k < 0: pole at 0. Sound only for a STRICTLY negative base (x.hi < 0 —
+    // an open-at-0 bound is not enough: IEEE pow(+0, -odd) is +inf while the
+    // one-sided limit from below is -inf). x^k is then monotone on the side.
+    if (x.hi < 0) {
+        const a = powOp(x.lo, k);
+        const b = powOp(x.hi, k);
+        return .{ .lo = @min(a, b), .hi = @max(a, b) };
+    }
+    // Punctured or zero-touching negative base with a negative exponent: the
+    // same both-sided pole as the fdiv puncture ⇒ ⊤.
+    return .top;
+}
+
 /// Endpoint-combination for the non-monotone binary ops: all four corners,
 /// closed result (openness is not derivable through a product). A NaN corner
 /// (0*inf, 0/0, inf/inf) means the abstraction cannot say anything ⇒ ⊤.
+///
+/// SOUNDNESS PRECONDITION: corners bound f over the box only when f is
+/// monotone in each argument separately there. `*` is bilinear (always
+/// eligible); `/` is eligible only for a ONE-SIGNED divisor (the `.fdiv`
+/// transfer guards this — a punctured sign-spanning divisor has a two-branch
+/// range no corner attains); `pow` is eligible only for x >= 0 (`powIv`
+/// guards the negative-base parity/pole cases).
 fn combine(x: Interval, y: Interval, f: *const fn (f64, f64) f64) Interval {
     const c = [4]f64{ f(x.lo, y.lo), f(x.lo, y.hi), f(x.hi, y.lo), f(x.hi, y.hi) };
     var lo = math.inf(f64);
@@ -2030,6 +2150,225 @@ test "§3.4.2: an `exclude` proves nonzero only where its bracket is square" {
             return e;
         };
     }
+}
+
+test "§3.4.2: a PUNCTURED sign-spanning divisor licenses no corner interval" {
+    // `b` in [-10,10]\{0}: 1.0/b really ranges over (-inf,-0.1] ∪ [0.1,+inf).
+    // The corners 1/±10 used to fabricate the COMPLEMENT [-0.1,0.1], from
+    // which ln(0.3 - 1/b) was "proven" in-domain and the unit went
+    // `.optimized` — whose nnan assertion ln(0.3 - 1/b) then violated at any
+    // card with 0.3 - 1/b < 0 (silent Release UB). And the mirrored shape
+    // ln(1/b - 0.5) was "proven" OUT of domain, an E0602 reject fabricated
+    // against legal inputs (b = 0.1 gives ln(9.5)). Both must now be the
+    // honest third verdict: accepted, `.strict`.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module p(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real b = 1.0 from [-10:10] exclude 0;
+        \\  analog begin
+        \\    I(p,n) <+ ln(0.3 - 1.0/b) * V(p,n);
+        \\    I(p,n) <+ ln(1.0/b - 0.5) * V(p,n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+
+    try std.testing.expect(v.ok()); // neither shape is provably violating
+    try std.testing.expect(!h.has(.E0602));
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "§4.3.1: pow with a sign-spanning base and an even exponent reaches 0" {
+    // x in [-2,2]: pow(x,2) is [0,4] — the interior minimum at x = 0 is the
+    // point the four corners (all = 4) miss. From the fabricated [4,4] BOTH
+    // wrong directions were derived: sqrt(pow(x,2)-1) went `.optimized` (NaN
+    // at |x| < 1 under fast-math = silent UB) and ln(2-pow(x,2)) was REJECTED
+    // E0602 on a fabricated "known range [-2:-2]" (legal at |x| > sqrt(2)).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module q(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real x = 1.0 from [-2:2];
+        \\  analog begin
+        \\    I(p,n) <+ sqrt(pow(x,2.0) - 1.0) * V(p,n);
+        \\    I(p,n) <+ ln(2.0 - pow(x,2.0)) * V(p,n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.E0602));
+    try std.testing.expect(!h.has(.E0604));
+    // Both `<+ I(p,n)` statements fold into ONE unit (§5.6.1.3, see UNIT
+    // ORDERING) — and its joined slice is NaN-capable, so `.strict`.
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "§4.3.1: pow on a proven-positive base keeps its corner proof" {
+    // The sound side of powIv must not have widened: base in [1,3], exponent
+    // 2 → [1,9], bounded, so ln(pow) is proven in-domain and the unit stays
+    // `.optimized`.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module w(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real g = 2.0 from [1:3];
+        \\  analog I(p,n) <+ ln(pow(g, 2.0)) * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+}
+
+test "audit: a domain-straddling monotone argument yields no narrow interval" {
+    // sqrt over [-4,9] is [0,3] on the legal branch; the old NaN→+inf
+    // endpoint fold claimed [3,+inf], from which asin(sqrt(s)-…) faced a
+    // fabricated E0605 "provably > 1". Straddle must abstract to ⊤: accepted,
+    // `.strict`, no rejection (legal cards exist: s = 0.25 → asin(0.5)).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module a(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real s = 0.25 from [-4:9];
+        \\  analog I(p,n) <+ asin(sqrt(s)) * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.E0605));
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "§3.2.1: an integer parameter is 32-bit, hence finite without a range" {
+    // `q` unranged used to seed ⊤/non-finite and drag the unit `.strict`,
+    // with a W0650 blaming an unrelated probe. A model-card integer cannot
+    // hold an infinity — its type is the range.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module i(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer q = 3;
+        \\  analog I(p,n) <+ q * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+    try std.testing.expect(!h.has(.W0650));
+}
+
+test "§3.2.1: even a `from [0:inf]` integer range is clamped finite by its type" {
+    // The written range admits infinity, but no 32-bit integer holds one:
+    // the type meet keeps the parameter finite, so neither W0651 (about the
+    // PROOF cost of the closed bound) nor W0650 has anything true to say.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module j(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer m = 1 from [0:inf];
+        \\  analog I(p,n) <+ m * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expectEqual(FloatMode.optimized, v.unit_modes[0]);
+    try std.testing.expect(!h.has(.W0650));
+    try std.testing.expect(!h.has(.W0651));
+}
+
+test "E0609: pow with a provably-negative base and provably-fractional exponent" {
+    // §4.3.1 Table 4-14 "if x < 0, all integer y": every card in
+    // [-10:-1] × {0.5} evaluates pow to NaN, so §4.3.2's "shall report an
+    // error" is discharged statically — the same standard as E0602.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module e(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real m = -2.0 from [-10:-1];
+        \\  analog I(p,n) <+ pow(m, 0.5) * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(!v.ok());
+    try std.testing.expect(h.has(.E0609));
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+}
+
+test "E0609: pow(0, negative) is provably outside Table 4-14's zero-base row" {
+    // "if x = 0, all y > 0" — an integer exponent does not rescue a zero
+    // base; pow(0,-2) is +inf on every execution.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module z(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p,n) <+ pow(0.0, -2.0) * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(!v.ok());
+    try std.testing.expect(h.has(.E0609));
+}
+
+test "E0609: a straddling base or a possibly-integer exponent stays accepted" {
+    // Three-way split: `u` unranged MIGHT be negative and `w` in [2.5:3.0]
+    // MIGHT be the integer 3.0 — neither is a provable violation, so both
+    // are accepted and forfeit finiteness (`.strict`), never rejected.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module s(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real u = 1.0;
+        \\  parameter real m = -2.0 from [-10:-1];
+        \\  parameter real w = 3.0 from [2.5:3.0];
+        \\  analog begin
+        \\    I(p,n) <+ pow(u, 0.5) * V(p,n);
+        \\    I(p,n) <+ pow(m, w) * V(p,n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.E0609));
+    try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
 }
 
 test "class-6 errors carry a real source span (Mir.InstRow.tok)" {
