@@ -172,7 +172,7 @@ fn emitCard(
     if (!is_model and !std.mem.eql(u8, kw, ".subckt")) return false; // a device card, .tran, .include, ...
 
     const name = it.next() orelse return false;
-    if (!isIdent(name)) return false;
+    if (!isSpiceName(name)) return false;
     for (seen.items) |s| if (std.mem.eql(u8, s, name)) return false;
     // `seen` keeps the bare name — the escape is a spelling of it, not another
     // name, so two cards named `wire` are still a repeat.
@@ -204,10 +204,11 @@ fn emitCard(
         , .{ decl, row.ports, row.ports, row.ports, row.prim, row.ports });
     } else {
         // `.SUBCKT name p1 p2 ... [params: k=v]` — ports up to the first thing
-        // that is not a node name.
+        // that is not a node name. NUMERIC nodes are the SPICE default (`1`,
+        // `2`, `0`), so a digit does not end the list — only a parameter does.
         var ports: std.ArrayList([]const u8) = .empty;
         while (it.next()) |t| {
-            if (!isIdent(t)) break; // `params:`, `k=v`, a number, ...
+            if (!isSpiceName(t)) break; // `params:`, `k=v`
             try ports.append(arena, try spell(arena, t));
         }
         // A.1.2 makes the port list optional, so a portless `.SUBCKT` is a legal
@@ -236,10 +237,9 @@ fn emitCard(
     return true;
 }
 
-/// Is `t` usable as a Verilog-AMS identifier (§2.7) after lowering? Anything else
-/// on a card — `params:`, `bf=80`, `1e-18` — ends the port list. `$` is not
-/// admitted even though §2.7 allows it in an identifier: `strip` has already
-/// treated it as a comment opener, so it cannot reach here.
+/// Is `t` usable BARE as a Verilog-AMS identifier (§2.7) after lowering? `$` is
+/// not admitted even though §2.7 allows it in an identifier: `strip` has
+/// already treated it as a comment opener, so it cannot reach here.
 fn isIdent(t: []const u8) bool {
     if (t.len == 0) return false;
     if (!std.ascii.isAlphabetic(t[0]) and t[0] != '_') return false;
@@ -247,22 +247,38 @@ fn isIdent(t: []const u8) bool {
     return true;
 }
 
+/// Is `t` a SPICE name at all — a model/subcircuit name or a node? SPICE names
+/// routinely LEAD WITH DIGITS (`2N2222`, `1N4148`), and bare numbers are the
+/// default node spelling, so §2.7 shape is not the test: anything printable
+/// that is not a parameter (`k=v`, `params:`) qualifies, and `spell` below
+/// decides how it has to be written. Rejecting these silently dropped the card
+/// (a later E0904 then blamed the USER's instantiation line) or truncated a
+/// `.SUBCKT F A 1 B` port list to one port — a silently WRONG ordered binding.
+fn isSpiceName(t: []const u8) bool {
+    if (t.len == 0) return false;
+    for (t) |c| if (c < 33 or c > 126 or c == '=' or c == ':') return false;
+    return true;
+}
+
 /// How `t` has to be WRITTEN to declare it here. `isIdent` above is §2.7 SHAPE
-/// only, and shape is not enough: a SPICE netlist has no reserved words, so a
-/// perfectly ordinary card can name a node `INPUT` or a model `WIRE`. Those
-/// spellings become keywords the moment they are lowered into Verilog-AMS text,
-/// and the diagnostic lands on a synthesized line with no author.
+/// only, and shape is not enough in either direction: a SPICE netlist has no
+/// reserved words, so a perfectly ordinary card can name a node `INPUT` or a
+/// model `WIRE` — and no §2.7 shape rule either, so a model is `2N2222` and a
+/// node is `1`. The keyword spellings become keywords the moment they are
+/// lowered into Verilog-AMS text, the digit-leading ones are not simple
+/// identifiers at all, and either way the diagnostic lands on a synthesized
+/// line with no author.
 ///
 /// §2.8.1's escape is the LRM's own answer, and it is the whole fix: an escaped
 /// identifier "can include any printable ASCII character", §2.8.2 lists what is
 /// a keyword and an escaped identifier is not among them, and neither the
 /// leading `\` nor the terminating white space is part of the NAME — so
 /// `elaborate.findModule`, §6.5.4's connection by order and §6.7.1's dotted
-/// probe all still see `wire` and `input`. The trailing space is the §2.8.1
-/// terminator and is load-bearing: `,` and `)` are printable ASCII and would
-/// otherwise be scanned INTO the identifier.
+/// probe all still see `wire`, `input`, `2n2222` and `1`. The trailing space is
+/// the §2.8.1 terminator and is load-bearing: `,` and `)` are printable ASCII
+/// and would otherwise be scanned INTO the identifier.
 fn spell(arena: Allocator, t: []const u8) Allocator.Error![]const u8 {
-    if (token.keyword_map.get(t) == null) return t;
+    if (isIdent(t) and token.keyword_map.get(t) == null) return t;
     return std.fmt.allocPrint(arena, "\\{s} ", .{t});
 }
 
@@ -332,6 +348,30 @@ test "a card naming a keyword is declared as a §2.8.1 escaped identifier" {
     // collision, not for every synthesized name.
     const plain = try synthesize(arena, ".SUBCKT PAD IN OUT\n.ENDS\n");
     try std.testing.expect(std.mem.indexOf(u8, plain.text, "module pad(in, out);") != null);
+}
+
+test "a digit-leading name and a numeric node are spelled §2.8.1, not dropped" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.MODEL 2N2222 NPN BF=200
+        \\.SUBCKT FLT A 1 B
+        \\.ENDS FLT
+    );
+    try std.testing.expectEqual(@as(u32, 2), s.modules);
+    // E.2 treats the model as a module definition; `2N2222` used to fail the
+    // §2.7 shape test and the card contributed NOTHING (the later E0904 then
+    // blamed the user's instantiation line).
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "module \\2n2222 (c, b, e, s);") != null);
+    // The numeric node is the SPICE default and is a PORT, not the end of the
+    // list: three ports, in card order, or §6.5.4's ordered binding is wrong.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "module flt(a, \\1 , b);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "electrical a, \\1 , b;") != null);
+    // A parameter assignment still ends the port list.
+    const p = try synthesize(arena, ".SUBCKT X N1 N2 PARAMS: W=2\n.ENDS\n");
+    try std.testing.expect(std.mem.indexOf(u8, p.text, "module x(n1, n2);") != null);
 }
 
 test "an unrecognised model type, a repeat and an empty netlist all contribute nothing" {

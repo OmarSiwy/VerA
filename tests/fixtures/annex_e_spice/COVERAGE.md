@@ -7,8 +7,11 @@ HTML section-ID audit: `sE-1` `sE-1-1` `sE-1-2` `sE-2` `sE-2-1` `sE-2-2` `sE-2-2
 `sE-4` `sE-4-1` `sE-4-2`, plus the two table anchors `table-e-1` and `table-e-2`.
 Nineteen sections. Annex E is normative.
 
-Forty-two fixtures live in this folder. `zig build torture -- annex_e_spice` reports
-**42/42 behaving as they say they do, 0 asserting nothing and 0 `//! xfail`** — nothing
+Forty-three fixtures live in this folder. (`spice_digit_names.va` is the newest:
+`.MODEL 2N2222` and a `.SUBCKT` with a numeric node, the names SPICE spells that
+§2.7 has no bare form for, carried as §2.8.1 escaped identifiers — the card
+reader used to drop the model silently and truncate the port list at the `1`.) `zig build torture -- annex_e_spice` reports
+**43/43 behaving as they say they do, 0 asserting nothing and 0 `//! xfail`** — nothing
 fails. (The 9/31 and the 21/40 this paragraph used to quote were written when nothing here
 could elaborate, and then when the row-map fixtures elaborated but asserted nothing. Every
 `primitive_*.va` now carries digits from Table E.1's own Behavior column or, for the rows

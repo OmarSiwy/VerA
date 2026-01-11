@@ -209,10 +209,28 @@ pub const Segment = struct {
 
 pub const File = struct {
     name: []const u8,
-    /// ORIGINAL text, before preprocessing. Snippets are cut from here, so
-    /// what the user sees is what the user wrote.
+    /// The text SPANS INDEX: comment-STRIPPED once the preprocessor has run
+    /// (`Bag.setStrippedText`), the registered text until then. Newline count
+    /// matches the original — the preprocessor's line contract — so LINES read
+    /// off this text are true of both.
     text: []const u8,
+    /// ORIGINAL text, before comment stripping; empty when `text` IS the
+    /// original. Snippets are cut from here, so what the user sees is what the
+    /// user wrote — a span's COLUMN goes through `to_src` first, because the
+    /// two texts drift apart wherever a comment preceded a token on its line.
+    raw: []const u8 = "",
+    /// Stripped offset → original offset, one mark per comment collapsed. See
+    /// `StripMark`.
+    to_src: []const StripMark = &.{},
 };
+
+/// One point where comment stripping (preprocessor §2.4) made the stripped
+/// text SHORTER than the original: from `out` up to the next mark the two
+/// advance in lockstep, so original offset = `src + (stripped offset − out)`.
+/// Before the first mark the mapping is identity. Sorted by `out` by
+/// construction — the stripper appends left to right — so lookup is the same
+/// binary search `SourceMap.resolve` runs.
+pub const StripMark = struct { out: u32, src: u32 };
 
 /// Preprocessed offset → (file, original offset, expansion chain).
 ///
@@ -549,7 +567,7 @@ pub const Bag = struct {
     ///
     /// NOT IN THE POOLS, deliberately. A `File.text` is the whole source —
     /// hundreds of kilobytes for a foundry model — BORROWED from the arena and
-    /// re-pointed by `setFileText` once comments are stripped. Interning it
+    /// re-pointed by `setStrippedText` once comments are stripped. Interning it
     /// into `string_bytes` would copy every byte of every file on the path
     /// where no diagnostic is ever produced, to save one `dupe` in `detach`.
     /// Zig dodges the question by interning only the single `source_line` it
@@ -717,12 +735,17 @@ pub const Bag = struct {
         return id;
     }
 
-    /// Point an already-registered file at different bytes. The preprocessor
-    /// registers a file before it has stripped comments from it; this is how
-    /// the snippet ends up cut from the text the spans actually index.
-    pub fn setFileText(self: *Bag, id: FileId, text: []const u8) void {
+    /// Point an already-registered file at its comment-STRIPPED bytes — what
+    /// every span from here on indexes. The registered ORIGINAL is kept and
+    /// `marks` maps stripped offsets back into it, so the renderer can print
+    /// the line the user WROTE with the caret still under the right column.
+    pub fn setStrippedText(self: *Bag, id: FileId, stripped: []const u8, marks: []const StripMark) void {
         const i = @intFromEnum(id);
-        if (i < self.files.items.len) self.files.items[i].text = text;
+        if (i >= self.files.items.len) return;
+        const f = &self.files.items[i];
+        f.raw = f.text;
+        f.text = stripped;
+        f.to_src = marks;
     }
 
     pub fn fileName(self: *const Bag, id: FileId) []const u8 {
@@ -735,6 +758,36 @@ pub const Bag = struct {
         const i = @intFromEnum(id);
         if (i >= self.files.items.len) return "";
         return self.files.items[i].text;
+    }
+
+    /// What RENDERING shows: the file as the user wrote it, comments and all.
+    /// Falls back to `text` for a file nothing was stripped from.
+    pub fn sourceText(self: *const Bag, id: FileId) []const u8 {
+        const i = @intFromEnum(id);
+        if (i >= self.files.items.len) return "";
+        const f = self.files.items[i];
+        return if (f.raw.len != 0) f.raw else f.text;
+    }
+
+    pub fn fileMarks(self: *const Bag, id: FileId) []const StripMark {
+        const i = @intFromEnum(id);
+        if (i >= self.files.items.len) return &.{};
+        return self.files.items[i].to_src;
+    }
+
+    /// Span-currency (stripped) offset → offset in `sourceText`. Identity when
+    /// nothing was stripped from `id`.
+    pub fn toSourceOffset(self: *const Bag, id: FileId, off: u32) u32 {
+        const marks = self.fileMarks(id);
+        if (marks.len == 0 or off < marks[0].out) return off;
+        // Last mark with out <= off; linear from there (see `StripMark`).
+        var lo: usize = 0;
+        var hi: usize = marks.len;
+        while (lo + 1 < hi) {
+            const mid = lo + (hi - lo) / 2;
+            if (marks[mid].out <= off) lo = mid else hi = mid;
+        }
+        return marks[lo].src + (off - marks[lo].out);
     }
 
     /// The no-include, no-macro case: spans index straight into `text`.
@@ -830,6 +883,8 @@ pub const Bag = struct {
         for (files.items) |*f| {
             f.name = try gpa.dupe(u8, f.name);
             f.text = try gpa.dupe(u8, f.text);
+            f.raw = try gpa.dupe(u8, f.raw);
+            f.to_src = try gpa.dupe(StripMark, f.to_src);
         }
 
         const segs = try gpa.dupe(Segment, self.map.segs);
@@ -851,6 +906,8 @@ pub const Bag = struct {
         for (self.files.items) |f| {
             gpa.free(f.name);
             gpa.free(f.text);
+            gpa.free(f.raw);
+            gpa.free(f.to_src);
         }
         for (self.map.segs) |sg| gpa.free(sg.macro);
         gpa.free(self.map.segs);
@@ -1239,7 +1296,16 @@ const tab_width = 4;
 fn displayCol(line: []const u8, byte_col: u32) u32 {
     var col: u32 = 0;
     const upto = @min(byte_col, line.len);
-    for (line[0..upto]) |c| col += if (c == '\t') tab_width else 1;
+    for (line[0..upto]) |c| {
+        // A UTF-8 continuation byte (0b10xxxxxx) is part of the codepoint the
+        // lead byte already counted, not a column of its own — counting BYTES
+        // pushed the caret one column right per extra byte of every `µ`, `Ω`,
+        // `°`. Counting lead bytes IS `std.unicode`'s codepoint count, minus
+        // the error path invalid input must not take here. (Codepoints, not
+        // grapheme clusters or wcwidth: same approximation rustc makes.)
+        if (c & 0xC0 == 0x80) continue;
+        col += if (c == '\t') tab_width else 1;
+    }
     return col;
 }
 
@@ -1310,10 +1376,14 @@ pub fn render(bag: *Bag, w: *std.Io.Writer, opts: RenderOptions) !void {
     }
 }
 
+/// Indexes `sourceText` — the ORIGINAL file — because everything the renderer
+/// derives from an index (line text, columns) is shown to the user, and what
+/// the user recognises is what the user wrote. Offsets go through
+/// `toSourceOffset` before they meet one of these.
 fn lineIndexFor(bag: *Bag, scratch: Allocator, indices: []?LineIndex, file: FileId) !LineIndex {
     const i = @min(@intFromEnum(file), indices.len - 1);
     if (indices[i]) |idx| return idx;
-    const idx = try LineIndex.build(scratch, bag.fileText(file));
+    const idx = try LineIndex.build(scratch, bag.sourceText(file));
     indices[i] = idx;
     return idx;
 }
@@ -1337,19 +1407,26 @@ fn place(
     if (span.isNone()) return null;
     const r = bag.locate(span, file);
     const idx = try lineIndexFor(bag, scratch, indices, r.file);
-    const file_text = bag.fileText(r.file);
+    const file_text = bag.sourceText(r.file);
     if (file_text.len == 0) return null;
 
-    const loc = idx.loc(r.offset);
+    // `r.offset` is in span currency — the comment-STRIPPED text. Everything
+    // from here down is measured in the ORIGINAL file: the line shown must be
+    // the one the user wrote, and its columns only agree with the stripped
+    // ones on lines no comment precedes a token on. Both ends map, so a span
+    // that straddles a stripped comment widens to cover it rather than
+    // underlining the wrong bytes.
+    const src_off = bag.toSourceOffset(r.file, r.offset);
+    const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset + span.len()));
+    const loc = idx.loc(src_off);
     const line_text = idx.lineText(file_text, loc.line);
     const start_col = displayCol(line_text, loc.col - 1);
 
     // A span that runs past the end of its line is clamped: an underline may
     // not wrap, and the first line is the informative one.
-    const end_off = r.offset + span.len();
-    const line_end = r.offset + @as(u32, @intCast(line_text.len)) - (loc.col - 1);
-    const clamped = @min(end_off, line_end);
-    const end_col = displayCol(line_text, clamped - r.offset + (loc.col - 1));
+    const line_end = src_off + @as(u32, @intCast(line_text.len)) - (loc.col - 1);
+    const clamped = @min(src_end, line_end);
+    const end_col = displayCol(line_text, clamped - src_off + (loc.col - 1));
 
     return .{
         .file = r.file,
@@ -1487,7 +1564,7 @@ fn renderSnippet(
         prev_line = line;
 
         const idx = try lineIndexFor(bag, scratch, indices, file);
-        const text = idx.lineText(bag.fileText(file), line);
+        const text = idx.lineText(bag.sourceText(file), line);
         const shown = userLine(bag, file, line);
 
         try w.print("{s}{d}{s} |{s} ", .{ p.gutter, shown, spaces(width -| digits(shown)), p.reset });
@@ -1526,15 +1603,19 @@ fn renderFix(
 ) !void {
     const p = opts.palette;
     const r = bag.locate(fix.span, file);
-    const file_text = bag.fileText(r.file);
+    const file_text = bag.sourceText(r.file);
     if (file_text.len == 0) return;
     const idx = try lineIndexFor(bag, scratch, indices, r.file);
-    const loc = idx.loc(r.offset);
+    // Same strip-map step as `place`: the patched line drawn is the ORIGINAL,
+    // so the cut points must be measured in it.
+    const src_off = bag.toSourceOffset(r.file, r.offset);
+    const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset + fix.span.len()));
+    const loc = idx.loc(src_off);
     const line = idx.lineText(file_text, loc.line);
     const shown = userLine(bag, r.file, loc.line);
 
     const cut = @min(loc.col - 1, line.len);
-    const cut_end = @min(cut + fix.span.len(), line.len);
+    const cut_end = @min(cut + (src_end - src_off), line.len);
 
     try w.print("{s}{s} |{s}\n", .{ spaces(width), p.gutter, p.reset });
     try w.print("{s}{d}{s} |{s} ", .{ p.gutter, shown, spaces(width -| digits(shown)), p.reset });
@@ -1663,7 +1744,9 @@ fn writeJsonSpan(
     }
     const r = bag.locate(span, file);
     const idx = try lineIndexFor(bag, scratch, indices, r.file);
-    const loc = idx.loc(r.offset);
+    // line/col are reported in the ORIGINAL file (strip-mapped, like the
+    // human renderer); byte_start/byte_end stay in span currency.
+    const loc = idx.loc(bag.toSourceOffset(r.file, r.offset));
     try w.writeAll("{\"file\":");
     try writeJsonString(w, bag.fileName(r.file));
     try w.print(",\"line\":{d},\"col\":{d},\"byte_start\":{d},\"byte_end\":{d}}}", .{
@@ -1972,6 +2055,52 @@ test "render: tabs expand so carets line up" {
     try std.testing.expect(std.mem.indexOf(u8, out, "|         ^^^^^^") != null);
     // The reported column is the display column, not the byte column.
     try std.testing.expect(std.mem.indexOf(u8, out, "t.va:2:9") != null);
+}
+
+test "render: multi-byte UTF-8 counts codepoints, not bytes" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Eight two-byte µ before the token: sixteen BYTES, eight columns. A
+    // byte-counting `displayCol` drew the caret eight columns too far right.
+    const src = "µµµµµµµµbadtok\n";
+    var bag = Bag.init(arena);
+    try bag.setSingleFile("u.va", src, 0);
+    const at = @as(u32, @intCast(std.mem.indexOf(u8, src, "badtok").?));
+    try bag.add(.parse, .E0207, .{ .start = at, .end = at + 6 }, "", .{});
+
+    const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
+    try std.testing.expect(std.mem.indexOf(u8, out, "| µµµµµµµµbadtok") != null);
+    // Eight spaces of caret indent — one per µ — exactly as the tab test's
+    // eight-space indent above, and the reported column is 9, not 17.
+    try std.testing.expect(std.mem.indexOf(u8, out, "|         ^^^^^^") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "u.va:1:9") != null);
+}
+
+test "strip marks map span offsets back into the original text" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    var bag = Bag.init(arena);
+    // Original: `abc /* c */ def` — the preprocessor strips to `abc   def`
+    // (block comment → one space, `stripComments`) and leaves one mark: from
+    // stripped offset 5 on, original = 11 + (stripped − 5). Before the first
+    // mark: identity.
+    _ = try bag.addFile("m.va", "abc /* c */ def\n");
+    bag.setStrippedText(.root, "abc   def\n", &.{.{ .out = 5, .src = 11 }});
+
+    try std.testing.expectEqualStrings("abc   def\n", bag.fileText(.root));
+    try std.testing.expectEqualStrings("abc /* c */ def\n", bag.sourceText(.root));
+    try std.testing.expectEqual(@as(u32, 0), bag.toSourceOffset(.root, 0)); // 'a'
+    try std.testing.expectEqual(@as(u32, 3), bag.toSourceOffset(.root, 3)); // pre-mark space
+    try std.testing.expectEqual(@as(u32, 12), bag.toSourceOffset(.root, 6)); // 'd'
+    try std.testing.expectEqual(@as(u32, 15), bag.toSourceOffset(.root, 9)); // '\n'
+    // A file registered without stripping maps as identity.
+    const other = try bag.addFile("p.va", "xyz\n");
+    try std.testing.expectEqual(@as(u32, 2), bag.toSourceOffset(other, 2));
+    try std.testing.expectEqualStrings("xyz\n", bag.sourceText(other));
 }
 
 test "render: json is one object per line and escapes properly" {
