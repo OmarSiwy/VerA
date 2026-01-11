@@ -164,6 +164,12 @@ pub const Code = enum(u16) {
     /// parser is the only stage that can tell a `generate_block`'s name from a
     /// §5.3.2 statement label, so it is the only stage that can judge this.
     E0230,
+    /// A.9.3 `hierarchical_identifier` — a per-segment `[ index ]` that is not
+    /// a constant expression the parser can fold. A class-2 number on E0222's
+    /// precedent: the parser is the only stage that CAN judge it, because it
+    /// spells the index into the interned path text (`u[0].g`), the same string
+    /// elaboration keys its flat names by.
+    E0231,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -485,6 +491,9 @@ pub const Code = enum(u16) {
     E0912,
     /// §7.6/§7.7 a connect module is instantiated by name.
     E0913,
+    /// §6.4.2 more than one paramset is still applicable after the clause's
+    /// tie-breaking rules.
+    E0914,
 
     // --------------------------------------------------------------- class 10
     // Runtime / artifact contract — codegen.zig, root.zig.
@@ -1449,6 +1458,24 @@ fn infoOf(c: Code) Info {
             \\through direct nesting — an `else if` chain.
             \\
             \\Rename the block, or rename the declaration it shadows.
+            ,
+        },
+        .E0231 => .{
+            .title = "hierarchical index is not a constant expression",
+            .lrm = "A.9.3",
+            .explain =
+            \\A.9.3: `hierarchical_identifier ::= { identifier [ [
+            \\constant_expression ] ] . } identifier` — the bracketed index that
+            \\selects one element of an instance array is a CONSTANT expression,
+            \\and it sits on a segment followed by `.` (the final identifier
+            \\takes none).
+            \\
+            \\VerA folds the index at parse time, because the whole dotted path
+            \\is interned as ONE string (`u[0].g`) — the same spelling
+            \\elaboration gives the flattened element — and a value that cannot
+            \\be folded has no digits to spell. The parser folds literals and
+            \\the +,-,*,/ arithmetic over them; a parameter read is not in that
+            \\set, and nothing else the grammar admits here is constant at all.
             ,
         },
         .W0250 => .{
@@ -4111,12 +4138,17 @@ fn infoOf(c: Code) Info {
             \\That is BINNING: one paramset per geometry range, and the instance's
             \\dimensions pick the bin.
             \\
-            \\Every candidate here was ruled out. VerA applies two of the clause's
-            \\criteria: an override must name a parameter the paramset declares,
-            \\and every parameter's value — overridden or defaulted — must lie
-            \\within that paramset's own declared `from`/`exclude` ranges. So
-            \\either an override is misspelled for this set, or the instance falls
-            \\in a gap between the bins.
+            \\Every candidate here was ruled out by the clause's selection rules:
+            \\an override must name an overridable parameter the paramset
+            \\declares, every parameter's value — overridden or defaulted — must
+            \\lie within that paramset's own declared `from`/`exclude` ranges,
+            \\and the module the paramset specializes must declare a port for
+            \\each port the instance connects. So either an override or a
+            \\connection is misspelled for this set, or the instance falls in a
+            \\gap between the bins.
+            \\
+            \\The OPPOSITE failure — several paramsets still applicable after
+            \\6.4.2's tie-breaking rules — is E0914.
             ,
         },
         .E0912 => .{
@@ -4167,6 +4199,35 @@ fn infoOf(c: Code) Info {
             \\would stamp its continuous half into the device with the digital half
             \\silently absent — a plausible-looking wrong device, which is worse
             \\than a refusal that names the reason.
+            ,
+        },
+        .E0914 => .{
+            .title = "more than one paramset is still applicable",
+            .lrm = "6.4.2",
+            .explain =
+            \\LRM 6.4.2 chooses among same-named paramsets in two phases. The
+            \\selection rules ("When choosing an appropriate paramset, the
+            \\following rules shall be enforced") cut the overload set down to
+            \\the applicable candidates; then "The rules above may not be
+            \\sufficient for the simulator to pick a unique paramset, in which
+            \\case the following rules shall be applied in order until a unique
+            \\paramset has been selected":
+            \\
+            \\  1. "The paramset with the fewest number of un-overridden
+            \\     parameters shall be selected."
+            \\  2. "The paramset with the greatest number of local parameters
+            \\     with specified ranges shall be selected."
+            \\  3. "The paramset with the fewest ports not connected in the
+            \\     instance line shall be selected."
+            \\
+            \\And then: "It shall be an error if there are still more than one
+            \\applicable paramset for an instance after application of these
+            \\rules." This is that error — the candidates named in the message
+            \\tie on all three counts, so the language gives the elaborator no
+            \\way to prefer one. Narrow a `from` range, or override one more
+            \\parameter, until the instance's values land in exactly one bin.
+            \\
+            \\ZERO applicable paramsets is the other failure, E0911.
             ,
         },
 

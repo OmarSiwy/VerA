@@ -573,7 +573,7 @@ const Flatten = struct {
                     // §3.10 order 1 still beats the local declaration on a port
                     // nobody connected: the segment exists, it is just the only
                     // segment of its signal.
-                    .discipline = self.oocDiscipline(path, p.name) orelse p.discipline,
+                    .discipline = (try self.oocDiscipline(path, p.name)) orelse p.discipline,
                     .main_tok = p.main_tok,
                 });
             }
@@ -643,7 +643,7 @@ const Flatten = struct {
             // DECLARED FOR sig IN THE MODULE WHERE sig WAS DECLARED" — so the
             // thing it overrides is a local declaration, and a local
             // declaration of a net that is not a port is this loop.
-            if (self.oocDiscipline(path, n.name)) |d| out.discipline = d;
+            if (try self.oocDiscipline(path, n.name)) |d| out.discipline = d;
             try self.addNet(out);
         }
         for (child.vars) |v| try self.vars.append(self.a(), try self.cloneVar(v));
@@ -694,9 +694,16 @@ const Flatten = struct {
         return null;
     }
 
-    /// The two ways a connection list can be malformed: longer than the port
-    /// list, or naming a port that does not exist. §6.2.2 permits it to be
-    /// SHORTER — that is the omitted-port spelling of "not to be connected".
+    /// The ways a connection list can be malformed: longer than the port list,
+    /// naming a port that does not exist, mixing the two spellings, or naming
+    /// one port twice. §6.2.2 permits it to be SHORTER — that is the
+    /// omitted-port spelling of "not to be connected".
+    ///
+    /// The list's FIRST entry decides which spelling it is (`connectionFor`
+    /// binds by the same test), so a mix is diagnosed relative to that. §6.5.5:
+    /// "The two types of module port connections can not be mixed; connections
+    /// to the ports of a particular module instance shall be all by order or
+    /// all by name."
     fn checkConnectionShape(self: *Flatten, inst: *const Ast.Instance, child: *const Ast.ModuleDecl) Error!void {
         const named = inst.ports.len != 0 and inst.ports[0].name != .none;
         if (!named) {
@@ -706,9 +713,18 @@ const Flatten = struct {
                 "`{s}` declares {d} port{s}, and this instance connects {d}",
                 .{ self.str(child.name), child.ports.len, if (child.ports.len == 1) "" else "s", inst.ports.len },
             );
+            // A `.name(...)` later in an ordered list used to bind by POSITION
+            // with the name silently ignored — the one shape of §6.2's mix the
+            // named loop below cannot see, because the whole list was ordered.
+            for (inst.ports) |c| if (c.name != .none) try self.err(
+                c.main_tok,
+                .E0906,
+                "a named connection in a list of ordered connections",
+                .{},
+            );
             return;
         }
-        for (inst.ports) |c| {
+        for (inst.ports, 0..) |c, i| {
             if (c.name == .none) {
                 try self.err(c.main_tok, .E0906, "an ordered connection in a list of named connections", .{});
                 continue;
@@ -716,9 +732,19 @@ const Flatten = struct {
             const found = for (child.ports) |p| {
                 if (p.name == c.name) break true;
             } else false;
-            if (!found) try self.err(c.main_tok, .E0906, "`{s}` is not a port of `{s}`", .{
-                self.str(c.name), self.str(child.name),
-            });
+            if (!found) {
+                try self.err(c.main_tok, .E0906, "`{s}` is not a port of `{s}`", .{
+                    self.str(c.name), self.str(child.name),
+                });
+                continue;
+            }
+            // 1364-2005 §12.3.6 (the base standard §6.2.2 builds on): a port is
+            // connected at most once — `connectionFor`'s first-match-wins made a
+            // second `.a(...)` vanish without a trace.
+            for (inst.ports[0..i]) |prev| if (prev.name == c.name) {
+                try self.err(c.main_tok, .E0906, "`{s}` is connected twice", .{self.str(c.name)});
+                break;
+            };
         }
     }
 
@@ -741,7 +767,14 @@ const Flatten = struct {
         var mfactor = parent.mfactor;
 
         const named = inst.params.len != 0 and inst.params[0].name != .none;
-        for (inst.params, 0..) |o, i| {
+        // §3.4.5: local parameters "cannot directly be modified with the
+        // defparam statement or by the ordered or named parameter value
+        // assignment" — so §6.3's "in the order of their declaration" is an
+        // order over the OVERRIDABLE parameters only, and an ordered value
+        // steps past every `is_local` entry instead of landing on it. The
+        // named arm refuses a localparam by name below, for the same clause.
+        var ord: usize = 0;
+        for (inst.params) |o| {
             // The value is the PARENT's expression, so it is cloned under the
             // parent's map, not the child's.
             const saved = self.unit;
@@ -754,14 +787,17 @@ const Flatten = struct {
 
             if (!named) {
                 // §6.3 "in the order of their declaration".
-                if (i >= child.params.len) {
-                    try self.err(o.main_tok, .E0907, "`{s}` declares {d} parameter{s}, and this instance overrides {d}", .{
-                        self.str(child.name), child.params.len,
-                        if (child.params.len == 1) "" else "s", inst.params.len,
+                while (ord < child.params.len and child.params[ord].is_local) ord += 1;
+                if (ord >= child.params.len) {
+                    const n = overridableCount(child.params);
+                    try self.err(o.main_tok, .E0907, "`{s}` declares {d} overridable parameter{s}, and this instance overrides {d}", .{
+                        self.str(child.name), n,
+                        if (n == 1) "" else "s", inst.params.len,
                     });
                     continue;
                 }
-                try over.put(self.a(), child.params[i].name, value);
+                try over.put(self.a(), child.params[ord].name, value);
+                ord += 1;
                 continue;
             }
             if (self.ctx.file.strings.eql(o.name, "$mfactor")) {
@@ -845,65 +881,207 @@ const Flatten = struct {
     /// simulator shall choose an appropriate paramset from the set that shares a
     /// given name for every instance that references that name."
     ///
-    /// Two of the clause's criteria are applied, and they are the two that are
-    /// decidable from the instantiation alone:
+    /// Two phases, straight from the clause. The selection rules — "the
+    /// following rules shall be enforced" — cut the overload set down to the
+    /// applicable paramsets (`paramsetAdmits`). Then: "The rules above may not
+    /// be sufficient for the simulator to pick a unique paramset, in which case
+    /// the following rules shall be applied in order until a unique paramset
+    /// has been selected:"
     ///
-    ///   - every parameter the instance overrides is a parameter of the paramset
-    ///     (an override the paramset has no home for cannot be honoured);
-    ///   - "the parameters of the paramset, with overrides and defaults, shall be
-    ///     all within the allowed ranges specified in the paramset parameter
-    ///     declaration" — which is what makes a BINNED set (§6.4.2's short- and
-    ///     long-channel pair, annex E's `spice_binning`) select on geometry.
+    ///   1. "The paramset with the fewest number of un-overridden parameters
+    ///      shall be selected." — §6.4.2's own m3 example: the default paramset
+    ///      (l, w, both overridden) beats the long-channel one (ad, as left at
+    ///      their defaults);
+    ///   2. "The paramset with the greatest number of local parameters with
+    ///      specified ranges shall be selected."
+    ///   3. "The paramset with the fewest ports not connected in the instance
+    ///      line shall be selected." — over the TARGET module's port list,
+    ///      since same-named paramsets "may refer to different modules".
     ///
-    /// ponytail: first survivor wins, and the ceiling is the rest of §6.4.2's
-    /// tie-breaking (the largest-number-of-parameters rule and the
-    /// implementation-defined remainder). A tie is not diagnosed, because the
-    /// clause does not make one an error; a set where NOTHING survives is E0911,
-    /// because that instance has no paramset and the LRM's own binning examples
-    /// rely on exactly one surviving.
+    /// "It shall be an error if there are still more than one applicable
+    /// paramset for an instance after application of these rules" — E0914. A
+    /// set where NOTHING survives selection is E0911, because that instance has
+    /// no paramset and the LRM's own binning examples rely on exactly one
+    /// surviving.
     fn selectParamset(self: *Flatten, inst: *const Ast.Instance) Error!?*const Ast.ParamsetDecl {
         var candidates: usize = 0;
+        var live: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
         for (self.ctx.file.paramsets) |*ps| {
             if (ps.name != inst.module) continue;
             candidates += 1;
-            if (self.paramsetAdmits(inst, ps)) return ps;
+            if (self.paramsetAdmits(inst, ps)) try live.append(self.a(), ps);
         }
-        if (candidates == 0) {
-            try self.err(inst.main_tok, .E0904, "`{s}`", .{self.str(inst.module)});
-        } else {
-            try self.err(inst.main_tok, .E0911, "`{s}`: no paramset named `{s}` admits these parameter values", .{
-                self.str(inst.name), self.str(inst.module),
+        if (live.items.len == 0) {
+            if (candidates == 0) {
+                try self.err(inst.main_tok, .E0904, "`{s}`", .{self.str(inst.module)});
+            } else {
+                try self.err(inst.main_tok, .E0911, "`{s}`: no paramset named `{s}` admits these parameter values", .{
+                    self.str(inst.name), self.str(inst.module),
+                });
+            }
+            return null;
+        }
+        // "applied in order until a unique paramset has been selected".
+        if (live.items.len > 1) try self.tieBreak(inst, &live, .un_overridden);
+        if (live.items.len > 1) try self.tieBreak(inst, &live, .ranged_locals);
+        if (live.items.len > 1) try self.tieBreak(inst, &live, .unconnected_ports);
+        if (live.items.len > 1) {
+            try self.err(inst.main_tok, .E0914, "`{s}`: {d} paramsets named `{s}` are still applicable after §6.4.2's tie-breaking rules", .{
+                self.str(inst.name), live.items.len, self.str(inst.module),
             });
+            return null;
         }
-        return null;
+        return live.items[0];
     }
 
+    /// The three §6.4.2 tie-breaking rules, in the clause's order.
+    const TieRule = enum { un_overridden, ranged_locals, unconnected_ports };
+
+    /// Apply ONE tie-breaking rule: score every surviving candidate and keep
+    /// the minimum (a "greatest" rule negates its count, so one comparison
+    /// direction serves all three).
+    fn tieBreak(
+        self: *Flatten,
+        inst: *const Ast.Instance,
+        live: *std.ArrayList(*const Ast.ParamsetDecl),
+        rule: TieRule,
+    ) Error!void {
+        const scores = try self.a().alloc(i64, live.items.len);
+        for (live.items, scores) |ps, *s| s.* = switch (rule) {
+            // "the fewest number of un-overridden parameters": the paramset's
+            // overridable parameters the instance left at their defaults. A
+            // localparam is not counted — it is not overridable at all (§3.4.5),
+            // so it says nothing about how specifically this instance names
+            // this bin, and §6.4.2's neighbouring rules treat "parameters" and
+            // "local parameters" as disjoint counts.
+            .un_overridden => blk: {
+                const overridable: i64 = @intCast(overridableCount(ps.params));
+                const named = inst.params.len != 0 and inst.params[0].name != .none;
+                if (!named) {
+                    // §6.3 ordered values land on the first inst.params.len
+                    // overridable parameters, so the remainder is the count.
+                    break :blk @max(0, overridable - @as(i64, @intCast(inst.params.len)));
+                }
+                var n: i64 = 0;
+                for (ps.params) |p| {
+                    if (p.is_local) continue;
+                    n += @intFromBool(!overridesParam(inst, ps, p.name));
+                }
+                break :blk n;
+            },
+            // "the greatest number of local parameters with specified ranges" —
+            // negated, see above.
+            .ranged_locals => blk: {
+                var n: i64 = 0;
+                for (ps.params) |p| n += @intFromBool(p.is_local and p.ranges.len != 0);
+                break :blk -n;
+            },
+            // "the fewest ports not connected in the instance line". A target
+            // module the file never declares scores worst; if such a candidate
+            // is selected anyway, E0904 names it at the use site.
+            .unconnected_ports => blk: {
+                const child = self.findModule(ps.target) orelse break :blk std.math.maxInt(i64);
+                var n: i64 = 0;
+                for (child.ports, 0..) |p, i| {
+                    const conn = self.connectionFor(inst, child, p, i);
+                    n += @intFromBool(conn == null or conn.?.expr == .none);
+                }
+                break :blk n;
+            },
+        };
+        var best = scores[0];
+        for (scores[1..]) |s| best = @min(best, s);
+        var w: usize = 0;
+        for (live.items, scores) |ps, s| if (s == best) {
+            live.items[w] = ps;
+            w += 1;
+        };
+        live.shrinkRetainingCapacity(w);
+    }
+
+    /// §3.4.5 the parameters an override CAN land on: the non-`is_local` ones.
+    fn overridableCount(params: []const Ast.ParamDecl) usize {
+        var n: usize = 0;
+        for (params) |p| n += @intFromBool(!p.is_local);
+        return n;
+    }
+
+    /// Does a NAMED instance override land on paramset parameter `name`,
+    /// directly or through a §3.4.7 alias?
+    fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, name: Ast.StrId) bool {
+        for (inst.params) |o| {
+            if (o.name == name) return true;
+            for (ps.aliasparams) |al| if (al.alias == o.name and al.target == name) return true;
+        }
+        return false;
+    }
+
+    /// §6.4.2's SELECTION rules — "When choosing an appropriate paramset, the
+    /// following rules shall be enforced" — as far as each is decidable here:
+    ///
+    ///   1. "All parameters overridden on the instance shall be parameters of
+    ///      the paramset" — and §3.4.5 keeps a localparam out of an override's
+    ///      reach, so a paramset whose only `x` is local does not admit an
+    ///      override of `x`, in either spelling;
+    ///   2. "The parameters of the paramset, with overrides and defaults, shall
+    ///      be all within the allowed ranges specified in the paramset
+    ///      parameter declaration" — which is what makes a BINNED set (§6.4.2's
+    ///      short- and long-channel pair, annex E's `spice_binning`) select on
+    ///      geometry;
+    ///   3. "The local parameters of the paramset, computed from parameters,
+    ///      shall be within the allowed ranges specified in the paramset" —
+    ///      their defaults ride the same loop, and `constReal` folds only
+    ///      literals, so a computed value is judged exactly as far as it can be
+    ///      folded (see `inRanges` for why unfoldable admits);
+    ///   4. "The underlying module shall have a port declared for each port
+    ///      connected in the instance line." A target module the file never
+    ///      declares cannot fail it — that absence is E0904's, at the use site.
     fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl) bool {
         const named = inst.params.len != 0 and inst.params[0].name != .none;
-        if (!named and inst.params.len > ps.params.len) return false;
-        for (ps.params, 0..) |p, i| {
+        if (!named and inst.params.len > overridableCount(ps.params)) return false;
+        var ord: usize = 0;
+        for (ps.params) |p| {
             // §6.4.2 "with overrides and defaults": the value this paramset would
-            // give the parameter, whichever supplied it.
+            // give the parameter, whichever supplied it. An `is_local` entry
+            // takes no override in either spelling (§3.4.5), so its default is
+            // the value judged — criterion 3.
             var value = p.default;
-            if (named) {
+            if (p.is_local) {
+                // keep the default
+            } else if (named) {
                 for (inst.params) |o| {
                     if (o.name == p.name) value = o.value;
                 }
-            } else if (i < inst.params.len) {
-                value = inst.params[i].value;
+            } else {
+                if (ord < inst.params.len) value = inst.params[ord].value;
+                ord += 1;
             }
             if (!self.inRanges(value, p.ranges)) return false;
         }
-        if (!named) return true;
-        for (inst.params) |o| {
+        if (named) for (inst.params) |o| {
             // §9.18's system parameters are not the paramset's to declare.
             if (self.ctx.file.strings.eql(o.name, "$mfactor")) continue;
             const found = for (ps.params) |p| {
-                if (p.name == o.name) break true;
+                if (!p.is_local and p.name == o.name) break true;
             } else for (ps.aliasparams) |al| {
                 if (al.alias == o.name) break true;
             } else false;
             if (!found) return false;
+        };
+        // Criterion 4, both connection spellings. A mixed or malformed list is
+        // not judged here — that is E0906's, after selection
+        // (`checkConnectionShape`).
+        if (self.findModule(ps.target)) |child| {
+            const conns_named = inst.ports.len != 0 and inst.ports[0].name != .none;
+            if (conns_named) {
+                for (inst.ports) |c| {
+                    if (c.name == .none) continue;
+                    const found = for (child.ports) |p| {
+                        if (p.name == c.name) break true;
+                    } else false;
+                    if (!found) return false;
+                }
+            } else if (inst.ports.len > child.ports.len) return false;
         }
         return true;
     }
@@ -1164,9 +1342,13 @@ const Flatten = struct {
     /// simply does not reach, so reporting it would report correct programs. The
     /// upgrade is a `used` flag on `ooc`, exactly like `Defparam.used`, once
     /// every consumer of the table is in.
-    fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) ?Ast.StrId {
-        var buf: [256]u8 = undefined;
-        const key = std.fmt.bufPrint(&buf, "{s}{s}", .{ path, self.str(local) }) catch return null;
+    fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) Error!?Ast.StrId {
+        // The same allocPrint join every sibling key builds (`defparams`,
+        // `walkInstances`). This was a fixed 256-byte bufPrint whose overflow
+        // was `catch return null` — a path longer than the buffer silently lost
+        // its out-of-context declaration, which is a wrong DISCIPLINE, not a
+        // wrong diagnostic.
+        const key = try std.fmt.allocPrint(self.a(), "{s}{s}", .{ path, self.str(local) });
         const n = self.ooc.get(key) orelse return null;
         return if (n.discipline == .none) null else n.discipline;
     }
@@ -1199,7 +1381,7 @@ const Flatten = struct {
     /// against. Widening the table without both of the other two would be a
     /// member with no consumer. TODO.md §1 carries the costed remainder.
     fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId) Error!void {
-        const disc = self.oocDiscipline(path, p.name) orelse p.discipline;
+        const disc = (try self.oocDiscipline(path, p.name)) orelse p.discipline;
         if (disc == .none) return;
         if (self.declaredDiscipline(bound) != .none) {
             // §7.4.4.1, and it is the whole of the basic mode's rule: "At each
