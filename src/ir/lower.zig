@@ -370,6 +370,15 @@ var_noise: std.StringHashMapUnmanaged(NoiseKinds) = .empty,
 loops: std.ArrayList(LoopCtx) = .empty,
 /// §4.7.1 the function currently being inlined (return slot + exit block).
 ret: ?RetCtx = null,
+/// §4.7.2/§6.8 the local `parameter` declarations of the function currently
+/// being inlined, empty outside one. Their VALUES fold into `consts`
+/// (`inlineUserFunc`); this slice is the MASK `lookupName`/`foldExpr` consult
+/// before `param_index`, because §6.8 makes the function one of the six scopes
+/// and a local declaration shadows the module's — while lookup asks
+/// `param_index` first, so without the mask a module parameter of the same
+/// name won over the local. A slice, not a set: a function declares a handful
+/// of parameters at most, and the save/restore is two pointer copies.
+func_params: []const Ast.ParamDecl = &.{},
 /// §4.7.1 recursion guard — names on the inline stack.
 inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
@@ -6290,7 +6299,10 @@ fn lookupIdent(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     if (self.vars.get(name)) |slot|
         return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
-    if (self.param_index.get(name)) |idx|
+    // §4.7.2/§6.8: inside a function body, a function-local `parameter` of the
+    // same name shadows the module's, so `param_index` is masked and the local
+    // value is found in `consts` (where `inlineUserFunc` folded it).
+    if (!self.funcParamShadows(name)) if (self.param_index.get(name)) |idx|
         return .{ .v = self.param_values.items[idx], .ty = astTy(self.params.items[idx].ty) };
     if (self.consts.get(name)) |c| return switch (c) {
         .int => .{ .v = try self.iconst(c.asInt()), .ty = .integer },
@@ -6313,6 +6325,16 @@ fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     if (near) |s| b.suggestHere(s);
     try b.emit();
     return poison;
+}
+
+/// §4.7.2/§6.8: does the function currently being inlined declare `name` as a
+/// local parameter? True makes the local (in `consts`) win over a module
+/// parameter of the same name — the shadowing §6.8's scope list requires.
+fn funcParamShadows(self: *const Lower, name: []const u8) bool {
+    for (self.func_params) |*p| {
+        if (self.file.strings.eql(p.name, name)) return true;
+    }
+    return false;
 }
 
 /// A.8.6 unary operators. §4.2.3 (+/-), §4.2.7 (!), §4.2.9 (~).
@@ -8203,6 +8225,7 @@ pub fn inlineUserFunc(
     const saved_ret = self.ret;
     const saved_restrict = self.restrict;
     const saved_loops = self.loops.items.len;
+    const saved_func_params = self.func_params;
     const log_mark = self.scope_log.items.len;
     self.vars = .empty;
     self.arrays = .empty;
@@ -8210,6 +8233,11 @@ pub fn inlineUserFunc(
     try self.inlining.append(self.arena, name);
 
     // §4.7.2 local parameters fold to constants; they never reach the Model.
+    // The DECL LIST is installed as `func_params` so `lookupName` masks a
+    // module parameter of the same name for the body's duration (§6.8) —
+    // swapped per call like `vars`, so a callee never sees its caller's
+    // locals (§4.7.1 isolation).
+    self.func_params = fd.params;
     for (fd.params) |*p| {
         if (self.constEval(p.default)) |c|
             try self.consts.put(self.arena, self.file.str(p.name), c);
@@ -8281,6 +8309,7 @@ pub fn inlineUserFunc(
     self.arrays = saved_arrays;
     self.ret = saved_ret;
     self.restrict = saved_restrict;
+    self.func_params = saved_func_params;
     self.loops.shrinkRetainingCapacity(saved_loops);
 
     var w: usize = 0;
@@ -8409,7 +8438,10 @@ fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
         .ident => {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.contains(name)) return null; // a runtime variable
-            if (!params and self.param_index.contains(name)) return null;
+            // A function-local parameter is NOT overridable by a model card
+            // (§4.7.2 — it never reaches the Model), so `elabConst`'s refusal
+            // to look through a parameter does not apply to a shadowing local.
+            if (!params and self.param_index.contains(name) and !self.funcParamShadows(name)) return null;
             return self.consts.get(name);
         },
         .unary => {
@@ -8544,9 +8576,14 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
 // and name their remaining ceiling at the fold itself. A block comment listing
 // what the file does not do is a register in the worst place for one.
 //   · §4.7.2 function-local `parameter` declarations fold into `consts` and
-//     are not restored on exit: a module parameter of the same name would be
-//     shadowed for the rest of the module. Give `consts` the same save/restore
-//     treatment as `vars` if a fixture ever does that.
+//     are not restored on exit. DURING the body the shadowing is right —
+//     `func_params` masks `param_index`, so the local wins there and the
+//     module parameter wins again after the call (`lookupName` asks
+//     `param_index` before `consts`). What remains is the CONSTANT-fold view
+//     AFTER the call: `consts` still carries the local's value under that
+//     name, so a later array bound or generate bound folding the shadowed name
+//     reads the function's constant, not the module default. Give `consts` the
+//     same save/restore treatment as `vars` if a fixture ever does that.
 
 // ---------------------------------------------------------------------------
 // Self-check: the whole frontend on two small modules — the split that class 6
