@@ -8325,11 +8325,19 @@ pub fn inlineUserFunc(
     const saved_arrays = self.arrays;
     const saved_ret = self.ret;
     const saved_restrict = self.restrict;
-    const saved_loops = self.loops.items.len;
+    // MASKED, not merely marked: the body is inlined into the caller's CFG, so
+    // without a fresh stack a `break` in a function whose own loops are all
+    // closed bound the loop the CALL SITE sits in and silently exited it — a
+    // caller-scope capture the same §4.7.1 isolation that swaps `vars` forbids.
+    // With the stack empty, `lowerJump` reports the §5.11 "only be used in a
+    // loop" E0404 exactly as it does for a bare module-level `break`, and a
+    // loop INSIDE the body still pushes and binds normally.
+    const saved_loops = self.loops;
     const saved_func_params = self.func_params;
     const log_mark = self.scope_log.items.len;
     self.vars = .empty;
     self.arrays = .empty;
+    self.loops = .empty;
     self.restrict = "an analog function";
     try self.inlining.append(self.arena, name);
 
@@ -8411,7 +8419,8 @@ pub fn inlineUserFunc(
     self.ret = saved_ret;
     self.restrict = saved_restrict;
     self.func_params = saved_func_params;
-    self.loops.shrinkRetainingCapacity(saved_loops);
+    self.loops.deinit(self.arena);
+    self.loops = saved_loops;
 
     var w: usize = 0;
     for (fd.args, arg_exprs) |formal, actual| {
