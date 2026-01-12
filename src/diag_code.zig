@@ -291,6 +291,10 @@ pub const Code = enum(u16) {
     E0361,
     /// §6.8 one identifier declares two items in one scope.
     E0362,
+    /// §3.4/A.2.4 a parameter default that reads simulation state — `$abstime`,
+    /// `$temperature`, an access function, `$random`, … — where the grammar
+    /// requires a constant_mintypmax_expression.
+    E0363,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -2367,6 +2371,30 @@ fn infoOf(c: Code) Info {
             \\What VerA checks is the first clause of that sentence: two variable
             \\declarations of one name in one module or one block. Rename one of
             \\them, or delete it if it was a repeat of the same declaration.
+            ,
+        },
+        .E0363 => .{
+            .title = "parameter default is not a constant expression",
+            .lrm = "3.4",
+            .explain =
+            \\A.2.4 gives a parameter assignment a constant_mintypmax_expression,
+            \\and 3.4 explains why: "The default_value may not be changed at
+            \\runtime" — a parameter is a value fixed before the solve, settable
+            \\only per instance (6.3). An expression that reads simulation state
+            \\— $abstime, $temperature, $vt, $random, an access function like
+            \\V(a,b), an analog operator — has a different value at every point
+            \\of the solve, so there is no single number a model card could
+            \\carry for it and no moment the default could honestly be read.
+            \\
+            \\A default MAY reference other parameters (3.4/6.3.4: an update of
+            \\the base parameter automatically updates the dependent one); it is
+            \\the operating point it may not reference.
+            \\
+            \\Compute the value in the analog block instead, into a variable:
+            \\
+            \\    parameter real tj0 = 27;          // overridable constant
+            \\    real tj;
+            \\    analog tj = $temperature - `P_CELSIUS0;
             ,
         },
 
