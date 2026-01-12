@@ -6992,6 +6992,27 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         return .{ .v = if (t.neg) try self.emit(.fneg, &.{d}) else d, .ty = .real };
     }
 
+    // A.8.2 fixes each operator's MANDATORY arguments — everything left of the
+    // grammar's first `[`. The per-slot loop below judges only slots that were
+    // WRITTEN (`ddt(,1.0)` → E0505), so a list that stops early has to be
+    // measured against the grammar here: `ddt()` otherwise skipped the loop
+    // entirely and became a silent zero, `absdelay(x)` a delay of nothing.
+    // The laplace forms mandate three slots — both vector commas sit outside
+    // the brackets, so a slot may be NULL (the loop's `nullZerosOk` carve-out
+    // governs which) but it must be THERE — and the zi forms four (…, T).
+    const min_args: usize = if (std.mem.eql(u8, name, "absdelay"))
+        2
+    else if (std.mem.startsWith(u8, name, "laplace_"))
+        3
+    else if (std.mem.startsWith(u8, name, "zi_"))
+        4
+    else
+        1; // ddt, idt, idtmod, transition, slew, last_crossing, limexp
+    if (args.len < min_args) {
+        try self.errAt(e, .E0505, "`{s}()` needs {d} argument(s), got {d}", .{ name, min_args, args.len });
+        return poison;
+    }
+
     try self.checkFilterArgBounds(name, args); // §4.5.5-§4.5.10
 
     const abstol_slot = abstolSlot(name);
