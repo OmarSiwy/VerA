@@ -97,6 +97,7 @@ const Analysis = @import("ir/analysis.zig");
 const Ssa = @import("ir/ssa.zig");
 const Elaborate = @import("ir/elaborate.zig");
 const Lower = @import("ir/lower.zig");
+const ifconv = @import("ir/ifconv.zig");
 const proof = @import("ir/proof.zig");
 pub const diag = @import("diag.zig");
 const diag_code = @import("diag_code.zig");
@@ -480,6 +481,13 @@ fn compileInArena(
         },
         error.DiagnosticsReported => return error.CompileFailed,
     };
+
+    // --- stage 4.5: if-convert pure diamonds to §4.2.12 select --------------
+    // Before prove: a select's guard facts come from markSelectArms, so the
+    // proof sees the same evidence the CFG edge carried, and codegen can emit
+    // proven-total conditionals branchless (S.sel) instead of `if`.
+    // The arena, not the gpa: ifconv appends to the arena-owned MIR tables.
+    _ = try ifconv.run(arena, mir);
 
     // --- stage 5: PROVE (class 6) — gates every target ----------------------
     // Also the source of the W0650 finiteness WARNING, which is why this runs

@@ -533,7 +533,7 @@ fn fuseSingleUse(self: *UnitPlan) void {
     for (0..self.an.nb) |bi| {
         const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
         if (stmts.len < 2) continue;
-        for (stmts[0 .. stmts.len - 1], stmts[1..]) |inst, next| {
+        for (stmts[0 .. stmts.len - 1], 0..) |inst, si| {
             const v = @intFromEnum(self.an.rv(self.an.i_res[@intFromEnum(inst)]));
             if (v < Mir.Value.first_dynamic) continue;
             if (!self.needed[v] or self.inlined[v]) continue;
@@ -547,8 +547,27 @@ fn fuseSingleUse(self: *UnitPlan) void {
             // `call` is an operator/function evaluated once per step (§4.5),
             // `phi` is materialised as a `var` — neither is an expression.
             if (op == .call or op == .phi) continue;
-            if (!self.eagerlyUses(next, @enumFromInt(v))) continue;
-            self.inlined[v] = true;
+            // The user may sit further down the SAME block as long as every
+            // statement in between is a pure expression (unary/binary/
+            // ternary): a pure op reads only SSA values, so sliding another
+            // pure expression past it changes nothing — the original
+            // adjacent-statement rule is the k == si + 1 case. A `call` or
+            // `phi` stops the scan: §4.5 operators and §9.4 prints are the
+            // side effects the adjacency rule existed to not cross. This is
+            // what lets ifconv's spliced arms sit between a comparison and
+            // the select that consumes it without costing the fusion.
+            for (stmts[si + 1 ..]) |next| {
+                if (self.eagerlyUses(next, @enumFromInt(v))) {
+                    self.inlined[v] = true;
+                    break;
+                }
+                const nop = self.mir.instOp(next);
+                if (nop == .call or nop == .phi) break;
+                switch (Mir.opClass(nop)) {
+                    .unary, .binary, .ternary => {},
+                    else => break,
+                }
+            }
         }
     }
 }

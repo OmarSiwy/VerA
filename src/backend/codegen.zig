@@ -350,6 +350,20 @@ pub const Gen = struct {
     /// `<module>__common__core`, or empty for a model with no targets at all.
     common_name: []const u8 = "",
     common_mode: proof.FloatMode = .optimized,
+    /// Float mode of the unit CURRENTLY being emitted. `.strict` is the eager
+    /// `sel` license — see `renderInst`'s select case. Set by `emitUnit` and
+    /// the common-core emitter, false-by-default so any other emission path
+    /// keeps the lazy form.
+    cur_strict: bool = false,
+    /// True once any residual/charge unit steered on an x-dependent value
+    /// through a scalar — a `.val()` comparison, a lazy `if`, an int cast, an
+    /// event operator, a value-collapsing helper (floor, table lookup …). A
+    /// device that finishes with this still false gets `pub const lane_clean
+    /// = true;`: instantiating eval/q with a LANE-PARALLEL S (one operating
+    /// point per lane) is then exact per lane, which the testbench's batch
+    /// differential check asserts. Display units never set it — they are not
+    /// part of the residual.
+    lane_pinned: bool = false,
     /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
     display: Display = .drop,
     /// `Options.jac_f32` — emit the single-precision-Jacobian permission decl.
@@ -778,6 +792,10 @@ pub const Gen = struct {
         if (stateful or self.lower.rng_auto_sites != 0) try self.emitStateMachine();
         try cg_limit.emit(self);
         try self.emitNextBreakpoint();
+        // Lane-parallel permission (see `lane_pinned`): eval/q of this device
+        // instantiated with a vector S is exact per lane. The testbench's
+        // batch differential check keys on it, and a batching host may.
+        if (!self.lane_pinned) try self.w("pub const lane_clean = true;\n\n", .{});
         try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
     }
 
@@ -1657,6 +1675,7 @@ pub const Gen = struct {
         // §4.3: the STRICTEST mode of every consumer — `proof.FloatMode.strictest`
         // explains why the join has to absorb `.strict`.
         try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
+        self.cur_strict = self.common_mode == .strict;
 
         const body_start = self.out.items.len;
         self.fatal = pre;
@@ -1737,6 +1756,7 @@ pub const Gen = struct {
         const at_inst = self.out.items.len;
         try self.w("inst: *const Instance) S {{\n", .{});
         try self.w("    @setFloatMode(.{s});\n", .{mode});
+        self.cur_strict = std.mem.eql(u8, mode, "strict");
 
         const body_start = self.out.items.len;
         try self.emitUnitBody(target);
@@ -2165,6 +2185,7 @@ pub const Gen = struct {
     }
 
     fn renderCond(self: *Gen, cond: Mir.Value) Error!void {
+        self.pinLanes(cond);
         const v = self.an.rv(cond);
         if (self.an.tyOf(v) == .int) {
             try self.renderVal(v, .int);
@@ -2304,6 +2325,7 @@ pub const Gen = struct {
                     // Not a literal, so §3.3 leaves it with no numeric value.
                     else => self.b("@as(i64, 0)", .{}),
                 };
+                self.pinLanes(v); // a real→int collapse is a scalar decision
                 try self.b("@as(i64, @intFromFloat(@round((", .{});
                 try self.renderValueRef(v);
                 try self.b(").val())))", .{});
@@ -2345,6 +2367,60 @@ pub const Gen = struct {
         }
     }
 
+    /// May `v`'s inline-rendered subtree run UNCONDITIONALLY in a `.strict`
+    /// unit? True for anything already materialized (slots/cache/phi vars are
+    /// computed before the select either way), leaves, and trees of ops that
+    /// are total on all of R under IEEE semantics: no call, and
+    /// `proof.domainOf == .all` — which excludes ln/sqrt/pow/… and the
+    /// hard-UB idiv/imod/fmod. Mirrors `foldHidesSlot`'s stop condition, so
+    /// "inline" here is exactly what `renderVal` would inline.
+    fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
+        if (depth > 64) return false;
+        const v = self.an.rv(v0);
+        const i = @intFromEnum(v);
+        if (i < self.an.nv and (self.plan.cached(v) or self.plan.slot[i] != none_u32)) return true;
+        const def = self.mir.valueDef(v);
+        if (def != .inst_result) return true; // const / param / probe
+        const inst = def.inst_result;
+        const row = self.mir.instRow(inst);
+        if (row.op == .call) return false;
+        if (proof.domainOf(row.op) != .all) return false;
+        return switch (Mir.opClass(row.op)) {
+            .phi => true, // function-scope var, assigned on edges before here
+            .unary => self.eagerSafe(@enumFromInt(row.a), depth + 1),
+            .binary => self.eagerSafe(@enumFromInt(row.a), depth + 1) and
+                self.eagerSafe(@enumFromInt(row.b), depth + 1),
+            .ternary => self.eagerSafe(@enumFromInt(row.a), depth + 1) and
+                self.eagerSafe(@enumFromInt(row.b), depth + 1) and
+                self.eagerSafe(@enumFromInt(row.c), depth + 1),
+            .branch, .jump, .call => false,
+        };
+    }
+
+    /// The select cond as an INLINE real comparison — unslotted, so rendering
+    /// it in mask space leaves no unread `const` behind. Slotted predicates
+    /// and int comparisons take the `S.con(@floatFromInt(..))` fallback.
+    /// An x-dependent value is about to be collapsed to one scalar decision —
+    /// record that lanes are pinned. dFree values are lane-uniform (params,
+    /// temperature, time), so collapsing them steers nothing.
+    fn pinLanes(self: *Gen, v: Mir.Value) void {
+        if (self.emitting_display) return;
+        if (self.an.dFree(v)) return;
+        self.lane_pinned = true;
+    }
+
+    fn maskCmp(self: *Gen, cond: Mir.Value) ?Mir.Inst {
+        const v = self.an.rv(cond);
+        const i = @intFromEnum(v);
+        if (i < self.an.nv and (self.plan.cached(v) or self.plan.slot[i] != none_u32)) return null;
+        const def = self.mir.valueDef(v);
+        if (def != .inst_result) return null;
+        return switch (self.mir.instOp(def.inst_result)) {
+            .flt, .fgt, .fle, .fge, .feq, .fne => def.inst_result,
+            else => null,
+        };
+    }
+
     fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
         const row = self.mir.instRow(inst);
         const op = row.op;
@@ -2366,13 +2442,71 @@ pub const Gen = struct {
         const b2: Mir.Value = @enumFromInt(row.b);
         const c: Mir.Value = @enumFromInt(row.c);
 
-        // §4.2.12 the value-form conditional MUST stay lazy: proof.zig treats
-        // the condition as a guard on the arms, so `x > 0 ? ln(x) : 0` is
-        // accepted — evaluating both arms would run ln(x) with x <= 0, which is
-        // UB under @setFloatMode(.optimized). Do not "simplify" this to a
-        // select of two pre-computed values.
+        // §4.2.12 the value-form conditional stays LAZY by default: proof.zig
+        // treats the condition as a guard on the arms, so `x > 0 ? ln(x) : 0`
+        // is accepted — evaluating both arms would run ln(x) with x <= 0,
+        // which is UB under @setFloatMode(.optimized). Do not "simplify" this
+        // to a select of two pre-computed values.
+        //
+        // EXCEPT where laziness buys nothing: in a `.strict` unit every f64
+        // op is IEEE-defined, so a real select whose inline arms contain no
+        // call and no domain-restricted op (proof.domainOf == .all — which
+        // also excludes idiv/imod/fmod, the hard-UB ones) may evaluate BOTH
+        // arms and pick with the contract's `sel` mask primitive. A dead
+        // arm's NaN/inf is discarded by the pick. That removes the branch the
+        // host's predictor would eat per Newton iteration (T7) and is what a
+        // lane-parallel S needs — `.val()` has no single answer across lanes.
         if (op == .select) {
             const want = self.an.vty[@intFromEnum(self.mir.instResult(inst))];
+            if (want == .real and self.cur_strict and
+                self.eagerSafe(b2, 0) and self.eagerSafe(c, 0))
+            {
+                // Best mask first: an inline real comparison renders in S
+                // space (`lt`/`le`/`eq`) and is TRUE PER LANE on a vector S.
+                // gt/ge are operand swaps; ne swaps the select's arms — the
+                // contract carries exactly lt/le/eq/sel. ifconv peels the
+                // `toBool` wrapper, so the cond IS the bare comparison here.
+                if (self.maskCmp(a)) |cmp| {
+                    const d = self.mir.instData(cmp).binary;
+                    const swap_ops = d.op == .fgt or d.op == .fge;
+                    const swap_arms = d.op == .fne;
+                    const prim: []const u8 = switch (d.op) {
+                        .flt, .fgt => "lt",
+                        .fle, .fge => "le",
+                        .feq, .fne => "eq",
+                        else => unreachable,
+                    };
+                    try self.b("((", .{});
+                    try self.renderVal(if (swap_ops) d.rhs else d.lhs, .real);
+                    try self.b(").{s}(", .{prim});
+                    try self.renderVal(if (swap_ops) d.lhs else d.rhs, .real);
+                    try self.b(")).sel(", .{});
+                    try self.renderVal(if (swap_arms) c else b2, .real);
+                    try self.b(", ", .{});
+                    try self.renderVal(if (swap_arms) b2 else c, .real);
+                    try self.b(")", .{});
+                    return;
+                }
+                // Fallback: the emitted predicate is a 0/1 i64 (or a real S
+                // tested against zero); either becomes the mask without a
+                // branch — the int through `con` (lane-UNIFORM: fine for a
+                // scalar S, pinned on a vector S), the real as-is.
+                if (self.an.tyOf(self.an.rv(a)) == .int) {
+                    self.pinLanes(a);
+                    try self.b("(S.con(@floatFromInt(", .{});
+                    try self.renderVal(a, .int);
+                    try self.b("))).sel(", .{});
+                } else {
+                    try self.b("(", .{});
+                    try self.renderVal(a, .real);
+                    try self.b(").sel(", .{});
+                }
+                try self.renderVal(b2, .real);
+                try self.b(", ", .{});
+                try self.renderVal(c, .real);
+                try self.b(")", .{});
+                return;
+            }
             try self.b("(if (", .{});
             try self.renderCond(a);
             try self.b(") ", .{});
@@ -2449,7 +2583,12 @@ pub const Gen = struct {
             },
             .fdiv => try self.method2(a, "div", b2),
             .fneg => try self.method1(a, "neg"),
-            .fmod => try self.helper2("zFmod", a, b2),
+            .fmod => {
+                // zFmod truncates a `.val()` quotient — a scalar collapse.
+                self.pinLanes(a);
+                self.pinLanes(b2);
+                try self.helper2("zFmod", a, b2);
+            },
             // §4.3.1/§4.3.2 math
             .sqrt => try self.method1(a, "sqrt"),
             .exp => try self.method1(a, "exp"),
@@ -2474,10 +2613,22 @@ pub const Gen = struct {
             .asinh => try self.helper1("zAsinh", a),
             .acosh => try self.helper1("zAcosh", a),
             .atanh => try self.helper1("zAtanh", a),
-            .floor => try self.helper1("zFloor", a),
-            .ceil => try self.helper1("zCeil", a),
+            // zFloor/zCeil collapse to `S.con` of a `.val()`, and zAtan2
+            // branches on its operands' signs — all three pin lanes.
+            .floor => {
+                self.pinLanes(a);
+                try self.helper1("zFloor", a);
+            },
+            .ceil => {
+                self.pinLanes(a);
+                try self.helper1("zCeil", a);
+            },
             .hypot => try self.helper2("zHypot", a, b2),
-            .atan2 => try self.helper2("zAtan2", a, b2),
+            .atan2 => {
+                self.pinLanes(a);
+                self.pinLanes(b2);
+                try self.helper2("zAtan2", a, b2);
+            },
             .fmin => try self.method2(a, "min", b2),
             .fmax => try self.method2(a, "max", b2),
             .pow => {
@@ -2716,6 +2867,9 @@ pub const Gen = struct {
     /// `Instance` latch and reads a field; every other name is a `rng_kernels.zig`
     /// call taking the i64 seed and its real parameters.
     fn emitRng(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+        // A draw is one scalar per CALL, not per lane: a batch eval draws once
+        // where N scalar evals draw N times. Pins unconditionally.
+        self.lane_pinned = self.lane_pinned or !self.emitting_display;
         const tail = name["$rng$".len..];
         if (std.mem.eql(u8, tail, "auto")) {
             // §9.13.1's "internal seed", which "gets updated every time the call
@@ -2764,6 +2918,10 @@ pub const Gen = struct {
     /// while the lookup point is routinely a probe and its derivative is the
     /// Jacobian row the solver needs.
     fn emitTable(self: *Gen, args: []const Mir.Value) Error!void {
+        // §9.21 zTable brackets on `.val()` — the cell choice is one scalar
+        // decision, so a lane off the chosen cell would read a linear
+        // extrapolation. Pins.
+        for (args) |arg| self.pinLanes(arg);
         const nd = self.intArg(args, 0) orelse 0;
         const np = self.intArg(args, 1) orelse 0;
         const ncol = self.intArg(args, 2) orelse 0;
@@ -2834,6 +2992,8 @@ pub const Gen = struct {
     }
 
     fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
+        self.pinLanes(a);
+        self.pinLanes(b2);
         try self.b("@as(i64, @intFromBool((", .{});
         try self.renderVal(a, .real);
         try self.b(").val() {s} (", .{opx});
@@ -3113,14 +3273,31 @@ pub const Gen = struct {
         const d = self.mir.instData(inst).call;
         const name = d.name;
         const k = opKind(name);
+        // Lane accounting for the batch differential gate. ddt/idt and the
+        // §4.5.11/§4.5.12 filters stay lane-exact: their helpers branch only
+        // on `dt` (lane-uniform) and are otherwise S-linear over shared f64
+        // state, so evaluating N points against one Instance is exactly N
+        // scalar evaluations. Every other operator either steers on a
+        // `.val()` of its x-dependent input (events, transition, slew) or
+        // collapses it (delays), so it pins.
+        switch (k) {
+            .none, .ddt, .idt, .laplace, .zi, .bound_step, .discontinuity => {},
+            else => for (d.args) |arg| self.pinLanes(arg),
+        }
         if (k != .none) return self.emitOperator(inst, d.args, k);
 
         // §4.5.13 limexp — user-invoked only; the engine never inserts it.
-        if (std.mem.eql(u8, name, "limexp"))
+        // Pins: zLimexp branches on its argument's `.val()`.
+        if (std.mem.eql(u8, name, "limexp")) {
+            if (d.args.len > 0) self.pinLanes(d.args[0]);
             return self.helper1("zLimexp", if (d.args.len > 0) d.args[0] else .f_zero);
+        }
 
         // §4.5.14 ddx(f, V(node)) — the unknown index came through as an int.
+        // Pins: `.ddxAt` reads one scalar partial, which a value-form batch S
+        // does not carry.
         if (std.mem.eql(u8, name, "ddx")) {
+            if (d.args.len > 0) self.pinLanes(d.args[0]);
             const u = if (d.args.len > 1) self.an.foldConst(d.args[1], 0, true) else null;
             try self.b("S.con((", .{});
             try self.renderVal(if (d.args.len > 0) d.args[0] else .f_zero, .real);
@@ -3505,6 +3682,10 @@ pub const Gen = struct {
                 "will not build",
             .{name},
         );
+        // A systf crosses to the host through concrete f64s (`.val()` per
+        // argument, partials written back) — a per-lane crossing does not
+        // exist, so it pins regardless of what the host computes.
+        self.lane_pinned = self.lane_pinned or !self.emitting_display;
         return self.emitSystfCall(name, args);
     }
 
@@ -5125,6 +5306,11 @@ const rscalar_txt =
     \\    pub fn min(a: T, b: T) T { return .{ .v = @min(a.v, b.v) }; }
     \\    pub fn max(a: T, b: T) T { return .{ .v = @max(a.v, b.v) }; }
     \\    pub fn pow(a: T, c: f64) T { return .{ .v = std.math.pow(f64, a.v, c) }; }
+    \\    // Contract masks and select (see contract.zig's S notes).
+    \\    pub fn lt(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v < b.v)) }; }
+    \\    pub fn le(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v <= b.v)) }; }
+    \\    pub fn eq(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v == b.v)) }; }
+    \\    pub fn sel(c: T, a: T, b: T) T { return .{ .v = if (c.v != 0.0) a.v else b.v }; }
     \\};
     \\
     \\
@@ -5138,6 +5324,7 @@ const Ast = @import("../frontend/ast.zig");
 const Preprocessor = @import("../frontend/preprocessor.zig");
 const Lexer = @import("../frontend/lexer.zig");
 const Parser = @import("../frontend/parser.zig");
+const ifconv = @import("../ir/ifconv.zig");
 
 const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
@@ -5476,6 +5663,60 @@ test "codegen: §5.8 control flow reconstructs into structured Zig" {
     try std.testing.expect(std.mem.indexOf(u8, src, "if (") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "} else {") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "break :B") != null);
+}
+
+test "codegen: if-converted diamond emits an eager mask select in a strict unit" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module mix(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    real g;
+        \\    if (V(p, n) > 0.5) g = 2.0 * V(p, n); else g = 0.5 * V(p, n);
+        \\    I(p, n) <+ g * exp(V(p, n));
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    // root.zig runs this between lower and prove; the harness does the same.
+    // The MIR is arena-owned, so the pass must append with the same arena.
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir);
+    try std.testing.expect(n >= 1);
+    const src = try h.gen(std.testing.allocator);
+    // exp(unbounded V) forfeits finiteness, so the unit is .strict — the
+    // eager-sel license. Arms are plain arithmetic: mask form, no branch.
+    try std.testing.expect(std.mem.indexOf(u8, src, ".sel(") != null);
+    // Lane-true mask: `V > 0.5` renders in S space as the swapped `lt`, not
+    // as a `.val()` i64 round-trip.
+    try std.testing.expect(std.mem.indexOf(u8, src, ".lt(") != null);
+    // The diamond is gone: nothing left for the relooper to label.
+    try std.testing.expect(std.mem.indexOf(u8, src, "break :B") == null);
+}
+
+test "codegen: a domain-guarded arm stays lazy through if-conversion" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module lg(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real vmin = 1.0 from (0:inf);
+        \\  analog I(p, n) <+ V(p, n) > vmin ? ln(V(p, n)) : 0.0;
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
+    const src = try h.gen(std.testing.allocator);
+    // domainOf(ln) != .all blocks the eager path: the select must render as
+    // the lazy `(if (...))` with `.log()` inside the guarded arm, and the
+    // proof must still accept the model (markSelectArms re-derives the guard).
+    // Scoped to the unit body — the emitted math prelude also spells `.log()`.
+    const unit = src[std.mem.indexOf(u8, src, "fn lg__").?..];
+    const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
+    const guard = std.mem.indexOf(u8, body, "(if (").?;
+    const lg2 = std.mem.indexOf(u8, body, ".log()").?;
+    try std.testing.expect(lg2 > guard);
+    try std.testing.expect(std.mem.indexOf(u8, body, ".sel(") == null);
 }
 
 test "codegen: a §5.6 potential contribution gets its own branch-current unknown" {

@@ -907,7 +907,123 @@ const runner_body =
     \\    pub fn maxC(a: T, c: f64) T { return if (a.v >= c) a else con(c); }
     \\    pub fn min(a: T, b: T) T { return if (a.v <= b.v) a else b; }
     \\    pub fn max(a: T, b: T) T { return if (a.v >= b.v) a else b; }
+    \\    // Contract masks and select. A comparison is piecewise constant, so
+    \\    // its derivative is zero (`con`); like min/max, `sel` carries the
+    \\    // winner's derivative.
+    \\    pub fn lt(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v < b.v))); }
+    \\    pub fn le(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v <= b.v))); }
+    \\    pub fn eq(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v == b.v))); }
+    \\    pub fn sel(c: T, a: T, b: T) T { return if (c.v != 0.0) a else b; }
     \\};
+    \\
+    \\/// Value-form batch scalar: NL operating points per eval call, one per
+    \\/// lane. Only instantiated for a device that declared `lane_clean` —
+    \\/// codegen's promise that nothing in eval/q steers on a `.val()` of an
+    \\/// x-dependent value, which is what makes `val` returning lane 0 safe:
+    \\/// on a lane-clean device it is only ever called on lane-uniform values.
+    \\const NL = 4;
+    \\const VF = @Vector(NL, f64);
+    \\const Vec = struct {
+    \\    v: VF,
+    \\    const T = @This();
+    \\    fn map1(a: T, comptime f: fn (f64) f64) T {
+    \\        var r: VF = undefined;
+    \\        inline for (0..NL) |i| r[i] = f(a.v[i]);
+    \\        return .{ .v = r };
+    \\    }
+    \\    pub fn con(c: f64) T { return .{ .v = @splat(c) }; }
+    \\    pub fn val(a: T) f64 { return a.v[0]; }
+    \\    pub fn ddxAt(_: T, _: usize) f64 { return 0.0; }
+    \\    pub fn add(a: T, b: T) T { return .{ .v = a.v + b.v }; }
+    \\    pub fn sub(a: T, b: T) T { return .{ .v = a.v - b.v }; }
+    \\    pub fn neg(a: T) T { return .{ .v = -a.v }; }
+    \\    pub fn mul(a: T, b: T) T { return .{ .v = a.v * b.v }; }
+    \\    pub fn div(a: T, b: T) T { return .{ .v = a.v / b.v }; }
+    \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * @as(VF, @splat(c)) }; }
+    \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + @as(VF, @splat(c)) }; }
+    \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
+    \\    pub fn log(a: T) T { return .{ .v = @log(a.v) }; }
+    \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
+    \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
+    \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }
+    \\    pub fn abs(a: T) T { return .{ .v = @abs(a.v) }; }
+    \\    pub fn expm1(a: T) T { return map1(a, std.math.expm1); }
+    \\    pub fn log1p(a: T) T { return map1(a, std.math.log1p); }
+    \\    pub fn tanh(a: T) T { return map1(a, std.math.tanh); }
+    \\    pub fn sinh(a: T) T { return map1(a, std.math.sinh); }
+    \\    pub fn cosh(a: T) T { return map1(a, std.math.cosh); }
+    \\    pub fn atan(a: T) T { return map1(a, std.math.atan); }
+    \\    pub fn minC(a: T, c: f64) T { return .{ .v = @min(a.v, @as(VF, @splat(c))) }; }
+    \\    pub fn maxC(a: T, c: f64) T { return .{ .v = @max(a.v, @as(VF, @splat(c))) }; }
+    \\    pub fn min(a: T, b: T) T { return .{ .v = @min(a.v, b.v) }; }
+    \\    pub fn max(a: T, b: T) T { return .{ .v = @max(a.v, b.v) }; }
+    \\    pub fn pow(a: T, c: f64) T {
+    \\        var r: VF = undefined;
+    \\        inline for (0..NL) |i| r[i] = std.math.pow(f64, a.v[i], c);
+    \\        return .{ .v = r };
+    \\    }
+    \\    const ones: VF = @splat(1.0);
+    \\    const zeros: VF = @splat(0.0);
+    \\    pub fn lt(a: T, b: T) T { return .{ .v = @select(f64, a.v < b.v, ones, zeros) }; }
+    \\    pub fn le(a: T, b: T) T { return .{ .v = @select(f64, a.v <= b.v, ones, zeros) }; }
+    \\    pub fn eq(a: T, b: T) T { return .{ .v = @select(f64, a.v == b.v, ones, zeros) }; }
+    \\    pub fn sel(c: T, a: T, b: T) T { return .{ .v = @select(f64, c.v != zeros, a.v, b.v) }; }
+    \\};
+    \\
+    \\/// The batch differential gate (ref/SIMD-Strategies T8): one vector eval
+    \\/// over NL perturbed copies of the operating point must agree with NL
+    \\/// scalar evals, lane by lane. Bit equality is the expectation — the same
+    \\/// IEEE ops run in the same order per lane — with a 1e-12 relative escape
+    \\/// for a vectorizer that contracts differently than the scalar pipeline.
+    \\/// Prints nothing on success, so transcripts never move; a mismatch is a
+    \\/// loud failure of the run.
+    \\fn laneCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\    if (comptime !(@hasDecl(D, "lane_clean") and D.lane_clean)) return;
+    \\    var xs: [NL][n_u]f64 = undefined;
+    \\    var xv: [n_u]Vec = undefined;
+    \\    for (0..NL) |k| {
+    \\        const s = 1.0 + 1.0e-3 * @as(f64, @floatFromInt(k));
+    \\        for (0..n_u) |i| xs[k][i] = x[i] * s + 1.0e-3 * @as(f64, @floatFromInt(k));
+    \\    }
+    \\    for (0..n_u) |i| {
+    \\        var lanes: VF = undefined;
+    \\        for (0..NL) |k| lanes[k] = xs[k][i];
+    \\        xv[i] = .{ .v = lanes };
+    \\    }
+    \\    const rv = D.eval(Vec, xv, model, inst, t);
+    \\    for (0..NL) |k| {
+    \\        var xd: [n_u]Dual = undefined;
+    \\        for (0..n_u) |i| {
+    \\            xd[i] = .{ .v = xs[k][i] };
+    \\            xd[i].d[i] = 1.0;
+    \\        }
+    \\        const rs = D.eval(Dual, xd, model, inst, t);
+    \\        for (0..n_u) |i| {
+    \\            const a = rv[i].v[k];
+    \\            const b = rs[i].v;
+    \\            if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) continue;
+    \\            if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) continue;
+    \\            std.debug.print("lane_check FAIL: res[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ u_names[i], k, a, b });
+    \\            std.process.exit(1);
+    \\        }
+    \\    }
+    \\    if (comptime @hasDecl(D, "q")) {
+    \\        const qv = D.q(Vec, xv, model, inst, t);
+    \\        for (0..NL) |k| {
+    \\            var xd: [n_u]Dual = undefined;
+    \\            for (0..n_u) |i| xd[i] = .{ .v = xs[k][i] };
+    \\            const qs = D.q(Dual, xd, model, inst, t);
+    \\            for (0..n_u) |i| {
+    \\                const a = qv[i].v[k];
+    \\                const b = qs[i].v;
+    \\                if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) continue;
+    \\                if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) continue;
+    \\                std.debug.print("lane_check FAIL: q[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ u_names[i], k, a, b });
+    \\                std.process.exit(1);
+    \\            }
+    \\        }
+    \\    }
+    \\}
     \\
     \\/// §4.5.2 accepted-step bookkeeping. `void` for a module with no stateful
     \\/// operator, which is most of them — codegen emits the state machine only
@@ -963,6 +1079,9 @@ const runner_body =
     \\        else
     \\            std.debug.print("  next_bp = none\n", .{});
     \\    }
+    \\
+    \\    // Batch differential gate — silent on success, fails the run loudly.
+    \\    laneCheck(x, t, model, inst);
     \\
     \\    const xd = seed(x);
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
