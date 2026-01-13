@@ -370,6 +370,15 @@ var_noise: std.StringHashMapUnmanaged(NoiseKinds) = .empty,
 loops: std.ArrayList(LoopCtx) = .empty,
 /// §4.7.1 the function currently being inlined (return slot + exit block).
 ret: ?RetCtx = null,
+/// §4.7.2/§6.8 the local `parameter` declarations of the function currently
+/// being inlined, empty outside one. Their VALUES fold into `consts`
+/// (`inlineUserFunc`); this slice is the MASK `lookupName`/`foldExpr` consult
+/// before `param_index`, because §6.8 makes the function one of the six scopes
+/// and a local declaration shadows the module's — while lookup asks
+/// `param_index` first, so without the mask a module parameter of the same
+/// name won over the local. A slice, not a set: a function declares a handful
+/// of parameters at most, and the save/restore is two pointer copies.
+func_params: []const Ast.ParamDecl = &.{},
 /// §4.7.1 recursion guard — names on the inline stack.
 inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
@@ -2613,6 +2622,20 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
         });
     }
 
+    // §3.4/A.2.4: a parameter assignment carries a constant_mintypmax_
+    // expression. "Did not fold" cannot be the test — the derive() fall-through
+    // below deliberately keeps a default that reads OTHER parameters (§6.3.4:
+    // the dependent must follow an override of its base) — so what is policed
+    // is the part no parameter dependence can excuse: a read of the operating
+    // point or the simulation state, which has no value a model card could
+    // carry. Without this, `parameter real bad = $abstime;` compiled and the
+    // card silently read 0.0. Reported and then lowered anyway, like E0347.
+    if (self.simStateInDefault(decl.default)) |what| {
+        var b = self.errWith(decl.main_tok, .E0363);
+        b.msg("`{s}` reads `{s}`", .{ name, what });
+        try b.emit();
+    }
+
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
     if (decl.dims.len != 0) return self.lowerParamArray(decl, name);
 
@@ -2659,6 +2682,56 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     };
 
     try self.addParam(name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
+}
+
+/// §3.4/A.2.4: the spelling of the first simulation-state reference in a
+/// parameter default, or null when none exists. Access functions, analog
+/// operators, small-signal sources and event functions are state reads by
+/// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
+/// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
+/// before the solve and are left to the ordinary paths. Same walk shape as
+/// `scanCalleesExpr`: list-carrying tags recurse `args`, the ternary's third
+/// operand lives in `extra`, and `lhs`/`rhs` are `.none` wherever unused.
+fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    const tag = ex.tag(e);
+    switch (tag) {
+        // §4.4 access functions, §4.5 analog operators, §4.6 small-signal
+        // sources, §5.10 event functions: operating-point reads by construction.
+        .branch_access, .port_access, .filter_call, .noise_call, .event_function => return self.file.str(ex.strOf(e)),
+        .sys_call => {
+            const n = self.file.str(ex.strOf(e));
+            if (simStateName(n)) return n;
+        },
+        else => {},
+    }
+    switch (tag) {
+        .call, .builtin_call, .sys_call, .concat, .assign_pattern => {
+            for (ex.args(e)) |a| if (self.simStateInDefault(a)) |w| return w;
+        },
+        .ternary => if (self.simStateInDefault(ex.ternaryElse(e))) |w| return w,
+        else => {},
+    }
+    if (self.simStateInDefault(ex.lhs(e))) |w| return w;
+    return self.simStateInDefault(ex.rhs(e));
+}
+
+/// The `$` (and `analysis`) names whose value belongs to a solve: time, the
+/// ambient temperature pair, the RNG family, and the analysis type. §9.13's
+/// distributions are matched by their two prefixes.
+///
+/// `$simparam` is deliberately NOT here: §9.15's table is the HOST's, constant
+/// for a whole run, and a default reading it is the documented W1050 contract
+/// — the field ships as 0 and the host writes it (codegen's "§3.4 a default
+/// with no compile-time value is W1050" test pins exactly that shape).
+fn simStateName(n: []const u8) bool {
+    const names = [_][]const u8{
+        "$abstime", "$realtime", "$temperature", "$vt",
+        "$random",  "$arandom",  "analysis",
+    };
+    for (names) |s| if (std.mem.eql(u8, n, s)) return true;
+    return std.mem.startsWith(u8, n, "$dist_") or std.mem.startsWith(u8, n, "$rdist_");
 }
 
 /// §3.4.2: "The parameter value shall be within the range from the smallest
@@ -4639,6 +4712,13 @@ fn noiseKindsOf(self: *const Lower, e: Ast.ExprId) NoiseKinds {
             for (ex.args(e)) |a| out = out.unionWith(self.noiseKindsOf(a));
             return out;
         },
+        // §4.2.12 ?: — its third operand lives in `extra`, which the lhs/rhs
+        // catch-all cannot see (same shape as `containsDdt`). Both arms count:
+        // a SET of declared generators is what this walk collects, and which
+        // arm the solve takes does not undeclare the other one.
+        .ternary => return self.noiseKindsOf(ex.lhs(e))
+            .unionWith(self.noiseKindsOf(ex.rhs(e)))
+            .unionWith(self.noiseKindsOf(ex.ternaryElse(e))),
         else => return self.noiseKindsOf(ex.lhs(e)).unionWith(self.noiseKindsOf(ex.rhs(e))),
     }
 }
@@ -5223,9 +5303,16 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     if (try self.lowerKernelCtl(tok, name, args)) return; // §9.17
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
+    var live: std.ArrayList(Ast.ExprId) = .empty;
+    defer live.deinit(self.arena);
+    var tys: std.ArrayList(Ty) = .empty;
+    defer tys.deinit(self.arena);
     for (args) |a| {
         if (a == .none) continue; // A.6.9 empty argument slot
-        try vals.append(self.arena, try self.lowerSysArg(a));
+        const tv = try self.lowerSysArg(a, takesNetRef(name));
+        try vals.append(self.arena, tv.v);
+        try live.append(self.arena, a);
+        try tys.append(self.arena, tv.ty);
     }
     const v = try self.call(name, vals.items);
     if (isFileOutTask(name)) {
@@ -5234,12 +5321,17 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         // module with a §9.5.2 output task needs the string kernels too.
         self.uses_str_tasks = true;
     }
-    if (isDisplayTask(name) or isFileOutTask(name)) try self.displays.append(self.arena, .{
-        .val = v,
-        .name = name,
-        .tok = tok,
-        .conditional = self.cond_depth != 0,
-    });
+    if (isDisplayTask(name) or isFileOutTask(name)) {
+        // §9.4.3's other pairing half — each conversion against its operand's
+        // TYPE. After the loop, because the types are what lowering computed.
+        try self.checkFormatTypes(live.items, tys.items);
+        try self.displays.append(self.arena, .{
+            .val = v,
+            .name = name,
+            .tok = tok,
+            .conditional = self.cond_depth != 0,
+        });
+    }
 }
 
 /// §9.5 Sequence one file-family call into the per-point I/O phase.
@@ -5300,7 +5392,7 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
         try self.err(tok, .E0813, "`{s}` needs a file descriptor", .{name});
         return try self.iconst(0);
     }
-    const fd = try self.lowerSysArg(args[fd_at]);
+    const fd = (try self.lowerSysArg(args[fd_at], false)).v; // a descriptor, never a net
     // §9.5.4.2 alone has a control string, and it is an operand of every reader
     // as well as of the count.
     const fmt: ?Mir.Value = if (scan) blk: {
@@ -5458,6 +5550,69 @@ fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!void
     var b = self.errWith(tok, .E0810);
     b.msg("the format string has {d} consuming format specifiers but {d} arguments follow it", .{ need, have });
     try b.emit();
+}
+
+/// §9.4.3's OTHER pairing rule: each conversion against its operand's TYPE.
+/// `checkFormatPairing` counts; this one checks that the pairs it counted can
+/// be RENDERED — three cannot (see E0819), and each used to sail through here
+/// and fail the generated device's own build as an "engine bug".
+///
+/// The walk mirrors `cg_display.translateFormat` exactly — same format pick
+/// (first argument that folds to a string), same flag/width skipping, same
+/// operand consumption over the LOWERED argument list (`live`/`tys` are the
+/// non-null slots, which is what the emitter receives) — because "would the
+/// emitted Zig compile" is a question about that pairing and no other. A
+/// shortfall stops the check where the operands stop; E0810 already owns it.
+fn checkFormatTypes(self: *Lower, live: []const Ast.ExprId, tys: []const Ty) Oom!void {
+    std.debug.assert(live.len == tys.len);
+    const at, const fmt = for (live, 0..) |a, i| {
+        if (self.constEval(a)) |c| switch (c) {
+            .str => |s| break .{ i, s },
+            else => {},
+        };
+    } else return;
+
+    var next: usize = at + 1;
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
+        i = p + 1;
+        if (i >= fmt.len) break;
+        while (i < fmt.len and (std.mem.indexOfScalar(u8, "-+ 0.", fmt[i]) != null or
+            (fmt[i] >= '0' and fmt[i] <= '9'))) : (i += 1)
+        {}
+        if (i >= fmt.len) break;
+        const conv = std.ascii.toLower(fmt[i]);
+        i += 1;
+        if (conv == '%' or conv == 'm' or conv == 'l') continue; // the three that consume nothing
+        if (next >= tys.len) return; // ran out of operands: E0810's finding, not ours
+        const ty = tys[next];
+        const arg = live[next];
+        next += 1;
+        // What `cg_display.appendConv` renders per (conversion, type):
+        //   %d/%b/%o/%h/%x — any type; a string takes §2.7's integer view.
+        //   %c             — an integer's low byte (Table 9-22); a real rounds.
+        //   %s             — the text; §9.4.5's ASCII-codes view of a NUMBER
+        //                    is not implemented.
+        //   %e/%f/%g/%r and the %t/%u/%z/%v decimal defaults — numbers only.
+        //   anything else  — the operand's natural form, every type.
+        const bad = switch (conv) {
+            's' => ty != .string,
+            'c' => ty == .string,
+            'e', 'f', 'g', 'r', 't', 'u', 'z', 'v' => ty == .string,
+            else => false,
+        };
+        if (!bad) continue;
+        var b = self.errAtWith(arg, .E0819);
+        b.msg("`%{c}` on a {s} operand", .{ conv, @tagName(ty) });
+        if (conv == 's') {
+            b.help("print the number with `%g` or `%d`", .{});
+        } else if (conv == 'c') {
+            b.help("`%c` takes a character code; use `%s` for the text", .{});
+        } else {
+            b.help("use `%s` for the text, or `%d` for the string's integer value", .{});
+        }
+        try b.emit();
+    }
 }
 
 /// §9.5.3 `$swrite(str, …)` / `$sformat(str, fmt, …)` — the §9.4.3 formatter
@@ -6290,7 +6445,10 @@ fn lookupIdent(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     if (self.vars.get(name)) |slot|
         return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
-    if (self.param_index.get(name)) |idx|
+    // §4.7.2/§6.8: inside a function body, a function-local `parameter` of the
+    // same name shadows the module's, so `param_index` is masked and the local
+    // value is found in `consts` (where `inlineUserFunc` folded it).
+    if (!self.funcParamShadows(name)) if (self.param_index.get(name)) |idx|
         return .{ .v = self.param_values.items[idx], .ty = astTy(self.params.items[idx].ty) };
     if (self.consts.get(name)) |c| return switch (c) {
         .int => .{ .v = try self.iconst(c.asInt()), .ty = .integer },
@@ -6313,6 +6471,16 @@ fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     if (near) |s| b.suggestHere(s);
     try b.emit();
     return poison;
+}
+
+/// §4.7.2/§6.8: does the function currently being inlined declare `name` as a
+/// local parameter? True makes the local (in `consts`) win over a module
+/// parameter of the same name — the shadowing §6.8's scope list requires.
+fn funcParamShadows(self: *const Lower, name: []const u8) bool {
+    for (self.func_params) |*p| {
+        if (self.file.strings.eql(p.name, name)) return true;
+    }
+    return false;
 }
 
 /// A.8.6 unary operators. §4.2.3 (+/-), §4.2.7 (!), §4.2.9 (~).
@@ -6887,7 +7055,21 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         }
         const u: u16 = switch (t.access) {
             .potential => t.hi,
-            .flow => try self.flowUnknown(t.hi, t.lo),
+            // PEEK — never mint. §4.5.6's closing sentence: "If the expression
+            // does not depend explicitly on the unknown, then ddx() returns
+            // zero (0)." A flow no probe has made a system unknown CANNOT be
+            // depended on: the only way a branch current enters an expression
+            // is through an `I()` read, and every read routes through
+            // `flowUnknown` — including any inside THIS ddx's first argument,
+            // which was lowered above, so the peek runs after every mint that
+            // could matter. Minting here declared an unknown no equation ever
+            // pins (the probe-branch row only exists for a READ branch): an
+            // all-zero Jacobian row and a structurally singular system. And
+            // recording a branch READ instead would make the pair a flow-probe
+            // branch — a 0 V short §4.5.6 gives a derivative operator no
+            // license to add to the topology. Absent unknown = the plain 0.
+            .flow => self.flow_unknowns.get(.{ .hi = t.hi, .lo = t.lo }) orelse
+                return .{ .v = .f_zero, .ty = .real },
         };
         const d = try self.call("ddx", &.{ f, try self.iconst(u) });
         // §1.3.1.2 again: `ddx(f, I(n,p))` differentiates with respect to the
@@ -6895,6 +7077,27 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // A potential probe reaches here only in the single-net form, which the
         // check above enforces and which is never reversed.
         return .{ .v = if (t.neg) try self.emit(.fneg, &.{d}) else d, .ty = .real };
+    }
+
+    // A.8.2 fixes each operator's MANDATORY arguments — everything left of the
+    // grammar's first `[`. The per-slot loop below judges only slots that were
+    // WRITTEN (`ddt(,1.0)` → E0505), so a list that stops early has to be
+    // measured against the grammar here: `ddt()` otherwise skipped the loop
+    // entirely and became a silent zero, `absdelay(x)` a delay of nothing.
+    // The laplace forms mandate three slots — both vector commas sit outside
+    // the brackets, so a slot may be NULL (the loop's `nullZerosOk` carve-out
+    // governs which) but it must be THERE — and the zi forms four (…, T).
+    const min_args: usize = if (std.mem.eql(u8, name, "absdelay"))
+        2
+    else if (std.mem.startsWith(u8, name, "laplace_"))
+        3
+    else if (std.mem.startsWith(u8, name, "zi_"))
+        4
+    else
+        1; // ddt, idt, idtmod, transition, slew, last_crossing, limexp
+    if (args.len < min_args) {
+        try self.errAt(e, .E0505, "`{s}()` needs {d} argument(s), got {d}", .{ name, min_args, args.len });
+        return poison;
     }
 
     try self.checkFilterArgBounds(name, args); // §4.5.5-§4.5.10
@@ -7356,7 +7559,8 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // convergence either way, and no fixture can see the difference
             // (a non-identity limiter would, which is why this is written down).
             return .{
-                .v = try self.call(name, &.{try self.lowerSysArg(sys_args[0])}),
+                // §9.17.3 the probe argument is an ACCESS FUNCTION, never a net.
+                .v = try self.call(name, &.{(try self.lowerSysArg(sys_args[0], false)).v}),
                 .ty = sysFuncTy(name),
             };
         }
@@ -7384,7 +7588,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     defer vals.deinit(self.arena);
     for (sys_args) |a| {
         if (a == .none) continue;
-        try vals.append(self.arena, try self.lowerSysArg(a));
+        try vals.append(self.arena, (try self.lowerSysArg(a, takesNetRef(name))).v);
     }
     const v = try self.call(name, vals.items);
     // §9.5 the remaining descriptor functions ($fopen, $ftell, $fseek, $rewind,
@@ -7893,21 +8097,35 @@ fn constStrArg(self: *Lower, e: Ast.ExprId) ?[]const u8 {
     };
 }
 
-/// Several ch9 functions take a NET or PORT reference rather than a value —
-/// §9.19 `$port_connected`, §9.20 `$analog_node_alias`, §9.22/§9.23 driver
-/// access. A bare net name in argument position lowers to its node_order
-/// index, which is what codegen needs; anything else is an ordinary value.
-fn lowerSysArg(self: *Lower, e: Ast.ExprId) Oom!Mir.Value {
+/// The ch9 names whose argument IS a net or port reference — §9.19
+/// `$port_connected`, §9.20 `$analog_node_alias`/`$analog_port_alias`. The
+/// §9.22/§9.23 driver access family takes net references too, but
+/// `isConnectModuleOnlySysFunc` refuses those calls before an argument is ever
+/// lowered, so listing them here would gate a path they cannot reach.
+fn takesNetRef(name: []const u8) bool {
+    const fns = [_][]const u8{ "$port_connected", "$analog_node_alias", "$analog_port_alias" };
+    for (fns) |f| if (std.mem.eql(u8, name, f)) return true;
+    return false;
+}
+
+/// A system call argument. For the `takesNetRef` names a bare net name lowers
+/// to its node_order index, which is what codegen needs. For every OTHER task
+/// the index is meaningless — `$strobe("%g", p)` printed p's INDEX — so the
+/// path is gated by the caller (`net_ok`) and a net name elsewhere falls
+/// through to `lowerExpr`, where §4.4's "a net is not a value" E0315 says to
+/// probe it.
+fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!TypedValue {
     const ex = &self.file.exprs;
-    if (ex.tag(e) == .ident) {
+    if (net_ok and ex.tag(e) == .ident) {
         const name = self.file.str(ex.strOf(e));
         const is_value = self.vars.contains(name) or self.param_index.contains(name) or
             self.consts.contains(name);
         if (!is_value) {
-            if (self.node_voltages.get(name)) |idx| return self.iconst(idx);
+            if (self.node_voltages.get(name)) |idx|
+                return .{ .v = try self.iconst(idx), .ty = .integer };
         }
     }
-    return (try self.lowerExpr(e)).v;
+    return self.lowerExpr(e);
 }
 
 /// §9.15 Table 9-27 — the simulation parameters THIS engine knows, and their
@@ -8202,14 +8420,28 @@ pub fn inlineUserFunc(
     const saved_arrays = self.arrays;
     const saved_ret = self.ret;
     const saved_restrict = self.restrict;
-    const saved_loops = self.loops.items.len;
+    // MASKED, not merely marked: the body is inlined into the caller's CFG, so
+    // without a fresh stack a `break` in a function whose own loops are all
+    // closed bound the loop the CALL SITE sits in and silently exited it — a
+    // caller-scope capture the same §4.7.1 isolation that swaps `vars` forbids.
+    // With the stack empty, `lowerJump` reports the §5.11 "only be used in a
+    // loop" E0404 exactly as it does for a bare module-level `break`, and a
+    // loop INSIDE the body still pushes and binds normally.
+    const saved_loops = self.loops;
+    const saved_func_params = self.func_params;
     const log_mark = self.scope_log.items.len;
     self.vars = .empty;
     self.arrays = .empty;
+    self.loops = .empty;
     self.restrict = "an analog function";
     try self.inlining.append(self.arena, name);
 
     // §4.7.2 local parameters fold to constants; they never reach the Model.
+    // The DECL LIST is installed as `func_params` so `lookupName` masks a
+    // module parameter of the same name for the body's duration (§6.8) —
+    // swapped per call like `vars`, so a callee never sees its caller's
+    // locals (§4.7.1 isolation).
+    self.func_params = fd.params;
     for (fd.params) |*p| {
         if (self.constEval(p.default)) |c|
             try self.consts.put(self.arena, self.file.str(p.name), c);
@@ -8281,7 +8513,9 @@ pub fn inlineUserFunc(
     self.arrays = saved_arrays;
     self.ret = saved_ret;
     self.restrict = saved_restrict;
-    self.loops.shrinkRetainingCapacity(saved_loops);
+    self.func_params = saved_func_params;
+    self.loops.deinit(self.arena);
+    self.loops = saved_loops;
 
     var w: usize = 0;
     for (fd.args, arg_exprs) |formal, actual| {
@@ -8409,7 +8643,10 @@ fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
         .ident => {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.contains(name)) return null; // a runtime variable
-            if (!params and self.param_index.contains(name)) return null;
+            // A function-local parameter is NOT overridable by a model card
+            // (§4.7.2 — it never reaches the Model), so `elabConst`'s refusal
+            // to look through a parameter does not apply to a shadowing local.
+            if (!params and self.param_index.contains(name) and !self.funcParamShadows(name)) return null;
             return self.consts.get(name);
         },
         .unary => {
@@ -8544,9 +8781,14 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
 // and name their remaining ceiling at the fold itself. A block comment listing
 // what the file does not do is a register in the worst place for one.
 //   · §4.7.2 function-local `parameter` declarations fold into `consts` and
-//     are not restored on exit: a module parameter of the same name would be
-//     shadowed for the rest of the module. Give `consts` the same save/restore
-//     treatment as `vars` if a fixture ever does that.
+//     are not restored on exit. DURING the body the shadowing is right —
+//     `func_params` masks `param_index`, so the local wins there and the
+//     module parameter wins again after the call (`lookupName` asks
+//     `param_index` before `consts`). What remains is the CONSTANT-fold view
+//     AFTER the call: `consts` still carries the local's value under that
+//     name, so a later array bound or generate bound folding the shadowed name
+//     reads the function's constant, not the module default. Give `consts` the
+//     same save/restore treatment as `vars` if a fixture ever does that.
 
 // ---------------------------------------------------------------------------
 // Self-check: the whole frontend on two small modules — the split that class 6
