@@ -592,8 +592,14 @@ fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
 
 /// §4.3.1 `pow(x, k)` with a constant exponent goes through the scalar's
 /// `pow(S, f64)`, so the exponent is never materialised as a value.
+///
+/// `resolve_params = false`, the exact mirror of `Gen.renderOp`'s `.pow` arm:
+/// a PARAMETER exponent is a value the model card owns, so it is marked live
+/// here (and the unit's `model` stays named) and rendered `S.con(model.<p>)`
+/// there. Folding through the declared default on either side — this one used
+/// `true` — freezes an overridden exponent at its default.
 fn foldedExponent(self: *const UnitPlan, d: anytype) bool {
-    return d.op == .pow and self.an.foldConst(d.rhs, 0, true) != null;
+    return d.op == .pow and self.an.foldConst(d.rhs, 0, false) != null;
 }
 
 /// True when the slice lives entirely in the entry block and uses no phi —

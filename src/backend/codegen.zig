@@ -1196,7 +1196,12 @@ pub const Gen = struct {
                 // or one that wraps around a `/`, does not agree with them; a
                 // derived integer parameter needs its own int-typed renderer for
                 // that, and no model has asked.
-                .int => try self.w("    model.{s} = @as(i32, @truncate(@as(i64, @intFromFloat(@round({s})))));\n", .{ self.p_names[i], e }),
+                // `lossyCast`, not `@intFromFloat`: `derive()` runs in the
+                // HOST on card values this compiler never saw, and a huge or
+                // NaN default expression is then runtime UB (ReleaseFast) or a
+                // panic (Debug). Saturate-then-wrap is the fold's own rule
+                // (`Analysis.asI64` + `Lower.wrap32`), so both agree.
+                .int => try self.w("    model.{s} = @as(i32, @truncate(std.math.lossyCast(i64, @round({s}))));\n", .{ self.p_names[i], e }),
                 .str => unreachable,
             }
         }
@@ -1253,7 +1258,13 @@ pub const Gen = struct {
             .real => try self.fmtF64(k.asReal()),
             // From the i64 side rather than through the f64 carrier: `folded`
             // kept the integer, so nothing has to be rounded back out of it.
-            .int => try std.fmt.allocPrint(self.arena, "{d}", .{k.asInt()}),
+            // A REAL default on an integer parameter goes through the same
+            // saturating cast as the fold path below — `Lower.Const.asInt`
+            // casts unguarded, and lower.zig is not this file's to change.
+            .int => try std.fmt.allocPrint(self.arena, "{d}", .{switch (k) {
+                .real => |r| std.math.lossyCast(i64, @round(r)),
+                else => k.asInt(),
+            }}),
             .str => switch (k) {
                 .str => |s| try std.fmt.allocPrint(self.arena, "\"{f}\"", .{std.zig.fmtString(s)}),
                 else => "\"\"",
@@ -1261,7 +1272,16 @@ pub const Gen = struct {
         };
         return switch (want) {
             .real => try self.fmtF64(if (c) |k| k.f else 0.0),
-            .int => try std.fmt.allocPrint(self.arena, "{d}", .{if (c) |k| @as(i64, @intFromFloat(@round(k.f))) else 0}),
+            // ponytail: `parameter integer big = 1e300;` saturates (`lossyCast`:
+            // clamp to i64, NaN→0) instead of panicking the compiler. §4.2.1.1
+            // only says real→integer ROUNDS; it fixes no overflow rule, and the
+            // honest answer would be a lowering-time diagnostic on the default's
+            // own span — that needs a new code in diag_code.zig and a check in
+            // lower.zig's constant validation, both owned elsewhere right now.
+            // Until then the field, the fold (`Analysis.asI64`) and the runtime
+            // `fi_cast` all saturate the same way, so no path panics and all
+            // three agree on the garbage.
+            .int => try std.fmt.allocPrint(self.arena, "{d}", .{if (c) |k| std.math.lossyCast(i64, @round(k.f)) else 0}),
             .str => blk: {
                 const def = self.mir.valueDef(self.an.rv(p.default));
                 break :blk if (def == .str_const)
@@ -1441,7 +1461,9 @@ pub const Gen = struct {
             const v: f64 = if (init) |c| c.f else 0.0;
             if (h.ty == .integer) {
                 try self.w("    {s}: i64 = {d}, // §5.10 held across evaluations\n", .{
-                    self.held_names[i], @as(i64, @intFromFloat(@round(v))),
+                    // Saturating like every other fold-side real→int cast —
+                    // an initializer of `1e300` must not panic the compiler.
+                    self.held_names[i], std.math.lossyCast(i64, @round(v)),
                 });
             } else {
                 try self.w("    {s}: f64 = {s}, // §5.10 held across evaluations\n", .{
@@ -2308,9 +2330,12 @@ pub const Gen = struct {
             },
             .int => {
                 if (def == .float_const) {
+                    // `lossyCast`, not an isFinite branch: `isFinite(1e300)` is
+                    // true and the old `@intFromFloat` panicked on it. Saturate
+                    // exactly like the emitted runtime cast below, so folding a
+                    // constant cannot change what the device would compute.
                     const x = def.float_const;
-                    const n: i64 = if (std.math.isFinite(x)) @intFromFloat(@round(x)) else 0;
-                    try self.b("{d}", .{n});
+                    try self.b("{d}", .{std.math.lossyCast(i64, @round(x))});
                     return;
                 }
                 // §2.7: a string LITERAL used as an operand is the unsigned
@@ -2326,9 +2351,12 @@ pub const Gen = struct {
                     else => self.b("@as(i64, 0)", .{}),
                 };
                 self.pinLanes(v); // a real→int collapse is a scalar decision
-                try self.b("@as(i64, @intFromFloat(@round((", .{});
+                // Saturating (§4.2.1.1 only defines the rounding): the device
+                // is built ReleaseFast by real hosts, where `@intFromFloat` of
+                // an out-of-range or NaN value is UB, not a trap.
+                try self.b("std.math.lossyCast(i64, @round((", .{});
                 try self.renderValueRef(v);
-                try self.b(").val())))", .{});
+                try self.b(").val()))", .{});
             },
             .str => try self.b("\"\"", .{}),
         }
@@ -2634,8 +2662,16 @@ pub const Gen = struct {
             .pow => {
                 // The scalar interface only has pow(S, f64); a constant exponent
                 // (the overwhelming case) uses it, anything else goes through
-                // exp(y·ln x).
-                if (self.an.foldConst(b2, 0, true)) |k| {
+                // `zPow`. `resolve_params = false` — the fold's own rule: only
+                // a Model DEFAULT may look through a parameter. Folding with
+                // `true` here baked the DECLARED default into `.pow(k)` and a
+                // model-card override was silently ignored (value AND
+                // Jacobian). A parameter exponent renders as a value
+                // (`S.con(model.<p>)`) and `zPow` handles it — a model param
+                // is solve-constant, so its derivative half is zero and the
+                // c·a^(c−1) treatment is intact. `UnitPlan.foldedExponent` is
+                // the exact mirror of this test; change both or neither.
+                if (self.an.foldConst(b2, 0, false)) |k| {
                     try self.b("(", .{});
                     try self.renderVal(a, .real);
                     try self.b(").pow({s})", .{try self.fmtF64(k.f)});
@@ -2648,9 +2684,13 @@ pub const Gen = struct {
                 try self.b(")))", .{});
             },
             .fi_cast => {
-                try self.b("@as(i64, @intFromFloat(@round((", .{});
+                // §4.2.1.1 rounds; overflow is the language's silence and the
+                // artifact's UB under ReleaseFast — `lossyCast` (saturate,
+                // NaN→0) is the defined answer, and `Analysis.asI64` folds
+                // with the identical rule.
+                try self.b("std.math.lossyCast(i64, @round((", .{});
                 try self.renderVal(a, .real);
-                try self.b(").val())))", .{});
+                try self.b(").val()))", .{});
             },
             .opt_barrier => try self.renderVal(a, res_ty),
             // §3.2 integer arithmetic, at §3.2's 32-bit 2's complement width —
@@ -2717,11 +2757,12 @@ pub const Gen = struct {
             },
             // §4.2.11 shifts. `<<` zero-fills from the right on its own; the
             // truncation is §3.2's width, which is what makes `1 << 31` negative
-            // and `1 << 32` zero. `std.math.shl` is still what defines an
-            // over-wide shift as 0 rather than as UB.
+            // and `1 << 32` zero. `zShl` wraps `std.math.shl` — which defines an
+            // over-wide shift as 0 rather than as UB — with the unsigned-count
+            // reading a NEGATIVE count needs (see the helper).
             .shl => {
                 try self.b("@as(i64, @as(i32, @truncate(", .{});
-                try self.intCall2Ty("std.math.shl", a, b2);
+                try self.intCall2("zShl", a, b2);
                 try self.b(")))", .{});
             },
             // §4.2.11: "Both the << and >> shift operators fill the vacated bit
@@ -2969,14 +3010,15 @@ pub const Gen = struct {
     /// shift this replaced made `-16 >> 2` come out as -4 instead of
     /// 0xFFFFFFF0 >> 2 == 1073741820, i.e. it kept the sign the LRM says to drop.
     ///
-    /// `std.math.shr` still does the shifting because it is what defines an
-    /// over-wide shift as 0 rather than as UB.
+    /// `zShr` (over `std.math.shr`) does the shifting because it is what
+    /// defines an over-wide or negative count as 0 rather than as UB or a
+    /// wrong-way shift — §4.2.11's count is unsigned; see the helper.
     ///
     /// `<<` is now narrowed at its own arm above, on §3.2's width rather than
     /// §4.2.11's fill rule — the two are separate clauses that happen to want the
     /// same 32 bits, and `Lower.wrap32` is where that width is written down.
     fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
-        try self.b("@as(i64, std.math.shr(u32, @as(u32, @bitCast(@as(i32, @truncate(", .{});
+        try self.b("@as(i64, zShr(@as(u32, @bitCast(@as(i32, @truncate(", .{});
         try self.renderVal(a, .int);
         try self.b(")))), ", .{});
         try self.renderVal(b2, .int);
@@ -3217,27 +3259,34 @@ pub const Gen = struct {
     /// the same meaning, so they share the test — `last_crossing` used to fire
     /// on any sign change and report a falling edge to a `(V(p), +1)` call.
     ///
-    /// The argument is a `constant_expression` in both grammars, so an
-    /// unfoldable one is a source error, not a direction; it degrades to
-    /// "either", which is the LRM's own default.
+    /// The argument is a `constant_expression` in both grammars — and a
+    /// PARAMETER is one, so `resolve_params = false`: folding through the
+    /// declared default froze `cross(x, dir)` at the default's direction and
+    /// the model card's override was silently ignored. A direction that folds
+    /// without parameters still picks its comparison here; a parameter one
+    /// becomes a `zCrossDir` call on the model's value, and a genuinely
+    /// solve-time one is E0515 out of `f64Expr` (§4.5.14's constant-or-
+    /// parameter rule).
     /// `in` is the CURRENT input as a plain `f64` expression: the local
     /// `updateState` binds, or the rendered operand `.val()` in `eval`. Both
     /// spellings compare against the same `__prev`, which holds the last
     /// ACCEPTED input either way.
     fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const u8) Error![]const u8 {
-        const dir: i64 = if (self.an.foldConst(if (args.len > 1) args[1] else .zero, 0, true)) |c|
-            @intFromFloat(c.f)
-        else
-            0;
-        return switch (dir) {
-            1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in }),
-            -1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in }),
-            else => std.fmt.allocPrint(
-                self.arena,
-                "(inst.{0s}__prev <= 0.0 and {1s} > 0.0) or (inst.{0s}__prev >= 0.0 and {1s} < 0.0)",
-                .{ n, in },
-            ),
-        };
+        const arg: Mir.Value = if (args.len > 1) args[1] else .zero;
+        if (self.an.foldConst(arg, 0, false)) |c| {
+            return switch (std.math.lossyCast(i64, c.f)) {
+                1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev <= 0.0 and {1s} > 0.0", .{ n, in }),
+                -1 => std.fmt.allocPrint(self.arena, "inst.{0s}__prev >= 0.0 and {1s} < 0.0", .{ n, in }),
+                else => std.fmt.allocPrint(
+                    self.arena,
+                    "(inst.{0s}__prev <= 0.0 and {1s} > 0.0) or (inst.{0s}__prev >= 0.0 and {1s} < 0.0)",
+                    .{ n, in },
+                ),
+            };
+        }
+        return std.fmt.allocPrint(self.arena, "zCrossDir({s}, inst.{s}__prev, {s})", .{
+            try self.f64Expr(arg), n, in,
+        });
     }
 
     /// §5.10.3.1/§5.10.3.2/§5.10.3.3, one sentence repeated verbatim for
@@ -3301,7 +3350,9 @@ pub const Gen = struct {
             const u = if (d.args.len > 1) self.an.foldConst(d.args[1], 0, true) else null;
             try self.b("S.con((", .{});
             try self.renderVal(if (d.args.len > 0) d.args[0] else .f_zero, .real);
-            try self.b(").ddxAt({d}))", .{if (u) |x| @as(i64, @intFromFloat(x.f)) else 0});
+            // The index is a literal lowering minted, but the cast is still
+            // saturating: a compiler panic is never the answer to bad MIR.
+            try self.b(").ddxAt({d}))", .{if (u) |x| std.math.lossyCast(i64, x.f) else 0});
             return;
         }
 
@@ -3558,11 +3609,13 @@ pub const Gen = struct {
             return self.renderVal(if (args.len > 0) args[0] else .f_zero, .real);
         if (eq(u8, name, "$clog2"))
             return self.intCall1("zClog2", if (args.len > 0) args[0] else .zero);
-        // §9.11 conversions.
+        // §9.11 conversions. `$rtoi` truncates (Table 9-7); the saturation is
+        // ours — the clause is silent on overflow and `@intFromFloat` is UB in
+        // the ReleaseFast artifact a host actually links.
         if (eq(u8, name, "$rtoi")) {
-            try self.b("@as(i64, @intFromFloat(@trunc((", .{});
+            try self.b("std.math.lossyCast(i64, @trunc((", .{});
             try self.renderVal(if (args.len > 0) args[0] else .f_zero, .real);
-            return self.b(").val())))", .{});
+            return self.b(").val()))", .{});
         }
         if (eq(u8, name, "$itor")) {
             try self.b("S.con(@as(f64, @floatFromInt(", .{});
@@ -3874,8 +3927,8 @@ pub const Gen = struct {
                 try self.argF64(args, 3, "0.0"),
             }),
             .absdelay => try self.b(
-                "S.con(zHistAt(&inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime - ({s})))",
-                .{ n, n, n, try self.argF64(args, 1, "0.0") },
+                "zAbsdelay(S, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
+                .{ in, n, n, n, try self.argF64(args, 1, "0.0") },
             ),
             // §4.5.8 the ramp reads its ORIGIN out of `Instance` — where the
             // output was when the current excursion began, and when that was —
@@ -3979,10 +4032,24 @@ pub const Gen = struct {
 
     fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
         if (i >= args.len) return dflt;
-        if (self.an.foldConst(args[i], 0, true)) |c| {
+        // `resolve_params = false`: a zero through the DECLARED default is not
+        // a zero — `transition(x, 0, tr)` with `tr` defaulting to 0.0 but
+        // overridden on the model card used to take `default_transition
+        // forever. Only a time that is zero WITHOUT parameters is spelled-
+        // absent at compile time.
+        if (self.an.foldConst(args[i], 0, false)) |c| {
             if (c.f == 0.0) return dflt;
+            return self.f64Expr(args[i]); // a known-nonzero literal, as before
         }
-        return self.f64Expr(args[i]);
+        const e = try self.f64Expr(args[i]);
+        // §4.5.8 conditions on the VALUE ("… or are equal to zero (0.0)"),
+        // which for a parameter time is a run-time fact — so the fall-through
+        // to `dflt` is emitted as a select. Skipped when `dflt` is the bare
+        // 0.0 fallback: `zTransFrac` already reads a non-positive time as the
+        // simulator's own default (an instantaneous edge), so the select would
+        // choose between two spellings of the same thing.
+        if (std.mem.eql(u8, dflt, "0.0")) return e;
+        return std.fmt.allocPrint(self.arena, "(if (({s}) != 0.0) ({s}) else ({s}))", .{ e, e, dflt });
     }
 
     /// §10.3 the `` `default_transition `` in force AT THE CALL BEING EMITTED,
@@ -4396,7 +4463,21 @@ pub const Gen = struct {
                     try self.argF64(args, 1, "0.0"), try self.argF64(args, 2, "0.0"),
                     try self.argF64(args, 3, "0.0"),
                 }),
-                .absdelay => try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, inst.abstime, in);\n", .{ n, n, n }),
+                .absdelay => {
+                    try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, inst.abstime, in);\n", .{ n, n, n });
+                    // §9.17.2 the same self-defence the §4.5.12 filter mounts
+                    // with its period: ask the host to keep the step at or
+                    // under td, or a wide step flattens the delay to
+                    // `zAbsdelay`'s short-side interpolation and the 32-sample
+                    // ring records nothing finer than the steps taken. `td`
+                    // may be a model expression (a parameter's overridden
+                    // value), so the bound is computed at run time; only a
+                    // positive one binds — `@min` with 0 would stop time.
+                    try self.w(
+                        "        const zad_td = {s};\n        if (zad_td > 0.0) inst.bound_step = @min(inst.bound_step, zad_td);\n",
+                        .{try self.argF64(args, 1, "0.0")},
+                    );
+                },
                 .transition => {
                     const t = try self.transitionTimes(args);
                     try self.w(
@@ -4463,8 +4544,11 @@ pub const Gen = struct {
                 .bound_step => try self.w("        inst.bound_step = @min(inst.bound_step, in);\n", .{}),
                 // §9.17.1 same, and `inf` means "no announcement": the degree is
                 // a non-negative constant_expression, so a finite `in` is exact.
+                // `lossyCast` because "finite" is not "fits an i32", and the
+                // artifact is built ReleaseFast — a huge degree saturates
+                // instead of being UB.
                 .discontinuity => try self.w(
-                    "        inst.discontinuity_order = if (std.math.isFinite(in)) @intFromFloat(in) else -1;\n",
+                    "        inst.discontinuity_order = if (std.math.isFinite(in)) std.math.lossyCast(i32, in) else -1;\n",
                     .{},
                 ),
                 // §4.5.11 advance the cascade on the accepted solution.
@@ -4570,13 +4654,15 @@ pub const Gen = struct {
     /// to the host as "this device wants no other timepoints", which is a claim
     /// this code would not be entitled to make.
     ///
-    // ponytail: the §5.10.3.3 `enable` is honoured here only where it FOLDS.
-    // A timer whose enable is the constant zero generates no events at all, so
-    // proposing its fire times would be a lie about where a discontinuity is; a
-    // timer whose enable is a solved quantity keeps its breakpoints, because
+    // ponytail: the §5.10.3.3 `enable` is honoured here only where it folds
+    // WITHOUT parameters (a genuinely-constant zero: that timer never fires,
+    // so proposing its fire times would be a lie about where a discontinuity
+    // is) or renders over the Model (a parameter enable: the guard is emitted
+    // and evaluated at run time — folding it through the DECLARED default
+    // used to veto a timer whose enable the model card overrode to nonzero).
+    // A timer whose enable is a solved quantity keeps its breakpoints, because
     // this hook has no `Instance` to evaluate one against and an extra timepoint
-    // costs a step, never an answer. Widen it when a Model-renderable enable
-    // shows up in a real model — it can simply AND into `zNextTimer`.
+    // costs a step, never an answer.
     fn emitNextBreakpoint(self: *Gen) Error!void {
         if (!self.usesOp(.timer)) return;
 
@@ -4586,7 +4672,7 @@ pub const Gen = struct {
         defer self.uses_model = saved;
         self.uses_model = false;
 
-        var timers: std.ArrayList([2][]const u8) = .empty;
+        var timers: std.ArrayList([3]?[]const u8) = .empty;
         for (self.units, 0..) |u, i| {
             if (u.role != .analog_op or opKind(u.target) != .timer) continue;
             const inst = self.opInstOf(@intCast(i)) orelse return;
@@ -4594,10 +4680,13 @@ pub const Gen = struct {
             // §5.10.3.3 "if enable is specified and it is zero, then timer() is
             // inactive": a constant-zero enable means this timer never fires, so
             // it contributes no breakpoint — and it must not veto the others.
+            var guard: ?[]const u8 = null;
             if (enableArgIdx("timer")) |ei| {
                 if (ei < args.len) {
-                    if (self.an.foldConst(args[ei], 0, true)) |c| {
+                    if (self.an.foldConst(args[ei], 0, false)) |c| {
                         if (c.f == 0.0) continue;
+                    } else if (try self.f64Const(args[ei], 0, false)) |e| {
+                        guard = e;
                     }
                 }
             }
@@ -4606,7 +4695,7 @@ pub const Gen = struct {
             // Verilog-A that this hook simply cannot describe.
             const start = try self.f64Const(if (args.len > 0) args[0] else .zero, 0, false) orelse return;
             const period = try self.f64Const(if (args.len > 1) args[1] else .zero, 0, false) orelse return;
-            try timers.append(self.arena, .{ start, period });
+            try timers.append(self.arena, .{ start, period, guard });
         }
         if (timers.items.len == 0) return;
 
@@ -4617,8 +4706,10 @@ pub const Gen = struct {
             \\    var best = std.math.inf(f64);
             \\
         , .{if (self.uses_model) "model" else "_"});
-        for (timers.items) |tm|
-            try self.w("    if (zNextTimer({s}, {s}, t)) |b| best = @min(best, b);\n", .{ tm[0], tm[1] });
+        for (timers.items) |tm| {
+            if (tm[2]) |g| try self.w("    if (({s}) != 0.0)\n    ", .{g});
+            try self.w("    if (zNextTimer({s}, {s}, t)) |b| best = @min(best, b);\n", .{ tm[0].?, tm[1].? });
+        }
         try self.w(
             \\    return if (best == std.math.inf(f64)) null else best;
             \\}}
@@ -4803,7 +4894,10 @@ pub fn opNeedsInput(k: OpKind) bool {
         // (`timer`'s "input" being its `start_time`), so the operand has to be
         // rendered there and not only in `updateState`. `zi` joined it for the
         // §4.5.12 static branch, which is a gain on the input, not a held value.
-        .ddt, .idt, .idtmod, .transition, .slew, .above, .laplace, .cross, .timer, .zi => true,
+        // `absdelay` joined for `zAbsdelay`'s two input-valued edges: the §4.5.7
+        // DC pass-through, and a delay shorter than the accepted step, whose
+        // only covering data is the in-flight value.
+        .ddt, .idt, .idtmod, .transition, .slew, .above, .laplace, .cross, .timer, .zi, .absdelay => true,
         else => false,
     };
 }
@@ -4856,8 +4950,21 @@ const math_txt =
     \\fn zLog10(comptime S: type, a: S) S { // §4.3.1 log() is base 10
     \\    return a.log().scale(0.4342944819032518);
     \\}
-    \\fn zHypot(comptime S: type, a: S, b: S) S { // §4.3.1
-    \\    return a.mul(a).add(b.mul(b)).sqrt();
+    \\/// §4.3.1 Table 4-14 hypot names the C library function, which is
+    \\/// overflow-free — a²+b² composed in S overflowed for legs ≳1e154. The
+    \\/// value is the libm one; the derivative (a/h)·da + (b/h)·db is grafted on
+    \\/// through zero-valued carriers, `a.addC(-av)` being an S whose VALUE is
+    \\/// exactly 0 and whose derivative is da — the same idiom the §12.32 systf
+    \\/// reassembly uses. Guarded: at h = 0 hypot has no derivative (a cone tip),
+    \\/// and a non-finite h has no slope worth propagating.
+    \\fn zHypot(comptime S: type, a: S, b: S) S {
+    \\    const av = a.val();
+    \\    const bv = b.val();
+    \\    const h = std.math.hypot(av, bv);
+    \\    var r = S.con(h);
+    \\    if (h != 0.0 and std.math.isFinite(h))
+    \\        r = r.add(a.addC(-av).scale(av / h)).add(b.addC(-bv).scale(bv / h));
+    \\    return r;
     \\}
     \\fn zAsin(comptime S: type, a: S) S { // §4.3.2 asin = atan(x/sqrt(1-x^2))
     \\    return a.div(a.mul(a).neg().addC(1.0).sqrt()).atan();
@@ -4892,14 +4999,56 @@ const math_txt =
     \\fn zCeil(comptime S: type, a: S) S { // §4.3.1 — derivative 0 a.e.
     \\    return S.con(@ceil(a.val()));
     \\}
-    \\fn zFmod(comptime S: type, a: S, b: S) S { // §4.2.4 % keeps the sign of a
-    \\    return a.sub(b.scale(@trunc(a.val() / b.val())));
+    \\/// §4.2.4 `%` keeps the sign of the first operand — C's fmod, which `@rem`
+    \\/// on f64 is, EXACTLY. The composed `a − b·trunc(a/b)` this replaces lost
+    \\/// the whole remainder to the subtraction's rounding once |a| ≳ 2^53·|b|.
+    \\/// The derivative treatment is unchanged (k = trunc(a/b) is constant a.e.,
+    \\/// so d = da − k·db), carried by zero-valued grafts so the exact value
+    \\/// survives; a non-finite k (b = 0, or a/b overflowed) has no slope worth
+    \\/// propagating and degrades to da alone.
+    \\fn zFmod(comptime S: type, a: S, b: S) S {
+    \\    const av = a.val();
+    \\    const bv = b.val();
+    \\    const k = @trunc(av / bv);
+    \\    var r = S.con(@rem(av, bv)).add(a.addC(-av));
+    \\    if (std.math.isFinite(k)) r = r.sub(b.addC(-bv).scale(k));
+    \\    return r;
     \\}
-    \\fn zPow(comptime S: type, a: S, b: S) S { // §4.3.1 with a non-constant exponent
-    \\    return b.mul(a.log()).exp();
+    \\/// §4.3.1 pow with a non-constant exponent. The exp(y·ln x) composition
+    \\/// this replaces was NaN on the clause's own legal domain "if x < 0, all
+    \\/// integer y". The value is libm's (std.math.pow handles the negative-base
+    \\/// integral-y sign itself); the derivatives are grafted on zero-valued
+    \\/// carriers:
+    \\///   ∂/∂x = y·x^(y−1)  — valid for x > 0 and for integral y of either sign;
+    \\///   ∂/∂y = x^y·ln(x)  — only for x > 0. For x ≤ 0 the legal y move in
+    \\///   integer steps, so no continuous ∂/∂y exists and 0 is the honest slope.
+    \\/// Non-finite slopes (x = 0 with y < 1, domain-error NaNs) are dropped the
+    \\/// same way zHypot drops its cone tip.
+    \\fn zPow(comptime S: type, a: S, b: S) S {
+    \\    const x = a.val();
+    \\    const y = b.val();
+    \\    const v = std.math.pow(f64, x, y);
+    \\    const gx = y * std.math.pow(f64, x, y - 1.0);
+    \\    const gy = if (x > 0.0) v * @log(x) else 0.0;
+    \\    var r = S.con(v);
+    \\    if (std.math.isFinite(gx) and gx != 0.0) r = r.add(a.addC(-x).scale(gx));
+    \\    if (std.math.isFinite(gy) and gy != 0.0) r = r.add(b.addC(-y).scale(gy));
+    \\    return r;
     \\}
     \\fn zIabs(a: i64) i64 { // §4.3.1 integer abs, §3.2's 32-bit result
     \\    return @as(i32, @truncate(if (a < 0) -%a else a));
+    \\}
+    \\/// §4.2.11 the shift COUNT reads as unsigned: a negative i64 count is a
+    \\/// reinterpreted value ≥ 2^63, which vacates every one of §3.2.1's 32 bits
+    \\/// — so the answer is 0, exactly like any other over-wide count. Without
+    \\/// the guard `std.math.shl`/`shr` take a negative count as "shift the
+    \\/// OTHER way" (8 << -1 came out 4, 8 >> -1 came out 16). Positive counts
+    \\/// keep the std functions' verified over-wide-is-0 semantics untouched.
+    \\fn zShl(a: i64, n: i64) i64 {
+    \\    return if (n < 0) 0 else std.math.shl(i64, a, n);
+    \\}
+    \\fn zShr(a: u32, n: i64) u32 {
+    \\    return if (n < 0) 0 else std.math.shr(u32, a, n);
     \\}
     \\fn zClog2(a: i64) i64 { // §9.11 $clog2
     \\    if (a <= 1) return 0;
@@ -4955,6 +5104,16 @@ const ops_txt =
     \\fn zSlew(comptime S: type, v: S, prev: f64, dt: f64, rise: f64, fall: f64) S { // §4.5.9
     \\    if (dt <= 0.0) return v;
     \\    return v.minC(prev + rise * dt).maxC(prev - fall * dt);
+    \\}
+    \\/// §5.10.3.1/§4.5.10 the crossing test for a direction that is a PARAMETER
+    \\/// (a constant_expression the model card owns, so codegen cannot pick the
+    \\/// comparison at emit time): +1 rising only, -1 falling only, anything
+    \\/// else either — the EXACT decode `Gen.crossTest` applies to a folded one,
+    \\/// so overriding the parameter to the value the default had changes nothing.
+    \\fn zCrossDir(dir: f64, prev: f64, in: f64) bool {
+    \\    if (dir == 1.0) return prev <= 0.0 and in > 0.0;
+    \\    if (dir == -1.0) return prev >= 0.0 and in < 0.0;
+    \\    return (prev <= 0.0 and in > 0.0) or (prev >= 0.0 and in < 0.0);
     \\}
     \\/// §4.5.8 the fraction of the current excursion the ramp has traversed.
     \\/// "transition() forces all positive transitions of expr to occur over
@@ -5130,10 +5289,43 @@ const zi_hold_txt =
 ;
 
 const hist_txt =
+    \\/// §4.5.7 the delayed value, as the residual sees it: Output(t) = Input(t − td).
+    \\///
+    \\/// Two edges are decided HERE rather than by the ring scan below:
+    \\///
+    \\///  · dt ≤ 0 is a static analysis — "In DC and operating point analyses,
+    \\///    absdelay() returns the value of its input" — so `vin` passes through,
+    \\///    derivative and all, exactly like `zTransition`'s DC branch.
+    \\///  · a td SHORTER than the step the host just took queries past the newest
+    \\///    accepted sample. The only data covering (ts[newest], now] is the
+    \\///    CURRENT in-flight value, so the answer interpolates between the newest
+    \\///    sample and `vin` — the same linear reading `zHistAt` applies inside
+    \\///    the history. That keeps the output continuous in t and carries the
+    \\///    f·∂vin derivative the td → 0 (identity) limit requires. The scan used
+    \\///    to fall through to the newest sample here, which silently stretched
+    \\///    every delay shorter than a step to the step itself. (Clamping was the
+    \\///    other candidate; it answers a PAST query with a value from the wrong
+    \\///    time and keeps the Jacobian blind to an input the output already
+    \\///    partially tracks, so interpolation is the sound choice.)
+    \\///
+    \\/// Inside the history the delayed value has no dependence on the current
+    \\/// unknowns, so it is injected as a constant (derivative 0) — the correct
+    \\/// companion model for a pure transport delay. The f ≤ 1 clamp covers a
+    \\/// runtime-negative td, which lowering rejects where it can fold.
+    \\fn zAbsdelay(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u32, now: f64, dt: f64, td: f64) S {
+    \\    if (dt <= 0.0) return vin;
+    \\    const t = now - td;
+    \\    const newest = (head + ts.len - 1) % ts.len;
+    \\    if (t > ts[newest]) {
+    \\        const span = now - ts[newest];
+    \\        if (span <= 0.0) return vin;
+    \\        const f = @min((t - ts[newest]) / span, 1.0);
+    \\        return vin.scale(f).addC(vs[newest] * (1.0 - f));
+    \\    }
+    \\    return S.con(zHistAt(ts, vs, head, t));
+    \\}
     \\/// §4.5.7 absdelay history: a fixed ring of (t, v) samples, linearly
-    \\/// interpolated. A pure delay has no dependence on the CURRENT unknowns, so
-    \\/// the delayed value is injected as a constant (derivative 0) — which is the
-    \\/// correct companion model for it.
+    \\/// interpolated.
     \\fn zHistAt(ts: []const f64, vs: []const f64, head: u32, t: f64) f64 {
     \\    const n = ts.len;
     \\    var i: usize = 0;
@@ -6464,7 +6656,7 @@ test "codegen: §4.5.7 a delay computed from parameters renders as an expression
     try std.testing.expect(std.mem.indexOf(
         u8,
         src,
-        "inst.abstime - ((model.len) * (@sqrt((model.l) * (model.c))))",
+        "inst.dt, (model.len) * (@sqrt((model.l) * (model.c))))",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
 }
