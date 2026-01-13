@@ -136,10 +136,12 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
                 }
                 item.s = src[si..end];
                 item.r = zstd.fmt.parseFloat(f64, item.s) catch return out;
-                item.i = if (item.r >= 9.223372036854776e18 or item.r <= -9.223372036854776e18)
-                    0
-                else
-                    @intFromFloat(@trunc(item.r));
+                // Saturating (`lossyCast`), like every other real→int cast the
+                // device performs: this text ships in ReleaseFast artifacts,
+                // where an unguarded `@intFromFloat` of "1e300" is UB. The
+                // hand-rolled range check this replaces answered 0 out of
+                // range, which was one more arbitrary rule than needed.
+                item.i = zstd.math.lossyCast(i64, @trunc(item.r));
             },
             // The four radix codes. "%d Matches an optionally signed decimal
             // number, consisting of the optional sign from the set + or -,
