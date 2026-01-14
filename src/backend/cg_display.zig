@@ -214,7 +214,67 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
     try emitScratch(g, ops.items);
     try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
     try renderPrintArgs(g, ops.items);
-    try g.b("}}); break :zd S.con(0.0); }}", .{});
+    try g.b("}}); ", .{});
+    // §9.7.3: `$fatal` "terminates the simulation with an errorcode" and makes
+    // "an implicit call to $finish" — it is the one member of the family whose
+    // print is followed by the END OF THE RUN, "without checking whether the
+    // iteration would be rejected". The finish_number is Syntax 9-7's literal
+    // 0|1|2 and "may be used in an implementation-specific manner"; here it is
+    // the process exit status, floored at 1 so a `$fatal` can never exit 0 and
+    // read as success to a shell (`vera --run` forwards the status verbatim).
+    // `zHalt` is f64-typed so the statements after it — §9.7's legal dead code
+    // — still compile; `break :zd` is statically reachable, never taken.
+    if (std.mem.eql(u8, name, "$fatal")) {
+        const has_num = args.len > 0 and g.strArg(args, 0) == null;
+        const lvl = if (has_num) finishLevel(g, args, 1) else 1;
+        try g.b("_ = zHalt({d}); ", .{std.math.clamp(lvl, 1, 255)});
+    }
+    try g.b("break :zd S.con(0.0); }}", .{});
+}
+
+/// §9.7.1's diagnostic argument, folded. Syntax 9-5/9-7 make it the literal
+/// 0 | 1 | 2, so a fold is the grammar and not an optimisation; anything that
+/// does not fold takes `dflt` — §9.7.1: "One (1) is the default if no argument
+/// is supplied."
+fn finishLevel(g: *Gen, args: []const Mir.Value, dflt: i64) i64 {
+    if (args.len == 0) return dflt;
+    return switch (g.mir.valueDef(g.an.rv(args[0]))) {
+        .int_const => |x| x,
+        .float_const => |x| std.math.lossyCast(i64, x),
+        else => dflt,
+    };
+}
+
+/// §9.7.1 `$finish` / §9.7.2 `$stop` in the printing artifact: the simulation
+/// ends HERE, at the call's position among the prints — everything the model
+/// said before it is already on stderr, and nothing after it runs.
+///
+/// Table 9-25 decides the diagnostic: 0 prints nothing, 1 prints "simulation
+/// time and location", 2 adds memory/CPU statistics. Level >= 1 prints the
+/// accepted time and the module; level 2 prints the same line — ponytail: a
+/// testbench artifact keeps no CPU/memory bookkeeping to report, so 2 is 1
+/// until a host that measures asks. (§9.7.1's dc-sweep-variable and
+/// analog-initial variants of the time field are likewise not distinguished:
+/// the artifact reports `inst.abstime`, which is the time the runner set.)
+///
+/// `$finish` exits 0 — ending the run is its defined behaviour, not a failure
+/// (§9.7.1 "the simulator shall exit after the current solution is complete";
+/// the display phase runs on the accepted solution, so this IS that point).
+/// `$stop` suspends "at a converged time point" and the LRM leaves resumption
+/// to the implementation (§9.7.2); ponytail: a batch artifact has no
+/// interactive kernel to suspend into, so its implementation of suspension is
+/// to print the diagnostic and exit 0 — the upgrade path is a debugger hook in
+/// the runner, when something interactive exists to resume from.
+pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+    const level = finishLevel(g, args, 1);
+    try g.b("zd: {{ ", .{});
+    if (level >= 1) {
+        g.uses_inst = true;
+        try g.b("std.debug.print(\"{s}: t={{d}} ({f})\\n\", .{{inst.abstime}}); ", .{
+            name, std.zig.fmtString(g.mir.name),
+        });
+    }
+    try g.b("_ = zHalt(0); break :zd S.con(0.0); }}", .{});
 }
 
 /// §9.5.3 `$swrite`/`$sformat` — "the same as their counterparts", §9.4.1's
@@ -835,6 +895,47 @@ test "§9.4.3/C: integer sign flags — %05d packs zeros after the sign, %+d pri
     const pad = try emitBody(a, "$strobe(\"%5d\", -42);");
     try std.testing.expect(has(pad, "zPadInt(&zb0, "));
     try std.testing.expect(has(pad, "\"{s:>5}\\n\""));
+}
+
+test "§9.7 simulation control: the run ends at the call, with the pinned status" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    // §9.7.3: $fatal prints its message, then exits with the finish_number as
+    // the errorcode. The torture fixture 173_fatal_terminates.va proves the
+    // run ends; THIS pins the code itself, which the harness cannot (it has no
+    // expected-exit mechanism, and a nonzero status is recorded, not judged).
+    const fat = try emitBody(a, "$fatal(2, \"died %d\", 7);");
+    try std.testing.expect(has(fat, "\"FATAL: died {d}\\n\""));
+    try std.testing.expect(has(fat, "_ = zHalt(2); "));
+    // ...floored at 1: a $fatal may never exit 0 and read as success to the
+    // shell `vera --run` forwards the status to.
+    const fat0 = try emitBody(a, "$fatal(0, \"boom\");");
+    try std.testing.expect(has(fat0, "_ = zHalt(1); "));
+    // $error stays non-fatal: same severity family, no exit at its call site
+    // (the kernel text is present in every printing artifact; the CALL is not).
+    const err = try emitBody(a, "$error(\"soft\");");
+    try std.testing.expect(!has(err, "_ = zHalt"));
+
+    // §9.7.1: the default diagnostic level is 1 — "prints simulation time and
+    // location" — and the exit status is 0: ending the run is the task's
+    // defined behaviour, not a failure.
+    const fin = try emitBody(a, "$finish;");
+    try std.testing.expect(has(fin, "\"$finish: t={d} (t)\\n\""));
+    try std.testing.expect(has(fin, "_ = zHalt(0); "));
+    // Table 9-25 level 0 prints nothing (and still exits).
+    const fin0 = try emitBody(a, "$finish(0);");
+    try std.testing.expect(!has(fin0, "$finish: t="));
+    try std.testing.expect(has(fin0, "_ = zHalt(0); "));
+    // §9.7.2 $stop, non-interactive artifact: diagnostic then exit 0.
+    const stp = try emitBody(a, "$stop(1);");
+    try std.testing.expect(has(stp, "\"$stop: t={d} (t)\\n\""));
+    try std.testing.expect(has(stp, "_ = zHalt(0); "));
+
+    // The kernel IS the exit — `std.process.exit`, f64-typed so §9.7's legal
+    // dead code after a terminating call still compiles.
+    try std.testing.expect(has(fin, "fn zHalt(code: u8) f64 {\n    std.process.exit(code);\n}"));
 }
 
 test "§9.4.3 Table 9-22: %h shows the operand's two's-complement bit pattern" {
