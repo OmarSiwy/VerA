@@ -322,6 +322,14 @@ pub fn validate(comptime D: type) void {
     validatePhysicsFn(D, "eval");
     if (@hasDecl(D, "q")) validatePhysicsFn(D, "q");
 
+    // §9.4/§9.5 display phase (the clause map lives on `allowed_pub_decls`).
+    // Present only in a printing artifact; when present it must be callable
+    // the way tb.zig's generated runner calls it — `D.display(Dual, xd,
+    // model, inst, t)` — which is `eval`'s generic shape returning void.
+    if (@hasDecl(D, "display")) {
+        if (genericFnError(D, "display", "void")) |m| @compileError(m);
+    }
+
     // Optional permission, not a shape: the WIDTH of S is the host's, and this
     // only says which widths this device's physics tolerates.
     if (@hasDecl(D, "jac_f32") and @TypeOf(D.jac_f32) != bool)
@@ -424,9 +432,17 @@ pub fn validate(comptime D: type) void {
     }
 
     // Operating-point output variables (§3.2.1). Position k in op_vars
-    // describes element k of opValues's result.
+    // describes element k of opValues's result. Twin metadata exactly like
+    // ac_stamps/acStamp above: the table and the hook require each other in
+    // BOTH directions, and the hook's shape is checked — it is generic over S
+    // (the engine reads op values off whichever scalar it is holding), so the
+    // check is `eval`'s, with the result sized by the table.
     expectArray(D, "op_vars", OpVar);
     requireWith(D, "op_vars", "opValues");
+    requireWith(D, "opValues", "op_vars");
+    if (@hasDecl(D, "opValues")) {
+        if (genericFnError(D, "opValues", "[op_vars.len]S")) |m| @compileError(m);
+    }
 
     // §2.8.3/§12.32 unresolved `$name`s. There is no device-side hook to pair
     // this table with — the implementation is the HOST's, which is the whole
@@ -517,9 +533,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "updateState", {} },
     .{ "stateCtl", {} },
     .{ "State", {} },
-    // Single-precision-Jacobian permission — see `validateJacF32` and the S
-    // note in the header. Optional; absent means f64, which is the default a
-    // host must assume.
+    // Single-precision-Jacobian permission — checked inline in `validate` (the
+    // "`jac_f32` must be a bool" guard); the S note in the header is the story.
+    // Optional; absent means f64, which is the default a host must assume.
     .{ "jac_f32", {} },
     // Runtime analysis kind exported by generated devices for the analysis()
     // builtin; the host engine sets Instance.analysis_kind per pass. Its
@@ -599,10 +615,20 @@ fn rejectStrayPubDecls(comptime D: type) void {
 /// Generic over S, so the concrete signature is checked by instantiation:
 /// here only arity + comptime-type first param.
 fn validatePhysicsFn(comptime D: type, comptime fn_name: []const u8) void {
+    if (genericFnError(D, fn_name, "[n_u]S")) |m| @compileError(m);
+}
+
+/// The shape shared by every generic-over-S entry point (`eval`, `q`,
+/// `opValues`, `display`): five parameters, the first `comptime S: type`.
+/// `ret` only names the expected result in the complaint — a generic return
+/// cannot be checked without instantiating. Returns the message instead of
+/// raising it so the NEGATIVE half is testable; `validate` is the raiser.
+fn genericFnError(comptime D: type, comptime fn_name: []const u8, comptime ret: []const u8) ?[]const u8 {
     const info = @typeInfo(@TypeOf(@field(D, fn_name)));
     if (info != .@"fn" or info.@"fn".params.len != 5 or info.@"fn".params[0].type != type)
-        @compileError(@typeName(D) ++ "." ++ fn_name ++
-            ": expected fn (comptime S: type, [n_u]S, *const Model, *const Instance, f64) [n_u]S");
+        return @typeName(D) ++ "." ++ fn_name ++
+            ": expected fn (comptime S: type, [n_u]S, *const Model, *const Instance, f64) " ++ ret;
+    return null;
 }
 
 fn expectFn(comptime D: type, comptime fn_name: []const u8, comptime Expected: type) void {
@@ -623,10 +649,17 @@ fn expectArray(comptime D: type, comptime decl: []const u8, comptime Child: type
 
 /// `decl` is meaningless without `needs` — a table with no hook to fill it, or
 /// a hook with no table to describe it. Declare it both ways for a pair that
-/// is mutually required (ac_stamps/acStamp).
+/// is mutually required (ac_stamps/acStamp, op_vars/opValues).
 fn requireWith(comptime D: type, comptime decl: []const u8, comptime needs: []const u8) void {
+    if (requireWithError(D, decl, needs)) |m| @compileError(m);
+}
+
+/// The testable half of `requireWith` — see `genericFnError` for why the
+/// message is returned rather than raised.
+fn requireWithError(comptime D: type, comptime decl: []const u8, comptime needs: []const u8) ?[]const u8 {
     if (@hasDecl(D, decl) and !@hasDecl(D, needs))
-        @compileError(@typeName(D) ++ ": `" ++ decl ++ "` requires `" ++ needs ++ "`");
+        return @typeName(D) ++ ": `" ++ decl ++ "` requires `" ++ needs ++ "`";
+    return null;
 }
 
 /// A numeric parameter field of either width. BOTH are live: this generator
@@ -931,7 +964,12 @@ const MockAll = struct {
     pub fn nextBreakpoint(_: *const Model, _: f64) ?f64 {
         return null;
     }
-    pub fn display(_: *const Model, _: *const Instance) void {}
+    /// The shape tb.zig's generated runner actually calls — `D.display(Dual,
+    /// xd, model, inst, t)` — and codegen emits: `pub fn display(comptime S:
+    /// type, x: [n_u]S, model: *const Model, inst: *const Instance, _: f64)
+    /// void`. This used to be a 2-arg `(Model, Instance)` fn, which no caller
+    /// anywhere has ever used; `validate` now refuses that shape.
+    pub fn display(comptime S: type, _: [n_u]S, _: *const Model, _: *const Instance, _: f64) void {}
 };
 
 test "validate: minimal resistor" {
@@ -946,6 +984,47 @@ test "validate: every contract member at once (allowlist cannot drift)" {
         if (!@hasDecl(MockAll, k))
             @compileError("allowed_pub_decls has `" ++ k ++ "` but MockAll does not declare it");
     };
+}
+
+test "op_vars/opValues are twins: each half is refused without the other" {
+    // The mirror of ac_stamps/acStamp. A hook with no table has positions
+    // nothing describes; a table with no hook describes values nothing fills.
+    const OnlyHook = struct {
+        pub fn opValues() void {}
+    };
+    const OnlyTable = struct {
+        pub const op_vars = [_]OpVar{.{ .name = "gm" }};
+    };
+    try testing.expect(comptime (requireWithError(OnlyHook, "opValues", "op_vars") != null));
+    try testing.expect(comptime (requireWithError(OnlyTable, "op_vars", "opValues") != null));
+    // MockAll declares both halves, so neither direction complains.
+    try testing.expect(comptime (requireWithError(MockAll, "op_vars", "opValues") == null));
+    try testing.expect(comptime (requireWithError(MockAll, "opValues", "op_vars") == null));
+}
+
+test "display/opValues shapes: the generic 5-param form, wrong arities refused" {
+    // The exact shape that used to slip through: MockAll's display was a
+    // 2-arg `(Model, Instance)` fn no caller has ever used — tb.zig calls
+    // `D.display(Dual, xd, model, inst, t)`, and a device declaring the
+    // 2-arg form fails in the RUNNER's build, three cache steps from the
+    // device that caused it. Refused at the definition instead.
+    const Bad = struct {
+        pub const Model = struct {};
+        pub const Instance = struct {};
+        pub fn display(_: *const Model, _: *const Instance) void {}
+        pub fn opValues(_: f64) f64 {
+            return 0;
+        }
+        pub fn eval(_: f64) void {} // not generic: first param is not `type`
+    };
+    try testing.expect(comptime (genericFnError(Bad, "display", "void") != null));
+    try testing.expect(comptime (genericFnError(Bad, "opValues", "[op_vars.len]S") != null));
+    try testing.expect(comptime (genericFnError(Bad, "eval", "[n_u]S") != null));
+    // The real shapes pass: MockAll.display mirrors codegen's emitted decl,
+    // MockAll.opValues mirrors eval.
+    try testing.expect(comptime (genericFnError(MockAll, "display", "void") == null));
+    try testing.expect(comptime (genericFnError(MockAll, "opValues", "[op_vars.len]S") == null));
+    try testing.expect(comptime (genericFnError(MockAll, "eval", "[n_u]S") == null));
 }
 
 test "validateHost: a systf is the host's to bind, and only when there is one" {
