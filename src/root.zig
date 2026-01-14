@@ -487,7 +487,7 @@ fn compileInArena(
     // proof sees the same evidence the CFG edge carried, and codegen can emit
     // proven-total conditionals branchless (S.sel) instead of `if`.
     // The arena, not the gpa: ifconv appends to the arena-owned MIR tables.
-    _ = try ifconv.run(arena, mir);
+    _ = try ifconv.run(arena, mir, lower.contributions.items);
 
     // --- stage 5: PROVE (class 6) — gates every target ----------------------
     // Also the source of the W0650 finiteness WARNING, which is why this runs

@@ -776,7 +776,12 @@ pub const Gen = struct {
         // they need `R` for the same reason `updateState` does. It stays out of
         // `buildPrelude`/`h.zig`: no UNIT body can reach these, because `$limit`
         // renders as the identity inside one.
-        if (stateful or cg_limit.usesCore(self)) try self.out.appendSlice(self.gpa, rscalar_txt);
+        if (stateful or cg_limit.usesCore(self)) {
+            try self.out.appendSlice(self.gpa, rscalar_txt);
+            // Pinned to the contract's primitive list, same as tb.zig's
+            // Dual/Vec — a primitive added there cannot silently miss R.
+            try self.out.appendSlice(self.gpa, "comptime {\n    contract.checkScalar(R);\n}\n\n");
+        }
 
         try self.emitTopology();
         try self.emitModel();
@@ -2405,8 +2410,7 @@ pub const Gen = struct {
     fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
         if (depth > 64) return false;
         const v = self.an.rv(v0);
-        const i = @intFromEnum(v);
-        if (i < self.an.nv and (self.plan.cached(v) or self.plan.slot[i] != none_u32)) return true;
+        if (self.materialized(v)) return true;
         const def = self.mir.valueDef(v);
         if (def != .inst_result) return true; // const / param / probe
         const inst = def.inst_result;
@@ -2425,9 +2429,14 @@ pub const Gen = struct {
         };
     }
 
-    /// The select cond as an INLINE real comparison — unslotted, so rendering
-    /// it in mask space leaves no unread `const` behind. Slotted predicates
-    /// and int comparisons take the `S.con(@floatFromInt(..))` fallback.
+    /// Already computed as a statement (slot) or a cache field — rendering it
+    /// is a name, not an expression. The stop condition `eagerSafe`,
+    /// `maskCmp` and `foldHidesSlot` share.
+    fn materialized(self: *const Gen, v: Mir.Value) bool {
+        const i = @intFromEnum(v);
+        return i < self.an.nv and (self.plan.cached(v) or self.plan.slot[i] != none_u32);
+    }
+
     /// An x-dependent value is about to be collapsed to one scalar decision —
     /// record that lanes are pinned. dFree values are lane-uniform (params,
     /// temperature, time), so collapsing them steers nothing.
@@ -2437,10 +2446,12 @@ pub const Gen = struct {
         self.lane_pinned = true;
     }
 
+    /// The select cond as an INLINE real comparison — unslotted, so rendering
+    /// it in mask space leaves no unread `const` behind. Slotted predicates
+    /// and int comparisons take the `S.con(@floatFromInt(..))` fallback.
     fn maskCmp(self: *Gen, cond: Mir.Value) ?Mir.Inst {
         const v = self.an.rv(cond);
-        const i = @intFromEnum(v);
-        if (i < self.an.nv and (self.plan.cached(v) or self.plan.slot[i] != none_u32)) return null;
+        if (self.materialized(v)) return null;
         const def = self.mir.valueDef(v);
         if (def != .inst_result) return null;
         return switch (self.mir.instOp(def.inst_result)) {
@@ -2494,10 +2505,17 @@ pub const Gen = struct {
                 // gt/ge are operand swaps; ne swaps the select's arms — the
                 // contract carries exactly lt/le/eq/sel. ifconv peels the
                 // `toBool` wrapper, so the cond IS the bare comparison here.
+                // The MASK, best form first: an inline real comparison
+                // renders in S space (TRUE PER LANE on a vector S; ne swaps
+                // the arms — the contract carries exactly lt/le/eq/sel).
+                // Otherwise the emitted predicate is a 0/1 i64 (or a real S
+                // tested against zero): still branchless, but the int form is
+                // lane-UNIFORM — fine for a scalar S, pinned on a vector S.
+                var swap_arms = false;
                 if (self.maskCmp(a)) |cmp| {
                     const d = self.mir.instData(cmp).binary;
                     const swap_ops = d.op == .fgt or d.op == .fge;
-                    const swap_arms = d.op == .fne;
+                    swap_arms = d.op == .fne;
                     const prim: []const u8 = switch (d.op) {
                         .flt, .fgt => "lt",
                         .fle, .fge => "le",
@@ -2509,17 +2527,7 @@ pub const Gen = struct {
                     try self.b(").{s}(", .{prim});
                     try self.renderVal(if (swap_ops) d.lhs else d.rhs, .real);
                     try self.b(")).sel(", .{});
-                    try self.renderVal(if (swap_arms) c else b2, .real);
-                    try self.b(", ", .{});
-                    try self.renderVal(if (swap_arms) b2 else c, .real);
-                    try self.b(")", .{});
-                    return;
-                }
-                // Fallback: the emitted predicate is a 0/1 i64 (or a real S
-                // tested against zero); either becomes the mask without a
-                // branch — the int through `con` (lane-UNIFORM: fine for a
-                // scalar S, pinned on a vector S), the real as-is.
-                if (self.an.tyOf(self.an.rv(a)) == .int) {
+                } else if (self.an.tyOf(self.an.rv(a)) == .int) {
                     self.pinLanes(a);
                     try self.b("(S.con(@floatFromInt(", .{});
                     try self.renderVal(a, .int);
@@ -2529,9 +2537,9 @@ pub const Gen = struct {
                     try self.renderVal(a, .real);
                     try self.b(").sel(", .{});
                 }
-                try self.renderVal(b2, .real);
+                try self.renderVal(if (swap_arms) c else b2, .real);
                 try self.b(", ", .{});
-                try self.renderVal(c, .real);
+                try self.renderVal(if (swap_arms) b2 else c, .real);
                 try self.b(")", .{});
                 return;
             }
@@ -2701,6 +2709,7 @@ pub const Gen = struct {
                 // artifact's UB under ReleaseFast — `lossyCast` (saturate,
                 // NaN→0) is the defined answer, and `Analysis.asI64` folds
                 // with the identical rule.
+                self.pinLanes(a); // a real→int collapse is a scalar decision
                 try self.b("std.math.lossyCast(i64, @round((", .{});
                 try self.renderVal(a, .real);
                 try self.b(").val()))", .{});
@@ -2798,9 +2807,7 @@ pub const Gen = struct {
     fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
         if (depth > 32) return true;
         const v = self.an.rv(v0);
-        const i = @intFromEnum(v);
-        if (depth > 0 and i < self.an.nv and
-            (self.plan.cached(v) or self.plan.slot[i] != none_u32)) return true;
+        if (depth > 0 and self.materialized(v)) return true;
         const def = self.mir.valueDef(v);
         if (def != .inst_result) return false;
         const row = self.mir.instRow(def.inst_result);
@@ -5888,7 +5895,7 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
     defer h.deinit();
     // root.zig runs this between lower and prove; the harness does the same.
     // The MIR is arena-owned, so the pass must append with the same arena.
-    const n = try ifconv.run(h.arena_state.allocator(), &h.mir);
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items);
     try std.testing.expect(n >= 1);
     const src = try h.gen(std.testing.allocator);
     // exp(unbounded V) forfeits finiteness, so the unit is .strict — the
@@ -5912,7 +5919,7 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
         \\endmodule
     , &h);
     defer h.deinit();
-    _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items);
     const src = try h.gen(std.testing.allocator);
     // domainOf(ln) != .all blocks the eager path: the select must render as
     // the lazy `(if (...))` with `.log()` inside the guarded arm, and the
@@ -5924,6 +5931,35 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
     const lg2 = std.mem.indexOf(u8, body, ".log()").?;
     try std.testing.expect(lg2 > guard);
     try std.testing.expect(std.mem.indexOf(u8, body, ".sel(") == null);
+}
+
+test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module ml(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    real y;
+        \\    y = 0.0;
+        \\    if (V(p, n) > 0.0) begin
+        \\      real t;
+        \\      t = ln(V(p, n));
+        \\      y = t + 2.0 * t; // t shared: markSelectArms could not guard it
+        \\    end
+        \\    I(p, n) <+ y * 1.0e-3;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    // The guard's evidence only survives conversion on exclusively-owned
+    // slices; a shared `ln` result must refuse, or the model silently drops
+    // to `.strict` (and an integer `/` in the same shape turns REJECTED).
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items);
+    try std.testing.expectEqual(@as(u32, 0), n);
+    // Still compiles and proves through the CFG dominance path.
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".log()") != null);
 }
 
 test "codegen: a §5.6 potential contribution gets its own branch-current unknown" {
@@ -7157,6 +7193,43 @@ test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures a
     // at or above 3.5 V would answer max(0.4, 2) = 2".
     try std.testing.expectEqual(@as(f64, 14.0), k.zLimvds(100.0, 4.0));
     try std.testing.expectEqual(@as(f64, 2.0), k.zLimvds(1.0, 4.0));
+}
+
+test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
+    // The `lane_clean` promise is only as good as its pins, and the pins are
+    // hand-placed at emission sites — fixture 158 (zPow) proved a forgotten
+    // one ships a false promise. This binds the two mechanically: any helper
+    // in the emitted math/ops templates whose BODY reads `.val(` must appear
+    // here, and adding one without deciding its pin fails this test, not a
+    // customer's batch run. A helper is on the ledger either because its
+    // emission site calls `pinLanes` (see each site's comment) or because it
+    // steers only on lane-UNIFORM state (dt, ic, inst history — never x).
+    const pinned = [_][]const u8{
+        "zPow",    "zHypot", "zFmod", "zFloor", "zCeil",
+        "zAtan2",  "zLimexp", "zWrap",
+    };
+    const uniform = [_][]const u8{
+        "zDdt", "zIdt", "zIdtAcc", "zIdtmod", "zSlew", "zTransFrac",
+        "zTransition", "zAbsdelay", "zLog10", "zTan", "zAsin", "zAcos",
+        "zAsinh", "zAcosh", "zAtanh", "zPadInt",
+    };
+    const text = math_txt ++ ops_txt;
+    var it = std.mem.splitSequence(u8, text, "\nfn ");
+    _ = it.first(); // preamble before the first helper
+    while (it.next()) |chunk| {
+        const paren = std.mem.indexOfScalar(u8, chunk, '(') orelse continue;
+        const fn_name = chunk[0..paren];
+        // Body = up to the next helper (the split already bounded it).
+        if (std.mem.indexOf(u8, chunk, ".val(") == null) continue;
+        for (pinned) |p| {
+            if (std.mem.eql(u8, fn_name, p)) break;
+        } else for (uniform) |u| {
+            if (std.mem.eql(u8, fn_name, u)) break;
+        } else {
+            std.debug.print("helper `{s}` reads .val() but is on neither ledger\n", .{fn_name});
+            return error.TestUnexpectedResult;
+        }
+    }
 }
 
 test "codegen: §4.5.15 only pnjlim reports non-convergence" {
