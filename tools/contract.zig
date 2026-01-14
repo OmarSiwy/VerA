@@ -343,6 +343,19 @@ pub fn validate(comptime D: type) void {
     // Present only in a printing artifact; when present it must be callable
     // the way tb.zig's generated runner calls it — `D.display(Dual, xd,
     // model, inst, t)` — which is `eval`'s generic shape returning void.
+    //
+    // §9.7 SIMULATION CONTROL RUNS INSIDE THIS PHASE AND MAY NOT RETURN. A
+    // `$finish`/`$stop`/`$fatal` the model reaches terminates the PROCESS at
+    // its position among the prints (`std.process.exit`; exit status 0 for
+    // §9.7.1/§9.7.2, `$fatal`'s finish_number floored at 1 for §9.7.3's
+    // errorcode). The signature stays `void` on purpose: both clauses tie the
+    // task to the accepted point — which is exactly when a host calls this —
+    // so ending the run right here IS the contract, and a return-value channel
+    // would only re-encode "the process is over" for a caller that no longer
+    // exists. A host that must survive its devices' §9.7 calls (an interactive
+    // kernel with a real `$stop`) upgrades this to a control-code return; no
+    // such host exists today, and a device built `--display=drop` contains no
+    // display phase and no exit (the calls are dropped under W0850/W0851).
     if (@hasDecl(D, "display")) {
         if (genericFnError(D, "display", "void")) |m| @compileError(m);
     }
