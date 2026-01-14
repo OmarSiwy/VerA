@@ -111,13 +111,17 @@ pub fn main() void {
         assert(@reduce(.And, hit == @Vector(4, u8){ 0, 0, 3, 17 }));
     }
 
-    // T5 — carry propagation finds odd-length backslash-run ends.
+    // T5 — carry propagation finds odd-length backslash-run ends. The landing
+    // bit is isolated with `& ~B` (simdjson's own formula): `^ B` would also
+    // light every bit of the consumed run, which is the bug this case shipped
+    // with — and under ReleaseFast the failed assert was UB that LLVM turned
+    // into an infinite loop. The reference doc carried the same error.
     {
         const B: u64 = 0b1110;
         const starts = B & ~(B << 1);
         const odd_starts = starts & 0xAAAA_AAAA_AAAA_AAAA;
         const carries = B +% odd_starts;
-        assert((carries ^ B) == 0b1_0000);
+        assert((carries & ~B) == 0b1_0000);
     }
 
     // T5 — prefix XOR via clmul vs scalar, 100k inputs.
