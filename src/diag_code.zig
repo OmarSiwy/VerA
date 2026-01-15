@@ -474,11 +474,13 @@ pub const Code = enum(u16) {
     E0901,
     /// §7.4.4/F.2.1 step 3 more than one discipline declaration for one net.
     E0902,
-    // E0903 is RESERVED for annex F.2.1 step 4.b's unresolvable-discipline
-    // error, which needs the signal hierarchy VerA does not build yet
-    // (tests/fixtures/annex_f_resolution/unknown_discipline_mixed_port.va pins
-    // it). Left as a hole rather than filled in, so the fixture's `//! reject`
-    // keeps naming the rule it is about.
+    /// F.2.1/F.2.2 step 4.b, fourth bullet: a net whose discipline resolution
+    /// came out UNKNOWN — more than one candidate, no matching `resolveto` —
+    /// and which connects through a port to a segment of a different domain.
+    /// Was RESERVED (a hole in this enum) while the multi-candidate arm did
+    /// not exist; the number was promised to the rule the whole time, which is
+    /// why the fixture's `//! reject` line never had to change.
+    E0903,
     /// §6.2.2 an instance names a module (or paramset) the file never declares.
     E0904,
     /// §6.2.2 a module instantiates itself, directly or through a cycle.
@@ -502,6 +504,13 @@ pub const Code = enum(u16) {
     /// §6.4.2 more than one paramset is still applicable after the clause's
     /// tie-breaking rules.
     E0914,
+    /// §7.7.1 a connect insertion statement names no `connectmodule`.
+    E0915,
+    /// §7.7.2 a connect resolution statement names no declared discipline.
+    E0916,
+    /// §7.7.2 disciplines a `resolveto exclude` rule deems incompatible are
+    /// found on one net.
+    E0917,
 
     // --------------------------------------------------------------- class 10
     // Runtime / artifact contract — codegen.zig, root.zig.
@@ -4108,6 +4117,36 @@ fn infoOf(c: Code) Info {
             \\different segments, they need different nets.
             ,
         },
+        .E0903 => .{
+            .title = "unknown discipline on a net with a mixed-port connection",
+            .lrm = "F.2.1",
+            .explain =
+            \\Annex F.2.1 step 4.b (printed verbatim in F.2.2 4.b and 5.b)
+            \\resolves an UNDECLARED net from the disciplines of its child
+            \\segments whose domain matches the net's. One candidate resolves
+            \\the net; more than one is resolved only by a matching connect
+            \\statement — "if there is more than one discipline in the list and
+            \\the contents of the list match the discipline list of a
+            \\resolution connect statement, the net is of the resolved
+            \\discipline given by the statement" (7.7.2's
+            \\`connect a, b resolveto c;`). "Otherwise the discipline is
+            \\unknown. This is legal provided the net has no mixed-port
+            \\connections (i.e., it does not connect through a port to a
+            \\segment of a different domain). Otherwise this is an error."
+            \\
+            \\This net is that error: its matching-domain candidates resolve to
+            \\no single discipline, no `connect ... resolveto` statement lists
+            \\exactly that candidate set, and one of its segments is of the
+            \\OTHER domain — so the bridge the insertion phase (7.8) would have
+            \\to place has no discipline to bridge to.
+            \\
+            \\A 7.7.1 INSERTION statement (`connect some_connectmodule;`) does
+            \\not help: it names a bridging module and resolves nothing, which
+            \\is the difference between the two connectrules_item forms.
+            \\Either declare the net's discipline, or add a resolution
+            \\statement whose list matches the candidates.
+            ,
+        },
         .E0904 => .{
             .title = "instance names no module",
             .lrm = "6.2.2",
@@ -4309,6 +4348,69 @@ fn infoOf(c: Code) Info {
             \\ZERO applicable paramsets is the other failure, E0911.
             ,
         },
+        .E0915 => .{
+            .title = "connect insertion names no connect module",
+            .lrm = "7.7.1",
+            .explain =
+            \\A connect module auto-insertion statement,
+            \\`connect connectmodule_identifier ... ;` (A.1.8
+            \\connect_insertion), "declares which connect modules are
+            \\automatically inserted when mixed nets of the appropriate types
+            \\are encountered" — so the identifier has to name a module
+            \\declared with the `connectmodule` keyword (7.6, A.1.2's third
+            \\module_keyword alternative).
+            \\
+            \\Either nothing in the compilation declares the name, or the name
+            \\is an ordinary module — the message says which. An ordinary
+            \\module cannot be an insertion target for the reason E0913 gives
+            \\for the reverse mistake: a connect module's discrete half lives
+            \\in behavioral code the insertion phase owns, and 7.6's port
+            \\disciplines are what "define the default type of disciplines
+            \\which shall be bridged".
+            ,
+        },
+        .E0916 => .{
+            .title = "connect resolution names no discipline",
+            .lrm = "7.7.2",
+            .explain =
+            \\In `connect d1, d2 resolveto d3;` (A.1.8 connect_resolution)
+            \\every identifier is a discipline_identifier: "the discipline
+            \\identifiers before the resolveto keyword are the list of
+            \\compatible disciplines and the discipline identifier after is
+            \\the discipline to be used". A name no discipline declaration
+            \\introduces can neither be matched against a net's candidate list
+            \\nor assigned to the net, so the whole statement is dead — and a
+            \\misspelled discipline here would otherwise silently turn a
+            \\resolving design into an E0903 one.
+            \\
+            \\`exclude` after `resolveto` is not a discipline and is not this
+            \\error: it is the keyword that deems the listed disciplines
+            \\incompatible (E0917 when they then meet).
+            ,
+        },
+        .E0917 => .{
+            .title = "disciplines excluded by a connect resolution share a net",
+            .lrm = "7.7.2",
+            .explain =
+            \\LRM 7.7.2: "If the keyword exclude follows resolveto rather than
+            \\a discipline identifier, then the otherwise compatible
+            \\disciplines are deemed to be incompatible and an error is
+            \\indicated if they are found on the same net." The clause's own
+            \\example is two supply families —
+            \\
+            \\    connect logic18 logic32 resolveto exclude ;
+            \\    connect electrical18 electrical32 resolveto exclude ;
+            \\
+            \\— "these connect statements prevent ports associated with one
+            \\supply voltage to be connected to nets associated with the
+            \\other."
+            \\
+            \\The candidate disciplines of this undeclared net (annex F.2.1
+            \\step 4.b's list) match an exclude rule's discipline list
+            \\exactly, so the connection the rule exists to forbid is present.
+            \\Separate the nets, or delete the exclude rule.
+            ,
+        },
 
         // ----------------------------------------------------------- class 10
         .E1001 => .{
@@ -4320,13 +4422,15 @@ fn infoOf(c: Code) Info {
             \\is a header — include it from a module instead of compiling it.
             \\
             \\If the file DOES contain a design element, it is one that is not a
-            \\device. `connectrules`, `primitive` and `library` have no parser at
-            \\all, and the earlier diagnostics name which one. A `connectmodule`
-            \\parses and is accepted (LRM 7.6, A.1.2's third `module_keyword`) but
-            \\is still not a device: LRM 7.6 makes it the bridge the connect
-            \\module INSERTION PHASE places on a mixed net, so it is instantiated
-            \\by the tool and never elaborated on its own. Put the module that
-            \\uses it in the same compilation.
+            \\device. `primitive` and `library` have no parser at all, and the
+            \\earlier diagnostics name which one. A `connectmodule` parses and is
+            \\accepted (LRM 7.6, A.1.2's third `module_keyword`) but is still not
+            \\a device: LRM 7.6 makes it the bridge the connect module INSERTION
+            \\PHASE places on a mixed net, so it is instantiated by the tool and
+            \\never elaborated on its own. A `connectrules` block (LRM 7.7)
+            \\parses too, and is configuration for that same phase — a source of
+            \\connect modules and connect rules alone still has no device. Put
+            \\the module that uses them in the same compilation.
             \\
             \\A `paramset` is NOT one of them any more (LRM 6.4), but it is not a
             \\module either: it is a bundle of parameter values FOR a module, so a

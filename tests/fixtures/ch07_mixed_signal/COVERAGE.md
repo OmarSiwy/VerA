@@ -4,13 +4,16 @@ Source: `docs/ch7-mixed-signal.html`, read section by section.
 
 HTML section-ID audit: `s7-1` `s7-2` `s7-2-1` `s7-2-2` `s7-2-3` `s7-2-4` `s7-3` `s7-3-1` `s7-3-2` `s7-3-2-1` `s7-3-3` `s7-3-4` `s7-3-5` `s7-3-6` `s7-3-6-1` `s7-3-6-2` `s7-3-6-3` `s7-3-6-4` `s7-3-6-5` `s7-3-7` `s7-4` `s7-4-1` `s7-4-2` `s7-4-3` `s7-4-4` `s7-4-4-1` `s7-4-4-2` `s7-4-4-3` `s7-4-5` `s7-5` `s7-6` `s7-7` `s7-7-1` `s7-7-2` `s7-7-2-1` `s7-7-3` `s7-7-4` `s7-8` `s7-8-1` `s7-8-2` `s7-8-3` `s7-8-3-1` `s7-8-3-2` `s7-8-4` `s7-8-5` `s7-8-5-1` `s7-8-6` `s7-9`. Forty-eight ids.
 
-Eight of the forty-eight carry a fixture whose verdict turns on that section's
-own rule. The other forty do not, and the table says so with a leading `—`
-rather than a plausible file name. This is the chapter Annex C.9 deletes
-outright — "Clause 7 only applies to Verilog-AMS HDL" — so most of what is here
-is a boundary marker, not a semantic check, and the count reflects that.
+Thirteen of the forty-eight carry a fixture whose verdict turns on that section's
+own rule. The others do not, and the table says so with a leading `—`
+rather than a plausible file name. This was the chapter Annex C.9 deleted
+outright — "Clause 7 only applies to Verilog-AMS HDL" — while VerA was a
+Verilog-A compiler; under the AMS direction the 7.7 family is parsed and
+consumed (annex F.2 resolution), and the boundary that remains is the
+INSERTION phase (7.8), which needs the discrete kernel the artifact does not
+contain.
 
-Forty-seven `.va` files: thirteen run and assert, thirty-four are `//! reject`, and NONE is
+Fifty `.va` files: twenty-one run and assert, twenty-nine are `//! reject`, and NONE is
 `//! xfail`. Those three numbers are grep-MEASURED (`grep -l '^//! xfail' *.va` and the same
 for `reject`), not carried over — the sentence that stood here said ten xfail, then two,
 which successive waves' closures falsified each time. The
@@ -57,26 +60,26 @@ Every diagnostic quoted in this file was produced by running
 | `s7-4-4` | conflicting discipline declarations for one segment are an error | — `conflicting_discipline_declaration_rejected.va`, green: `//! reject more than one discipline declaration`, the clause's own wording |
 | `s7-4-4-1` | basic mode: continuous and discrete propagate up, continuous wins | — no fixture here. `annex_f_resolution/hierarchy_resolution.va` is the closest thing in the tree |
 | `s7-4-4-2` | detail mode: continuous up then back down, `resolveto` ignored | — no fixture in this tree distinguishes the two modes |
-| `s7-4-4-3` | coercion: a declared interconnect discipline wins unless `resolveto` overrides | — no fixture. `resolution_connect_unsupported.va` mentions the clause in prose and pins `connectrules` |
+| `s7-4-4-3` | coercion: a declared interconnect discipline wins unless `resolveto` overrides | — no fixture. Resolution runs on UNDECLARED nets only (`Elaborate.resolveMultiCandidates` gates on `port_resolved`); coercing a *declared* interconnect discipline by `resolveto` is not implemented, and `resolution_connect_accepted.va`'s header says so |
 | `s7-4-5` | continuous signals resolve identically under both algorithms | — no fixture; both algorithms agreeing is a statement about hierarchy |
 | `s7-5` | connect modules; Syntax 7-4 adds `connectmodule` to `module_keyword` | green, via the row below: the keyword parses as A.1.2's third `module_keyword` and is cited to 7.6, not counted twice |
 | `s7-6` | connect module descriptions; port disciplines define what is bridged | `connectmodule_accepted.va` (`//! lrm 7.6`, `C.9`, `C.16`) — **green, and the verdict is INVERTED from what this row used to say.** It pinned ``E0201: construct is not in the supported subset: `connectmodule` `` on an annex C argument; annex C describes the Verilog-A subset and A.1.2 leaves an AMS compiler no way to refuse the spelling, so the file now asserts ACCEPTANCE (`V(p)` from the ordinary module, which only runs if the whole file elaborated) plus the §7.6 corollary that a connect module is not a design root — it is written FIRST, and nothing instantiates either module, so a compiler picking "the first uninstantiated module" would elaborate the bridge. `supply_hierarchical_connectmodule.va` is the same acceptance plus §6.7.1's `$root` terminal. Table 7-2's direction combinations are still untouched |
-| `s7-7` | connect specification statements | `connectrules_unsupported.va` (`//! lrm 7.7`, `C.9`, `C.16`) — ``E0201 ... `connectrules` ``, on the keyword. This one row is the whole of 7.7's coverage; see "the E0201 wall" below |
-| `s7-7-1` | `connect <module>;` auto-insertion statement | — the form is inside `connectrules_unsupported.va` and is never parsed |
-| `s7-7-2` | `connect a, b resolveto c;` | — `resolution_connect_unsupported.va`, same E0201 on the enclosing `connectrules` |
-| `s7-7-2-1` | connect rule resolution mechanism | — no fixture; a selection algorithm needs a hierarchy to select in |
-| `s7-7-3` | parameter passing attribute, `connect m #(.p(v));` | — `connect_parameter_unsupported.va`, same E0201 |
-| `s7-7-4` | `connect_mode` | — `connect_mode_unsupported.va`, same E0201 |
+| `s7-7` | connect specification statements | `connectrules_accepted.va` (`//! lrm 7.7`, `7.7.1`) — **green and INVERTED from the E0201 wall this row used to be** (see below): the block parses (A.1.8), its insertion is validated against a real connect module, and the `V(p)` assertion exists only if the whole file elaborated |
+| `s7-7-1` | `connect <module>;` auto-insertion statement | `connectrules_accepted.va` — the form in its bare shape, plus elaboration's name check: an insertion naming a non-`connectmodule` is E0915 (unit-tested in `src/ir/elaborate.zig`; no fixture pins the code because the check is VerA hygiene — 7.7.1 states the identifier's kind, not a diagnostic). The overrides shapes are `connect_mode_accepted.va` |
+| `s7-7-2` | `connect a, b resolveto c;` | `resolution_connect_accepted.va` — the form over annex D disciplines, accepted (an unknown discipline in the list is E0916). The SEMANTICS — a two-candidate net resolved by its matching statement, and the `exclude` refusal — are `annex_f_resolution/resolveto_resolution.va` and `exclude_resolution.va`, where the topology exists to exercise them |
+| `s7-7-2-1` | connect rule resolution mechanism | — partly, from `annex_f_resolution/`: exact-set match and "the resolved discipline need not be one of the disciplines specified" are `resolveto_resolution.va`. The subset fallback and the multi-match warning are not implemented (`Elaborate.matchResolution`) and have no fixture |
+| `s7-7-3` | parameter passing attribute, `connect m #(.p(v));` | `connect_parameter_accepted.va` (numeric override) and `connect_supply_accepted.va` (string override) — accepted in the A.1.8 grammar slot, parsed by the same A.4.1 production an instance's `#(...)` is, and never APPLIED: they parameterize the insertion phase VerA does not have, and both headers say so |
+| `s7-7-4` | `connect_mode` | `connect_mode_accepted.va` — both spellings in their grammar position, with the directed override shapes. Segregation itself is uncredited (no insertion) |
 | `s7-8` | automatic insertion at mixed ports | — post-elaboration; no fixture. Its converse now has a diagnostic and DELIBERATELY no fixture: naming a connect module in an instantiation is E0913, because the flatten carries analog blocks and drops `discrete` ones, so inlining a bridge would stamp its continuous half with its digital half silently absent. No clause says instantiating one is an error — 7.7/7.8 only say the tool chooses and inserts it — so the refusal is an implementation choice and pinning it here would pin VerA rather than the LRM. It is covered by a unit test in `src/ir/elaborate.zig` instead |
-| `s7-8-1` | connect module selection per hierarchy level | — no fixture. Previously credited to `connectrules_unsupported.va`, which selects nothing |
+| `s7-8-1` | connect module selection per hierarchy level | — no fixture. Selection is the insertion phase's first step, and there is no insertion phase |
 | `s7-8-2` | signal segmentation; never more than one analog node per signal | — no fixture |
-| `s7-8-3` | `connect_mode` parameter, default `merged` | — `connect_mode_unsupported.va` writes both values but they sit behind the `connectrules` keyword |
-| `s7-8-3-1` | `merged`: one shared instance per signal/module/discipline | — same file, unreached text |
-| `s7-8-3-2` | `split`: one instance per port | — same file, unreached text |
+| `s7-8-3` | `connect_mode` parameter, default `merged` | — `connect_mode_accepted.va` writes both values and they PARSE now, but the mode has no consumer (no insertion to segregate), so the default rule is unreached — `Ast.ConnectInsertion` keeps `.unspecified` rather than applying `merged`, deliberately |
+| `s7-8-3-1` | `merged`: one shared instance per signal/module/discipline | — same file, parsed and unconsumed |
+| `s7-8-3-2` | `split`: one instance per port | — same file, parsed and unconsumed |
 | `s7-8-4` | driver-receiver segregation and insertion rules | — no fixture; five rules, all about elaborated signals |
 | `s7-8-5` | generated instance names, `SigName__ModuleName__BottomDiscipline` | — `connect_generated_defparam_unsupported.va` gets `E0907`: the `defparam` parses now (§6.3.1), and what refuses the file is that the generated instance the path names does not exist, there being no auto-insertion. That is the clause's own precondition, not its naming scheme. The scheme lives entirely in identifier text no compiler interprets, so it is untestable by construction; `connect_generated_split_name_unsupported.va` was the same test with a different identifier and was deleted |
 | `s7-8-5-1` | port names for built-in primitives, six gate families | — `primitive_generated_ports_unsupported.va` stops at `E0205 ... found and`, the A.3 gate instance, which is the module item VerA has no production for; the `defparam` beside it is a legal §6.3.1 item now and its own verdict is pinned by the file above. Neither says anything about `in1`. Only the N-input family is written; the other five (N-output, 3- and 4-port MOS, pass switches, single-port) differ by identifier text alone and are recorded here rather than duplicated |
-| `s7-8-6` | supply sensitive connect modules | partly. `connect_supply_unsupported.va` is still E0201 on `connectrules`. `supply_hierarchical_connectmodule.va` is **green and inverted**: the connect module is accepted, and what it now pins is the other thing §7.8.6's example needs to be writable — `V($root.global_supply.vdd)`, a `$root`-prefixed hierarchical name as an access-function TERMINAL (§6.7 Syntax 6-9, §6.7.1), which was E0208 before. The supply sensitivity itself is still unreached: nothing instantiates the bridge, so its analog body is accepted and never evaluated. Its header says so |
+| `s7-8-6` | supply sensitive connect modules | partly. `connect_supply_accepted.va` — the clause's parameterization channel, a §7.7.3 string override naming the supply, accepted against a connect module that declares it. `supply_hierarchical_connectmodule.va` pins the other writable piece — `V($root.global_supply.vdd)`, a `$root`-prefixed hierarchical name as an access-function TERMINAL (§6.7 Syntax 6-9, §6.7.1), which was E0208 before. The supply sensitivity itself is still unreached: nothing instantiates a bridge, so no connect module's analog body is ever evaluated. Both headers say so |
 | `s7-9` | driver-receiver segregation | — no fixture. Segregation is a property of an elaborated mixed net |
 
 ## The xfail ledger
@@ -95,21 +98,26 @@ regress.
 | `discrete_bus_narrow.va` (was `_unsupported`) | `s7-3-1` | Green. What blocked it was never a capability: four green fixtures pinned `reject E0205` on a constant assignment in an `initial` block, three of them arguing under C.7/C.9 that the refusal *was* conformance. The owner re-verdicted all four (`13_digital_initial_accepted.va`, `digital_initial_accepted.va`, `discrete_real_from_analog.va`, `ch08_scheduling/analog_digital_initial_order.va`) — annex C states the Verilog-A SUBSET and VerA targets Verilog-AMS — and `reg` plus a constant `initial` block are accepted now. 8'hff reads +255, zero-extended |
 | `discrete_bus_31.va` (was `_unsupported`) | `s7-3-1` | Green at the legal boundary: 31 ones read +2147483647 with the integer's sign bit zero. The WIDTH half is judged separately, by the parser — E0222 stays silent at 31 and fires at 32 |
 
-## The E0201 wall
+## The E0201 wall, demolished
 
-Five fixtures — `connectrules_unsupported.va`, `connect_mode_unsupported.va`,
-`connect_parameter_unsupported.va`, `connect_supply_unsupported.va`,
-`resolution_connect_unsupported.va` — differ only in the text inside a
-`connectrules ... endconnectrules` block, and all five produce byte-identical
-diagnostics: ``E0201: construct is not in the supported subset: `connectrules` ``
-pointing at column 1 of the block header. Nothing inside is parsed. That means
-7.7.1, 7.7.2, 7.7.3, 7.7.4, 7.8.3 and 7.8.6 are *source inventories*: they
-record the spelling of a form the LRM defines, and they pin a verdict that would
-be unchanged if the block's body were deleted. They are worth keeping — the
-inventory is what stops someone reinventing the syntax when AMS support is
-attempted — but crediting them as coverage of the clauses inside the block, as
-this file previously did, was false five times over. Each fixture carries a
-plain host module so the refusal cannot be about an empty file.
+Five fixtures — now `connectrules_accepted.va`, `connect_mode_accepted.va`,
+`connect_parameter_accepted.va`, `connect_supply_accepted.va`,
+`resolution_connect_accepted.va` (each `was *_unsupported.va`) — used to differ
+only in the text inside a `connectrules ... endconnectrules` block while
+producing byte-identical ``E0201 ... `connectrules` `` diagnostics at column 1
+of the block header, with nothing inside parsed. This file called them *source
+inventories* and refused to credit them for the clauses inside the block; that
+refusal is why the inversion was cheap. The block parses now (A.1.8;
+`Parser.parseConnectRules`), its names are judged at elaboration (E0915 for an
+insertion naming no connect module, E0916 for a resolution naming no
+discipline — so each fixture had to grow a REAL connect module or use annex D
+disciplines), and the five bodies are five different grammar paths rather than
+one test five times. What they still do not credit is anything the INSERTION
+phase would do: the mode, the parameter overrides and the port overrides are
+parsed into `Ast.ConnectInsertion` and consumed by nothing, each header names
+that ceiling, and the resolution statements — the one 7.7 form with a consumer
+(annex F.2.1 step 4.b, `Elaborate.resolveMultiCandidates`) — have their
+semantics pinned in `annex_f_resolution/`, not here.
 
 ## Code gaps this chapter exposes
 
@@ -149,11 +157,14 @@ lead with a Chapter 3 cite; the Chapter 7 cite is secondary and, for
 
 ## What a Verilog-AMS compiler would add
 
-Almost all of 7.4.4 through 7.9 is unreachable from a single flat module: it is
-about elaborated hierarchy, discipline propagation and post-elaboration
-insertion. Those empty rows are the shape of the language boundary, not a debt
-against VerA, and they stay empty until this is a Verilog-AMS compiler with an
-elaborator. The rows that *are* debt and not boundary are the ten in the ledger
-— and of those, the three in 7.3.2.1 need nothing from AMS at all: a finiteness
-check on a contributed value is a flat, single-module rule that VerA currently
-answers with a warning.
+This section used to say all of 7.4.4 through 7.9 "stays empty until this is a
+Verilog-AMS compiler with an elaborator". The elaborator exists
+(`ir/elaborate.zig` flattens the hierarchy), discipline propagation is annex
+F's and covered there, and the 7.7 connect specification family is parsed,
+validated and — for resolution statements — consumed. What remains empty is
+exactly the INSERTION half: 7.8's selection/segmentation/auto-insertion and
+7.9's driver-receiver segregation need a discrete kernel for the bridge's
+digital side to run on, and VerA's artifact is one analog device. Those rows
+are still boundary, not debt; the connect-statement fields with no consumer
+(`mode`, `#(...)`, port overrides) are the parsed edge of that boundary and
+say so where they are declared.
