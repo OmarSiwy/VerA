@@ -23,10 +23,45 @@ per-site ceilings, and this file carries the cross-cutting ones.
   accepted: §3.6.2.7's prose governs and A.1.7's grammar is treated as a
   non-exhaustive erratum. The decision is recorded in the fixture header.
 
-The suite still carries 3 `DEBT` banners (rejections the LRM does not
-sanction, each naming its rule): `annex_c_analog_subset/08_wreal_rejected.va`,
-`annex_g_change_history/06_obsolete_generate.va`,
-`ch09_system_tasks/150_rdist_domain_rejected.va`.
+~~The suite still carries 3 `DEBT` banners~~ **0 DEBT as of the 2026-08-30
+spec audit** — the trio this row used to list all resolved themselves, and
+their own headers record it:
+
+- `annex_c_analog_subset/08_wreal_rejected.va` — rejection IS conformance:
+  C.4 bullet 2 removes §3.7 from the Verilog-A subset by name.
+- `annex_g_change_history/06_obsolete_generate.va` — rejection IS
+  conformance: G.2 says obsolete statements "are not supported in the current
+  version of Verilog-AMS HDL". The modern §6.6.1 form this file's header
+  called DEBT is implemented (`ch06_hierarchy/generate_loop.va` runs, unrolls,
+  total=14).
+- `ch09_system_tasks/150_rdist_domain_rejected.va` — repurposed: it now pins
+  §9.13.2's "shall be greater than zero → error", which IS sanctioned.
+
+## 1b. Decisions — 2026-08-30 spec audit, each checked against docs/*.html
+
+Settled by spec text; do not re-litigate without a new LRM revision:
+
+1. **wreal**: keep rejecting. C.4 sanctions it; full support needs the
+   discrete kernel §2 rules out. DONE (fixture green).
+2. **Obsolete `generate`**: keep rejecting. G.2. DONE (fixture green).
+3. **`type_string` ("global"/"instance")**: §9.13.1/.2 make it legal ONLY
+   inside a paramset ("shall only be used ... from within a paramset").
+   Outside-paramset E0816 stays. Inside a paramset it must be ACCEPTED —
+   `lowerRandom`'s blanket reject predates §6.4.2 paramsets landing. IMPLEMENT.
+4. **Correlated noise (§4.6.4.6)**: the spec's own normative example is
+   `n = white_noise(pwr); V(a,b) <+ c1*n;` — the exact shape `noiseKindsOf`
+   drops. Track the noise source as a value through lowering; a shared source
+   exports one `source` id across both branches (that is what the shared-source
+   column exists for). IMPLEMENT.
+5. **`$random`/`$rdist_*` algorithm**: §9.13.3 pins it normatively — "17.9.3
+   of IEEE Std 1364 ... contains the C-code to describe the algorithm", Table
+   9-26 maps every function to its 1364 C function. Lehmer 16807 is
+   nonconforming. IMPLEMENT the reference algorithm + a digit-pinning fixture
+   (§3's `$random` row predicted this day: all RNG fixtures break together,
+   `rng_kernels.zig` is the single fix site).
+6. **noise_table PSD hook, driver template, |U|>256, incremental cache,
+   digital execution, while-loop fixpoint**: spec silent or host-scoped;
+   triggers unchanged (§2, §3). NO ACTION.
 
 ## 2. Will not do — and the reason, so it is not re-litigated
 
@@ -482,7 +517,7 @@ Grouped by area; the file is the authority, this is the index.
 
 ## 4. Suite machinery
 
-- 415 of 1152 fixtures are `reject` fixtures. Where a feature's only fixtures are
+- 470 of 1233 fixtures are `reject` fixtures. Where a feature's only fixtures are
   negative, VerA conforms by **refusing** it and never implements it — true of
   `$simprobe`, the `zi_*` non-zero-tau forms, Table 9-30/9-31's `D`/`2`/`3`/`I`/`E`
   schemes and the whole §9.22 family. A high score is not the same as a complete
