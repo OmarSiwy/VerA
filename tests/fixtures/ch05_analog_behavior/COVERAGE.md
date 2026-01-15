@@ -1,10 +1,13 @@
 # Chapter 5 coverage
 
 Source: `docs/ch5-analog.html`, read in full through Section 5.11.
-113 `.va` fixtures, of which 31 are `//! reject`, 82 run and assert, and TWO are
-`//! xfail` — `two_named_branches.va` and `net_named_gnd_is_not_ground.va`
-(grep-measured over the directory: `ls *.va`, `grep -l '^//! reject'`,
-`grep -l '^//! xfail'`).
+123 `.va` fixtures, of which 33 are `//! reject`, 90 run and assert, and NONE
+is `//! xfail` (grep-measured over the directory: `ls *.va`,
+`grep -l '^//! reject'`, `grep -l '^//! xfail'`). The last two xfails closed
+together: `net_named_gnd_is_not_ground.va` when node identity split from node
+spelling, and `two_named_branches.va` when §9.4 display operands started
+evaluating branch-flow reads against the converged end-of-block retention
+(§9.4.1) — see the debt ledger.
 
 HTML section-ID audit: `s5.2` `s5-2-1` `s5-4-3`. Three IDs for fifty-seven
 printed sections — this chapter is a layout-preserving extraction and its
@@ -15,7 +18,7 @@ numbering, recovered from the body text: 5.1; 5.2; 5.2.1; 5.3; 5.3.1; 5.3.2;
 5.6.4; 5.6.5; 5.6.6; 5.6.7; 5.6.7.1; 5.6.7.2; 5.6.8; 5.6.8.1; 5.6.8.2; 5.7;
 5.8; 5.8.1; 5.8.2; 5.8.3; 5.8.4; 5.9; 5.9.1; 5.9.2; 5.9.3; 5.10; 5.10.1;
 5.10.2; 5.10.3; 5.10.3.1; 5.10.3.2; 5.10.3.3; 5.10.3.4; 5.10.4; 5.10.5; 5.11.
-Forty-five have a fixture, twelve do not.
+Forty-six have a fixture, eleven do not.
 
 Every row below is a `//! lrm` cite grepped out of the fixtures themselves, not
 a judgement about what a fixture is "really" testing. A file that discusses a
@@ -30,10 +33,10 @@ clause in its header but does not cite it is not credited here.
 | 5.3.1 Sequential blocks | `sequential_block.va`, `nested_sequential_blocks.va` |
 | 5.3.2 Block names | `named_block_locals.va` (block-local parameter); `named_block_scope_rejected.va` (E0314 — the bare name, not the lifetime; §6.8 searches upward only) |
 | 5.4 Analog signals | — no fixture cites the parent; it is an introduction pointing at Clause 6 |
-| 5.4.1 Access functions | `access_one_node.va`, `access_two_nodes.va`, `named_branch_probe.va`, `single_terminal_branch.va`, `direct_flow.va`, `direct_potential.va`, `flow_source.va`, `potential_probe.va`, `conductor.va`, `derivative_contribution.va`, `controlled_sources.va`, `controlled_voltage_source.va`, `implicit_zero_contribution.va`, `unassigned_switch_arm.va`. `two_named_branches_retain_separately.va` — the clause's "any number of named branches between any two signals", in §5.4.3 Example 1's own `branch (a, c) i_diode, junc_cap;` spelling: each of the two retains its own contributed flow (1.0 and 0.25, two different digits one shared accumulator cannot produce) and `I(<a>)` still reads their sum, 1.25, so identity does not cost the node its total. `two_named_branches.va` **xfail** — the collapse it was written for is fixed; what is left is that its four CHECKs sit ABOVE the two `<+` lines and VerA answers a branch-flow read at the statement position (§5.6.1.2's sequential retention) instead of §5.4.2.2's "anywhere in the module" |
-| 5.4.2 Probes and sources | `flow_probe.va`, `controlled_sources.va`, `current_controlled_current.va`, `current_controlled_voltage.va`. `net_named_gnd_is_not_ground.va` **xfail** — the clause's branch is a pair of NODES, and §1.3.1.1's reference node is a node and not a spelling, so `I(a)` and `I(a,gnd)` over a net whose own name is `gnd` are two branches. VerA interns a branch-flow unknown under the string `flow(<hi>,<lo>)` and `nodeName` prints the reference as `gnd`, so the two collapse onto one unknown and the second read returns the first branch's current. Its three other CHECKs (the topology, the solve, V of the reference) pass |
+| 5.4.1 Access functions | `access_one_node.va`, `access_two_nodes.va`, `named_branch_probe.va`, `single_terminal_branch.va`, `direct_flow.va`, `direct_potential.va`, `flow_source.va`, `potential_probe.va`, `conductor.va`, `derivative_contribution.va`, `controlled_sources.va`, `controlled_voltage_source.va`, `implicit_zero_contribution.va`, `unassigned_switch_arm.va`. `two_named_branches_retain_separately.va` — the clause's "any number of named branches between any two signals", in §5.4.3 Example 1's own `branch (a, c) i_diode, junc_cap;` spelling: each of the two retains its own contributed flow (1.0 and 0.25, two different digits one shared accumulator cannot produce) and `I(<a>)` still reads their sum, 1.25, so identity does not cost the node its total. `two_named_branches.va` — green: the collapse it was written for is fixed, and its four CHECKs sitting ABOVE the two `<+` lines read the branches' retained flows anyway, because a §9.4 display operand evaluates a branch-flow read against the converged end-of-block state (§9.4.1/§5.4.2.2) rather than §5.6.1.2's statement-position prefix |
+| 5.4.2 Probes and sources | `flow_probe.va`, `controlled_sources.va`, `current_controlled_current.va`, `current_controlled_voltage.va`. `net_named_gnd_is_not_ground.va` — green since node IDENTITY split from node SPELLING: `I(a)` and `I(a,gnd)` over a net whose own name is `gnd` are two branches (§1.3.1.1's reference node is a node, not a spelling), keyed on the pair while `uniqueSpelling` suffixes the second printed member |
 | 5.4.2.1 Probes | `probe_both_quantities_invalid.va` — green (`//! reject DiagnosticsReported`): an unnamed branch is classified as a probe, so reading both quantities of one is diagnosed |
-| 5.4.2.2 Sources | `source_probe_both.va`, `constant_current_source.va`, `two_named_branches_retain_separately.va` (a source branch's flow read back, per branch), `two_named_branches.va` (**xfail**, above: the clause's "accessible in expressions anywhere in the module" is the half VerA does not meet — a read placed before the `<+` sees nothing retained) |
+| 5.4.2.2 Sources | `source_probe_both.va`, `constant_current_source.va`, `two_named_branches_retain_separately.va` (a source branch's flow read back, per branch), `two_named_branches.va` (green, above: the clause's "accessible in expressions anywhere in the module", read in a display operand ABOVE the `<+` lines), `read_before_write_converged.va` (the same rule in isolation — one branch, one read above one `<+ 5m`, want 5.0e-3, deliberately a different figure from two_named_branches' 3m/7m) |
 | 5.4.3 Accessing flow through a port | `port_flow_probe.va` (legal `I(<p>)`); `port_potential_invalid.va` (E0507, `V(<p>)`); `port_flow_contribution_invalid.va` (E0407, `I(<p>)` on the left of `<+`) |
 | 5.4.4 Unassigned sources | `unassigned_switch_arm.va`, `retained_conditional_contribution.va`, `implicit_zero_contribution.va` — all three pin the observable half only: which arm ran and what the branch potential is. None reads the implied zero flow, and each says so in its own header |
 | 5.5 Accessing net and branch signals and attributes | — no fixture cites the parent; one sentence of introduction |
@@ -41,7 +44,7 @@ clause in its header but does not cite it is not credited here.
 | 5.5.2 Signal access for vector branches | `vector_access.va` — the clause's own DAC8 example, eight literal bit selects weighted 1/2 … 1/256 |
 | 5.5.3 Accessing attributes | `nature_attribute_unsupported.va` — green: Syntax 5-4 parses, and `a.potential.abstol` resolves through the net's discipline (so §3.6.2.3's tolerance override is what it reads). `nature_attribute_nonconstant_invalid.va` is the negative half and pins the clause's own ban on `.access` at E0359, not a parse boundary |
 | 5.5.4 Creating unnamed branches using hierarchical net references | `hierarchical_access_unsupported.va` — green: `parseNetRef` builds a `.hier_ident` for a dotted terminal and lowering resolves the path against the elaborated design |
-| 5.5.5 Accessing nets and branch signals hierarchically | — **no fixture.** The clause's own rules (a hierarchical read of a *named* branch; the two error conditions — branch absent in the instance, wrong access function for it; `V(top.drv.branch(a,b))` for an existing unnamed branch; the hierarchical port branch) are uncovered. §5.5.4's fixture borrows this clause's *shape* to stay resolvable in one file, but cites 5.5.4 and tests unnamed-branch creation, not these rules |
+| 5.5.5 Accessing nets and branch signals hierarchically | `lrm_5_5_5.va` — a hierarchical read of a *named* branch in a child instance, both quantities: `V(submod.b)` reads the child's potential source at its own 1.34 and `I(submod.b)` its row-pinned current (the branch lookup resolves the §6.7 path through `flatName` into the same `branches` table a simple name uses). `ch06_hierarchy/oomr_branch_probe_two_levels.va` pins the depth (`u.v.b`). Still uncovered: the clause's two *error* conditions (branch absent in the instance, wrong access function for it), `V(top.drv.branch(a,b))` for an existing unnamed branch, and the hierarchical port branch |
 | 5.6 Contribution statements | — no fixture cites the parent |
 | 5.6.1 Direct branch contribution statements | — no fixture cites the parent. Syntax 5-5's own restriction (a conditionally executed contribution may not contain an analog filter) is cited from §5.8.1 by `conditional_filter_invalid.va` |
 | 5.6.1.1 Relations | `potential_probe.va`, `single_terminal_branch.va` |
@@ -83,14 +86,12 @@ clause in its header but does not cite it is not credited here.
 
 ## The debt ledger
 
-TWO fixtures carry `//! xfail`, grep-measured: `two_named_branches.va` and
-`net_named_gnd_is_not_ground.va`. The second is not a leftover from the twenty —
-it was written deliberately, in wave 10, to pin a defect ahead of the rewrite
-that will fix it, and its header argues why an xfail is the only honest verdict
-for it (a `//! reject` would invert the fixture, and a green fixture recording
-+1 mA where the LRM says -1 mA is the frozen wrong answer the suite exists to
-kill). The prose below is kept as the record of what the twenty rows were and
-how they closed.
+EMPTY — grep finds no `//! xfail` in this directory. The last two closed in
+different waves: `net_named_gnd_is_not_ground.va` (written deliberately in
+wave 10 to pin a defect ahead of the rewrite that fixed it) when node identity
+split from node spelling, and `two_named_branches.va` when §9.4 display
+operands moved to converged evaluation — see its row above. The prose below is
+kept as the record of what the twenty rows were and how they closed.
 
 **Eight stated a rule the compiler did not enforce** — `//! reject` fixtures that
 compiled anyway, so each was a missing diagnostic, and all eight are green:
@@ -113,14 +114,20 @@ the dot parses AND the instance tree it resolves in exists, so both now run and 
 rather than pinning a diagnostic, and neither carries a `//! reject` arm any more. Their
 filenames still say `_unsupported` and are the two most misleading names left in this
 folder. `named_event_unsupported.va` was the third. The rest are semantic:
-`two_named_branches.va` — no longer for the collapse, which is fixed (contribution
-retention is keyed on the BRANCH now, not on the node pair, so §5.4.3 Example 1's
-diode reads its conduction current and not the sum; `two_named_branches_retain_separately.va`
-pins that). What is left is a read POSITION rule: VerA lowers `I(br)` out of the
-accumulator as it stands at that statement, and that file reads before it
-contributes. Closing it means evaluating a §9.4 task's operands after the block
-("$strobe … when the simulator has converged", §9.4.1) rather than at the call,
-which is a change to every display task and not to branches.
+`two_named_branches.va` — closed twice. First the collapse, fixed by keying
+contribution retention on the BRANCH, not the node pair, so §5.4.3 Example 1's
+diode reads its conduction current and not the sum
+(`two_named_branches_retain_separately.va` pins that). Then the read POSITION:
+its CHECKs sit before the `<+` lines, and a §9.4 display OPERAND containing a
+branch-flow read is now lowered at the end of the analog block ("$strobe …
+when the simulator has converged", §9.4.1), where the accumulator holds what
+the cycle retained — the same end-of-block state the core exports as
+`resist_val`/`wrote_val`. Ordinary reads (assignments, contribution
+right-hand sides) keep §5.6.1.2's statement-position semantics, with one
+carve-out that surfaced with the change: a `<+` right-hand side reading its
+OWN target is §5.6.6's implicit form and reads the branch-flow unknown
+(`implicit_fixed_point.va` — whose emitted equation previously fed that
+occurrence a constant 0 and asserted nothing about it).
 `value_retention.va`, `indirect_contribution.va` and
 `multiple_indirect.va` shared one root cause and are all three green now: the
 generated testbench solves, so a §5.6.7 target moves to its constraint's solution
@@ -143,13 +150,13 @@ module can, and each header says so in a SCOPE paragraph. They are credited
 under §5.4.4 and §5.6.5 for what they do assert (which arm ran, and the branch
 potential), and §5.6.1.3's numeric rule is `value_retention.va` alone.
 
-Four of the twelve uncovered sections (5.1, 5.4, 5.5, 5.6) are pure
+Four of the eleven uncovered sections (5.1, 5.4, 5.5, 5.6) are pure
 introductions, 5.6.8 is a bare heading with no body, and 5.3, 5.8 and 5.10.3
-state only what their children restate normatively. That leaves three real
-holes: **5.5.5** (hierarchical access to named and existing unnamed branches,
-and its two error conditions), **5.6.8.2** (hierarchical contribution to named
-and unnamed branches, and the conditions under which it is disallowed) and
-**5.10.5** (digital events in analog behavior). §5.10.5 sits behind digital
-values. §5.5.5 and §5.6.8.2 no longer sit behind anything: hierarchical access and
-hierarchical contribution both work (see the ledger), so what is missing there is their
-two *error* conditions, which are fixtures nobody has written.
+state only what their children restate normatively. That leaves two real
+holes: **5.6.8.2** (hierarchical contribution to named and unnamed branches,
+and the conditions under which it is disallowed) and **5.10.5** (digital
+events in analog behavior). §5.10.5 sits behind digital values. §5.5.5 left
+the list — `lrm_5_5_5.va` reads a child's named branch through the instance
+path (see its row) — and §5.6.8.2 no longer sits behind anything: hierarchical
+contribution works, so what is missing there is its error conditions, which
+are fixtures nobody has written.

@@ -4073,7 +4073,8 @@ fn infoOf(c: Code) Info {
             .title = "hierarchical name names nothing in the elaborated design",
             .lrm = "6.7",
             .explain =
-            \\A dotted name that resolves to no net, parameter or constant.
+            \\A dotted name that resolves to no net, branch, parameter or
+            \\constant.
             \\
             \\This is NOT "hierarchy is unsupported" any more — that was E0204,
             \\retired. §6.2.2 instantiation elaborates and `ir/elaborate.zig`
