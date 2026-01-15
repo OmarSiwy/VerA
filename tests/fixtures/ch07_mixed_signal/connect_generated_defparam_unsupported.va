@@ -13,7 +13,8 @@
 // What settles it is the INSTANCE, not the keyword. §7.8.5's generated name
 // exists only where a connect module was auto-inserted, which needs a
 // `connectrules` block and a mixed-domain net — neither is here, and VerA has no
-// auto-insertion at all (C.9: "Clause 7 only applies to Verilog-AMS HDL"). §6.3.1
+// auto-insertion at all (the block PARSES now, §7.7/A.1.8, but §7.8's insertion
+// phase needs the discrete kernel the emitted analog device lacks). §6.3.1
 // puts a defparam's target "in any module instance throughout the design"; this
 // design has no instances, so the path names nothing.
 //
@@ -28,7 +29,6 @@
 //
 //! lrm 7.8.5
 //! lrm 6.3.1
-//! lrm C.9
 //! reject E0907
 module ch7_connect_generated_defparam;
   defparam signal__converter__ddiscrete.threshold = 0.6;
