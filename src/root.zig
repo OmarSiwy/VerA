@@ -446,8 +446,9 @@ fn compileInArena(
             // The parser recovers at top level, so a diagnosed parse still
             // tells us whether a §6.2 `module` was found at all. When it was
             // not — the file held only design elements VerA has no parser for
-            // (`connectrules`, `library`, `primitive`) or none that make a device
-            // (`paramset`) — NoModule is the outcome the caller acts on; the
+            // (`library`, `primitive`) or none that make a device (`paramset`,
+            // `connectrules`, parsed since the F.2 wave) — NoModule is the
+            // outcome the caller acts on; the
             // precise reason is already in the bag. The prelude's own modules do
             // not count: they are never what was asked for.
             //
