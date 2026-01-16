@@ -21,20 +21,20 @@
 // form.
 //
 // What this cost to close: `Lower.var_noise` records the sources a variable
-// name carries, and `noiseKindsOf` consults it when the walk reaches an
+// name carries, and `noiseSrcsOf` consults it when the walk reaches an
 // identifier. It is reaching and not dataflow — a name is never cleared — so a
 // variable reassigned away from a source still counts as holding one. That
 // over-reports a row in a topology table; what it replaces under-reported a
 // GENERATOR, which is a PSD a host had no way to know it should ask for.
 //
-// STILL OPEN, and it is the other half of §4.6.4.6: `contract.NoiseGen` has no
-// `source` field, so the two contributions of the clause's own example are
-// exported as two rows indistinguishable from two INDEPENDENT generators. The
-// correlation the clause exists to express is still not expressible.
+// The other half of §4.6.4.6 is the `#0` below: `contract.NoiseGen.source`
+// names the generator identity, so a host can tell one source reached through
+// a variable from two independent ones. `38_correlated_noise.va` pins the
+// two-branch sharing; `161_partially_correlated_noise.va` pins Example 2.
 //
 //! lrm 4.6.4.6
 //! lrm 4.6.4.1
-//! noise thermal(a,b)
+//! noise thermal(a,b)#0
 //! analysis dc
 //! bias V(a) = 1.0
 //! bias V(b) = 0.0
