@@ -63,6 +63,11 @@ const std = @import("std");
 const Ast = @import("../frontend/ast.zig");
 const Lexer = @import("../frontend/lexer.zig");
 const diag = @import("../diag.zig");
+// §9.13's argument table and the kernels it names — `rewriteParamsetDist` folds
+// an in-paramset draw with the SAME code a device embeds, so the two cannot
+// disagree on the stream.
+const Lower = @import("lower.zig");
+const rng = @import("../backend/rng_kernels.zig");
 
 /// `NoModule`: A.1.2 lets a source_text hold no module_declaration at all
 /// (a file of `discipline`/`nature` declarations is legal), but a device needs
@@ -321,6 +326,12 @@ const Flatten = struct {
     /// around the recursive call, so it is a stack discipline, not a field that
     /// outlives its unit.
     unit: Unit = .{},
+
+    /// True while `paramsetOverrides` clones text written INSIDE a §6.4
+    /// paramset body — the one scope §9.13.1/§9.13.2 admit a distribution
+    /// call's `type_string` in. Set and cleared with the `unit` swap there;
+    /// read by `cloneExpr`'s sys_call arm (`rewriteParamsetDist`).
+    in_paramset: bool = false,
 
     /// One `segs` row: the disciplines a net's child segments declared, and
     /// where the first one was declared (the diagnostic anchor — the same
@@ -1237,6 +1248,10 @@ const Flatten = struct {
 
         const saved = self.unit;
         self.unit = ps_unit;
+        // Everything cloned from here to the restore is paramset-body text —
+        // the instance's own override values (`ps_over`) were already cloned
+        // by `collectOverrides` above, in the parent's scope.
+        self.in_paramset = true;
         for (ps.params) |p| {
             var out = p;
             out.name = self.flat(p.name);
@@ -1297,6 +1312,7 @@ const Flatten = struct {
                 .output_var => {}, // §6.4.3, dropped in the parser — see there
             }
         }
+        self.in_paramset = false;
         self.unit = saved;
 
         unit.mfactor = ps_unit.mfactor;
@@ -1989,6 +2005,7 @@ const Flatten = struct {
             },
             .sys_call => {
                 if (try self.rewriteSysCall(e)) |lit| return lit;
+                if (self.in_paramset) if (try self.rewriteParamsetDist(e)) |out| return out;
                 n.extra = try self.cloneArgs(e);
             },
             .builtin_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => {
@@ -2030,6 +2047,136 @@ const Flatten = struct {
         const table = if (is_pc) &self.unit.connected else &self.unit.given;
         const answer = table.get(local) orelse return null;
         return try self.ex().addInt(self.a(), tok, @intFromBool(answer));
+    }
+
+    /// §9.13.1/§9.13.2 a distribution call written INSIDE a §6.4 paramset body
+    /// — the one scope whose calls may carry the optional trailing
+    /// `type_string`, and a compile-time fact about the paramset, so it sits
+    /// with `rewriteSysCall`'s other elaboration-time answers. Two jobs:
+    ///
+    ///   1. The `type_string`. Syntax 9-8/9-9 admit it and §9.13.2 fences it:
+    ///      "The type_string provides support for Monte-Carlo analysis and
+    ///      shall only be used in calls to a distribution function from within
+    ///      a paramset." The grammar lists exactly two spellings —
+    ///      `type_string ::= "global" | "instance"` — so anything else is an
+    ///      error (E0816). Monte-Carlo trials are the HOST's loop ("one value
+    ///      is generated for each Monte-Carlo trial"); VerA compiles one
+    ///      trial, in which "global" and "instance" select the same single
+    ///      draw — so a valid string is validated and DROPPED, leaving the
+    ///      call behaving exactly as without it.
+    ///   2. The value. A paramset statement computes a module parameter at
+    ///      elaboration (§6.4), and §9.13.2 makes the draw a pure function of
+    ///      its seed ("shall always return the same value given the same
+    ///      seed") — so a call whose seed and parameters are literals is one
+    ///      kernel evaluation performed NOW, with the very functions every
+    ///      device embeds (`rng_kernels.zig`). The call becomes the literal it
+    ///      draws, which is what lets the value ride the ordinary §6.3
+    ///      override machinery into the model card.
+    ///
+    /// Returns null when the callee is not one of Table 9-10's names (or is
+    /// `$random`, whose Syntax 9-8 production has no `type_string`). A call
+    /// whose arguments do not fold is returned with the string stripped and
+    /// left to lowering, which owns the remaining argument rules — in a
+    /// parameter position that path still ends in E0363, the same verdict the
+    /// call had without a `type_string`.
+    ///
+    /// ponytail: the fold takes a literal seed only. Syntax 9-9 also admits an
+    /// integer parameter identifier, and a paramset's own parameters are fixed
+    /// by the time this runs — folding through them needs the parameter values
+    /// threaded in here; add when a model actually writes one.
+    fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+        const x = self.ex();
+        const name = self.str(x.strOf(e));
+        const d = Lower.distOf(name) orelse return null;
+        if (std.mem.eql(u8, name, "$random")) return null;
+        const tok = x.mainTok(e);
+        const args = x.args(e);
+
+        var eff = args;
+        var stripped = false;
+        var bad = false;
+        if (eff.len > 0 and eff[eff.len - 1] != .none and x.tag(eff[eff.len - 1]) == .str_literal) {
+            const last = eff[eff.len - 1];
+            const ts = self.str(x.strOf(last));
+            if (!std.mem.eql(u8, ts, "global") and !std.mem.eql(u8, ts, "instance")) {
+                try self.err(x.mainTok(last), .E0816, "`{s}`'s `type_string` shall be \"global\" or \"instance\", got \"{s}\"", .{ name, ts });
+                bad = true;
+            }
+            eff = eff[0 .. eff.len - 1];
+            stripped = true;
+        }
+
+        // The fold: the seed plus §9.13.2's parameters, all literal, judged by
+        // the same domain rules `lowerRandom` applies on the runtime path.
+        fold: {
+            if (bad or eff.len != @as(usize, d.nparam) + 1) break :fold;
+            const seed = constIntLit(x, eff[0]) orelse break :fold;
+            var p = [2]f64{ 0, 0 };
+            for (eff[1..], 0..) |arg, i| {
+                p[i] = self.constReal(arg) orelse break :fold;
+                if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and p[i] <= 0) {
+                    try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, Lower.distParamName(d, i), p[i] });
+                    bad = true;
+                }
+            }
+            if (d.ordered and p[0] >= p[1]) {
+                try self.err(x.mainTok(eff[1]), .E0816, "the start value shall be smaller than the end value, got {d} and {d}", .{ p[0], p[1] });
+                bad = true;
+            }
+            if (bad) break :fold; // report; nothing sound to draw
+            const v: f64 = if (std.mem.eql(u8, d.kernel, "$rng$rand"))
+                rng.zRngRand(seed)
+            else if (std.mem.eql(u8, d.kernel, "$rng$i_uniform"))
+                rng.zRngIUniform(seed, p[0], p[1])
+            else if (std.mem.eql(u8, d.kernel, "$rng$uniform"))
+                rng.zRngUniform(seed, p[0], p[1])
+            else if (std.mem.eql(u8, d.kernel, "$rng$normal"))
+                rng.zRngNormal(seed, p[0], p[1])
+            else if (std.mem.eql(u8, d.kernel, "$rng$exponential"))
+                rng.zRngExponential(seed, p[0])
+            else if (std.mem.eql(u8, d.kernel, "$rng$poisson"))
+                rng.zRngPoisson(seed, p[0])
+            else if (std.mem.eql(u8, d.kernel, "$rng$chi_square"))
+                rng.zRngChiSquare(seed, p[0])
+            else if (std.mem.eql(u8, d.kernel, "$rng$t"))
+                rng.zRngT(seed, p[0])
+            else if (std.mem.eql(u8, d.kernel, "$rng$erlang"))
+                rng.zRngErlang(seed, p[0], p[1])
+            else
+                break :fold;
+            // §9.13.2 "$dist_ ... return integer values" — §4.2.1.1's rounding,
+            // the same conversion the runtime path's `toInt` performs.
+            return if (d.ty == .integer)
+                try x.addInt(self.a(), tok, @intFromFloat(@round(v)))
+            else
+                try x.addReal(self.a(), tok, v);
+        }
+
+        if (!stripped) return null; // the ordinary clone will do
+        // Unfoldable, but a `type_string` shall not survive to lowering, where
+        // it would read as the out-of-paramset scope error: rebuild the call
+        // over the remaining arguments, cloned as `cloneArgs` would have.
+        var n = x.get(e);
+        const out = try self.a().alloc(Ast.ExprId, eff.len);
+        for (eff, out) |s, *o| o.* = try self.cloneExpr(s);
+        n.extra = try self.ex().addExprList(self.a(), out);
+        return try self.ex().add(self.a(), n);
+    }
+
+    /// §9.13.1 Syntax 9-8's literal seed form, `[ sign ] decimal_number`. A
+    /// real is deliberately NOT one — "the seed argument shall be an integer"
+    /// is lowering's E0816 to report, so a real seed just declines the fold.
+    fn constIntLit(x: *const Ast.ExprStore, e: Ast.ExprId) ?i64 {
+        if (e == .none) return null;
+        return switch (x.tag(e)) {
+            .int_literal => x.intValue(e),
+            .unary => switch (x.unOp(e)) {
+                .plus => constIntLit(x, x.lhs(e)),
+                .minus => if (constIntLit(x, x.lhs(e))) |v| -v else null,
+                else => null,
+            },
+            else => null,
+        };
     }
 
     /// Copy one statement (and everything under it) into the pool.
