@@ -7098,47 +7098,81 @@ test "codegen: §3.4 a default with no compile-time value is W1050, a derived on
     try std.testing.expect(std.mem.indexOf(u8, src, "model.warm = (2.0) * (model.base);") != null);
 }
 
-test "codegen: §9.13 the emitted draws satisfy the two rules every fixture asserts" {
+test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digit" {
     // Same arrangement as the scanner below: the kernels are `@embedFile`d into
     // every device, so what is checked here is byte-for-byte what runs there.
     //
-    // The two rules are §9.13.1/§9.13.2's, and they are the ONLY things the 25
-    // §9.13 fixtures assert — §9.13.3 leaves the stream to IEEE 1364 §17.9.3 and
-    // no clause of this LRM requires a tool to reproduce it, so there is no digit
-    // to pin. "Shall always return the same value given the same seed", and "a
-    // value is passed to the function and A DIFFERENT VALUE IS RETURNED".
+    // §9.13.3 binds this family to IEEE 1364 §17.9.3's C listing (Table 9-26),
+    // so there ARE digits to pin. Every literal below was produced by COMPILING
+    // AND RUNNING that listing — the copy in Icarus Verilog's vpi/sys_random.c,
+    // cross-checked against Verilator's verilated_probdist.cpp; provenance and
+    // URLs in rng_kernels.zig's header — with `zig cc`, never hand-computed.
+    // The log/sqrt-free rows (`uniform`, `rtl_dist_uniform`, the LCG steps) are
+    // compared EXACTLY: they are pure IEEE-754 mul/add/div and the port must
+    // reproduce the C bit for bit. The transcendental rows allow libm-vs-@log
+    // ulp drift and nothing more — their SEEDS are still exact, because the
+    // seed path is integer arithmetic and admits no drift at all.
     const k = @import("rng_kernels.zig");
-    for ([_]i64{ -2147483647, -7, 0, 1, 7, 42, 2147483646 }) |sd| {
-        const n = k.zRngNext(sd);
-        try std.testing.expect(n != @as(f64, @floatFromInt(sd))); // inout: different
-        try std.testing.expectEqual(n, k.zRngNext(sd)); // repeatable
-        try std.testing.expect(n >= 0 and n < 2147483647);
-        // §9.13.1 "the random number returned is a 32-bit signed integer".
-        const r = k.zRngRand(sd);
-        try std.testing.expect(r >= -2147483648.0 and r <= 2147483647.0);
-        try std.testing.expectEqual(r, @round(r));
-        // §9.13.2's two bounds, and finiteness — which `proof.callAbstract` now
-        // asserts of the whole family, so a NaN here would be a wrong `.optimized`.
-        try std.testing.expect(k.zRngIUniform(sd, 0, 10) >= 0 and k.zRngIUniform(sd, 0, 10) <= 10);
-        try std.testing.expectEqual(k.zRngIUniform(sd, 0, 10), @round(k.zRngIUniform(sd, 0, 10)));
-        try std.testing.expect(k.zRngUniform(sd, 0.0, 10.0) >= 0.0 and k.zRngUniform(sd, 0.0, 10.0) <= 10.0);
-        try std.testing.expect(k.zRngExponential(sd, 3.0) >= 0.0);
-        try std.testing.expect(k.zRngPoisson(sd, 3.0) >= 0.0);
-        try std.testing.expect(k.zRngChiSquare(sd, 4.0) >= 0.0);
-        try std.testing.expect(k.zRngErlang(sd, 2.0, 3.0) >= 0.0);
-        try std.testing.expect(std.math.isFinite(k.zRngT(sd, 4.0)));
-        try std.testing.expect(std.math.isFinite(k.zRngNormal(sd, 0.0, 1.0)));
-    }
-    // Both signs occur, which is the half of the width sentence a one-sided
-    // generator would silently fail ("it can be positive or negative").
+    const eps = std.testing.expectApproxEqRel;
+    // $random from seed 7 = rtl_dist_uniform(&s, INT_MIN, INT_MAX), twice — the
+    // second pair proves the write-back rejoined the reference stream.
+    try std.testing.expectEqual(@as(f64, -2146999808), k.zRngRand(7));
+    try std.testing.expectEqual(@as(f64, 483484), k.zRngRandNext(7));
+    try std.testing.expectEqual(@as(f64, 1181502348), k.zRngRand(483484));
+    try std.testing.expectEqual(@as(f64, -965981971), k.zRngRandNext(483484));
+    try std.testing.expectEqual(@as(f64, -2144582656), k.zRngRand(42));
+    // One plain `uniform()` step, the Instance latch's advance.
+    try std.testing.expectEqual(@as(f64, 483484), k.zRngNext(7));
+    try std.testing.expectEqual(@as(f64, -483482), k.zRngNext(-7));
+    try std.testing.expectEqual(@as(f64, -1844104698), k.zRngNext(0)); // 259341593 escape
+    try std.testing.expectEqual(@as(f64, 69070), k.zRngNext(1));
+    try std.testing.expectEqual(@as(f64, 2147345511), k.zRngNext(2147483646));
+    // Table 9-26 `$rdist_uniform` → `uniform`: exact, mul/add only.
+    try std.testing.expectEqual(@as(f64, 0.0011265279204053513), k.zRngUniform(7, 0.0, 10.0));
+    try std.testing.expectEqual(@as(f64, 483484), k.zRngUniformNext(7, 0.0, 10.0));
+    try std.testing.expectEqual(@as(f64, 7.7508995236036071), k.zRngUniform(483484, 0.0, 10.0));
+    // `$dist_uniform` → `rtl_dist_uniform`: an integer on the CLOSED range.
+    try std.testing.expectEqual(@as(f64, 0), k.zRngIUniform(7, 0, 10));
+    try std.testing.expectEqual(@as(f64, 1), k.zRngIUniform(7, 1, 6));
+    try std.testing.expectEqual(@as(f64, 483484), k.zRngIUniformNext(7, 0, 10));
+    // The transcendental rows, each with its exact reference seed.
+    try eps(@as(f64, 1.151634785351684), k.zRngNormal(7, 0.0, 1.0), 1e-12);
+    try std.testing.expectEqual(@as(f64, -1368524349), k.zRngNormalNext(7, 0.0, 1.0));
+    try eps(@as(f64, 27.273600318905594), k.zRngExponential(7, 3.0), 1e-12);
+    try std.testing.expectEqual(@as(f64, 483484), k.zRngExponentialNext(7, 3.0));
+    try std.testing.expectEqual(@as(f64, 0), k.zRngPoisson(7, 3.0));
+    try std.testing.expectEqual(@as(f64, 483484), k.zRngPoissonNext(7, 3.0));
+    try eps(@as(f64, 18.691952590208434), k.zRngChiSquare(7, 4.0), 1e-12);
+    try std.testing.expectEqual(@as(f64, -965981971), k.zRngChiSquareNext(7, 4.0));
+    try eps(@as(f64, 0.53274261066788675), k.zRngT(7, 4.0), 1e-12);
+    try std.testing.expectEqual(@as(f64, -1368524349), k.zRngTNext(7, 4.0));
+    try eps(@as(f64, 14.018964442656326), k.zRngErlang(7, 2.0, 3.0), 1e-12);
+    try std.testing.expectEqual(@as(f64, -965981971), k.zRngErlangNext(7, 2.0, 3.0));
+    // §9.13.1's width sentence: "a 32-bit signed integer; it can be positive or
+    // negative" — both signs occur along the reference stream, and every draw
+    // stays inside the width.
     var neg = false;
     var pos = false;
     var sd: i64 = 1;
     for (0..64) |_| {
-        if (k.zRngRand(sd) < 0) neg = true else pos = true;
-        sd = @intFromFloat(k.zRngNext(sd));
+        const r = k.zRngRand(sd);
+        try std.testing.expect(r >= -2147483648.0 and r <= 2147483647.0);
+        try std.testing.expectEqual(r, @round(r));
+        if (r < 0) neg = true else pos = true;
+        sd = @intFromFloat(k.zRngRandNext(sd));
     }
     try std.testing.expect(neg and pos);
+    // Repeatability (§9.13.2 "shall always return the same value given the same
+    // seed") and finiteness — which `proof.callAbstract` asserts of the whole
+    // family, so a NaN here would be a wrong `.optimized`.
+    for ([_]i64{ -2147483647, -7, 0, 1, 7, 42, 2147483646 }) |s| {
+        try std.testing.expectEqual(k.zRngNext(s), k.zRngNext(s));
+        try std.testing.expect(k.zRngNext(s) != @as(f64, @floatFromInt(s))); // inout: different
+        try std.testing.expect(std.math.isFinite(k.zRngT(s, 4.0)));
+        try std.testing.expect(std.math.isFinite(k.zRngNormal(s, 0.0, 1.0)));
+        try std.testing.expect(std.math.isFinite(k.zRngChiSquare(s, 4.0)));
+        try std.testing.expect(k.zRngPoisson(s, 3.0) >= 0.0);
+    }
 }
 
 test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
