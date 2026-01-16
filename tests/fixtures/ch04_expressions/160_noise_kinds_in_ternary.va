@@ -24,8 +24,8 @@
 //
 //! lrm 4.6.4
 //! lrm 4.2.12
-//! noise thermal(a,b)
-//! noise flicker(a,b)
+//! noise thermal(a,b)#0
+//! noise flicker(a,b)#1
 //! analysis dc
 //! bias V(a) = 1.0
 //! bias V(b) = 0.0

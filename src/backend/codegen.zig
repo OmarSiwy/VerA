@@ -4556,16 +4556,20 @@ pub const Gen = struct {
     /// because absent means the model never declared the source.
     ///
     /// ONE ENTRY PER GENERATOR, not per contribution. §4.6.4's own shape is
-    /// several sources on one branch, and `Lower.NoiseKinds` is a set for that
-    /// reason; iterating it here is what makes the thermal source of
-    /// `combined/13_noise_temperature_analysis.va` reach the table at all.
+    /// several sources on one branch, and `Lower.Contribution.noise_srcs` is a
+    /// set for that reason; iterating it here is what makes the thermal source
+    /// of `combined/13_noise_temperature_analysis.va` reach the table at all.
     ///
-    /// Three §4.6.4 shapes are deliberately NOT in this table, and TODO.md §3
+    /// §4.6.4.6 correlation is the `source` column: `NoiseSrc.id` (the AST id
+    /// of the declaring call) renamed densely in first-seen order, so two rows
+    /// that reached one call through a variable share one `source` and two
+    /// textually separate calls never do.
+    ///
+    /// Two §4.6.4 shapes are deliberately NOT in this table, and TODO.md §3
     /// carries them rather than leaving them to be rediscovered: §4.6.4.3/.4
     /// `noise_table`/`noise_table_log` have no tag (`tools/contract.zig`'s
-    /// `NoiseGen.kind` and `PsdTerm` "land together"), and a source assigned to
-    /// a variable that is then contributed exports nothing, because the walk
-    /// below is over the contributed EXPRESSION.
+    /// `NoiseGen.kind` and `PsdTerm` "land together"), and a generator on a
+    /// ground-ground branch has no row or column to name (§1.3.1.1).
     ///
     // ponytail: no `noisePsd` hook. Emitting one means running a third variant
     // of each unit (white_noise(p) → p) against the plain-f64 scalar `R`; the
@@ -4575,9 +4579,12 @@ pub const Gen = struct {
         var n: usize = 0;
         for (self.lower.contributions.items) |c| {
             if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
-            n += c.noise_kinds.count();
+            n += c.noise_srcs.len;
         }
         if (n == 0) return;
+        // Dense `source` renaming, first-seen order — stable because the
+        // contributions and their `noise_srcs` are both in source order.
+        var ids: std.ArrayList(u32) = .empty;
         try self.w("/// §4.6.4 noise sources declared by the model.\npub const noise_gens = [_]contract.NoiseGen(Self){{\n", .{});
         for (self.lower.contributions.items) |c| {
             if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
@@ -4585,12 +4592,15 @@ pub const Gen = struct {
             // spelled row == col.
             const row = if (c.hi != Lower.ground) c.hi else c.lo;
             const col = if (c.lo != Lower.ground) c.lo else row;
-            // Set-iteration order is `NoiseKind`'s declaration order, which is
-            // §4.6.4.1 before §4.6.4.2 and therefore stable across builds.
-            var it = c.noise_kinds.iterator();
-            while (it.next()) |kind| {
-                try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s} }},\n", .{
-                    self.u_names[row], self.u_names[col], @tagName(kind),
+            for (c.noise_srcs) |s| {
+                const sid = for (ids.items, 0..) |v, i| {
+                    if (v == s.id) break i;
+                } else blk: {
+                    try ids.append(self.arena, s.id);
+                    break :blk ids.items.len - 1;
+                };
+                try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s}, .source = {d} }},\n", .{
+                    self.u_names[row], self.u_names[col], @tagName(s.kind), sid,
                 });
             }
         }
@@ -6227,13 +6237,15 @@ test "codegen: §4.6.4 two noise sources on one branch export TWO generators" {
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .thermal }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .flicker }") != null);
-    // §4.6.4.1 before §4.6.4.2 — the set iterates in declaration order, so the
+    // §4.6.4.6 each CALL is one generator, so the two rows carry distinct
+    // dense `source` ids — two independent sources, not one shared.
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .thermal, .source = 0 }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .flicker, .source = 1 }") != null);
+    // §4.6.4.1 before §4.6.4.2 — the sources append in statement order, so the
     // table is stable across builds and a host may index it positionally.
     try std.testing.expect(
-        std.mem.indexOf(u8, src, ".kind = .thermal }").? <
-            std.mem.indexOf(u8, src, ".kind = .flicker }").?,
+        std.mem.indexOf(u8, src, ".kind = .thermal").? <
+            std.mem.indexOf(u8, src, ".kind = .flicker").?,
     );
 }
 
