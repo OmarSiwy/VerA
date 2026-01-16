@@ -5968,8 +5968,9 @@ fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
 
 /// One row of Table 9-10's probabilistic family: the source spelling, the
 /// synthetic kernel `rng_kernels.zig` implements, and the argument rules
-/// §9.13.1/§9.13.2 state for it.
-const Dist = struct {
+/// §9.13.1/§9.13.2 state for it. Pub because `elaborate.rewriteParamsetDist`
+/// judges the same argument rules for a call written inside a §6.4 paramset.
+pub const Dist = struct {
     /// Source spelling, `$` included.
     name: []const u8,
     /// `rng_kernels.zig` entry point, or "" for the two whose only argument is
@@ -6015,13 +6016,13 @@ const dists = [_]Dist{
     .{ .name = "$rdist_erlang", .kernel = "$rng$erlang", .nparam = 2, .ty = .real, .positive = 0b11 },
 };
 
-fn distOf(name: []const u8) ?*const Dist {
+pub fn distOf(name: []const u8) ?*const Dist {
     for (&dists) |*d| if (std.mem.eql(u8, name, d.name)) return d;
     return null;
 }
 
 /// The name §9.13.2 gives parameter `i` of `d`, for the diagnostics.
-fn distParamName(d: *const Dist, i: usize) []const u8 {
+pub fn distParamName(d: *const Dist, i: usize) []const u8 {
     if (d.ordered) return if (i == 0) "start" else "end";
     if (std.mem.endsWith(u8, d.name, "chi_square") or std.mem.endsWith(u8, d.name, "_t"))
         return "degree_of_freedom";
@@ -6055,10 +6056,12 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
     for (args) |a| if (a != .none) try given.append(self.arena, a);
 
     // §9.13.1 Syntax 9-8 / §9.13.2 Syntax 9-9: the optional trailing
-    // `type_string` ("instance" or "global") selects which paramset override the
-    // stream belongs to, and there is no paramset here — §6.4 paramsets are a
-    // separate compilation unit and VerA compiles a module. So a string in the
-    // last slot is a scope error, not an unsupported argument.
+    // `type_string` ("instance" or "global") "shall only be used in calls to a
+    // distribution function from within a paramset". The in-paramset calls were
+    // already handled at elaboration — `elaborate.rewriteParamsetDist` validates
+    // the string and folds or strips the call while cloning a §6.4 paramset body
+    // — so any string still in the last slot here was written OUTSIDE one, and
+    // is the scope error §9.13.2's sentence describes.
     if (given.items.len > 0) {
         const last = given.items[given.items.len - 1];
         if (ex.tag(last) == .str_literal) {

@@ -73,8 +73,8 @@ and refusing the call is the whole of what §9.22 paragraph 3 requires.
 | `s9.11` | conversion functions; only `$bitstoreal`/`$realtobits` extend to analog | `15_conversion_functions.va` (the pair is the identity on 3.7, bit-exact), `063_realtobits.va`, `064_bitstoreal.va`; the four Table 9-8 "No" rows are `061_rtoi`, `062_itor`, `134_signed`, `135_unsigned` — **all green**, `analog context`; `$rtoi` used to be answered with a silent truncation |
 | `s9.12` | `$test$plusargs` and `$value$plusargs` | `065_test_plusargs.va`, `066_value_plusargs.va`, `16_plusargs.va` |
 | `s9.13` | probabilistic distribution family | — parent; carried by 9.13.1–9.13.2 |
-| `s9.13.1` | `$random` and `$arandom`, seeded and unseeded | `32_random.va`, `33_arandom.va`, `115_random_no_seed.va`, `116_arandom_no_seed.va`, `117_arandom_parameter_seed.va`, `118_arandom_negative_seed.va`. Scope negative `132_arandom_type_string_outside_paramset_rejected.va` — E0816 |
-| `s9.13.2` | seven `$dist_*` and six `$rdist_*` names | `34_distribution.va`, `35_real_distribution.va`, `119`–`130` (one file per name). Argument-rule negatives `150_rdist_domain_rejected.va`, `151_rdist_uniform_start_end_rejected.va`, `166_rdist_real_seed_rejected.va`, `133_rdist_type_string_outside_paramset_rejected.va` — all E0816 |
+| `s9.13.1` | `$random` and `$arandom`, seeded and unseeded | `32_random.va`, `33_arandom.va`, `115_random_no_seed.va`, `116_arandom_no_seed.va`, `117_arandom_parameter_seed.va`, `118_arandom_negative_seed.va`. Scope negative `132_arandom_type_string_outside_paramset_rejected.va` — E0816. The legal in-paramset `type_string` is `175_dist_type_string_inside_paramset.va` |
+| `s9.13.2` | seven `$dist_*` and six `$rdist_*` names | `34_distribution.va`, `35_real_distribution.va`, `119`–`130` (one file per name). Argument-rule negatives `150_rdist_domain_rejected.va`, `151_rdist_uniform_start_end_rejected.va`, `166_rdist_real_seed_rejected.va`, `133_rdist_type_string_outside_paramset_rejected.va`, `176_dist_type_string_misspelled_rejected.va` — all E0816. `175_dist_type_string_inside_paramset.va` is the legal side: `"global"`/`"instance"` accepted within a paramset and selecting nothing outside a host's Monte-Carlo loop |
 | `s9.13.3` | Table 9-26 cross-listing to the 1364 C algorithms | — no fixture claims a distribution's VALUE, and none can: this clause defers the algorithms to IEEE 1364 §17.9.3 and no clause of *this* LRM requires a tool to reproduce that stream. What the family's fixtures pin instead is §9.13.1/§9.13.2's own two sentences — repeatability on a seed, and the inout seed coming back different |
 | `s9.14` | math system functions | Twenty-seven atomics `067`–`093` plus `17_math_unary.va`, `18_math_trig.va`, `19_math_binary.va`, `20_math_2023.va`. Two of the atomics were the last debt here and both are green: `092_ln1p.va` — `zLn1p` used to be `a.addC(1.0).log()`, returning 4.440892098500625e-16 for `$ln1p(5e-16)`, 11% low, which is precisely the naive value Table 4-14's C `log1p` exists to replace — and `093_expm1.va`, `zExpm1` as `a.exp().addC(-1.0)`, the same 11% error for the same reason |
 | `s9.15` | `$temperature` `$vt` `$simparam` `$simparam$str` | `21_temperature_vt.va`, `094_temperature.va`, `095_vt_ambient.va`, `096_vt_temperature.va` (all `//! temp`-driven), `22_simparam.va` (unknown name returns its fallback verbatim), `23_simparam_string.va`. All three branches of the clause's `$simparam` sentence are now green: `147_simparam_unknown_no_fallback_rejected.va` is a **reject VerA meets** (E0811 — the unknown name with no fallback), and `157_simparam_timescale.va` pins Table 9-27's two source-derived rows, `"timeUnit"`/`"timePrecision"` in seconds, which the preprocessor now parses out of `` `timescale `` and publishes for `Lower.simparamValue` |
@@ -152,10 +152,14 @@ into two pure calls over the seed (the variate, and the write-back), exactly as
 `$sscanf` is split into one call per out-parameter. The seedless forms have no
 such variable, so their §9.13.1 "internal seed" is a latch in `Instance` advanced
 by `updateState` on the ACCEPTED step and only read by `eval` — the same
-discipline, with the boundary the contract already had. The four argument-rule
-negatives (`150`, `151`, `166`, and the paramset scope pair `132`/`133`) reject
-on E0816, which is per-argument and therefore fires whether or not the family is
-otherwise supported.
+discipline, with the boundary the contract already had. The argument-rule
+negatives (`150`, `151`, `166`, the paramset scope pair `132`/`133`, and the
+misspelled `type_string` `176`) reject on E0816, which is per-argument and
+therefore fires whether or not the family is otherwise supported. The
+`type_string`'s legal side is `175`: inside a §6.4 paramset the call is folded
+at elaboration (`elaborate.rewriteParamsetDist`, the same `rng_kernels.zig` a
+device embeds), where a valid `type_string` selects nothing because the
+Monte-Carlo trials it partitions are the HOST's loop, not a compilation's.
 
 **Analog-context table: the wall is down (11 fixtures).** Tables 9-1, 9-2, 9-3, 9-5, 9-6,
 9-7 and 9-8 each have a "No" column and VerA implemented none of it. `061`, `062`, `134`,

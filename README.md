@@ -99,7 +99,7 @@ fixture tree in `tests/fixtures/` is organized to mirror.
 
 ## What is actually verified
 
-1233 `.va` fixtures. Each states its own expected behavior in the file — `//!
+1235 `.va` fixtures. Each states its own expected behavior in the file — `//!
 reject <substring>` to demand a diagnostic, or a `CHECK` from `check.vh` whose
 `ok=1` column is the assertion. There are no sidecar files.
 
@@ -128,7 +128,7 @@ naming the rule it violates. Three are left, down from 60 — the rest became re
 requirements over seven waves. They stay green on purpose: a suite exists to
 notice change, and a permanently-red fixture notices nothing.
 
-Current, measured on this tree: **1233/1233 behave as they say they do, 0 XFAIL,
+Current, measured on this tree: **1235/1235 behave as they say they do, 0 XFAIL,
 0 FAIL** (`--strict` passes), and no fixture asserts nothing. `/TODO.md` carries
 the deliberate ceilings and the will-not-do list.
 

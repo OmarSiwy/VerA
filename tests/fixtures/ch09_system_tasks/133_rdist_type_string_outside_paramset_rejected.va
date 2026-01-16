@@ -14,7 +14,7 @@
 // the violation is visible in the source alone.
 //
 // Nothing is asserted, for the same reason as 132: an illegal call site has no
-// result, and the legal in-paramset use needs paramset support first.
+// result. The legal in-paramset use is 175_dist_type_string_inside_paramset.va.
 //
 //! lrm 9.13.2
 //! reject E0816
