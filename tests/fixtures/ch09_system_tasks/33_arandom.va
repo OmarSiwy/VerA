@@ -4,12 +4,12 @@
 // file must COMPILE and run green; a compiler that refuses the call is the one
 // that is wrong, which is why the expectation is a run and not a reject.
 //
-// The value itself is implementation-defined — §9.13.3 points at the IEEE 1364
-// §17.9.3 C code, which no clause of this LRM requires a tool to reproduce — so
-// no digits are written for it. What §9.13.2 DOES fix is repeatability: "The
-// system functions shall always return the same value given the same seed."
-// Two seeds initialized to the same integer must therefore agree, and that
-// holds for any conforming RNG whatever its stream.
+// The value is not free — §9.13.3 binds this family to the IEEE 1364 §17.9.3
+// C listing (Table 9-26), and 171_random_ieee1364_digits.va pins that stream
+// digit for digit. This fixture keeps the clause-local claim: §9.13.2's
+// repeatability, "The system functions shall always return the same value
+// given the same seed." Two seeds initialized to the same integer must agree,
+// and that holds for any conforming implementation of the listing.
 //
 // $arandom is the analog spelling: "$arandom is upwardly compatible with
 // $random — $arandom can take the same arguments as $random and has the same
