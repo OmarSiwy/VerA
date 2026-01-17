@@ -1486,7 +1486,107 @@ pub const Gen = struct {
                 });
             }
         }
+        // FSM accepted/working twins — `stateCtl`'s accepted copy. Emitted
+        // only for modules that get the hook (`emitsStateCtl`), so a plain
+        // cross-observer carries no dead fields.
+        if (self.emitsStateCtl()) {
+            for (self.lower.held_vars.items, 0..) |h, i| {
+                const init = self.an.foldConst(self.an.rv(h.init), 0, true);
+                const v: f64 = if (init) |c| c.f else 0.0;
+                if (h.ty == .integer) {
+                    try self.w("    {s}__acc: i64 = {d}, // stateCtl accepted copy\n", .{
+                        self.held_names[i], std.math.lossyCast(i64, @round(v)),
+                    });
+                } else {
+                    try self.w("    {s}__acc: f64 = {s}, // stateCtl accepted copy\n", .{
+                        self.held_names[i], try self.fmtF64(v),
+                    });
+                }
+            }
+            for (self.units, 0..) |u, i| {
+                if (u.role != .analog_op) continue;
+                switch (opKind(u.target)) {
+                    .cross, .above => try self.w(
+                        "    {s}__prev__acc: f64 = 0.0, // stateCtl accepted copy\n",
+                        .{self.unit_names[i]},
+                    ),
+                    else => {},
+                }
+            }
+        }
         try self.w("}};\n\n", .{});
+    }
+
+    /// A module whose §5.10 event-HELD state is fed by `cross`/`above` edges
+    /// is a hysteresis FSM the transient can catch mid-step (a switch). It
+    /// gets `stateCtl` (contract.zig StateCtlOp): the driver rejects the
+    /// converged step whose accepted solution flipped the latch and shrinks
+    /// toward the crossing, so the conductance discontinuity lands SHARP —
+    /// which is what makes a piecewise-constant waveform interpolate
+    /// correctly onto ngspice's own output grid. Without the hook the flip
+    /// smears across whatever dt the integrator happened to carry
+    /// (devices/switch: one 0.8-of-full-scale sample against a 1e-11 match
+    /// everywhere else).
+    fn emitsStateCtl(self: *const Gen) bool {
+        if (self.lower.held_vars.items.len == 0) return false;
+        for (self.units) |u| {
+            if (u.role != .analog_op) continue;
+            switch (opKind(u.target)) {
+                .cross, .above => return true,
+                else => {},
+            }
+        }
+        return false;
+    }
+
+    /// The hook body. `query` compares the HELD (discrete) state only; the
+    /// continuous cross histories are committed/reverted alongside so a
+    /// rejected attempt cannot leave a half-advanced edge test behind (which
+    /// would suppress the refire on the retry). Tag ORDER mirrors
+    /// contract.StateCtlOp — the engine converts by ordinal.
+    fn emitStateCtl(self: *Gen) Error!void {
+        try self.w(
+            \\pub const StateCtlOp = enum(u8) {{ query, commit, revert }};
+            \\
+            \\pub fn stateCtl(_: *const Model, inst: *Instance, _: *State, op: StateCtlOp) bool {{
+            \\    if (op == .query) {{
+            \\        return
+        , .{});
+        var first = true;
+        for (self.held_names) |n| {
+            try self.w("{s}(inst.{s} != inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n });
+            first = false;
+        }
+        try self.w(
+            \\;
+            \\    }}
+            \\    if (op == .commit) {{
+            \\
+        , .{});
+        for (self.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
+        for (self.units, 0..) |u, i| {
+            if (u.role != .analog_op) continue;
+            switch (opKind(u.target)) {
+                .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.unit_names[i], self.unit_names[i] }),
+                else => {},
+            }
+        }
+        try self.w("    }} else {{\n", .{});
+        for (self.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
+        for (self.units, 0..) |u, i| {
+            if (u.role != .analog_op) continue;
+            switch (opKind(u.target)) {
+                .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.unit_names[i], self.unit_names[i] }),
+                else => {},
+            }
+        }
+        try self.w(
+            \\    }}
+            \\    return false;
+            \\}}
+            \\
+            \\
+        , .{});
     }
 
     // =======================================================================
@@ -4971,6 +5071,7 @@ pub const Gen = struct {
             \\
             \\
         , .{});
+        if (self.emitsStateCtl()) try self.emitStateCtl();
     }
 
     /// §5.10.5 `timer(start_time, period)` — the host's `nextBreakpoint` hook.
@@ -7659,6 +7760,46 @@ test "codegen: §4.5.15 signed $limit clamps sign*v and seeds sign*vcrit" {
     const s2 = try h2.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s2, "sg") == null);
     try std.testing.expect(std.mem.indexOf(u8, s2, "zPnjlim(vn, vo") != null);
+}
+
+test "codegen: cross-fed held state emits stateCtl with accepted twins" {
+    // The hysteresis-FSM hook (contract.zig StateCtlOp): a module whose held
+    // state is written from cross edges gets stateCtl + accepted-copy twins,
+    // so the transient can land its conductance flip sharp. A held variable
+    // fed only by a timer does NOT — breakpoints already place those edges.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module sw(p, n, c);
+        \\  inout p, n, c; electrical p, n, c;
+        \\  integer latched;
+        \\  analog begin
+        \\    @(cross(V(c) - 0.5, +1)) latched = 1;
+        \\    @(cross(V(c) - 0.5, -1)) latched = 0;
+        \\    I(p, n) <+ ((latched > 0) ? 1.0 : 1.0e-9) * V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "__held__latched__acc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "__prev__acc = inst.") != null);
+
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module tmr(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  integer armed;
+        \\  analog begin
+        \\    @(timer(1n)) armed = 1;
+        \\    I(p, n) <+ ((armed > 0) ? 1.0 : 1.0e-9) * V(p, n);
+        \\  end
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const s2 = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "stateCtl") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "__acc") == null);
 }
 
 test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
