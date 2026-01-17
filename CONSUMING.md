@@ -173,6 +173,7 @@ table with no values or values with no table is a hook nobody can call.
 | decl | what | pairs with |
 |---|---|---|
 | `q` | §5.6.1.2 charges | — |
+| `evalQ` | both residuals from ONE model evaluation — **see below** | `q` |
 | `limit` / `seed` | pnjlim/fetlim, cold-start (SPICE MODEINITJCT) | — |
 | `collapse` | node collapsing | — |
 | `initState` / `updateState` / `stateCtl` / `State` | accepted-step FSM state | each other |
@@ -194,6 +195,34 @@ A positional table plus a hook indexed at position `k` is the idiom throughout �
 `noise_gens[k]` describes element `k` of `noisePsd`'s result, and so on. Nothing
 is name-keyed, because a `[]const u8` lookup is a runtime search that cannot be
 comptime-validated.
+
+### `evalQ` — call this one in a transient
+
+```zig
+pub fn evalQ(comptime S: type, x: [n]S, m: *const Model, i: *const Instance, t: f64)
+    struct { res: [n]S, q: [n]S }
+```
+
+Emitted whenever `q` is. Returns exactly what `eval` and `q` return — the
+generated testbench asserts it bit-for-bit, value and derivative, at every
+accepted step — for **half** the work.
+
+`eval` and `q` each open their own call to the module's shared core, so a host
+that wants both runs the entire model twice. That is an artifact of there being
+two entry points, not of the physics: codegen already hoists every subexpression
+the two halves share into one core whose returned struct carries both halves'
+targets, and the dispatchers only read different fields of it. Measured on a
+host SPICE, `<module>__common__core` showed up twice per instance evaluation
+with identical inclusive cost, against device evaluation that was ~90% of a
+transient.
+
+So:
+
+- needs the resistive half only (DC, operating point) → call `eval`;
+- needs both (every transient step) → call `evalQ`, **not** `eval` then `q`.
+
+`eval` and `q` are unchanged and remain the §3.1 contract; this is purely
+additive, and a host that ignores it keeps working at the old cost.
 
 `attempt` is the one row here that is declared and not consumed. Its site names
 `batch.zig:616` as the caller and that file no longer exists (the SIMD batch

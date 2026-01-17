@@ -359,6 +359,16 @@ pub fn validate(comptime D: type) void {
     validatePhysicsFn(D, "eval");
     if (@hasDecl(D, "q")) validatePhysicsFn(D, "q");
 
+    // `evalQ` is `eval` and `q` sharing ONE model evaluation — the same five
+    // parameters, returning both residuals. Fusing is the whole point, so it
+    // is meaningless without a reactive half; a device that declares it
+    // without `q` has a hook whose second field nothing can fill.
+    if (@hasDecl(D, "evalQ")) {
+        if (!@hasDecl(D, "q"))
+            @compileError(name ++ ".evalQ without q: the fused entry point needs a reactive half");
+        if (genericFnError(D, "evalQ", "struct { res: [n_u]S, q: [n_u]S }")) |m| @compileError(m);
+    }
+
     // §9.4/§9.5 display phase (the clause map lives on `allowed_pub_decls`).
     // Present only in a printing artifact; when present it must be callable
     // the way tb.zig's generated runner calls it — `D.display(Dual, xd,
@@ -576,6 +586,8 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "Instance", {} },
     .{ "eval", {} },
     .{ "q", {} },
+    // Both residuals from one core evaluation; see `validate`'s pair rule.
+    .{ "evalQ", {} },
     .{ "limit", {} },
     .{ "seed", {} },
     .{ "collapse", {} },
@@ -980,6 +992,9 @@ const MockAll = struct {
     pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
         const i = x[0].sub(x[1]).scale(@as(f64, m.g));
         return .{ i, i.neg() };
+    }
+    pub fn evalQ(comptime S: type, x: [n_u]S, m: *const Model, i: *const Instance, t: f64) struct { res: [n_u]S, q: [n_u]S } {
+        return .{ .res = eval(S, x, m, i, t), .q = q(S, x, m, i, t) };
     }
     pub fn q(comptime S: type, x: [n_u]S, _: *const Model, _: *const Instance, _: f64) [n_u]S {
         return .{ x[0].scale(1e-12), x[1].scale(-1e-12) };

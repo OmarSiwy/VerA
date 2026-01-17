@@ -1038,6 +1038,33 @@ const runner_body =
     \\    }
     \\}
     \\
+    \\/// The fused differential gate: `evalQ` shares ONE core call between the
+    \\/// two halves, so it must return exactly what the separate `eval` and `q`
+    \\/// return. Same ops, same order, same core — bit equality, no epsilon.
+    \\/// A mismatch means the shared-core hoist changed the physics, which is
+    \\/// the only way this refactor can be wrong.
+    \\fn fusedCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\    if (comptime !@hasDecl(D, "evalQ")) return;
+    \\    const xd = seed(x);
+    \\    const both = D.evalQ(Dual, xd, model, inst, t);
+    \\    const res = D.eval(Dual, xd, model, inst, t);
+    \\    const qq = D.q(Dual, xd, model, inst, t);
+    \\    for (0..n_u) |i| {
+    \\        fusedAssert("res", i, both.res[i].v, res[i].v);
+    \\        fusedAssert("q", i, both.q[i].v, qq[i].v);
+    \\        for (0..n_u) |j| {
+    \\            fusedAssert("dres", i, both.res[i].d[j], res[i].d[j]);
+    \\            fusedAssert("dq", i, both.q[i].d[j], qq[i].d[j]);
+    \\        }
+    \\    }
+    \\}
+    \\
+    \\fn fusedAssert(what: []const u8, i: usize, a: f64, b: f64) void {
+    \\    if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) return;
+    \\    std.debug.print("fused_check FAIL: {s}[{s}]: evalQ {e} vs split {e}\n", .{ what, u_names[i], a, b });
+    \\    std.process.exit(1);
+    \\}
+    \\
     \\/// Bit equality is the expectation — the same IEEE ops run in the same
     \\/// order per lane — with a 1e-12 relative escape for a vectorizer that
     \\/// contracts differently than the scalar pipeline.
@@ -1103,8 +1130,9 @@ const runner_body =
     \\            std.debug.print("  next_bp = none\n", .{});
     \\    }
     \\
-    \\    // Batch differential gate — silent on success, fails the run loudly.
+    \\    // Differential gates — silent on success, fail the run loudly.
     \\    laneCheck(x, t, model, inst);
+    \\    fusedCheck(x, t, model, inst);
     \\
     \\    const xd = seed(x);
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
