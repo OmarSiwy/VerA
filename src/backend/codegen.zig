@@ -807,6 +807,7 @@ pub const Gen = struct {
         if (stateful or self.lower.rng_auto_sites != 0) try self.emitStateMachine();
         try cg_limit.emit(self);
         try self.emitNextBreakpoint();
+        try self.emitDelays();
         // Lane-parallel permission (see `lane_pinned`): eval/q of this device
         // instantiated with a vector S is exact per lane. The testbench's
         // batch differential check keys on it, and a batching host may.
@@ -5105,6 +5106,39 @@ pub const Gen = struct {
     // A timer whose enable is a solved quantity keeps its breakpoints, because
     // this hook has no `Instance` to evaluate one against and an extra timepoint
     // costs a step, never an answer.
+    /// §4.5.7 the per-site transport delays, model-frame like
+    /// `nextBreakpoint` above — a delay argument is a §4.5.14
+    /// constant/parameter expression, so it renders over `Model` alone.
+    /// The host's transient uses these two ways (ngspice traload's habit):
+    /// a landed breakpoint re-emits one echo at t + td so the ARRIVING
+    /// wavefront gets its own timepoint instead of being smeared across a
+    /// step, and dt_max is clamped under the shortest delay. A site whose
+    /// delay is a solved quantity is skipped — no claim beats a wrong one.
+    fn emitDelays(self: *Gen) Error!void {
+        const saved = self.uses_model;
+        defer self.uses_model = saved;
+        self.uses_model = false;
+        var tds: std.ArrayList([]const u8) = .empty;
+        for (self.units, 0..) |u, i| {
+            if (u.role != .analog_op or opKind(u.target) != .absdelay) continue;
+            const inst = self.opInstOf(@intCast(i)) orelse continue;
+            const args = self.mir.instData(inst).call.args;
+            if (args.len < 2) continue;
+            const td = try self.f64Const(args[1], 0, false) orelse continue;
+            try tds.append(self.arena, td);
+        }
+        if (tds.items.len == 0) return;
+        try self.w(
+            \\/// §4.5.7 transport delays, one per absdelay site. The host lands
+            \\/// wavefront breakpoints at corner + td and bounds dt_max under the
+            \\/// shortest delay (engine minDelay -> tran echo machinery).
+            \\pub fn delays({s}: *const Model) [{d}]f64 {{
+            \\    return .{{
+        , .{ if (self.uses_model) "model" else "_", tds.items.len });
+        for (tds.items, 0..) |td, k| try self.w("{s} {s}", .{ if (k == 0) "" else ",", td });
+        try self.w(" }};\n}}\n\n\n", .{});
+    }
+
     fn emitNextBreakpoint(self: *Gen) Error!void {
         if (!self.usesOp(.timer)) return;
 
