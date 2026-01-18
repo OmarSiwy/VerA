@@ -4711,8 +4711,8 @@ fn splitTerm(self: *Lower, e: Ast.ExprId, negate: bool, out: *Split) Oom!void {
     }
 
     if (self.containsDdt(e)) {
-        const v = try self.lowerReactive(e) orelse return;
-        try self.accumulate(&out.react, v, negate);
+        const t = try self.lowerReactive(e) orelse return;
+        try self.accumulate(&out.react, try self.finishReactive(t), negate);
     } else {
         const v = try self.toReal(try self.lowerExpr(e));
         try self.accumulate(&out.resist, v, negate);
@@ -4744,25 +4744,61 @@ fn containsDdt(self: *const Lower, e: Ast.ExprId) bool {
     }
 }
 
-/// A multiplicative coefficient riding a `ddt` factor. LRM semantics of
-/// `A*ddt(B)` is A·dB/dt — the CAPACITANCE form — so A multiplies at its
-/// current value and contributes no derivative of its own: q = freeze(A)·B
-/// puts A·∂B/∂x on the C-plane and drops the spurious B·∂A/∂x that a plain
-/// product's AD would add (measured: MESA Cgg inflated up to 2.17x, its
-/// oscillator period 21% slow; ngspice hands caps to NIintegrate at their
-/// current value the same way, mesaload.c:341-347). Values with no unknown
-/// dependence (literals, parameters) already have zero gradient — pass
-/// them through so param-only models emit byte-identical code.
-fn freezeCoeff(self: *Lower, v: Mir.Value) Oom!Mir.Value {
+/// One reactive term with its multiplicative spine split apart: `b` is the
+/// `ddt` operand, `coeff` the accumulated product of everything that rode
+/// outside the ddt (null = 1), `coeff_nonconst` whether any factor depends
+/// on an unknown (literals/params have zero gradient and need no site).
+const ReactiveTerm = struct { b: Mir.Value, coeff: ?Mir.Value = null, coeff_nonconst: bool = false };
+
+fn coeffIsConst(self: *const Lower, v: Mir.Value) bool {
     return switch (self.mir.valueKind(v)) {
-        .float_const, .int_const, .undef, .param_ref => v,
-        else => try self.emit(.freeze_grad, &.{v}),
+        .float_const, .int_const, .undef, .param_ref => true,
+        else => false,
     };
 }
 
+/// LRM semantics of `A*ddt(B)` is A·dB/dt — the CAPACITANCE form: the
+/// stamped current carries no B·dA/dt (measured with the plain-product
+/// lowering: MESA Cgg inflated up to 2.17x, oscillator period 21% slow).
+/// A non-constant A becomes a path-integrated charge, ngspice's own
+/// construction (NIintegrate on the increment, mesaload.c:341-344):
+///
+///     q = pq + A·(B − pb)      pb = B at last accept, pq = Σ committed A·ΔB
+///
+/// The base (pb, pq) is FIXED across one Newton attempt and advances only at
+/// `stateCtl(.commit)` (operating-point exit, transient accepted step), so
+///  - the committed charge increment is A·ΔB: capacitance-form physics;
+///  - at any committed point ΔB = 0, so the C-plane is exactly A·∂B/∂x (AC);
+///  - within a step the residual is one smooth function whose AD Jacobian
+///    carries dA only as (dA/dx)·ΔB — the legitimate Newton term that
+///    vanishes as dt→0. The earlier per-iterate freeze latch instead solved
+///    the product-form residual with the dA term deleted from the Jacobian:
+///    a quasi-Newton whose error gain grows with α = 1/dt, which is exactly
+///    the mesa_oscillator/hfet_inverter/mos6_inverter timestep wedge.
+fn finishReactive(self: *Lower, t: ReactiveTerm) Oom!Mir.Value {
+    const c = t.coeff orelse return t.b; // plain ddt(B): q = B, exact
+    // Constant/param coefficient: dA ≡ 0, the plain product IS the
+    // capacitance form (and pq/pb with zero init would reproduce it).
+    if (!t.coeff_nonconst) return try self.emit(.fmul, &.{ c, t.b });
+    const pb = try self.emit(.path_prev, &.{t.b});
+    const d = try self.emit(.fmul, &.{ c, try self.emit(.fsub, &.{ t.b, pb }) });
+    return try self.emit(.fadd, &.{ try self.emit(.path_acc, &.{d}), d });
+}
+
+fn mulCoeff(self: *Lower, t: *ReactiveTerm, c: Mir.Value, op: Mir.Opcode) Oom!void {
+    t.coeff = if (t.coeff) |old|
+        try self.emit(op, &.{ old, c })
+    else if (op == .fdiv)
+        try self.emit(.fdiv, &.{ try self.fconst(1.0), c })
+    else
+        c;
+    t.coeff_nonconst = t.coeff_nonconst or !self.coeffIsConst(c);
+}
+
 /// The charge/flux of a reactive term: strip exactly one `ddt` from a
-/// multiplicative spine (§5.6.1.2).
-fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
+/// multiplicative spine (§5.6.1.2), collecting the spine's coefficients
+/// LIVE (no gradient suppression — `finishReactive` decides the form).
+fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
     const ex = &self.file.exprs;
     spine: switch (ex.tag(e)) {
         .filter_call => {
@@ -4783,14 +4819,17 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 // `lowerFilter`, where §5.5.3's ban on a non-constant attribute
                 // reference is otherwise reached through `lowerExpr`.
                 if (args.len > 1) _ = try self.lowerAbstolArg(args[1]);
-                return try self.toReal(try self.lowerExpr(args[0]));
+                return .{ .b = try self.toReal(try self.lowerExpr(args[0])) };
             }
         },
         .unary => switch (ex.unOp(e)) {
             .plus => return self.lowerReactive(ex.lhs(e)),
             .minus => {
-                const v = try self.lowerReactive(ex.lhs(e)) orelse return null;
-                return try self.emit(.fneg, &.{v});
+                var t = try self.lowerReactive(ex.lhs(e)) orelse return null;
+                // Sign rides the coefficient (constness unchanged: negation
+                // adds no unknown dependence).
+                t.coeff = if (t.coeff) |old| try self.emit(.fneg, &.{old}) else try self.fconst(-1.0);
+                return t;
             },
             else => {},
         },
@@ -4800,19 +4839,20 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 const r_has = self.containsDdt(ex.rhs(e));
                 if (l_has and r_has) break :spine;
                 if (l_has) {
-                    const a = try self.lowerReactive(ex.lhs(e)) orelse return null;
-                    const b = try self.freezeCoeff(try self.toReal(try self.lowerExpr(ex.rhs(e))));
-                    return try self.emit(.fmul, &.{ a, b });
+                    var t = try self.lowerReactive(ex.lhs(e)) orelse return null;
+                    try self.mulCoeff(&t, try self.toReal(try self.lowerExpr(ex.rhs(e))), .fmul);
+                    return t;
                 }
-                const a = try self.freezeCoeff(try self.toReal(try self.lowerExpr(ex.lhs(e))));
-                const b = try self.lowerReactive(ex.rhs(e)) orelse return null;
-                return try self.emit(.fmul, &.{ a, b });
+                const c = try self.toReal(try self.lowerExpr(ex.lhs(e)));
+                var t = try self.lowerReactive(ex.rhs(e)) orelse return null;
+                try self.mulCoeff(&t, c, .fmul);
+                return t;
             },
             .div => {
                 if (self.containsDdt(ex.rhs(e))) break :spine; // ddt in a divisor
-                const a = try self.lowerReactive(ex.lhs(e)) orelse return null;
-                const b = try self.freezeCoeff(try self.toReal(try self.lowerExpr(ex.rhs(e))));
-                return try self.emit(.fdiv, &.{ a, b });
+                var t = try self.lowerReactive(ex.lhs(e)) orelse return null;
+                try self.mulCoeff(&t, try self.toReal(try self.lowerExpr(ex.rhs(e))), .fdiv);
+                return t;
             },
             else => {},
         },

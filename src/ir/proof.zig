@@ -1125,7 +1125,10 @@ const Prover = struct {
             .floor => &mFloor,
             .ceil => &mCeil,
             .if_cast => &mId,
-            .opt_barrier, .freeze_grad => &mId,
+            // .path_prev/.path_acc take `else` (unbounded): the latch holds a
+            // value from an EARLIER solve, which current branch guards do not
+            // constrain — an mId interval here would be wrong-narrow.
+            .opt_barrier => &mId,
             else => null,
         };
         if (monotone) |f| {
