@@ -785,8 +785,10 @@ pub const Gen = struct {
         // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
         // they need `R` for the same reason `updateState` does. It stays out of
         // `buildPrelude`/`h.zig`: no UNIT body can reach these, because `$limit`
-        // renders as the identity inside one.
-        if (stateful or cg_limit.usesCore(self)) {
+        // renders as the identity inside one. `collapse` reads the core the
+        // same way, so it opens `R` too.
+        const cpairs = try self.collapsePairs();
+        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0) {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
             // Dual/Vec — a primitive added there cannot silently miss R.
@@ -806,6 +808,7 @@ pub const Gen = struct {
         // makes the residual non-deterministic and Newton never converges.
         if (stateful or self.lower.rng_auto_sites != 0) try self.emitStateMachine();
         try cg_limit.emit(self);
+        try self.emitCollapse(cpairs);
         try self.emitNextBreakpoint();
         try self.emitDelays();
         // Lane-parallel permission (see `lane_pinned`): eval/q of this device
@@ -5114,6 +5117,180 @@ pub const Gen = struct {
     // A timer whose enable is a solved quantity keeps its breakpoints, because
     // this hook has no `Instance` to evaluate one against and an extra timepoint
     // costs a step, never an answer.
+    // ---------------------------------------------- zero-parasitic collapse
+
+    /// One collapsible §5.6.5 switch branch: when `flag` (a §5.6.1.3
+    /// retention flag, carried as a core field) is nonzero at build time,
+    /// the host aliases unknown `victim` and the branch-flow unknown
+    /// `flow_u` onto unknown `target`. Indices are node_order/U-enum space.
+    const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: Mir.Value };
+
+    /// Is `v` a constant of the whole simulation — a function of Model and
+    /// Instance-at-build and nothing else? Stricter than `Analysis.dFree`,
+    /// which admits x-steered selects between constants (its ternary/phi
+    /// rule ignores the condition); a collapse decision taken once at build
+    /// must not. Calls are ALLOWLISTED for the same reason: `$abstime`, rng
+    /// draws, `$held_*` seeds and `analysis()` all change between
+    /// evaluations, so a new operator is unsound here until shown otherwise.
+    ///
+    /// The phi rule leans on lowering's structured CFGs: the branch at the
+    /// join's immediate dominator is what steers a diamond's phi, and any
+    /// NESTED x-dependent steering surfaces as an inner phi in the incoming
+    /// values, which recursion refuses. Loop-carried phis are refused
+    /// outright.
+    fn buildFree(self: *const Gen, v0: Mir.Value, depth: u32) bool {
+        if (depth > 64) return false;
+        const v = self.an.rv(v0);
+        switch (self.mir.valueDef(v)) {
+            .undef, .float_const, .int_const, .str_const, .param_ref => return true,
+            .block_param => return false, // §4.4 probe: x by definition
+            .inst_result => |inst| {
+                const row = self.mir.instRow(inst);
+                switch (Mir.opClass(row.op)) {
+                    .branch, .jump => return false,
+                    .unary => return self.buildFree(@enumFromInt(row.a), depth + 1),
+                    .binary => return self.buildFree(@enumFromInt(row.a), depth + 1) and
+                        self.buildFree(@enumFromInt(row.b), depth + 1),
+                    .ternary => return self.buildFree(@enumFromInt(row.a), depth + 1) and
+                        self.buildFree(@enumFromInt(row.b), depth + 1) and
+                        self.buildFree(@enumFromInt(row.c), depth + 1),
+                    .call => {
+                        const d = self.mir.instData(inst).call;
+                        const ok = std.StaticStringMap(void).initComptime(.{
+                            .{ "$temperature", {} },
+                            .{ "$vt", {} },
+                            .{ "$mfactor", {} },
+                            .{ "$param_given", {} },
+                        });
+                        if (!ok.has(d.name)) return false;
+                        for (d.args) |arg| {
+                            if (!self.buildFree(arg, depth + 1)) return false;
+                        }
+                        return true;
+                    },
+                    .phi => {
+                        const blk = self.an.def_block[@intFromEnum(v)];
+                        if (blk == none_u32 or self.an.inLoop(blk)) return false;
+                        const id = self.an.idom[blk];
+                        if (id == none_u32) return false;
+                        const ti = self.an.term[id];
+                        if (ti == .none) return false;
+                        const t = self.mir.instData(ti);
+                        if (t != .branch) return false;
+                        if (!self.buildFree(t.branch.cond, depth + 1)) return false;
+                        const d = self.mir.instData(inst).phi;
+                        for (0..d.count) |k| {
+                            if (!self.buildFree(self.mir.phiPair(inst, @intCast(k)).value, depth + 1)) return false;
+                        }
+                        return true;
+                    },
+                }
+            },
+        }
+    }
+
+    /// Is `v` zero on EVERY path — `.f_zero`, a fold to 0.0, or a phi all of
+    /// whose arms are? The accumulator of a §5.6.5 potential arm contributing
+    /// `<+ 0.0` is exactly this shape: entry-seeded 0, `discardOpposite`'s 0
+    /// on the flow arm, `0 + 0.0` on its own.
+    fn zeroOnEveryPath(self: *const Gen, v0: Mir.Value, depth: u32) bool {
+        if (depth > 16) return false;
+        const v = self.an.rv(v0);
+        if (v == .f_zero) return true;
+        if (self.an.foldConst(v, 0, false)) |k| return k.f == 0.0;
+        const def = self.mir.valueDef(v);
+        if (def == .inst_result and self.mir.instRow(def.inst_result).op == .phi) {
+            const d = self.mir.instData(def.inst_result).phi;
+            for (0..d.count) |k| {
+                if (!self.zeroOnEveryPath(self.mir.phiPair(def.inst_result, @intCast(k)).value, depth + 1)) return false;
+            }
+            return true;
+        }
+        return false;
+    }
+
+    /// The §5.6.5 switch branches this model can COLLAPSE: runtime-selected
+    /// potential rows whose retained value is the constant 0 V (and 0 flux —
+    /// a selected nonzero source is a real source, not a short) and whose
+    /// retention flag is fixed at build time (`buildFree`). ngspice does the
+    /// same in every setup routine (DIOsetup: `posPrimeNode = posNode` when
+    /// RS == 0); keeping the pair apart behind a selected 0 V short costs the
+    /// host an unknown, a branch row, and catastrophic cancellation when its
+    /// LU eliminates the short.
+    fn collapsePairs(self: *Gen) Error![]CollapsePair {
+        var out: std.ArrayList(CollapsePair) = .empty;
+        const np: u32 = @intCast(self.lower.num_ports);
+        for (self.lower.contributions.items, 0..) |c, i| {
+            if (c.kind != .direct or c.access != .potential) continue;
+            const ret = self.retention(c);
+            if (ret != .runtime) continue;
+            if (!self.buildFree(ret.runtime, 0)) continue;
+            if (!self.zeroOnEveryPath(c.resist_val, 0)) continue;
+            if (!self.zeroOnEveryPath(c.react_val, 0)) continue;
+            const fu = self.branch_u[i];
+            if (fu == none_u32) continue;
+            // Only a non-port internal node is the host's to move, and only
+            // onto a real unknown (§1.3.1.1 ground has none). The host
+            // resolves aliases in ascending unknown order, so the target
+            // must precede both movers.
+            const hi_free = c.hi != Lower.ground and c.hi >= np;
+            const lo_free = c.lo != Lower.ground and c.lo >= np;
+            if (!hi_free and !lo_free) continue;
+            const victim: u32 = if (hi_free and lo_free) @max(c.hi, c.lo) else if (hi_free) c.hi else c.lo;
+            const target: u32 = if (hi_free and lo_free) @min(c.hi, c.lo) else if (hi_free) c.lo else c.hi;
+            if (target == Lower.ground) continue;
+            if (target >= victim or target >= fu) continue;
+            try out.append(self.arena, .{ .victim = victim, .target = target, .flow_u = fu, .flag = ret.runtime });
+        }
+        return out.items;
+    }
+
+    /// The host-side collapse hook — `seed`'s twin: it runs the core once at
+    /// x = 0 (exact, since every admitted flag is `buildFree`) and reads the
+    /// same §5.6.1.3 retention flags `eval` selects the branch row on. Flag
+    /// set ⇒ the 0 V potential arm is retained ⇒ the branch is a dead short:
+    /// the host aliases the internal node and the branch-flow unknown onto
+    /// the far node, every stamp of the pair lands on one matrix slot and
+    /// cancels exactly, and the LU never sees the short.
+    ///
+    /// Consulted ONCE, at build — ngspice's own semantics (setup runs before
+    /// the first load), and why `buildFree` refuses anything that can change
+    /// between evaluations.
+    fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
+        if (pairs.len == 0) return;
+        try self.w(
+            \\/// Zero-parasitic node collapse (ngspice setup: DIOsetup's
+            \\/// `posPrimeNode = posNode` when RS == 0). Applied by the host before
+            \\/// matrix build; the flags read here are the §5.6.1.3 retention flags
+            \\/// `eval` selects the branch rows on, evaluated at x = 0 like `seed` —
+            \\/// sound because codegen admits only build-time-constant flags.
+            \\pub fn collapse(model: *const Model, inst: *const Instance) [n_u]?u8 {{
+            \\    var xr: [n_u]R = undefined;
+            \\    for (&xr) |*p| p.* = R.con(0.0);
+            \\    const m = core(R, xr, model, inst);
+            \\    var out: [n_u]?u8 = .{{null}} ** n_u;
+            \\
+        , .{});
+        for (pairs) |p| {
+            const fi = @intFromEnum(self.an.rv(p.flag));
+            const k = self.lo_idx[fi];
+            assert(k != none_u32); // `buildJobs` queues every runtime retention flag
+            if (self.an.vty[fi] == .int)
+                try self.w("    if (m.f{d} != 0) {{", .{k})
+            else
+                try self.w("    if (m.f{d}.v != 0.0) {{", .{k});
+            try self.w(" // 0 V arm retained: dead short\n", .{});
+            try self.w("        out[@intFromEnum(U.{s})] = @intFromEnum(U.{s});\n", .{
+                self.u_names[p.victim], self.u_names[p.target],
+            });
+            try self.w("        out[@intFromEnum(U.{s})] = @intFromEnum(U.{s});\n", .{
+                self.u_names[p.flow_u], self.u_names[p.target],
+            });
+            try self.w("    }}\n", .{});
+        }
+        try self.w("    return out;\n}}\n\n", .{});
+    }
+
     /// §4.5.7 the per-site transport delays, model-frame like
     /// `nextBreakpoint` above — a delay argument is a §4.5.14
     /// constant/parameter expression, so it renders over `Model` alone.
@@ -5824,6 +6001,10 @@ const hist_txt =
     \\/// interpolated.
     \\fn zHistAt(ts: []const f64, vs: []const f64, head: u32, t: f64) f64 {
     \\    const n = ts.len;
+    \\    // O(1) clamp for a query at/before the oldest sample (ts[head] once the
+    \\    // ring is full, which the seeding first push below guarantees) — the
+    \\    // scan would walk all n entries to reach the same answer.
+    \\    if (t <= ts[head]) return vs[head];
     \\    var i: usize = 0;
     \\    var newer: usize = (head + n - 1) % n;
     \\    while (i < n) : (i += 1) {
@@ -5843,6 +6024,18 @@ const hist_txt =
     \\    return vs[head];
     \\}
     \\fn zHistPush(ts: []f64, vs: []f64, head: *u32, t: f64, v: f64) void {
+    \\    // First push seeds the WHOLE ring: before it, every slot is an
+    \\    // unwritten 0, so a query older than recorded history (any t < td
+    \\    // early in a transient) read 0 V instead of the operating point —
+    \\    // the line launched a false transient off a value nothing ever wrote.
+    \\    // Full-from-first-push also makes `head` the oldest sample always,
+    \\    // which zHistAt's clamps rely on.
+    \\    if (head.* == 0 and ts[ts.len - 1] == 0) {
+    \\        @memset(ts, t);
+    \\        @memset(vs, v);
+    \\        head.* = 1;
+    \\        return;
+    \\    }
     \\    ts[head.*] = t;
     \\    vs[head.*] = v;
     \\    head.* = (head.* + 1) % @as(u32, @intCast(ts.len));
@@ -7253,6 +7446,66 @@ test "codegen: §4.5.7 a delay computed from parameters renders as an expression
         "inst.dt, (model.len) * (@sqrt((model.l) * (model.c))))",
     ) != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
+}
+
+test "codegen: §5.6.5 a zero-short switch branch emits a collapse hook" {
+    // diode.va's access-resistance idiom: rs > 0 selects a real resistor,
+    // rs == 0 a retained 0 V short that ngspice would collapse at setup
+    // (DIOsetup: posPrimeNode = posNode).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module d(a, c);
+        \\  inout a, c;
+        \\  electrical a, c, ai;
+        \\  parameter real rs = 0.0 from [0:inf);
+        \\  branch (a, ai) rsb;
+        \\  analog begin
+        \\    I(ai, c) <+ 1e-3 * V(ai, c);
+        \\    if (rs > 0.0) I(rsb) <+ V(rsb) / rs;
+        \\    else          V(rsb) <+ 0.0;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        src,
+        "pub fn collapse(model: *const Model, inst: *const Instance) [n_u]?u8",
+    ) != null);
+    // The internal node AND the branch-flow unknown both alias onto the port,
+    // so the pair's stamps land on one slot and cancel.
+    try std.testing.expect(std.mem.indexOf(u8, src, "out[@intFromEnum(U.ai)] = @intFromEnum(U.a);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "out[@intFromEnum(U.flowZ28aZ2caiZ29)] = @intFromEnum(U.a);") != null);
+}
+
+test "codegen: no collapse hook without the zero-short pattern" {
+    // An unconditional resistor has nothing to collapse.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator, resistor_va, &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse") == null);
+}
+
+test "codegen: an x-steered zero short is NOT collapsed" {
+    // The guard reads a probe, so which arm is retained changes per
+    // evaluation; a build-time alias would be a lie. `buildFree` refuses it.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module d(a, c);
+        \\  inout a, c;
+        \\  electrical a, c, ai;
+        \\  analog begin
+        \\    I(ai, c) <+ 1e-3 * V(ai, c);
+        \\    if (V(a, c) > 1.0) I(a, ai) <+ 1e3 * V(a, ai);
+        \\    else               V(a, ai) <+ 0.0;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse") == null);
 }
 
 test "codegen: §4.5 a control argument that is a solve result is E0515, not generated Zig" {
