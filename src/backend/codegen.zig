@@ -369,6 +369,13 @@ pub const Gen = struct {
     prev_lo: []u32 = &.{},
     acc_vals: []Mir.Value = &.{},
     acc_lo: []u32 = &.{},
+    /// Temperature/parameter-only hoist (ngspice's `<dev>temp` phase, done
+    /// once instead of per eval): value → `Instance.pc__<k>` field index or
+    /// `none_u32`, and the mapped roots in field order. Filled by
+    /// `planPrecompute`; `emitPrecompute` writes the fields, every other body
+    /// reads them as leaves (unit_plan `pcHoisted`).
+    pc_idx: []u32 = &.{},
+    pc_vals: []Mir.Value = &.{},
     /// Set while the core is being emitted. It slices from every target at once
     /// and returns all of them, computing each value rather than reading it out
     /// of a struct that does not exist yet; the §9.4 display unit — the only
@@ -536,10 +543,13 @@ pub const Gen = struct {
         try cg_limit.collect(self);
         try self.buildJobs();
         try self.planCommon();
-        // After `planCommon`, which is what fills them. Stable for the rest of
-        // the compilation; `cached` reads them for every unit.
+        try self.planPrecompute();
+        // After the two planners, which are what fill them. Stable for the
+        // rest of the compilation; `cached`/`pcHoisted` read them per unit.
         self.plan.lo_idx = self.lo_idx;
         self.plan.lo_vals = self.lo_vals;
+        self.plan.pc_idx = self.pc_idx;
+        self.plan.pc_on = self.pc_vals.len != 0;
     }
 
     // ---------------------------------------------------- the shared core ----
@@ -681,6 +691,192 @@ pub const Gen = struct {
             .target = "core",
         }) catch return error.NameTooLong;
         self.common_name = try a.dupe(u8, n);
+    }
+
+    // ------------------------------------------- the temperature hoist ----
+    //
+    // MEASURED MOTIVE (ARPice callgrind, tran/fourbitadder): log 8.2% +
+    // pow 6.4% + exp 5.1% + ldexp/frexp ~3% of TOTAL instructions sit inside
+    // BJT eval — `pow(t/tnom, xti)`-class factors recomputed per instance per
+    // Newton iteration. ngspice computes them once (bjttemp.c) at setup/.temp;
+    // the host already has the hook (`precompute` runs at finalize and on
+    // every reprep — parameter writes and setTemp both route through it).
+    //
+    // A value is HOISTABLE when its transitive inputs are only parameters,
+    // literals and `$temperature` — no §4.4 probe, no `$abstime`, no stateful
+    // operator, no phi (a loop-carried value is not one value) — AND every op
+    // on the way down is one the precompute body can re-spell with the exact
+    // VALUE semantics the in-eval rendering had (see `pscalar_txt`). A
+    // hoist ROOT is such a value, containing at least one libm-class op
+    // (anything cheaper is not the measured cost), read at least once from
+    // OUTSIDE the hoistable region. Roots become `Instance.pc__<k>` fields.
+
+    /// Three-state memo for `pcClass` — `unknown` doubles as the visit mark.
+    const PcCls = enum(u8) { unknown, no, yes };
+
+    /// Is `v0` computable from parameters/literals/`$temperature` alone,
+    /// through ops the precompute body can mirror bit-exactly? Fills the memo
+    /// at the rv-RESOLVED index. Recursion depth is the expression depth;
+    /// the cap is a sound fail-safe (false never hoists).
+    fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
+        const v = self.an.rv(v0);
+        const i = @intFromEnum(v);
+        switch (cls[i]) {
+            .yes => return true,
+            .no => return false,
+            .unknown => {},
+        }
+        if (depth > 2048) return false;
+        const ok: bool = switch (self.mir.valueDef(v)) {
+            .undef, .float_const, .int_const => true,
+            .str_const, .block_param => false,
+            .param_ref => |p| Analysis.tyOfParam(self.lower.params.items[p].ty) != .str,
+            .inst_result => |inst| blk: {
+                const row = self.mir.instRow(inst);
+                switch (row.op) {
+                    .call => {
+                        const d = self.mir.instData(inst).call;
+                        break :blk std.mem.eql(u8, d.name, "$temperature") or
+                            (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0);
+                    },
+                    // A phi is not one value; the path latches read Instance
+                    // state `updateState`/commit have not written yet at
+                    // precompute time.
+                    .phi, .branch, .jump, .path_prev, .path_acc => break :blk false,
+                    .select => {
+                        const d = self.mir.instData(inst).ternary;
+                        break :blk self.pcClass(cls, d.cond, depth + 1) and
+                            self.pcClass(cls, d.then_val, depth + 1) and
+                            self.pcClass(cls, d.else_val, depth + 1);
+                    },
+                    else => switch (Mir.opClass(row.op)) {
+                        .unary => break :blk self.pcClass(cls, @enumFromInt(row.a), depth + 1),
+                        .binary => break :blk self.pcClass(cls, @enumFromInt(row.a), depth + 1) and
+                            self.pcClass(cls, @enumFromInt(row.b), depth + 1),
+                        else => break :blk false,
+                    },
+                }
+            },
+        };
+        cls[i] = if (ok) .yes else .no;
+        return ok;
+    }
+
+    fn libmClass(op: Mir.Opcode) bool {
+        return switch (op) {
+            .exp, .expm1, .ln, .ln1p, .log10, .pow, .hypot => true,
+            .sin, .cos, .tan, .asin, .acos, .atan, .atan2 => true,
+            .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => true,
+            else => false,
+        };
+    }
+
+    /// Does the hoistable tree under `v0` contain a libm-class op? Only called
+    /// on `.yes` values, so the walk cannot leave the region (and phis/calls
+    /// terminate it).
+    fn pcExpensive(self: *Gen, exq: []PcCls, v0: Mir.Value, depth: u32) bool {
+        const v = self.an.rv(v0);
+        const i = @intFromEnum(v);
+        switch (exq[i]) {
+            .yes => return true,
+            .no => return false,
+            .unknown => {},
+        }
+        const def = self.mir.valueDef(v);
+        const e: bool = e: {
+            if (depth > 2048) break :e false;
+            if (def != .inst_result) break :e false;
+            const row = self.mir.instRow(def.inst_result);
+            if (libmClass(row.op)) break :e true;
+            break :e switch (Mir.opClass(row.op)) {
+                .unary => self.pcExpensive(exq, @enumFromInt(row.a), depth + 1),
+                .binary => self.pcExpensive(exq, @enumFromInt(row.a), depth + 1) or
+                    self.pcExpensive(exq, @enumFromInt(row.b), depth + 1),
+                .ternary => {
+                    const d = self.mir.instData(def.inst_result).ternary;
+                    break :e self.pcExpensive(exq, d.cond, depth + 1) or
+                        self.pcExpensive(exq, d.then_val, depth + 1) or
+                        self.pcExpensive(exq, d.else_val, depth + 1);
+                },
+                else => false,
+            };
+        };
+        exq[i] = if (e) .yes else .no;
+        return e;
+    }
+
+    /// One use of `o` from outside the hoistable region: make it a root if it
+    /// qualifies. Ascending value order later turns `root` into `pc_idx`.
+    fn pcConsider(self: *Gen, cls: []PcCls, exq: []PcCls, root: []bool, o: Mir.Value) void {
+        const v = self.an.rv(o);
+        const i = @intFromEnum(v);
+        if (cls[i] != .yes) return;
+        if (root[i]) return;
+        if (self.an.vty[i] != .real) return;
+        // A tree that folds to a literal costs nothing per eval already.
+        if (self.an.foldConst(v, 0, false) != null) return;
+        if (!self.pcExpensive(exq, v, 0)) return;
+        root[i] = true;
+    }
+
+    fn planPrecompute(self: *Gen) Error!void {
+        const a = self.arena;
+        const nv = self.an.nv;
+        self.pc_idx = try a.alloc(u32, nv);
+        @memset(self.pc_idx, none_u32);
+
+        const cls = try a.alloc(PcCls, nv);
+        @memset(cls, .unknown);
+        for (0..nv) |i| _ = self.pcClass(cls, @enumFromInt(@as(u32, @intCast(i))), 0);
+
+        const exq = try a.alloc(PcCls, nv);
+        @memset(exq, .unknown);
+        const root = try a.alloc(bool, nv);
+        @memset(root, false);
+
+        // Every use from a consumer that is NOT itself hoistable marks a root:
+        // instruction operands (a branch/call/phi result is never hoistable, so
+        // conditions, operator inputs and phi copies are covered by the same
+        // rule), plus the unit targets the residual returns.
+        for (0..self.mir.insts.len) |ii| {
+            const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
+            const res = self.mir.instResult(inst);
+            if (res != .undef and cls[@intFromEnum(self.an.rv(res))] == .yes) continue;
+            switch (self.mir.instData(inst)) {
+                .unary => |d| self.pcConsider(cls, exq, root, d.operand),
+                .binary => |d| {
+                    self.pcConsider(cls, exq, root, d.lhs);
+                    self.pcConsider(cls, exq, root, d.rhs);
+                },
+                .ternary => |d| {
+                    self.pcConsider(cls, exq, root, d.cond);
+                    self.pcConsider(cls, exq, root, d.then_val);
+                    self.pcConsider(cls, exq, root, d.else_val);
+                },
+                .branch => |d| self.pcConsider(cls, exq, root, d.cond),
+                .call => |d| for (d.args, 0..) |arg, k| {
+                    // Control arguments render host-side through `f64Expr`
+                    // (never a pc read), so a field for one would go unread.
+                    if (callArgIsValue(d.name, k, self.display))
+                        self.pcConsider(cls, exq, root, arg);
+                },
+                .phi => |d| {
+                    var k: u32 = 0;
+                    while (k < d.count) : (k += 1)
+                        self.pcConsider(cls, exq, root, self.mir.phiPair(inst, k).value);
+                },
+                .jump => {},
+            }
+        }
+        for (self.jobs) |job| self.pcConsider(cls, exq, root, job.target);
+
+        var vals: std.ArrayList(Mir.Value) = .empty;
+        for (0..nv) |i| {
+            if (!root[i]) continue;
+            self.pc_idx[i] = @intCast(vals.items.len);
+            try vals.append(a, @enumFromInt(@as(u32, @intCast(i))));
+        }
+        self.pc_vals = vals.items;
     }
 
     pub fn w(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
@@ -918,6 +1114,9 @@ pub const Gen = struct {
         try self.emitModel();
         try self.emitDerive();
         try self.emitInstance();
+        // Before `emitUnits`: its `plan.analyze` is the pass that clears the
+        // precompute plan's live-set residue (unit_plan.zig's partial reset).
+        try self.emitPrecompute();
         try self.emitUnits();
         try self.emitDispatchers();
         try self.emitNoiseTable();
@@ -1651,7 +1850,87 @@ pub const Gen = struct {
                 }
             }
         }
+        // Temperature/parameter-only prep, hoisted out of the per-eval path:
+        // `precompute` writes these once per model-card/temperature write.
+        // LAST, for the same insert-tolerance reason as the held block above.
+        for (0..self.pc_vals.len) |k| {
+            try self.w("    pc__{d}: f64 = 0.0, // precompute\n", .{k});
+        }
         try self.w("}};\n\n", .{});
+    }
+
+    /// The temperature hoist's writer: one flat body computing every `pc__<k>`
+    /// field from `model` and `inst.temperature` alone (see planPrecompute).
+    ///
+    /// Emitted through the SAME plan/renderInst pipeline as the core, with the
+    /// pc roots standing in for the live-outs, so slot/inline decisions — and
+    /// with them the exact f64-vs-S composition of every value — reproduce
+    /// what the core used to emit inline. `P` supplies the S protocol with the
+    /// ARPice host Dual's value semantics; bit-identity of eval before/after
+    /// the hoist is the contract here (verified externally, /tmp/b4probe).
+    ///
+    /// Flat on purpose (`plan.flat`): the slice admits only pure ops and the
+    /// two environment calls, so ascending value order IS a topological order
+    /// and no CFG needs reconstructing — a value guarded by an `if` in the
+    /// source is loop-free and total to compute, and an untaken guard's field
+    /// simply goes unread (same argument as the eager `sel`).
+    fn emitPrecompute(self: *Gen) Error!void {
+        if (self.pc_vals.len == 0) return;
+        try self.out.appendSlice(self.gpa, pscalar_txt);
+
+        // Plan the pc slice through the common-mode path: targets = pc_vals.
+        const save_idx = self.plan.lo_idx;
+        const save_vals = self.plan.lo_vals;
+        self.plan.lo_idx = self.pc_idx;
+        self.plan.lo_vals = self.pc_vals;
+        self.plan.pc_on = false; // computing the fields, not reading them
+        self.plan.flat = true;
+        self.plan.display_unit = false;
+        defer {
+            self.plan.lo_idx = save_idx;
+            self.plan.lo_vals = save_vals;
+            self.plan.pc_on = true;
+            self.plan.flat = false;
+        }
+        try self.plan.analyze(.undef, true);
+
+        self.uses_model = false;
+        self.uses_x = false;
+        try self.w(
+            \\/// Temperature/parameter-only prep (ngspice's `<dev>temp` phase, once
+            \\/// instead of per eval). The host calls it after every model-card or
+            \\/// temperature write, before the next solve.
+            \\
+        , .{});
+        try self.w("pub fn precompute(inst: *Instance, ", .{});
+        const at_model = self.out.items.len;
+        try self.w("model: *const Model) void {{\n", .{});
+        try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
+        try self.w("    const S = P;\n", .{});
+        self.cur_strict = self.common_mode == .strict;
+
+        self.hoist_idx.clearRetainingCapacity();
+        try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
+        // RPO blocks, statement order within — the def-before-use order the
+        // structured emitter walks. Ascending VALUE order is not one: ifconv
+        // and trivial-phi aliasing can point an operand at a later index.
+        for (self.an.rpo) |bi| {
+            for (self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]]) |inst| {
+                const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+                if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
+                try self.w("    const t{d}: {s} = ", .{ self.plan.slot[i], zigTy(self.an.vty[i]) });
+                try self.renderInst(inst);
+                try self.w(";\n", .{});
+            }
+        }
+        for (self.pc_vals, 0..) |v, k| {
+            const i = @intFromEnum(v);
+            assert(self.plan.slot[i] != none_u32); // a target is never inlined
+            try self.w("    inst.pc__{d} = t{d}.val();\n", .{ k, self.plan.slot[i] });
+        }
+        assert(!self.uses_x); // pcClass excludes every §4.4 probe
+        if (!self.uses_model) self.patchParam(at_model, "model".len);
+        try self.w("}}\n\n", .{});
     }
 
     /// A module whose §5.10 event-HELD state is fed by `cross`/`above` edges
@@ -2948,6 +3227,12 @@ pub const Gen = struct {
     /// UNIT-LOCAL slot name (never `v{MIR index}` — naming.zig's ABSOLUTE RULE).
     fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
         const i = @intFromEnum(v);
+        // Hoisted out of the run entirely: `precompute` wrote the field when
+        // the model card / temperature last changed.
+        if (i < self.an.nv and self.plan.pcHoisted(v)) {
+            self.uses_inst = true;
+            return self.b("S.con(inst.pc__{d})", .{self.pc_idx[i]});
+        }
         // Hoisted: computed once by the common declaration, read here out of the
         // cache the body opened with — see "the shared core" in `Plan`.
         if (i < self.an.nv and self.plan.cached(v)) return self.b("c.f{d}", .{self.lo_idx[i]});
@@ -3005,12 +3290,13 @@ pub const Gen = struct {
         };
     }
 
-    /// Already computed as a statement (slot) or a cache field — rendering it
-    /// is a name, not an expression. The stop condition `eagerSafe`,
-    /// `maskCmp` and `foldHidesSlot` share.
+    /// Already computed as a statement (slot), a cache field, or a precompute
+    /// field — rendering it is a name, not an expression. The stop condition
+    /// `eagerSafe`, `maskCmp` and `foldHidesSlot` share.
     fn materialized(self: *const Gen, v: Mir.Value) bool {
         const i = @intFromEnum(v);
-        return i < self.an.nv and (self.plan.cached(v) or self.plan.slot[i] != none_u32);
+        return i < self.an.nv and
+            (self.plan.pcHoisted(v) or self.plan.cached(v) or self.plan.slot[i] != none_u32);
     }
 
     /// An x-dependent value is about to be collapsed to one scalar decision —
@@ -3734,6 +4020,11 @@ pub const Gen = struct {
             // own declaration.
             if (depth > 0 and self.an.dFree(v)) {
                 const i = @intFromEnum(v);
+                // A precompute field IS the plain f64 — no `.val()` needed.
+                if (i < self.an.nv and self.plan.pcHoisted(v)) {
+                    self.uses_inst = true;
+                    return try std.fmt.allocPrint(self.arena, "inst.pc__{d}", .{self.pc_idx[i]});
+                }
                 if (i < self.an.nv and self.plan.cached(v))
                     return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.lo_idx[i]});
                 if (i < self.an.nv and self.plan.slot[i] != none_u32) {
@@ -6609,6 +6900,61 @@ const display_txt =
     \\fn zHalt(code: u8) f64 {
     \\    std.process.exit(code);
     \\}
+    \\
+;
+
+const pscalar_txt =
+    \\/// Value-only scalar for `precompute`, mirroring the ARPice host Dual's
+    \\/// VALUE semantics op for op (gompute.math forwards to the builtins on
+    \\/// the host): div is a*(1/b), abs/min/max/minC/maxC branch, expm1/log1p
+    \\/// are the Kahan corrections over exp/log. R (plain a/b, std.math.expm1)
+    \\/// is deliberately NOT reused: updateState keeps R, so accepted-state
+    \\/// bits do not move; eval keeps the host's S, so a field read must
+    \\/// reproduce the host chain it replaced bit for bit.
+    \\const P = struct {
+    \\    v: f64,
+    \\    const T = @This();
+    \\    pub fn con(c: f64) T { return .{ .v = c }; }
+    \\    pub fn val(a: T) f64 { return a.v; }
+    \\    pub fn ddxAt(_: T, _: usize) f64 { return 0.0; }
+    \\    pub fn add(a: T, b: T) T { return .{ .v = a.v + b.v }; }
+    \\    pub fn sub(a: T, b: T) T { return .{ .v = a.v - b.v }; }
+    \\    pub fn neg(a: T) T { return .{ .v = -a.v }; }
+    \\    pub fn mul(a: T, b: T) T { return .{ .v = a.v * b.v }; }
+    \\    pub fn div(a: T, b: T) T { return .{ .v = a.v * (1.0 / b.v) }; }
+    \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * c }; }
+    \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + c }; }
+    \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
+    \\    pub fn log(a: T) T { return .{ .v = @log(a.v) }; }
+    \\    pub fn expm1(a: T) T {
+    \\        const u = @exp(a.v);
+    \\        if (u == 1.0) return .{ .v = a.v };
+    \\        if (u - 1.0 == -1.0) return .{ .v = -1.0 };
+    \\        return .{ .v = (u - 1.0) * a.v / @log(u) };
+    \\    }
+    \\    pub fn log1p(a: T) T {
+    \\        const u = 1.0 + a.v;
+    \\        return .{ .v = if (u == 1.0) a.v else @log(u) * (a.v / (u - 1.0)) };
+    \\    }
+    \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
+    \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
+    \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }
+    \\    pub fn tanh(a: T) T { return .{ .v = std.math.tanh(a.v) }; }
+    \\    pub fn sinh(a: T) T { return .{ .v = std.math.sinh(a.v) }; }
+    \\    pub fn cosh(a: T) T { return .{ .v = std.math.cosh(a.v) }; }
+    \\    pub fn atan(a: T) T { return .{ .v = std.math.atan(a.v) }; }
+    \\    pub fn abs(a: T) T { return if (a.v < 0) .{ .v = -a.v } else a; }
+    \\    pub fn minC(a: T, c: f64) T { return if (a.v > c) .{ .v = c } else a; }
+    \\    pub fn maxC(a: T, c: f64) T { return if (a.v < c) .{ .v = c } else a; }
+    \\    pub fn min(a: T, b: T) T { return if (a.v <= b.v) a else b; }
+    \\    pub fn max(a: T, b: T) T { return if (a.v >= b.v) a else b; }
+    \\    pub fn pow(a: T, c: f64) T { return .{ .v = std.math.pow(f64, a.v, c) }; }
+    \\    pub fn lt(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v < b.v)) }; }
+    \\    pub fn le(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v <= b.v)) }; }
+    \\    pub fn eq(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v == b.v)) }; }
+    \\    pub fn sel(c: T, a: T, b: T) T { return if (c.v != 0.0) a else b; }
+    \\};
+    \\
     \\
 ;
 
