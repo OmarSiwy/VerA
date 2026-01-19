@@ -7991,6 +7991,29 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try self.errAt(e, .E0813, "`{s}` is a task and has no value; call it as a statement", .{name});
         return poison;
     }
+    // Engine extension (no LRM basis): `$prev(e)` — e at the last ACCEPTED
+    // solve, via the same `path_prev` latch §5.6.1.2's reactive lowering
+    // already plants on ddt operands (pb__k staged by updateState, advanced
+    // only by stateCtl(.commit); before the first commit the latch reads its
+    // 0.0 default). Exists so a model can spell SPICE's Meyer capacitance
+    // averaging `(C + C_prev)/2` — plain Verilog-A has no accepted-step
+    // memory. $prev of a value with no unknown dependence is the value
+    // itself: a past constant IS the constant, so param-only uses emit
+    // byte-identical code (same rule as `coeffIsConst`).
+    if (std.mem.eql(u8, name, "$prev")) {
+        const args = ex.args(e);
+        if (args.len != 1 or args[0] == .none) {
+            var b = self.errAtWith(e, .E0809);
+            b.msg("`$prev` takes exactly 1 argument, got {d}", .{args.len});
+            try b.emit();
+            return poison;
+        }
+        const v = try self.toReal(try self.lowerExpr(args[0]));
+        return .{
+            .v = if (self.coeffIsConst(v)) v else try self.emit(.path_prev, &.{v}),
+            .ty = .real,
+        };
+    }
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     for (sys_args) |a| {
