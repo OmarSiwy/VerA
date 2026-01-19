@@ -1103,7 +1103,7 @@ pub const Gen = struct {
         // renders as the identity inside one. `collapse` reads the core the
         // same way, so it opens `R` too.
         const cpairs = try self.collapsePairs();
-        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0 or self.acc_lo.len != 0) {
+        if (stateful or cg_limit.usesCore(self) or cpairs.len != 0 or self.pathLatches()) {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
             // Dual/Vec — a primitive added there cannot silently miss R.
@@ -1124,7 +1124,7 @@ pub const Gen = struct {
         // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
         // advance, which is the ONLY place a stream may move: a per-iteration draw
         // makes the residual non-deterministic and Newton never converges.
-        if (stateful or self.lower.rng_auto_sites != 0 or self.acc_lo.len != 0) try self.emitStateMachine();
+        if (stateful or self.lower.rng_auto_sites != 0 or self.pathLatches()) try self.emitStateMachine();
         try cg_limit.emit(self);
         try self.emitCollapse(cpairs);
         try self.emitNextBreakpoint();
@@ -1955,13 +1955,22 @@ pub const Gen = struct {
         return false;
     }
 
+    /// Any path latch at all. The reactive lowering always plants prev+acc
+    /// pairs, but a source-level `$prev` site arrives alone — every gate that
+    /// keys the latch machinery (R text, state machine, core sweep, stateCtl)
+    /// tests this, not `acc_lo`, so a `$prev`-only model still gets its
+    /// updateState staging and commit advance.
+    fn pathLatches(self: *const Gen) bool {
+        return self.acc_lo.len != 0 or self.prev_lo.len != 0;
+    }
+
     /// §5.6.1.2 path-integrated reactive sites also ride `stateCtl`: the
     /// driver's existing `.commit` calls (operating-point exit, transient
     /// accepted step) are exactly the accepted-solve boundary the latches
     /// advance on. They contribute nothing to `query` — the base moving is
     /// the integrator's business, not a step-reject condition.
     fn emitsStateCtl(self: *const Gen) bool {
-        return self.fsmStateCtl() or self.acc_lo.len != 0;
+        return self.fsmStateCtl() or self.pathLatches();
     }
 
     /// The hook body. `query` compares the HELD (discrete) state only; the
@@ -5523,7 +5532,7 @@ pub const Gen = struct {
             uses_core = uses_core or self.opInputIdx(@intCast(i)) != none_u32;
         }
         for (self.held_idx) |k| uses_core = uses_core or k != none_u32;
-        uses_core = uses_core or self.acc_lo.len != 0;
+        uses_core = uses_core or self.pathLatches();
         try self.w(
             \\/// §4.5.2 accepted-step bookkeeping for the analog operators.
             \\pub const State = struct {{
@@ -8948,6 +8957,45 @@ test "codegen: cross-fed held state emits stateCtl with accepted twins" {
     const s2 = try h2.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s2, "stateCtl") == null);
     try std.testing.expect(std.mem.indexOf(u8, s2, "__acc") == null);
+}
+
+test "codegen: a $prev-only model still gets latch staging and commit" {
+    // `$prev` plants a path_prev site with NO path_acc sibling (the reactive
+    // lowering always pairs them, a source site arrives alone), so every gate
+    // on the latch machinery must key on pathLatches(), not acc_lo — this is
+    // the model that fails silently (pb__ stuck at 0.0) if one reverts.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module avg(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  real g;
+        \\  analog begin
+        \\    g = 1.0 + 0.1 * V(p, n);
+        \\    I(p, n) <+ 0.5 * (g + $prev(g)) * V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "S.con(inst.pb__0)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "inst.wb__0 = ") != null); // updateState stages
+    try std.testing.expect(std.mem.indexOf(u8, s, "inst.pb__0 = inst.wb__0;") != null); // commit latches
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
+
+    // $prev of a value with no unknown dependence is the value itself — no
+    // latch, no hook, byte-identical to writing the parameter.
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module k(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter real c = 2.0;
+        \\  analog I(p, n) <+ $prev(c) * V(p, n);
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const s2 = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "pb__") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "stateCtl") == null);
 }
 
 test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
