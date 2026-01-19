@@ -59,6 +59,12 @@ pub const Alg = enum {
     fetlim,
     limvds,
     fetlimds,
+    /// ngspice's per-model absolute step clamp (`B4SOIlimit`, hisim's
+    /// `limit_dx`): |vnew − vold| ≤ arg. Unlike `pnjlim` it carries NO
+    /// cold-start seed — B4SOI's MODEINITJCT starts every junction at
+    /// icVxS (0), and the vcrit seed is exactly what parked a floating
+    /// SOI body in the high-current basin.
+    steplim,
 
     /// Numeric arguments that follow the algorithm name.
     fn arity(a: Alg) usize {
@@ -66,6 +72,7 @@ pub const Alg = enum {
             .pnjlim => 2,
             .fetlim, .fetlimds => 1,
             .limvds => 0,
+            .steplim => 1,
         };
     }
 };
@@ -105,7 +112,18 @@ pub fn collect(g: *Gen) Error!void {
     // runs unconditionally. `limit` has no CFG of its own — it is a flat list
     // of clamps — so a call under an `if` is one this cannot honour: its guard
     // is bias-dependent and would have to be re-evaluated at the UNLIMITED x.
-    const exit = g.an.rpo[g.an.rpo.len - 1];
+    //
+    // The exit is the block with NO successors, not `rpo[last]`: with a loop
+    // upstream, DFS may visit the loop's after-block before its body, and
+    // reverse postorder then ends on the BODY — dominance against that
+    // declined every `$limit` in BSIMSOI (its temp section runs a `for` over
+    // fingers and a TOXP `while` before the probe block).
+    const exit = blk: {
+        for (g.an.rpo) |bi| {
+            if (g.an.succs[bi].len == 0) break :blk bi;
+        }
+        break :blk g.an.rpo[g.an.rpo.len - 1];
+    };
     for (g.an.rpo) |bi| {
         for (g.an.blockInstsFlat(bi)) |inst| {
             if (g.mir.instOp(inst) != .call) continue;
@@ -356,7 +374,7 @@ pub fn emit(g: *Gen) Error!void {
     // Only `pnjlim` ever reports non-convergence, so a fetlim/limvds-only
     // device has nothing to track and `var ok` would never be mutated.
     var any_pnjlim = false;
-    for (g.limits) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim;
+    for (g.limits) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim or lc.alg == .steplim;
     if (any_pnjlim) try g.w("    var ok = true;\n", .{});
     for (g.limits, 0..) |lc, i| switch (lc.alg) {
         // Collect kept only complete ladders; the earlier leg speaks for all
@@ -412,6 +430,7 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
             .fetlim => "Fetlim",
             .limvds => "Limvds",
             .fetlimds => unreachable, // emitLadder owns every surviving site
+            .steplim => "Steplim",
         },
         if (signed) "sg * " else "",
         if (signed) "sg * " else "",
@@ -440,8 +459,9 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     // ngspice reports `icheck` from `DEVpnjlim` alone, and sets it exactly on
     // the paths where it moved `vnew` — so "the value changed" IS the flag,
     // with no out-parameter. `fetlim`/`limvds` have no such flag: their clamps
-    // are trajectory shaping, not a statement about the residual.
-    if (lc.alg == .pnjlim) try g.w("        if (vl != vn) ok = false;\n", .{});
+    // are trajectory shaping, not a statement about the residual. `steplim`
+    // reports like pnjlim — ngspice's B4SOIlimit sets Check=1 on every clamp.
+    if (lc.alg == .pnjlim or lc.alg == .steplim) try g.w("        if (vl != vn) ok = false;\n", .{});
     try g.w("    }}\n", .{});
 }
 
