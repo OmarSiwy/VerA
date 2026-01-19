@@ -122,6 +122,16 @@ pub fn zLimvds(vnew0: f64, vold: f64) f64 {
     return sel(vold >= 3.5, r_hi, r_lo);
 }
 
+/// ngspice `B4SOIlimit` / hisim `limit_dx`: absolute per-iteration step
+/// clamp, |vnew − vold| ≤ lim. No explicit non-finite guard (ngspice's
+/// "YOU TURKEY" reset): Zig's `@min`/`@max` are maxnum-semantics, so a
+/// NaN/±inf vnew collapses to the near step bound — bounded either way,
+/// and this file cannot name `std` (embedded verbatim, see the test note).
+/// Trivially fixed-point-preserving.
+pub fn zSteplim(vnew0: f64, vold: f64, lim: f64) f64 {
+    return @max(vold - lim, @min(vold + lim, vnew0));
+}
+
 // ------------------------------------------------------------------ oracles
 // The original branchy ngspice transcriptions, verbatim. NOT emitted callers'
 // API (cg_limit emits `zPnjlim` etc. by name) — these exist so the
@@ -195,6 +205,15 @@ fn zLimvdsOracle(vnew0: f64, vold: f64) f64 {
     return vnew;
 }
 
+/// ngspice `B4SOIlimit` minus the NaN reset (see zSteplim's header for why
+/// the kernel bounds NaN instead of zeroing it).
+fn zSteplimOracle(vnew0: f64, vold: f64, lim: f64) f64 {
+    const t0 = vnew0 - vold;
+    if (@abs(t0) > lim)
+        return if (t0 > 0.0) vold + lim else vold - lim;
+    return vnew0;
+}
+
 // The differential test lives HERE, not in ref/SIMD-Strategies/verify.zig,
 // because `zig run verify.zig` roots the module at ref/SIMD-Strategies/ and a
 // `@import("../../src/…")` escapes it. codegen.zig's tests `@import` this
@@ -230,9 +249,13 @@ test "§4.5.15 branchless limiters ≡ branchy ngspice oracles, bit for bit" {
         const vt = draw.pos(rand);
         const vcrit = draw.pos(rand);
         const vto = draw.any(rand);
+        const lim = draw.pos(rand);
         try expectBits(zPnjlim(vnew, vold, vt, vcrit), zPnjlimOracle(vnew, vold, vt, vcrit));
         try expectBits(zFetlim(vnew, vold, vto), zFetlimOracle(vnew, vold, vto));
         try expectBits(zLimvds(vnew, vold), zLimvdsOracle(vnew, vold));
+        try expectBits(zSteplim(vnew, vold, lim), zSteplimOracle(vnew, vold, lim));
+        try expectBits(zSteplim(vold + lim, vold, lim), zSteplimOracle(vold + lim, vold, lim)); // |Δ| == lim
+        try expectBits(zSteplim(vold - lim, vold, lim), zSteplimOracle(vold - lim, vold, lim));
 
         // Exact boundary hits, derived from the same random draws so they land
         // on every magnitude: each guard's `==` case must stay transparent.
