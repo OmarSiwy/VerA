@@ -8910,6 +8910,61 @@ test "codegen: §4.5.15 signed $limit clamps sign*v and seeds sign*vcrit" {
     try std.testing.expect(std.mem.indexOf(u8, s2, "zPnjlim(vn, vo") != null);
 }
 
+test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
+    // The mos-family frame swap (mos1load.c:351-373): both gate legs spelled
+    // "fetlimds" plus a limvds on the channel emit ONE rung that branches on
+    // the sign of the OLD vds, fetlims only the controlling leg, and gives
+    // limvds mode-dependent write targets — `di` in normal mode (vgs is
+    // preserved, vgd derived), `si` in inverse mode (`vds =
+    // -DEVlimvds(-vds,-vdso)`, vgd preserved, vgs derived).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(g, d, s);
+        \\  inout g, d, s; electrical g, d, s, di, si;
+        \\  parameter real vto = 0.7;
+        \\  parameter real type = -1.0;
+        \\  real vgs, vgd, vds;
+        \\  analog begin
+        \\    vgs = type * $limit(V(g, si), "fetlimds", type * vto, type);
+        \\    vgd = type * $limit(V(g, di), "fetlimds", type * vto, type);
+        \\    vds = type * $limit(V(di, si), "limvds", type);
+        \\    I(d, di) <+ (V(d) - V(di)) / 10.0;
+        \\    I(s, si) <+ (V(s) - V(si)) / 10.0;
+        \\    I(di, si) <+ 1e-3 * (vgs + vgd + vds);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    // The branch condition is the limiter's own memory, in the device frame.
+    try std.testing.expect(std.mem.indexOf(u8, s, "const vdso = old[@intFromEnum(U.di)] - old[@intFromEnum(U.si)];") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "if (sgt * vdso >= 0.0) {") != null);
+    // Normal arm: +frame limvds, correction to the drain side.
+    try std.testing.expect(std.mem.indexOf(u8, s, "const dl = sgt * zLimvds(sgt * dn, sgt * vdso);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "x[@intFromEnum(U.di)] += dl - dn;") != null);
+    // Inverse arm: −frame limvds, correction to the source side.
+    try std.testing.expect(std.mem.indexOf(u8, s, "const dl = -sgt * zLimvds(-sgt * dn, -sgt * vdso);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "x[@intFromEnum(U.si)] -= dl - dn;") != null);
+    // The limvds site is CLAIMED by the ladder — no standalone clamp shape.
+    try std.testing.expect(std.mem.indexOf(u8, s, "zLimvds(sg * vn") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "zLimvds(vn, vo") == null);
+
+    // A dangling fetlimds (no second leg, no limvds) is declined whole, not
+    // half-honoured as a static clamp — that would be the bug back again.
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m2(g, s);
+        \\  inout g, s; electrical g, s, si;
+        \\  parameter real vto = 0.7;
+        \\  analog I(si, s) <+ ($limit(V(g, si), "fetlimds", vto) - V(s)) / 1.0;
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const s2 = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "no complete mode ladder") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "pub fn limit(") == null);
+}
+
 test "codegen: cross-fed held state emits stateCtl with accepted twins" {
     // The hysteresis-FSM hook (contract.zig StateCtlOp): a module whose held
     // state is written from cross edges gets stateCtl + accepted-copy twins,

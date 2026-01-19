@@ -37,21 +37,34 @@ const Error = cg.Error;
 
 const none_u32 = std.math.maxInt(u32);
 
-/// The three SPICE3 limiters the corpus names. NOT an LRM taxonomy: §4.5.15
-/// leaves the identifier implementation-defined, and these are the spellings
-/// `devsup.c` established, which is what every `.va` in the corpus writes.
-/// An identifier that is not one of these is declined, which §4.5.15 permits
-/// ("the simulator may choose to ignore the limiting request").
+/// The three SPICE3 limiters the corpus names, plus one of our own. NOT an
+/// LRM taxonomy: §4.5.15 leaves the identifier implementation-defined; the
+/// first three are the spellings `devsup.c` established, which is what every
+/// `.va` in the corpus writes. An identifier that is not one of these is
+/// declined, which §4.5.15 permits ("the simulator may choose to ignore the
+/// limiting request").
+///
+/// `fetlimds` is OURS, naming a construct devsup.c has no word for: ngspice's
+/// MOS loads (mos1load.c:351-373, same in mos2/3/6/9, vdmos, b3ld) do not
+/// fetlim both gate legs — they fetlim the junction that CONTROLS the channel
+/// in the present mode, `vgs` when the OLD vds >= 0 and `vgd` when it is
+/// negative, run limvds, and derive the other leg. A static both-legs ladder
+/// clamps the non-controlling frame at a vds = 0 crossing, and Newton
+/// two-cycles against the mode-swapped Jacobian (ngspice/mosamp wedged at the
+/// seam). Spell BOTH gate legs `fetlimds` next to a `limvds` on the channel
+/// and the three emit as one mode ladder (`emitLadder`); jfet/hfet keep
+/// `fetlim`, because their ngspice loads really do clamp both legs.
 pub const Alg = enum {
     pnjlim,
     fetlim,
     limvds,
+    fetlimds,
 
     /// Numeric arguments that follow the algorithm name.
     fn arity(a: Alg) usize {
         return switch (a) {
             .pnjlim => 2,
-            .fetlim => 1,
+            .fetlim, .fetlimds => 1,
             .limvds => 0,
         };
     }
@@ -145,7 +158,81 @@ pub fn collect(g: *Gen) Error!void {
         }
     }
     g.limits = out.items;
+
+    // A `fetlimds` site is only honoured as a member of a COMPLETE mode
+    // ladder — dangling, it would clamp one leg with no frame authority,
+    // which is the static-order bug the algorithm exists to fix. The mask is
+    // computed over the unfiltered list first: validity is symmetric (both
+    // legs check both `lo`s, a >2-way gate share fails every member), so
+    // dropping the invalid sites never invalidates a surviving one.
+    var any_dangling = false;
+    for (g.limits, 0..) |lc, i| {
+        if (lc.alg == .fetlimds and ladderOf(g, i) == null) any_dangling = true;
+    }
+    if (any_dangling) {
+        const keep = try g.arena.alloc(bool, g.limits.len);
+        for (g.limits, 0..) |lc, i| {
+            keep[i] = lc.alg != .fetlimds or ladderOf(g, i) != null;
+            if (!keep[i]) try declineLc(g, &declined, lc, "no complete mode ladder — it needs a second fetlimds site on the same gate node and a limvds site across the two channel nodes, all channel sides internal");
+        }
+        var w_: usize = 0;
+        for (out.items, 0..) |lc, i| {
+            if (!keep[i]) continue;
+            out.items[w_] = lc;
+            w_ += 1;
+        }
+        g.limits = out.items[0..w_];
+    }
     g.limits_declined = declined.items;
+}
+
+fn declineLc(g: *Gen, list: *std.ArrayList([]const u8), lc: LimitCall, why: []const u8) Error!void {
+    try list.append(g.arena, try std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{t}\"): {s}", .{ uName(g, lc.hi), uName(g, lc.lo), lc.alg, why }));
+}
+
+/// A resolved mode ladder: indices into `g.limits` of the vgs leg, the vgd
+/// leg, and the `limvds` site whose probe orients them — `limvds` reads
+/// V(di,si), so the leg landing on its `lo` is the source leg (vgs) and the
+/// one landing on its `hi` is the drain leg (vgd).
+const Ladder = struct { gs: u32, gd: u32, ds: u32 };
+
+/// The ladder `g.limits[i]` (a `fetlimds` site, either leg) belongs to:
+/// exactly two `fetlimds` sites share its first-named node (the gate), one
+/// `limvds` site spans their second-named nodes (the channel), and both
+/// channel nodes are the device's own to correct. Null otherwise. Derived on
+/// demand — collect and emit ask the same question of the same list, so
+/// storing the answer could only let the two fall out of agreement.
+fn ladderOf(g: *const Gen, i: usize) ?Ladder {
+    const me = g.limits[i];
+    var partner: usize = undefined;
+    var gate_legs: usize = 0;
+    for (g.limits, 0..) |lc, j| {
+        if (lc.alg != .fetlimds or lc.hi != me.hi) continue;
+        gate_legs += 1;
+        if (j != i) partner = j;
+    }
+    if (gate_legs != 2) return null;
+    const other = g.limits[partner];
+    if (!writable(g, me.lo) or !writable(g, other.lo)) return null;
+    for (g.limits, 0..) |lc, k| {
+        if (lc.alg != .limvds) continue;
+        if (lc.hi == me.lo and lc.lo == other.lo)
+            return .{ .gs = @intCast(partner), .gd = @intCast(i), .ds = @intCast(k) };
+        if (lc.hi == other.lo and lc.lo == me.lo)
+            return .{ .gs = @intCast(i), .gd = @intCast(partner), .ds = @intCast(k) };
+    }
+    return null;
+}
+
+/// Is this `limvds` site the channel rung of some ladder? Then `emitLadder`
+/// owns it and the flat list must not clamp it a second time.
+fn limvdsClaimed(g: *const Gen, k: usize) bool {
+    for (g.limits, 0..) |lc, i| {
+        if (lc.alg != .fetlimds) continue;
+        const lad = ladderOf(g, i) orelse continue;
+        if (lad.ds == k) return true;
+    }
+    return false;
 }
 
 fn decline(g: *Gen, list: *std.ArrayList([]const u8), args: []const Mir.Value, why: []const u8) Error!void {
@@ -249,7 +336,10 @@ pub fn emit(g: *Gen) Error!void {
         \\/// order ngspice's load routines apply them (fetlim → limvds → pnjlim on
         \\/// a JFET). Each clamp has ONE writer — the second-named node — so
         \\/// clamps that share their first-named node cannot fight (emitClamp
-        \\/// says why a split breaks a BJT).
+        \\/// says why a split breaks a BJT). A `fetlimds` pair and its `limvds`
+        \\/// emit as ONE mode-swapped rung at the pair's source position: the leg
+        \\/// that controls the channel in the OLD vds sign is clamped and the
+        \\/// other derived, exactly ngspice's MOS ladder (emitLadder).
         \\
     , .{});
     try g.w("pub fn limit({s}: *const Model, {s}: *const Instance, cur: [n_u]f64, old: [n_u]f64) contract.LimitResult(n_u) {{\n", .{
@@ -268,7 +358,16 @@ pub fn emit(g: *Gen) Error!void {
     var any_pnjlim = false;
     for (g.limits) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim;
     if (any_pnjlim) try g.w("    var ok = true;\n", .{});
-    for (g.limits) |lc| try emitClamp(g, lc);
+    for (g.limits, 0..) |lc, i| switch (lc.alg) {
+        // Collect kept only complete ladders; the earlier leg speaks for all
+        // three sites, the partner and the claimed limvds stay silent.
+        .fetlimds => {
+            const lad = ladderOf(g, i).?;
+            if (i == @min(lad.gs, lad.gd)) try emitLadder(g, lad);
+        },
+        .limvds => if (!limvdsClaimed(g, i)) try emitClamp(g, lc),
+        else => try emitClamp(g, lc),
+    };
     try g.w("    return .{{ .x = x, .converged = {s} }};\n}}\n\n", .{if (any_pnjlim) "ok" else "true"});
 
     try emitSeed(g);
@@ -312,6 +411,7 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
             .pnjlim => @as([]const u8, "Pnjlim"),
             .fetlim => "Fetlim",
             .limvds => "Limvds",
+            .fetlimds => unreachable, // emitLadder owns every surviving site
         },
         if (signed) "sg * " else "",
         if (signed) "sg * " else "",
@@ -343,6 +443,80 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     // are trajectory shaping, not a statement about the residual.
     if (lc.alg == .pnjlim) try g.w("        if (vl != vn) ok = false;\n", .{});
     try g.w("    }}\n", .{});
+}
+
+/// One `fetlimds` pair + its `limvds`, emitted as ngspice's MOS gate ladder
+/// (mos1load.c:351-373): branch on the sign of the OLD vds — the limiter's
+/// own memory, and exactly the condition the load's mode select reads — clamp
+/// the CONTROLLING gate leg, re-clamp the channel, derive the other leg. In
+/// node coordinates "derive the other" is a write-target choice: correcting
+/// the source-side node moves vgs and vds together and leaves vgd (normal
+/// mode's fetlim, inverse mode's limvds); correcting the drain-side node
+/// moves vgd and vds and leaves vgs (the other two rungs). And vgdo needs no
+/// storage of its own: old[g]−old[di] IS vgso−vdso, the derivation ngspice
+/// spells by hand off its vgs/vds states.
+///
+/// The channel rung fixes the same frame the standalone `limvds` clamp
+/// recovers from sign(vo) (the f4cd9cc rule): the mode branch already knows
+/// it — `sgt` in the normal arm, `-sgt` in the inverse arm, ngspice's
+/// `vds = -DEVlimvds(-vds,-vdso)` — and adds the write target the flat list
+/// cannot express.
+fn emitLadder(g: *Gen, lad: Ladder) Error!void {
+    const gs = g.limits[lad.gs];
+    const gd = g.limits[lad.gd];
+    const ds = g.limits[lad.ds];
+    const ng = g.u_names[gs.hi]; // shared gate
+    const nd = g.u_names[gd.lo]; // drain-side channel node (the limvds hi)
+    const ns = g.u_names[gs.lo]; // source-side channel node (the limvds lo)
+    try g.w("    {{ // \"fetlimds\" mode ladder (ngspice mos1load.c): fetlim V({s},{s}) | V({s},{s})\n", .{ ng, ns, ng, nd });
+    try g.w("        // by the sign of OLD V({s},{s}), then limvds, then derive the other leg.\n", .{ nd, ns });
+    try g.w("        const vdso = old[@intFromEnum(U.{s})] - old[@intFromEnum(U.{s})];\n", .{ nd, ns });
+    try writeSign(g, "sgt", ds.sign);
+    try g.w("        if (sgt * vdso >= 0.0) {{ // normal mode: vgs controls\n", .{});
+    try emitLeg(g, gs, nd, ns, false);
+    try g.w("        }} else {{ // inverse mode: vgd controls\n", .{});
+    try emitLeg(g, gd, nd, ns, true);
+    try g.w("        }}\n    }}\n", .{});
+}
+
+/// One arm: fetlim the controlling leg (writing its own second-named node, so
+/// the other leg's probe is untouched), then limvds the channel V(nd,ns)
+/// against the old vds, writing the node the fetlim left alone.
+fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) Error!void {
+    const ngate = g.u_names[leg.hi];
+    const nw = g.u_names[leg.lo];
+    try g.w("            const vn = x[@intFromEnum(U.{s})] - x[@intFromEnum(U.{s})];\n", .{ ngate, nw });
+    try g.w("            const vo = old[@intFromEnum(U.{s})] - old[@intFromEnum(U.{s})];\n", .{ ngate, nw });
+    if (leg.sign == .f_zero) {
+        try g.w("            const vl = zFetlim(vn, vo, ", .{});
+        try writeArg(g, leg.argv[0]);
+        try g.w(");\n", .{});
+    } else {
+        try g.w("            const sg: f64 = if (", .{});
+        try writeArg(g, leg.sign);
+        try g.w(" < 0) -1.0 else 1.0;\n", .{});
+        try g.w("            const vl = sg * zFetlim(sg * vn, sg * vo, ", .{});
+        try writeArg(g, leg.argv[0]);
+        try g.w(");\n", .{});
+    }
+    try g.w("            x[@intFromEnum(U.{s})] -= vl - vn;\n", .{nw});
+    const neg: []const u8 = if (inv) "-" else "";
+    try g.w("            const dn = x[@intFromEnum(U.{s})] - x[@intFromEnum(U.{s})];\n", .{ nd, ns });
+    try g.w("            const dl = {s}sgt * zLimvds({s}sgt * dn, {s}sgt * vdso);\n", .{ neg, neg, neg });
+    if (inv) {
+        try g.w("            x[@intFromEnum(U.{s})] -= dl - dn;\n", .{ns});
+    } else {
+        try g.w("            x[@intFromEnum(U.{s})] += dl - dn;\n", .{nd});
+    }
+}
+
+/// `const NAME: f64 = ±1.0` recovered from a sign argument, or the literal
+/// 1.0 when the site is unsigned.
+fn writeSign(g: *Gen, name: []const u8, v: Mir.Value) Error!void {
+    if (v == .f_zero) return g.w("        const {s}: f64 = 1.0;\n", .{name});
+    try g.w("        const {s}: f64 = if (", .{name});
+    try writeArg(g, v);
+    try g.w(" < 0) -1.0 else 1.0;\n", .{});
 }
 
 fn writeProbe(g: *Gen, lc: LimitCall, arr: []const u8) Error!void {
