@@ -6354,9 +6354,9 @@ const math_txt =
     \\/// those targets have no libm — `@exp`/`@log` on an f64 die at PTX
     \\/// assembly with "no libcall available for fexp". `contract.gm`'s host
     \\/// branch IS the builtin, so host emission is numerically unchanged; its
-    \\/// device branch is a self-contained soft port. sin/cos stay raw: no
-    \\/// admitted device reaches them in scalar form, and one that does fails
-    \\/// its kernel compile loudly (extend contract.gm then).
+    \\/// device branch is a self-contained soft port. sin/cos joined when the
+    \\/// bjt reached tan through the StateKernel's scalar core (`fsin` cannot
+    \\/// select on NVPTX); expm1/log1p/atan stay on std.math (pure Zig).
     \\inline fn zDevExp(x: f64) f64 {
     \\    return contract.gm.exp(x);
     \\}
@@ -6367,10 +6367,10 @@ const math_txt =
     \\    return contract.gm.pow(x, y);
     \\}
     \\inline fn zDevSin(x: f64) f64 {
-    \\    return @sin(x);
+    \\    return contract.gm.sin(x);
     \\}
     \\inline fn zDevCos(x: f64) f64 {
-    \\    return @cos(x);
+    \\    return contract.gm.cos(x);
     \\}
     \\inline fn zDevTanh(x: f64) f64 {
     \\    return contract.gm.tanh(x);
