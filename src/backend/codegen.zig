@@ -6348,6 +6348,40 @@ const header_txt =
 const math_txt =
     \\// ---- §4.3 math, value form (derivative propagates by composition) ----
     \\
+    \\/// Device-routed f64 transcendentals for the SCALAR paths (`R`, the
+    \\/// §4.5.15 limiters, zLimexp's clamp constant). Generated devices also
+    \\/// compile for NVPTX/AMDGCN (the engine's GPU eval and StateKernel), and
+    \\/// those targets have no libm — `@exp`/`@log` on an f64 die at PTX
+    \\/// assembly with "no libcall available for fexp". `contract.gm`'s host
+    \\/// branch IS the builtin, so host emission is numerically unchanged; its
+    \\/// device branch is a self-contained soft port. sin/cos stay raw: no
+    \\/// admitted device reaches them in scalar form, and one that does fails
+    \\/// its kernel compile loudly (extend contract.gm then).
+    \\inline fn zDevExp(x: f64) f64 {
+    \\    return contract.gm.exp(x);
+    \\}
+    \\inline fn zDevLog(x: f64) f64 {
+    \\    return contract.gm.log(x);
+    \\}
+    \\inline fn zDevPow(x: f64, y: f64) f64 {
+    \\    return contract.gm.pow(x, y);
+    \\}
+    \\inline fn zDevSin(x: f64) f64 {
+    \\    return @sin(x);
+    \\}
+    \\inline fn zDevCos(x: f64) f64 {
+    \\    return @cos(x);
+    \\}
+    \\inline fn zDevTanh(x: f64) f64 {
+    \\    return contract.gm.tanh(x);
+    \\}
+    \\inline fn zDevSinh(x: f64) f64 {
+    \\    return contract.gm.sinh(x);
+    \\}
+    \\inline fn zDevCosh(x: f64) f64 {
+    \\    return contract.gm.cosh(x);
+    \\}
+    \\
     \\fn zTan(comptime S: type, a: S) S { // §4.3.2 tan = sin/cos
     \\    return a.sin().div(a.cos());
     \\}
@@ -6469,7 +6503,7 @@ const math_txt =
     \\}
     \\fn zLimexp(comptime S: type, a: S) S { // §4.5.13 — user-invoked ONLY
     \\    const lim = 80.0;
-    \\    if (a.val() > lim) return a.addC(1.0 - lim).scale(@exp(lim));
+    \\    if (a.val() > lim) return a.addC(1.0 - lim).scale(zDevExp(lim));
     \\    return a.exp();
     \\}
     \\
@@ -6974,23 +7008,26 @@ const rscalar_txt =
     \\    pub fn div(a: T, b: T) T { return .{ .v = a.v / b.v }; }
     \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * c }; }
     \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + c }; }
-    \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
-    \\    pub fn log(a: T) T { return .{ .v = @log(a.v) }; }
+    \\    // Transcendentals via zDev* (math_txt): this type also compiles in
+    \\    // the GPU StateKernel, where the raw builtins have no libcall. The
+    \\    // host branch of each IS the builtin — host output is unchanged.
+    \\    pub fn exp(a: T) T { return .{ .v = zDevExp(a.v) }; }
+    \\    pub fn log(a: T) T { return .{ .v = zDevLog(a.v) }; }
     \\    pub fn expm1(a: T) T { return .{ .v = std.math.expm1(a.v) }; }
     \\    pub fn log1p(a: T) T { return .{ .v = std.math.log1p(a.v) }; }
     \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
-    \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
-    \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }
-    \\    pub fn tanh(a: T) T { return .{ .v = std.math.tanh(a.v) }; }
-    \\    pub fn sinh(a: T) T { return .{ .v = std.math.sinh(a.v) }; }
-    \\    pub fn cosh(a: T) T { return .{ .v = std.math.cosh(a.v) }; }
+    \\    pub fn sin(a: T) T { return .{ .v = zDevSin(a.v) }; }
+    \\    pub fn cos(a: T) T { return .{ .v = zDevCos(a.v) }; }
+    \\    pub fn tanh(a: T) T { return .{ .v = zDevTanh(a.v) }; }
+    \\    pub fn sinh(a: T) T { return .{ .v = zDevSinh(a.v) }; }
+    \\    pub fn cosh(a: T) T { return .{ .v = zDevCosh(a.v) }; }
     \\    pub fn atan(a: T) T { return .{ .v = std.math.atan(a.v) }; }
     \\    pub fn abs(a: T) T { return .{ .v = @abs(a.v) }; }
     \\    pub fn minC(a: T, c: f64) T { return .{ .v = @min(a.v, c) }; }
     \\    pub fn maxC(a: T, c: f64) T { return .{ .v = @max(a.v, c) }; }
     \\    pub fn min(a: T, b: T) T { return .{ .v = @min(a.v, b.v) }; }
     \\    pub fn max(a: T, b: T) T { return .{ .v = @max(a.v, b.v) }; }
-    \\    pub fn pow(a: T, c: f64) T { return .{ .v = std.math.pow(f64, a.v, c) }; }
+    \\    pub fn pow(a: T, c: f64) T { return .{ .v = zDevPow(a.v, c) }; }
     \\    // Contract masks and select (see contract.zig's S notes).
     \\    pub fn lt(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v < b.v)) }; }
     \\    pub fn le(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v <= b.v)) }; }
