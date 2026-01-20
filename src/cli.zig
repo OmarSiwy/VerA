@@ -163,10 +163,7 @@ pub fn main(init: std.process.Init) !u8 {
             try out.writeAll(usage_text);
             return 0;
         } else if (std.mem.eql(u8, arg, "--explain")) {
-            const name = args.next() orelse {
-                try err.writeAll("error: --explain needs a code, e.g. --explain W0650\n");
-                return 2;
-            };
+            const name = args.next() orelse return missing(err, "--explain", "a code, e.g. --explain W0650");
             const code = std.meta.stringToEnum(diag.Code, name) orelse {
                 try err.print("error: unknown diagnostic code `{s}`\n", .{name});
                 return 2;
@@ -214,20 +211,14 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.eql(u8, arg, "--zig")) {
             zig_exe = args.next() orelse return missing(err, "--zig", "a path");
         } else if (std.mem.eql(u8, arg, "-o")) {
-            out_path = args.next() orelse {
-                try err.writeAll("error: -o needs a path\n");
-                return 2;
-            };
+            out_path = args.next() orelse return missing(err, "-o", "a path");
             emit_zig = true;
             target = .release_fast;
             codegen_flag = arg;
         } else if (std.mem.startsWith(u8, arg, "--expect-module=")) {
             expect_module = arg["--expect-module=".len..];
         } else if (std.mem.eql(u8, arg, "-I")) {
-            try include_dirs.append(gpa, args.next() orelse {
-                try err.writeAll("error: -I needs a directory\n");
-                return 2;
-            });
+            try include_dirs.append(gpa, args.next() orelse return missing(err, "-I", "a directory"));
         } else if (std.mem.eql(u8, arg, "--no-std-defs")) {
             std_defs = false;
         } else if (std.mem.eql(u8, arg, "--diagnostics=json")) {
@@ -537,6 +528,7 @@ pub fn main(init: std.process.Init) !u8 {
 }
 
 fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
+    // ponytail: missing operands share one message shape and usage status.
     try w.print("error: {s} needs {s}\n", .{ flag, what });
     return 2;
 }

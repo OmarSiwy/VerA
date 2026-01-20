@@ -88,14 +88,8 @@ fn zfIo() zfstd.Io {
 /// which syscall opens the file. "b" is ignored: it distinguishes binary from
 /// text on hosts that translate line endings, and nothing here translates.
 fn zfMode(ty: []const u8) struct { c: u8, plus: bool } {
-    var c: u8 = 'w'; // "If type is omitted, the file is opened for writing"
-    for (ty) |ch| switch (ch) {
-        'r', 'w', 'a' => {
-            c = ch;
-            break;
-        },
-        else => {},
-    };
+    // ponytail: the grammar is three mode letters; stdlib finds the first one.
+    const c: u8 = if (zfstd.mem.indexOfAny(u8, ty, "rwa")) |k| ty[k] else 'w';
     return .{ .c = c, .plus = zfstd.mem.indexOfScalar(u8, ty, '+') != null };
 }
 
@@ -128,13 +122,8 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
             zf_last_err = zfErrno(e);
             return 0;
         },
-        // "Append; open for writing at end of file, or create for writing".
-        'a' => cwd.createFile(io, path, .{ .read = m.plus, .truncate = false }) catch |e| {
-            zf_last_err = zfErrno(e);
-            return 0;
-        },
-        // "Truncate to zero length or create for writing".
-        else => cwd.createFile(io, path, .{ .read = m.plus, .truncate = true }) catch |e| {
+        // ponytail: append and write share creation; only write truncates.
+        else => cwd.createFile(io, path, .{ .read = m.plus, .truncate = m.c != 'a' }) catch |e| {
             zf_last_err = zfErrno(e);
             return 0;
         },

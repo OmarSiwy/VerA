@@ -424,13 +424,12 @@ fn reportCoverage(
         if (c.reject) g.value_ptr.neg = true else g.value_ptr.pos = true;
     }
 
-    var sections: usize = 0;
+    // ponytail: sorted citations need only the previous section to group the report.
     var prev: []const u8 = "";
     for (cites.items) |c| {
         if (!std.mem.eql(u8, c.section, prev)) {
             try w.print("§{s}\n", .{c.section});
             prev = c.section;
-            sections += 1;
         }
         // `+` accepts and computes, `-` refuses. Per fixture and not per clause,
         // so the line that answers "which fixture proves the OTHER half?" is

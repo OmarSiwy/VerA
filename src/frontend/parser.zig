@@ -1523,13 +1523,15 @@ pub const Parser = struct {
         for (b.gen_blocks.items, 0..) |g, i| {
             // Every ordinary declaration space of the module. A port is listed
             // as well as a net: §6.5's header names are declarations too.
+            // ponytail: stdlib membership over interned IDs; index declarations
+            // if large modules make these linear scans hot.
             const clash = self.nameIn(Ast.Port, b.ports.items, g.name) or
                 self.nameIn(Ast.ParamDecl, b.params.items, g.name) or
                 self.nameIn(Ast.VarDecl, b.vars.items, g.name) or
                 self.nameIn(Ast.NetDecl, b.nets.items, g.name) or
                 self.nameIn(Ast.BranchDecl, b.branches.items, g.name) or
                 self.nameIn(Ast.FuncDecl, b.functions.items, g.name) or
-                containsStr(b.genvars.items, g.name) or
+                std.mem.indexOfScalar(Ast.StrId, b.genvars.items, g.name) != null or
                 alias: {
                     // §3.4.6 an aliasparam's own identifier is a declaration.
                     for (b.aliasparams.items) |a| if (a.alias == g.name) break :alias true;
@@ -1553,11 +1555,6 @@ pub const Parser = struct {
     fn nameIn(self: *const Parser, comptime T: type, decls: []const T, name: Ast.StrId) bool {
         _ = self;
         for (decls) |d| if (d.name == name) return true;
-        return false;
-    }
-
-    fn containsStr(names: []const Ast.StrId, name: Ast.StrId) bool {
-        for (names) |n| if (n == name) return true;
         return false;
     }
 
@@ -3077,21 +3074,16 @@ pub const Parser = struct {
     /// of the path, exactly as `parsePrimary` does it for a value position, and
     /// `Lower.flatName` is the one place that strips it.
     ///
-    /// ponytail: no index INSIDE a path (`u[0].a`) — an A.8.9 spelling with no
-    /// fixture and no resolution rule written yet; `hier_ident` is already the
-    /// shape it would use.
+    /// ponytail: ordinary and `$root` terminals share the dotted-tail parse.
+    /// No index INSIDE a path (`u[0].a`); adding it needs a resolution rule,
+    /// and `hier_ident` is already the shape it would use.
     fn parseNetRef(self: *Parser) Error!Ast.ExprId {
         const tok = self.pos;
-        if (self.peek() == .system_identifier and self.tags[self.pos + 1] == .dot) {
+        const name = if (self.peek() == .system_identifier and self.tags[self.pos + 1] == .dot) blk: {
             const root = try self.internTok(self.pos);
             self.pos += 1;
-            var parts: std.ArrayList(Ast.StrId) = .empty;
-            try parts.append(self.arena, root);
-            while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
-            const off = try self.file.exprs.addStrList(self.arena, parts.items);
-            return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
-        }
-        const name = try self.expectIdent();
+            break :blk root;
+        } else try self.expectIdent();
         if (self.peek() == .dot) {
             var parts: std.ArrayList(Ast.StrId) = .empty;
             try parts.append(self.arena, name);

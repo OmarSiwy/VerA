@@ -310,16 +310,17 @@ pub const SsaBuilder = struct {
     fn readVariableRecursive(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         const b = try self.ensureState(block);
 
+        // ponytail: Mir.emitPhi already builds empty phis; no second builder needed.
         var val: Mir.Value = undefined;
         if (!self.block_state.items(.sealed)[b]) {
             // Preds not final yet (loop header, §5.9): incomplete phi, filled by sealBlock.
-            val = try self.newPhi(block);
+            val = try self.mir.emitPhi(self.gpa, block, &.{});
             try self.pushIncomplete(block, place, val);
         } else if (self.predCount(block) == 1) {
             val = try self.readVariable(place, self.firstPred(block));
         } else {
             // ≥2 preds (or 0 — an undefined read in a source-less block).
-            val = try self.newPhi(block);
+            val = try self.mir.emitPhi(self.gpa, block, &.{});
             try self.writeVariable(place, block, val); // break cycles before recursing
             val = try self.addPhiOperands(place, val, block);
         }
@@ -445,10 +446,6 @@ pub const SsaBuilder = struct {
         assert(i < self.mir.blockCount());
         while (self.block_state.len <= i) try self.block_state.append(self.gpa, .{});
         return i;
-    }
-
-    fn newPhi(self: *SsaBuilder, block: Mir.Block) Error!Mir.Value {
-        return self.mir.emitPhi(self.gpa, block, &.{});
     }
 
     /// Record "`user` (a phi) reads `value`". Sentinels never collapse, so they

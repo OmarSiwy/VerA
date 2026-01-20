@@ -99,8 +99,8 @@ pub fn synthesize(arena: Allocator, netlist: []const u8) Allocator.Error!Synthes
 
     // One lowered copy up front (E.2.1: SPICE is case-insensitive), so every
     // slice below is already canonical and nothing has to remember to fold.
-    const lower = try arena.alloc(u8, netlist.len);
-    for (netlist, 0..) |c, i| lower[i] = std.ascii.toLower(c);
+    // ponytail: ASCII folding is the ceiling; use a different fold only for a new dialect.
+    const lower = try std.ascii.allocLowerString(arena, netlist);
 
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(arena,
@@ -278,7 +278,8 @@ fn isSpiceName(t: []const u8) bool {
 /// the §2.8.1 terminator and is load-bearing: `,` and `)` are printable ASCII
 /// and would otherwise be scanned INTO the identifier.
 fn spell(arena: Allocator, t: []const u8) Allocator.Error![]const u8 {
-    if (isIdent(t) and token.keyword_map.get(t) == null) return t;
+    // ponytail: share the lexer's keyword lookup; extend the common table for new keywords.
+    if (isIdent(t) and token.lookupKeyword(t) == null) return t;
     return std.fmt.allocPrint(arena, "\\{s} ", .{t});
 }
 

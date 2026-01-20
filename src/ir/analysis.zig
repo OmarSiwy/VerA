@@ -821,7 +821,7 @@ pub fn tyOfParam(t: Ast.Type) VTy {
     };
 }
 
-/// ch9 return types — mirrors `Lower.sysFuncTy` (§9.11/§9.12/§9.19/§9.22).
+/// ch9 return types from `Lower.sysFuncTy` (§9.11/§9.12/§9.19/§9.22).
 /// Everything else, including every §4.5 operator and §4.6 event, is real:
 /// lowering compares an event guard against `0.0`, so it must stay real.
 /// MUST agree with `Lower.sysFuncTy`: the two type the same call from opposite
@@ -832,41 +832,16 @@ pub fn tyOfParam(t: Ast.Type) VTy {
 /// `$bitstoreal` yields the real that pattern stands for. Only the first belongs
 /// here — see tests/fixtures/exhaustive/122_bit_conversions.va.
 pub fn callTy(name: []const u8) VTy {
-    const ints = [_][]const u8{
-        "$param_given",          "$port_connected",
-        "$test$plusargs",        "$value$plusargs",
-        "$rtoi",                 "$clog2",
-        "$realtobits",
-        // The §9.22/§9.23 driver access family is absent, matching
-        // `Lower.sysFuncTy`: §9.22 paragraph 3 confines those calls to connect
-        // modules, so lowering refuses every one (E0818) and no `call` with such
-        // a name reaches this analysis to be typed.
-        // §9.5.4.2 `Lower.lowerScan`'s synthetic names: the item count, and the
-        // item flavour chosen for an `integer` destination.
-        "$sscanf",               "$sscanf$int",
-        // §9.20 "The return value for both system functions shall be one (1) ...
-        // and zero (0) otherwise" — a status, not a measurement.
-        "$analog_node_alias",    "$analog_port_alias",
-        // §9.5.1–§9.5.8 the descriptor family, plus `lowerFileRead`'s synthetic
-        // item name. Every one integer-valued; see `Lower.sysFuncTy`.
-        "$fopen",                "$fgets",
-        "$fscanf",               "$fscanf$int",
-        "$ftell",                "$fseek",
-        "$rewind",               "$ferror",
-        "$feof",
-    };
-    for (ints) |i| if (std.mem.eql(u8, name, i)) return .int;
-    if (std.mem.eql(u8, name, "$simparam$str")) return .str;
-    // §9.5.3 the formatted text, §9.5.4.2 the item whose destination is a string.
-    if (std.mem.eql(u8, name, "$sformat") or std.mem.eql(u8, name, "$sscanf$str")) return .str;
-    // §9.5.4.1's string, §9.5.4.2's file-sourced string item, §9.5.7's description.
-    if (std.mem.eql(u8, name, "$fgets$str") or std.mem.eql(u8, name, "$fscanf$str") or
-        std.mem.eql(u8, name, "$ferror$str")) return .str;
     // §5.10 `Lower.holdSlot`'s synthetic seed. Not a ch9 task and not in
     // `Lower.sysFuncTy`: the callee is chosen by the variable's declared type,
     // so the name IS the type and the two sides agree by construction.
     if (std.mem.eql(u8, name, "$held_int")) return .int;
-    return .real;
+    // ponytail: reuse ch9 typing; only MIR-only callees need a case here.
+    return switch (Lower.sysFuncTy(name)) {
+        .real => .real,
+        .integer => .int,
+        .string => .str,
+    };
 }
 
 // ---------------------------------------------------------------------------

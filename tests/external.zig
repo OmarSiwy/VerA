@@ -90,7 +90,7 @@ const External = struct {
         w: *Io.Writer,
     ) anyerror!Result {
         const self: *External = @ptrCast(@alignCast(ctx));
-        const root = try self.wrap(io, arena, f, source);
+        const root = try wrap(io, arena, f, source);
 
         var argv: std.ArrayList([]const u8) = .empty;
         try argv.appendSlice(arena, self.argv);
@@ -132,14 +132,13 @@ const External = struct {
 
     /// Write the prelude wrapper and return its path — or the fixture's own path
     /// when a prelude would collide with what the fixture declares itself.
+    // ponytail: wrapper contents depend only on the fixture, so no compiler receiver.
     fn wrap(
-        self: *External,
         io: Io,
         arena: std.mem.Allocator,
         f: Fixture,
         source: []const u8,
     ) ![]const u8 {
-        _ = self;
         // A fixture that defines a nature or a discipline IS the Annex D
         // material; including Annex D on top of it is a redefinition, and the
         // error would be the harness's, not the compiler's.

@@ -1060,7 +1060,8 @@ fn rejectStrayPubDecls(comptime D: type) void {
         // stays only until codegen stops emitting it — VerA's own fixtures
         // (066_laplace_dc_gain, 067_zi_sample_hold, 23_laplace_filters,
         // 24_z_transform_filters) depend on it today.
-        if (d.name.len >= 5 and std.mem.eql(u8, d.name[d.name.len - 5 ..], "__sec")) continue;
+        // ponytail: the exemption is suffix-only; endsWith owns the length guard.
+        if (std.mem.endsWith(u8, d.name, "__sec")) continue;
         @compileError(@typeName(D) ++ ": stray pub decl `" ++ d.name ++
             "` — only contract-recognized names may be pub");
     }

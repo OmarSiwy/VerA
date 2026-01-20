@@ -299,8 +299,11 @@ pub const LineIndex = struct {
     pub fn build(arena: Allocator, text: []const u8) Allocator.Error!LineIndex {
         var starts: std.ArrayList(u32) = .empty;
         try starts.append(arena, 0);
-        for (text, 0..) |c, i| {
-            if (c == '\n') try starts.append(arena, @intCast(i + 1));
+        // ponytail: reuse stdlib byte search; batch offsets if indexing profiles hot.
+        var pos: usize = 0;
+        while (std.mem.indexOfScalarPos(u8, text, pos, '\n')) |i| {
+            pos = i + 1;
+            try starts.append(arena, @intCast(pos));
         }
         return .{ .starts = try starts.toOwnedSlice(arena) };
     }
@@ -1573,8 +1576,8 @@ fn renderSnippet(
 
         // One underline row per span on this line, deepest column last so the
         // labels stack instead of overlapping.
-        for (placed[i..j], 0..) |q, k| {
-            _ = k;
+        // ponytail: each of at most five rows needs only its span, no row index.
+        for (placed[i..j]) |q| {
             try w.print("{s}{s} |{s} ", .{ spaces(width), p.gutter, p.reset });
             try w.splatByteAll(' ', q.col);
             const colour = if (q.primary) p.forSeverity(sev) else p.gutter;
@@ -1927,9 +1930,8 @@ test "line index" {
 /// Renders a bag to an arena-owned string. Test helper, and the shape a host
 /// that wants the text rather than a writer would use.
 fn renderToString(bag: *Bag, opts: RenderOptions) ![]const u8 {
-    var buf: std.ArrayList(u8) = .empty;
-    var aw: std.Io.Writer.Allocating = .fromArrayList(bag.arena, &buf);
-    defer buf = aw.toArrayList();
+    // ponytail: the arena owns the result; transfer ownership only if it must outlive it.
+    var aw: std.Io.Writer.Allocating = .init(bag.arena);
     try render(bag, &aw.writer, opts);
     return aw.writer.buffered();
 }

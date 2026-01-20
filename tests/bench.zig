@@ -230,7 +230,7 @@ fn checkShape(gpa: Allocator, axis: Axis, i: usize) !Footprint {
 ///
 /// `mir.zig` is a set of `MultiArrayList`s, so a row costs the SUM of its
 /// field sizes and not `@sizeOf(Row)` (25 vs 28 for `InstRow`, 9 vs 16 for
-/// `ValueRow` — measured by `soaBytes` below rather than asserted, so it
+/// `ValueRow` — computed by `capacityInBytes` below rather than asserted, so it
 /// tracks the struct). The two dedup maps and the interner are excluded on
 /// purpose: they are build-time scratch that `deinit` drops, and no proposed
 /// layout change touches them. What is counted is exactly the surface an
@@ -241,17 +241,10 @@ const Footprint = struct {
     blocks: u64 = 0,
     extra: u64 = 0,
 
-    /// Bytes a `MultiArrayList(T)` spends per element: the sum of the field
-    /// sizes, which is what `capacityInBytes` multiplies by.
-    fn soaBytes(comptime T: type) u64 {
-        comptime var n: u64 = 0;
-        inline for (std.meta.fields(T)) |f| n += @sizeOf(f.type);
-        return n;
-    }
-
-    const inst_b = soaBytes(Mir.InstRow);
-    const def_b = soaBytes(Mir.ValueRow) + @sizeOf(Mir.Value); // + alias slot
-    const block_b = soaBytes(Mir.BlockRow);
+    // ponytail: ask the SoA container for its row size; this still excludes spare capacity.
+    const inst_b: u64 = std.MultiArrayList(Mir.InstRow).capacityInBytes(1);
+    const def_b: u64 = std.MultiArrayList(Mir.ValueRow).capacityInBytes(1) + @sizeOf(Mir.Value); // + alias slot
+    const block_b: u64 = std.MultiArrayList(Mir.BlockRow).capacityInBytes(1);
 
     fn of(m: *const Mir) Footprint {
         return .{

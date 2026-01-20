@@ -278,7 +278,8 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
 fn asCode(pattern: []const u8) ?vera.diag.Code {
     if (pattern.len != 5) return null;
     if (pattern[0] != 'E' and pattern[0] != 'W') return null;
-    for (pattern[1..]) |c| if (c < '0' or c > '9') return null;
+    // ponytail: stdlib digit classification; the E/W + four-digit format stays fixed.
+    for (pattern[1..]) |c| if (!std.ascii.isDigit(c)) return null;
     return std.meta.stringToEnum(vera.diag.Code, pattern);
 }
 

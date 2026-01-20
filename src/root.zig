@@ -246,8 +246,8 @@ pub const CompileResult = struct {
     pub fn deinit(self: *CompileResult) void {
         self.gpa.free(self.device.text);
         self.verdict.deinit(self.gpa);
-        self.arena.deinit();
-        self.gpa.destroy(self.arena);
+        // ponytail: one teardown for the heap-stable compilation arena.
+        freeArena(self.gpa, self.arena);
         self.* = undefined;
     }
 
@@ -567,16 +567,11 @@ pub fn buildArtifact(
 ) !orchestrator.Result {
     if (result.target == .lint) return error.NoArtifact;
     const device = try result.generateOutput();
+    // ponytail: orchestrator errors already have the names callers receive.
     return switch (result.target) {
         .lint => unreachable,
         .debug => (resident orelse return error.NoResidentChild).rebuild(gpa, device, generation),
         .release_fast => orchestrator.compileRelease(gpa, io, o, device, generation),
-    } catch |err| switch (err) {
-        error.OutOfMemory => error.OutOfMemory,
-        // The orchestrator's failure modes are build-system shaped (spawn,
-        // pipe, zig diagnostics); they are not compile errors of ours, so they
-        // pass through with their own names rather than becoming CompileFailed.
-        else => err,
     };
 }
 

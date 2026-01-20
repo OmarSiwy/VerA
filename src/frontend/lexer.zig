@@ -721,10 +721,6 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
                 out[n] = '\t';
                 i += 1;
             },
-            '\\', '"' => {
-                out[n] = body[i];
-                i += 1;
-            },
             '0'...'7' => { // \ddd, 1–3 octal digits
                 var v: u16 = 0;
                 var k: usize = 0;
@@ -734,7 +730,9 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
                 }
                 out[n] = @truncate(v);
             },
-            else => { // §2.7 leaves other escapes undefined: pass the character through
+            // ponytail: backslash, quote and undefined escapes pass through;
+            // add an arm only for an escape with a distinct byte mapping.
+            else => {
                 out[n] = body[i];
                 i += 1;
             },
