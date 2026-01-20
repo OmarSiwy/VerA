@@ -443,6 +443,10 @@ pub const Gen = struct {
     /// branch current per §5.6 potential contribution that lowering did not
     /// already give a `flow(a,b)` slot. Values are node_order-space indices.
     branch_u: []u32 = &.{},
+    /// The §5.6.5 switch branches `collapse` aliases away (`collapsePairs`).
+    /// Cached because `emitSwitchRow` needs the membership test and the list
+    /// is built once, before any residual is emitted.
+    cpairs: []const CollapsePair = &.{},
     n_u: u32 = 0,
     /// Structural Jacobian columns per residual ROW: `pat[react][ru]` has bit
     /// `cu` set when `∂res[ru]/∂x[cu]` can be nonzero. `emitStamps` fills it as
@@ -1102,7 +1106,10 @@ pub const Gen = struct {
         // `buildPrelude`/`h.zig`: no UNIT body can reach these, because `$limit`
         // renders as the identity inside one. `collapse` reads the core the
         // same way, so it opens `R` too.
-        const cpairs = try self.collapsePairs();
+        // Before `emitDispatchers`: `emitSwitchRow` splits exactly these
+        // branches, so the list has to exist before any residual is emitted.
+        self.cpairs = try self.collapsePairs();
+        const cpairs = self.cpairs;
         if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or self.pathLatches()) {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
@@ -5561,15 +5568,46 @@ pub const Gen = struct {
     ///
     /// The flow form's ±c_I KCL stamps are NOT emitted (`flowIsMerged`): the
     /// retained flow reaches KCL through I_b, which the row pins to c_I.
+    ///
+    /// EXCEPT on a COLLAPSIBLE branch (`collapsePairs`), where the structure is
+    /// not constant, because `collapse` deletes I_b from the host's maps in
+    /// BOTH cases and contract.zig's `collapse_applied` says so. The row is
+    /// then split on the retention flag — a `buildFree` value, fixed for the
+    /// whole simulation, so a real `if` and not an `S.sel`:
+    ///
+    ///   flag set (0 V arm, dead short): the host aliased hi, lo and I_b onto
+    ///     one unknown, so ±I_b and `V(hi) − V(lo)` are stamps that ADD AND
+    ///     SUBTRACT THE SAME SLOT. "They cancel exactly" is false — float
+    ///     addition into a shared accumulator is not associative, and I_b there
+    ///     is a node VOLTAGE, so `3.5e-19 + (−0.2) + (−0.2) + 0.2 + 0.2 == 0`
+    ///     erases a substrate leak that was already in the row. A host that
+    ///     applied the aliases therefore gets no stamps at all; one that did
+    ///     not keeps the full branch equations for standalone evaluation.
+    ///   flag clear: I_b does not exist, so nothing can pin it. The branch is
+    ///     a plain conductance and its flow reaches KCL directly, exactly like
+    ///     an unswitched `.flow` contribution — `switchOpen` is that value.
     fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, react: bool) Error!void {
         const u = self.branch_u[i];
         const partner = self.switchFlowOf(i);
+        const split = self.collapsible(i);
+        const d: u32 = if (split) 4 else 2;
+        if (split) {
+            try self.ind(2);
+            try self.b("if (", .{});
+            try self.coreRef(flag);
+            if (self.an.vty[@intFromEnum(self.an.rv(flag))] == .int)
+                try self.b(" != 0) {{\n", .{})
+            else
+                try self.b(".val() != 0.0) {{\n", .{});
+            try self.ind(3);
+            try self.b("if (comptime !(@hasDecl(S, \"collapse_applied\") and S.collapse_applied)) {{\n", .{});
+        }
         if (!react) {
-            try self.ind(2);
+            try self.ind(d);
             try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
-            try self.stamp(2, c.hi, "add", "ib", uBit(u));
-            try self.stamp(2, c.lo, "sub", "ib", uBit(u));
-            try self.ind(2);
+            try self.stamp(d, c.hi, "add", "ib", uBit(u));
+            try self.stamp(d, c.lo, "sub", "ib", uBit(u));
+            try self.ind(d);
             self.patRow(@intCast(u), uBit(u) | nodeBit(c.hi) | nodeBit(c.lo) | self.switchRowDeps(i, c, react));
             try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.u_names[u]});
             try self.coreRef(flag);
@@ -5581,13 +5619,59 @@ pub const Gen = struct {
             try self.switchElse(partner, react);
             try self.b(");\n", .{});
         } else {
-            try self.ind(2);
+            try self.ind(d);
             self.patRow(@intCast(u), uBit(u) | self.switchRowDeps(i, c, react));
             try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.u_names[u]});
             try self.coreRef(flag);
             try self.b(", c.neg(), ", .{});
             try self.switchElse(partner, react);
             try self.b(");\n", .{});
+        }
+        if (split) {
+            try self.ind(3);
+            try self.b("}}\n", .{});
+            try self.ind(2);
+            try self.b("}} else {{\n", .{});
+            try self.ind(3);
+            try self.b("const flow = ", .{});
+            try self.switchOpen(partner, react);
+            try self.b(";\n", .{});
+            const bits = self.switchRowDeps(i, c, react);
+            try self.stamp(3, c.hi, "add", "flow", bits);
+            try self.stamp(3, c.lo, "sub", "flow", bits);
+            try self.ind(2);
+            try self.b("}}\n", .{});
+        }
+    }
+
+    /// Is potential contribution `i` one `collapse` aliases away? Keyed on the
+    /// branch-flow unknown, which `contribIndex` makes unique per branch.
+    fn collapsible(self: *const Gen, i: usize) bool {
+        const u = self.branch_u[i];
+        if (u == none_u32) return false;
+        for (self.cpairs) |p| if (p.flow_u == u) return true;
+        return false;
+    }
+
+    /// The value the branch row would have PINNED I_b to, for the arm where
+    /// I_b no longer exists: the partner's retained flow, or zero when nothing
+    /// is retained (§5.6.1.3's open circuit). `switchElse` writes the same
+    /// three cases as a residual — `I_b − c` and `−φ` — and this is that
+    /// residual solved for I_b, so the signs are the plain `.flow` stamp's.
+    fn switchOpen(self: *Gen, partner: ?usize, react: bool) Error!void {
+        const j = partner orelse return self.b("S.con(0.0)", .{});
+        const f = self.lower.contributions.items[j];
+        const fv = self.an.rv(if (react) f.react_val else f.resist_val);
+        switch (self.retention(f)) {
+            .off => try self.b("S.con(0.0)", .{}),
+            .on => try self.coreRef(fv),
+            .runtime => |fw| {
+                try self.b("S.sel(", .{});
+                try self.coreRef(fw);
+                try self.b(", ", .{});
+                try self.coreRef(fv);
+                try self.b(", S.con(0.0))", .{});
+            },
         }
     }
 
@@ -6262,9 +6346,16 @@ pub const Gen = struct {
             \\    }}
             \\
         , .{});
-        for (pairs, 0..) |p, pi| {
-            try self.w("    if (a{d}) out[@intFromEnum(U.{s})] = zCollapseRoot(&parent, @intFromEnum(U.{s}));\n", .{
-                pi, self.u_names[p.flow_u], self.u_names[p.target],
+        // UNCONDITIONAL, unlike the union above. The flag decides whether the
+        // two NODES merge; the branch-flow unknown goes either way. Short
+        // taken: it is part of the merged set. Short not taken: the branch is
+        // `I(hi,lo) <+ <conductance>`, which wants no current row at all —
+        // `emitSwitchRow`'s else arm stamps it straight into KCL. Guarding this
+        // line on the flag cost the host one unknown and one matrix row per
+        // RETAINED parasitic, for a row the physics never writes.
+        for (pairs) |p| {
+            try self.w("    out[@intFromEnum(U.{s})] = zCollapseRoot(&parent, @intFromEnum(U.{s}));\n", .{
+                self.u_names[p.flow_u], self.u_names[p.target],
             });
         }
         try self.w("    return out;\n}}\n\n", .{});
