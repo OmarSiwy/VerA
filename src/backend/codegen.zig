@@ -1117,7 +1117,32 @@ pub const Gen = struct {
         // Before `emitUnits`: its `plan.analyze` is the pass that clears the
         // precompute plan's live-set residue (unit_plan.zig's partial reset).
         try self.emitPrecompute();
+        const units_from = self.out.items.len;
         try self.emitUnits();
+        // Does the CORE (physics units, not the updateState epilogue) read a
+        // host-published sim-state Instance field? A GPU host keeps Instance
+        // blobs device-resident and republishes t/dt/kind on the HOST copy
+        // only, so such a core evals against stale values there — the decl
+        // lets it exclude the device (ARPice engine.gpuEligible). Text scan
+        // over exactly the unit range: the lowering sites are many (§4.6
+        // analysis(), $abstime, ddt/idt/laplace/transition/timer/cross) and
+        // every one spells its read `inst.<field>`.
+        const units_text = self.out.items[units_from..];
+        const reads_dt = blk: { // boundary-aware: `inst.dtemp` must not match
+            var from: usize = 0;
+            while (std.mem.indexOfPos(u8, units_text, from, "inst.dt")) |at| : (from = at + 1) {
+                const nxt = at + "inst.dt".len;
+                if (nxt >= units_text.len) break :blk true;
+                const c = units_text[nxt];
+                if (!std.ascii.isAlphanumeric(c) and c != '_') break :blk true;
+            }
+            break :blk false;
+        };
+        const core_reads_simstate = reads_dt or
+            std.mem.indexOf(u8, units_text, "inst.analysis_kind") != null or
+            std.mem.indexOf(u8, units_text, "inst.abstime") != null or
+            std.mem.indexOf(u8, units_text, "inst.is_initial_step") != null or
+            std.mem.indexOf(u8, units_text, "inst.is_final_step") != null;
         try self.emitDispatchers();
         try self.emitNoiseTable();
         try self.emitSystfTable();
@@ -1133,6 +1158,7 @@ pub const Gen = struct {
         // instantiated with a vector S is exact per lane. The testbench's
         // batch differential check keys on it, and a batching host may.
         if (!self.lane_pinned) try self.w("pub const lane_clean = true;\n\n", .{});
+        if (core_reads_simstate) try self.w("pub const core_reads_simstate = true;\n\n", .{});
         try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
     }
 
@@ -7145,6 +7171,33 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     const hdr = std.mem.lastIndexOf(u8, on[0..at], "/// This device permits").?;
     const stripped = try std.mem.concat(a, u8, &.{ on[0..hdr], on[at + decl.len ..] });
     try std.testing.expectEqualStrings(off, stripped);
+}
+
+test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate" {
+    // A device-resident host republishes t/dt/kind on the HOST Instance only,
+    // so a core reading them there evals stale — the decl is how it knows to
+    // keep such a device off the device. The resistor must NOT carry it (its
+    // updateState epilogue latch, when present, is not a core read).
+    {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, resistor_va, &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "core_reads_simstate") == null);
+    }
+    {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator,
+            \\module ak(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  analog I(p, n) <+ V(p, n) * (analysis("tran") ? 2.0 : 1.0);
+            \\endmodule
+        , &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_reads_simstate = true;") != null);
+    }
 }
 
 test "codegen: one stably-named declaration for the model, thin dispatcher" {

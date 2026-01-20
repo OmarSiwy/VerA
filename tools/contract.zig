@@ -950,6 +950,15 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // the generated testbench's batch differential check asserts the claim on
     // every fixture that carries it. Absent means batching is NOT sound.
     .{ "lane_clean", {} },
+    // The CORE (physics units) reads a host-published sim-state Instance
+    // field (analysis()/$abstime/ddt-family `inst.dt` and friends). A host
+    // that keeps Instance blobs device-resident republishes those fields on
+    // the HOST copy only, so such a core must not run device-resident
+    // (ARPice engine.gpuEligible keys off this). Emitted by codegen from a
+    // scan of exactly the unit range; the updateState epilogue's
+    // `state.t_prev = inst.abstime` latch does not count — nothing in the
+    // core reads it back.
+    .{ "core_reads_simstate", {} },
     // Runtime analysis kind exported by generated devices for the analysis()
     // builtin; the host engine sets Instance.analysis_kind per pass. Its
     // ordinals are checked against `AnalysisKind` by `validateSimState`.
@@ -1310,6 +1319,7 @@ const MockAll = struct {
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
     pub const lane_clean = true;
+    pub const core_reads_simstate = true;
 
     pub const Model = struct { g: f32 = 1e-3 };
     pub const Instance = struct {
