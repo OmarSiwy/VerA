@@ -1125,7 +1125,32 @@ pub const Gen = struct {
         // Before `emitUnits`: its `plan.analyze` is the pass that clears the
         // precompute plan's live-set residue (unit_plan.zig's partial reset).
         try self.emitPrecompute();
+        const units_from = self.out.items.len;
         try self.emitUnits();
+        // Does the CORE (physics units, not the updateState epilogue) read a
+        // host-published sim-state Instance field? A GPU host keeps Instance
+        // blobs device-resident and republishes t/dt/kind on the HOST copy
+        // only, so such a core evals against stale values there — the decl
+        // lets it exclude the device (ARPice engine.gpuEligible). Text scan
+        // over exactly the unit range: the lowering sites are many (§4.6
+        // analysis(), $abstime, ddt/idt/laplace/transition/timer/cross) and
+        // every one spells its read `inst.<field>`.
+        const units_text = self.out.items[units_from..];
+        const reads_dt = blk: { // boundary-aware: `inst.dtemp` must not match
+            var from: usize = 0;
+            while (std.mem.indexOfPos(u8, units_text, from, "inst.dt")) |at| : (from = at + 1) {
+                const nxt = at + "inst.dt".len;
+                if (nxt >= units_text.len) break :blk true;
+                const c = units_text[nxt];
+                if (!std.ascii.isAlphanumeric(c) and c != '_') break :blk true;
+            }
+            break :blk false;
+        };
+        const core_reads_simstate = reads_dt or
+            std.mem.indexOf(u8, units_text, "inst.analysis_kind") != null or
+            std.mem.indexOf(u8, units_text, "inst.abstime") != null or
+            std.mem.indexOf(u8, units_text, "inst.is_initial_step") != null or
+            std.mem.indexOf(u8, units_text, "inst.is_final_step") != null;
         try self.emitDispatchers();
         try self.emitNoiseTable();
         try self.emitSystfTable();
@@ -1141,6 +1166,7 @@ pub const Gen = struct {
         // instantiated with a vector S is exact per lane. The testbench's
         // batch differential check keys on it, and a batching host may.
         if (!self.lane_pinned) try self.w("pub const lane_clean = true;\n\n", .{});
+        if (core_reads_simstate) try self.w("pub const core_reads_simstate = true;\n\n", .{});
         try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
     }
 
@@ -6374,6 +6400,40 @@ const header_txt =
 const math_txt =
     \\// ---- §4.3 math, value form (derivative propagates by composition) ----
     \\
+    \\/// Device-routed f64 transcendentals for the SCALAR paths (`R`, the
+    \\/// §4.5.15 limiters, zLimexp's clamp constant). Generated devices also
+    \\/// compile for NVPTX/AMDGCN (the engine's GPU eval and StateKernel), and
+    \\/// those targets have no libm — `@exp`/`@log` on an f64 die at PTX
+    \\/// assembly with "no libcall available for fexp". `contract.gm`'s host
+    \\/// branch IS the builtin, so host emission is numerically unchanged; its
+    \\/// device branch is a self-contained soft port. sin/cos joined when the
+    \\/// bjt reached tan through the StateKernel's scalar core (`fsin` cannot
+    \\/// select on NVPTX); expm1/log1p/atan stay on std.math (pure Zig).
+    \\inline fn zDevExp(x: f64) f64 {
+    \\    return contract.gm.exp(x);
+    \\}
+    \\inline fn zDevLog(x: f64) f64 {
+    \\    return contract.gm.log(x);
+    \\}
+    \\inline fn zDevPow(x: f64, y: f64) f64 {
+    \\    return contract.gm.pow(x, y);
+    \\}
+    \\inline fn zDevSin(x: f64) f64 {
+    \\    return contract.gm.sin(x);
+    \\}
+    \\inline fn zDevCos(x: f64) f64 {
+    \\    return contract.gm.cos(x);
+    \\}
+    \\inline fn zDevTanh(x: f64) f64 {
+    \\    return contract.gm.tanh(x);
+    \\}
+    \\inline fn zDevSinh(x: f64) f64 {
+    \\    return contract.gm.sinh(x);
+    \\}
+    \\inline fn zDevCosh(x: f64) f64 {
+    \\    return contract.gm.cosh(x);
+    \\}
+    \\
     \\fn zTan(comptime S: type, a: S) S { // §4.3.2 tan = sin/cos
     \\    return a.sin().div(a.cos());
     \\}
@@ -6495,7 +6555,7 @@ const math_txt =
     \\}
     \\fn zLimexp(comptime S: type, a: S) S { // §4.5.13 — user-invoked ONLY
     \\    const lim = 80.0;
-    \\    if (a.val() > lim) return a.addC(1.0 - lim).scale(@exp(lim));
+    \\    if (a.val() > lim) return a.addC(1.0 - lim).scale(zDevExp(lim));
     \\    return a.exp();
     \\}
     \\
@@ -7000,23 +7060,26 @@ const rscalar_txt =
     \\    pub fn div(a: T, b: T) T { return .{ .v = a.v / b.v }; }
     \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * c }; }
     \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + c }; }
-    \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
-    \\    pub fn log(a: T) T { return .{ .v = @log(a.v) }; }
+    \\    // Transcendentals via zDev* (math_txt): this type also compiles in
+    \\    // the GPU StateKernel, where the raw builtins have no libcall. The
+    \\    // host branch of each IS the builtin — host output is unchanged.
+    \\    pub fn exp(a: T) T { return .{ .v = zDevExp(a.v) }; }
+    \\    pub fn log(a: T) T { return .{ .v = zDevLog(a.v) }; }
     \\    pub fn expm1(a: T) T { return .{ .v = std.math.expm1(a.v) }; }
     \\    pub fn log1p(a: T) T { return .{ .v = std.math.log1p(a.v) }; }
     \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
-    \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
-    \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }
-    \\    pub fn tanh(a: T) T { return .{ .v = std.math.tanh(a.v) }; }
-    \\    pub fn sinh(a: T) T { return .{ .v = std.math.sinh(a.v) }; }
-    \\    pub fn cosh(a: T) T { return .{ .v = std.math.cosh(a.v) }; }
+    \\    pub fn sin(a: T) T { return .{ .v = zDevSin(a.v) }; }
+    \\    pub fn cos(a: T) T { return .{ .v = zDevCos(a.v) }; }
+    \\    pub fn tanh(a: T) T { return .{ .v = zDevTanh(a.v) }; }
+    \\    pub fn sinh(a: T) T { return .{ .v = zDevSinh(a.v) }; }
+    \\    pub fn cosh(a: T) T { return .{ .v = zDevCosh(a.v) }; }
     \\    pub fn atan(a: T) T { return .{ .v = std.math.atan(a.v) }; }
     \\    pub fn abs(a: T) T { return .{ .v = @abs(a.v) }; }
     \\    pub fn minC(a: T, c: f64) T { return .{ .v = @min(a.v, c) }; }
     \\    pub fn maxC(a: T, c: f64) T { return .{ .v = @max(a.v, c) }; }
     \\    pub fn min(a: T, b: T) T { return .{ .v = @min(a.v, b.v) }; }
     \\    pub fn max(a: T, b: T) T { return .{ .v = @max(a.v, b.v) }; }
-    \\    pub fn pow(a: T, c: f64) T { return .{ .v = std.math.pow(f64, a.v, c) }; }
+    \\    pub fn pow(a: T, c: f64) T { return .{ .v = zDevPow(a.v, c) }; }
     \\    // Contract masks and select (see contract.zig's S notes).
     \\    pub fn lt(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v < b.v)) }; }
     \\    pub fn le(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v <= b.v)) }; }
@@ -7134,6 +7197,33 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     const hdr = std.mem.lastIndexOf(u8, on[0..at], "/// This device permits").?;
     const stripped = try std.mem.concat(a, u8, &.{ on[0..hdr], on[at + decl.len ..] });
     try std.testing.expectEqualStrings(off, stripped);
+}
+
+test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate" {
+    // A device-resident host republishes t/dt/kind on the HOST Instance only,
+    // so a core reading them there evals stale — the decl is how it knows to
+    // keep such a device off the device. The resistor must NOT carry it (its
+    // updateState epilogue latch, when present, is not a core read).
+    {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, resistor_va, &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "core_reads_simstate") == null);
+    }
+    {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator,
+            \\module ak(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  analog I(p, n) <+ V(p, n) * (analysis("tran") ? 2.0 : 1.0);
+            \\endmodule
+        , &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_reads_simstate = true;") != null);
+    }
 }
 
 test "codegen: one stably-named declaration for the model, thin dispatcher" {

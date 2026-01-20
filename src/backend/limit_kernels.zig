@@ -46,6 +46,22 @@
 // function of the new iterate, the previous one, and the algorithm's own
 // constants.
 
+/// Natural log, device-routed (this file is both spliced into generated
+/// devices and `@import`ed by codegen.zig's tests, so it may reference no
+/// emitted name — hence its own alias, not math_txt's zDevLog). The engine's
+/// GPU StateKernel compiles these kernels for NVPTX/AMDGCN, where `@log(f64)`
+/// has no libcall; `contract.gm.log`'s host branch IS the builtin, so host
+/// numerics are unchanged, clamp-at-0 -inf behaviour included. The contract
+/// import sits in the dead branch, so VerA's own compilation of this file
+/// (host, no `contract` module) never resolves it.
+const k_dev = switch (@import("builtin").target.cpu.arch) {
+    .nvptx64, .amdgcn => true,
+    else => false,
+};
+inline fn klog(x: f64) f64 {
+    return if (comptime k_dev) @import("contract").gm.log(x) else @log(x);
+}
+
 /// Two-way pick, BIT-SELECT spelling: mask is all-ones/all-zeros from the
 /// bool, result is exactly `a`'s or `b`'s bit pattern. NOT `if (c) a else b`,
 /// and not a bare `(m & a) | (~m & b)` either — LLVM folds both back into a
@@ -57,10 +73,15 @@
 inline fn sel(c: bool, a: f64, b: f64) f64 {
     var av: u64 = @bitCast(a);
     var bv: u64 = @bitCast(b);
-    asm volatile (""
-        : [av] "+r" (av),
-          [bv] "+r" (bv),
-    );
+    // Host-only fence: NVPTX spells a 64-bit GPR "l", not "r", and a GPU has
+    // no branch predictor to defend — predicated select IS the good lowering
+    // there, so the device build just skips the barrier.
+    if (comptime !k_dev) {
+        asm volatile (""
+            : [av] "+r" (av),
+              [bv] "+r" (bv),
+        );
+    }
     const m = @as(u64, 0) -% @intFromBool(c);
     return @bitCast((m & av) | (~m & bv));
 }
@@ -75,9 +96,9 @@ pub fn zPnjlim(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
     // arg-2 ≥ 0), d_dn needs arg ≤ -2 (so 2-arg ≥ 4), d_log needs
     // vnew0 > vcrit > 0 (so vnew0/vt ≥ 0 after rounding) — the 0.0 clamp only
     // ever rewrites DEAD arguments.
-    const d_up = vold + vt * (2.0 + @log(@max(arg - 2.0, 0.0)));
-    const d_dn = vold - vt * (2.0 + @log(@max(2.0 - arg, 0.0)));
-    const d_log = vt * @log(@max(vnew0 / vt, 0.0));
+    const d_up = vold + vt * (2.0 + klog(@max(arg - 2.0, 0.0)));
+    const d_dn = vold - vt * (2.0 + klog(@max(2.0 - arg, 0.0)));
+    const d_log = vt * klog(@max(vnew0 / vt, 0.0));
     const damped = sel(vold > 0.0, sel(arg > 0.0, d_up, d_dn), d_log);
     // The negative-excursion floor of the oracle's `else if` arm.
     const floor = sel(vold > 0.0, -vold - 1.0, 2.0 * vold - 1.0);
