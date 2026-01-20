@@ -477,14 +477,18 @@ fn compileInArena(
     lower.default_transitions = transitions;
     lower.timescale = timescale;
     lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
-    lower.lowerFile() catch |err| switch (err) {
-        error.OutOfMemory => return error.OutOfMemory,
-        error.NoModule => {
-            try bag.add(.lower, .E1001, .{}, "", .{});
-            return error.NoModule;
-        },
-        error.DiagnosticsReported => return error.CompileFailed,
-    };
+    {
+        // SSA maps its matrix directly; the compilation arena cannot free it.
+        defer lower.builder.deinit();
+        lower.lowerFile() catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            error.NoModule => {
+                try bag.add(.lower, .E1001, .{}, "", .{});
+                return error.NoModule;
+            },
+            error.DiagnosticsReported => return error.CompileFailed,
+        };
+    }
 
     // --- stage 4.5: if-convert pure diamonds to §4.2.12 select --------------
     // Before prove: a select's guard facts come from markSelectArms, so the
@@ -643,6 +647,8 @@ test "lint: source → MIR, arena freed clean" {
     try std.testing.expectEqual(@as(usize, 2), res.lower.num_ports);
     try std.testing.expect(res.verdict.ok());
     try std.testing.expectEqual(res.unitCount(), res.verdict.unit_modes.len);
+    // Direct OS mappings must be gone before returning the arena-owned MIR.
+    try std.testing.expectEqual(@as(usize, 0), res.lower.builder.defs.len);
 }
 
 test "diagnostics outlive the compilation arena" {
