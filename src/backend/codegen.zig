@@ -3408,6 +3408,48 @@ pub const Gen = struct {
     /// `proof.domainOf == .all` — which excludes ln/sqrt/pow/… and the
     /// hard-UB idiv/imod/fmod. Mirrors `foldHidesSlot`'s stop condition, so
     /// "inline" here is exactly what `renderVal` would inline.
+    /// Would evaluating this arm eagerly run a libm call that the branch would
+    /// have skipped? `eagerSafe` answers whether both arms MAY be evaluated;
+    /// this answers whether they SHOULD.
+    ///
+    /// Branchless is the right default because the arms are a few FP ops and a
+    /// mispredict costs more than both. A transcendental inverts that: `exp` is
+    /// ~50 instructions, so a `sel` over it pays for the arm that is thrown
+    /// away every single time. mos1 measured 2.00 `exp` per instance-eval
+    /// against ngspice's 1.45 for exactly this reason — the b-s junction kept
+    /// its `if` (a multi-use domain op blocked if-conversion) while the
+    /// identical b-d junction was flattened, so both of ITS arms run forever.
+    ///
+    /// The cost of saying no is a data-dependent branch and a lane pin. That
+    /// was the argument for keeping these eager — a lane-parallel S has no
+    /// single `.val()` to steer on. It does not survive measurement: an
+    /// instance-parallel S would have to take BOTH junction arms anyway, which
+    /// is what collapses that design's kernel speedup from 3.6x to 1.67x, and
+    /// the sparse stamp it cannot vectorize at all (195 Ir/instance at W=1,
+    /// 196 at W=4) caps the whole idea at 1.17x end-to-end. Not a lever worth
+    /// protecting with a real per-iterate cost.
+    ///
+    /// Only the INLINE tree counts: a `materialized` value is a statement that
+    /// already ran, so hoisting it into a select changes nothing.
+    fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
+        if (depth > 64) return false;
+        const v = self.an.rv(v0);
+        if (self.materialized(v)) return false;
+        const def = self.mir.valueDef(v);
+        if (def != .inst_result) return false;
+        const row = self.mir.instRow(def.inst_result);
+        if (libmClass(row.op)) return true;
+        return switch (Mir.opClass(row.op)) {
+            .unary => self.eagerCostly(@enumFromInt(row.a), depth + 1),
+            .binary => self.eagerCostly(@enumFromInt(row.a), depth + 1) or
+                self.eagerCostly(@enumFromInt(row.b), depth + 1),
+            .ternary => self.eagerCostly(@enumFromInt(row.a), depth + 1) or
+                self.eagerCostly(@enumFromInt(row.b), depth + 1) or
+                self.eagerCostly(@enumFromInt(row.c), depth + 1),
+            .phi, .branch, .jump, .call => false,
+        };
+    }
+
     fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
         if (depth > 64) return false;
         const v = self.an.rv(v0);
@@ -3500,7 +3542,8 @@ pub const Gen = struct {
         if (op == .select) {
             const want = self.an.vty[@intFromEnum(self.mir.instResult(inst))];
             if (want == .real and self.cur_strict and
-                self.eagerSafe(b2, 0) and self.eagerSafe(c, 0))
+                self.eagerSafe(b2, 0) and self.eagerSafe(c, 0) and
+                !self.eagerCostly(b2, 0) and !self.eagerCostly(c, 0))
             {
                 // Best mask first: an inline real comparison renders in S
                 // space (`lt`/`le`/`eq`) and is TRUE PER LANE on a vector S.
