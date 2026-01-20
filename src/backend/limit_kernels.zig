@@ -17,7 +17,10 @@
 // unconditionally and combine with selects, so the predictor sees constant
 // behaviour whether or not the clamp fires — the ngspice control flow survives
 // only in the `*Oracle` transcriptions below, kept as the differential-test
-// reference (T8 step 5). Two rules make that transformation exact:
+// reference (T8 step 5). ONE EXCEPTION, and it is measured: `zPnjlim`'s
+// damping arm costs three `@log` LIBCALLS on the host, which is not a select
+// and not free, so that arm keeps a host-only guard (see its header). Two
+// rules make the transformation exact:
 //
 //   * CLAMP BEFORE LOG. A branchless kernel evaluates its dead paths, so every
 //     `@log` argument is clamped with `@max(x, 0.0)` FIRST — never log a
@@ -91,6 +94,22 @@ inline fn sel(c: bool, a: f64, b: f64) f64 {
 /// starts to outrun Newton, i.e. `vt*ln(vt/(sqrt(2)*is))`. Branchless; see
 /// header. Requires the physical domain `vt > 0`, `vcrit > 0`.
 pub fn zPnjlim(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
+    const damp = vnew0 > vcrit and @abs(vnew0 - vold) > vt + vt;
+    // The negative-excursion floor of the oracle's `else if` arm.
+    const floor = sel(vold > 0.0, -vold - 1.0, 2.0 * vold - 1.0);
+    const floored = sel(vnew0 < 0.0 and vnew0 < floor, floor, vnew0);
+    // HOST ONLY, and the one place branchless loses: the damping arm needs
+    // THREE `@log` libcalls, and it is dead on the overwhelming majority of
+    // iterates. Unconditional, they cost 209 Ir per MOSFET per Newton
+    // iteration on scaling/parallel_inverters_100 — 8.0% of the whole program,
+    // where ngspice's whole limiter ladder is 52. `damp` is a compare a
+    // predictor gets right, so the branch is free and the logs go away.
+    // Bit-identical: this returns exactly the `damp == false` arm of the
+    // select below. On a GPU there is no predictor and no libcall to save
+    // (`gm.log` is inline), so the device build stays branchless.
+    if (comptime !k_dev) {
+        if (!damp) return floored;
+    }
     const arg = (vnew0 - vold) / vt;
     // Damping candidates, all evaluated. Live guards: d_up needs arg ≥ 2 (so
     // arg-2 ≥ 0), d_dn needs arg ≤ -2 (so 2-arg ≥ 4), d_log needs
@@ -100,10 +119,6 @@ pub fn zPnjlim(vnew0: f64, vold: f64, vt: f64, vcrit: f64) f64 {
     const d_dn = vold - vt * (2.0 + klog(@max(2.0 - arg, 0.0)));
     const d_log = vt * klog(@max(vnew0 / vt, 0.0));
     const damped = sel(vold > 0.0, sel(arg > 0.0, d_up, d_dn), d_log);
-    // The negative-excursion floor of the oracle's `else if` arm.
-    const floor = sel(vold > 0.0, -vold - 1.0, 2.0 * vold - 1.0);
-    const floored = sel(vnew0 < 0.0 and vnew0 < floor, floor, vnew0);
-    const damp = vnew0 > vcrit and @abs(vnew0 - vold) > vt + vt;
     return sel(damp, damped, floored);
 }
 
