@@ -331,6 +331,66 @@ fn writable(g: *const Gen, u: u32) bool {
     return u != none_u32 and u >= g.lower.num_ports;
 }
 
+// -------------------------------------------------------- the live sets
+
+/// Which unknowns `limit` actually touches. `reads` is every `cur[u]`/`old[u]`
+/// the emitted body loads, `writes` every `x[u]` it (or `seed`) can store.
+///
+/// WHY THE HOST WANTS THIS. `limit`'s signature is `[n_u]f64` twice in and
+/// `[n_u]f64` out because the host cannot name a device's unknowns, but a MOS
+/// ladder reads four of eight and writes two: `d`, `s` and the two branch-flow
+/// unknowns pass straight through, and without a mask the host gathers them
+/// from `x`, copies them across `limit`'s frame and stores them back into
+/// `lim_x` once per instance per Newton iterate to arrive at the value they
+/// already had. ngspice has no such traffic — its limiter memory is the three
+/// BRANCH voltages in `CKTstate0`, not every node the device touches.
+///
+/// Both masks are SUPERSETS by construction and must stay that way: a missing
+/// `reads` bit hands the clamp an undefined probe, a missing `writes` bit
+/// silently drops a limit. `unionSite` mirrors `emitClamp`/`emitLadder`
+/// site for site, so the two go stale together or not at all.
+const Live = struct { reads: u64 = 0, writes: u64 = 0 };
+
+fn ubit(u: u32) u64 {
+    return if (u == none_u32) 0 else @as(u64, 1) << @intCast(u);
+}
+
+fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
+    lv.reads |= ubit(lc.hi) | ubit(lc.lo);
+    lv.writes |= ubit(if (writable(g, lc.lo)) lc.lo else lc.hi);
+}
+
+pub fn liveSets(g: *const Gen) Live {
+    var lv: Live = .{};
+    // A core re-entry is seeded from EVERY entry of `cur` (`emit`'s `xr` loop),
+    // and n_u > 64 has no room in the mask — both answer "all of them".
+    if (usesCore(g) or g.n_u > 64) lv.reads = ~@as(u64, 0);
+    for (g.limits, 0..) |lc, i| switch (lc.alg) {
+        .fetlimds => {
+            const lad = ladderOf(g, i).?;
+            if (i != @min(lad.gs, lad.gd)) continue;
+            // The two mode arms unioned: the shared gate is read, and both
+            // channel nodes are read AND written (which one takes the fetlim
+            // correction and which the limvds one swaps with the mode).
+            const gs = g.limits[lad.gs];
+            const gd = g.limits[lad.gd];
+            lv.reads |= ubit(gs.hi) | ubit(gs.lo) | ubit(gd.lo);
+            lv.writes |= ubit(gs.lo) | ubit(gd.lo);
+        },
+        .limvds => if (!limvdsClaimed(g, i)) unionSite(&lv, g, lc),
+        else => unionSite(&lv, g, lc),
+    };
+    // `seed` corrects the same node `emitClamp` does, but OR it in rather than
+    // rely on that: the host initialises `lim_x` through `seed` and reads it
+    // back through `limit`, so a bit in one and not the other is a stale slot.
+    for (g.limits) |lc| {
+        if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
+        lv.writes |= ubit(if (writable(g, lc.lo)) lc.lo else lc.hi);
+    }
+    lv.reads |= lv.writes;
+    return lv;
+}
+
 // ------------------------------------------------------------- the prep
 
 /// Memo for `scValue`/`scBlock`.
@@ -763,6 +823,7 @@ pub fn emit(g: *Gen) Error!void {
     var any_pnjlim = false;
     for (g.limits) |lc| any_pnjlim = any_pnjlim or lc.alg == .pnjlim or lc.alg == .steplim;
     if (any_pnjlim) try g.w("    var ok = true;\n", .{});
+    try emitSigns(g);
     for (g.limits, 0..) |lc, i| switch (lc.alg) {
         // Collect kept only complete ladders; the earlier leg speaks for all
         // three sites, the partner and the claimed limvds stay silent.
@@ -775,8 +836,60 @@ pub fn emit(g: *Gen) Error!void {
     };
     try g.w("    return .{{ .x = x, .converged = {s} }};\n}}\n\n", .{if (any_pnjlim) "ok" else "true"});
 
+    const lv = liveSets(g);
+    try g.w(
+        \\/// Which unknowns `limit` and `seed` touch — `limit_reads` every
+        \\/// `cur`/`old` entry the body loads, `limit_writes` every `x` entry it
+        \\/// can store. Both are supersets. A host that gathers, copies and
+        \\/// writes back all `n_u` spends that traffic on unknowns the ladder
+        \\/// never looks at; ngspice's limiter memory is the branch voltages in
+        \\/// `CKTstate0`, not every node the device touches.
+        \\
+    , .{});
+    try g.w("pub const limit_reads: u64 = 0x{x};\npub const limit_writes: u64 = 0x{x};\n\n", .{ lv.reads, lv.writes });
+
     try emitSeed(g);
     try emitPrepTest(g);
+}
+
+/// `const zsg__k: f64 = ±1.0` for each DISTINCT frame sign, once at the top of
+/// `limit`. Every clamp on a MOSFET reads the same `type` parameter, so without
+/// this the compare-and-select is re-emitted three or four times per body over
+/// a latched `inst.lp__k` that cannot have changed between them (measured: 8 Ir
+/// per MOSFET per Newton iterate on mos1, 5 of them recoverable). Named from
+/// the MIR value so `signOf` needs no shared state.
+fn emitSigns(g: *Gen) Error!void {
+    var seen: std.ArrayList(u32) = .empty;
+    defer seen.deinit(g.gpa);
+    // MIRRORS `emit`'s dispatch site for site. A claimed `limvds` emits no
+    // clamp of its own but IS the ladder's channel rung, so its sign is still
+    // referenced; a const with no reference is a Zig compile error, and one
+    // referenced but not emitted is worse.
+    for (g.limits, 0..) |lc, i| switch (lc.alg) {
+        .fetlimds => {
+            const lad = ladderOf(g, i).?;
+            if (i != @min(lad.gs, lad.gd)) continue;
+            try oneSign(g, &seen, g.limits[lad.gs].sign);
+            try oneSign(g, &seen, g.limits[lad.gd].sign);
+            try oneSign(g, &seen, g.limits[lad.ds].sign);
+        },
+        .limvds => if (!limvdsClaimed(g, i)) try oneSign(g, &seen, lc.sign),
+        else => try oneSign(g, &seen, lc.sign),
+    };
+}
+
+fn oneSign(g: *Gen, seen: *std.ArrayList(u32), v: Mir.Value) Error!void {
+    if (v == .f_zero) return;
+    const k = signKey(g, v);
+    for (seen.items) |s| if (s == k) return;
+    try seen.append(g.gpa, k);
+    try g.w("    const zsg__{d}: f64 = if (", .{k});
+    try writeArg(g, v);
+    try g.w(" < 0) -1.0 else 1.0;\n", .{});
+}
+
+fn signKey(g: *const Gen, v: Mir.Value) u32 {
+    return @intFromEnum(g.an.rv(v));
 }
 
 fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
@@ -802,13 +915,9 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
         // that is NOT fixed-point-preserving, so it moved the converged
         // solution, not just the trajectory (2.1x drain current at vds=-5).
         if (lc.alg == .limvds) {
-            try g.w("        const sg: f64 = if (vo < 0) -1.0 else if (vo > 0) 1.0 else (if (", .{});
-            try writeArg(g, lc.sign);
-            try g.w(" < 0) -1.0 else 1.0);\n", .{});
+            try g.w("        const sg: f64 = if (vo < 0) -1.0 else if (vo > 0) 1.0 else zsg__{d};\n", .{signKey(g, lc.sign)});
         } else {
-            try g.w("        const sg: f64 = if (", .{});
-            try writeArg(g, lc.sign);
-            try g.w(" < 0) -1.0 else 1.0;\n", .{});
+            try g.w("        const sg: f64 = zsg__{d};\n", .{signKey(g, lc.sign)});
         }
     }
     try g.w("        const vl = {s}z{s}({s}vn, {s}vo", .{
@@ -898,9 +1007,7 @@ fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) E
     if (leg.sign == .f_zero) {
         try g.w("            const vl = zFetlim(vn, vo, ", .{});
     } else {
-        try g.w("            const sg: f64 = if (", .{});
-        try writeArg(g, leg.sign);
-        try g.w(" < 0) -1.0 else 1.0;\n", .{});
+        try g.w("            const sg: f64 = zsg__{d};\n", .{signKey(g, leg.sign)});
         try g.w("            const vl = sg * zFetlim(sg * vn, sg * vo, ", .{});
     }
     try writeArg(g, leg.argv[0]);
@@ -920,9 +1027,7 @@ fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) E
 /// 1.0 when the site is unsigned.
 fn writeSign(g: *Gen, name: []const u8, v: Mir.Value) Error!void {
     if (v == .f_zero) return g.w("        const {s}: f64 = 1.0;\n", .{name});
-    try g.w("        const {s}: f64 = if (", .{name});
-    try writeArg(g, v);
-    try g.w(" < 0) -1.0 else 1.0;\n", .{});
+    try g.w("        const {s}: f64 = zsg__{d};\n", .{ name, signKey(g, v) });
 }
 
 fn writeProbe(g: *Gen, lc: LimitCall, arr: []const u8) Error!void {
