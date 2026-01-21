@@ -23,8 +23,7 @@ const Mir = @import("../ir/mir.zig");
 const Lower = @import("../ir/lower.zig");
 const token = @import("../frontend/token.zig");
 
-/// Identifies one emitted source unit. LRM units: §5.6 contribution,
-/// §4.7 user function, §5.3.2 named block, §4.5 analog operator.
+/// Identifies one emitted source unit: §5.6 contribution or §4.5 analog operator.
 pub const Unit = struct {
     role: Role,
     /// For a contribution: access fn + node pair (e.g. "I_drain_source").
@@ -43,9 +42,6 @@ pub const Unit = struct {
 
 pub const Role = enum {
     analog,
-    analog_initial,
-    function,
-    block,
     analog_op,
     /// §9.4 the module's display tasks, chained into one root by
     /// `Lower.finishDisplays`. Like `common` it is deliberately NOT produced by
@@ -136,14 +132,9 @@ pub fn sanitize(buf: []u8, name: []const u8) error{NoSpaceLeft}![]const u8 {
     // interpolates it bare (`model.{s}`, `{s}__given`). `Z` stays injective —
     // it is the escape marker, so `sanitizeInto` emits it only as `Z<hi><lo>`,
     // and a trailing `Z` with no two digits after it cannot arise any other way.
-    if (isZigReserved(b.slice())) try b.byte('Z');
-    return b.slice();
-}
-
-/// Zig keywords and primitive type names — the identifiers that are legal in
-/// Verilog-A but cannot be a bare declaration name in the emitted Zig.
-fn isZigReserved(name: []const u8) bool {
-    return std.zig.Token.keywords.has(name) or std.zig.primitives.isPrimitive(name);
+    const leaf = b.buf[0..b.len];
+    if (std.zig.Token.keywords.has(leaf) or std.zig.primitives.isPrimitive(leaf)) try b.byte('Z');
+    return b.buf[0..b.len];
 }
 
 test "sanitize escapes Zig keywords and primitives" {
@@ -179,10 +170,6 @@ const Buf = struct {
         @memcpy(b.buf[b.len..][0..s.len], s);
         b.len += s.len;
     }
-
-    fn slice(b: *const Buf) []const u8 {
-        return b.buf[0..b.len];
-    }
 };
 
 // ---------------------------------------------------------------------------
@@ -211,7 +198,7 @@ pub fn unitName(
         const printed = try std.fmt.bufPrint(b.buf[b.len..], "{d}", .{unit.disambig});
         b.len += printed.len;
     }
-    return b.slice();
+    return b.buf[0..b.len];
 }
 
 // ---------------------------------------------------------------------------
@@ -266,7 +253,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Low
             // real net — not even one literally named `gnd` — can collide.
             if (n == Lower.ground) try b.byte('0') else try sanitizeInto(&b, lower.nodeName(n));
         }
-        try units.append(gpa, .{ .role = .analog, .target = try gpa.dupe(u8, b.slice()) });
+        try units.append(gpa, .{ .role = .analog, .target = try gpa.dupe(u8, b.buf[0..b.len]) });
     }
 
     // (2) stateful analog operators — §4.5. codegen keys their Instance state
@@ -325,15 +312,6 @@ fn assignDisambig(units: []Unit) void {
     }
 }
 
-// ponytail: `.function` (§4.7) and `.block` (§5.3.2) units are never
-// enumerated, because lower.zig INLINES user functions and named blocks into
-// the caller's CFG — there is no separate MIR region to emit a decl from, and a
-// phantom unit here would desynchronize proof.Verdict from codegen. The roles
-// and `unitName` support stay, so the day lowering stops inlining, this file
-// only grows two loops over `lower.module.?.functions` / the named SeqBlocks.
-// Same for `.analog_initial`: §5.2.1 forbids contributions there, so it emits
-// no units today.
-//
 // ponytail: an analog-operator target is just its callee name ("ddt"), so N
 // ddt's in one module collide and take disambig 0..N-1 — inserting one in the
 // middle shifts the later ones — bounded local re-Sema, which is the trade-off

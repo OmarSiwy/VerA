@@ -37,7 +37,6 @@ const std = @import("std");
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
 const Ast = @import("../frontend/ast.zig");
-const assert = std.debug.assert;
 
 /// File-as-struct: `@import("analysis.zig")` is both the namespace and the type.
 pub const Analysis = @This();
@@ -128,9 +127,7 @@ vty: []VTy = &.{},
 /// `rv` one array load and makes the whole render path genuinely read-only,
 /// which is what per-unit parallelism will need. Costs `nv * 4` bytes.
 ///
-/// INVARIANT: nothing calls `Mir.setAlias` after `prepare`. Its only caller
-/// is `ssa.tryRemoveTrivialPhi`, which runs inside lowering — codegen and
-/// proof are read-only passes over a finished Mir.
+/// INVARIANT: nothing calls `Mir.setAlias` after `prepare`.
 alias: []Mir.Value = &.{},
 
 /// Per Value: is this quantity independent of EVERY §4.4 probe, so that its
@@ -147,9 +144,7 @@ alias: []Mir.Value = &.{},
 /// real multiplies and an n_u-wide add at every operation it touches, and that
 /// arithmetic survives into the PTX (ARPice docs/gpu-device-eval.md §9.6).
 ///
-/// Conservative in one direction only: `false` is always sound, so a call (an
-/// analog operator carries its argument's derivative) and a probe are `false`
-/// without further inspection.
+/// Conservative in one direction only: `false` is always sound.
 dfree: []bool = &.{},
 
 /// Per Value: WHICH unknowns its derivative can be nonzero in — bit `u` set
@@ -210,16 +205,10 @@ pub fn buildStructure(
 ) Error!Analysis {
     var self: Analysis = .{ .arena = arena, .mir = mir, .lower = lower };
     self.nv = @intCast(mir.defs.len + Mir.Value.first_dynamic);
-    try self.buildAlias();
+    self.alias = try arena.alloc(Mir.Value, self.nv);
+    for (self.alias, 0..) |*p, v| p.* = mir.resolveAlias(@enumFromInt(@as(u32, @intCast(v))));
     try self.buildCfg();
     return self;
-}
-
-/// Snapshot the whole alias forest, root-first, so `rv` never touches the
-/// Mir again. Values below `first_dynamic` are their own root by definition.
-fn buildAlias(self: *Analysis) Error!void {
-    self.alias = try self.arena.alloc(Mir.Value, self.nv);
-    for (self.alias, 0..) |*p, v| p.* = self.mir.resolveAlias(@enumFromInt(@as(u32, @intCast(v))));
 }
 
 pub fn rv(self: *const Analysis, v: Mir.Value) Mir.Value {
@@ -249,7 +238,6 @@ fn buildCfg(self: *Analysis) Error!void {
     self.loop_of = try a.alloc(u32, nb);
     @memset(self.rpo_num, none_u32);
     @memset(self.idom, none_u32);
-    @memset(self.is_merge, false);
     @memset(self.is_loop, false);
     @memset(self.loop_of, none_u32);
 
@@ -836,7 +824,6 @@ pub fn callTy(name: []const u8) VTy {
     // `Lower.sysFuncTy`: the callee is chosen by the variable's declared type,
     // so the name IS the type and the two sides agree by construction.
     if (std.mem.eql(u8, name, "$held_int")) return .int;
-    // ponytail: reuse ch9 typing; only MIR-only callees need a case here.
     return switch (Lower.sysFuncTy(name)) {
         .real => .real,
         .integer => .int,

@@ -114,9 +114,6 @@ pub const Tag = enum(u8) {
     // gives a connect module the module_declaration production and nothing
     // else, so its terminator is `endmodule` like the other two spellings —
     // annex B reserves `endconnectrules` and there is no `endconnectmodule`.
-    // Moved out of `reserved_keywords` for the reason `always` and `defparam`
-    // were: it names a design element with a production, and a spelling-only
-    // reserved tag cannot be dispatched on.
     kw_connectmodule,
     kw_endmodule,
     kw_paramset,
@@ -125,10 +122,7 @@ pub const Tag = enum(u8) {
     kw_endfunction,
     kw_analog, // §5.2
     kw_initial, // 'analog initial' §5.2, and A.6.2 initial_construct
-    // A.6.2 `always_construct ::= always statement`. Moved out of
-    // `reserved_keywords` for the reason `defparam` was: it has a PRODUCTION
-    // now, so the parser has somewhere to dispatch it (see `parseDiscrete`),
-    // and a spelling-only reserved tag cannot be dispatched on.
+    // A.6.2 `always_construct ::= always statement`.
     kw_always,
     kw_begin,
     kw_end,
@@ -138,11 +132,8 @@ pub const Tag = enum(u8) {
 
     // connect specifications §7.7, annex A.1.8 — the `connectrules` design
     // element (an A.1.2 description alternative) and the keywords of its two
-    // item forms. Moved out of `reserved_keywords` for the reason
-    // `connectmodule` was: A.1.8 gives each a production, so they are
-    // constructs the parser dispatches (`parseConnectRules`), not spellings
-    // with nothing behind them. All six are Verilog-AMS-only words — none is on
-    // an IEEE 1364 list — so `introducedIn` defaults them to `.vams_2_3`,
+    // item forms. All six are Verilog-AMS-only words — none is on
+    // an IEEE 1364 list — so `isReserved` defaults them to `.vams_2_3`,
     // which is exactly what the same spellings answered from the reserved
     // list; §10.6 membership is keyed by spelling and does not move.
     // `exclude` (A.1.8 discipline_identifier_or_exclude) already has a tag:
@@ -190,10 +181,7 @@ pub const Tag = enum(u8) {
     kw_vectored,
 
     // A.4.1 `pass_switchtype ::= tran | rtran`, the unconditional bidirectional
-    // switch. Moved out of `reserved_keywords` for the reason `always` and
-    // `connectmodule` were: `gate_instantiation` is a module_or_generate_item
-    // (A.1.4), so these are constructs the parser dispatches and not spellings
-    // with nothing behind them. Both stay reserved — they are on the
+    // switch. Both stay reserved — they are on the
     // 1364-1995 list, which `keyword_intro` keys by spelling.
     //
     // The rest of A.4.1's gate types have no tag: they are still `.kw_reserved`
@@ -254,8 +242,7 @@ pub const Tag = enum(u8) {
     // A.6.5 `event_expression ::= … | driver_update expression` — a DIGITAL
     // event, so it is not in `isEventFunction` and never reachable from an
     // analog block; §9.22.4 defines it, and §9.22 paragraph 3 confines the
-    // whole family to a connect module. Out of `reserved_keywords` because it
-    // has a production (`parseEventTerm`).
+    // whole family to a connect module.
     kw_driver_update,
 
     // analog operators & filters §4.5
@@ -450,11 +437,7 @@ const kw_first: [keyword_map.keys().len + (kw_lanes orelse 1)]u8 = blk: {
 /// run of keys of length L, which exists only because `StaticStringMap` sorts
 /// its keys by length — the loop below `@compileError`s if a stdlib change ever
 /// stops it doing that, rather than silently mis-slicing the runs.
-const kw_max_len = blk: {
-    var m: usize = 0;
-    for (keyword_map.keys()) |k| m = @max(m, k.len);
-    break :blk m;
-};
+const kw_max_len: usize = keyword_map.max_len;
 
 const kw_len_start: [kw_max_len + 2]u16 = blk: {
     const keys = keyword_map.keys();
@@ -462,11 +445,10 @@ const kw_len_start: [kw_max_len + 2]u16 = blk: {
         if (b.len < a.len) @compileError("StaticStringMap no longer sorts keys by length");
     }
     var t: [kw_max_len + 2]u16 = undefined;
-    var i: usize = 0;
-    for (&t, 0..) |*slot, len| {
-        while (i < keys.len and keys[i].len < len) i += 1;
-        slot.* = i;
+    for (keyword_map.len_indexes[0 .. kw_max_len + 1], 0..) |off, len| {
+        t[len] = @intCast(off);
     }
+    t[kw_max_len + 1] = keys.len;
     break :blk t;
 };
 
@@ -558,7 +540,7 @@ fn lookupKeywordScalar(name: []const u8, lo: usize, hi: usize) ?Tag {
 ///
 ///     1364-1995 ⊂ 1364-2001 ⊂ 1364-2005 ⊂ VAMS-2.3 ⊂ VAMS-2023
 ///
-/// so one `introducedIn` datum per keyword decides membership in all five:
+/// so one `keyword_intro` datum per keyword decides membership in all five:
 /// a word is reserved in set `s` iff it was introduced no later than `s`.
 ///
 /// SCOPE (§10.6, verbatim): "The `begin_keywords and `end_keywords directives
@@ -599,14 +581,7 @@ const specifier_map = std.StaticStringMap(KeywordSet).initComptime(.{
 /// LRM §10.6 / annex B. Is the keyword spelled `name` a reserved word under
 /// `set`? Only meaningful for a spelling that is in `keyword_map` at all.
 pub fn isReserved(name: []const u8, set: KeywordSet) bool {
-    return @intFromEnum(introducedIn(name)) <= @intFromEnum(set);
-}
-
-/// Oldest keyword set in which `name` is reserved. Everything not on one of
-/// the IEEE 1364 lists below is a Verilog-AMS keyword, and annex G dates the
-/// handful that arrived after VAMS-2.3.
-fn introducedIn(name: []const u8) KeywordSet {
-    return keyword_intro.get(name) orelse .vams_2_3;
+    return @intFromEnum(keyword_intro.get(name) orelse .vams_2_3) <= @intFromEnum(set);
 }
 
 // ---- predicates the lexer/parser want ------------------------------------
@@ -641,14 +616,6 @@ pub fn isNetType(tag: Tag) bool {
         .kw_supply0,
         .kw_supply1,
         => true,
-        else => false,
-    };
-}
-
-/// LRM §3.3 variable/parameter base type keyword.
-pub fn isDataType(tag: Tag) bool {
-    return switch (tag) {
-        .kw_integer, .kw_real, .kw_string, .kw_realtime, .kw_time, .kw_reg => true,
         else => false,
     };
 }
@@ -698,6 +665,8 @@ pub fn isMathFunction(tag: Tag) bool {
 /// `analog_filter_function_call` (17 names, `limexp` included); the parser
 /// turns these into `Ast.ExprTag.filter_call`. Each occurrence owns runtime
 /// state (§4.5.1).
+/// Filters and small-signal functions may not appear in a conditional/loop
+/// whose controlling expression is not constant (§4.5.1, §5.8.4).
 pub fn isFilterFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_ddt,
@@ -738,13 +707,6 @@ pub fn isSmallSignalFunction(tag: Tag) bool {
     };
 }
 
-/// LRM §4.5/§4.6 — everything that carries per-instance runtime state, so it
-/// may not appear in a conditional/loop whose controlling expression is not
-/// constant (§4.5.1, §5.8.4). Union of the two groups above.
-pub fn isAnalogOperator(tag: Tag) bool {
-    return isFilterFunction(tag) or isSmallSignalFunction(tag);
-}
-
 /// LRM §5.10.3 — EXACTLY annex A.6.5 `analog_event_functions` (4 names), legal
 /// only inside an `@( ... )` event control. These become
 /// `Ast.ExprTag.event_function`.
@@ -770,7 +732,7 @@ pub fn isEventFunction(tag: Tag) bool {
 pub fn isBuiltinFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_analysis, .kw_initial_step, .kw_final_step => true,
-        else => isMathFunction(tag) or isAnalogOperator(tag) or isEventFunction(tag),
+        else => isMathFunction(tag) or isFilterFunction(tag) or isSmallSignalFunction(tag) or isEventFunction(tag),
     };
 }
 
@@ -784,16 +746,8 @@ const KV = struct { []const u8, Tag };
 /// Keeping them in the map is what makes them unusable as identifiers (annex B).
 const reserved_keywords = [_][]const u8{
     // annex C.16 — not used by Verilog-A
-    // `connectmodule` and `driver_update` moved OUT of this list and into
-    // `kw_connectmodule` / `kw_driver_update`: A.1.2 makes the first a
-    // module_keyword and A.6.5 makes the second an event_expression, so both
-    // are constructs the parser dispatches. They stay reserved — this list is
-    // only about which spellings have nothing behind them. The A.1.8
-    // `connectrules` family (`connect`, `connectrules`, `endconnectrules`,
-    // `merged`, `resolveto`, `split`) moved out the same way and for the same
-    // reason — see the `kw_connectrules` group. What is left of C.16's list is
-    // the two words annex A really does spend on nothing: `net_resolution`
-    // appears in no production at all, and `wreal` (§3.7) declares a discrete
+    // `net_resolution` appears in no production at all, and `wreal` (§3.7)
+    // declares a discrete
     // real net there is no digital kernel to drive.
     "net_resolution", "wreal",
     // digital behavior / structural §IEEE1364
@@ -802,18 +756,8 @@ const reserved_keywords = [_][]const u8{
     // B.1 reserves the spelling and Verilog-AMS 2.4 then spends it on nothing
     // — no statement, no system function, no production in annex A. Being
     // unavailable as an identifier is the whole of what the word does.
-    // `always` moved OUT of this list and into a `kw_always` tag, exactly as
-    // `defparam` did below: A.6.2 gives `always_construct` a production and
-    // §7.2.2 gives its body a CONTEXT, so it is a construct the parser
-    // dispatches, not a spelling with nothing behind it. It stays reserved —
-    // `keyword_intro` is keyed by spelling, and "always" is still on the
-    // 1364-1995 list.
     "and",                "assert",        "assign",
     "automatic",          "buf",           "bufif0",       "bufif1",
-    // `defparam` moved OUT of this list and into a `kw_defparam` tag: §6.3.1
-    // defines the parameter_override and A.1.4 makes it a module_or_generate
-    // item, so it is a construct with a production, not a reserved spelling
-    // with nothing behind it.
     "cmos",               "deassign",      "edge",
     "endprimitive",       "endspecify",    "endtable",     "endtask",
     "force",              "fork",          "highz0",       "highz1",
@@ -823,10 +767,8 @@ const reserved_keywords = [_][]const u8{
     "pmos",               "posedge",       "primitive",    "pull0",
     "pull1",              "pulldown",      "pullup",       "pulsestyle_ondetect",
     "pulsestyle_onevent", "rcmos",         "release",      "rnmos",
-    // `tran` and `rtran` moved OUT of this list and into `kw_tran` / `kw_rtran`:
-    // A.4.1's `pass_switchtype` has a production and A.1.4 makes
-    // `gate_instantiation` a module_or_generate_item. The `tranif`/`rtranif`
-    // spellings below stay here — a pass ENABLE switch is a three-terminal gate
+    // The `tranif`/`rtranif` spellings below stay here — a pass ENABLE switch
+    // is a three-terminal gate
     // whose conduction is a logic value, which is a different construct.
     "rpmos",              "rtranif0",      "rtranif1",
     "showcancelled",      "small",         "specify",      "specparam",
@@ -887,7 +829,7 @@ const kw_1364_2005 = [_][]const u8{"uwire"};
 /// tables G.6 (v2.3.1→v2.4) and G.7 (v2.4→VAMS-2023): `$noise_table_log`
 /// (G.6 item 4349), `absdelta` (G.6 item 4803), `return`/`break`/`continue`
 /// (G.7 item 830) and `expm1`/`ln1p` (G.7 item 7780). Every other VAMS keyword
-/// defaults to `.vams_2_3` — see `introducedIn`.
+/// defaults to `.vams_2_3` — see `isReserved`.
 const kw_vams_2023 = [_][]const u8{
     "absdelta", "break", "continue", "expm1", "ln1p", "noise_table_log", "return",
 };
@@ -901,40 +843,25 @@ const intro_kvs = kvs: {
     const n = kw_1364_1995.len + kw_1364_2001.len + kw_1364_2005.len + kw_vams_2023.len;
     var out: [n]IntroKV = undefined;
     var i: usize = 0;
-    for (kw_1364_1995) |name| {
-        out[i] = .{ name, .v1364_1995 };
-        i += 1;
+    for (.{ kw_1364_1995, kw_1364_2001, kw_1364_2005, kw_vams_2023 }, [_]KeywordSet{
+        .v1364_1995, .v1364_2001, .v1364_2005, .vams_2023,
+    }) |names, set| {
+        for (names) |name| {
+            out[i] = .{ name, set };
+            i += 1;
+        }
     }
-    for (kw_1364_2001) |name| {
-        out[i] = .{ name, .v1364_2001 };
-        i += 1;
-    }
-    for (kw_1364_2005) |name| {
-        out[i] = .{ name, .v1364_2005 };
-        i += 1;
-    }
-    for (kw_vams_2023) |name| {
-        out[i] = .{ name, .vams_2023 };
-        i += 1;
-    }
-    const frozen = out;
-    break :kvs frozen;
+    break :kvs out;
 };
 
 const keyword_kvs = kvs: {
     @setEvalBranchQuota(20_000);
-    const fields = @typeInfo(Tag).@"enum".fields;
-
-    var n: usize = reserved_keywords.len;
-    for (fields) |f| {
-        if (std.mem.startsWith(u8, f.name, "kw_") and !std.mem.eql(u8, f.name, "kw_reserved")) n += 1;
-    }
+    const fields = @typeInfo(Tag).@"enum".fields[@intFromEnum(Tag.first_keyword)..@intFromEnum(Tag.kw_reserved)];
+    const n = reserved_keywords.len + fields.len;
 
     var out: [n]KV = undefined;
     var i: usize = 0;
     for (fields) |f| {
-        if (!std.mem.startsWith(u8, f.name, "kw_")) continue;
-        if (std.mem.eql(u8, f.name, "kw_reserved")) continue;
         out[i] = .{ f.name[3..], @field(Tag, f.name) };
         i += 1;
     }
@@ -942,8 +869,7 @@ const keyword_kvs = kvs: {
         out[i] = .{ name, .kw_reserved };
         i += 1;
     }
-    const frozen = out;
-    break :kvs frozen;
+    break :kvs out;
 };
 
 // ---- checks ---------------------------------------------------------------

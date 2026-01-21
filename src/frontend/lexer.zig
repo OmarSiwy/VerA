@@ -742,19 +742,6 @@ pub fn stringContents(gpa: std.mem.Allocator, text: []const u8) ![]u8 {
     return gpa.realloc(out, n);
 }
 
-// Deviations from tests/fixtures/ch02_lexical snapshots of the OLD engine (each
-// fixture is named `*_current_behavior` or documented in COVERAGE.md as "records
-// the current rejection", i.e. a snapshot, not a normative requirement):
-//   - 27_form_feed_whitespace: form feed IS white space (§2.3), so it separates
-//     tokens here instead of being rejected.
-//   - 25_base_sign_current_behavior: `8'd -6` is "illegal syntax" per §2.6.1
-//     Example 3, so `8'd` lexes as one `.invalid` token.
-//   - 14_real_leading_dot: §2.6.2 requires a digit on each side of the point, so
-//     `.12` lexes as `.` + `12` and the parser rejects it.
-// x/z/? digits (05), unsized based (22), signed based (23) and white space
-// inside a based number (36) are all still rejected — by `parseInt`/the parser,
-// not by the scanner, so the token stream stays LRM-shaped.
-
 // ---- checks ---------------------------------------------------------------
 
 const testing = std.testing;

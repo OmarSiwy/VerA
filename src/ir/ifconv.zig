@@ -298,24 +298,18 @@ fn splice(mir: *Mir, dst: Mir.Block, arm: Mir.Block) void {
     var it = mir.blockInsts(arm);
     while (it.next()) |inst| {
         if (mir.instOp(inst) == .jump) continue; // classifyArm proved it's last
-        appendExisting(mir, dst, inst);
+        mir.insts.items(.next)[@intFromEnum(inst)] = .none;
+        const bi = @intFromEnum(dst);
+        const last = mir.blocks.items(.last)[bi];
+        if (last == .none) {
+            mir.blocks.items(.first)[bi] = inst;
+        } else {
+            mir.insts.items(.next)[@intFromEnum(last)] = inst;
+        }
+        mir.blocks.items(.last)[bi] = inst;
     }
     mir.blocks.items(.first)[@intFromEnum(arm)] = .none;
     mir.blocks.items(.last)[@intFromEnum(arm)] = .none;
-}
-
-/// Relink an existing row to the end of `dst`'s chain (addInst without the
-/// append — the row already exists).
-fn appendExisting(mir: *Mir, dst: Mir.Block, inst: Mir.Inst) void {
-    mir.insts.items(.next)[@intFromEnum(inst)] = .none;
-    const bi = @intFromEnum(dst);
-    const last = mir.blocks.items(.last)[bi];
-    if (last == .none) {
-        mir.blocks.items(.first)[bi] = inst;
-    } else {
-        mir.insts.items(.next)[@intFromEnum(last)] = inst;
-    }
-    mir.blocks.items(.last)[bi] = inst;
 }
 
 /// Replace this phi's diamond pairs with one `(x, sel)` pair; if that leaves a

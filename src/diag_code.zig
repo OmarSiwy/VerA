@@ -29,9 +29,7 @@
 //!     prints `Info.lrm` under every diagnostic already.
 //!
 //! DOD: `Code` is an `enum(u16)` whose tag name IS the rendered spelling, so
-//! `@tagName` replaces a name table. `info` is one exhaustive `switch`, which
-//! the compiler turns into a jump table AND — the reason it is a switch and not
-//! an array — refuses to compile if a new code arrives without an entry.
+//! `@tagName` replaces a name table.
 
 /// Static per-code documentation. All three fields are comptime string
 /// literals; nothing here is ever allocated.
@@ -557,6 +555,14 @@ const table = build: {
     break :build t;
 };
 
+fn retiredInfo(explanation: []const u8) Info {
+    return .{
+        .title = "(retired)",
+        .lrm = "",
+        .explain = explanation,
+    };
+}
+
 /// The catalogue proper. Exhaustive by construction: adding a `Code` without an
 /// arm here is a compile error, which is the point. Called only by `table`'s
 /// comptime initializer, so it costs nothing at runtime.
@@ -1014,10 +1020,7 @@ fn infoOf(c: Code) Info {
             \\keyword set halfway through parsing it.
             ,
         },
-        .E0203 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        .E0203 => retiredInfo(
             \\"named event declaration is not implemented". Retired: A.2.1.3
             \\`event_declaration` now parses and 5.10.4's trigger/detect pair
             \\lowers, so the condition does not exist to report. A named event is
@@ -1026,12 +1029,8 @@ fn infoOf(c: Code) Info {
             \\
             \\What replaced it: E0705, for a `@(ev)` or `-> ev` naming something
             \\no `event` declaration introduced. The number is not reused.
-            ,
-        },
-        .E0204 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        ),
+        .E0204 => retiredInfo(
             \\"module instantiation is not supported". Retired: A.4.1
             \\module_instantiation now parses and `ir/elaborate.zig` flattens the
             \\instance tree into the one device VerA emits, so the condition does
@@ -1043,8 +1042,7 @@ fn infoOf(c: Code) Info {
             \\instantiation is recursive), E0906 (the port connections do not
             \\match the port list) and E0907 (an override names no parameter).
             \\The number is not reused.
-            ,
-        },
+        ),
         .E0205 => .{
             .title = "unsupported module item",
             .lrm = "A.1.4",
@@ -1154,10 +1152,7 @@ fn infoOf(c: Code) Info {
             \\Plain `=` assigns to a variable, never to a branch.
             ,
         },
-        .E0215 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        .E0215 => retiredInfo(
             \\"expected an operand". Retired: a parser-recovery artifact that
             \\named no rule — it fired for ANY token that cannot begin an
             \\operand, and by dying first it made the codes that DO state a
@@ -1170,8 +1165,7 @@ fn infoOf(c: Code) Info {
             \\What replaced it: E0209 for a token that genuinely cannot begin
             \\an expression, E0320/E0416 where this artifact was the accidental
             \\messenger. The number is not reused.
-            ,
-        },
+        ),
         .E0216 => .{
             .title = "concatenation operand has no bit width",
             .lrm = "4.2.13",
@@ -1537,10 +1531,7 @@ fn infoOf(c: Code) Info {
         },
 
         // ------------------------------------------------------------ class 3
-        .E0301, .E0302 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        .E0301, .E0302 => retiredInfo(
             \\"vector ports are not supported" (E0301) and "vector nets are not
             \\supported" (E0302). Both retired: 3.6.3 vector nets and 6.5.2
             \\vector ports now elaborate. Each element becomes its own solver
@@ -1550,8 +1541,7 @@ fn infoOf(c: Code) Info {
             \\What replaced them: E0350 for 6.5.2.2 (the port's two declarations
             \\give different ranges), E0351 and E0352 for the element reference
             \\itself. The numbers are not reused.
-            ,
-        },
+        ),
         .E0303 => .{
             .title = "aliasparam target is not a parameter",
             .lrm = "3.4.7",
@@ -1565,10 +1555,7 @@ fn infoOf(c: Code) Info {
             \\alias.
             ,
         },
-        .E0304, .E0305 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        .E0304, .E0305 => retiredInfo(
             \\"port branches are not supported" (E0304) and "branch arrays are
             \\not supported" (E0305). Both retired: 3.12.1 `branch (<p>) name;`
             \\resolves to the same 5.4.3 port-flow unknown `I(<p>)` reads, and
@@ -1579,8 +1566,7 @@ fn infoOf(c: Code) Info {
             \\A port branch left of `<+` is E0407 (5.4.3 forbids the position,
             \\not the name); an out-of-range element is E0352 and the bare base
             \\name is E0351, both shared with vector nets.
-            ,
-        },
+        ),
         .E0306 => .{
             .title = "expected a net identifier",
             .lrm = "3.12",
@@ -3287,10 +3273,7 @@ fn infoOf(c: Code) Info {
             \\`from [1:inf)`. See E0602.
             ,
         },
-        .E0608 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        .E0608 => retiredInfo(
             \\"argument of tan is at a pole". Retired: 4.3.2 makes tan
             \\undefined at odd multiples of pi/2, but those are irrational
             \\points and every IEEE double is rational, so no representable
@@ -3305,8 +3288,7 @@ fn infoOf(c: Code) Info {
             \\
             \\Nothing replaced it; the condition does not exist to report.
             \\The number is not reused.
-            ,
-        },
+        ),
         .E0609 => .{
             .title = "pow() arguments violate the sign rule",
             .lrm = "4.3.1",
@@ -3508,10 +3490,7 @@ fn infoOf(c: Code) Info {
         },
 
         // ------------------------------------------------------------ class 8
-        .E0801 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        .E0801 => retiredInfo(
             \\"unsupported system function". Retired: it was a CAPABILITY CLASS —
             \\one code for every ch9 function VerA declined to implement — and the
             \\list is now empty, so the diagnostic could not fire.
@@ -3528,8 +3507,7 @@ fn infoOf(c: Code) Info {
             \\A function this compiler cannot host now gets a code that names the
             \\rule: E0806 for a digital-only name (LRM 9.2), E0808 for a spelling
             \\the language does not define. The number is not reused.
-            ,
-        },
+        ),
         .E0802 => .{
             .title = "$bound_step takes exactly one argument",
             .lrm = "9.17.2",
@@ -4439,10 +4417,7 @@ fn infoOf(c: Code) Info {
             \\file that declares the module and instantiate the paramset from it.
             ,
         },
-        .E1002 => .{
-            .title = "(retired)",
-            .lrm = "",
-            .explain =
+        .E1002 => retiredInfo(
             \\"generated identifier is too long". Retired: the condition is
             \\real — code generation builds a structural key per unit from the
             \\module name, the role and the target, and a key can overflow the
@@ -4457,8 +4432,7 @@ fn infoOf(c: Code) Info {
             \\If codegen ever reports the overflow through the bag, with a
             \\source location, that report takes a NEW number. This one is not
             \\reused.
-            ,
-        },
+        ),
         .E1003 => .{
             .title = "more solver unknowns than the device contract can hold",
             .lrm = "",

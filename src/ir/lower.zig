@@ -393,7 +393,7 @@ loops: std.ArrayList(LoopCtx) = .empty,
 ret: ?RetCtx = null,
 /// §4.7.2/§6.8 the local `parameter` declarations of the function currently
 /// being inlined, empty outside one. Their VALUES fold into `consts`
-/// (`inlineUserFunc`); this slice is the MASK `lookupName`/`foldExpr` consult
+/// (`inlineUserFuncPre`); this slice is the MASK `lookupName`/`foldExpr` consult
 /// before `param_index`, because §6.8 makes the function one of the six scopes
 /// and a local declaration shadows the module's — while lookup asks
 /// `param_index` first, so without the mask a module parameter of the same
@@ -521,7 +521,7 @@ held_vars: std.ArrayList(HeldVar) = .empty,
 /// module's variables are declared. Empty for a module with no event control.
 held_names: std.StringHashMapUnmanaged(void) = .empty,
 /// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
-/// Collected by `collectLimitSlots` before the analog block is lowered.
+/// Collected by `scanCallSites` before the analog block is lowered.
 limit_slots: std.ArrayList(LimitSlot) = .empty,
 /// §9.15 the model reads `$simparam("iteration")` or `$simparam("iniLim")`, so
 /// codegen owes it `Instance.newton_iteration` and the two hooks that move it.
@@ -657,13 +657,6 @@ const ScopeEntry = struct { name: []const u8, prev: ?VarSlot };
 const ArrayInfo = struct {
     dims: []const Bounds,
     ty: Ty,
-
-    /// The first dimension, for the callers that only handle a flat vector
-    /// (a whole array passed to §4.5.11's coefficient slot, §3.4.4's parameter
-    /// element walk).
-    fn first(a: ArrayInfo) Bounds {
-        return a.dims[0];
-    }
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
@@ -804,19 +797,11 @@ pub fn tokenSpan(self: *const Lower, tok: u32) diag.Span {
     return Lexer.tokenSpan(self.src, self.tok_starts, tok);
 }
 
-pub fn exprSpan(self: *const Lower, e: Ast.ExprId) diag.Span {
-    return self.tokenSpan(self.file.exprs.mainTok(e));
-}
-
 /// Record an error and keep going. Callers substitute a poison value; nothing
 /// downstream runs because `lowerFile` fails at the end.
 fn err(self: *Lower, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Oom!void {
     self.had_error = true;
     return self.bag.add(.lower, code, self.tokenSpan(tok), fmt, args);
-}
-
-fn errAt(self: *Lower, e: Ast.ExprId, code: diag.Code, comptime fmt: []const u8, args: anytype) Oom!void {
-    return self.err(self.file.exprs.mainTok(e), code, fmt, args);
 }
 
 /// Same, for a diagnostic that wants a label, a note or a suggestion. The
@@ -826,20 +811,12 @@ fn errWith(self: *Lower, tok: u32, code: diag.Code) diag.Builder {
     return self.bag.build(.lower, code, self.tokenSpan(tok));
 }
 
-fn errAtWith(self: *Lower, e: Ast.ExprId, code: diag.Code) diag.Builder {
-    return self.errWith(self.file.exprs.mainTok(e), code);
-}
-
 /// A poison real. Lowering continues so the run reports every error at once.
 const poison: TypedValue = .{ .v = .undef, .ty = .real };
 
 // ---------------------------------------------------------------------------
 // Small MIR helpers
 // ---------------------------------------------------------------------------
-
-fn newBlock(self: *Lower) Oom!Mir.Block {
-    return self.mir.addBlock(self.arena);
-}
 
 fn emit(self: *Lower, op: Mir.Opcode, ops: []const Mir.Value) Oom!Mir.Value {
     return self.mir.emit(self.arena, self.cur, op, ops);
@@ -850,14 +827,6 @@ fn call(self: *Lower, name: []const u8, args: []const Mir.Value) Oom!Mir.Value {
     return self.mir.emitCall(self.arena, self.cur, callee, args);
 }
 
-fn fconst(self: *Lower, x: f64) Oom!Mir.Value {
-    return self.mir.addFloatConst(self.arena, x);
-}
-
-fn iconst(self: *Lower, x: i64) Oom!Mir.Value {
-    return self.mir.addIntConst(self.arena, x);
-}
-
 /// Close `self.cur` with a jump and register the CFG edge (ssa.zig requires the
 /// edge before the target is sealed).
 fn gotoBlock(self: *Lower, target: Mir.Block) Oom!void {
@@ -865,11 +834,21 @@ fn gotoBlock(self: *Lower, target: Mir.Block) Oom!void {
     try self.builder.addPredecessor(target, self.cur);
 }
 
+/// Register both CFG edges before sealing their targets. A loop leaves its
+/// exit unsealed until its body has registered any `break` predecessors.
+inline fn branchTo(self: *Lower, cond: Mir.Value, then_b: Mir.Block, else_b: Mir.Block, comptime seal_else: bool) Oom!void {
+    _ = try self.mir.emitBranch(self.arena, self.cur, cond, then_b, else_b);
+    try self.builder.addPredecessor(then_b, self.cur);
+    try self.builder.addPredecessor(else_b, self.cur);
+    try self.builder.sealBlock(then_b);
+    if (seal_else) try self.builder.sealBlock(else_b);
+}
+
 /// Start a fresh predecessor-less block. Everything appended to it is dead
 /// (post-`break`/`return` code, §5.9/§4.7.1); sealing it immediately keeps the
 /// SSA builder from ever waiting on an edge that will not arrive.
 fn startUnreachable(self: *Lower) Oom!void {
-    const b = try self.newBlock();
+    const b = try self.mir.addBlock(self.arena);
     try self.builder.sealBlock(b);
     self.cur = b;
 }
@@ -941,7 +920,7 @@ pub fn wrap32(x: i64) i64 {
 fn strNum(self: *Lower, tv: TypedValue) Oom!TypedValue {
     if (tv.ty != .string) return tv;
     return switch (self.mir.valueDef(tv.v)) {
-        .str_const => |s| .{ .v = try self.iconst(strToInt(s, 64)), .ty = .integer },
+        .str_const => |s| .{ .v = try self.mir.addIntConst(self.arena, strToInt(s, 64)), .ty = .integer },
         else => tv,
     };
 }
@@ -989,14 +968,14 @@ fn coerceTo(self: *Lower, e: Ast.ExprId, ty: Ty, tv: TypedValue) Oom!Mir.Value {
         var bytes: std.ArrayList(u8) = .empty;
         defer bytes.deinit(self.arena);
         if (!try self.strLitBytes(e, &bytes)) {
-            try self.errAt(e, .E0354, "assigning a string to {s}", .{@tagName(ty)});
+            try self.err(self.file.exprs.mainTok(e), .E0354, "assigning a string to {s}", .{@tagName(ty)});
             return zeroOf(ty);
         }
         // §3.3's "right justified and either truncated on the left or zero
         // filled on the left" is measured against the DECLARED type, and §3.2
         // fixes `integer` at 32 bits: "hello" is 40 bits and loses its 'h'.
         // That width is the LRM's and not VerA's storage — see `strToInt`.
-        if (ty == .integer) return self.iconst(strToInt(bytes.items, 32));
+        if (ty == .integer) return self.mir.addIntConst(self.arena, strToInt(bytes.items, 32));
     }
     return switch (ty) {
         .real => self.toReal(tv),
@@ -1073,11 +1052,7 @@ fn astTy(t: Ast.Type) Ty {
 /// `elaborate.zig` owns "which module is the device, and what did the hierarchy
 /// above it do to the names in it"; this owns "turn one unit's declarations and
 /// analog blocks into MIR". The design is FLAT by construction — see that file's
-/// header for why the MIR gains no hierarchy concept — so a design of one unit
-/// (all any file can hold while §6.2.2 instantiation is refused in the parser)
-/// reaches `lowerModule` exactly as the module AST did before the pass existed.
-/// When a flattened instance list arrives it is walked HERE, and `lowerModule`
-/// stays the per-unit body it already is.
+/// header for why the MIR gains no hierarchy concept.
 ///
 /// Elaboration is called from lowering rather than from the driver because its
 /// input is the AST and its only consumer is the next line: a `Lower` field set
@@ -1102,7 +1077,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     self.module = module;
     self.mir.name = self.file.str(module.name);
 
-    const entry = try self.newBlock();
+    const entry = try self.mir.addBlock(self.arena);
     assert(entry == .entry);
     try self.builder.sealBlock(entry);
     self.cur = entry;
@@ -1125,7 +1100,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const name = self.file.str(p.name);
             const disc = self.strOrEmpty(p.discipline);
             for (0..r.size()) |k| {
-                const idx = try self.internNode(try self.vecElem(name, r.at(@intCast(k))), disc);
+                const idx = try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), disc);
                 self.node_dir.items[idx] = p.direction;
             }
             try self.vectors.put(self.arena, name, r);
@@ -1149,7 +1124,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         if (n.range) |d| {
             if (try self.foldDim(d, n.main_tok)) |r| {
                 for (0..r.size()) |k|
-                    _ = try self.internNode(try self.vecElem(name, r.at(@intCast(k))), self.strOrEmpty(n.discipline));
+                    _ = try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), self.strOrEmpty(n.discipline));
                 try self.vectors.put(self.arena, name, r);
             }
             continue;
@@ -1243,7 +1218,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // discipline (§6.5.2), so the first element answers for all of them and
         // the violation is reported once, at the declaration that commits it.
         var key_buf: [elem_key_len]u8 = undefined;
-        const probe_name = if (self.vectors.get(base)) |r| try self.elemKey1(&key_buf, base, r.at(0)) else base;
+        const probe_name = if (self.vectors.get(base)) |r| try self.elemKey(&key_buf, base, &.{r.at(0)}) else base;
         const idx = self.node_voltages.get(probe_name) orelse continue;
         if (idx == ground) continue;
         const dname = self.node_disciplines.items[idx];
@@ -1313,7 +1288,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             // already has — see `lowerBranchAccess`.
             const p = try self.nodeOf(b.hi);
             for (0..(if (arr) |r| r.size() else 1)) |k| {
-                const key = if (arr) |r| try self.vecElem(base, r.at(@intCast(k))) else base;
+                const key = if (arr) |r| try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, r.at(@intCast(k)) }) else base;
                 try self.port_branches.put(self.arena, key, p);
             }
         } else if (arr) |r| {
@@ -1325,7 +1300,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const lo = if (b.lo == .none) ground else try self.nodeOf(b.lo);
             try self.checkNetCompat(b.main_tok, hi, lo); // §3.12 → §3.11
             for (0..r.size()) |k|
-                try self.branches.put(self.arena, try self.vecElem(base, r.at(@intCast(k))), .{
+                try self.branches.put(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, r.at(@intCast(k)) }), .{
                     .hi = hi,
                     .lo = lo,
                     .id = self.newBranchId(),
@@ -1421,7 +1396,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // each slot's previous-iterate read has to be seeded in the ENTRY block —
     // a site under an `if` must still leave a value the end-of-block read can
     // find, and a slot minted inside the arm would not dominate it.
-    for (module.analog) |blk| try self.collectLimitSlots(blk.body);
+    for (module.analog) |blk| try self.scanCallSites(blk.body, true, {}, {});
 
     // §5.2 analog blocks, concatenated (§6.9.1).
     for (module.analog) |blk| {
@@ -1446,7 +1421,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const prev = self.restrict;
             self.restrict = "an analog initial block";
             self.in_analog_initial = true;
-            try self.lowerGuarded(flag, blk.body);
+            try self.lowerBranchStmt(flag, blk.body, .none, false);
             self.in_analog_initial = false;
             self.restrict = prev;
         } else {
@@ -1586,7 +1561,7 @@ fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     for (module.discrete) |blk| {
         ctx.where = if (blk.is_always) "an always block" else "an initial block";
-        try self.scanDiscrete(blk.body, blk.main_tok, &ctx);
+        try self.scanContext(blk.body, true, blk.main_tok, &ctx);
     }
     // The continuous side second: §7.2.2's conflict and §5.2.1's read are both
     // "this analog statement, against what the discrete blocks own", so the
@@ -1595,7 +1570,7 @@ fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // "the domain of a variable is that of the context from which its value is
     // assigned" gives the variable to whichever context is not the intruder, and
     // a module with a discrete block in it has already been told about that.
-    for (module.analog) |blk| try self.scanContinuous(blk.body, blk.is_initial, &ctx);
+    for (module.analog) |blk| try self.scanContext(blk.body, false, blk.is_initial, &ctx);
 }
 
 /// A.6.2 `initial_construct ::= initial statement`, lowered — as far as it can
@@ -1687,8 +1662,10 @@ fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
     }
 }
 
-/// One statement of an `initial`/`always` body. Collects the §7.2.2 assignment
-/// targets and checks every expression under it.
+/// Collect discrete §7.2.2 assignment targets, then check the continuous side
+/// for both-context assignments and §5.2.1 digital reads in `analog initial`.
+/// The context is compile-time: each walk keeps its own early exits and visits.
+/// Runs only in a module that HAS a discrete block; ordinary analog pays nothing.
 ///
 /// ponytail: a name declared in a NAMED BLOCK inside the discrete body shadows
 /// the module-level one, and this scan does not model that — the
@@ -1696,8 +1673,9 @@ fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// ever recording a name the module itself declared. A block-local `integer x`
 /// shadowing a module-level `real x` would still be recorded; give
 /// `Ast.SeqBlock` a scope walk here if a model ever does that.
-fn scanDiscrete(self: *Lower, id: Ast.StmtId, blk_tok: u32, ctx: *DiscreteCtx) Oom!void {
-    if (id == .none) return;
+fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: if (discrete) u32 else bool, ctx: *DiscreteCtx) Oom!void {
+    if (id == .none or (!discrete and ctx.assigned.count() == 0)) return;
+    const is_initial = if (discrete) {} else context;
     const ex = &self.file.exprs;
     switch (self.file.stmt(id)) {
         .assign => |a| {
@@ -1707,112 +1685,10 @@ fn scanDiscrete(self: *Lower, id: Ast.StmtId, blk_tok: u32, ctx: *DiscreteCtx) O
             while (t != .none and (ex.tag(t) == .index or ex.tag(t) == .range)) t = ex.lhs(t);
             if (t != .none and ex.tag(t) == .ident) {
                 const name = self.file.str(ex.strOf(t));
-                if (self.vars.contains(name)) try ctx.assigned.put(self.arena, name, blk_tok);
-            }
-            try self.scanDiscreteExpr(a.value, ctx);
-        },
-        .block => |b| for (b.body) |s| try self.scanDiscrete(s, blk_tok, ctx),
-        .if_stmt => |s| {
-            try self.scanDiscreteExpr(s.cond, ctx);
-            try self.scanDiscrete(s.then_s, blk_tok, ctx);
-            try self.scanDiscrete(s.else_s, blk_tok, ctx);
-        },
-        .case_stmt => |s| {
-            try self.scanDiscreteExpr(s.scrutinee, ctx);
-            for (s.arms) |arm| {
-                for (arm.labels) |l| try self.scanDiscreteExpr(l, ctx);
-                try self.scanDiscrete(arm.body, blk_tok, ctx);
-            }
-        },
-        .for_stmt => |s| {
-            try self.scanDiscrete(s.init, blk_tok, ctx);
-            try self.scanDiscreteExpr(s.cond, ctx);
-            try self.scanDiscrete(s.step, blk_tok, ctx);
-            try self.scanDiscrete(s.body, blk_tok, ctx);
-        },
-        .while_stmt => |s| {
-            try self.scanDiscreteExpr(s.cond, ctx);
-            try self.scanDiscrete(s.body, blk_tok, ctx);
-        },
-        .repeat_stmt => |s| {
-            try self.scanDiscreteExpr(s.count, ctx);
-            try self.scanDiscrete(s.body, blk_tok, ctx);
-        },
-        .event_control => |s| {
-            try self.scanDiscreteExpr(s.event, ctx);
-            try self.scanDiscrete(s.body, blk_tok, ctx);
-        },
-        .sys_task => |s| for (s.args) |a| try self.scanDiscreteExpr(a, ctx),
-        // A contribution or an indirect contribution in a discrete block is
-        // §5.6's own "the analog context" rule, not one of the four above, and
-        // the block has already been refused. Nothing to add.
-        .empty, .contribute, .indirect, .event_trigger, .disable, .jump => {},
-    }
-}
-
-/// Every expression reachable from a discrete statement. The child edges are the
-/// per-tag column usage documented on `Ast.ExprTag`; the `args` whitelist is the
-/// set of tags whose `extra` is an ExprId list offset — the others park a literal
-/// value or a StrId list there, and reading them as expressions would walk
-/// garbage.
-fn scanDiscreteExpr(self: *Lower, e: Ast.ExprId, ctx: *DiscreteCtx) Oom!void {
-    if (e == .none) return;
-    const ex = &self.file.exprs;
-    const tag = ex.tag(e);
-    switch (tag) {
-        // §4.5.15, verbatim: analog operators "can not be used inside an initial
-        // or always block". Same code as the analog-function-body and
-        // analog-initial cases, because it is the same sentence's family of
-        // contexts: an operator carries state from one accepted timepoint to the
-        // next, and none of these has a timepoint to advance.
-        .filter_call => try self.errAt(e, .E0422, "not allowed in {s}", .{ctx.where}),
-        .call => {
-            const name = self.file.str(ex.strOf(e));
-            if (ctx.funcs.contains(name)) {
-                var b = self.errAtWith(e, .E0430);
-                b.msg("`{s}`", .{name});
-                b.note(
-                    "an analog function shall only be called from an analog block " ++
-                        "or from another analog function",
-                    .{},
-                );
-                try b.emit();
-            }
-        },
-        else => {},
-    }
-    try self.scanDiscreteExpr(ex.lhs(e), ctx);
-    try self.scanDiscreteExpr(ex.rhs(e), ctx);
-    if (tag == .ternary) try self.scanDiscreteExpr(ex.ternaryElse(e), ctx);
-    switch (tag) {
-        .call,
-        .builtin_call,
-        .sys_call,
-        .filter_call,
-        .noise_call,
-        .event_function,
-        .concat,
-        .assign_pattern,
-        => for (ex.args(e)) |a| try self.scanDiscreteExpr(a, ctx),
-        else => {},
-    }
-}
-
-/// The continuous side of the same two sets: §7.2.2's both-contexts conflict on
-/// an assignment target, and §5.2.1's digital read inside an `analog initial`.
-/// Runs only in a module that HAS a discrete block, so the ordinary analog path
-/// pays nothing.
-fn scanContinuous(self: *Lower, id: Ast.StmtId, is_initial: bool, ctx: *DiscreteCtx) Oom!void {
-    if (id == .none or ctx.assigned.count() == 0) return;
-    const ex = &self.file.exprs;
-    switch (self.file.stmt(id)) {
-        .assign => |a| {
-            var t = a.target;
-            while (t != .none and (ex.tag(t) == .index or ex.tag(t) == .range)) t = ex.lhs(t);
-            if (t != .none and ex.tag(t) == .ident) {
-                const name = self.file.str(ex.strOf(t));
-                if (ctx.assigned.get(name)) |dtok| {
-                    var b = self.errAtWith(t, .E0432);
+                if (discrete) {
+                    if (self.vars.contains(name)) try ctx.assigned.put(self.arena, name, context);
+                } else if (ctx.assigned.get(name)) |dtok| {
+                    var b = self.errWith(self.file.exprs.mainTok(t), .E0432);
                     b.msg("`{s}`", .{name});
                     b.label(
                         self.tokenSpan(dtok),
@@ -1822,67 +1698,98 @@ fn scanContinuous(self: *Lower, id: Ast.StmtId, is_initial: bool, ctx: *Discrete
                     try b.emit();
                 }
             }
-            try self.scanContinuousExpr(a.value, is_initial, ctx);
+            try self.scanContextExpr(a.value, discrete, is_initial, ctx);
         },
-        .block => |b| for (b.body) |s| try self.scanContinuous(s, is_initial, ctx),
+        .block => |b| for (b.body) |s| try self.scanContext(s, discrete, context, ctx),
         .if_stmt => |s| {
-            try self.scanContinuousExpr(s.cond, is_initial, ctx);
-            try self.scanContinuous(s.then_s, is_initial, ctx);
-            try self.scanContinuous(s.else_s, is_initial, ctx);
+            try self.scanContextExpr(s.cond, discrete, is_initial, ctx);
+            try self.scanContext(s.then_s, discrete, context, ctx);
+            try self.scanContext(s.else_s, discrete, context, ctx);
         },
         .case_stmt => |s| {
-            try self.scanContinuousExpr(s.scrutinee, is_initial, ctx);
+            try self.scanContextExpr(s.scrutinee, discrete, is_initial, ctx);
             for (s.arms) |arm| {
-                for (arm.labels) |l| try self.scanContinuousExpr(l, is_initial, ctx);
-                try self.scanContinuous(arm.body, is_initial, ctx);
+                for (arm.labels) |l| try self.scanContextExpr(l, discrete, is_initial, ctx);
+                try self.scanContext(arm.body, discrete, context, ctx);
             }
         },
         .for_stmt => |s| {
-            try self.scanContinuous(s.init, is_initial, ctx);
-            try self.scanContinuousExpr(s.cond, is_initial, ctx);
-            try self.scanContinuous(s.step, is_initial, ctx);
-            try self.scanContinuous(s.body, is_initial, ctx);
+            try self.scanContext(s.init, discrete, context, ctx);
+            try self.scanContextExpr(s.cond, discrete, is_initial, ctx);
+            try self.scanContext(s.step, discrete, context, ctx);
+            try self.scanContext(s.body, discrete, context, ctx);
         },
         .while_stmt => |s| {
-            try self.scanContinuousExpr(s.cond, is_initial, ctx);
-            try self.scanContinuous(s.body, is_initial, ctx);
+            try self.scanContextExpr(s.cond, discrete, is_initial, ctx);
+            try self.scanContext(s.body, discrete, context, ctx);
         },
         .repeat_stmt => |s| {
-            try self.scanContinuousExpr(s.count, is_initial, ctx);
-            try self.scanContinuous(s.body, is_initial, ctx);
+            try self.scanContextExpr(s.count, discrete, is_initial, ctx);
+            try self.scanContext(s.body, discrete, context, ctx);
         },
         .event_control => |s| {
-            try self.scanContinuousExpr(s.event, is_initial, ctx);
-            try self.scanContinuous(s.body, is_initial, ctx);
+            try self.scanContextExpr(s.event, discrete, is_initial, ctx);
+            try self.scanContext(s.body, discrete, context, ctx);
         },
-        .contribute => |s| try self.scanContinuousExpr(s.rhs, is_initial, ctx),
-        .indirect => |s| try self.scanContinuousExpr(s.eqn, is_initial, ctx),
-        .sys_task => |s| for (s.args) |a| try self.scanContinuousExpr(a, is_initial, ctx),
+        .sys_task => |s| for (s.args) |a| try self.scanContextExpr(a, discrete, is_initial, ctx),
+        // A contribution or an indirect contribution in a discrete block is
+        // §5.6's own "the analog context" rule, not one of the four above, and
+        // the block has already been refused. Nothing to add.
+        .contribute => |s| if (!discrete) try self.scanContextExpr(s.rhs, discrete, is_initial, ctx),
+        .indirect => |s| if (!discrete) try self.scanContextExpr(s.eqn, discrete, is_initial, ctx),
         .empty, .event_trigger, .disable, .jump => {},
     }
 }
 
+/// Every expression reachable from a context statement. The child edges are the
+/// per-tag column usage documented on `Ast.ExprTag`; the `args` whitelist is the
+/// set of tags whose `extra` is an ExprId list offset — the others park a literal
+/// value or a StrId list there, and reading them as expressions would walk
+/// garbage.
 /// §5.2.1: "digital values cannot be accessed from the analog initial block as
 /// they have not yet been assigned when the analog initial block is executed."
 /// Only the READ is diagnosed, and only inside an `analog initial` — the same
 /// read from the ordinary analog block is what §7.3.1 Table 7-1 is the
 /// conversion table for.
-fn scanContinuousExpr(self: *Lower, e: Ast.ExprId, is_initial: bool, ctx: *DiscreteCtx) Oom!void {
-    if (e == .none or !is_initial) return;
+fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_initial: if (discrete) void else bool, ctx: *DiscreteCtx) Oom!void {
+    if (e == .none or (!discrete and !is_initial)) return;
     const ex = &self.file.exprs;
     const tag = ex.tag(e);
-    if (tag == .ident) {
+    if (discrete) {
+        switch (tag) {
+            // §4.5.15, verbatim: analog operators "can not be used inside an initial
+            // or always block". Same code as the analog-function-body and
+            // analog-initial cases, because it is the same sentence's family of
+            // contexts: an operator carries state from one accepted timepoint to the
+            // next, and none of these has a timepoint to advance.
+            .filter_call => try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx.where}),
+            .call => {
+                const name = self.file.str(ex.strOf(e));
+                if (ctx.funcs.contains(name)) {
+                    var b = self.errWith(self.file.exprs.mainTok(e), .E0430);
+                    b.msg("`{s}`", .{name});
+                    b.note(
+                        "an analog function shall only be called from an analog block " ++
+                            "or from another analog function",
+                        .{},
+                    );
+                    try b.emit();
+                }
+            },
+            else => {},
+        }
+    } else if (tag == .ident) {
         const name = self.file.str(ex.strOf(e));
         if (ctx.assigned.get(name)) |dtok| {
-            var b = self.errAtWith(e, .E0431);
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0431);
             b.msg("`{s}`", .{name});
             b.label(self.tokenSpan(dtok), "`{s}` is assigned here, in the discrete context", .{name});
             try b.emit();
         }
     }
-    try self.scanContinuousExpr(ex.lhs(e), is_initial, ctx);
-    try self.scanContinuousExpr(ex.rhs(e), is_initial, ctx);
-    if (tag == .ternary) try self.scanContinuousExpr(ex.ternaryElse(e), is_initial, ctx);
+    try self.scanContextExpr(ex.lhs(e), discrete, is_initial, ctx);
+    try self.scanContextExpr(ex.rhs(e), discrete, is_initial, ctx);
+    if (tag == .ternary) try self.scanContextExpr(ex.ternaryElse(e), discrete, is_initial, ctx);
     switch (tag) {
         .call,
         .builtin_call,
@@ -1892,7 +1799,7 @@ fn scanContinuousExpr(self: *Lower, e: Ast.ExprId, is_initial: bool, ctx: *Discr
         .event_function,
         .concat,
         .assign_pattern,
-        => for (ex.args(e)) |a| try self.scanContinuousExpr(a, is_initial, ctx),
+        => for (ex.args(e)) |a| try self.scanContextExpr(a, discrete, is_initial, ctx),
         else => {},
     }
 }
@@ -1912,7 +1819,7 @@ fn collectDisciplines(self: *Lower) Oom!void {
     // spelling": everything downstream — `branchOf`, `contribIndex`,
     // `resolveLvalue`, the E0501/E0337 checks — sees an `Access` and cannot
     // tell which word produced it. The single exemption is the §3.6.1.4 name
-    // match in `checkAccessMatch`; see `isGeneric` there.
+    // match in `checkAccessMatch`.
     try self.access_kind.put(self.arena, generic_potential, .potential);
     try self.access_kind.put(self.arena, generic_flow, .flow);
 
@@ -2367,7 +2274,7 @@ fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
         return self.applyDefaultDiscipline(name, main_tok);
     var key_buf: [elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
-        try self.applyDefaultDiscipline(try self.elemKey1(&key_buf, name, r.at(@intCast(k))), main_tok);
+        try self.applyDefaultDiscipline(try self.elemKey(&key_buf, name, &.{r.at(@intCast(k))}), main_tok);
 }
 
 fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
@@ -2490,7 +2397,7 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
         .ident => {
             const name = self.file.str(ex.strOf(e));
             if (self.vectors.get(name)) |r| {
-                try self.errAt(e, .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
+                try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
                 return ground;
             }
             return self.internNode(name, "");
@@ -2507,7 +2414,7 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
         .hier_ident => {
             const name = try self.flatName(e);
             if (!self.node_voltages.contains(name)) {
-                var b = self.errAtWith(e, .E0901);
+                var b = self.errWith(self.file.exprs.mainTok(e), .E0901);
                 b.msg("`{s}` names no net in the elaborated design", .{name});
                 try b.emit();
                 return ground;
@@ -2517,12 +2424,12 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
         .index => {
             const base = ex.lhs(e);
             if (ex.tag(base) != .ident) {
-                try self.errAt(e, .E0306, "", .{});
+                try self.err(self.file.exprs.mainTok(e), .E0306, "", .{});
                 return ground;
             }
             const name = self.file.str(ex.strOf(base));
             const r = self.vectors.get(name) orelse {
-                try self.errAt(e, .E0351, "`{s}` was not declared with a range", .{name});
+                try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` was not declared with a range", .{name});
                 return ground;
             };
             // §5.5.2 "The index must be a constant expression, though it may
@@ -2530,17 +2437,17 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
             // `consts`, where `tryUnrollFor` binds the genvar of the enclosing
             // §5.9.3 `for` for the duration of each unrolled copy.
             const i = self.constEval(ex.rhs(e)) orelse {
-                try self.errAt(e, .E0352, "index into `{s}` is not a constant expression", .{name});
+                try self.err(self.file.exprs.mainTok(e), .E0352, "index into `{s}` is not a constant expression", .{name});
                 return ground;
             };
             if (!r.has(i.asInt())) {
-                try self.errAt(e, .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i.asInt() });
+                try self.err(self.file.exprs.mainTok(e), .E0352, "`{s}` is [{d}:{d}], so {d} is not one of its elements", .{ name, r.msb, r.lsb, i.asInt() });
                 return ground;
             }
-            return self.internNodeElem(name, i.asInt(), "");
+            return self.internNodeElem(name, i.asInt());
         },
         else => {
-            try self.errAt(e, .E0306, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0306, "", .{});
             return ground;
         },
     }
@@ -2550,23 +2457,20 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
 /// spelling the source uses, so a diagnostic, a `//!` operating-point binding
 /// and the emitted `U` enum all name the same thing, and naming.zig's escape
 /// makes it a legal Zig identifier without anybody choosing an encoding.
-fn vecElem(self: *Lower, base: []const u8, i: i64) Oom![]const u8 {
-    return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, i });
-}
-
+///
 /// `internNode` for a vector element, `bus[3]`.
 ///
 /// The spelling goes into a stack buffer for the LOOKUP and only reaches the
 /// arena when the element is genuinely new. `elemKey`'s reasoning exactly, and
 /// for the same reason: §5.5.2 lets `V(bus[3])` sit in an unrolled §5.9.3 loop
-/// body, and `vecElem` was formatting the name afresh on every reference just to
+/// body, and formatting the name afresh on every reference would just
 /// rediscover the slot the first one interned. `getKey` hands back the arena copy
 /// already in the map, so `internNode` does its whole job unchanged.
-fn internNodeElem(self: *Lower, base: []const u8, i: i64, discipline: []const u8) Oom!u16 {
+fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
     var buf: [elem_key_len]u8 = undefined;
-    const key = try self.elemKey1(&buf, base, i);
-    const name = self.node_voltages.getKey(key) orelse try self.vecElem(base, i);
-    return self.internNode(name, discipline);
+    const key = try self.elemKey(&buf, base, &.{i});
+    const name = self.node_voltages.getKey(key) orelse try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, i });
+    return self.internNode(name, "");
 }
 
 /// Fold a declared `[msb:lsb]` (§3.6.3 Syntax 3-6). The bounds are constant
@@ -2652,13 +2556,13 @@ fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
     const h_name = if (hv != null) self.file.str(self.file.exprs.strOf(b.hi)) else "";
     const l_name = if (lv != null) self.file.str(self.file.exprs.strOf(b.lo)) else "";
     for (0..size) |k| {
-        const hi = if (hv) |h| try self.internNode(try self.vecElem(h_name, h.at(@intCast(k))), "") else h_scalar;
-        const lo = if (lv) |l| try self.internNode(try self.vecElem(l_name, l.at(@intCast(k))), "") else l_scalar;
+        const hi = if (hv) |h| try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ h_name, h.at(@intCast(k)) }), "") else h_scalar;
+        const lo = if (lv) |l| try self.internNode(try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ l_name, l.at(@intCast(k)) }), "") else l_scalar;
         // §3.12 → §3.11 once, not `size` times: every element of a vector
         // branch pairs the same two DISCIPLINES, so the verdict is the same on
         // all of them and only the first has anything new to say.
         if (k == 0) try self.checkNetCompat(b.main_tok, hi, lo);
-        try self.branches.put(self.arena, try self.vecElem(name, @intCast(k)), .{
+        try self.branches.put(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, @as(i64, @intCast(k)) }), .{
             .hi = hi,
             .lo = lo,
             .id = self.newBranchId(),
@@ -2801,15 +2705,15 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // automatically updates gate_cap". So a default that MENTIONS another
     // parameter may NOT be frozen at the number it folds to under that
     // parameter's declared default — the host overrides the base after
-    // elaboration and the dependent has to follow it. `elabConst` is precisely
+    // elaboration and the dependent has to follow it. `foldExpr(..., false)` is precisely
     // the fold that refuses to look through a parameter, so it is the "may this
     // be baked into the model card?" test; `folded` above cannot be, for the
     // §6.6.1 reason. Codegen turns the surviving expression into `derive()`.
-    const frozen = self.elabConst(decl.default);
+    const frozen = self.foldExpr(decl.default, false);
 
     const default: Mir.Value = if (frozen) |c| switch (c) {
-        .int => try self.iconst(c.asInt()),
-        .real => try self.fconst(c.asReal()),
+        .int => try self.mir.addIntConst(self.arena, c.asInt()),
+        .real => try self.mir.addFloatConst(self.arena, c.asReal()),
         .str => |s| try self.mir.addStrConst(self.arena, s),
     } else blk: {
         // `parameter real b = a*2;` where `a` is itself overridable: keep it as
@@ -2827,7 +2731,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
 /// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
 /// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
 /// before the solve and are left to the ordinary paths. Same walk shape as
-/// `scanCalleesExpr`: list-carrying tags recurse `args`, the ternary's third
+/// `scanCallSitesExpr`: list-carrying tags recurse `args`, the ternary's third
 /// operand lives in `extra`, and `lhs`/`rhs` are `.none` wherever unused.
 fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
     if (e == .none) return null;
@@ -2986,7 +2890,7 @@ fn checkParamType(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8, fo
 fn aliasSystemParam(self: *Lower, alias: []const u8, target: []const u8) Oom!bool {
     if (!std.mem.eql(u8, target, "$mfactor")) return false;
     self.mfactor_param = @intCast(self.params.items.len);
-    try self.addParam(alias, .real, try self.fconst(1.0), .{ .real = 1.0 }, &.{}, false, Mir.no_tok);
+    try self.addParam(alias, .real, try self.mir.addFloatConst(self.arena, 1.0), .{ .real = 1.0 }, &.{}, false, Mir.no_tok);
     return true;
 }
 
@@ -3037,7 +2941,7 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
     // so every element keeps its §3.4 zero default and one bad declaration does
     // not turn every USE of the parameter into a second diagnostic.
     if (decl.default != .none and self.file.exprs.tag(decl.default) != .assign_pattern) {
-        var b = self.errAtWith(decl.default, .E0349);
+        var b = self.errWith(self.file.exprs.mainTok(decl.default), .E0349);
         b.msg("initialising array parameter `{s}`", .{name});
         b.help("write the list as an assignment pattern: `'{{ ... }}`", .{});
         try b.emit();
@@ -3051,10 +2955,10 @@ fn lowerParamArray(self: *Lower, decl: *const Ast.ParamDecl, name: []const u8) O
         shapeSubscripts(dims, k, idx);
         const default: Mir.Value = if (elem == .none)
             (if (astTy(ty) == .real) Mir.Value.f_zero else Mir.Value.zero)
-            // §6.3.4 again: `elabConst`, not `constEval` — an element written
+            // §6.3.4 again: `foldExpr(..., false)`, not `constEval` — an element written
             // over another parameter tracks it exactly like a scalar default.
-        else if (self.elabConst(elem)) |c|
-            (if (astTy(ty) == .real) try self.fconst(c.asReal()) else try self.iconst(c.asInt()))
+        else if (self.foldExpr(elem, false)) |c|
+            (if (astTy(ty) == .real) try self.mir.addFloatConst(self.arena, c.asReal()) else try self.mir.addIntConst(self.arena, c.asInt()))
         else blk: {
             const tv = try self.lowerExpr(elem);
             break :blk if (astTy(ty) == .real) try self.toReal(tv) else tv.v;
@@ -3155,7 +3059,6 @@ fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]const u
 /// covers the spelling.
 fn flattenPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds) Oom![]const Ast.ExprId {
     const out = try self.arena.alloc(Ast.ExprId, shapeCells(dims));
-    @memset(out, .none);
     self.fillPattern(e, dims, out);
     return out;
 }
@@ -3299,17 +3202,7 @@ fn elemKey(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, idx: []const 
     return buf[0..n];
 }
 
-/// The one-dimensional spelling of the two above, for the many callers that
-/// index a `[lo:hi]` array with a single subscript.
-fn elemKey1(self: *Lower, buf: *[elem_key_len]u8, name: []const u8, i: i64) Oom![]const u8 {
-    return self.elemKey(buf, name, &.{i});
-}
-
 // ---- §3.2 variables and scopes ---------------------------------------------
-
-fn openScope(self: *const Lower) usize {
-    return self.scope_log.items.len;
-}
 
 fn closeScope(self: *Lower, mark: usize) void {
     while (self.scope_log.items.len > mark) {
@@ -3439,7 +3332,7 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
     // is that diamond's join. Either way it dominates every statement of the
     // module, which is all the seed has to do.
     const idx: i64 = @intCast(self.held_vars.items.len);
-    const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.iconst(idx)});
+    const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.mir.addIntConst(self.arena, idx)});
     try self.held_vars.append(self.arena, .{
         .name = name,
         .ty = ty,
@@ -3575,7 +3468,7 @@ fn lowerDisable(self: *Lower, tok: u32) Oom!void {
 
 /// §5.3.2 named sequential block: its declarations shadow for the block only.
 fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
-    const mark = self.openScope();
+    const mark = self.scope_log.items.len;
     defer self.closeScope(mark);
     for (b.params) |*p| try self.lowerParamDecl(p); // §5.3.2 local parameters
     try self.checkOneItemPerScope(b.vars);
@@ -3676,14 +3569,14 @@ fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!b
 
     const iv = try self.toInt(try self.lowerExpr(chain.subs[0]));
     const tv = try self.lowerExpr(value);
-    const d = info.first();
+    const d = info.dims[0];
     var key_buf: [elem_key_len]u8 = undefined;
     var i = d.lo;
     while (i <= d.hi) : (i += 1) {
         const slot = self.vars.get(try self.elemKey(&key_buf, name, &.{i})) orelse continue;
         const old = try self.builder.readVariable(slot.place, self.cur);
         const new = try self.coerceTo(value, slot.ty, tv);
-        const c = try self.emit(.ieq, &.{ iv, try self.iconst(i) });
+        const c = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, i) });
         try self.builder.writeVariable(slot.place, self.cur, try self.emit(.select, &.{ c, new, old }));
     }
     return true;
@@ -3713,7 +3606,7 @@ fn copyWholeArray(
     const src = self.arrays.get(src_name) orelse return false;
 
     if (src.dims.len != dst.dims.len) {
-        var b = self.errAtWith(target, .E0429);
+        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
         b.msg("array `{s}` has {d} dimensions and `{s}` has {d}", .{
             dst_name, dst.dims.len, src_name, src.dims.len,
         });
@@ -3722,7 +3615,7 @@ fn copyWholeArray(
     }
     for (dst.dims, src.dims, 0..) |d, s, k| {
         if (d.count() == s.count()) continue;
-        var b = self.errAtWith(target, .E0429);
+        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
         // The element COUNTS, not the bounds: `dimsBounds` normalizes `[10:1]`
         // to lo/hi, so printing them back is not the source's own spelling and
         // sends the reader looking for a declaration that is not there.
@@ -3737,7 +3630,7 @@ fn copyWholeArray(
     // integer/real conversions are NOT that: a `real` array and an `integer`
     // array hold different objects, and the clause has no coercion in it.
     if (src.ty != dst.ty) {
-        var b = self.errAtWith(target, .E0429);
+        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
         b.msg("array `{s}` holds `{s}` and `{s}` holds `{s}`", .{
             dst_name, @tagName(dst.ty), src_name, @tagName(src.ty),
         });
@@ -3772,13 +3665,13 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.get(name)) |s| return s;
             if (self.param_index.contains(name)) {
-                var b = self.errAtWith(e, .E0312);
+                var b = self.errWith(self.file.exprs.mainTok(e), .E0312);
                 b.msg("`{s}`", .{name});
                 b.help("declare a `real` variable if the value changes during the solve", .{});
                 try b.emit();
                 return null;
             }
-            var b = self.errAtWith(e, .E0313);
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0313);
             b.msg("`{s}`", .{name});
             const near = diag.didYouMeanMap(name, self.vars) orelse
                 diag.didYouMeanMap(name, self.param_index);
@@ -3789,7 +3682,7 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
         .index => {
             var subs: [max_stack_dims]Ast.ExprId = undefined;
             const chain = self.indexChain(e, &subs) orelse {
-                try self.errAt(e, .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
+                try self.err(self.file.exprs.mainTok(e), .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
                 return null;
             };
             const name = self.file.str(chain.name);
@@ -3800,9 +3693,7 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
             const at = idx[0..chain.subs.len];
             for (chain.subs, at) |s, *o| {
                 const c = self.constEval(s) orelse {
-                    // ponytail: a runtime array index would need a select chain or
-                    // real memory; every fixture indexes with a constant/genvar.
-                    try self.errAt(e, .E0311, "indexing `{s}`", .{name});
+                    try self.err(self.file.exprs.mainTok(e), .E0311, "indexing `{s}`", .{name});
                     return null;
                 };
                 o.* = c.asInt();
@@ -3815,7 +3706,7 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
         // VerA limitation — this one is a rule, and a variable in another scope
         // stays unwritable however much of §6.8 is implemented.
         .hier_ident => {
-            var b = self.errAtWith(e, .E0316);
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0316);
             b.msg("a hierarchical name is not an assignment target", .{});
             b.note("§5.7: \"Hierarchical assignment of a variable from another scope/module is not allowed\"", .{});
             try b.emit();
@@ -3825,11 +3716,11 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
         // production from the §4.2.13 expression, and it is not in the analog
         // subset (annex C). Named so the message does not blame the rhs.
         .concat, .multi_concat => {
-            try self.errAt(e, .E0317, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0317, "", .{});
             return null;
         },
         else => {
-            try self.errAt(e, .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0316, "only `x` and `x[<constant>]` can be assigned to", .{});
             return null;
         },
     }
@@ -3837,7 +3728,7 @@ fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
 
 fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oom!?VarSlot {
     const info = self.arrays.get(name) orelse {
-        try self.errAt(e, .E0309, "`{s}`", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0309, "`{s}`", .{name});
         return null;
     };
     if (!try self.checkSubscripts(e, name, info, idx)) return null;
@@ -3873,7 +3764,7 @@ fn indexChain(self: *const Lower, e: Ast.ExprId, buf: []Ast.ExprId) ?IndexChain 
 /// a whole ROW, as if it were a scalar.
 fn checkSubscriptCount(self: *Lower, e: Ast.ExprId, name: []const u8, info: ArrayInfo, n: usize) Oom!bool {
     if (n == info.dims.len) return true;
-    var b = self.errAtWith(e, .E0356);
+    var b = self.errWith(self.file.exprs.mainTok(e), .E0356);
     b.msg("`{s}` is declared with {d} dimension(s) and is indexed with {d}", .{
         name, info.dims.len, n,
     });
@@ -3886,7 +3777,7 @@ fn checkSubscripts(self: *Lower, e: Ast.ExprId, name: []const u8, info: ArrayInf
     if (!try self.checkSubscriptCount(e, name, info, idx.len)) return false;
     for (idx, info.dims, 0..) |i, d, k| {
         if (i >= d.lo and i <= d.hi) continue;
-        try self.errAt(e, .E0310, "index {d} is outside dimension {d} of `{s}[{d}:{d}]`", .{
+        try self.err(self.file.exprs.mainTok(e), .E0310, "index {d} is outside dimension {d} of `{s}[{d}:{d}]`", .{
             i, k, name, d.lo, d.hi,
         });
         return false;
@@ -3933,14 +3824,14 @@ fn lowerJump(self: *Lower, tok: u32, kind: Ast.Stmt.JumpKind, value: Ast.ExprId)
 /// codegen stamps `+val` at hi and `-val` at lo.
 pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
     if (self.restrict) |ctx| {
-        try self.errAt(lhs, .E0405, "not allowed in {s}", .{ctx});
+        try self.err(self.file.exprs.mainTok(lhs), .E0405, "not allowed in {s}", .{ctx});
         return;
     }
     // §5.10 "Contribution statements cannot be used inside an event control
     // block because it can generate discontinuity in analog signals"; A.6.4
     // `analog_event_statement` states it structurally.
     if (self.in_event_stmt) {
-        try self.errAt(lhs, .E0406, "", .{});
+        try self.err(self.file.exprs.mainTok(lhs), .E0406, "", .{});
         return;
     }
     // §5.9, the third blanket restriction on `repeat`/`while`/non-genvar `for`:
@@ -3952,21 +3843,21 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // `lowerFor` ever gets there — so an `analog for (i = 0; i < 4; ...)` over a
     // genvar contributes four times and never reaches here.
     if (self.loops.items.len != 0) {
-        try self.errAt(lhs, .E0426, "", .{});
+        try self.err(self.file.exprs.mainTok(lhs), .E0426, "", .{});
         return;
     }
     const ex = &self.file.exprs;
     // §5.4.3 "The port access function shall not be used on the left side of a
     // contribution operator <+." (§4.4 says the same of branch assignment.)
     if (ex.tag(lhs) == .port_access) {
-        var b = self.errAtWith(lhs, .E0407);
+        var b = self.errWith(self.file.exprs.mainTok(lhs), .E0407);
         b.help("contribute to the branch instead: `I(p, gnd) <+ ...`", .{});
         try b.emit();
         _ = try self.lowerExpr(rhs);
         return;
     }
     if (ex.tag(lhs) != .branch_access) {
-        try self.errAt(lhs, .E0408, "", .{});
+        try self.err(self.file.exprs.mainTok(lhs), .E0408, "", .{});
         _ = try self.lowerExpr(rhs);
         return;
     }
@@ -3975,7 +3866,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // §5.6.7.2 "Once a value is indirectly assigned to a branch, it cannot be
     // contributed to using the branch contribution operator <+."
     if (self.indirectOn(target.hi, target.lo)) {
-        var b = self.errAtWith(lhs, .E0409);
+        var b = self.errWith(self.file.exprs.mainTok(lhs), .E0409);
         b.msg("`{s}({s},{s})`", .{
             if (target.access == .potential) "V" else "I",
             self.nodeName(target.hi),
@@ -3994,7 +3885,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     for ([_]u16{ target.hi, target.lo }) |n| {
         if (n >= self.node_dir.items.len or self.node_dir.items[n] != .input) continue;
         if (!self.isSignalFlow(self.node_disciplines.items[n])) continue;
-        var b = self.errAtWith(lhs, .E0425);
+        var b = self.errWith(self.file.exprs.mainTok(lhs), .E0425);
         b.msg("`{s}` is an `input` port of discipline `{s}`", .{ self.node_order.items[n], self.node_disciplines.items[n] });
         try b.emit();
         return;
@@ -4078,7 +3969,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
 /// the clone, which needs the discipline table elaboration does not have.
 fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
     if (!self.scalesByMfactor(rhs)) return;
-    var b = self.errAtWith(lhs, .E0912);
+    var b = self.errWith(self.file.exprs.mainTok(lhs), .E0912);
     b.msg("this flow contribution multiplies by `$mfactor`", .{});
     b.note("§6.3.6: every flow contribution is scaled by $mfactor automatically, and \"Verilog-AMS does not provide a method to disable\" it — so an explicit factor scales it twice", .{});
     b.help("delete the `$mfactor` factor; read it in a guard if the equation needs to know the multiplicity", .{});
@@ -4162,7 +4053,7 @@ fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
     if (args.len < 5 or args[4] == .none) return;
     const tau = self.constEval(args[4]) orelse return;
     if (tau.asReal() != 0.0) return;
-    var b = self.errAtWith(rhs, .E0518);
+    var b = self.errWith(self.file.exprs.mainTok(rhs), .E0518);
     b.msg("a Z-filter with zero (0) transition time shall not be directly assigned to a branch", .{});
     b.help("read it into a variable first, then contribute the variable", .{});
     try b.emit();
@@ -4187,7 +4078,7 @@ fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!void
     var bad: ?f64 = null;
     _ = self.scanFinite(v, 0, &bad);
     const x = bad orelse return;
-    try self.errAt(lhs, .E0424, "{s}", .{
+    try self.err(self.file.exprs.mainTok(lhs), .E0424, "{s}", .{
         if (std.math.isNan(x)) "contribution of a NaN" else "contribution of an infinite value",
     });
 }
@@ -4270,11 +4161,11 @@ fn scanFinite(self: *const Lower, v0: Mir.Value, depth: u32, bad: *?f64) ?f64 {
 /// the entry appended here ever reaches codegen's stamping loop.
 fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprId, eqn: Ast.ExprId) Oom!void {
     if (self.restrict) |ctx| {
-        try self.errAt(lhs, .E0410, "not allowed in {s}", .{ctx});
+        try self.err(self.file.exprs.mainTok(lhs), .E0410, "not allowed in {s}", .{ctx});
         return;
     }
     if (self.in_event_stmt) {
-        try self.errAt(lhs, .E0411, "", .{});
+        try self.err(self.file.exprs.mainTok(lhs), .E0411, "", .{});
         return;
     }
     // §5.6.7 "Indirect branch contributions shall not be used in conditional or
@@ -4286,13 +4177,13 @@ fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprId, e
     }
     const ex = &self.file.exprs;
     if (ex.tag(lhs) != .branch_access) {
-        try self.errAt(lhs, .E0413, "", .{});
+        try self.err(self.file.exprs.mainTok(lhs), .E0413, "", .{});
         return;
     }
     // §5.6.7 "The left-hand side of the equality operator must either be an
     // access function, or ddt, idt or idtmod applied to an access function."
     if (!self.isIndirectProbe(probe_e)) {
-        var b = self.errAtWith(probe_e, .E0414);
+        var b = self.errWith(self.file.exprs.mainTok(probe_e), .E0414);
         b.help("use an access function, or `ddt`/`idt`/`idtmod` applied to one", .{});
         try b.emit();
         return;
@@ -4304,7 +4195,7 @@ fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprId, e
     for (self.contributions.items) |c| {
         if (c.kind != .direct) continue;
         if (!samePair(c.hi, c.lo, target.hi, target.lo)) continue;
-        var b = self.errAtWith(lhs, .E0415);
+        var b = self.errWith(self.file.exprs.mainTok(lhs), .E0415);
         b.msg("`({s},{s})`", .{ self.nodeName(target.hi), self.nodeName(target.lo) });
         b.note("a branch is defined either by accumulated `<+` or by one indirect assignment, never both", .{});
         try b.emit();
@@ -4456,7 +4347,7 @@ fn branchKey(self: *Lower, buf: *[elem_key_len]u8, e: Ast.ExprId) Oom!?[]const u
             const base = ex.lhs(e);
             if (ex.tag(base) != .ident) break :blk null;
             const i = self.constEval(ex.rhs(e)) orelse break :blk null;
-            break :blk try self.elemKey1(buf, self.file.str(ex.strOf(base)), i.asInt());
+            break :blk try self.elemKey(buf, self.file.str(ex.strOf(base)), &.{i.asInt()});
         },
         else => null,
     };
@@ -4484,7 +4375,7 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     const access = self.access_kind.get(name) orelse {
-        var b = self.errAtWith(e, .E0501);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0501);
         b.msg("`{s}`", .{name});
         if (diag.didYouMeanMap(name, self.access_kind)) |s|
             b.suggestHere(s);
@@ -4501,7 +4392,7 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     // and the honest fix is §4.5.6 deciding whether a port flow is a valid
     // derivative unknown at all.
     if (try self.portBranchOf(e)) |_| {
-        var b = self.errAtWith(e, .E0407);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0407);
         b.msg("`{s}` is a port branch (3.12.1)", .{self.file.str(ex.strOf(ex.lhs(e)))});
         b.help("contribute to the branch instead: `I(p, gnd) <+ ...`", .{});
         try b.emit();
@@ -4546,7 +4437,7 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     // needs a name comparison the interned index has already thrown away, and
     // no fixture writes it.
     if (ex.rhs(e) != .none and hi == lo and hi != ground) {
-        var b = self.errAtWith(e, .E0315);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0315);
         b.msg("`{s}({s}, {s})` names one signal twice", .{ name, self.nodeName(hi), self.nodeName(lo) });
         if (access == .flow)
             b.help("the flow into a port is `{s}(<{s}>)` (5.4.3)", .{ name, self.nodeName(hi) });
@@ -4561,10 +4452,6 @@ fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
 /// access names that is not read out of a §3.6.1.4 `access =` attribute.
 const generic_potential = "potential";
 const generic_flow = "flow";
-
-fn isGeneric(name: []const u8) bool {
-    return std.mem.eql(u8, name, generic_potential) or std.mem.eql(u8, name, generic_flow);
-}
 
 /// §4.4: "The access function name shall match the discipline declaration for
 /// the nets, ports, or branch given in the argument expression list."
@@ -4595,7 +4482,7 @@ fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Acces
     if (node == ground) return;
     const dname = self.node_disciplines.items[node];
     if (dname.len == 0) {
-        var b = self.errAtWith(e, .E0337);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0337);
         b.msg("`{s}` has no discipline, so `{s}` names nothing on it", .{ self.nodeName(node), name });
         b.note("§3.6.2.4 treats a net with no discipline that is referenced in behavioral code as discrete; declare one, e.g. `electrical {s};`", .{self.nodeName(node)});
         try b.emit();
@@ -4608,7 +4495,7 @@ fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Acces
     };
     const half = if (access == .potential) "potential" else "flow";
     if (want.len == 0) {
-        var b = self.errAtWith(e, .E0501);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0501);
         b.msg("`{s}` is not an access function of `{s}`", .{ name, self.nodeName(node) });
         b.note("`{s}` is of discipline `{s}`, which binds no {s} nature, so `{s}` has no {s} to access", .{
             self.nodeName(node), dname, half, self.nodeName(node), half,
@@ -4623,8 +4510,8 @@ fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Acces
     // ONLY from it — the two checks above still apply, and must: §5.5.1's
     // generic spelling reaches a nature, not a bare node, so a natureless or
     // half-bound discipline has nothing for it to read either.
-    if (isGeneric(name)) return;
-    var b = self.errAtWith(e, .E0501);
+    if (std.mem.eql(u8, name, generic_potential) or std.mem.eql(u8, name, generic_flow)) return;
+    var b = self.errWith(self.file.exprs.mainTok(e), .E0501);
     b.msg("`{s}` is not an access function of `{s}`", .{ name, self.nodeName(node) });
     b.suggestHere(want);
     b.note("`{s}` is of discipline `{s}`, whose {s} nature declares `access = {s}`", .{
@@ -4838,7 +4725,7 @@ fn mulCoeff(self: *Lower, t: *ReactiveTerm, c: Mir.Value, op: Mir.Opcode) Oom!vo
     t.coeff = if (t.coeff) |old|
         try self.emit(op, &.{ old, c })
     else if (op == .fdiv)
-        try self.emit(.fdiv, &.{ try self.fconst(1.0), c })
+        try self.emit(.fdiv, &.{ try self.mir.addFloatConst(self.arena, 1.0), c })
     else
         c;
     t.coeff_nonconst = t.coeff_nonconst or !self.coeffIsConst(c);
@@ -4859,7 +4746,7 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
                 // path; this reactive spine bypasses that call and has to
                 // agree (§4.5.14).
                 if (args.len == 0 or args[0] == .none) {
-                    try self.errAt(e, .E0502, "", .{});
+                    try self.err(self.file.exprs.mainTok(e), .E0502, "", .{});
                     return null;
                 }
                 // args[1] (abstol/nature, §4.5.3) only affects tolerance, so
@@ -4877,7 +4764,7 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
                 var t = try self.lowerReactive(ex.lhs(e)) orelse return null;
                 // Sign rides the coefficient (constness unchanged: negation
                 // adds no unknown dependence).
-                t.coeff = if (t.coeff) |old| try self.emit(.fneg, &.{old}) else try self.fconst(-1.0);
+                t.coeff = if (t.coeff) |old| try self.emit(.fneg, &.{old}) else try self.mir.addFloatConst(self.arena, -1.0);
                 return t;
             },
             else => {},
@@ -4907,7 +4794,7 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
         },
         else => {},
     }
-    var b = self.errAtWith(e, .E0503);
+    var b = self.errWith(self.file.exprs.mainTok(e), .E0503);
     b.help("assign the derivative to a variable, then use that variable in the contribution", .{});
     try b.emit();
     return null;
@@ -4984,7 +4871,7 @@ fn addNoiseSrc(arena: std.mem.Allocator, out: *std.ArrayList(NoiseSrc), s: Noise
 /// condition and of a case-generate its selector; the loop generate's three
 /// parts are E0417-E0419, judged in `tryUnrollFor` where the unroll needs them.
 ///
-/// `constEval`, NOT `elabConst`: a `parameter` is a `constant_primary` (A.8.4)
+/// `constEval`, NOT `foldExpr(..., false)`: a `parameter` is a `constant_primary` (A.8.4)
 /// and §6.6's stated purpose is "the ability for parameter values to affect the
 /// structure of the model", so a parameterized scheme is exactly what the clause
 /// is for. What it excludes is a module variable or anything reading the
@@ -4994,7 +4881,7 @@ fn addNoiseSrc(arena: std.mem.Allocator, out: *std.ArrayList(NoiseSrc), s: Noise
 /// as the §5.8 runtime branch it looks like, so a second mistake inside the
 /// selected arm is reported in the same run.
 ///
-/// ponytail: a scheme this accepts is not necessarily FOLDED. `elabConst` keeps
+/// ponytail: a scheme this accepts is not necessarily FOLDED. `foldExpr(..., false)` keeps
 /// refusing a parameter on purpose — folding it to its declared default would
 /// compile the arm the model card did not ask for — so a parameterized generate
 /// becomes a runtime diamond over both arms instead of one elaborated arm. Same
@@ -5010,18 +4897,11 @@ fn checkGenScheme(self: *Lower, tok: u32, scheme: Ast.ExprId) Oom!void {
 /// §5.8 conditional. A constant-foldable condition lowers only the taken arm —
 /// that is also what makes `generate if` (§6.6.2) collapse at elaboration.
 fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.StmtId) Oom!void {
-    if (self.elabConst(cond)) |c| {
+    if (self.foldExpr(cond, false)) |c| {
         return self.lowerStmt(if (c.isTrue()) then_s else else_s);
     }
     const c = try self.toBool(try self.lowerExpr(cond));
     try self.lowerBranchStmt(c, then_s, else_s, self.isAnalysisOrConst(cond));
-}
-
-/// §5.10 the same diamond, but the condition is already a Value (event guards)
-/// — and an event's `hit` flag is the definition of a condition that changes
-/// during the solve, so it is never static.
-fn lowerGuarded(self: *Lower, cond: Mir.Value, body: Ast.StmtId) Oom!void {
-    try self.lowerBranchStmt(cond, body, .none, false);
 }
 
 /// Lower a body that only runs under a RUNTIME condition. The wrapper carries
@@ -5048,7 +4928,7 @@ fn lowerCondBody(self: *Lower, body: Ast.StmtId, static: bool) Oom!void {
 /// nothing in the tree can change between one Newton iteration and the next:
 /// literals, `parameter`s and `analysis()` calls, combined with operators.
 ///
-/// Deliberately NOT `elabConst`: that folds to a VALUE and refuses a parameter
+/// Deliberately NOT `foldExpr(..., false)`: that folds to a VALUE and refuses a parameter
 /// on purpose (a model card overrides it), while this asks the different
 /// question of whether the value is fixed for the whole analysis. A parameter
 /// is `constant_primary` in A.8.4 and cannot move mid-solve, so it qualifies.
@@ -5081,15 +4961,11 @@ fn lowerBranchStmt(
     else_s: Ast.StmtId,
     static: bool,
 ) Oom!void {
-    const then_b = try self.newBlock();
-    const else_b = try self.newBlock();
-    const join = try self.newBlock();
+    const then_b = try self.mir.addBlock(self.arena);
+    const else_b = try self.mir.addBlock(self.arena);
+    const join = try self.mir.addBlock(self.arena);
 
-    _ = try self.mir.emitBranch(self.arena, self.cur, cond, then_b, else_b);
-    try self.builder.addPredecessor(then_b, self.cur);
-    try self.builder.addPredecessor(else_b, self.cur);
-    try self.builder.sealBlock(then_b);
-    try self.builder.sealBlock(else_b);
+    try self.branchTo(cond, then_b, else_b, true);
 
     self.cur = then_b;
     try self.lowerCondBody(then_s, static);
@@ -5162,14 +5038,10 @@ fn lowerCaseChain(
         cond = if (cond) |c| try self.emit(.logor, &.{ c, eq }) else eq;
     }
 
-    const then_b = try self.newBlock();
-    const else_b = try self.newBlock();
-    const join = try self.newBlock();
-    _ = try self.mir.emitBranch(self.arena, self.cur, cond.?, then_b, else_b);
-    try self.builder.addPredecessor(then_b, self.cur);
-    try self.builder.addPredecessor(else_b, self.cur);
-    try self.builder.sealBlock(then_b);
-    try self.builder.sealBlock(else_b);
+    const then_b = try self.mir.addBlock(self.arena);
+    const else_b = try self.mir.addBlock(self.arena);
+    const join = try self.mir.addBlock(self.arena);
+    try self.branchTo(cond.?, then_b, else_b, true);
 
     self.cur = then_b;
     try self.lowerCondBody(a.body, static);
@@ -5189,13 +5061,13 @@ fn lowerCaseChain(
 
 /// §5.9.1 `while`. Braun order: the header is sealed only after the back edge.
 fn lowerWhile(self: *Lower, cond: Ast.ExprId, body: Ast.StmtId) Oom!void {
-    const header = try self.newBlock();
+    const header = try self.mir.addBlock(self.arena);
     try self.gotoBlock(header);
     self.cur = header;
 
     const c = try self.toBool(try self.lowerExpr(cond));
-    const body_b = try self.newBlock();
-    const exit = try self.newBlock();
+    const body_b = try self.mir.addBlock(self.arena);
+    const exit = try self.mir.addBlock(self.arena);
     // `self.cur`, NOT `header`: a §4.2.7 short-circuit (`while (i<=4 && f(x))`)
     // splits the condition across blocks of its own and leaves `cur` at the
     // join. Branching from `header` regardless appended a SECOND terminator to
@@ -5204,10 +5076,7 @@ fn lowerWhile(self: *Lower, cond: Ast.ExprId, body: Ast.StmtId) Oom!void {
     // branched on a temporary nothing ever assigned. Same hazard as `?:` in a
     // condition. Pinned by codegen.zig's test "§5.9.1 a short-circuit loop
     // condition still reaches the loop's branch".
-    _ = try self.mir.emitBranch(self.arena, self.cur, c, body_b, exit);
-    try self.builder.addPredecessor(body_b, self.cur);
-    try self.builder.addPredecessor(exit, self.cur);
-    try self.builder.sealBlock(body_b);
+    try self.branchTo(c, body_b, exit, false);
 
     try self.loops.append(self.arena, .{ .brk = exit, .cont = header });
     self.cur = body_b;
@@ -5226,19 +5095,16 @@ fn lowerRepeat(self: *Lower, count: Ast.ExprId, body: Ast.StmtId) Oom!void {
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, n);
 
-    const header = try self.newBlock();
+    const header = try self.mir.addBlock(self.arena);
     try self.gotoBlock(header);
     self.cur = header;
 
     const i = try self.builder.readVariable(place, header);
     const c = try self.emit(.igt, &.{ i, .zero });
-    const body_b = try self.newBlock();
-    const step_b = try self.newBlock();
-    const exit = try self.newBlock();
-    _ = try self.mir.emitBranch(self.arena, header, c, body_b, exit);
-    try self.builder.addPredecessor(body_b, header);
-    try self.builder.addPredecessor(exit, header);
-    try self.builder.sealBlock(body_b);
+    const body_b = try self.mir.addBlock(self.arena);
+    const step_b = try self.mir.addBlock(self.arena);
+    const exit = try self.mir.addBlock(self.arena);
+    try self.branchTo(c, body_b, exit, false);
 
     try self.loops.append(self.arena, .{ .brk = exit, .cont = step_b });
     self.cur = body_b;
@@ -5264,20 +5130,17 @@ fn lowerFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId
     if (try self.tryUnrollFor(init_s, cond, step, body)) return;
 
     try self.lowerStmt(init_s);
-    const header = try self.newBlock();
+    const header = try self.mir.addBlock(self.arena);
     try self.gotoBlock(header);
     self.cur = header;
 
     const c = try self.toBool(try self.lowerExpr(cond));
-    const body_b = try self.newBlock();
-    const step_b = try self.newBlock();
-    const exit = try self.newBlock();
+    const body_b = try self.mir.addBlock(self.arena);
+    const step_b = try self.mir.addBlock(self.arena);
+    const exit = try self.mir.addBlock(self.arena);
     // `self.cur`, not `header` — see `lowerWhile`: the condition may have been
     // split across blocks by a short-circuit, and the branch belongs at its end.
-    _ = try self.mir.emitBranch(self.arena, self.cur, c, body_b, exit);
-    try self.builder.addPredecessor(body_b, self.cur);
-    try self.builder.addPredecessor(exit, self.cur);
-    try self.builder.sealBlock(body_b);
+    try self.branchTo(c, body_b, exit, false);
 
     try self.loops.append(self.arena, .{ .brk = exit, .cont = step_b });
     self.cur = body_b;
@@ -5304,7 +5167,7 @@ const max_unroll: u32 = 4096;
 fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId, body: Ast.StmtId) Oom!bool {
     const gv = self.genvarOf(init_s) orelse return false;
     const start = self.constEval(self.assignValueOf(init_s).?) orelse {
-        try self.errAt(cond, .E0417, "initial value of `{s}`", .{gv});
+        try self.err(self.file.exprs.mainTok(cond), .E0417, "initial value of `{s}`", .{gv});
         return true;
     };
     try self.consts.put(self.arena, gv, start);
@@ -5315,19 +5178,19 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
     var n: u32 = 0;
     while (n < max_unroll) : (n += 1) {
         const c = self.constEval(cond) orelse {
-            try self.errAt(cond, .E0418, "", .{});
+            try self.err(self.file.exprs.mainTok(cond), .E0418, "", .{});
             break;
         };
         if (!c.isTrue()) break;
         try self.lowerStmt(body);
         const next = self.constEval(self.assignValueOf(step) orelse .none) orelse {
-            try self.errAt(cond, .E0419, "", .{});
+            try self.err(self.file.exprs.mainTok(cond), .E0419, "", .{});
             break;
         };
         try self.consts.put(self.arena, gv, next);
     }
     if (n == max_unroll)
-        try self.errAt(cond, .E0420, "gave up after {d} iterations", .{max_unroll});
+        try self.err(self.file.exprs.mainTok(cond), .E0420, "gave up after {d} iterations", .{max_unroll});
     _ = self.consts.remove(gv);
     return true;
 }
@@ -5361,14 +5224,14 @@ fn assignValueOf(self: *const Lower, s: Ast.StmtId) ?Ast.ExprId {
 /// events, §5.10.3 monitored events).
 pub fn lowerEventControl(self: *Lower, event: Ast.ExprId, body: Ast.StmtId) Oom!void {
     if (self.restrict) |ctx| {
-        try self.errAt(event, .E0702, "not allowed in {s}", .{ctx});
+        try self.err(self.file.exprs.mainTok(event), .E0702, "not allowed in {s}", .{ctx});
         return;
     }
     // §5.10 "Nested event control statements are not allowed" — and A.6.4
     // agrees: `analog_event_statement` has no
     // `analog_event_control_statement` alternative.
     if (self.in_event_stmt) {
-        try self.errAt(event, .E0703, "", .{});
+        try self.err(self.file.exprs.mainTok(event), .E0703, "", .{});
         return;
     }
     // §5.8 "Event control statements (e.g.: timer, cross) cannot be used inside
@@ -5378,7 +5241,7 @@ pub fn lowerEventControl(self: *Lower, event: Ast.ExprId, body: Ast.StmtId) Oom!
     // carve-out here is a constant expression, so `analysis("dc")` does not
     // license it and `static_cond_depth` is deliberately not consulted.
     if (self.cond_depth != 0) {
-        var b = self.errAtWith(event, .E0707);
+        var b = self.errWith(self.file.exprs.mainTok(event), .E0707);
         b.help("put `@(...)` on the spine and make the statement it guards conditional", .{});
         try b.emit();
     }
@@ -5386,7 +5249,8 @@ pub fn lowerEventControl(self: *Lower, event: Ast.ExprId, body: Ast.StmtId) Oom!
     const prev = self.in_event_stmt;
     self.in_event_stmt = true;
     defer self.in_event_stmt = prev;
-    try self.lowerGuarded(cond, body);
+    // §5.10 an event's `hit` flag changes during the solve, so it is never static.
+    try self.lowerBranchStmt(cond, body, .none, false);
 }
 
 /// §5.10.1 or-lists, §5.10.2 initial_step/final_step, §5.10.3 cross/above/timer.
@@ -5418,7 +5282,7 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
                 // §5.10.3 absdelta monitors a digital-domain delta; it has no
                 // analog kernel semantics. (Wording pinned by
                 // tests/fixtures/ch05_analog_behavior/absdelta_digital_only.)
-                try self.errAt(e, .E0513, "", .{});
+                try self.err(self.file.exprs.mainTok(e), .E0513, "", .{});
                 return null;
             }
             try self.checkEventArgBounds(e, name); // §5.10.3.1/§5.10.3.2
@@ -5435,7 +5299,7 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
             return try self.call(name, args.items);
         },
         .event_posedge, .event_negedge => {
-            try self.errAt(e, .E0704, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0704, "", .{});
             return null;
         },
         // §5.10.4 `@ hierarchical_event_identifier` — the event's flag IS the
@@ -5446,11 +5310,11 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
         .ident => {
             const name = self.file.str(ex.strOf(e));
             if (self.events.get(name)) |p| return try self.builder.readVariable(p, self.cur);
-            try self.errAt(e, .E0705, "`{s}`", .{name});
+            try self.err(self.file.exprs.mainTok(e), .E0705, "`{s}`", .{name});
             return null;
         },
         else => {
-            try self.errAt(e, .E0706, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0706, "", .{});
             return null;
         },
     }
@@ -5483,7 +5347,7 @@ fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
             // refused: 0.5 selects no direction, while a real spelled 1.0 does
             // evaluate to one and the clause's complaint would be typographic.
             if (c != .str and v != @round(v))
-                try self.errAt(args[d], .E0517, "`cross()` direction shall evaluate to an integer, got {d}", .{v});
+                try self.err(self.file.exprs.mainTok(args[d]), .E0517, "`cross()` direction shall evaluate to an integer, got {d}", .{v});
         }
     };
 
@@ -5495,7 +5359,7 @@ fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
         if (c == .str) continue;
         const v = c.asReal();
         if (v >= 0) continue;
-        try self.errAt(args[i], .E0517, "`{s}()` {s} shall be non-negative, got {d}", .{
+        try self.err(self.file.exprs.mainTok(args[i]), .E0517, "`{s}()` {s} shall be non-negative, got {d}", .{
             name,
             if (i == tol_first) "time_tol" else "expr_tol",
             v,
@@ -5508,7 +5372,7 @@ fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     // is the missing DIRECTION and not the comma.
     if (tol_given) if (dir) |d| {
         if (d >= args.len or args[d] == .none) {
-            var b = self.errAtWith(e, .E0517);
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0517);
             b.msg("a tolerance is given but the direction slot is empty", .{});
             b.help("write the direction explicitly; `0` is \"either edge\"", .{});
             try b.emit();
@@ -5805,7 +5669,7 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
     const fd_at: usize = if (gets) 1 else 0;
     if (args.len <= fd_at or args[fd_at] == .none) {
         try self.err(tok, .E0813, "`{s}` needs a file descriptor", .{name});
-        return try self.iconst(0);
+        return try self.mir.addIntConst(self.arena, 0);
     }
     const fd = (try self.lowerSysArg(args[fd_at], false)).v; // a descriptor, never a net
     // §9.5.4.2 alone has a control string, and it is an operand of every reader
@@ -5823,7 +5687,7 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
         };
         break :blk (try self.lowerExpr(args[1])).v;
     } else null;
-    if (scan and fmt == null) return try self.iconst(0);
+    if (scan and fmt == null) return try self.mir.addIntConst(self.arena, 0);
 
     const n = if (gets)
         try self.call("$fgets", &.{fd})
@@ -5844,7 +5708,7 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
         // `analysis.callTy` cannot disagree about it.
         if (gets or ferr) {
             if (slot.ty != .string) {
-                try self.errAt(a, .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
+                try self.err(self.file.exprs.mainTok(a), .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
                 continue;
             }
             const v = try self.call(if (gets) "$fgets$str" else "$ferror$str", &.{ n, fd });
@@ -5856,7 +5720,7 @@ fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Exp
             .string => "$fscanf$str",
             .real => "$fscanf$real",
         };
-        const v = try self.call(callee, &.{ n, fd, fmt.?, try self.iconst(item) });
+        const v = try self.call(callee, &.{ n, fd, fmt.?, try self.mir.addIntConst(self.arena, item) });
         try self.builder.writeVariable(slot.place, self.cur, v);
         item += 1;
     }
@@ -6017,7 +5881,7 @@ fn checkFormatTypes(self: *Lower, live: []const Ast.ExprId, tys: []const Ty) Oom
             else => false,
         };
         if (!bad) continue;
-        var b = self.errAtWith(arg, .E0819);
+        var b = self.errWith(self.file.exprs.mainTok(arg), .E0819);
         b.msg("`%{c}` on a {s} operand", .{ conv, @tagName(ty) });
         if (conv == 's') {
             b.help("print the number with `%g` or `%d`", .{});
@@ -6047,7 +5911,7 @@ fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     }
     const slot = try self.resolveLvalue(args[0]) orelse return;
     if (slot.ty != .string) {
-        try self.errAt(args[0], .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
+        try self.err(self.file.exprs.mainTok(args[0]), .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
         return;
     }
     var vals: std.ArrayList(Mir.Value) = .empty;
@@ -6077,7 +5941,7 @@ fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
 fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
     if (args.len < 2 or args[0] == .none or args[1] == .none) {
         try self.err(tok, .E0813, "$sscanf needs a string to read and a format string", .{});
-        return self.iconst(0);
+        return self.mir.addIntConst(self.arena, 0);
     }
     const src = (try self.lowerExpr(args[0])).v;
     const fmt = (try self.lowerExpr(args[1])).v;
@@ -6085,7 +5949,7 @@ fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
     // checking: a conversion code the scanner does not implement would consume
     // nothing and still be counted, so the model would read a plausible number.
     if (self.constEval(args[1])) |c| switch (c) {
-        .str => |s| if (try self.checkScanFormat(tok, s)) return self.iconst(0),
+        .str => |s| if (try self.checkScanFormat(tok, s)) return self.mir.addIntConst(self.arena, 0),
         else => {},
     };
     self.uses_str_tasks = true;
@@ -6101,7 +5965,7 @@ fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
             .string => "$sscanf$str",
             .real => "$sscanf$real",
         };
-        const v = try self.call(callee, &.{ src, fmt, try self.iconst(item) });
+        const v = try self.call(callee, &.{ src, fmt, try self.mir.addIntConst(self.arena, item) });
         try self.builder.writeVariable(slot.place, self.cur, v);
         item += 1;
     }
@@ -6119,8 +5983,7 @@ fn lowerScan(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!Mir.Value {
 pub const Dist = struct {
     /// Source spelling, `$` included.
     name: []const u8,
-    /// `rng_kernels.zig` entry point, or "" for the two whose only argument is
-    /// the seed (`$random`/`$arandom`, handled by `$rng$rand`).
+    /// `rng_kernels.zig` entry point.
     kernel: []const u8,
     /// Arguments AFTER the seed. §9.13.1's two take none and their seed is
     /// itself optional; every §9.13.2 distribution requires its seed.
@@ -6211,7 +6074,7 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
     if (given.items.len > 0) {
         const last = given.items[given.items.len - 1];
         if (ex.tag(last) == .str_literal) {
-            try self.errAt(last, .E0816, "`{s}`'s `type_string` argument is only meaningful within a paramset (§6.4)", .{name});
+            try self.err(self.file.exprs.mainTok(last), .E0816, "`{s}`'s `type_string` argument is only meaningful within a paramset (§6.4)", .{name});
             return poison;
         }
     }
@@ -6247,7 +6110,7 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
         // | [ sign ] decimal_number`. A real is none of the three, and the
         // inout half of the rule needs somewhere to put an updated INTEGER.
         if (tv.ty != .integer) {
-            try self.errAt(sa, .E0816, "the seed argument shall be an integer, and this one is {s}", .{@tagName(tv.ty)});
+            try self.err(self.file.exprs.mainTok(sa), .E0816, "the seed argument shall be an integer, and this one is {s}", .{@tagName(tv.ty)});
             return poison;
         }
         seed = tv.v;
@@ -6265,7 +6128,7 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
         // of x, which a draw advancing per Newton iteration would destroy.
         const site = self.rng_auto_sites;
         self.rng_auto_sites += 1;
-        const latch = try self.call("$rng$auto", &.{try self.iconst(site)});
+        const latch = try self.call("$rng$auto", &.{try self.mir.addIntConst(self.arena, site)});
         seed = if (given.items.len > 0)
             // The declared constant/parameter still SEEDS the stream, so it is
             // mixed in rather than dropped: two call sites with the same literal
@@ -6288,7 +6151,7 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
         const c = self.constEval(a) orelse continue;
         if (c == .str) continue;
         if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and c.asReal() <= 0)
-            try self.errAt(a, .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{
+            try self.err(self.file.exprs.mainTok(a), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{
                 name, distParamName(d, i), c.asReal(),
             });
     }
@@ -6298,7 +6161,7 @@ fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprI
         if (lo != null and hi != null and lo.? != .str and hi.? != .str and
             lo.?.asReal() >= hi.?.asReal())
         {
-            var b = self.errAtWith(given.items[1], .E0816);
+            var b = self.errWith(self.file.exprs.mainTok(given.items[1]), .E0816);
             b.msg("the start value shall be smaller than the end value, got {d} and {d}", .{ lo.?.asReal(), hi.?.asReal() });
             b.note("§9.13.2: start and end \"bound the values returned\", and an interval with start above end is empty", .{});
             try b.emit();
@@ -6382,7 +6245,7 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
         // written.
         if (self.constEval(args[0])) |c| {
             if (c.asReal() < 0.0) {
-                try self.errAt(args[0], .E0803, "got {d}", .{c.asReal()});
+                try self.err(self.file.exprs.mainTok(args[0]), .E0803, "got {d}", .{c.asReal()});
                 return true;
             }
         }
@@ -6408,7 +6271,7 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
         var degree: i64 = 0;
         if (real_args.len == 1) {
             const c = self.constEval(real_args[0]) orelse {
-                try self.errAt(real_args[0], .E0805, "", .{});
+                try self.err(self.file.exprs.mainTok(real_args[0]), .E0805, "", .{});
                 return true;
             };
             degree = c.asInt();
@@ -6421,30 +6284,12 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
         if (degree < 0) return true;
         const p = try self.kernelCtlPlace(&self.disc_place);
         const cur = try self.builder.readVariable(p, self.cur);
-        const v = try self.fconst(@floatFromInt(degree));
+        const v = try self.mir.addFloatConst(self.arena, @floatFromInt(degree));
         try self.builder.writeVariable(p, self.cur, try self.emit(.fmin, &.{ cur, v }));
         return true;
     }
     return false;
 }
-
-// THE "DELIBERATELY UNSUPPORTED" LIST IS GONE, and with it E0801 (retired).
-//
-// It held two families and both left for the same reason — the LRM defines them
-// for the analog context, so refusing them refused a conforming source. §9.13's
-// 17 probabilistic names went first: a draw that changes between Newton
-// iterations would make the residual non-deterministic, but §9.13.1's seed is an
-// inout argument ("a value is passed to the function and a different value is
-// returned"), so a variate is a pure function of the seed and is fixed across the
-// iterations at one point by construction (`lowerRandom`, `rng_kernels.zig`).
-// §9.16's `$simprobe` went second: Table 9-13 marks it analog-context Yes and the
-// clause fixes what an unresolvable probe returns, which is a value and not an
-// error whenever the fallback is supplied (`lowerSimprobe`).
-//
-// An empty list is a diagnostic that cannot fire, so the list and the code went
-// rather than sitting here as one. A function this compiler genuinely cannot host
-// gets a code that says which rule it broke — E0806 for a digital-only name,
-// E0817 for an unresolvable probe — not a capability class.
 
 /// §9.2. Every Chapter 9 table carries a "supported in analog context" column,
 /// and these are the names whose cell says No. Seven tables, one list, because
@@ -6570,8 +6415,8 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     defer self.mir.cur_tok = saved_tok;
     self.mir.cur_tok = ex.mainTok(e);
     switch (ex.tag(e)) {
-        .int_literal => return .{ .v = try self.iconst(ex.intValue(e)), .ty = .integer }, // §2.6.1
-        .real_literal => return .{ .v = try self.fconst(ex.realValue(e)), .ty = .real }, // §2.6.2
+        .int_literal => return .{ .v = try self.mir.addIntConst(self.arena, ex.intValue(e)), .ty = .integer }, // §2.6.1
+        .real_literal => return .{ .v = try self.mir.addFloatConst(self.arena, ex.realValue(e)), .ty = .real }, // §2.6.2
         .str_literal => return .{
             .v = try self.mir.addStrConst(self.arena, self.file.str(ex.strOf(e))),
             .ty = .string,
@@ -6579,20 +6424,20 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // A.2.5 — only legal inside a value range, which proof.zig reads from
         // the AST directly; lowering one is harmless.
         .pos_inf => return .{ .v = .f_inf, .ty = .real },
-        .neg_inf => return .{ .v = try self.fconst(-std.math.inf(f64)), .ty = .real },
+        .neg_inf => return .{ .v = try self.mir.addFloatConst(self.arena, -std.math.inf(f64)), .ty = .real },
 
-        .ident => return self.lookupIdent(e),
+        .ident => return self.lookupName(e, self.file.str(ex.strOf(e))),
         .hier_ident => {
             // §5.5.3 Syntax 5-4 first: a nature attribute reference is a
             // CONSTANT this module can resolve, unlike a §6.8 hierarchical name,
             // which needs an instance tree (E0901).
             if (self.natureAttrRef(e)) |r| switch (r) {
                 .value => |c| return switch (c) {
-                    .real, .int => .{ .v = try self.fconst(c.asReal()), .ty = .real },
+                    .real, .int => .{ .v = try self.mir.addFloatConst(self.arena, c.asReal()), .ty = .real },
                     .str => .{ .v = try self.mir.addStrConst(self.arena, c.str), .ty = .string },
                 },
                 .banned => |attr| {
-                    var b = self.errAtWith(e, .E0359);
+                    var b = self.errWith(self.file.exprs.mainTok(e), .E0359);
                     b.msg("`{s}`", .{attr});
                     b.note("§5.5.3: \"This syntax shall not be used for the access, ddt_nature, or idt_nature attributes of a nature, nor any other attribute whose value is not a constant expression\"", .{});
                     try b.emit();
@@ -6612,7 +6457,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // an ordinary variable of the flat design under its path name, so
             // nothing else would stop the read.
             if (self.vars.contains(name)) {
-                var vb = self.errAtWith(e, .E0910);
+                var vb = self.errWith(self.file.exprs.mainTok(e), .E0910);
                 vb.msg("`{s}`", .{name});
                 vb.note("§6.7.1 permits a hierarchical parameter, branch probe or analog function; a variable is the one entry on that list it forbids", .{});
                 try vb.emit();
@@ -6621,7 +6466,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             if (self.param_index.contains(name) or
                 self.consts.contains(name) or self.node_voltages.contains(name))
                 return self.lookupName(e, name);
-            var b = self.errAtWith(e, .E0901);
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0901);
             b.msg("`{s}` names nothing in the elaborated design", .{name});
             try b.emit();
             return poison;
@@ -6648,11 +6493,11 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // where the operand widths still exist.
         .concat, .multi_concat => return self.lowerConcat(e),
         .assign_pattern => {
-            try self.errAt(e, .E0509, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0509, "", .{});
             return poison;
         },
         .range => {
-            try self.errAt(e, .E0329, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0329, "", .{});
             return poison;
         },
         .event_or,
@@ -6666,7 +6511,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // writes the keyword where a value belongs.
         .event_driver_update,
         => {
-            try self.errAt(e, .E0701, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0701, "", .{});
             return poison;
         },
     }
@@ -6678,12 +6523,12 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     var subs: [max_stack_dims]Ast.ExprId = undefined;
     const chain = self.indexChain(e, &subs) orelse {
-        try self.errAt(e, .E0330, "only `name[<index>]` is supported", .{});
+        try self.err(self.file.exprs.mainTok(e), .E0330, "only `name[<index>]` is supported", .{});
         return poison;
     };
     const name = self.file.str(chain.name);
     const info = self.arrays.get(name) orelse {
-        try self.errAt(e, .E0309, "`{s}`", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0309, "`{s}`", .{name});
         return poison;
     };
 
@@ -6710,10 +6555,10 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // own examples index a multidimensional array with literals. `for (i…) a[i]`
     // (§4.7.1's `arrayadd`) is the shape that needs the chain, and it is flat.
     if (info.dims.len != 1) {
-        try self.errAt(e, .E0311, "indexing the multidimensional array `{s}`", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0311, "indexing the multidimensional array `{s}`", .{name});
         return poison;
     }
-    const d = info.first();
+    const d = info.dims[0];
     const iv = try self.toInt(try self.lowerExpr(chain.subs[0]));
     var acc: ?TypedValue = null;
     var i = d.hi;
@@ -6721,7 +6566,7 @@ fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const el = (try self.arrayElemValue(name, &.{i})) orelse return poison;
         if (acc) |a| {
             const ty = unify(el.ty, a.ty);
-            const c = try self.emit(.ieq, &.{ iv, try self.iconst(i) });
+            const c = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, i) });
             const ev = if (ty == .real) try self.toReal(el) else el.v;
             const av = if (ty == .real) try self.toReal(a) else a.v;
             acc = .{ .v = try self.emit(.select, &.{ c, ev, av }), .ty = ty };
@@ -6754,7 +6599,7 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const repl = ex.tag(e) == .multi_concat;
     const elems = ex.args(if (repl) ex.rhs(e) else e);
     if (elems.len == 0) {
-        try self.errAt(e, .E0326, "", .{});
+        try self.err(self.file.exprs.mainTok(e), .E0326, "", .{});
         return poison;
     }
     var copies: i64 = 1;
@@ -6766,14 +6611,14 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // string to repeat: §3.3's `{i{"Hi"}}` is legal because `i` is
             // knowable, not because the device could build a string at runtime.
             else => {
-                try self.errAt(ex.lhs(e), .E0328, "", .{});
+                try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E0328, "", .{});
                 return poison;
             },
         };
         // §4.2.13: the replication constant is "non-negative, non-x and
         // non-z". Zero is legal and yields the empty string.
         if (copies < 0) {
-            try self.errAt(ex.lhs(e), .E0327, "a replication constant shall be non-negative, got {d}", .{copies});
+            try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E0327, "a replication constant shall be non-negative, got {d}", .{copies});
             return poison;
         }
     }
@@ -6781,13 +6626,13 @@ fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     for (elems) |el| {
         const tv = try self.lowerExpr(el);
         if (tv.ty != .string) {
-            try self.errAt(e, .E0327, "only sized constants and strings can be concatenated", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0327, "only sized constants and strings can be concatenated", .{});
             return poison;
         }
         switch (self.mir.valueDef(tv.v)) {
             .str_const => |s| try out.appendSlice(self.arena, s),
             else => {
-                try self.errAt(e, .E0328, "", .{});
+                try self.err(self.file.exprs.mainTok(e), .E0328, "", .{});
                 return poison;
             },
         }
@@ -6861,35 +6706,28 @@ fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
 /// §2.8 name resolution: variables (§3.2) shadow parameters (§3.4), which
 /// shadow genvars (§3.5). Nets are NOT values — they are only reachable
 /// through an access function (§4.4).
-fn lookupIdent(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
-    return self.lookupName(e, self.file.str(self.file.exprs.strOf(e)));
-}
-
-/// Same resolution, for a name that is not the node's own `str`: §6.7's dotted
-/// path, joined by `flatName`. Split out rather than parameterised in place so
-/// the hierarchical read gets the identical shadowing order and the identical
-/// diagnostics — E0315's "probe it" advice is as true of `u.a` as of `a`.
+/// §6.7 hierarchical reads pass the dotted path joined by `flatName`.
 fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue {
     if (self.vars.get(name)) |slot|
         return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
     // §4.7.2/§6.8: inside a function body, a function-local `parameter` of the
     // same name shadows the module's, so `param_index` is masked and the local
-    // value is found in `consts` (where `inlineUserFunc` folded it).
+    // value is found in `consts` (where `inlineUserFuncPre` folded it).
     if (!self.funcParamShadows(name)) if (self.param_index.get(name)) |idx|
         return .{ .v = self.param_values.items[idx], .ty = astTy(self.params.items[idx].ty) };
     if (self.consts.get(name)) |c| return switch (c) {
-        .int => .{ .v = try self.iconst(c.asInt()), .ty = .integer },
-        .real => .{ .v = try self.fconst(c.asReal()), .ty = .real },
+        .int => .{ .v = try self.mir.addIntConst(self.arena, c.asInt()), .ty = .integer },
+        .real => .{ .v = try self.mir.addFloatConst(self.arena, c.asReal()), .ty = .real },
         .str => |s| .{ .v = try self.mir.addStrConst(self.arena, s), .ty = .string },
     };
     if (self.node_voltages.contains(name)) {
-        var b = self.errAtWith(e, .E0315);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0315);
         b.msg("`{s}`", .{name});
         b.help("probe it: `V({s})` or `I({s})`", .{ name, name });
         try b.emit();
         return poison;
     }
-    var b = self.errAtWith(e, .E0314);
+    var b = self.errWith(self.file.exprs.mainTok(e), .E0314);
     b.msg("`{s}`", .{name});
     const near = diag.didYouMeanMap(name, self.vars) orelse
         diag.didYouMeanMap(name, self.param_index) orelse
@@ -6926,8 +6764,8 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // where the constant is built, not in a second range rule.
             switch (self.mir.valueDef(self.mir.resolveAlias(a.v))) {
                 .int_const => |x| if (x != std.math.minInt(i64))
-                    return .{ .v = try self.iconst(-x), .ty = a.ty },
-                .float_const => |x| return .{ .v = try self.fconst(-x), .ty = a.ty },
+                    return .{ .v = try self.mir.addIntConst(self.arena, -x), .ty = a.ty },
+                .float_const => |x| return .{ .v = try self.mir.addFloatConst(self.arena, -x), .ty = a.ty },
                 else => {},
             }
             return .{
@@ -6938,7 +6776,7 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         .logical_not => return .{ .v = try self.emit(.lognot, &.{try self.toBool(a)}), .ty = .integer },
         .bit_not => {
             if (a.ty != .integer) {
-                try self.errAt(e, .E0318, "`~` on a {s}", .{@tagName(a.ty)});
+                try self.err(self.file.exprs.mainTok(e), .E0318, "`~` on a {s}", .{@tagName(a.ty)});
                 return poison;
             }
             return .{ .v = try self.emit(.bitnot, &.{a.v}), .ty = .integer };
@@ -6955,16 +6793,16 @@ fn lowerUnary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // §4.2.1 first: a real operand has no bits to fold at all, and
             // E0319 names the operand rather than the context.
             if (a.ty != .integer) {
-                try self.errAt(e, .E0319, "got a {s}", .{@tagName(a.ty)});
+                try self.err(self.file.exprs.mainTok(e), .E0319, "got a {s}", .{@tagName(a.ty)});
                 return poison;
             }
-            try self.errAt(e, .E0348, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0348, "", .{});
             return poison;
         },
         // §4.2.10 xor reduction is a parity, which has no analog equivalent
         // and no MIR opcode (annex C).
         .reduce_xor, .reduce_xnor => {
-            try self.errAt(e, .E0320, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0320, "", .{});
             return poison;
         },
     }
@@ -6995,7 +6833,7 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         .add, .sub, .mul, .div, .mod => {
             const ty = unify(a.ty, b.ty);
             if (ty == .string) {
-                try self.errAt(e, .E0321, "", .{});
+                try self.err(self.file.exprs.mainTok(e), .E0321, "", .{});
                 return poison;
             }
             const real = ty == .real;
@@ -7018,7 +6856,7 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         .eq, .neq, .lt, .le, .gt, .ge => return .{ .v = try self.cmp(op, a, b), .ty = .integer },
         .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr => {
             if (a.ty != .integer or b.ty != .integer) {
-                try self.errAt(e, .E0322, "got {s} and {s}", .{ @tagName(a.ty), @tagName(b.ty) });
+                try self.err(self.file.exprs.mainTok(e), .E0322, "got {s} and {s}", .{ @tagName(a.ty), @tagName(b.ty) });
                 return poison;
             }
             const opc: Mir.Opcode = switch (op) {
@@ -7033,7 +6871,7 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         },
         // §4.2.5 case equality is a 4-state comparison (annex C).
         .case_eq, .case_neq => {
-            var d = self.errAtWith(e, .E0323);
+            var d = self.errWith(self.file.exprs.mainTok(e), .E0323);
             d.help("use `==`; for reals prefer `abs(a - b) < tol`", .{});
             try d.emit();
             return poison;
@@ -7041,13 +6879,13 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // §4.2.11 arithmetic shifts have no MIR opcode: a Verilog-A `integer`
         // is signed, so `<<<`/`>>>` would need a separate signed-shift op.
         .ashl, .ashr => {
-            var d = self.errAtWith(e, .E0324);
+            var d = self.errWith(self.file.exprs.mainTok(e), .E0324);
             d.help("use `<<` and `>>`", .{});
             try d.emit();
             return poison;
         },
         else => {
-            try self.errAt(e, .E0325, "`{s}`", .{@tagName(op)});
+            try self.err(self.file.exprs.mainTok(e), .E0325, "`{s}`", .{@tagName(op)});
             return poison;
         },
     }
@@ -7106,14 +6944,10 @@ fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         self.static_cond_depth -= @intFromBool(static);
     }
 
-    const then_b = try self.newBlock();
-    const else_b = try self.newBlock();
-    const join = try self.newBlock();
-    _ = try self.mir.emitBranch(self.arena, self.cur, c, then_b, else_b);
-    try self.builder.addPredecessor(then_b, self.cur);
-    try self.builder.addPredecessor(else_b, self.cur);
-    try self.builder.sealBlock(then_b);
-    try self.builder.sealBlock(else_b);
+    const then_b = try self.mir.addBlock(self.arena);
+    const else_b = try self.mir.addBlock(self.arena);
+    const join = try self.mir.addBlock(self.arena);
+    try self.branchTo(c, then_b, else_b, true);
 
     self.cur = then_b;
     const t = try self.lowerExpr(ex.rhs(e));
@@ -7145,8 +6979,8 @@ fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedVal
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, a);
 
-    const rhs_b = try self.newBlock();
-    const join = try self.newBlock();
+    const rhs_b = try self.mir.addBlock(self.arena);
+    const join = try self.mir.addBlock(self.arena);
     // `a && b` evaluates b only when a is true; `a || b` only when a is false.
     if (op == .logical_and) {
         _ = try self.mir.emitBranch(self.arena, self.cur, a, rhs_b, join);
@@ -7172,7 +7006,7 @@ fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedVal
 /// makes the branch current an unknown of its own (§5.4.2).
 fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.restrict) |ctx| {
-        try self.errAt(e, .E0421, "not allowed in {s}", .{ctx});
+        try self.err(self.file.exprs.mainTok(e), .E0421, "not allowed in {s}", .{ctx});
         return poison;
     }
     // §3.12.1: a port branch names the §5.4.3 port flow, so `I(pb)` and
@@ -7288,7 +7122,7 @@ fn flowAccum(self: *const Lower, t: Target) ?Accum {
 /// pins it with the row `x[u] − Σ stamps at p`.
 fn lowerPortAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.restrict) |ctx| {
-        try self.errAt(e, .E0421, "not allowed in {s}", .{ctx});
+        try self.err(self.file.exprs.mainTok(e), .E0421, "not allowed in {s}", .{ctx});
         return poison;
     }
     return self.portFlowRead(e, try self.nodeOf(self.file.exprs.lhs(e)));
@@ -7303,7 +7137,7 @@ fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     const access = self.access_kind.get(name) orelse {
-        var b = self.errAtWith(e, .E0501);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0501);
         b.msg("`{s}`", .{name});
         if (diag.didYouMeanMap(name, self.access_kind)) |s|
             b.suggestHere(s);
@@ -7313,7 +7147,7 @@ fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     // §5.4.3 "The expression V(<a>) is invalid for ports and nets, where V is a
     // potential access function." A port access reads a FLOW, always.
     if (access == .potential) {
-        try self.errAt(e, .E0507, "`{s}` is a potential access function", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0507, "`{s}` is a potential access function", .{name});
         return poison;
     }
     // §4.4.2 "For port access functions, the expression list is a single port
@@ -7321,7 +7155,7 @@ fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     // the port access function is used." An internal net has no outside, so its
     // port flow would be an identically-zero substitute — reject instead.
     if (p == ground or p >= self.num_ports) {
-        var b = self.errAtWith(e, .E0508);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0508);
         b.msg("`{s}(<{s}>)`", .{ name, self.nodeName(p) });
         if (diag.didYouMeanMap(self.nodeName(p), self.node_voltages)) |s|
             b.help("did you mean `{s}`?", .{s});
@@ -7411,7 +7245,7 @@ fn lowerBuiltin(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// collected before `didYouMean` sees them — and the built-in names ride in the
 /// same list so one call picks the single nearest of the whole set.
 fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
-    var b = self.errAtWith(e, .E0512);
+    var b = self.errWith(self.file.exprs.mainTok(e), .E0512);
     b.msg("`{s}`", .{name});
 
     var names: std.ArrayList([]const u8) = .empty;
@@ -7431,7 +7265,7 @@ fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
 }
 
 fn arityError(self: *Lower, e: Ast.ExprId, name: []const u8, want: usize) Oom!TypedValue {
-    try self.errAt(e, .E0506, "`{s}()` takes {d}", .{ name, want });
+    try self.err(self.file.exprs.mainTok(e), .E0506, "`{s}()` takes {d}", .{ name, want });
     return poison;
 }
 
@@ -7461,7 +7295,7 @@ fn isHistoryless(name: []const u8) bool {
 
 fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (self.restrict) |ctx| {
-        try self.errAt(e, .E0422, "not allowed in {s}", .{ctx});
+        try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx});
         return poison;
     }
     const ex = &self.file.exprs;
@@ -7474,7 +7308,7 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // type's zero instead of the real input, and its history is wrong from then
     // on.
     if (self.cond_depth != self.static_cond_depth and !isHistoryless(name)) {
-        var b = self.errAtWith(e, .E0514);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0514);
         b.msg("`{s}`", .{name});
         b.help("hoist `{s}(...)` onto the spine and make only its USE conditional", .{name});
         try b.emit();
@@ -7486,7 +7320,7 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         if (args.len != 2) return self.arityError(e, name, 2);
         const f = try self.toReal(try self.lowerExpr(args[0]));
         if (ex.tag(args[1]) != .branch_access) {
-            try self.errAt(e, .E0504, "", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0504, "", .{});
             return poison;
         }
         const t = try self.branchOf(args[1]) orelse return poison;
@@ -7502,7 +7336,7 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // single-node probe in the second slot. A FLOW is exempt: a branch
         // current is one unknown however many nets the branch spans.
         if (t.access == .potential and t.lo != ground) {
-            try self.errAt(args[1], .E0504, "a potential across two nets is not one unknown", .{});
+            try self.err(self.file.exprs.mainTok(args[1]), .E0504, "a potential across two nets is not one unknown", .{});
             return poison;
         }
         const u: u16 = switch (t.access) {
@@ -7523,7 +7357,7 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             .flow => self.flow_unknowns.get(.{ .hi = t.hi, .lo = t.lo }) orelse
                 return .{ .v = .f_zero, .ty = .real },
         };
-        const d = try self.call("ddx", &.{ f, try self.iconst(u) });
+        const d = try self.call("ddx", &.{ f, try self.mir.addIntConst(self.arena, u) });
         // §1.3.1.2 again: `ddx(f, I(n,p))` differentiates with respect to the
         // negation of the one canonical unknown, so the derivative negates too.
         // A potential probe reaches here only in the single-net form, which the
@@ -7548,7 +7382,7 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     else
         1; // ddt, idt, idtmod, transition, slew, last_crossing, limexp
     if (args.len < min_args) {
-        try self.errAt(e, .E0505, "`{s}()` needs {d} argument(s), got {d}", .{ name, min_args, args.len });
+        try self.err(self.file.exprs.mainTok(e), .E0505, "`{s}()` needs {d} argument(s), got {d}", .{ name, min_args, args.len });
         return poison;
     }
 
@@ -7575,20 +7409,20 @@ fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // coefficient vector, and an empty one has no such reading.
         if (a == .none) {
             if (i == 1 and nullZerosOk(name)) {
-                try vals.append(self.arena, try self.iconst(0));
+                try vals.append(self.arena, try self.mir.addIntConst(self.arena, 0));
                 continue;
             }
-            try self.errAt(e, .E0505, "`{s}()`", .{name});
+            try self.err(self.file.exprs.mainTok(e), .E0505, "`{s}()`", .{name});
             return poison;
         }
         // A.8.3 `abstol_expression ::= constant_expression | nature_identifier`.
         // The second arm is the ONLY place a nature name is a value, so it is
-        // resolved here and not in `lookupIdent`: natures and disciplines share
+        // resolved here and not in `lookupName`: natures and disciplines share
         // one global scope (§3.13.1), and letting that scope answer general
         // identifier lookup would shadow every variable named after a nature.
         if (abstol_slot == i) {
             if (self.natureAbstol(a)) |t| {
-                try vals.append(self.arena, try self.fconst(t));
+                try vals.append(self.arena, try self.mir.addFloatConst(self.arena, t));
                 continue;
             }
         }
@@ -7790,7 +7624,7 @@ fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId
         if (c == .str) continue; // a type error, not a range one
         const v = c.asReal();
         if (r.want.holds(v)) continue;
-        try self.errAt(args[r.i], .E0516, "`{s}()` argument `{s}` shall be {s}, got {d}", .{ name, r.arg, r.want.word(), v });
+        try self.err(self.file.exprs.mainTok(args[r.i]), .E0516, "`{s}()` argument `{s}` shall be {s}, got {d}", .{ name, r.arg, r.want.word(), v });
     }
 
     // §4.5.10: "The optional direction indicator shall evaluate to an integer
@@ -7800,7 +7634,7 @@ fn checkFilterArgBounds(self: *Lower, name: []const u8, args: []const Ast.ExprId
         if (self.constEval(args[1])) |c| {
             const v = c.asReal();
             if (c != .str and (v != @round(v) or @abs(v) > 1))
-                try self.errAt(args[1], .E0516, "`last_crossing()` direction indicator shall be +1, -1 or 0, got {d}", .{v});
+                try self.err(self.file.exprs.mainTok(args[1]), .E0516, "`last_crossing()` direction indicator shall be +1, -1 or 0, got {d}", .{v});
         }
     }
 }
@@ -7824,7 +7658,7 @@ fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) 
     switch (ex.tag(a)) {
         .assign_pattern, .concat => {
             const elems = ex.args(a);
-            try out.append(self.arena, try self.iconst(@intCast(elems.len)));
+            try out.append(self.arena, try self.mir.addIntConst(self.arena, @intCast(elems.len)));
             for (elems) |el|
                 try out.append(self.arena, try self.toReal(try self.lowerExpr(el)));
             return true;
@@ -7836,8 +7670,8 @@ fn appendVectorArg(self: *Lower, out: *std.ArrayList(Mir.Value), a: Ast.ExprId) 
             // array has no reading as a list of poles and is left to the
             // ordinary path, which reports it (E0356).
             if (info.dims.len != 1) return false;
-            const d = info.first();
-            try out.append(self.arena, try self.iconst(d.count()));
+            const d = info.dims[0];
+            try out.append(self.arena, try self.mir.addIntConst(self.arena, d.count()));
             var i = d.lo;
             while (i <= d.hi) : (i += 1) {
                 const el = (try self.arrayElemValue(name, &.{i})) orelse return true;
@@ -7874,14 +7708,14 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     if (isDigitalOnlySysFunc(name)) { // §9.2
-        try self.errAt(e, .E0806, "`{s}`", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0806, "`{s}`", .{name});
         return poison;
     }
     // §9.22/§9.23 — the driver access family, refused because this is not a
     // connect module (see `isConnectModuleOnlySysFunc` for why the test is a
     // name test today and what it narrows into later).
     if (isConnectModuleOnlySysFunc(name)) {
-        var b = self.errAtWith(e, .E0818);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0818);
         b.msg("`{s}` can only be called from a connect module", .{name});
         b.note("§9.22: \"Driver access functions can only be called from connect modules.\" This is a `module`", .{});
         try b.emit();
@@ -7902,7 +7736,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // name does not exist. One entry, not a table: it is the only retired v1.0
     // `$` spelling in G.1 that VerA ever accepted.
     if (std.mem.eql(u8, name, "$limexp")) {
-        var b = self.errAtWith(e, .E0808);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0808);
         b.msg("`$limexp`", .{});
         b.suggestHere("limexp");
         try b.emit();
@@ -7929,7 +7763,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                         4
                     else if (std.mem.eql(u8, s, "fetlim")) 3 else 0;
                     if (need != 0 and args.len < need) {
-                        var b = self.errAtWith(e, .E0809);
+                        var b = self.errWith(self.file.exprs.mainTok(e), .E0809);
                         b.msg("`\"{s}\"` needs {d} arguments to `$limit`, got {d}", .{ s, need, args.len });
                         try b.emit();
                         return poison;
@@ -7954,7 +7788,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         if (args.len == 1) {
             if (self.constEval(args[0])) |c| switch (c) {
                 .str => |s| if (self.simparamValue(s) == null and !simparamIsRuntime(s)) {
-                    var b = self.errAtWith(e, .E0811);
+                    var b = self.errWith(self.file.exprs.mainTok(e), .E0811);
                     b.msg("`\"{s}\"`", .{s});
                     b.note("$simparam(\"{s}\", <expression>) supplies the value to use instead, and §9.15 makes that form legal for any name", .{s});
                     try b.emit();
@@ -7989,7 +7823,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // no meaning for that.
             for (fd.args) |formal| {
                 if (formal.direction == .input) continue;
-                var b = self.errAtWith(e, .E0814);
+                var b = self.errWith(self.file.exprs.mainTok(e), .E0814);
                 b.msg("formal `{s}` of the `$limit` limiter `{s}` is declared `{s}`", .{
                     self.file.str(formal.name), self.file.str(fd.name), @tagName(formal.direction),
                 });
@@ -8016,7 +7850,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // §9.5.3 the two writers are TASKS: their whole content is the assignment to
     // the string variable, and in expression position there is nothing to assign.
     if (std.mem.eql(u8, name, "$swrite") or std.mem.eql(u8, name, "$sformat")) {
-        try self.errAt(e, .E0813, "`{s}` is a task and has no value; call it as a statement", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0813, "`{s}` is a task and has no value; call it as a statement", .{name});
         return poison;
     }
     // Engine extension (no LRM basis): `$prev(e)` — e at the last ACCEPTED
@@ -8031,7 +7865,7 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (std.mem.eql(u8, name, "$prev")) {
         const args = ex.args(e);
         if (args.len != 1 or args[0] == .none) {
-            var b = self.errAtWith(e, .E0809);
+            var b = self.errWith(self.file.exprs.mainTok(e), .E0809);
             b.msg("`$prev` takes exactly 1 argument, got {d}", .{args.len});
             try b.emit();
             return poison;
@@ -8090,7 +7924,7 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     while (i < args.len and args[i] != .none and !self.isTableSource(args[i])) i += 1;
     const nd = i;
     if (nd == 0 or i == args.len) {
-        try self.errAt(e, .E0815, "`$table_model(table_inputs, table_data_source [, table_control_string])` — one lookup expression per dimension, then the data source", .{});
+        try self.err(self.file.exprs.mainTok(e), .E0815, "`$table_model(table_inputs, table_data_source [, table_control_string])` — one lookup expression per dimension, then the data source", .{});
         return poison;
     }
 
@@ -8120,7 +7954,7 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         ns += 1;
     }
     if (i != args.len) {
-        try self.errAt(e, .E0815, "trailing argument to `$table_model` is neither an array data source nor a constant string", .{});
+        try self.err(self.file.exprs.mainTok(e), .E0815, "trailing argument to `$table_model` is neither an array data source nor a constant string", .{});
         return poison;
     }
 
@@ -8132,19 +7966,19 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // `table_model_array ::= 1st_dim_array_identifier [, …], output_array_identifier`
         // — one column per dimension plus at least one dependent.
         if (ns > 1) {
-            try self.errAt(e, .E0815, "an array data source takes at most one control string", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0815, "an array data source takes at most one control string", .{});
             return poison;
         }
         ctl = strs[0];
         ncol = cols.items.len;
         np = cols.items[0].len;
         if (ncol <= nd) {
-            try self.errAt(e, .E0815, "{d} lookup input(s) need {d} independent arrays plus an output array, got {d}", .{ nd, nd, ncol });
+            try self.err(self.file.exprs.mainTok(e), .E0815, "{d} lookup input(s) need {d} independent arrays plus an output array, got {d}", .{ nd, nd, ncol });
             return poison;
         }
         for (cols.items) |c| {
             if (c.len != np) {
-                try self.errAt(e, .E0815, "the arrays of a `$table_model` data source are columns of one table and must be the same length; got {d} and {d}", .{ np, c.len });
+                try self.err(self.file.exprs.mainTok(e), .E0815, "the arrays of a `$table_model` data source are columns of one table and must be the same length; got {d} and {d}", .{ np, c.len });
                 return poison;
             }
         }
@@ -8155,7 +7989,7 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         rows = flat;
     } else {
         if (ns == 0) {
-            try self.errAt(e, .E0815, "`$table_model` needs a data source: a file name, or one array per dimension plus an output array", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0815, "`$table_model` needs a data source: a file name, or one array per dimension plus an output array", .{});
             return poison;
         }
         ctl = strs[1];
@@ -8163,14 +7997,14 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         ncol = nums.cols;
         np = nums.vals.len / ncol;
         const flat = try self.arena.alloc(Mir.Value, nums.vals.len);
-        for (nums.vals, flat) |v, *out| out.* = try self.fconst(v);
+        for (nums.vals, flat) |v, *out| out.* = try self.mir.addFloatConst(self.arena, v);
         rows = flat;
     }
 
     // §9.21: "The minimum data requirement is to have the product of at least
     // two points per dimension (2ᴺ for N dimensions)."
     if (np < std.math.pow(usize, 2, @min(nd, 30))) {
-        try self.errAt(e, .E0815, "a {d}-dimensional table needs at least {d} samples, got {d}", .{ nd, std.math.pow(usize, 2, @min(nd, 30)), np });
+        try self.err(self.file.exprs.mainTok(e), .E0815, "a {d}-dimensional table needs at least {d} samples, got {d}", .{ nd, std.math.pow(usize, 2, @min(nd, 30)), np });
         return poison;
     }
 
@@ -8180,10 +8014,10 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     try vals.appendSlice(self.arena, &.{
-        try self.iconst(@intCast(nd)),
-        try self.iconst(@intCast(np)),
-        try self.iconst(@intCast(ncol)),
-        try self.iconst(@intCast(dep)),
+        try self.mir.addIntConst(self.arena, @intCast(nd)),
+        try self.mir.addIntConst(self.arena, @intCast(np)),
+        try self.mir.addIntConst(self.arena, @intCast(ncol)),
+        try self.mir.addIntConst(self.arena, @intCast(dep)),
         try self.mir.addStrConst(self.arena, ext),
     });
     for (args[0..nd]) |a| try vals.append(self.arena, try self.toReal(try self.lowerExpr(a)));
@@ -8241,7 +8075,7 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
         }
         const r = dir.readFileAlloc(io, name, self.arena, .limited(max_table_bytes)) catch |e2| {
             if (e2 == error.OutOfMemory) return error.OutOfMemory;
-            try self.errAt(e, .E0815, "cannot read the `$table_model` data source \"{s}\"", .{name});
+            try self.err(self.file.exprs.mainTok(e), .E0815, "cannot read the `$table_model` data source \"{s}\"", .{name});
             return null;
         };
         break :blk r;
@@ -8256,7 +8090,7 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
         var it = std.mem.tokenizeAny(u8, line, " \t\r");
         while (it.next()) |tok| {
             const x = std.fmt.parseFloat(f64, tok) catch {
-                try self.errAt(e, .E0815, "\"{s}\": `{s}` is not a real or integer number", .{ name, tok });
+                try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": `{s}` is not a real or integer number", .{ name, tok });
                 return null;
             };
             try vals.append(self.arena, x);
@@ -8265,12 +8099,12 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
         if (n == 0) continue; // blank line, or a line that was only a comment
         if (cols == 0) cols = n;
         if (n != cols) {
-            try self.errAt(e, .E0815, "\"{s}\": every sample point is one row of {d} columns; found a row of {d}", .{ name, cols, n });
+            try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": every sample point is one row of {d} columns; found a row of {d}", .{ name, cols, n });
             return null;
         }
     }
     if (cols <= nd) {
-        try self.errAt(e, .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ name, nd, nd, cols });
+        try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ name, nd, nd, cols });
         return null;
     }
     return .{ .vals = vals.items, .cols = cols };
@@ -8307,7 +8141,7 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
         if (tail.len != 0) sel = std.fmt.parseInt(usize, tail, 10) catch 0;
     }
     if (sel == 0 or nd + sel - 1 >= ncol) {
-        try self.errAt(e, .E0815, "dependent selector {d} names no dependent column: the data source has {d} column(s) and {d} independent(s)", .{ sel, ncol, nd });
+        try self.err(self.file.exprs.mainTok(e), .E0815, "dependent selector {d} names no dependent column: the data source has {d} column(s) and {d} independent(s)", .{ sel, ncol, nd });
         return null;
     }
 
@@ -8319,25 +8153,25 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
             // One sub-string per independent variable, "with the first
             // sub-string applying to the outermost dimension and so on".
             if (s.len == 0) continue;
-            try self.errAt(e, .E0815, "the control string has more interpolation sub-strings than the {d} lookup input(s)", .{nd});
+            try self.err(self.file.exprs.mainTok(e), .E0815, "the control string has more interpolation sub-strings than the {d} lookup input(s)", .{nd});
             return null;
         }
         defer d += 1;
         var j: usize = 0;
         if (s.len != 0 and std.mem.indexOfScalar(u8, "ID123", s[0]) != null) {
             if (s[0] != '1') {
-                try self.errAt(e, .E0815, "VerA implements Table 9-30's `1` (linear interpolation) only; `{c}` is not implemented", .{s[0]});
+                try self.err(self.file.exprs.mainTok(e), .E0815, "VerA implements Table 9-30's `1` (linear interpolation) only; `{c}` is not implemented", .{s[0]});
                 return null;
             }
             j = 1;
         }
         const xs = s[j..];
         if (xs.len > 2) {
-            try self.errAt(e, .E0815, "`{s}`: a control sub-string carries at most 2 extrapolation characters", .{s});
+            try self.err(self.file.exprs.mainTok(e), .E0815, "`{s}`: a control sub-string carries at most 2 extrapolation characters", .{s});
             return null;
         }
         for (xs) |c| if (c != 'C' and c != 'L') {
-            try self.errAt(e, .E0815, "`{c}` is not an extrapolation method VerA implements (Table 9-31 `C` or `L`)", .{c});
+            try self.err(self.file.exprs.mainTok(e), .E0815, "`{c}` is not an extrapolation method VerA implements (Table 9-31 `C` or `L`)", .{c});
             return null;
         };
         // "When one extrapolation method character is given, the specified
@@ -8417,7 +8251,7 @@ fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args: []
 }
 
 /// The `limit_slots` index for this access function, minting nothing: every
-/// slot was created by `collectLimitSlots` before the body was lowered. Null
+/// slot was created by `scanCallSites` before the body was lowered. Null
 /// when the argument is not an access function at all.
 fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
     const t = try self.limitSlotKey(a) orelse return null;
@@ -8430,69 +8264,13 @@ fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
 
 /// The branch an access function names. `null` for anything that is not one.
 ///
-/// Asked twice of the same expression — once by `collectLimitSlots`, once by
+/// Asked twice of the same expression — once by `scanCallSites`, once by
 /// the site — and that costs nothing: `branchOf`'s diagnostics are deduped by
 /// `(code, span)` in the bag, so a malformed access function is still reported
 /// exactly once.
 fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?Target {
     if (a == .none or self.file.exprs.tag(a) != .branch_access) return null;
     return self.branchOf(a);
-}
-
-/// §9.17.3 mint one state slot per ACCESS FUNCTION reached by a user-function
-/// `$limit`, in source order, seeded in the entry block. `LimitSlot`'s header
-/// says why the key is the access function and not the call site.
-fn collectLimitSlots(self: *Lower, id: Ast.StmtId) Oom!void {
-    if (id == .none) return;
-    switch (self.file.stmt(id)) {
-        .block => |b| for (b.body) |s| try self.collectLimitSlots(s),
-        .assign => |a| try self.collectLimitSlotsExpr(a.value),
-        .contribute => |c| try self.collectLimitSlotsExpr(c.rhs),
-        .indirect => |c| try self.collectLimitSlotsExpr(c.eqn),
-        .if_stmt => |s| {
-            try self.collectLimitSlotsExpr(s.cond);
-            try self.collectLimitSlots(s.then_s);
-            try self.collectLimitSlots(s.else_s);
-        },
-        .case_stmt => |s| {
-            try self.collectLimitSlotsExpr(s.scrutinee);
-            for (s.arms) |arm| try self.collectLimitSlots(arm.body);
-        },
-        .for_stmt => |s| {
-            try self.collectLimitSlotsExpr(s.cond);
-            try self.collectLimitSlots(s.body);
-        },
-        .while_stmt => |s| {
-            try self.collectLimitSlotsExpr(s.cond);
-            try self.collectLimitSlots(s.body);
-        },
-        .repeat_stmt => |s| try self.collectLimitSlots(s.body),
-        .event_control => |s| try self.collectLimitSlots(s.body),
-        .sys_task => |s| for (s.args) |a| try self.collectLimitSlotsExpr(a),
-        .jump => |j| try self.collectLimitSlotsExpr(j.value),
-        else => {},
-    }
-}
-
-fn collectLimitSlotsExpr(self: *Lower, e: Ast.ExprId) Oom!void {
-    if (e == .none) return;
-    const ex = &self.file.exprs;
-    const tag = ex.tag(e);
-    if (tag == .sys_call and std.mem.eql(u8, self.file.str(ex.strOf(e)), "$limit")) {
-        const args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
-        if (args.len >= 2) {
-            if (self.limitUserFunc(args[1]) != null) try self.addLimitSlot(args[0]);
-        }
-    }
-    switch (tag) {
-        .call, .builtin_call, .sys_call, .filter_call, .noise_call, .concat, .assign_pattern, .event_function => {
-            for (ex.args(e)) |a| try self.collectLimitSlotsExpr(a);
-        },
-        .ternary => try self.collectLimitSlotsExpr(ex.ternaryElse(e)),
-        else => {},
-    }
-    try self.collectLimitSlotsExpr(ex.lhs(e));
-    try self.collectLimitSlotsExpr(ex.rhs(e));
 }
 
 fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
@@ -8504,7 +8282,7 @@ fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
     const k: i64 = @intCast(self.limit_slots.items.len);
     // A `call`, so it is opaque to `analysis.foldConst` — the previous iterate
     // is not a constant, however constant the rest of the expression is.
-    const seed = try self.call("$limit$old", &.{try self.iconst(k)});
+    const seed = try self.call("$limit$old", &.{try self.mir.addIntConst(self.arena, k)});
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, seed);
     try self.limit_slots.append(self.arena, .{
@@ -8542,7 +8320,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     // initial block." The next sentence gives the reason: both "shall be
     // re-evaluated each sweep point of a dc sweep", i.e. between solves.
     if (!self.in_analog_initial) {
-        try self.errAt(e, .E0812, "`{s}` is used outside an analog initial block", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0812, "`{s}` is used outside an analog initial block", .{name});
         return true;
     }
     // 2. "shall not be used inside conditional ( if , case , or ?: ) statements
@@ -8555,17 +8333,13 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     // `$abstime` is not. A constant-folded `if` never raises either counter and
     // so never reaches here at all.
     //
-    // ponytail: a `?:` whose arms are the call is not counted — lowering emits a
-    // `select`, not a conditional body. No fixture writes one; the day one does,
-    // the place to count it is `lowerTernary`.
-    //
     // The `analog initial` block is itself ONE guarded body — `lowerModule`
     // wraps it in the `initial_step` flag rather than splitting the CFG — so the
     // depth inside an EMPTY initial block is already 1/0. That guard is not a
     // §9.20 conditional, it is the context the clause requires, so it is
     // discounted (saturating, since rule 1 above is what guarantees it is there).
     if ((self.cond_depth -| 1) != self.static_cond_depth) {
-        try self.errAt(e, .E0812, "`{s}` is used inside conditional statement whose condition can change during the simulation", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0812, "`{s}` is used inside conditional statement whose condition can change during the simulation", .{name});
         return true;
     }
     // 3/4/5. The analog_net_reference. "The analog_net_reference shall be either
@@ -8573,7 +8347,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     // system function call."
     const ref = if (args.len > 0) args[0] else Ast.ExprId.none;
     if (ref == .none) {
-        try self.errAt(e, .E0812, "`{s}` needs an analog_net_reference and a hierarchical_reference_string", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0812, "`{s}` needs an analog_net_reference and a hierarchical_reference_string", .{name});
         return true;
     }
     switch (ex.tag(ref)) {
@@ -8581,7 +8355,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
             const rname = self.file.str(ex.strOf(ref));
             const idx = self.node_voltages.get(rname);
             if (idx == null or idx.? == ground or self.vars.contains(rname)) {
-                try self.errAt(e, .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
+                try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
                 return true;
             }
             // 4. "It shall be an error for the analog_net_reference to be a port
@@ -8589,7 +8363,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
             // whatever the instantiating netlist connected it to, and the alias
             // would bind the same matrix position a second time.
             if (idx.? < self.num_ports) {
-                try self.errAt(e, .E0812, "§9.20 does not allow the analog_net_reference to be a port: `{s}`", .{rname});
+                try self.err(self.file.exprs.mainTok(e), .E0812, "§9.20 does not allow the analog_net_reference to be a port: `{s}`", .{rname});
                 return true;
             }
         },
@@ -8598,11 +8372,11 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
         // or part select of a vector node." The asymmetry is deliberate: the
         // scalar ELEMENT is what the hierarchical_reference_string may name.
         .index, .range => {
-            try self.errAt(e, .E0812, "a vector analog_net_reference must be the whole vector, not a bit select or part select", .{});
+            try self.err(self.file.exprs.mainTok(e), .E0812, "a vector analog_net_reference must be the whole vector, not a bit select or part select", .{});
             return true;
         },
         else => {
-            try self.errAt(e, .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
+            try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
             return true;
         },
     }
@@ -8616,7 +8390,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
             .str => |s| break :blk s,
             else => {},
         };
-        try self.errAt(e, .E0812, "the hierarchical_reference_string of `{s}` is not a constant string (a string literal or a string parameter)", .{name});
+        try self.err(self.file.exprs.mainTok(e), .E0812, "the hierarchical_reference_string of `{s}` is not a constant string (a string literal or a string parameter)", .{name});
         return true;
     };
     // "It shall be an error for the hierarchical_reference_string to reference a
@@ -8633,7 +8407,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     if (std.mem.indexOfScalar(u8, target, '.') == null) {
         for (self.alias_refs.items) |prev| {
             if (!std.mem.eql(u8, prev, target)) continue;
-            try self.errAt(e, .E0812, "`\"{s}\"` is already the analog_net_reference of another $analog_node_alias/$analog_port_alias call", .{target});
+            try self.err(self.file.exprs.mainTok(e), .E0812, "`\"{s}\"` is already the analog_net_reference of another $analog_node_alias/$analog_port_alias call", .{target});
             return true;
         }
     }
@@ -8668,7 +8442,7 @@ fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
     if (args.len < 2) {
-        var b = self.errAtWith(e, .E0809);
+        var b = self.errWith(self.file.exprs.mainTok(e), .E0809);
         b.msg("`$simprobe` takes an instance name and a parameter name", .{});
         try b.emit();
         return poison;
@@ -8682,7 +8456,7 @@ fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     // Unresolved. §9.16's own two outcomes, in the clause's order.
     if (args.len >= 3 and args[2] != .none) return self.lowerExpr(args[2]);
-    var b = self.errAtWith(e, .E0817);
+    var b = self.errWith(self.file.exprs.mainTok(e), .E0817);
     b.msg("`$simprobe(\"{s}\", \"{s}\")` names no parameter of the elaborated design", .{
         inst orelse "<expression>", param orelse "<expression>",
     });
@@ -8728,7 +8502,7 @@ fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!TypedValue {
             self.consts.contains(name);
         if (!is_value) {
             if (self.node_voltages.get(name)) |idx|
-                return .{ .v = try self.iconst(idx), .ty = .integer };
+                return .{ .v = try self.mir.addIntConst(self.arena, idx), .ty = .integer };
         }
     }
     return self.lowerExpr(e);
@@ -8859,7 +8633,7 @@ pub fn sysFuncTy(name: []const u8) Ty {
 /// or indirectly, i.e., recursive functions are not permitted."
 ///
 /// The sentence constrains the FUNCTION, so the check cannot be left to
-/// `inlineUserFunc`'s inline stack: that one only fires when the analog block
+/// `inlineUserFuncPre`'s inline stack: that one only fires when the analog block
 /// actually reaches the call, which makes an illegal declaration legal as long
 /// as nobody calls it — and it is precisely the declarations that cannot be
 /// compiled, since §4.7.2 inlining has no call ABI to fall back on.
@@ -8872,7 +8646,7 @@ fn checkFuncRecursion(self: *Lower, fns: []const Ast.FuncDecl) Oom!void {
     const edges = try self.arena.alloc(std.ArrayList(u32), fns.len);
     for (fns, edges) |*fd, *out| {
         out.* = .empty;
-        try self.scanCallees(fd.body, fns, out);
+        try self.scanCallSites(fd.body, false, fns, out);
     }
 
     const seen = try self.arena.alloc(bool, fns.len);
@@ -8896,64 +8670,86 @@ fn checkFuncRecursion(self: *Lower, fns: []const Ast.FuncDecl) Oom!void {
     }
 }
 
-/// Collect the §4.7 functions one statement tree calls, as indices into `fns`.
+/// With `limits`, §9.17.3 mints one state slot per ACCESS FUNCTION reached by a
+/// user-function `$limit`, in source order, seeded in the entry block.
+/// `LimitSlot`'s header says why the key is the access function, not the call site.
+/// Otherwise collect the §4.7 functions the statement calls, as indices into `fns`.
 /// A name that is not a declared function is not an edge — `lowerUserCall`
 /// reports it (E0512) when the call is reached.
-fn scanCallees(self: *Lower, id: Ast.StmtId, fns: []const Ast.FuncDecl, out: *std.ArrayList(u32)) Oom!void {
+fn scanCallSites(
+    self: *Lower,
+    id: Ast.StmtId,
+    comptime limits: bool,
+    fns: if (limits) void else []const Ast.FuncDecl,
+    out: if (limits) void else *std.ArrayList(u32),
+) Oom!void {
     if (id == .none) return;
     switch (self.file.stmt(id)) {
-        .block => |b| for (b.body) |s| try self.scanCallees(s, fns, out),
+        .block => |b| for (b.body) |s| try self.scanCallSites(s, limits, fns, out),
         .assign => |a| {
-            try self.scanCalleesExpr(a.target, fns, out);
-            try self.scanCalleesExpr(a.value, fns, out);
+            if (!limits) try self.scanCallSitesExpr(a.target, limits, fns, out);
+            try self.scanCallSitesExpr(a.value, limits, fns, out);
         },
         .contribute => |c| {
-            try self.scanCalleesExpr(c.lhs, fns, out);
-            try self.scanCalleesExpr(c.rhs, fns, out);
+            if (!limits) try self.scanCallSitesExpr(c.lhs, limits, fns, out);
+            try self.scanCallSitesExpr(c.rhs, limits, fns, out);
         },
         .indirect => |c| {
-            try self.scanCalleesExpr(c.lhs, fns, out);
-            try self.scanCalleesExpr(c.probe, fns, out);
-            try self.scanCalleesExpr(c.eqn, fns, out);
+            if (!limits) try self.scanCallSitesExpr(c.lhs, limits, fns, out);
+            if (!limits) try self.scanCallSitesExpr(c.probe, limits, fns, out);
+            try self.scanCallSitesExpr(c.eqn, limits, fns, out);
         },
         .if_stmt => |s| {
-            try self.scanCalleesExpr(s.cond, fns, out);
-            try self.scanCallees(s.then_s, fns, out);
-            try self.scanCallees(s.else_s, fns, out);
+            try self.scanCallSitesExpr(s.cond, limits, fns, out);
+            try self.scanCallSites(s.then_s, limits, fns, out);
+            try self.scanCallSites(s.else_s, limits, fns, out);
         },
         .case_stmt => |s| {
-            try self.scanCalleesExpr(s.scrutinee, fns, out);
+            try self.scanCallSitesExpr(s.scrutinee, limits, fns, out);
             for (s.arms) |arm| {
-                for (arm.labels) |l| try self.scanCalleesExpr(l, fns, out);
-                try self.scanCallees(arm.body, fns, out);
+                if (!limits) for (arm.labels) |l| try self.scanCallSitesExpr(l, limits, fns, out);
+                try self.scanCallSites(arm.body, limits, fns, out);
             }
         },
         .for_stmt => |s| {
-            try self.scanCallees(s.init, fns, out);
-            try self.scanCalleesExpr(s.cond, fns, out);
-            try self.scanCallees(s.step, fns, out);
-            try self.scanCallees(s.body, fns, out);
+            if (!limits) try self.scanCallSites(s.init, limits, fns, out);
+            try self.scanCallSitesExpr(s.cond, limits, fns, out);
+            if (!limits) try self.scanCallSites(s.step, limits, fns, out);
+            try self.scanCallSites(s.body, limits, fns, out);
         },
         .while_stmt => |s| {
-            try self.scanCalleesExpr(s.cond, fns, out);
-            try self.scanCallees(s.body, fns, out);
+            try self.scanCallSitesExpr(s.cond, limits, fns, out);
+            try self.scanCallSites(s.body, limits, fns, out);
         },
         .repeat_stmt => |s| {
-            try self.scanCalleesExpr(s.count, fns, out);
-            try self.scanCallees(s.body, fns, out);
+            if (!limits) try self.scanCallSitesExpr(s.count, limits, fns, out);
+            try self.scanCallSites(s.body, limits, fns, out);
         },
-        .event_control => |s| try self.scanCallees(s.body, fns, out),
-        .sys_task => |s| for (s.args) |a| try self.scanCalleesExpr(a, fns, out),
-        .jump => |j| try self.scanCalleesExpr(j.value, fns, out),
+        .event_control => |s| try self.scanCallSites(s.body, limits, fns, out),
+        .sys_task => |s| for (s.args) |a| try self.scanCallSitesExpr(a, limits, fns, out),
+        .jump => |j| try self.scanCallSitesExpr(j.value, limits, fns, out),
         else => {},
     }
 }
 
-fn scanCalleesExpr(self: *Lower, e: Ast.ExprId, fns: []const Ast.FuncDecl, out: *std.ArrayList(u32)) Oom!void {
+fn scanCallSitesExpr(
+    self: *Lower,
+    e: Ast.ExprId,
+    comptime limits: bool,
+    fns: if (limits) void else []const Ast.FuncDecl,
+    out: if (limits) void else *std.ArrayList(u32),
+) Oom!void {
     if (e == .none) return;
     const ex = &self.file.exprs;
     const tag = ex.tag(e);
-    if (tag == .call) {
+    if (limits) {
+        if (tag == .sys_call and std.mem.eql(u8, self.file.str(ex.strOf(e)), "$limit")) {
+            const args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
+            if (args.len >= 2) {
+                if (self.limitUserFunc(args[1]) != null) try self.addLimitSlot(args[0]);
+            }
+        }
+    } else if (tag == .call) {
         // StrIds are interned, so identity IS name equality (`natureOf` relies
         // on the same thing).
         for (fns, 0..) |*fd, k| if (fd.name == ex.strOf(e)) {
@@ -8965,14 +8761,14 @@ fn scanCalleesExpr(self: *Lower, e: Ast.ExprId, fns: []const Ast.FuncDecl, out: 
         // Every tag whose `extra` is an ExprId list; the rest park a literal, an
         // opcode or a StrId list there, which `args` must not be handed.
         .call, .builtin_call, .sys_call, .filter_call, .noise_call, .concat, .assign_pattern, .event_function => {
-            for (ex.args(e)) |a| try self.scanCalleesExpr(a, fns, out);
+            for (ex.args(e)) |a| try self.scanCallSitesExpr(a, limits, fns, out);
         },
-        .ternary => try self.scanCalleesExpr(ex.ternaryElse(e), fns, out),
+        .ternary => try self.scanCallSitesExpr(ex.ternaryElse(e), limits, fns, out),
         else => {},
     }
     // `lhs`/`rhs` are `.none` on every tag that does not use them.
-    try self.scanCalleesExpr(ex.lhs(e), fns, out);
-    try self.scanCalleesExpr(ex.rhs(e), fns, out);
+    try self.scanCallSitesExpr(ex.lhs(e), limits, fns, out);
+    try self.scanCallSitesExpr(ex.rhs(e), limits, fns, out);
 }
 
 fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
@@ -8981,7 +8777,7 @@ fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const m = self.module orelse return poison;
     for (m.functions) |*fd| {
         if (!std.mem.eql(u8, self.file.str(fd.name), name)) continue;
-        return self.inlineUserFunc(fd, ex.args(e), e);
+        return self.inlineUserFuncPre(fd, &.{}, ex.args(e), e);
     }
     // vpi_* and every other unresolved name lands here.
     try self.unknownCall(e, name);
@@ -8995,17 +8791,9 @@ fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// module variables — implemented by swapping in a fresh scope.
 /// §4.7.2.3/§4.7.2.4: `output`/`inout` arguments are written back to the
 /// caller's lvalue after the body runs.
-pub fn inlineUserFunc(
-    self: *Lower,
-    fd: *const Ast.FuncDecl,
-    arg_exprs: []const Ast.ExprId,
-    site: Ast.ExprId,
-) Oom!TypedValue {
-    return self.inlineUserFuncPre(fd, &.{}, arg_exprs, site);
-}
-
-/// The same, with the leading formals bound to values the CALLER already has
-/// rather than to source expressions. §9.17.3's `$limit` is the one caller: the
+///
+/// Leading formals can bind to values the CALLER already has rather than to
+/// source expressions. §9.17.3's `$limit` supplies these leading values: the
 /// simulator supplies `vnew` and `vold` itself and the source only writes the
 /// tail. `pre` fills `fd.args[0..pre.len]`, `arg_exprs` the rest.
 pub fn inlineUserFuncPre(
@@ -9018,12 +8806,12 @@ pub fn inlineUserFuncPre(
     const name = self.file.str(fd.name);
     for (self.inlining.items) |n| {
         if (std.mem.eql(u8, n, name)) {
-            try self.errAt(site, .E0510, "`{s}`", .{name});
+            try self.err(self.file.exprs.mainTok(site), .E0510, "`{s}`", .{name});
             return poison;
         }
     }
     if (pre.len + arg_exprs.len != fd.args.len) {
-        try self.errAt(site, .E0511, "`{s}()` takes {d}, got {d}", .{
+        try self.err(self.file.exprs.mainTok(site), .E0511, "`{s}()` takes {d}, got {d}", .{
             name, fd.args.len, pre.len + arg_exprs.len,
         });
         return poison;
@@ -9050,7 +8838,10 @@ pub fn inlineUserFuncPre(
         }
         const actual = arg_exprs[fi - pre.len];
         if (formal.dims.len != 0) {
-            const n = try self.funcArrayLen(&formal) orelse return poison;
+            // §4.7.2.3 formal bounds fold in the caller's scope: they may name
+            // a module parameter.
+            const dims = try self.dimsBounds(formal.dims, formal.main_tok, self.file.str(formal.name)) orelse return poison;
+            const n = shapeCells(dims);
             const vals = try self.arena.alloc(Mir.Value, n);
             // §4.7.2.3: "All output arguments ... are initialized, zero (0) if
             // numeric, which in turn means that the argument passed to it is
@@ -9058,7 +8849,7 @@ pub fn inlineUserFuncPre(
             if (formal.direction == .output) {
                 @memset(vals, zeroOf(ty));
             } else if (!try self.funcArrayIn(actual, ty, vals)) {
-                try self.errAt(actual, .E0511, "`{s}()` argument `{s}` needs {d} elements", .{
+                try self.err(self.file.exprs.mainTok(actual), .E0511, "`{s}()` argument `{s}` needs {d} elements", .{
                     name, self.file.str(formal.name), n,
                 });
                 return poison;
@@ -9146,7 +8937,7 @@ pub fn inlineUserFuncPre(
     try self.checkOneItemPerScope(fd.vars);
     for (fd.vars) |*v| try self.declareVarDecl(v, .local);
 
-    const exit = try self.newBlock();
+    const exit = try self.mir.addBlock(self.arena);
     self.ret = .{ .slot = ret_slot, .exit = exit };
     try self.lowerStmt(fd.body);
     try self.gotoBlock(exit);
@@ -9202,15 +8993,6 @@ pub fn inlineUserFuncPre(
         try self.builder.writeVariable(slot.place, self.cur, vals[0]);
     }
     return result;
-}
-
-/// How many scalars an array FORMAL declares (§4.7.2.3). Its bounds are a
-/// `constant_expression` like any other array's, folded in the CALLER's scope
-/// because a formal's range may name a module parameter.
-fn funcArrayLen(self: *Lower, formal: *const Ast.FuncArg) Oom!?usize {
-    // ponytail: bounds diagnostics use the formal's token, so no call-site state is needed.
-    const dims = try self.dimsBounds(formal.dims, formal.main_tok, self.file.str(formal.name)) orelse return null;
-    return shapeCells(dims);
 }
 
 /// §4.7.2.3: "the argument passed into the function must be an analog variable
@@ -9290,13 +9072,9 @@ pub fn constEval(self: *const Lower, e: Ast.ExprId) ?Const {
     return self.foldExpr(e, true);
 }
 
-/// The same fold with parameters EXCLUDED. A procedural `if (p > 0)` must stay
+/// With `params = false`, a procedural `if (p > 0)` must stay
 /// a runtime branch — `p` is overridable by the model card, so folding it to
 /// its default would silently compile the wrong arm (§3.4 vs §6.6.2).
-fn elabConst(self: *const Lower, e: Ast.ExprId) ?Const {
-    return self.foldExpr(e, false);
-}
-
 fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     if (e == .none) return null;
     const ex = &self.file.exprs;
@@ -9310,7 +9088,7 @@ fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.contains(name)) return null; // a runtime variable
             // A function-local parameter is NOT overridable by a model card
-            // (§4.7.2 — it never reaches the Model), so `elabConst`'s refusal
+            // (§4.7.2 — it never reaches the Model), so `foldExpr(..., false)`'s refusal
             // to look through a parameter does not apply to a shadowing local.
             if (!params and self.param_index.contains(name) and !self.funcParamShadows(name)) return null;
             return self.consts.get(name);
@@ -9436,17 +9214,7 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     };
 }
 
-// ponytail: ONE deferral is listed here, because it is the only one with no home
-// at a declaration or a call site — every other ceiling in this file says so in
-// its own `ponytail:` comment, where it cannot drift out of agreement with the
-// code beside it. This list used to hold four more, and all four had shipped:
-// §4.4.2/§5.4.3 port probes (see `port_probes` and `lowerPortAccess`, with their
-// own solver unknown), §3.12 branch arrays and §6.5.2 vector ports (scalarised —
-// see the `vectors` map), §6.2.2 module instantiation (src/ir/elaborate.zig), and
-// §3.2.2 runtime array indices, which fold to a select chain for one dimension
-// and name their remaining ceiling at the fold itself. A block comment listing
-// what the file does not do is a register in the worst place for one.
-//   · §4.7.2 function-local `parameter` declarations fold into `consts` and
+// ponytail: §4.7.2 function-local `parameter` declarations fold into `consts` and
 //     are not restored on exit. DURING the body the shadowing is right —
 //     `func_params` masks `param_index`, so the local wins there and the
 //     module parameter wins again after the call (`lookupName` asks
@@ -9457,8 +9225,7 @@ fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
 //     same save/restore treatment as `vars` if a fixture ever does that.
 
 // ---------------------------------------------------------------------------
-// Self-check: the whole frontend on two small modules — the split that class 6
-// and codegen depend on, plus one diagnostic. Runs on std.testing.allocator
+// Self-checks run on std.testing.allocator
 // through an arena, so a leaked byte fails the test.
 // ---------------------------------------------------------------------------
 
@@ -9752,7 +9519,7 @@ test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under
     // "…unless the conditional expression is a constant expression": a folded
     // condition lowers its arm straight into the current block, so it never
     // raises `cond_depth`. (A §3.4 `parameter` is deliberately NOT foldable
-    // here — one artifact serves every model card — and `elabConst` treats a
+    // here — one artifact serves every model card — and `foldExpr(..., false)` treats a
     // §3.4.5 `localparam` the same way, so this uses a literal.)
     var ok: Harness = undefined;
     try Harness.run(std.testing.allocator,

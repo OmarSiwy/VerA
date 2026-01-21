@@ -50,15 +50,12 @@ pub const Value = enum(u32) {
     /// have no row in the `defs` side table.
     pub const first_dynamic: u32 = 12;
 
-    pub fn idx(v: Value) u32 {
-        return @intFromEnum(v);
-    }
 };
 pub const Block = enum(u32) { entry = 0, _ };
 /// Interned string handle (call callees, §4.4 access names, ch9 sysfunc names).
 /// The SAME type the AST uses — one interning mechanism in the engine — but it
 /// indexes THIS Mir's `strings` table, not the AST's. `.none` is the absent
-/// sentinel. See `internString` / `stringOf`.
+/// sentinel. See `internString` / `strings.get`.
 pub const StrId = Ast.StrId;
 
 /// Opcode set. LRM §4.2 (arith/rel/logic/bit/shift), §4.3 (math), casts.
@@ -329,11 +326,11 @@ pub const ValueRow = struct { kind: DefKind, payload: u64 };
 pub const InstData = union(OpClass) {
     unary: struct { op: Opcode, operand: Value },
     binary: struct { op: Opcode, lhs: Value, rhs: Value },
-    ternary: struct { op: Opcode, cond: Value, then_val: Value, else_val: Value },
+    ternary: struct { cond: Value, then_val: Value, else_val: Value },
     phi: struct { start: u32, count: u32 },
     branch: struct { cond: Value, then_block: Block, else_block: Block },
     jump: struct { target: Block },
-    call: struct { callee: StrId, name: []const u8, args: []const Value },
+    call: struct { name: []const u8, args: []const Value },
 };
 
 pub const PhiPair = struct { block: Block, value: Value };
@@ -452,10 +449,6 @@ pub fn internString(self: *Mir, gpa: std.mem.Allocator, bytes: []const u8) !StrI
     return self.strings.intern(gpa, bytes);
 }
 
-pub fn stringOf(self: *const Mir, s: StrId) []const u8 {
-    return self.strings.get(s);
-}
-
 /// Definition of `value`. Sentinels are decoded without a table lookup.
 pub fn valueDef(self: *const Mir, value: Value) Def {
     switch (value) {
@@ -478,7 +471,7 @@ pub fn valueDef(self: *const Mir, value: Value) Def {
         .undef => .undef,
         .float_const => .{ .float_const = @bitCast(row.payload) },
         .int_const => .{ .int_const = @bitCast(row.payload) },
-        .str_const => .{ .str_const = self.stringOf(@enumFromInt(@as(u32, @truncate(row.payload)))) },
+        .str_const => .{ .str_const = self.strings.get(@enumFromInt(@as(u32, @truncate(row.payload)))) },
         .param_ref => .{ .param_ref = @truncate(row.payload) },
         .block_param => .{ .block_param = @truncate(row.payload) },
         .inst_result => .{ .inst_result = @enumFromInt(@as(u32, @truncate(row.payload))) },
@@ -652,7 +645,7 @@ pub fn emitJump(self: *Mir, gpa: std.mem.Allocator, block: Block, target: Block)
 /// LRM §4.3/§4.5/§4.7/ch9 call by name (math builtin, analog operator, UDF,
 /// system function). `callee` names it; codegen.emitCall dispatches on the name.
 pub fn emitCall(self: *Mir, gpa: std.mem.Allocator, block: Block, callee: StrId, args: []const Value) !Value {
-    const start = try self.addExtraValues(gpa, args);
+    const start = try self.addExtra(gpa, @ptrCast(args));
     const result = try self.addValue(gpa, .inst_result, 0);
     const inst = try self.addInst(gpa, block, .{
         .op = .call,
@@ -720,7 +713,6 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
             .rhs = @enumFromInt(row.b),
         } },
         .ternary => .{ .ternary = .{
-            .op = row.op,
             .cond = @enumFromInt(row.a),
             .then_val = @enumFromInt(row.b),
             .else_val = @enumFromInt(row.c),
@@ -733,9 +725,9 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
         } },
         .jump => .{ .jump = .{ .target = @enumFromInt(row.a) } },
         .call => .{ .call = .{
-            .callee = @enumFromInt(row.a),
-            .name = self.stringOf(@enumFromInt(row.a)),
-            .args = self.getExtraValues(row.b, row.c),
+            .name = self.strings.get(@enumFromInt(row.a)),
+            // Borrowed slice into the payload pool; invalidated by further appends.
+            .args = @ptrCast(self.extra.items[row.b..][0..row.c]),
         } },
     };
 }
@@ -761,10 +753,6 @@ pub fn addExtra(self: *Mir, gpa: std.mem.Allocator, words: []const u32) !u32 {
     return @intCast(start);
 }
 
-pub fn addExtraValues(self: *Mir, gpa: std.mem.Allocator, values: []const Value) !u32 {
-    return self.addExtra(gpa, @ptrCast(values));
-}
-
 pub fn addExtraPairs(self: *Mir, gpa: std.mem.Allocator, pairs: []const PhiPair) !u32 {
     const start = self.extra.items.len;
     assert(start < std.math.maxInt(u32));
@@ -774,11 +762,6 @@ pub fn addExtraPairs(self: *Mir, gpa: std.mem.Allocator, pairs: []const PhiPair)
         self.extra.appendAssumeCapacity(@intFromEnum(p.value));
     }
     return @intCast(start);
-}
-
-/// Borrowed slice into the payload pool; invalidated by further appends.
-pub fn getExtraValues(self: *const Mir, start: u32, len: u32) []const Value {
-    return @ptrCast(self.extra.items[start..][0..len]);
 }
 
 // -------------------------------------------------------------------------

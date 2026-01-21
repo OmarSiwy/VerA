@@ -424,7 +424,6 @@ fn reportCoverage(
         if (c.reject) g.value_ptr.neg = true else g.value_ptr.pos = true;
     }
 
-    // ponytail: sorted citations need only the previous section to group the report.
     var prev: []const u8 = "";
     for (cites.items) |c| {
         if (!std.mem.eql(u8, c.section, prev)) {
@@ -717,7 +716,7 @@ fn renderText(arena: std.mem.Allocator, html: []const u8) ![]u8 {
                 // Anything not listed keeps its `&` and is walked as text: the
                 // only job here is that a heading's number and its title end up
                 // separated by something `indexOfAny(" \t")` can find.
-                if (entity(name)) |repl| {
+                if (entities.get(name)) |repl| {
                     out.appendSliceAssumeCapacity(repl);
                     i = end + 1;
                 } else {
@@ -745,15 +744,12 @@ fn renderText(arena: std.mem.Allocator, html: []const u8) ![]u8 {
     return out.items;
 }
 
-fn entity(name: []const u8) ?[]const u8 {
-    const table = std.StaticStringMap([]const u8).initComptime(.{
-        .{ "nbsp", " " },  .{ "#160", " " }, .{ "amp", "&" },
-        .{ "lt", "<" },    .{ "gt", ">" },   .{ "quot", "\"" },
-        .{ "apos", "'" },  .{ "#39", "'" },  .{ "mdash", "-" },
-        .{ "ndash", "-" },
-    });
-    return table.get(name);
-}
+const entities = std.StaticStringMap([]const u8).initComptime(.{
+    .{ "nbsp", " " },  .{ "#160", " " }, .{ "amp", "&" },
+    .{ "lt", "<" },    .{ "gt", ">" },   .{ "quot", "\"" },
+    .{ "apos", "'" },  .{ "#39", "'" },  .{ "mdash", "-" },
+    .{ "ndash", "-" },
+});
 
 /// Order cites the way the LRM's contents page does: numerically per component,
 /// so §10 follows §9 instead of §1, and chapters come before annexes.

@@ -68,52 +68,45 @@ const Fixture = harness.Fixture;
 const Result = harness.Result;
 
 pub fn main(init: std.process.Init) !u8 {
-    var vera_runner: Vera = .{
-        .fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, options.fixture_optimize).?,
-    };
+    // `-Doptimize` builds the RUNNER; this builds the per-fixture testbench
+    // binaries the runner spawns a `zig build-exe` for. Two different programs,
+    // so two different knobs.
+    var fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, options.fixture_optimize).?;
     return harness.run(init, .{
         .name = "vera",
         .runs = true,
         .owns_xfail = true,
-        .ctx = &vera_runner,
-        .check = Vera.check,
-        .arg = Vera.arg,
+        .ctx = &fixture_opt,
+        .check = check,
+        .arg = arg,
     });
 }
 
-/// The VerA plug. Its only state is the knob the harness knows nothing about.
-const Vera = struct {
-    /// `-Doptimize` builds the RUNNER; this builds the per-fixture testbench
-    /// binaries the runner spawns a `zig build-exe` for. Two different programs,
-    /// so two different knobs.
-    fixture_opt: std.builtin.OptimizeMode,
+fn arg(ctx: *anyopaque, a: []const u8) bool {
+    const fixture_opt: *std.builtin.OptimizeMode = @ptrCast(@alignCast(ctx));
+    if (!std.mem.startsWith(u8, a, "--fixture-opt=")) return false;
+    const name = a["--fixture-opt=".len..];
+    fixture_opt.* = std.meta.stringToEnum(std.builtin.OptimizeMode, name) orelse {
+        std.debug.print("torture: not an optimize mode: {s}\n", .{name});
+        std.process.exit(1);
+    };
+    return true;
+}
 
-    fn arg(ctx: *anyopaque, a: []const u8) bool {
-        const self: *Vera = @ptrCast(@alignCast(ctx));
-        if (!std.mem.startsWith(u8, a, "--fixture-opt=")) return false;
-        const name = a["--fixture-opt=".len..];
-        self.fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, name) orelse {
-            std.debug.print("torture: not an optimize mode: {s}\n", .{name});
-            std.process.exit(1);
-        };
-        return true;
-    }
-
-    fn check(
-        ctx: *anyopaque,
-        gpa: std.mem.Allocator,
-        io: Io,
-        arena: std.mem.Allocator,
-        f: Fixture,
-        source: []const u8,
-        d: vera.tb.Directives,
-        w: *Io.Writer,
-    ) anyerror!Result {
-        const self: *Vera = @ptrCast(@alignCast(ctx));
-        if (d.reject.len != 0) return verifyRejected(gpa, f, source, d, w);
-        return runAndCheck(gpa, io, arena, self.fixture_opt, f, source, d, w);
-    }
-};
+fn check(
+    ctx: *anyopaque,
+    gpa: std.mem.Allocator,
+    io: Io,
+    arena: std.mem.Allocator,
+    f: Fixture,
+    source: []const u8,
+    d: vera.tb.Directives,
+    w: *Io.Writer,
+) anyerror!Result {
+    const fixture_opt: *std.builtin.OptimizeMode = @ptrCast(@alignCast(ctx));
+    if (d.reject.len != 0) return verifyRejected(gpa, f, source, d, w);
+    return runAndCheck(gpa, io, arena, fixture_opt.*, f, source, d, w);
+}
 
 /// Why a fixture failed to produce a device, in the vocabulary the `//! reject`
 /// directives are written in.
@@ -126,8 +119,6 @@ const Failure = struct {
     generated: ?[]const u8 = null,
 };
 
-const Attempt = union(enum) { ok, failed: Failure };
-
 // ---------------------------------------------------------------------------
 // The reject half: the expected behavior is a diagnostic
 // ---------------------------------------------------------------------------
@@ -139,22 +130,14 @@ fn verifyRejected(
     d: vera.tb.Directives,
     w: *Io.Writer,
 ) !Result {
-    var attempt = try compileFixture(gpa, f, source, d);
-    defer switch (attempt) {
-        .ok => {},
-        .failed => |*bad| {
-            if (bad.generated) |g| gpa.free(g);
-            bad.diags.deinit(gpa);
-        },
+    var bad = try compileFixture(gpa, f, source, d) orelse {
+        try w.print("FAIL {s}: expected a diagnostic, but it compiled cleanly\n", .{f.path});
+        return .unmet;
     };
-
-    const bad = switch (attempt) {
-        .ok => {
-            try w.print("FAIL {s}: expected a diagnostic, but it compiled cleanly\n", .{f.path});
-            return .unmet;
-        },
-        .failed => |bad| bad,
-    };
+    defer {
+        if (bad.generated) |g| gpa.free(g);
+        bad.diags.deinit(gpa);
+    }
 
     for (d.reject) |pattern| {
         if (!failureContains(bad, pattern)) {
@@ -167,11 +150,11 @@ fn verifyRejected(
     return .met;
 }
 
-/// One compilation, collapsed to `ok` or a `Failure`. Two failure modes are not
+/// One compilation, returning a `Failure` or null. Two failure modes are not
 /// Zig errors and get synthetic names, matching the vocabulary the fixtures use:
 ///   `DiagnosticsReported`  — compiled, but a stage reported a message.
 ///   `GeneratedCompileError` — codegen deliberately emitted `@compileError`.
-fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !Attempt {
+fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !?Failure {
     var diags: vera.diag.Bag = .init(gpa);
     // `.debug` (not `.lint`) so stage 6 runs: some fixtures are rejected by
     // codegen emitting `@compileError`, which `.lint` would never see.
@@ -186,41 +169,33 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
             diags.deinit(gpa);
             return error.OutOfMemory;
         }
-        return .{ .failed = .{ .error_name = @errorName(err), .diags = diags } };
+        return .{ .error_name = @errorName(err), .diags = diags };
     };
-    errdefer result.deinit();
+    defer result.deinit();
 
     if (diags.failed()) {
-        var r = result;
-        r.deinit();
-        return .{ .failed = .{ .error_name = "DiagnosticsReported", .diags = diags } };
+        return .{ .error_name = "DiagnosticsReported", .diags = diags };
     }
 
     const generated = result.generateDevice() catch |err| {
-        var r = result;
-        r.deinit();
         if (err == error.OutOfMemory) {
             diags.deinit(gpa);
             return error.OutOfMemory;
         }
-        return .{ .failed = .{ .error_name = @errorName(err), .diags = diags } };
+        return .{ .error_name = @errorName(err), .diags = diags };
     };
     if (std.mem.indexOf(u8, generated, "@compileError") != null) {
-        // The generated text dies with the arena, so it has to be duped into
-        // `gpa` before the result is dropped.
-        const owned = try gpa.dupe(u8, generated);
-        var r = result;
-        r.deinit();
-        return .{ .failed = .{
+        // Transfer the GPA-owned text before dropping the compilation.
+        result.device.text = "";
+        return .{
             .error_name = "GeneratedCompileError",
             .diags = diags,
-            .generated = owned,
-        } };
+            .generated = generated,
+        };
     }
 
-    result.deinit();
     diags.deinit(gpa);
-    return .ok;
+    return null;
 }
 
 /// A rejection is described by more than the returned error value: the `//!
@@ -278,7 +253,6 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
 fn asCode(pattern: []const u8) ?vera.diag.Code {
     if (pattern.len != 5) return null;
     if (pattern[0] != 'E' and pattern[0] != 'W') return null;
-    // ponytail: stdlib digit classification; the E/W + four-digit format stays fixed.
     for (pattern[1..]) |c| if (!std.ascii.isDigit(c)) return null;
     return std.meta.stringToEnum(vera.diag.Code, pattern);
 }
@@ -461,11 +435,10 @@ fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8) ![
     });
     var buf: [1 << 16]u8 = undefined;
     var reader = child.stderr.?.readerStreaming(io, &buf);
-    var text: std.ArrayList(u8) = .empty;
-    errdefer text.deinit(gpa);
-    var aw: Io.Writer.Allocating = .fromArrayList(gpa, &text);
+    var aw: Io.Writer.Allocating = .init(gpa);
     _ = reader.interface.streamRemaining(&aw.writer) catch {};
-    text = aw.toArrayList();
+    var text = aw.toArrayList();
+    errdefer text.deinit(gpa);
     // A nonzero status is part of the transcript: `$finish`/`$fatal` and a panic
     // in generated code both show up here, and silently dropping it would let a
     // crashing testbench match a golden that records the output it managed to

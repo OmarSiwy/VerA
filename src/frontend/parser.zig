@@ -52,7 +52,7 @@ pub const Parser = struct {
     /// §10.6 reserved-keyword set in effect, and the open `begin_keywords
     /// directives it was pushed by. See `keywordsDirective` / `identLike`.
     kw_set: token.KeywordSet = token.default_keyword_set,
-    kw_stack: std.ArrayList(struct { tok: u32, prev: token.KeywordSet }) = .empty,
+    kw_stack: std.ArrayList(token.KeywordSet) = .empty,
     /// Inside an `analog function` body (§4.7.1). Two of that clause's bullets
     /// are restrictions on statements the ordinary statement parser also parses
     /// for module scope, so the position is the only thing that tells them
@@ -82,8 +82,7 @@ pub const Parser = struct {
     /// the `ModuleDecl` at `endmodule` and cleared — see `parseAttributes`.
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,
     /// Are we inside an attribute VALUE? §2.9's nesting ban is the only rule
-    /// that needs to know, and it needs no more than a flag; `u32` because the
-    /// counter is bumped before the check that would refuse the second one.
+    /// that needs to know.
     attr_depth: u32 = 0,
 
     pub fn init(
@@ -184,7 +183,7 @@ pub const Parser = struct {
                 .eof => break,
                 // §10.6: legal ONLY here — "outside of a design element".
                 .dir_begin_keywords, .dir_end_keywords => self.keywordsDirective() catch |e| {
-                    try self.rethrowOom(e);
+                    if (e == error.OutOfMemory) return e;
                     self.recoverTopLevel(before);
                 },
                 // A.1.2 `module_keyword ::= module | macromodule`. §6.2: "The
@@ -204,7 +203,7 @@ pub const Parser = struct {
                 // here: see `Ast.ModuleDecl.is_connect`.
                 .kw_module, .kw_macromodule, .kw_connectmodule => {
                     const m = self.parseModule() catch |e| {
-                        try self.rethrowOom(e);
+                        if (e == error.OutOfMemory) return e;
                         self.recoverTopLevel(before);
                         continue;
                     };
@@ -212,7 +211,7 @@ pub const Parser = struct {
                 },
                 .kw_discipline => {
                     const d = self.parseDiscipline() catch |e| {
-                        try self.rethrowOom(e);
+                        if (e == error.OutOfMemory) return e;
                         self.recoverTopLevel(before);
                         continue;
                     };
@@ -220,7 +219,7 @@ pub const Parser = struct {
                 },
                 .kw_nature => {
                     const n = self.parseNature() catch |e| {
-                        try self.rethrowOom(e);
+                        if (e == error.OutOfMemory) return e;
                         self.recoverTopLevel(before);
                         continue;
                     };
@@ -233,7 +232,7 @@ pub const Parser = struct {
                 // elaborates to (`ir/elaborate.zig`).
                 .kw_paramset => {
                     const ps = self.parseParamset() catch |e| {
-                        try self.rethrowOom(e);
+                        if (e == error.OutOfMemory) return e;
                         self.recoverTopLevel(before);
                         continue;
                     };
@@ -246,7 +245,7 @@ pub const Parser = struct {
                 // 4.b's third bullet reads.
                 .kw_connectrules => {
                     const cr = self.parseConnectRules() catch |e| {
-                        try self.rethrowOom(e);
+                        if (e == error.OutOfMemory) return e;
                         self.recoverTopLevel(before);
                         continue;
                     };
@@ -287,9 +286,8 @@ pub const Parser = struct {
         const tok = self.pos;
         self.pos += 1;
         if (self.tags[tok] == .dir_end_keywords) {
-            const open = self.kw_stack.pop() orelse
+            self.kw_set = self.kw_stack.pop() orelse
                 return self.failAt(tok, .E0136, "", .{});
-            self.kw_set = open.prev;
             return;
         }
         const str = try self.expect(.string_literal);
@@ -301,7 +299,7 @@ pub const Parser = struct {
             "`{s}`",
             .{spec},
         );
-        try self.kw_stack.append(self.arena, .{ .tok = tok, .prev = self.kw_set });
+        try self.kw_stack.append(self.arena, self.kw_set);
         self.kw_set = set;
     }
 
@@ -371,7 +369,7 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
         try self.parseModuleItems(&b, .kw_endmodule);
         _ = try self.expect(.kw_endmodule);
-        try self.checkGenBlockNames(&b);
+        self.checkGenBlockNames(&b);
         const attrs = try self.arena.dupe(Ast.NatureAttr, self.attrs.items);
         self.attrs.clearRetainingCapacity();
 
@@ -503,7 +501,7 @@ pub const Parser = struct {
                         .E0205,
                         "found {s} in a paramset body",
                         .{self.found(self.pos)},
-                    )) catch |e| try self.rethrowOom(e);
+                    )) catch |e| if (e == error.OutOfMemory) return e;
                     self.skipParamsetStatement();
                 },
             }
@@ -684,6 +682,17 @@ pub const Parser = struct {
         construct: u32,
     };
 
+    /// A.1.3 `port_expression ::= port_reference | { port_reference
+    /// { , port_reference } }` (§6.5.1: a port may be "a simple net
+    /// identifier" or "a vector net formed as a result of the concatenation
+    /// operator"). Appends one `Ast.Port` per port_reference.
+    ///
+    /// ponytail: a concatenated port becomes N terminals, not one N-bit
+    /// terminal. That is the same model §3.6.3 vector ports already get here —
+    /// `electrical [1:0] p` scalarises to two nodes and two terminals.
+    /// The external port's width and member order live in these consecutive
+    /// entries, in source order.
+    ///
     /// A.1.3 list_of_ports / list_of_port_declarations (§6.5). Both styles fall
     /// out of one loop: a direction keyword starts a new declaration and its
     /// direction+discipline stick to the following comma-separated names.
@@ -696,7 +705,7 @@ pub const Parser = struct {
         while (true) {
             try self.skipAttributes();
             if (token.isPortDirection(self.peek())) {
-                dir = self.portDirection(self.peek());
+                dir = portDirection(self.peek());
                 self.pos += 1;
                 disc = try self.optDiscipline();
                 // A.1.3 `inout [ range ] port_identifier {, port_identifier}` —
@@ -715,52 +724,28 @@ pub const Parser = struct {
                 _ = try self.expect(.lparen);
                 close_named = true;
             }
-            try self.parsePortExpr(b, dir, disc, range, external);
+            const concat = self.eat(.lbrace);
+            while (true) {
+                const tok = self.pos;
+                const name = try self.expectIdent();
+                try b.ports.append(self.arena, .{
+                    .name = name,
+                    .direction = dir,
+                    .discipline = disc,
+                    .range = range,
+                    .external_name = external,
+                    .main_tok = tok,
+                });
+                if (!concat or !self.eat(.comma)) break;
+            }
+            if (concat) _ = try self.expect(.rbrace);
             if (close_named) _ = try self.expect(.rparen);
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.rparen);
     }
 
-    /// A.1.3 `port_expression ::= port_reference | { port_reference
-    /// { , port_reference } }` (§6.5.1: a port may be "a simple net
-    /// identifier" or "a vector net formed as a result of the concatenation
-    /// operator"). Appends one `Ast.Port` per port_reference.
-    ///
-    /// ponytail: a concatenated port becomes N terminals, not one N-bit
-    /// terminal. That is the same model §3.6.3 vector ports already get here —
-    /// `electrical [1:0] p` scalarises to two nodes and two terminals — and
-    /// nothing can observe the difference until VerA has instantiation, which
-    /// is also the only thing that can observe `external` at all. When it does,
-    /// the external port's width and member order live in these consecutive
-    /// entries, in source order.
-    fn parsePortExpr(
-        self: *Parser,
-        b: *Body,
-        dir: Ast.Direction,
-        disc: Ast.StrId,
-        range: ?Ast.Dim,
-        external: Ast.StrId,
-    ) Error!void {
-        const concat = self.eat(.lbrace);
-        while (true) {
-            const tok = self.pos;
-            const name = try self.expectIdent();
-            try b.ports.append(self.arena, .{
-                .name = name,
-                .direction = dir,
-                .discipline = disc,
-                .range = range,
-                .external_name = external,
-                .main_tok = tok,
-            });
-            if (!concat or !self.eat(.comma)) break;
-        }
-        if (concat) _ = try self.expect(.rbrace);
-    }
-
-    fn portDirection(self: *Parser, tag: token.Tag) Ast.Direction {
-        _ = self;
+    fn portDirection(tag: token.Tag) Ast.Direction {
         return switch (tag) {
             .kw_input => .input,
             .kw_output => .output,
@@ -793,9 +778,8 @@ pub const Parser = struct {
             if (t == end or t == .eof or t == .kw_endmodule) return;
             const before = self.pos;
             self.parseModuleItem(b) catch |e| {
-                try self.rethrowOom(e);
-                if (self.pos == before) self.pos += 1;
-                self.recoverStatement();
+                if (e == error.OutOfMemory) return e;
+                self.recoverStatement(before);
             };
         }
     }
@@ -820,15 +804,15 @@ pub const Parser = struct {
             // route A.1.4 offers from a module_or_generate_item to a
             // contribution is `analog_construct ::= analog analog_statement`,
             // and `analog` is not the start of any analog statement.
-            .kw_for => try self.parseLoopGenerate(b),
-            .kw_if => try self.parseIfGenerate(b),
+            .kw_for => try self.parseGenerate(b, .kw_for),
+            .kw_if => try self.parseGenerate(b, .kw_if),
             // Syntax 6-8 case_generate_construct. Gated on being inside a
             // generate region or block because `case` is ALSO A.6.7's statement
             // keyword, and at module scope with no generate above it there is no
             // production for either — that stays E0205, which a dozen fixtures
             // pin together with the word `case`.
             .kw_case => if (self.gen_depth > 0)
-                try self.parseCaseGenerate(b)
+                try self.parseGenerate(b, .kw_case)
             else
                 return self.unsupportedItem(),
             // Not an item: a generate_block is only ever the body of the two
@@ -1307,15 +1291,22 @@ pub const Parser = struct {
     /// falls out too: an `else if` chain is an if_generate_construct nested in
     /// the outer construct's block, so it inherits the id rather than starting
     /// a new one.
-    fn enterConstruct(self: *Parser) void {
+    fn parseGenerate(self: *Parser, b: *Body, comptime kind: token.Tag) Error!void {
         if (self.gen_construct_depth == 0) self.gen_construct += 1;
         self.gen_construct_depth += 1;
         self.gen_depth += 1;
-    }
-
-    fn leaveConstruct(self: *Parser) void {
-        self.gen_construct_depth -= 1;
-        self.gen_depth -= 1;
+        defer {
+            self.gen_construct_depth -= 1;
+            self.gen_depth -= 1;
+        }
+        const tok = self.pos;
+        const s = switch (kind) {
+            .kw_for => try self.parseFor(b, tok),
+            .kw_if => try self.parseIf(b, tok),
+            .kw_case => try self.parseCase(.normal, b),
+            else => unreachable,
+        };
+        try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
     }
 
     /// Syntax 6-8 `loop_generate_construct ::= for ( genvar_initialization ;
@@ -1328,10 +1319,9 @@ pub const Parser = struct {
     /// condition, E0419 iteration, E0420 non-terminating) need nothing here —
     /// and why the §6.6 scheme rule the if/case forms carry (E0428) does not
     /// apply to this node: for a `for` it is those four codes instead.
-    fn parseLoopGenerate(self: *Parser, b: *Body) Error!void {
-        self.enterConstruct();
-        defer self.leaveConstruct();
-        const tok = self.pos;
+    /// `gen` is either a module Body pointer or comptime null for a statement.
+    /// Inline specialization shares the grammar without a runtime dispatch.
+    inline fn parseFor(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
         self.pos += 1; // 'for'
         _ = try self.expect(.lparen);
         const init_s = try self.parseAssignNoSemi();
@@ -1340,14 +1330,13 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
         const step = try self.parseAssignNoSemi();
         _ = try self.expect(.rparen);
-        const body = try self.parseGenerateBlock(b);
-        const s = try self.addStmt(.{ .for_stmt = .{
+        const body = if (@TypeOf(gen) == @TypeOf(null)) try self.parseStmt() else try self.parseGenerateBlock(gen);
+        return self.file.addStmt(self.arena, .{ .for_stmt = .{
             .init = init_s,
             .cond = cond,
             .step = step,
             .body = body,
         } }, tok);
-        try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
     }
 
     /// Syntax 6-8 `if_generate_construct ::= if ( constant_expression )
@@ -1356,20 +1345,18 @@ pub const Parser = struct {
     /// `else if` needs no arm of its own: an if_generate_construct is itself a
     /// module_or_generate_item, so the chain is a one-item generate_block in
     /// the `else`, which `parseGenerateBlock` reaches through `parseModuleItem`.
-    fn parseIfGenerate(self: *Parser, b: *Body) Error!void {
-        self.enterConstruct();
-        defer self.leaveConstruct();
-        const tok = self.pos;
+    inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
         self.pos += 1; // 'if'
         _ = try self.expect(.lparen);
         const cond = try self.parseExpr();
         _ = try self.expect(.rparen);
-        const then_s = try self.parseGenerateBlock(b);
+        const then_s = if (@TypeOf(gen) == @TypeOf(null)) try self.parseStmt() else try self.parseGenerateBlock(gen);
         const else_s: Ast.StmtId = if (self.eat(.kw_else))
-            try self.parseGenerateBlock(b)
+            if (@TypeOf(gen) == @TypeOf(null)) try self.parseStmt() else try self.parseGenerateBlock(gen)
         else
             .none;
-        const s = try self.addStmt(
+        return self.file.addStmt(
+            self.arena,
             .{ .if_stmt = .{
                 .cond = cond,
                 .then_s = then_s,
@@ -1377,26 +1364,10 @@ pub const Parser = struct {
                 // §6.6's "all expressions in generate schemes shall be constant
                 // expressions" is judged in lowering (E0428), which is the only
                 // stage that can evaluate one.
-                .is_generate = true,
+                .is_generate = @TypeOf(gen) != @TypeOf(null),
             } },
             tok,
         );
-        try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
-    }
-
-    /// Syntax 6-8 `case_generate_construct ::= case ( constant_expression )
-    /// case_generate_item { case_generate_item } endcase`.
-    ///
-    /// The arms are `generate_block_or_null`, which is the only thing separating
-    /// this from A.6.7's `case_statement` — so `parseCase` parses both and takes
-    /// the module `Body` the generate blocks hoist their declarations into as the
-    /// switch between them.
-    fn parseCaseGenerate(self: *Parser, b: *Body) Error!void {
-        self.enterConstruct();
-        defer self.leaveConstruct();
-        const tok = self.pos;
-        const s = try self.parseCase(.normal, b);
-        try b.analog.append(self.arena, .{ .body = s, .main_tok = tok });
     }
 
     /// Syntax 6-8 `generate_block ::= module_or_generate_item | begin
@@ -1420,7 +1391,7 @@ pub const Parser = struct {
         // A.4.2 has no null generate_block, but `if (c) ;` is what a model
         // writes for a deliberately empty arm and refusing it would only move
         // the error off the rule the source actually breaks.
-        if (self.eat(.semicolon)) return self.addStmt(.empty, tok);
+        if (self.eat(.semicolon)) return self.file.addStmt(self.arena, .empty, tok);
 
         var blk: Ast.SeqBlock = .{};
         var gb: Body = .{};
@@ -1444,9 +1415,8 @@ pub const Parser = struct {
                 if (self.peek() == .kw_end) break;
                 const before = self.pos;
                 self.parseModuleItem(&gb) catch |e| {
-                    try self.rethrowOom(e);
-                    if (self.pos == before) self.pos += 1;
-                    self.recoverStatement();
+                    if (e == error.OutOfMemory) return e;
+                    self.recoverStatement(before);
                 };
             }
             _ = try self.expect(.kw_end);
@@ -1491,7 +1461,7 @@ pub const Parser = struct {
         // direct-nesting permission work: `construct` already says which
         // construct each came from.
         try b.gen_blocks.appendSlice(self.arena, gb.gen_blocks.items);
-        return self.addStmt(.{ .block = blk }, tok);
+        return self.file.addStmt(self.arena, .{ .block = blk }, tok);
     }
 
     /// §6.6.1/§6.6.2/§6.8: a named generate block's name is a DECLARATION in
@@ -1519,18 +1489,18 @@ pub const Parser = struct {
     /// as well, which the clause does not license. Key on the construct itself
     /// rather than its root the day a fixture asks; that needs generate blocks to
     /// be real scope objects, which is also what §6.6.3 hierarchical names want.
-    fn checkGenBlockNames(self: *Parser, b: *Body) Error!void {
+    fn checkGenBlockNames(self: *Parser, b: *Body) void {
         for (b.gen_blocks.items, 0..) |g, i| {
             // Every ordinary declaration space of the module. A port is listed
             // as well as a net: §6.5's header names are declarations too.
             // ponytail: stdlib membership over interned IDs; index declarations
             // if large modules make these linear scans hot.
-            const clash = self.nameIn(Ast.Port, b.ports.items, g.name) or
-                self.nameIn(Ast.ParamDecl, b.params.items, g.name) or
-                self.nameIn(Ast.VarDecl, b.vars.items, g.name) or
-                self.nameIn(Ast.NetDecl, b.nets.items, g.name) or
-                self.nameIn(Ast.BranchDecl, b.branches.items, g.name) or
-                self.nameIn(Ast.FuncDecl, b.functions.items, g.name) or
+            const clash = nameIn(Ast.Port, b.ports.items, g.name) or
+                nameIn(Ast.ParamDecl, b.params.items, g.name) or
+                nameIn(Ast.VarDecl, b.vars.items, g.name) or
+                nameIn(Ast.NetDecl, b.nets.items, g.name) or
+                nameIn(Ast.BranchDecl, b.branches.items, g.name) or
+                nameIn(Ast.FuncDecl, b.functions.items, g.name) or
                 std.mem.indexOfScalar(Ast.StrId, b.genvars.items, g.name) != null or
                 alias: {
                     // §3.4.6 an aliasparam's own identifier is a declaration.
@@ -1552,8 +1522,7 @@ pub const Parser = struct {
     /// Is `name` the name of one of `decls`? One helper for eight declaration
     /// slices, which all carry a `.name: StrId` — and a StrId comparison is a
     /// name comparison because §2.8 identifiers are interned.
-    fn nameIn(self: *const Parser, comptime T: type, decls: []const T, name: Ast.StrId) bool {
-        _ = self;
+    fn nameIn(comptime T: type, decls: []const T, name: Ast.StrId) bool {
         for (decls) |d| if (d.name == name) return true;
         return false;
     }
@@ -1561,7 +1530,7 @@ pub const Parser = struct {
     /// §6.5.2 body port declaration: it re-declares a header port's direction
     /// and discipline, it does not introduce a new terminal.
     fn parsePortDecl(self: *Parser, b: *Body) Error!void {
-        const dir = self.portDirection(self.peek());
+        const dir = portDirection(self.peek());
         self.pos += 1;
         const disc = try self.optDiscipline();
         // A.2.1.2 `inout [ range ] list_of_port_identifiers ;` — §6.5.2.2's
@@ -1572,7 +1541,7 @@ pub const Parser = struct {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
-            if (self.findPort(b, name)) |p| {
+            if (findPort(b, name)) |p| {
                 // §6.2 "Ports declared in the list of port declarations shall
                 // not be redeclared within the body of the module." A direction
                 // is what a `list_of_port_declarations` header carries and a
@@ -1594,8 +1563,7 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
     }
 
-    fn findPort(self: *Parser, b: *Body, name: Ast.StrId) ?*Ast.Port {
-        _ = self;
+    fn findPort(b: *Body, name: Ast.StrId) ?*Ast.Port {
         for (b.ports.items) |*p| if (p.name == name) return p;
         return null;
     }
@@ -1730,7 +1698,7 @@ pub const Parser = struct {
             // declarations and can apply §7.4.4 (E0902) — overwriting here is
             // what used to make the second one invisible. The entry adds no
             // node: internNode finds the port's existing slot by name.
-            const port = if (is_ground) null else self.findPort(b, name);
+            const port = if (is_ground) null else findPort(b, name);
             if (port != null and port.?.discipline == .none) {
                 port.?.discipline = disc;
                 // §6.5.2.2: this IS the port type declaration. Recorded beside
@@ -1800,7 +1768,7 @@ pub const Parser = struct {
 
     /// Parameter declaration incl. ranges. LRM §3.4, §3.4.1, §3.4.2, §3.4.5.
     ///
-    /// Deviates from the stub signature: `parameter real a = 1, b = 2;` is one
+    /// `parameter real a = 1, b = 2;` is one
     /// declaration but N `ParamDecl`s, so the list is an out-parameter.
     pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!void {
         const is_local = self.peek() == .kw_localparam;
@@ -1914,11 +1882,11 @@ pub const Parser = struct {
         const tok = self.pos;
         if (self.peek() == .minus and self.peekAt(1) == .kw_inf) {
             self.pos += 2;
-            return self.addExpr(.{ .tag = .neg_inf, .main_tok = tok });
+            return self.file.exprs.add(self.arena, .{ .tag = .neg_inf, .main_tok = tok });
         }
         if (self.peek() == .kw_inf) {
             self.pos += 1;
-            return self.addExpr(.{ .tag = .pos_inf, .main_tok = tok });
+            return self.file.exprs.add(self.arena, .{ .tag = .pos_inf, .main_tok = tok });
         }
         return self.parseExpr();
     }
@@ -1952,10 +1920,7 @@ pub const Parser = struct {
     /// The width of `[msb:lsb]` when both bounds are integer LITERALS.
     ///
     /// ponytail: literals only. Folding `[W-1:0]` needs the constant evaluator,
-    /// which lives in lowering — and the one caller is the `reg` arm, whose
-    /// declaration is refused before lowering ever runs. The day discrete nets
-    /// are implemented this check moves down there with them and gets the
-    /// folder for free.
+    /// which lives in lowering.
     fn literalWidth(self: *const Parser, d: Ast.Dim) ?u64 {
         const ex = &self.file.exprs;
         if (ex.tag(d.msb) != .int_literal or ex.tag(d.lsb) != .int_literal) return null;
@@ -2044,7 +2009,7 @@ pub const Parser = struct {
             switch (self.peek()) {
                 .eof, .kw_endfunction => break,
                 .kw_input, .kw_output, .kw_inout => {
-                    const dir = self.portDirection(self.peek());
+                    const dir = portDirection(self.peek());
                     self.pos += 1;
                     // `input real x;` (A.2.7 task_port_type) or bare `input x;`
                     const ty: Ast.Type = switch (self.peek()) {
@@ -2100,9 +2065,8 @@ pub const Parser = struct {
                 else => {
                     const before = self.pos;
                     const s = self.parseStmt() catch |e| {
-                        try self.rethrowOom(e);
-                        if (self.pos == before) self.pos += 1;
-                        self.recoverStatement();
+                        if (e == error.OutOfMemory) return e;
+                        self.recoverStatement(before);
                         continue;
                     };
                     try body.append(self.arena, s);
@@ -2139,7 +2103,7 @@ pub const Parser = struct {
         const body_id: Ast.StmtId = if (body.items.len == 1)
             body.items[0]
         else
-            try self.addStmt(.{ .block = .{ .body = body.items } }, main_tok);
+            try self.file.addStmt(self.arena, .{ .block = .{ .body = body.items } }, main_tok);
 
         try b.functions.append(self.arena, .{
             .name = name,
@@ -2315,53 +2279,23 @@ pub const Parser = struct {
         switch (self.peek()) {
             .semicolon => {
                 self.pos += 1;
-                return self.addStmt(.empty, tok);
+                return self.file.addStmt(self.arena, .empty, tok);
             },
             .kw_begin => return self.parseSeqBlock(),
-            .kw_if => { // §5.8 / A.6.6
-                self.pos += 1;
-                _ = try self.expect(.lparen);
-                const cond = try self.parseExpr();
-                _ = try self.expect(.rparen);
-                const then_s = try self.parseStmt();
-                const else_s: Ast.StmtId = if (self.eat(.kw_else))
-                    try self.parseStmt()
-                else
-                    .none;
-                return self.addStmt(
-                    .{ .if_stmt = .{ .cond = cond, .then_s = then_s, .else_s = else_s } },
-                    tok,
-                );
-            },
+            .kw_if => return self.parseIf(null, tok), // §5.8 / A.6.6
             // §5.8.3 / A.6.7. `casex`/`casez` share the production and are
             // refused in lowering by E0416, the code annex C.7 owns.
             .kw_case => return self.parseCase(.normal, null),
             .kw_casex => return self.parseCase(.casex, null),
             .kw_casez => return self.parseCase(.casez, null),
-            .kw_for => { // §5.9.2 / A.6.8 (also A.4.2 loop generate)
-                self.pos += 1;
-                _ = try self.expect(.lparen);
-                const init_s = try self.parseAssignNoSemi();
-                _ = try self.expect(.semicolon);
-                const cond = try self.parseExpr();
-                _ = try self.expect(.semicolon);
-                const step = try self.parseAssignNoSemi();
-                _ = try self.expect(.rparen);
-                const body = try self.parseStmt();
-                return self.addStmt(.{ .for_stmt = .{
-                    .init = init_s,
-                    .cond = cond,
-                    .step = step,
-                    .body = body,
-                } }, tok);
-            },
+            .kw_for => return self.parseFor(null, tok), // §5.9.2 / A.6.8
             .kw_while => { // §5.9.1
                 self.pos += 1;
                 _ = try self.expect(.lparen);
                 const cond = try self.parseExpr();
                 _ = try self.expect(.rparen);
                 const body = try self.parseStmt();
-                return self.addStmt(.{ .while_stmt = .{ .cond = cond, .body = body } }, tok);
+                return self.file.addStmt(self.arena, .{ .while_stmt = .{ .cond = cond, .body = body } }, tok);
             },
             .kw_repeat => { // §5.9
                 self.pos += 1;
@@ -2369,7 +2303,7 @@ pub const Parser = struct {
                 const count = try self.parseExpr();
                 _ = try self.expect(.rparen);
                 const body = try self.parseStmt();
-                return self.addStmt(.{ .repeat_stmt = .{ .count = count, .body = body } }, tok);
+                return self.file.addStmt(self.arena, .{ .repeat_stmt = .{ .count = count, .body = body } }, tok);
             },
             .at => return self.parseEventControl(), // §5.10 / A.6.5
             // A.6.5 `event_trigger ::= -> hierarchical_event_identifier
@@ -2380,13 +2314,13 @@ pub const Parser = struct {
                 self.pos += 1;
                 const name = try self.expectIdent();
                 _ = try self.expect(.semicolon);
-                return self.addStmt(.{ .event_trigger = .{ .name = name } }, tok);
+                return self.file.addStmt(self.arena, .{ .event_trigger = .{ .name = name } }, tok);
             },
             .kw_disable => { // §5.11
                 self.pos += 1;
                 const name = try self.expectIdent();
                 _ = try self.expect(.semicolon);
-                return self.addStmt(.{ .disable = .{ .name = name } }, tok);
+                return self.file.addStmt(self.arena, .{ .disable = .{ .name = name } }, tok);
             },
             .kw_return => { // A.6.5 jump_statement (§4.7.1)
                 self.pos += 1;
@@ -2408,13 +2342,13 @@ pub const Parser = struct {
                 else
                     try self.parseExpr();
                 _ = try self.expect(.semicolon);
-                return self.addStmt(.{ .jump = .{ .kind = .ret, .value = value } }, tok);
+                return self.file.addStmt(self.arena, .{ .jump = .{ .kind = .ret, .value = value } }, tok);
             },
             .kw_break, .kw_continue => {
                 const kind: Ast.Stmt.JumpKind = if (self.peek() == .kw_break) .brk else .cont;
                 self.pos += 1;
                 _ = try self.expect(.semicolon);
-                return self.addStmt(.{ .jump = .{ .kind = kind } }, tok);
+                return self.file.addStmt(self.arena, .{ .jump = .{ .kind = kind } }, tok);
             },
             // A.6.9 analog_system_task_enable (§5.12, ch9)
             .system_identifier => return self.parseSysTask(),
@@ -2466,9 +2400,8 @@ pub const Parser = struct {
             // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
             // — no null alternative, so a stray `;` here is E0219.
             const s = self.parseStmtNoNull() catch |e| {
-                try self.rethrowOom(e);
-                if (self.pos == before) self.pos += 1;
-                self.recoverStatement();
+                if (e == error.OutOfMemory) return e;
+                self.recoverStatement(before);
                 continue;
             };
             try body.append(self.arena, s);
@@ -2478,9 +2411,12 @@ pub const Parser = struct {
         blk.params = params.items;
         blk.vars = vars.items;
         blk.body = body.items;
-        return self.addStmt(.{ .block = blk }, tok);
+        return self.file.addStmt(self.arena, .{ .block = blk }, tok);
     }
 
+    /// Syntax 6-8 `case_generate_construct ::= case ( constant_expression )
+    /// case_generate_item { case_generate_item } endcase`.
+    ///
     /// §5.8.3 / A.6.7 analog_case_statement. `casex`/`casez` are out of the
     /// analog subset (annex C.7); they parse here and `lowerCase` refuses the
     /// kind, so the diagnostic names the rule instead of the grammar.
@@ -2512,7 +2448,8 @@ pub const Parser = struct {
             try arms.append(self.arena, .{ .labels = labels.items, .body = body });
         }
         _ = try self.expect(.kw_endcase);
-        return self.addStmt(
+        return self.file.addStmt(
+            self.arena,
             .{ .case_stmt = .{
                 .kind = kind,
                 .scrutinee = scrutinee,
@@ -2535,10 +2472,10 @@ pub const Parser = struct {
             // `@ hierarchical_event_identifier`
             const id_tok = self.pos;
             const name = try self.expectIdent();
-            break :blk try self.addExpr(.{ .tag = .ident, .main_tok = id_tok, .str = name });
+            break :blk try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = id_tok, .str = name });
         };
         const body = try self.parseStmt();
-        return self.addStmt(.{ .event_control = .{ .event = event, .body = body } }, tok);
+        return self.file.addStmt(self.arena, .{ .event_control = .{ .event = event, .body = body } }, tok);
     }
 
     /// A.6.5 analog_event_expression — `or` and `,` both build `.event_or`
@@ -2549,7 +2486,7 @@ pub const Parser = struct {
             const tok = self.pos;
             self.pos += 1;
             const rhs = try self.parseEventTerm();
-            lhs = try self.addExpr(.{
+            lhs = try self.file.exprs.add(self.arena, .{
                 .tag = .event_or,
                 .main_tok = tok,
                 .lhs = lhs,
@@ -2574,7 +2511,7 @@ pub const Parser = struct {
         if (self.in_connect_module and self.peek() == .kw_driver_update) {
             self.pos += 1;
             const sig = try self.parseExpr();
-            return self.addExpr(.{ .tag = .event_driver_update, .main_tok = tok, .lhs = sig });
+            return self.file.exprs.add(self.arena, .{ .tag = .event_driver_update, .main_tok = tok, .lhs = sig });
         }
         const tag: Ast.ExprTag = switch (self.peek()) {
             .kw_initial_step => .event_initial_step,
@@ -2598,7 +2535,7 @@ pub const Parser = struct {
             _ = try self.expect(.rparen);
         }
         const off = try self.file.exprs.addStrList(self.arena, names.items);
-        return self.addExpr(.{ .tag = tag, .main_tok = tok, .extra = off });
+        return self.file.exprs.add(self.arena, .{ .tag = tag, .main_tok = tok, .extra = off });
     }
 
     /// A.6.9 `$task [ ( [expr] {, [expr]} ) ] ;` — ch9 system tasks. The name
@@ -2610,7 +2547,7 @@ pub const Parser = struct {
         var args: []const Ast.ExprId = &.{};
         if (self.peek() == .lparen) args = try self.parseCallArgs();
         _ = try self.expect(.semicolon);
-        return self.addStmt(.{ .sys_task = .{ .name = name, .args = args } }, tok);
+        return self.file.addStmt(self.arena, .{ .sys_task = .{ .name = name, .args = args } }, tok);
     }
 
     /// Contribution vs procedural-assignment disambiguation. LRM §5.6, §5.7.
@@ -2624,13 +2561,13 @@ pub const Parser = struct {
                 self.pos += 1;
                 const rhs = try self.parseExpr();
                 _ = try self.expect(.semicolon);
-                return self.addStmt(.{ .contribute = .{ .lhs = lhs, .rhs = rhs } }, tok);
+                return self.file.addStmt(self.arena, .{ .contribute = .{ .lhs = lhs, .rhs = rhs } }, tok);
             },
             .assign_eq => { // §5.7 / A.6.2
                 self.pos += 1;
                 const value = try self.parseExpr();
                 _ = try self.expect(.semicolon);
-                return self.addStmt(.{ .assign = .{ .target = lhs, .value = value } }, tok);
+                return self.file.addStmt(self.arena, .{ .assign = .{ .target = lhs, .value = value } }, tok);
             },
             .colon => { // §5.6.7 / A.6.10 indirect contribution
                 self.pos += 1;
@@ -2638,7 +2575,8 @@ pub const Parser = struct {
                 _ = try self.expect(.eq_eq);
                 const eqn = try self.parseExpr();
                 _ = try self.expect(.semicolon);
-                return self.addStmt(
+                return self.file.addStmt(
+                    self.arena,
                     .{ .indirect = .{ .lhs = lhs, .probe = probe, .eqn = eqn } },
                     tok,
                 );
@@ -2654,7 +2592,7 @@ pub const Parser = struct {
         const target = try self.parseExpr();
         _ = try self.expect(.assign_eq);
         const value = try self.parseExpr();
-        return self.addStmt(.{ .assign = .{ .target = target, .value = value } }, tok);
+        return self.file.addStmt(self.arena, .{ .assign = .{ .target = target, .value = value } }, tok);
     }
 
     // -----------------------------------------------------------------------
@@ -2666,8 +2604,7 @@ pub const Parser = struct {
         return self.parseExprPrec(prec_ternary);
     }
 
-    /// Precedence climbing over LRM Table 4-3 (§4.2.2). Everything associates
-    /// left to right except `?:` (§4.2.12) and `**`, which are right-assoc.
+    /// Precedence climbing over LRM Table 4-3 (§4.2.2).
     fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
         var lhs = try self.parseUnary();
         while (true) {
@@ -2680,7 +2617,7 @@ pub const Parser = struct {
                 const then_e = try self.parseExpr();
                 _ = try self.expect(.colon);
                 const else_e = try self.parseExprPrec(prec_ternary);
-                lhs = try self.addExpr(.{
+                lhs = try self.file.exprs.add(self.arena, .{
                     .tag = .ternary,
                     .main_tok = tok,
                     .lhs = lhs,
@@ -2700,7 +2637,7 @@ pub const Parser = struct {
             // right-associative operator, and `?:` is handled above, not here.
             // `**` used to be excepted, which made `2**3**2` 512 instead of 64.
             const rhs = try self.parseExprPrec(prec + 1);
-            lhs = try self.addExpr(.{
+            lhs = try self.file.exprs.add(self.arena, .{
                 .tag = .binary,
                 .main_tok = tok,
                 .lhs = lhs,
@@ -2735,7 +2672,7 @@ pub const Parser = struct {
         self.pos += 1;
         try self.skipAttributes(); // A.8.3 `unary_operator { attribute_instance }`
         const operand = try self.parseUnary();
-        return self.addExpr(.{
+        return self.file.exprs.add(self.arena, .{
             .tag = .unary,
             .main_tok = tok,
             .lhs = operand,
@@ -2752,7 +2689,7 @@ pub const Parser = struct {
             var idx = try self.parseExpr();
             if (self.eat(.colon)) { // A.8.3 analog_range_expression
                 const lsb = try self.parseExpr();
-                idx = try self.addExpr(.{
+                idx = try self.file.exprs.add(self.arena, .{
                     .tag = .range,
                     .main_tok = tok,
                     .lhs = idx,
@@ -2760,7 +2697,7 @@ pub const Parser = struct {
                 });
             }
             _ = try self.expect(.rbracket);
-            e = try self.addExpr(.{ .tag = .index, .main_tok = tok, .lhs = e, .rhs = idx });
+            e = try self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = e, .rhs = idx });
         }
         return e;
     }
@@ -2777,7 +2714,7 @@ pub const Parser = struct {
             .string_literal => { // §2.7
                 const s = try self.internString(tok);
                 self.pos += 1;
-                return self.addExpr(.{ .tag = .str_literal, .main_tok = tok, .str = s });
+                return self.file.exprs.add(self.arena, .{ .tag = .str_literal, .main_tok = tok, .str = s });
             },
             .lparen => {
                 self.pos += 1;
@@ -2792,7 +2729,7 @@ pub const Parser = struct {
                 if (count) |n| return self.multiConcat(tok, n, items.items);
                 if (try self.foldBitConcat(tok, items.items)) |folded| return folded;
                 const off = try self.file.exprs.addExprList(self.arena, items.items);
-                return self.addExpr(.{ .tag = .concat, .main_tok = tok, .extra = off });
+                return self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
             },
             // A.8.1 assignment_pattern `'{ ... }` (§3.4.4 array defaults,
             // §4.5.6 filter coefficient args)
@@ -2828,7 +2765,7 @@ pub const Parser = struct {
                 }
                 _ = try self.expect(.rbrace);
                 const off = try self.file.exprs.addExprList(self.arena, items.items);
-                return self.addExpr(.{ .tag = .assign_pattern, .main_tok = tok, .extra = off });
+                return self.file.exprs.add(self.arena, .{ .tag = .assign_pattern, .main_tok = tok, .extra = off });
             },
             .identifier, .escaped_identifier => {
                 const text = self.tokenText(tok);
@@ -2907,16 +2844,10 @@ pub const Parser = struct {
                         }
                         const flat = try self.file.strings.intern(self.arena, joined.items);
                         const args = try self.parseCallArgs();
-                        const off = try self.file.exprs.addExprList(self.arena, args);
-                        return self.addExpr(.{
-                            .tag = .call,
-                            .main_tok = tok,
-                            .extra = off,
-                            .str = flat,
-                        });
+                        return self.addCall(.call, tok, flat, args);
                     }
                     const off = try self.file.exprs.addStrList(self.arena, parts.items);
-                    return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
+                    return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
                 }
                 if (self.peek() == .lparen) {
                     // §4.4 branch probe vs §4.7 user function: only a declared
@@ -2925,15 +2856,9 @@ pub const Parser = struct {
                         return self.parseAccess(name, tok);
                     }
                     const args = try self.parseCallArgs();
-                    const off = try self.file.exprs.addExprList(self.arena, args);
-                    return self.addExpr(.{
-                        .tag = .call,
-                        .main_tok = tok,
-                        .extra = off,
-                        .str = name,
-                    });
+                    return self.addCall(.call, tok, name, args);
                 }
-                return self.addExpr(.{ .tag = .ident, .main_tok = tok, .str = name });
+                return self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
             },
             // §5.5.1 Syntax 5-3 `nature_access_function ::=
             // nature_attribute_identifier | potential | flow`, and §4.4: "as an
@@ -2973,24 +2898,18 @@ pub const Parser = struct {
                     try parts.append(self.arena, name);
                     while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
                     const off = try self.file.exprs.addStrList(self.arena, parts.items);
-                    return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
+                    return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
                 }
                 const args: []const Ast.ExprId = if (self.peek() == .lparen)
                     try self.parseCallArgs()
                 else
                     &.{};
-                const off = try self.file.exprs.addExprList(self.arena, args);
-                return self.addExpr(.{
-                    .tag = .sys_call,
-                    .main_tok = tok,
-                    .extra = off,
-                    .str = name,
-                });
+                return self.addCall(.sys_call, tok, name, args);
             },
             // A.2.5 value_range_expression `inf` (only meaningful in §3.4.2).
             .kw_inf => {
                 self.pos += 1;
-                return self.addExpr(.{ .tag = .pos_inf, .main_tok = tok });
+                return self.file.exprs.add(self.arena, .{ .tag = .pos_inf, .main_tok = tok });
             },
             else => {},
         }
@@ -3015,9 +2934,13 @@ pub const Parser = struct {
         const name = try self.file.intern(self.arena, token.Tag.lexeme(t).?);
         self.pos += 1;
         const args = try self.parseCallArgs();
+        return self.addCall(call_tag, tok, name, args);
+    }
+
+    inline fn addCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, args: []const Ast.ExprId) Error!Ast.ExprId {
         const off = try self.file.exprs.addExprList(self.arena, args);
-        return self.addExpr(.{
-            .tag = call_tag,
+        return self.file.exprs.add(self.arena, .{
+            .tag = tag,
             .main_tok = tok,
             .extra = off,
             .str = name,
@@ -3032,7 +2955,7 @@ pub const Parser = struct {
             const port = try self.parseNetRef();
             _ = try self.expect(.gt);
             _ = try self.expect(.rparen);
-            return self.addExpr(.{
+            return self.file.exprs.add(self.arena, .{
                 .tag = .port_access,
                 .main_tok = tok,
                 .lhs = port,
@@ -3043,7 +2966,7 @@ pub const Parser = struct {
         var lo: Ast.ExprId = .none;
         if (self.eat(.comma)) lo = try self.parseNetRef();
         _ = try self.expect(.rparen);
-        return self.addExpr(.{
+        return self.file.exprs.add(self.arena, .{
             .tag = .branch_access,
             .main_tok = tok,
             .lhs = hi,
@@ -3089,14 +3012,14 @@ pub const Parser = struct {
             try parts.append(self.arena, name);
             while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
             const off = try self.file.exprs.addStrList(self.arena, parts.items);
-            return self.addExpr(.{ .tag = .hier_ident, .main_tok = tok, .extra = off });
+            return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
         }
-        const base = try self.addExpr(.{ .tag = .ident, .main_tok = tok, .str = name });
+        const base = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
         if (self.peek() != .lbracket) return base;
         self.pos += 1;
         const idx = try self.parseExpr();
         _ = try self.expect(.rbracket);
-        return self.addExpr(.{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
+        return self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
     }
 
     /// A.8.2 / A.6.9 argument list. An omitted argument (`f(a, , c)`, and the
@@ -3349,8 +3272,8 @@ pub const Parser = struct {
     /// documents the tag.
     fn multiConcat(self: *Parser, tok: u32, count: Ast.ExprId, items: []const Ast.ExprId) Error!Ast.ExprId {
         const off = try self.file.exprs.addExprList(self.arena, items);
-        const inner = try self.addExpr(.{ .tag = .concat, .main_tok = tok, .extra = off });
-        return self.addExpr(.{ .tag = .multi_concat, .main_tok = tok, .lhs = count, .rhs = inner });
+        const inner = try self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
+        return self.file.exprs.add(self.arena, .{ .tag = .multi_concat, .main_tok = tok, .lhs = count, .rhs = inner });
     }
 
     /// §4.2.13's "non-negative, non-x and non-z constant expression" when it is
@@ -3609,14 +3532,6 @@ pub const Parser = struct {
         return self.file.intern(self.arena, buf);
     }
 
-    fn addExpr(self: *Parser, node: Ast.Node) Error!Ast.ExprId {
-        return self.file.exprs.add(self.arena, node);
-    }
-
-    fn addStmt(self: *Parser, s: Ast.Stmt, main_tok: u32) Error!Ast.StmtId {
-        return self.file.addStmt(self.arena, s, main_tok);
-    }
-
     /// §2.9 Syntax 2-4 / A.9.1:
     ///
     ///     attribute_instance ::= (* attr_spec { , attr_spec } *)
@@ -3634,7 +3549,7 @@ pub const Parser = struct {
     /// a diagnostic where it used to be silently swallowed.
     fn skipAttributes(self: *Parser) error{OutOfMemory}!void {
         self.parseAttributes() catch |e| {
-            // OOM is never recoverable (`rethrowOom`'s contract) — swallowing
+            // OOM is never recoverable — swallowing
             // it here would resume parsing with whatever half-built state the
             // allocator refused to finish.
             if (e == error.OutOfMemory) return error.OutOfMemory;
@@ -3696,7 +3611,8 @@ pub const Parser = struct {
 
     /// Resynchronize after a bad statement or module item: past the next `;`,
     /// or up to a keyword that closes the enclosing construct.
-    fn recoverStatement(self: *Parser) void {
+    inline fn recoverStatement(self: *Parser, before: u32) void {
+        if (self.pos == before) self.pos += 1;
         while (true) : (self.pos += 1) switch (self.peek()) {
             .eof,
             .kw_end,
@@ -3760,15 +3676,6 @@ pub const Parser = struct {
     fn failWith(self: *Parser, tok: u32, code: diag.Code) diag.Builder {
         self.failed = true;
         return self.bag.build(.parse, code, lexer.tokenSpan(self.src, self.starts, tok));
-    }
-
-    /// OOM is never recoverable; ParseError is. Used at every recovery point.
-    fn rethrowOom(self: *Parser, e: Error) Error!void {
-        _ = self;
-        switch (e) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.ParseError => {},
-        }
     }
 
     /// Human name of the token at `i`, for the "found ..." half of a message.
@@ -4299,15 +4206,6 @@ test "annex C rejections keep their pinned wording" {
             .code = .E0209,
             .point = "",
         },
-        // A.8.9's hierarchical net reference. `V(u.n)` USED to be this row; §6.7.1
-        // dotted terminals parse now (`parseNetRef` builds a `.hier_ident` and
-        // lowering resolves the path against the elaborated design). What is left
-        // unimplemented in the same production is an INDEX inside a path — §6.7's
-        // `adder1[5].sum` — which stops at the `.` after the bit select.
-        // A.8.1 multiple concatenation USED to be a row here
-        // (`b = {2{1}}` → "expected `}`"). It parses now: the count and its
-        // inner concatenation unroll into the operand list, so the condition
-        // this row pinned no longer exists. See "§4.2.13 replication unrolls".
     };
     for (cases) |c| {
         const res = try parseForTest(arena, c.src);

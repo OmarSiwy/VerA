@@ -49,10 +49,8 @@
 //! one (E0917), and an UNKNOWN result with a mixed-port connection is the
 //! F.2.1/F.2.2 fourth-bullet error, E0903 (`resolveMultiCandidates`).
 //!
-//! WHAT IS NOT HERE, and each is a fixture's `//! xfail` rather than a silent
-//! gap: annex E's SPICE primitive definitions (nothing to look up, so an
-//! instance naming one is E0904), and §6.5.7.1's vector-net distribution across
-//! an instance array — a port connection has to be a scalar net reference. The
+//! §6.5.7.1's vector-net distribution across an instance array is not here —
+//! a port connection has to be a scalar net reference. The
 //! §7.8 connect-module INSERTION phase is also not here, deliberately and
 //! without a fixture owed: VerA emits ONE analog device, §7.6 puts insertion
 //! after the resolution this file performs, and a bridge needs the digital
@@ -243,11 +241,6 @@ const Defparam = struct {
 const Flatten = struct {
     ctx: Ctx,
     had_error: bool = false,
-    /// The device. Read for the one question that is about the ROOT rather than
-    /// about the unit being inlined: which names are the terminals, since Annex
-    /// F.2's top segments are the top's ports and a discipline resolved up the
-    /// hierarchy lands on one of them.
-    top: *const Ast.ModuleDecl = undefined,
 
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
@@ -265,9 +258,8 @@ const Flatten = struct {
     names: std.StringHashMapUnmanaged([]const u8) = .empty,
 
     /// The discipline every flat net has been DECLARED with, keyed by the flat
-    /// name — §3.10's precedence orders 1 and 2 after they have been decided,
-    /// which is what `declaredDiscipline` answers. It used to answer by
-    /// scanning `self.nets`, which grows with every inlined instance port, so
+    /// name — §3.10's precedence orders 1 and 2 after they have been decided.
+    /// This used to scan `self.nets`, which grows with every inlined instance port, so
     /// resolving the N-th instance's bindings cost a walk over everything
     /// already flattened. Four sites append a net and all four go through
     /// `addNet`, which is what makes this table and `self.nets` agree by
@@ -364,41 +356,28 @@ const Flatten = struct {
         mfactor: Ast.ExprId = .none,
     };
 
-    fn a(self: *Flatten) std.mem.Allocator {
-        return self.ctx.arena;
-    }
-    fn ex(self: *Flatten) *Ast.ExprStore {
-        return &self.ctx.file.exprs;
-    }
-    fn str(self: *Flatten, id: Ast.StrId) []const u8 {
-        return self.ctx.file.str(id);
-    }
-
     fn err(self: *Flatten, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Error!void {
         self.had_error = true;
         return self.ctx.bag.add(.lower, code, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, tok), fmt, args);
     }
 
     fn run(self: *Flatten, top: *const Ast.ModuleDecl) Error!Design {
-        self.top = top;
         // The top's own declarations go in unrenamed and uncloned: it IS the
         // flat namespace, so an identity rename would rewrite every expression
-        // in the device for no change. `unit.rename` is empty here, and
-        // `cloneStmt` short-circuits on an empty map only in the sense that it
-        // still copies — see `needsClone`.
-        try self.params.appendSlice(self.a(), top.params);
-        try self.aliasparams.appendSlice(self.a(), top.aliasparams);
-        try self.vars.appendSlice(self.a(), top.vars);
+        // in the device for no change.
+        try self.params.appendSlice(self.ctx.arena, top.params);
+        try self.aliasparams.appendSlice(self.ctx.arena, top.aliasparams);
+        try self.vars.appendSlice(self.ctx.arena, top.vars);
         for (top.ports) |p| try self.noteDiscipline(p.name, p.discipline);
         try self.addNets(top.nets);
-        try self.branches.appendSlice(self.a(), top.branches);
-        try self.genvars.appendSlice(self.a(), top.genvars);
-        try self.events.appendSlice(self.a(), top.events);
-        try self.functions.appendSlice(self.a(), top.functions);
-        try self.attrs.appendSlice(self.a(), top.attrs);
+        try self.branches.appendSlice(self.ctx.arena, top.branches);
+        try self.genvars.appendSlice(self.ctx.arena, top.genvars);
+        try self.events.appendSlice(self.ctx.arena, top.events);
+        try self.functions.appendSlice(self.ctx.arena, top.functions);
+        try self.attrs.appendSlice(self.ctx.arena, top.attrs);
 
         var stack: std.ArrayList(Ast.StrId) = .empty;
-        try stack.append(self.a(), top.name);
+        try stack.append(self.ctx.arena, top.name);
         try self.walkInstances(top, "", &stack, 0);
 
         // Annex F.2.1 step 4's multi-candidate arm, over the segment sets the
@@ -415,7 +394,7 @@ const Flatten = struct {
         // read through §6.7.1, which is how Table E.1 is observable at all — must
         // see the child's contribution however the two blocks were written. The
         // top's own blocks therefore go in LAST, after every inlined child's.
-        try self.analog.appendSlice(self.a(), top.analog);
+        try self.analog.appendSlice(self.ctx.arena, top.analog);
 
         // §6.3.1 a defparam names "the parameter ... in any module instance
         // throughout the design" — so one that matched nothing named nothing.
@@ -432,7 +411,7 @@ const Flatten = struct {
 
         if (self.had_error) return error.DiagnosticsReported;
 
-        const out = try self.a().create(Ast.ModuleDecl);
+        const out = try self.ctx.arena.create(Ast.ModuleDecl);
         out.* = .{
             .name = top.name,
             .main_tok = top.main_tok,
@@ -467,8 +446,8 @@ const Flatten = struct {
         // path starts at an instance of this module and the values it overrides
         // are created as those instances are inlined below.
         for (module.defparams) |dp| {
-            const key = try std.fmt.allocPrint(self.a(), "{s}{s}", .{ path, self.str(dp.path) });
-            try self.defparams.put(self.a(), key, .{
+            const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(dp.path) });
+            try self.defparams.put(self.ctx.arena, key, .{
                 .value = try self.cloneExpr(dp.value),
                 .tok = dp.main_tok,
             });
@@ -483,15 +462,15 @@ const Flatten = struct {
         // compatible — so this is a duplicate-KEY test and not a compatibility
         // test.
         for (module.nets) |n| {
-            if (!isOoc(self.str(n.name))) continue;
-            const key = try std.fmt.allocPrint(self.a(), "{s}{s}", .{ path, self.str(n.name) });
+            if (!isOoc(self.ctx.file.str(n.name))) continue;
+            const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(n.name) });
             if (self.ooc.get(key)) |first| {
                 try self.err(n.main_tok, .E0902, "`{s}` already has the out-of-context discipline `{s}`", .{
-                    key, self.str(first.discipline),
+                    key, self.ctx.file.str(first.discipline),
                 });
                 continue;
             }
-            try self.ooc.put(self.a(), key, n);
+            try self.ooc.put(self.ctx.arena, key, n);
         }
 
         for (module.instances) |inst| {
@@ -504,7 +483,7 @@ const Flatten = struct {
                 ps = try self.selectParamset(&inst) orelse continue;
                 break :blk self.findModule(ps.?.target) orelse {
                     try self.err(ps.?.main_tok, .E0904, "`{s}`, the module this paramset specializes", .{
-                        self.str(ps.?.target),
+                        self.ctx.file.str(ps.?.target),
                     });
                     continue;
                 };
@@ -519,19 +498,19 @@ const Flatten = struct {
             // would be stamped into the device with its digital half missing.
             if (child.is_connect) {
                 try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`, and §7.6 has the insertion phase place it on a mixed net", .{
-                    self.str(child.name),
+                    self.ctx.file.str(child.name),
                 });
                 continue;
             }
             for (stack.items) |on_stack| if (on_stack == child.name) {
                 try self.err(inst.main_tok, .E0905, "`{s}` is already being elaborated at `{s}{s}`", .{
-                    self.str(child.name), path, self.str(inst.name),
+                    self.ctx.file.str(child.name), path, self.ctx.file.str(inst.name),
                 });
                 return;
             };
             if (depth >= max_depth) {
                 try self.err(inst.main_tok, .E0905, "the instance tree is more than {d} levels deep at `{s}{s}`", .{
-                    max_depth, path, self.str(inst.name),
+                    max_depth, path, self.ctx.file.str(inst.name),
                 });
                 return;
             }
@@ -544,11 +523,11 @@ const Flatten = struct {
             var is_array = false;
             if (inst.range) |r| {
                 const msb = self.constInt(r.msb) orelse {
-                    try self.err(inst.main_tok, .E0909, "`{s}`", .{self.str(inst.name)});
+                    try self.err(inst.main_tok, .E0909, "`{s}`", .{self.ctx.file.str(inst.name)});
                     continue;
                 };
                 const lsb = self.constInt(r.lsb) orelse {
-                    try self.err(inst.main_tok, .E0909, "`{s}`", .{self.str(inst.name)});
+                    try self.err(inst.main_tok, .E0909, "`{s}`", .{self.ctx.file.str(inst.name)});
                     continue;
                 };
                 lo = @min(msb, lsb);
@@ -559,10 +538,10 @@ const Flatten = struct {
             var k = lo;
             while (k <= hi) : (k += 1) {
                 const leaf = if (is_array)
-                    try std.fmt.allocPrint(self.a(), "{s}[{d}]", .{ self.str(inst.name), k })
+                    try std.fmt.allocPrint(self.ctx.arena, "{s}[{d}]", .{ self.ctx.file.str(inst.name), k })
                 else
-                    self.str(inst.name);
-                const child_path = try std.fmt.allocPrint(self.a(), "{s}{s}{c}", .{ path, leaf, sep });
+                    self.ctx.file.str(inst.name);
+                const child_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, leaf, sep });
                 try self.inlineInstance(&inst, child, ps, child_path, stack, depth);
             }
         }
@@ -593,7 +572,7 @@ const Flatten = struct {
         // been flattened to `u.n`.
         for (child.ports, 0..) |p, i| {
             const conn = connectionFor(inst, p, i);
-            try unit.connected.put(self.a(), p.name, conn != null and conn.?.expr != .none);
+            try unit.connected.put(self.ctx.arena, p.name, conn != null and conn.?.expr != .none);
             const actual: ?Ast.StrId = if (conn) |c| self.netRefName(c.expr) else null;
             if (actual) |n| {
                 // The port IS the parent's net. No new node, no new
@@ -601,15 +580,15 @@ const Flatten = struct {
                 // topology join rather than a copy.
                 // ponytail: the parent map already owns this lookup and fallback.
                 const bound = parent.rename.get(n) orelse n;
-                try unit.rename.put(self.a(), p.name, bound);
+                try unit.rename.put(self.ctx.arena, p.name, bound);
                 // §6.7.1 the port still HAS a hierarchical name, and probing it
                 // is legal — so the path has to resolve to the net it was joined
                 // to. This is the entry that makes `Design.names` more than an
                 // identity map.
                 try self.names.put(
-                    self.a(),
-                    try std.fmt.allocPrint(self.a(), "{s}{s}", .{ path, self.str(p.name) }),
-                    self.str(bound),
+                    self.ctx.arena,
+                    try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) }),
+                    self.ctx.file.str(bound),
                 );
                 try self.resolveDiscipline(path, p, bound);
             } else {
@@ -619,7 +598,7 @@ const Flatten = struct {
                 // child's equations reference it — so it becomes an internal net
                 // of the device, carrying the port's own discipline.
                 const internal = try self.join(path, p.name);
-                try unit.rename.put(self.a(), p.name, internal);
+                try unit.rename.put(self.ctx.arena, p.name, internal);
                 try self.addNet(.{
                     .name = internal,
                     // §3.10 order 1 still beats the local declaration on a port
@@ -629,7 +608,7 @@ const Flatten = struct {
                     .main_tok = p.main_tok,
                 });
             }
-            if (conn) |c| if (c.expr != .none and self.netRefName(c.expr) == null)
+            if (conn) |c| if (c.expr != .none and actual == null)
                 try self.err(c.main_tok, .E0906, "a port connection must be a net reference", .{});
         }
         try self.checkConnectionShape(inst, child);
@@ -658,33 +637,11 @@ const Flatten = struct {
         self.unit = unit;
 
         // ---- the declarations themselves -----------------------------------
-        for (child.params) |p| {
-            var out = p;
-            out.name = self.flat(p.name);
-            out.ranges = try self.cloneRanges(p.ranges);
-            out.dims = try self.cloneDims(p.dims);
-            if (over.get(p.name)) |v| {
-                out.default = v; // already in the parent's flat namespace
-                out.is_override = true;
-            } else {
-                out.default = try self.cloneExpr(p.default);
-            }
-            // §6.3: a flattened child's parameter is not the DEVICE's parameter.
-            // The device is the top module, and its model card is the top's
-            // parameter list; a child's value was fixed here, at elaboration, so
-            // exposing it as overridable would offer the host a knob that can no
-            // longer move anything.
-            out.is_local = true;
-            try self.params.append(self.a(), out);
-        }
-        for (child.aliasparams) |al| try self.aliasparams.append(self.a(), .{
-            .alias = self.flat(al.alias),
-            .target = self.flat(al.target),
-        });
+        try self.cloneParams(child.params, child.aliasparams, &over);
         for (child.nets) |n| {
             // Annex F.2.1 step 3: a dotted declaration is an out-of-context one,
             // already collected by `walkInstances`. It declares no net HERE.
-            if (isOoc(self.str(n.name))) continue;
+            if (isOoc(self.ctx.file.str(n.name))) continue;
             var out = n;
             out.name = self.flat(n.name);
             out.range = try self.cloneDim(n.range);
@@ -698,31 +655,31 @@ const Flatten = struct {
             if (try self.oocDiscipline(path, n.name)) |d| out.discipline = d;
             try self.addNet(out);
         }
-        for (child.vars) |v| try self.vars.append(self.a(), try self.cloneVar(v));
+        for (child.vars) |v| try self.vars.append(self.ctx.arena, try self.cloneVar(v));
         for (child.branches) |b| {
             var out = b;
             out.name = self.flat(b.name);
             out.hi = try self.cloneExpr(b.hi);
             out.lo = try self.cloneExpr(b.lo);
             out.range = try self.cloneDim(b.range);
-            try self.branches.append(self.a(), out);
+            try self.branches.append(self.ctx.arena, out);
         }
-        for (child.genvars) |g| try self.genvars.append(self.a(), self.flat(g));
-        for (child.events) |e| try self.events.append(self.a(), self.flat(e));
-        for (child.functions) |fd| try self.functions.append(self.a(), try self.cloneFunc(fd));
-        for (child.attrs) |at| try self.attrs.append(self.a(), .{
+        for (child.genvars) |g| try self.genvars.append(self.ctx.arena, self.flat(g));
+        for (child.events) |e| try self.events.append(self.ctx.arena, self.flat(e));
+        for (child.functions) |fd| try self.functions.append(self.ctx.arena, try self.cloneFunc(fd));
+        for (child.attrs) |at| try self.attrs.append(self.ctx.arena, .{
             .name = at.name,
             .value = try self.cloneExpr(at.value),
             .main_tok = at.main_tok,
         });
-        for (child.analog) |blk| try self.analog.append(self.a(), .{
+        for (child.analog) |blk| try self.analog.append(self.ctx.arena, .{
             .is_initial = blk.is_initial,
             .body = try self.cloneStmt(blk.body),
             .main_tok = blk.main_tok,
         });
 
         // ---- recurse, with this unit's map in force ------------------------
-        try stack.append(self.a(), child.name);
+        try stack.append(self.ctx.arena, child.name);
         try self.walkInstances(child, path, stack, depth + 1);
         _ = stack.pop();
 
@@ -756,7 +713,7 @@ const Flatten = struct {
                 inst.ports[child.ports.len].main_tok,
                 .E0906,
                 "`{s}` declares {d} port{s}, and this instance connects {d}",
-                .{ self.str(child.name), child.ports.len, if (child.ports.len == 1) "" else "s", inst.ports.len },
+                .{ self.ctx.file.str(child.name), child.ports.len, if (child.ports.len == 1) "" else "s", inst.ports.len },
             );
             // A `.name(...)` later in an ordered list used to bind by POSITION
             // with the name silently ignored — the one shape of §6.2's mix the
@@ -779,7 +736,7 @@ const Flatten = struct {
             } else false;
             if (!found) {
                 try self.err(c.main_tok, .E0906, "`{s}` is not a port of `{s}`", .{
-                    self.str(c.name), self.str(child.name),
+                    self.ctx.file.str(c.name), self.ctx.file.str(child.name),
                 });
                 continue;
             }
@@ -787,7 +744,7 @@ const Flatten = struct {
             // connected at most once — `connectionFor`'s first-match-wins made a
             // second `.a(...)` vanish without a trace.
             for (inst.ports[0..i]) |prev| if (prev.name == c.name) {
-                try self.err(c.main_tok, .E0906, "`{s}` is connected twice", .{self.str(c.name)});
+                try self.err(c.main_tok, .E0906, "`{s}` is connected twice", .{self.ctx.file.str(c.name)});
                 break;
             };
         }
@@ -836,12 +793,12 @@ const Flatten = struct {
                 if (ord >= child.params.len) {
                     const n = overridableCount(child.params);
                     try self.err(o.main_tok, .E0907, "`{s}` declares {d} overridable parameter{s}, and this instance overrides {d}", .{
-                        self.str(child.name), n,
+                        self.ctx.file.str(child.name), n,
                         if (n == 1) "" else "s", inst.params.len,
                     });
                     continue;
                 }
-                try over.put(self.a(), child.params[ord].name, value);
+                try over.put(self.ctx.arena, child.params[ord].name, value);
                 ord += 1;
                 continue;
             }
@@ -849,7 +806,7 @@ const Flatten = struct {
                 mfactor = if (mfactor == .none)
                     value
                 else
-                    try self.ex().add(self.a(), .{
+                    try self.ctx.file.exprs.add(self.ctx.arena, .{
                         .tag = .binary,
                         .main_tok = o.main_tok,
                         .lhs = mfactor,
@@ -869,24 +826,24 @@ const Flatten = struct {
                 if (p.name == target) break p;
             } else {
                 try self.err(o.main_tok, .E0907, "`{s}` is not a parameter of `{s}`", .{
-                    self.str(o.name), self.str(child.name),
+                    self.ctx.file.str(o.name), self.ctx.file.str(child.name),
                 });
                 continue;
             };
             // §3.4.5 a localparam is not overridable.
             if (decl.is_local) {
                 try self.err(o.main_tok, .E0907, "`{s}` is a localparam of `{s}`", .{
-                    self.str(o.name), self.str(child.name),
+                    self.ctx.file.str(o.name), self.ctx.file.str(child.name),
                 });
                 continue;
             }
             // §3.4.7: "It shall be an error to specify a value for both the
             // original parameter and its alias in the same module instantiation".
             if (over.contains(target)) {
-                try self.err(o.main_tok, .E0908, "`{s}` and its alias are both given a value", .{self.str(target)});
+                try self.err(o.main_tok, .E0908, "`{s}` and its alias are both given a value", .{self.ctx.file.str(target)});
                 continue;
             }
-            try over.put(self.a(), target, value);
+            try over.put(self.ctx.arena, target, value);
         }
 
         // §9.18: an instance with no `.$mfactor` still PROPAGATES the parent's
@@ -903,18 +860,18 @@ const Flatten = struct {
         // why the lookup is over the child's OVERRIDABLE parameters.
         for (child.params) |p| {
             if (p.is_local) continue;
-            const key = try std.fmt.allocPrint(self.a(), "{s}{s}", .{ path, self.str(p.name) });
+            const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) });
             const dp = self.defparams.getPtr(key) orelse continue;
             dp.used = true;
-            try over.put(self.a(), p.name, dp.value);
+            try over.put(self.ctx.arena, p.name, dp.value);
         }
 
         // §9.19 `$param_given` — decided here, once, for every parameter of the
         // child. It is a question about the INSTANTIATION, so it has one answer
         // per flattened parameter and the clone can substitute a literal.
-        for (child.params) |p| try unit.given.put(self.a(), p.name, over.contains(p.name));
+        for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
         for (child.aliasparams) |al| if (over.contains(al.target))
-            try unit.given.put(self.a(), al.alias, true);
+            try unit.given.put(self.ctx.arena, al.alias, true);
     }
 
     // ---- §6.4 paramsets ---------------------------------------------------
@@ -954,14 +911,14 @@ const Flatten = struct {
         for (self.ctx.file.paramsets) |*ps| {
             if (ps.name != inst.module) continue;
             candidates += 1;
-            if (self.paramsetAdmits(inst, ps)) try live.append(self.a(), ps);
+            if (self.paramsetAdmits(inst, ps)) try live.append(self.ctx.arena, ps);
         }
         if (live.items.len == 0) {
             if (candidates == 0) {
-                try self.err(inst.main_tok, .E0904, "`{s}`", .{self.str(inst.module)});
+                try self.err(inst.main_tok, .E0904, "`{s}`", .{self.ctx.file.str(inst.module)});
             } else {
                 try self.err(inst.main_tok, .E0911, "`{s}`: no paramset named `{s}` admits these parameter values", .{
-                    self.str(inst.name), self.str(inst.module),
+                    self.ctx.file.str(inst.name), self.ctx.file.str(inst.module),
                 });
             }
             return null;
@@ -972,7 +929,7 @@ const Flatten = struct {
         if (live.items.len > 1) try self.tieBreak(inst, &live, .unconnected_ports);
         if (live.items.len > 1) {
             try self.err(inst.main_tok, .E0914, "`{s}`: {d} paramsets named `{s}` are still applicable after §6.4.2's tie-breaking rules", .{
-                self.str(inst.name), live.items.len, self.str(inst.module),
+                self.ctx.file.str(inst.name), live.items.len, self.ctx.file.str(inst.module),
             });
             return null;
         }
@@ -991,7 +948,7 @@ const Flatten = struct {
         live: *std.ArrayList(*const Ast.ParamsetDecl),
         rule: TieRule,
     ) Error!void {
-        const scores = try self.a().alloc(i64, live.items.len);
+        const scores = try self.ctx.arena.alloc(i64, live.items.len);
         for (live.items, scores) |ps, *s| s.* = switch (rule) {
             // "the fewest number of un-overridden parameters": the paramset's
             // overridable parameters the instance left at their defaults. A
@@ -1164,7 +1121,7 @@ const Flatten = struct {
     /// lowering's, and §6.4.2's ranges in every printed example are literals.
     fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
         if (e == .none) return null;
-        const x = self.ex();
+        const x = &self.ctx.file.exprs;
         return switch (x.tag(e)) {
             .int_literal => @floatFromInt(x.intValue(e)),
             .real_literal => x.realValue(e),
@@ -1219,7 +1176,7 @@ const Flatten = struct {
         unit: *Unit,
         path: []const u8,
     ) Error!void {
-        const ps_path = try std.fmt.allocPrint(self.a(), "{s}{s}{c}", .{ path, self.str(ps.name), sep });
+        const ps_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, self.ctx.file.str(ps.name), sep });
 
         // ---- level 1: the paramset's own parameters, overridden by the instance
         var ps_unit: Unit = .{ .mfactor = parent.mfactor };
@@ -1246,24 +1203,7 @@ const Flatten = struct {
         // the instance's own override values (`ps_over`) were already cloned
         // by `collectOverrides` above, in the parent's scope.
         self.in_paramset = true;
-        for (ps.params) |p| {
-            var out = p;
-            out.name = self.flat(p.name);
-            out.ranges = try self.cloneRanges(p.ranges);
-            out.dims = try self.cloneDims(p.dims);
-            if (ps_over.get(p.name)) |v| {
-                out.default = v; // cloned in the parent's namespace already
-                out.is_override = true;
-            } else {
-                out.default = try self.cloneExpr(p.default);
-            }
-            out.is_local = true; // §6.3: the device's model card is the TOP's
-            try self.params.append(self.a(), out);
-        }
-        for (ps.aliasparams) |al| try self.aliasparams.append(self.a(), .{
-            .alias = self.flat(al.alias),
-            .target = self.flat(al.target),
-        });
+        try self.cloneParams(ps.params, ps.aliasparams, &ps_over);
 
         // ---- level 2: the module's parameters, from the paramset's statements
         for (ps.overrides) |o| {
@@ -1273,29 +1213,29 @@ const Flatten = struct {
                         if (p.name == o.name) break p;
                     } else {
                         try self.err(o.main_tok, .E0907, "`{s}` is not a parameter of `{s}`", .{
-                            self.str(o.name), self.str(child.name),
+                            self.ctx.file.str(o.name), self.ctx.file.str(child.name),
                         });
                         continue;
                     };
                     if (decl.is_local) {
                         try self.err(o.main_tok, .E0907, "`{s}` is a localparam of `{s}`", .{
-                            self.str(o.name), self.str(child.name),
+                            self.ctx.file.str(o.name), self.ctx.file.str(child.name),
                         });
                         continue;
                     }
-                    try over.put(self.a(), o.name, try self.cloneExpr(o.value));
+                    try over.put(self.ctx.arena, o.name, try self.cloneExpr(o.value));
                 },
                 // §9.18 `.$mfactor = expr;` in a paramset is the same override the
                 // instance's `.$mfactor(expr)` is, so it multiplies the same way.
                 .system_param => {
                     if (!self.ctx.file.strings.eql(o.name, "$mfactor")) {
                         try self.err(o.main_tok, .E0907, "`{s}` is not a system parameter this paramset can set", .{
-                            self.str(o.name),
+                            self.ctx.file.str(o.name),
                         });
                         continue;
                     }
                     const v = try self.cloneExpr(o.value);
-                    ps_unit.mfactor = if (ps_unit.mfactor == .none) v else try self.ex().add(self.a(), .{
+                    ps_unit.mfactor = if (ps_unit.mfactor == .none) v else try self.ctx.file.exprs.add(self.ctx.arena, .{
                         .tag = .binary,
                         .main_tok = o.main_tok,
                         .lhs = ps_unit.mfactor,
@@ -1311,9 +1251,9 @@ const Flatten = struct {
 
         unit.mfactor = ps_unit.mfactor;
         // §9.19 as for a module instance: decided here, once, per parameter.
-        for (child.params) |p| try unit.given.put(self.a(), p.name, over.contains(p.name));
+        for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
         for (child.aliasparams) |al| if (over.contains(al.target))
-            try unit.given.put(self.a(), al.alias, true);
+            try unit.given.put(self.ctx.arena, al.alias, true);
     }
 
     // ---- Annex F.2 discipline resolution ----------------------------------
@@ -1331,7 +1271,7 @@ const Flatten = struct {
     /// connects.
     fn addNets(self: *Flatten, nets: []const Ast.NetDecl) Error!void {
         for (nets) |n| {
-            if (isOoc(self.str(n.name))) continue;
+            if (isOoc(self.ctx.file.str(n.name))) continue;
             try self.addNet(n);
         }
     }
@@ -1339,7 +1279,7 @@ const Flatten = struct {
     /// THE insertion point for a net of the flattened module. Nothing appends to
     /// `self.nets` directly: `disc_of` is only as complete as this is exclusive.
     fn addNet(self: *Flatten, n: Ast.NetDecl) Error!void {
-        try self.nets.append(self.a(), n);
+        try self.nets.append(self.ctx.arena, n);
         try self.noteDiscipline(n.name, n.discipline);
     }
 
@@ -1348,7 +1288,7 @@ const Flatten = struct {
     /// slot, and `resolveDiscipline` for what first-wins still costs.
     fn noteDiscipline(self: *Flatten, name: Ast.StrId, disc: Ast.StrId) Error!void {
         if (disc == .none) return;
-        const gop = try self.disc_of.getOrPut(self.a(), name);
+        const gop = try self.disc_of.getOrPut(self.ctx.arena, name);
         if (!gop.found_existing) gop.value_ptr.* = disc;
     }
 
@@ -1398,7 +1338,7 @@ const Flatten = struct {
         // was `catch return null` — a path longer than the buffer silently lost
         // its out-of-context declaration, which is a wrong DISCIPLINE, not a
         // wrong diagnostic.
-        const key = try std.fmt.allocPrint(self.a(), "{s}{s}", .{ path, self.str(local) });
+        const key = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(local) });
         const n = self.ooc.get(key) orelse return null;
         return if (n.discipline == .none) null else n.discipline;
     }
@@ -1443,11 +1383,12 @@ const Flatten = struct {
         // because the post-pass, not this arrival, is what knows which nets
         // have a question left (`port_resolved` gates it there).
         {
-            const gop = try self.segs.getOrPut(self.a(), bound);
+            const gop = try self.segs.getOrPut(self.ctx.arena, bound);
             if (!gop.found_existing) gop.value_ptr.* = .{ .tok = p.main_tok };
-            try gop.value_ptr.discs.append(self.a(), disc);
+            try gop.value_ptr.discs.append(self.ctx.arena, disc);
         }
-        if (self.declaredDiscipline(bound) != .none) {
+        const declared = self.disc_of.get(bound) orelse .none;
+        if (declared != .none) {
             // §7.4.4.1, and it is the whole of the basic mode's rule: "At each
             // level of the hierarchy where continuous and discrete meet for an
             // undeclared net that net segment is declared continuous." The
@@ -1461,7 +1402,7 @@ const Flatten = struct {
             // declaration. `port_resolved` is what draws that line — first-wins
             // still holds everywhere else, which is what `noteDiscipline` says.
             if (!self.port_resolved.contains(bound)) return;
-            if (self.isContinuous(self.declaredDiscipline(bound))) return;
+            if (self.isContinuous(declared)) return;
             if (!self.isContinuous(disc)) return;
             self.disc_of.putAssumeCapacity(bound, disc);
             for (self.nets.items) |*n| {
@@ -1469,7 +1410,7 @@ const Flatten = struct {
             }
             return;
         }
-        try self.port_resolved.put(self.a(), bound, {});
+        try self.port_resolved.put(self.ctx.arena, bound, {});
         try self.addNet(.{
             .name = bound,
             .discipline = disc,
@@ -1478,12 +1419,6 @@ const Flatten = struct {
             // is the one that named it.
             .main_tok = p.main_tok,
         });
-    }
-
-    /// The discipline the flat net `name` already has, from the top's ports, the
-    /// top's own declarations, or a segment resolved earlier in the walk.
-    fn declaredDiscipline(self: *Flatten, name: Ast.StrId) Ast.StrId {
-        return self.disc_of.get(name) orelse .none;
     }
 
     /// Annex F.2.1 step 4 (its 4.a/4.b are printed verbatim in F.2.2 step 4;
@@ -1558,7 +1493,7 @@ const Flatten = struct {
                 }
                 // ponytail: linear membership for short lists; use a set if this scan dominates.
                 if (std.mem.indexOfScalar(Ast.StrId, cands.items, d) == null)
-                    try cands.append(self.a(), d);
+                    try cands.append(self.ctx.arena, d);
             }
             if (cands.items.len <= 1) continue; // the walk's answer stands
 
@@ -1567,7 +1502,7 @@ const Flatten = struct {
                     // §7.7.2: "deemed to be incompatible and an error is
                     // indicated if they are found on the same net."
                     try self.err(entry.value_ptr.tok, .E0917, "the disciplines of `{s}` match `connect ... resolveto exclude`", .{
-                        self.str(net),
+                        self.ctx.file.str(net),
                     });
                     continue;
                 }
@@ -1589,9 +1524,9 @@ const Flatten = struct {
                 .E0903,
                 "`{s}` has candidate disciplines {{`{s}`, `{s}`{s}}} and no matching `resolveto`",
                 .{
-                    self.str(net),
-                    self.str(cands.items[0]),
-                    self.str(cands.items[1]),
+                    self.ctx.file.str(net),
+                    self.ctx.file.str(cands.items[0]),
+                    self.ctx.file.str(cands.items[1]),
                     if (cands.items.len > 2) ", ..." else "",
                 },
             );
@@ -1630,11 +1565,11 @@ const Flatten = struct {
                 // a §7.6 connect module — an ordinary module bridges nothing
                 // (E0913 is the same fact from the instantiation side).
                 const m = self.findModule(ins.module) orelse {
-                    try self.err(ins.main_tok, .E0915, "nothing declares `{s}`", .{self.str(ins.module)});
+                    try self.err(ins.main_tok, .E0915, "nothing declares `{s}`", .{self.ctx.file.str(ins.module)});
                     continue;
                 };
                 if (!m.is_connect) try self.err(ins.main_tok, .E0915, "`{s}` is not declared with `connectmodule`", .{
-                    self.str(ins.module),
+                    self.ctx.file.str(ins.module),
                 });
                 // ponytail: the §7.7.1 discipline/direction overrides and the
                 // §7.7.3 parameter names are NOT judged against the connect
@@ -1649,9 +1584,9 @@ const Flatten = struct {
                 // never match a candidate list, and would silently turn a
                 // resolving design into an E0903 one.
                 for (r.disciplines) |d| if (!self.disciplineExists(d))
-                    try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.str(d)});
+                    try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.ctx.file.str(d)});
                 if (!r.exclude and !self.disciplineExists(r.resolved))
-                    try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.str(r.resolved)});
+                    try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.ctx.file.str(r.resolved)});
             }
         }
     }
@@ -1670,9 +1605,9 @@ const Flatten = struct {
 
     /// `path ++ local`, interned, and recorded in the §6.7 path table.
     fn join(self: *Flatten, path: []const u8, local: Ast.StrId) Error!Ast.StrId {
-        const s = try std.fmt.allocPrint(self.a(), "{s}{s}", .{ path, self.str(local) });
-        const id = try self.ctx.file.intern(self.a(), s);
-        try self.names.put(self.a(), s, s);
+        const s = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(local) });
+        const id = try self.ctx.file.intern(self.ctx.arena, s);
+        try self.names.put(self.ctx.arena, s, s);
         return id;
     }
 
@@ -1681,7 +1616,7 @@ const Flatten = struct {
         // electrical p;` leaves a NetDecl behind for the same name, and rewriting
         // it here would disconnect the port.
         if (unit.rename.contains(local)) return;
-        try unit.rename.put(self.a(), local, try self.join(path, local));
+        try unit.rename.put(self.ctx.arena, local, try self.join(path, local));
     }
 
     /// The flat spelling of a name in the unit being cloned. A name with no
@@ -1696,8 +1631,8 @@ const Flatten = struct {
     /// without introducing a node and an equation for the expression's value.
     fn netRefName(self: *Flatten, e: Ast.ExprId) ?Ast.StrId {
         if (e == .none) return null;
-        if (self.ex().tag(e) != .ident) return null;
-        return self.ex().strOf(e);
+        if (self.ctx.file.exprs.tag(e) != .ident) return null;
+        return self.ctx.file.exprs.strOf(e);
     }
 
     /// E.3.3 name scoping: "in the resolution hierarchy of names during
@@ -1731,9 +1666,9 @@ const Flatten = struct {
         for (self.ctx.file.modules[0..self.ctx.file.builtin_modules]) |*m| {
             if (m.name == name) return m;
         }
-        const want = self.str(name);
+        const want = self.ctx.file.str(name);
         for (self.ctx.file.netlistModules()) |*m| {
-            if (std.ascii.eqlIgnoreCase(self.str(m.name), want)) return m;
+            if (std.ascii.eqlIgnoreCase(self.ctx.file.str(m.name), want)) return m;
         }
         return null;
     }
@@ -1783,13 +1718,13 @@ const Flatten = struct {
     /// rewriting the source.
     fn primitiveAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId) Ast.StrId {
         const which: Ast.PotentialOrFlow = blk: {
-            const a_ = self.str(access);
+            const a_ = self.ctx.file.str(access);
             if (std.mem.eql(u8, a_, "V")) break :blk .potential;
             if (std.mem.eql(u8, a_, "I")) break :blk .flow;
             return access; // not one of the table's two spellings
         };
         const name = self.netRefName(net) orelse return access;
-        const disc = self.declaredDiscipline(name);
+        const disc = self.disc_of.get(name) orelse .none;
         if (disc == .none) return access; // §3.6.5 implicit, or resolved later
         const d = for (self.ctx.file.disciplines) |*x| {
             if (x.name == disc) break x;
@@ -1800,8 +1735,8 @@ const Flatten = struct {
         };
         if (nature == .none) return access;
         const v = self.ctx.file.natureAttrExpr(nature, "access") orelse return access;
-        if (self.ex().tag(v) != .ident) return access;
-        return self.ex().strOf(v);
+        if (self.ctx.file.exprs.tag(v) != .ident) return access;
+        return self.ctx.file.exprs.strOf(v);
     }
 
     /// §6.2.2 an instance array bound. Integer literals and the arithmetic over
@@ -1809,7 +1744,7 @@ const Flatten = struct {
     /// E0909, because the parameter table does not exist until lowering.
     fn constInt(self: *Flatten, e: Ast.ExprId) ?i64 {
         if (e == .none) return null;
-        const x = self.ex();
+        const x = &self.ctx.file.exprs;
         return switch (x.tag(e)) {
             .int_literal => x.intValue(e),
             .unary => blk: {
@@ -1837,6 +1772,37 @@ const Flatten = struct {
 
     // ---- the clone --------------------------------------------------------
 
+    /// §6.3: a flattened child's parameter is not the DEVICE's parameter.
+    /// The device is the top module, and its model card is the top's
+    /// parameter list; a child's value was fixed here, at elaboration, so
+    /// exposing it as overridable would offer the host a knob that can no
+    /// longer move anything.
+    inline fn cloneParams(
+        self: *Flatten,
+        params: []const Ast.ParamDecl,
+        aliases: []const Ast.AliasParam,
+        over: *const std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId),
+    ) Error!void {
+        for (params) |p| {
+            var out = p;
+            out.name = self.flat(p.name);
+            out.ranges = try self.cloneRanges(p.ranges);
+            out.dims = try self.cloneDims(p.dims);
+            if (over.get(p.name)) |v| {
+                out.default = v; // already in the parent's flat namespace
+                out.is_override = true;
+            } else {
+                out.default = try self.cloneExpr(p.default);
+            }
+            out.is_local = true;
+            try self.params.append(self.ctx.arena, out);
+        }
+        for (aliases) |al| try self.aliasparams.append(self.ctx.arena, .{
+            .alias = self.flat(al.alias),
+            .target = self.flat(al.target),
+        });
+    }
+
     fn cloneDim(self: *Flatten, d: ?Ast.Dim) Error!?Ast.Dim {
         const dim = d orelse return null;
         return .{ .msb = try self.cloneExpr(dim.msb), .lsb = try self.cloneExpr(dim.lsb) };
@@ -1844,14 +1810,14 @@ const Flatten = struct {
 
     fn cloneDims(self: *Flatten, dims: []const Ast.Dim) Error![]const Ast.Dim {
         if (dims.len == 0) return &.{};
-        const out = try self.a().alloc(Ast.Dim, dims.len);
+        const out = try self.ctx.arena.alloc(Ast.Dim, dims.len);
         for (dims, out) |d, *o| o.* = (try self.cloneDim(d)).?;
         return out;
     }
 
     fn cloneRanges(self: *Flatten, rs: []const Ast.ValueRange) Error![]const Ast.ValueRange {
         if (rs.len == 0) return &.{};
-        const out = try self.a().alloc(Ast.ValueRange, rs.len);
+        const out = try self.ctx.arena.alloc(Ast.ValueRange, rs.len);
         for (rs, out) |r, *o| {
             o.* = r;
             o.lo = try self.cloneExpr(r.lo);
@@ -1889,7 +1855,7 @@ const Flatten = struct {
     const HiddenName = struct { name: Ast.StrId, was: ?Ast.StrId };
 
     fn hide(self: *Flatten, list: *std.ArrayList(HiddenName), name: Ast.StrId) Error!void {
-        try list.append(self.a(), .{ .name = name, .was = self.unit.rename.get(name) });
+        try list.append(self.ctx.arena, .{ .name = name, .was = self.unit.rename.get(name) });
         _ = self.unit.rename.remove(name);
     }
 
@@ -1912,7 +1878,7 @@ const Flatten = struct {
     /// pushes and pops.
     fn cloneLocalParams(self: *Flatten, ps: []const Ast.ParamDecl) Error![]const Ast.ParamDecl {
         if (ps.len == 0) return &.{};
-        const out = try self.a().alloc(Ast.ParamDecl, ps.len);
+        const out = try self.ctx.arena.alloc(Ast.ParamDecl, ps.len);
         for (ps, out) |p, *o| {
             o.* = p;
             o.default = try self.cloneExpr(p.default);
@@ -1924,7 +1890,7 @@ const Flatten = struct {
 
     fn cloneLocalVars(self: *Flatten, vs: []const Ast.VarDecl) Error![]const Ast.VarDecl {
         if (vs.len == 0) return &.{};
-        const out = try self.a().alloc(Ast.VarDecl, vs.len);
+        const out = try self.ctx.arena.alloc(Ast.VarDecl, vs.len);
         for (vs, out) |v, *o| {
             o.* = v;
             o.dims = try self.cloneDims(v.dims);
@@ -1939,7 +1905,7 @@ const Flatten = struct {
     /// module clones the same source rows again, under its own map.
     fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
         if (e == .none) return .none;
-        const x = self.ex();
+        const x = &self.ctx.file.exprs;
         var n = x.get(e);
         switch (n.tag) {
             // Literals and the two infinities carry no reference; the side-table
@@ -1956,9 +1922,9 @@ const Flatten = struct {
                 // `$root` prefix that opts out of it is not a name of any unit, so
                 // it passes through here and is stripped by `Lower.flatName`.
                 const parts = x.nameParts(e);
-                const out = try self.a().alloc(Ast.StrId, parts.len);
+                const out = try self.ctx.arena.alloc(Ast.StrId, parts.len);
                 for (parts, out, 0..) |p, *o, i| o.* = if (i == 0) self.flat(p) else p;
-                n.extra = try self.ex().addStrList(self.a(), out);
+                n.extra = try self.ctx.file.exprs.addStrList(self.ctx.arena, out);
             },
             .unary => n.lhs = try self.cloneExpr(x.lhs(e)),
             .binary, .index, .range, .event_or, .multi_concat => {
@@ -1987,25 +1953,24 @@ const Flatten = struct {
             .call => {
                 // §4.7 a user function was renamed with the declarations.
                 n.str = self.flat(n.str);
-                n.extra = try self.cloneArgs(e);
+                n.extra = try self.cloneArgs(x.args(e));
             },
             .sys_call => {
                 if (try self.rewriteSysCall(e)) |lit| return lit;
                 if (self.in_paramset) if (try self.rewriteParamsetDist(e)) |out| return out;
-                n.extra = try self.cloneArgs(e);
+                n.extra = try self.cloneArgs(x.args(e));
             },
             .builtin_call, .filter_call, .noise_call, .event_function, .concat, .assign_pattern => {
-                n.extra = try self.cloneArgs(e);
+                n.extra = try self.cloneArgs(x.args(e));
             },
         }
-        return self.ex().add(self.a(), n);
+        return self.ctx.file.exprs.add(self.ctx.arena, n);
     }
 
-    fn cloneArgs(self: *Flatten, e: Ast.ExprId) Error!u32 {
-        const src = self.ex().args(e);
-        const out = try self.a().alloc(Ast.ExprId, src.len);
+    inline fn cloneArgs(self: *Flatten, src: []const Ast.ExprId) Error!u32 {
+        const out = try self.ctx.arena.alloc(Ast.ExprId, src.len);
         for (src, out) |s, *o| o.* = try self.cloneExpr(s);
-        return self.ex().addExprList(self.a(), out);
+        return self.ctx.file.exprs.addExprList(self.ctx.arena, out);
     }
 
     /// The three ch9 functions whose answer is a property of the INSTANTIATION
@@ -2017,7 +1982,7 @@ const Flatten = struct {
     /// port IS the parent's net and nothing downstream can tell it from one.
     /// §9.18 `$mfactor` is the running product `collectOverrides` built.
     fn rewriteSysCall(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
-        const x = self.ex();
+        const x = &self.ctx.file.exprs;
         const name = x.strOf(e);
         const tok = x.mainTok(e);
         if (self.ctx.file.strings.eql(name, "$mfactor")) {
@@ -2032,7 +1997,7 @@ const Flatten = struct {
         const local = x.strOf(args[0]);
         const table = if (is_pc) &self.unit.connected else &self.unit.given;
         const answer = table.get(local) orelse return null;
-        return try self.ex().addInt(self.a(), tok, @intFromBool(answer));
+        return try self.ctx.file.exprs.addInt(self.ctx.arena, tok, @intFromBool(answer));
     }
 
     /// §9.13.1/§9.13.2 a distribution call written INSIDE a §6.4 paramset body
@@ -2071,8 +2036,8 @@ const Flatten = struct {
     /// by the time this runs — folding through them needs the parameter values
     /// threaded in here; add when a model actually writes one.
     fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
-        const x = self.ex();
-        const name = self.str(x.strOf(e));
+        const x = &self.ctx.file.exprs;
+        const name = self.ctx.file.str(x.strOf(e));
         const d = Lower.distOf(name) orelse return null;
         if (std.mem.eql(u8, name, "$random")) return null;
         const tok = x.mainTok(e);
@@ -2083,7 +2048,7 @@ const Flatten = struct {
         var bad = false;
         if (eff.len > 0 and eff[eff.len - 1] != .none and x.tag(eff[eff.len - 1]) == .str_literal) {
             const last = eff[eff.len - 1];
-            const ts = self.str(x.strOf(last));
+            const ts = self.ctx.file.str(x.strOf(last));
             if (!std.mem.eql(u8, ts, "global") and !std.mem.eql(u8, ts, "instance")) {
                 try self.err(x.mainTok(last), .E0816, "`{s}`'s `type_string` shall be \"global\" or \"instance\", got \"{s}\"", .{ name, ts });
                 bad = true;
@@ -2133,9 +2098,9 @@ const Flatten = struct {
             // §9.13.2 "$dist_ ... return integer values" — §4.2.1.1's rounding,
             // the same conversion the runtime path's `toInt` performs.
             return if (d.ty == .integer)
-                try x.addInt(self.a(), tok, @intFromFloat(@round(v)))
+                try x.addInt(self.ctx.arena, tok, @intFromFloat(@round(v)))
             else
-                try x.addReal(self.a(), tok, v);
+                try x.addReal(self.ctx.arena, tok, v);
         }
 
         if (!stripped) return null; // the ordinary clone will do
@@ -2143,10 +2108,8 @@ const Flatten = struct {
         // it would read as the out-of-paramset scope error: rebuild the call
         // over the remaining arguments, cloned as `cloneArgs` would have.
         var n = x.get(e);
-        const out = try self.a().alloc(Ast.ExprId, eff.len);
-        for (eff, out) |s, *o| o.* = try self.cloneExpr(s);
-        n.extra = try self.ex().addExprList(self.a(), out);
-        return try self.ex().add(self.a(), n);
+        n.extra = try self.cloneArgs(eff);
+        return try self.ctx.file.exprs.add(self.ctx.arena, n);
     }
 
     /// §9.13.1 Syntax 9-8's literal seed form, `[ sign ] decimal_number`. A
@@ -2181,7 +2144,7 @@ const Flatten = struct {
                 for (b.vars) |v| try self.hide(&hidden, v.name);
                 const params = try self.cloneLocalParams(b.params);
                 const vars = try self.cloneLocalVars(b.vars);
-                const body = try self.a().alloc(Ast.StmtId, b.body.len);
+                const body = try self.ctx.arena.alloc(Ast.StmtId, b.body.len);
                 for (b.body, body) |src, *o| o.* = try self.cloneStmt(src);
                 self.unhide(hidden.items);
                 break :blk .{ .block = .{
@@ -2214,9 +2177,9 @@ const Flatten = struct {
                 .is_generate = v.is_generate,
             } },
             .case_stmt => |v| blk: {
-                const arms = try self.a().alloc(Ast.CaseArm, v.arms.len);
+                const arms = try self.ctx.arena.alloc(Ast.CaseArm, v.arms.len);
                 for (v.arms, arms) |src, *o| {
-                    const labels = try self.a().alloc(Ast.ExprId, src.labels.len);
+                    const labels = try self.ctx.arena.alloc(Ast.ExprId, src.labels.len);
                     for (src.labels, labels) |l, *ol| ol.* = try self.cloneExpr(l);
                     o.* = .{ .labels = labels, .body = try self.cloneStmt(src.body) };
                 }
@@ -2250,13 +2213,13 @@ const Flatten = struct {
             .sys_task => |v| blk: {
                 // `name` is `$strobe`/`$discontinuity`/… — never a name of this
                 // unit.
-                const args = try self.a().alloc(Ast.ExprId, v.args.len);
+                const args = try self.ctx.arena.alloc(Ast.ExprId, v.args.len);
                 for (v.args, args) |src, *o| o.* = try self.cloneExpr(src);
                 break :blk .{ .sys_task = .{ .name = v.name, .args = args } };
             },
             .jump => |v| .{ .jump = .{ .kind = v.kind, .value = try self.cloneExpr(v.value) } },
         };
-        return file.addStmt(self.a(), out, tok);
+        return file.addStmt(self.ctx.arena, out, tok);
     }
 
     /// A name the unit declares but that `bind` never saw, because it is not a
@@ -2269,7 +2232,7 @@ const Flatten = struct {
         // declarations at all has nothing to collide with, so the label stands.
         var it = self.unit.rename.iterator();
         const sample = it.next() orelse return name;
-        const s = self.str(sample.value_ptr.*);
+        const s = self.ctx.file.str(sample.value_ptr.*);
         const cut = std.mem.lastIndexOfScalar(u8, s, sep) orelse return name;
         return self.join(s[0 .. cut + 1], name);
     }

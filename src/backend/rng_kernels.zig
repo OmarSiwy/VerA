@@ -126,11 +126,10 @@ fn zRngUniformCore(s: *u32, start: f64, end: f64) f64 {
 /// data-dependent and `zRngNormalNext` replays it.
 fn zRngNormalCore(s: *u32, mean: f64, dev: f64) f64 {
     var v1: f64 = 0.0;
-    var v2: f64 = 0.0;
     var sq: f64 = 1.0;
     while (sq >= 1.0 or sq == 0.0) {
         v1 = zRngUniformCore(s, -1.0, 1.0);
-        v2 = zRngUniformCore(s, -1.0, 1.0);
+        const v2 = zRngUniformCore(s, -1.0, 1.0);
         sq = v1 * v1 + v2 * v2;
     }
     return v1 * @sqrt(-2.0 * @log(sq) / sq) * dev + mean;
@@ -279,11 +278,8 @@ pub fn zRngRand(seed: i64) f64 {
     return zRngRandCore(&s);
 }
 
-pub fn zRngRandNext(seed: i64) f64 {
-    var s = zRngS32(seed);
-    _ = zRngRandCore(&s);
-    return zRngSOut(s);
-}
+// The full-range value adds no state after its single uniform draw.
+pub const zRngRandNext = zRngNext;
 
 /// IEEE 1364 §17.9.2 `$dist_uniform(seed, start, end)`: an INTEGER in the
 /// closed range [start, end]; `start >= end` degenerates to `start`, the same

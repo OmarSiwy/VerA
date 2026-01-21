@@ -310,14 +310,21 @@ pub const SsaBuilder = struct {
     fn readVariableRecursive(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         const b = try self.ensureState(block);
 
-        // ponytail: Mir.emitPhi already builds empty phis; no second builder needed.
         var val: Mir.Value = undefined;
         if (!self.block_state.items(.sealed)[b]) {
             // Preds not final yet (loop header, §5.9): incomplete phi, filled by sealBlock.
             val = try self.mir.emitPhi(self.gpa, block, &.{});
-            try self.pushIncomplete(block, place, val);
+            const node: u32 = @intCast(self.incomplete_pool.items.len);
+            try self.incomplete_pool.append(self.gpa, .{
+                .place = place,
+                .value = val,
+                .next = self.block_state.items(.phis_head)[b],
+            });
+            self.block_state.items(.phis_head)[b] = node;
         } else if (self.predCount(block) == 1) {
-            val = try self.readVariable(place, self.firstPred(block));
+            const head = self.predsHead(block);
+            assert(head != list_end);
+            val = try self.readVariable(place, self.pred_pool.items[head].block);
         } else {
             // ≥2 preds (or 0 — an undefined read in a source-less block).
             val = try self.mir.emitPhi(self.gpa, block, &.{});
@@ -468,17 +475,6 @@ pub const SsaBuilder = struct {
         return self.user_head.items[slot];
     }
 
-    fn pushIncomplete(self: *SsaBuilder, block: Mir.Block, place: Place, value: Mir.Value) Error!void {
-        const b = @intFromEnum(block);
-        const node: u32 = @intCast(self.incomplete_pool.items.len);
-        try self.incomplete_pool.append(self.gpa, .{
-            .place = place,
-            .value = value,
-            .next = self.block_state.items(.phis_head)[b],
-        });
-        self.block_state.items(.phis_head)[b] = node;
-    }
-
     fn predsHead(self: *const SsaBuilder, block: Mir.Block) u32 {
         const b = @intFromEnum(block);
         if (b >= self.block_state.len) return list_end;
@@ -491,11 +487,6 @@ pub const SsaBuilder = struct {
         return self.block_state.items(.preds_len)[b];
     }
 
-    fn firstPred(self: *const SsaBuilder, block: Mir.Block) Mir.Block {
-        const head = self.predsHead(block);
-        assert(head != list_end);
-        return self.pred_pool.items[head].block;
-    }
 };
 
 // -------------------------------------------------------------------------

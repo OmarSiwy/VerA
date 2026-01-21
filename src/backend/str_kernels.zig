@@ -51,9 +51,9 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
         const fc = fmt[fi];
         // Whitespace in the control string matches any run of whitespace,
         // including none.
-        if (zSpace(fc)) {
+        if (zstd.ascii.isWhitespace(fc)) {
             fi += 1;
-            while (si < src.len and zSpace(src[si])) si += 1;
+            while (si < src.len and zstd.ascii.isWhitespace(src[si])) si += 1;
             continue;
         }
         if (fc != '%') { // ordinary character: it must be there
@@ -79,7 +79,7 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
         const conv = fmt[fi];
         fi += 1;
         if (conv != 'c') {
-            while (si < src.len and zSpace(src[si])) si += 1;
+            while (si < src.len and zstd.ascii.isWhitespace(src[si])) si += 1;
         }
         if (si >= src.len) {
             // "This number can be EOF if the input ends before the first
@@ -107,7 +107,7 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
             // string operand has everywhere else, which nothing needs but which
             // costs one loop.
             's' => {
-                while (end < lim and !zSpace(src[end])) end += 1;
+                while (end < lim and !zstd.ascii.isWhitespace(src[end])) end += 1;
                 item.s = src[si..end];
                 for (item.s) |ch| item.i = item.i *% 256 +% ch;
                 item.r = @floatFromInt(item.i);
@@ -234,11 +234,6 @@ pub fn zSBuf(comptime site: usize) []u8 {
         var b: [512]u8 = undefined;
     };
     return &Buf.b;
-}
-
-fn zSpace(c: u8) bool {
-    // ponytail: retain the emitted helper name; stdlib owns ASCII whitespace.
-    return zstd.ascii.isWhitespace(c);
 }
 
 /// The value of `c` as a digit in `radix`, or null when it is not one.
