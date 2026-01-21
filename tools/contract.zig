@@ -628,6 +628,29 @@ pub fn LimitResult(comptime n: usize) type {
     };
 }
 
+/// Which unknowns `limit`/`seed` actually touch, as bit masks over `U`.
+/// `limitReads` is every `cur`/`old` entry the body loads, `limitWrites` every
+/// `x` entry it can store. Both are supersets, and both default to ALL when a
+/// device does not declare them — the answer that costs performance rather
+/// than correctness.
+///
+/// `limit`'s signature has to be `[n_u]f64` in and out, because a host cannot
+/// name a device's unknowns. But a MOS ladder reads four of eight and writes
+/// two: without these masks a host gathers, copies through the frame and
+/// stores back the other four once per instance per Newton iterate, to arrive
+/// at the value they already had. ngspice has no such traffic — its limiter
+/// memory is the three branch voltages in `CKTstate0`.
+///
+/// THE RULE FOR A HOST: an unknown outside `limitWrites` was never written by
+/// the device, so its "previously limited" value must come from the host's own
+/// previous iterate, not from the plane `limit` writes into.
+pub fn limitReads(comptime D: type) u64 {
+    return if (@hasDecl(D, "limit_reads")) D.limit_reads else ~@as(u64, 0);
+}
+pub fn limitWrites(comptime D: type) u64 {
+    return if (@hasDecl(D, "limit_writes")) D.limit_writes else ~@as(u64, 0);
+}
+
 /// Constant-Jacobian declaration. `g`/`c` assert that the device's dF/dx and
 /// dQ/dx do not depend on x, so the engine can build the stamp once and memcpy
 /// it every Newton iteration. A wrong value silently freezes the Jacobian.
@@ -752,6 +775,15 @@ pub fn validate(comptime D: type) void {
     // linear solve re-imposes every source constraint.
     if (@hasDecl(D, "limit"))
         expectFn(D, "limit", fn (*const D.Model, *const D.Instance, [n]f64, [n]f64) LimitResult(n));
+    // The masks are only meaningful next to a `limit`, and `writes ⊆ reads`
+    // because every corrected unknown is one the clamp read a probe from.
+    for ([_][]const u8{ "limit_reads", "limit_writes" }) |m| {
+        if (!@hasDecl(D, m)) continue;
+        if (!@hasDecl(D, "limit")) @compileError(@typeName(D) ++ "." ++ m ++ " without a `limit`");
+        if (@TypeOf(@field(D, m)) != u64) @compileError(@typeName(D) ++ "." ++ m ++ " must be a u64 mask over U");
+    }
+    if (@hasDecl(D, "limit_writes") and (limitWrites(D) & ~limitReads(D)) != 0)
+        @compileError(@typeName(D) ++ ".limit_writes has a bit limit_reads does not");
     if (@hasDecl(D, "seed"))
         expectFn(D, "seed", fn (*const D.Model, *const D.Instance) [n]?f64);
     // Node collapse (ngspice setup): for each internal unknown, return the
@@ -963,6 +995,11 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // Both residuals from one core evaluation; see `validate`'s pair rule.
     .{ "evalQ", {} },
     .{ "limit", {} },
+    // The two live-set masks over `U` that go with it — see `limitReads`.
+    // Optional; a device without them reads as "every unknown", which is the
+    // behaviour every host had before they existed.
+    .{ "limit_reads", {} },
+    .{ "limit_writes", {} },
     .{ "seed", {} },
     .{ "collapse", {} },
     .{ "initState", {} },
@@ -1376,6 +1413,15 @@ const MockAll = struct {
     pub const ac_stamps = [_]AcStamp{ .{ .row = 0, .col = 1 }, .{ .row = 1 } };
     pub const op_vars = [_]OpVar{.{ .name = "gd", .units = "S" }};
     pub const systf_calls = [_]Systf{.{ .name = "$sampnhold" }};
+    // The four OVER-APPROXIMATE masks. All-ones is what a host must assume
+    // when a device omits them, so it is also the value that cannot be wrong
+    // here — the guard below is about the ALLOWLIST not drifting, and these
+    // had drifted out of it: `jac_pattern`/`q_pattern` were allowlisted with
+    // nothing declaring them, so the guard has been failing to compile.
+    pub const jac_pattern = [n_u]u64{ 0b11, 0b11 };
+    pub const q_pattern = [n_u]u64{ 0b11, 0b11 };
+    pub const limit_reads: u64 = 0b11;
+    pub const limit_writes: u64 = 0b11;
 
     pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
         const i = x[0].sub(x[1]).scale(@as(f64, m.g));

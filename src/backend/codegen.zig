@@ -9698,8 +9698,19 @@ test "codegen: §4.5.15 signed $limit clamps sign*v and seeds sign*vcrit" {
     , &h);
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s, "const sg: f64 = if (") != null);
+    // The ±1 is recovered ONCE per distinct sign at the top of `limit` and
+    // each clamp aliases it — every clamp on a MOSFET reads the same latched
+    // `type`, so re-spelling the compare per site cost 8 Ir per instance per
+    // Newton iterate for an answer that cannot have changed between them.
+    try std.testing.expect(std.mem.indexOf(u8, s, "const zsg__") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, " < 0) -1.0 else 1.0;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "const sg: f64 = zsg__") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "sg * zPnjlim(sg * vn, sg * vo") != null);
+    // The live sets. The probe is `V(mid)` — mid against §1.3.1.1 ground, not
+    // against the port — so `mid` (bit 1) is the only unknown either half
+    // touches and `p` (bit 0) stays clear in both.
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub const limit_reads: u64 = 0x2;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "pub const limit_writes: u64 = 0x2;") != null);
     // Seed picks the branch by the sign's runtime value.
     try std.testing.expect(std.mem.indexOf(u8, s, "s[@intFromEnum(U.mid)] = if (") != null);
     // Convergence verdict unchanged: pnjlim still reports through `ok`.
