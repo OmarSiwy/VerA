@@ -499,6 +499,28 @@ pub const Gen = struct {
     sc_open: std.ArrayList(u32) = .empty,
     probing: bool = false,
 
+    // ---- the core's hoisted PREFIX (see `planHoistPrefix`) ----------------
+    /// This body is a prefix-cache candidate: the common core, tree-shaped,
+    /// unchunked, no fatal. Cleared again if planning finds no region.
+    hp_on: bool = false,
+    /// Values the cached region defines and the rest of the core reads —
+    /// reals first, so `hp_vals[j]` is `Instance.hp[j]` while `j < hp_real`
+    /// and `Instance.hpi[j - hp_real]` after. They are ALSO core live-outs,
+    /// in fields `f{lo_vals.len + j}`, which is how `precompute` fills them.
+    hp_vals: []Mir.Value = &.{},
+    hp_real: u32 = 0,
+    /// Top-level statement boundary the region ends at (0 = no region), and
+    /// the running boundary counter of the body being emitted.
+    hp_cut: u32 = 0,
+    hp_bnd: u32 = 0,
+    /// Probe-text offset of the candidate cut, and "something the cache
+    /// cannot hold has been emitted, so the cut may not advance past here".
+    hp_off: u32 = 0,
+    hp_dirty: bool = false,
+    /// Statements the region holds, for the "is skipping it worth a field"
+    /// test in `planHoistPrefix`.
+    hp_insts: u32 = 0,
+
     // ---- outlining (`Options.outline_chunk`) — all per-unit transient ----
     /// Statements per chunk (the option). 0 disables.
     outline: u32 = 0,
@@ -575,6 +597,9 @@ pub const Gen = struct {
         // LAST: §4.5.15 the clamp-argument hoist needs `lo_idx` filled, to name
         // the core field `emitPrep` reads each argument out of.
         try cg_limit.planPrep(self);
+        // After it, and before ANY emission: `emitInstance` and `emitPrecompute`
+        // are both written above the core and both need the region's width.
+        try self.planHoistPrefix();
     }
 
     // ---------------------------------------------------- the shared core ----
@@ -877,6 +902,250 @@ pub const Gen = struct {
         self.pc_vals = vals.items;
     }
 
+    // ------------------------------------------ the hoisted core PREFIX ----
+    //
+    // `planPrecompute` above hoists a value by RE-SPELLING it in a flat
+    // `precompute` body, which is why `pcClass` refuses a phi: a value assigned
+    // inside an `if` is not one expression, and precompute has no control flow
+    // to put it back in. That refusal is expensive far beyond the phi itself —
+    // one unhoistable value strands everything downstream of it — and the
+    // guards it trips over are the SPICE idiom itself: `$param_given(nsub)`,
+    // `js > 0 && ad > 0 && as > 0`, `cbs > 0`, `rd > 0`, `lambda0 != 0`. On
+    // mos6 that left 15 solve-independent Duals inside the bias body.
+    //
+    // This is the other half, and it re-spells nothing. The core's emitted body
+    // opens with a PREFIX of top-level statements that reads no §4.4 probe and
+    // no per-step Instance state; `precompute` already calls the core once at
+    // x = 0 (cg_limit.emitPrep), so that prefix has already run there. Return
+    // its live-outs as extra core fields, latch them in `Instance.hp*`, and let
+    // every later evaluation jump the region:
+    //
+    //     if (inst.hp_ok == 0) { …the prefix, verbatim… }
+    //     else { h[3] = S.con(inst.hp[0]); … }
+    //
+    // Nothing about the arithmetic moves — the same statements run, in the same
+    // order, on the same inputs; they simply run once. That is why bit-identity
+    // is structural here and not a hope, and it is the same claim `pc__`
+    // already makes (`precompute` computes in `R`, the core reads `S.con` of
+    // the field). Storing an f64 per crossing value is exact for the same
+    // reason: a region with no `x[]` read builds every S through `S.con`, so
+    // every derivative lane in it is a zero this reload reproduces.
+    //
+    // Cost is one `Instance` f64 per crossing value plus one predictable
+    // branch. Measured on mos6 (`devices/mos6_inverter` biases): 1224.6 →
+    // 1164.2 Ir/eval, 0 mismatches over 546 880 values.
+
+    /// May the cached region hold `v`? Everything the region may read must be
+    /// fixed between `precompute` and the evaluations that skip it — so this is
+    /// `pcClass`'s whitelist (default DENY: an op or a `$name` neither knows is
+    /// impure) with two differences that only make sense for a text region.
+    ///
+    /// A value that is already a STATEMENT stops the walk: it was emitted
+    /// earlier and asked this same question then. That is what admits the phi
+    /// `pcClass` has to refuse — a phi slot is written by `emitPhiCopies` on
+    /// the incoming edges, and those copies are checked as they are emitted.
+    /// It also means an impure CONDITION cannot smuggle a bias dependence in
+    /// through a pure-looking merge: the branch is an emitted value too, so the
+    /// region has already closed before its phi is reached.
+    ///
+    /// Read-before-written (a loop-carried slot, or one the emitter never
+    /// assigns) is pure as well: that read takes the `undefined`/zero seed, and
+    /// the seed is emitted above the region.
+    fn hpPure(self: *Gen, v0: Mir.Value, depth: u32) bool {
+        if (depth > 256) return false;
+        const v = self.an.rv(v0);
+        return switch (self.mir.valueDef(v)) {
+            .undef, .float_const, .int_const, .str_const, .param_ref => true,
+            .block_param => false, // §4.4 probe: the solve itself
+            // The MATERIALIZED shortcut belongs to operands only — asking it of
+            // an instruction's own result would answer "yes, it has a slot" and
+            // wave the instruction through unread.
+            .inst_result => |inst| self.materialized(v) or self.hpPureInst(inst, depth),
+        };
+    }
+
+    /// The same question about an emitted STATEMENT: its opcode has to be one
+    /// the cache may hold, and every operand it renders inline has to be pure.
+    fn hpPureInst(self: *Gen, inst: Mir.Inst, depth: u32) bool {
+        if (depth > 256) return false;
+        const row = self.mir.instRow(inst);
+        switch (row.op) {
+            .call => {
+                const d = self.mir.instData(inst).call;
+                return std.mem.eql(u8, d.name, "$temperature") or
+                    std.mem.eql(u8, d.name, "$param_given") or
+                    std.mem.eql(u8, d.name, "$port_connected") or
+                    (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0);
+            },
+            // `path_prev`/`path_acc` read the §5.6.1.2 latches, which move on
+            // every accepted step — the one class of Instance state that looks
+            // parameter-only and is not.
+            .phi, .branch, .jump, .path_prev, .path_acc => return false,
+            .select => {
+                const d = self.mir.instData(inst).ternary;
+                return self.hpPure(d.cond, depth + 1) and
+                    self.hpPure(d.then_val, depth + 1) and
+                    self.hpPure(d.else_val, depth + 1);
+            },
+            else => return switch (Mir.opClass(row.op)) {
+                .unary => self.hpPure(@enumFromInt(row.a), depth + 1),
+                .binary => self.hpPure(@enumFromInt(row.a), depth + 1) and
+                    self.hpPure(@enumFromInt(row.b), depth + 1),
+                else => false,
+            },
+        }
+    }
+
+    /// One emitted item's verdict. Once dirty, dirty for the rest of the body:
+    /// the region is a text PREFIX, so the first thing it cannot hold ends it.
+    fn hpMark(self: *Gen, v: Mir.Value) void {
+        if (!self.hp_on or self.hp_dirty) return;
+        if (!self.hpPure(v, 0)) self.hp_dirty = true;
+    }
+
+    fn hpMarkInst(self: *Gen, inst: Mir.Inst) void {
+        if (!self.hp_on or self.hp_dirty) return;
+        if (!self.hpPureInst(inst, 0)) self.hp_dirty = true;
+    }
+
+    /// A top-level statement boundary — `maybeCut`'s two call sites, which are
+    /// the only points where the emitter's depth is 1 and therefore no label,
+    /// loop or arm is open. Probing: remember the last clean one. Emitting: open
+    /// the guard at the top of the body, close it at the remembered boundary.
+    fn hpBoundary(self: *Gen) Error!void {
+        if (!self.hp_on or !self.emitting_common) return;
+        if (self.probing) {
+            if (!self.hp_dirty) {
+                self.hp_cut = self.hp_bnd;
+                self.hp_off = @intCast(self.out.items.len);
+                self.hp_insts = self.oc_insts;
+            }
+        } else if (self.hp_bnd == 0) {
+            self.uses_inst = true;
+            try self.ind(1);
+            try self.b("if (inst.hp_ok == 0) {{\n", .{});
+            self.ind_base += 1;
+        } else if (self.hp_bnd == self.hp_cut) {
+            self.ind_base -= 1;
+            try self.ind(1);
+            try self.b("}} else {{\n", .{});
+            for (self.hp_vals, 0..) |v, j| {
+                const i = @intFromEnum(v);
+                try self.ind(2);
+                try self.writeSlotRef(i);
+                if (self.an.vty[i] == .int)
+                    try self.b(" = inst.hpi[{d}];\n", .{j - self.hp_real})
+                else
+                    try self.b(" = S.con(inst.hp[{d}]);\n", .{j});
+            }
+            try self.ind(1);
+            try self.b("}}\n", .{});
+        }
+        self.hp_bnd += 1;
+    }
+
+    /// Find the region, once, before `emitInstance` needs its width. Runs the
+    /// same dry run `emitUnitBody` runs (`probeBody` only appends and rewinds),
+    /// under the same plan and float mode, so the boundary count it lands on is
+    /// the one the real walk will reach.
+    fn planHoistPrefix(self: *Gen) Error!void {
+        self.hp_on = false;
+        self.hp_vals = &.{};
+        self.hp_real = 0;
+        // No shared core to cut, or the cuts are already spoken for: the
+        // chunked layout puts a FUNCTION boundary at every top-level statement
+        // and no `if` may span two of them.
+        if (self.lo_vals.len == 0 or self.outline != 0) return;
+        for (self.jobs) |job| {
+            if (!job.is_display and job.pre_fatal != null) return;
+        }
+        const save_common = self.emitting_common;
+        const save_strict = self.cur_strict;
+        defer {
+            self.emitting_common = save_common;
+            self.cur_strict = save_strict;
+        }
+        self.emitting_common = true;
+        self.cur_strict = self.common_mode == .strict;
+        self.plan.display_unit = false;
+        self.oc_on = false;
+        try self.plan.analyze(.undef, true);
+        // Straight-line: no phi to strand, so `pc__` already took everything
+        // this could take, and a prefix guard would only add a branch.
+        if (self.plan.straight) return;
+
+        self.hp_on = true;
+        self.hoist_idx.clearRetainingCapacity();
+        try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
+        try self.probeBody(.undef);
+        if (self.hp_cut == 0) {
+            self.hp_on = false;
+            return;
+        }
+        // Live-out of the region: assigned inside it, read after it. `place`
+        // holds one dry run's offsets, and `hp_off` is an offset of that same
+        // run — the only coordinate system either is compared in. Emission
+        // order (`plan.live`) so the field indices are stable, reals first.
+        //
+        // `max_def` is the load-bearing half. The seeding call runs the WHOLE
+        // core, so what it latches is the slot's value at the RETURN; the else
+        // arm needs its value at the CUT. Those agree only when the region
+        // holds the slot's last write. A `while` preheader seeding a
+        // loop-carried phi is the counter-example that made this a rule rather
+        // than a comment: the initial `i = 0` is solve-independent and the loop
+        // that overwrites it is not, so caching it replayed the walk's LAST
+        // index into its first iteration (annex_e_spice/primitive_{i,v}pwl).
+        //
+        // Every refusal below leaves `hp_on` false and BOTH of `hp_vals`/
+        // `hp_real` at their entry zeros — `emitInstance` sizes `hpi` as
+        // `hp_vals.len - hp_real`, so a half-written pair is an integer
+        // overflow rather than a missing optimization.
+        var vals: std.ArrayList(Mir.Value) = .empty;
+        var n_real: u32 = 0;
+        for ([_]VTy{ .real, .int }) |want| {
+            for (self.plan.live.items) |lv| {
+                const i = @intFromEnum(lv);
+                if (self.an.vty[i] != want or self.plan.pcHoisted(lv)) continue;
+                const s = self.plan.slot[i];
+                if (s == none_u32) continue;
+                const p = self.place.items[s];
+                if (p.defs == 0 or p.def_off >= self.hp_off or p.max_use <= self.hp_off) continue;
+                // Written on BOTH sides of the cut: no field can hold two
+                // values, and cutting earlier is a search this does not run.
+                if (p.max_def > self.hp_off) {
+                    self.hp_on = false;
+                    return;
+                }
+                try vals.append(self.arena, lv);
+            }
+            if (want == .real) n_real = @intCast(vals.items.len);
+        }
+        // A `[]const u8` has no `Instance` field to live in. Vanishingly rare
+        // in a core prefix, and a whole region is not worth a third array.
+        for (self.plan.live.items) |lv| {
+            const i = @intFromEnum(lv);
+            if (self.an.vty[i] != .str or self.plan.slot[i] == none_u32) continue;
+            const p = self.place.items[self.plan.slot[i]];
+            if (p.defs != 0 and p.def_off < self.hp_off and p.max_use > self.hp_off) {
+                self.hp_on = false;
+                return;
+            }
+        }
+        // Worth a field? One reload is a load and a store, which is what the
+        // cheapest skipped statement costs — so a region has to hold more than
+        // two statements per value it hands on before the branch, the fields
+        // and the `precompute` stores pay for themselves. Same accounting as
+        // `pcConsider`'s, one level up. Zero values is the degenerate case:
+        // nothing the region computed outlives it, so skipping it saves
+        // nothing and the guard would be pure cost.
+        if (vals.items.len == 0 or vals.items.len * 2 >= self.hp_insts) {
+            self.hp_on = false;
+            return;
+        }
+        self.hp_vals = vals.items;
+        self.hp_real = n_real;
+    }
+
     pub fn w(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
         try self.out.print(self.gpa, fmt, args);
     }
@@ -1110,7 +1379,9 @@ pub const Gen = struct {
         // branches, so the list has to exist before any residual is emitted.
         self.cpairs = try self.collapsePairs();
         const cpairs = self.cpairs;
-        if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or self.pathLatches()) {
+        if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or self.pathLatches() or
+            self.hp_vals.len != 0)
+        {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
             // Dual/Vec — a primitive added there cannot silently miss R.
@@ -1903,6 +2174,15 @@ pub const Gen = struct {
         for (0..self.lp_vals.len) |k| {
             try self.w("    lp__{d}: f64 = 0.0, // $limit prep\n", .{k});
         }
+        // The core's hoisted PREFIX (`planHoistPrefix`): the solve-independent
+        // opening of the shared body, latched off the same `precompute` core
+        // call the `lp__` fields ride. `hp_ok` is what the core tests, so it is
+        // cleared on entry to `precompute` and set only once the values behind
+        // it belong to the model card now in force.
+        if (self.hp_real != 0) try self.w("    hp: [{d}]f64 = @splat(0.0), // core prefix cache\n", .{self.hp_real});
+        if (self.hp_vals.len != self.hp_real)
+            try self.w("    hpi: [{d}]i64 = @splat(0),\n", .{self.hp_vals.len - self.hp_real});
+        if (self.hp_vals.len != 0) try self.w("    hp_ok: i64 = 0,\n", .{});
         try self.w("}};\n\n", .{});
     }
 
@@ -1927,7 +2207,9 @@ pub const Gen = struct {
         // no `pc__` roots but a hoisted clamp argument still needs the body.
         const has_pc = self.pc_vals.len != 0;
         const has_lp = self.lp_vals.len != 0;
-        if (!has_pc and !has_lp) return;
+        // …and so does the core's hoisted prefix, off the same core call.
+        const has_hp = self.hp_vals.len != 0;
+        if (!has_pc and !has_lp and !has_hp) return;
         if (has_pc) try self.out.appendSlice(self.gpa, pscalar_txt);
 
         // Plan the pc slice through the common-mode path: targets = pc_vals.
@@ -1965,6 +2247,11 @@ pub const Gen = struct {
         try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
         if (has_pc) try self.w("    const S = P;\n", .{});
         self.cur_strict = self.common_mode == .strict;
+        // BEFORE the core call below, and not merely for tidiness: `precompute`
+        // runs again on every parameter write and every `setTemp`, and a stale
+        // `hp_ok` would make that call reload the OLD card's values and store
+        // them straight back.
+        if (has_hp) try self.w("    inst.hp_ok = 0;\n", .{});
 
         if (has_pc) {
             self.hoist_idx.clearRetainingCapacity();
@@ -1992,7 +2279,27 @@ pub const Gen = struct {
         // It names both `model` and `inst`, so the unused-parameter patch below
         // must not fire once it has been emitted.
         try cg_limit.emitPrep(self);
-        if (has_lp) self.uses_model = true;
+        if (has_hp) {
+            // `emitPrep` already evaluated the core at x = 0 and called it `m`;
+            // without it, the same two lines. Either way this is the ONE
+            // evaluation of the prefix per model card, and `hp_ok` is still 0
+            // for it — which is what makes the region run rather than reload.
+            if (!has_lp) try self.w(
+                \\    var xr: [n_u]R = undefined;
+                \\    for (&xr) |*p| p.* = R.con(0.0);
+                \\    const m = core(R, xr, model, inst);
+                \\
+            , .{});
+            for (self.hp_vals, 0..) |v, j| {
+                const f = self.lo_vals.len + j;
+                if (self.an.vty[@intFromEnum(v)] == .int)
+                    try self.w("    inst.hpi[{d}] = m.f{d};\n", .{ j - self.hp_real, f })
+                else
+                    try self.w("    inst.hp[{d}] = m.f{d}.v;\n", .{ j, f });
+            }
+            try self.w("    inst.hp_ok = 1;\n", .{});
+        }
+        if (has_lp or has_hp) self.uses_model = true;
         if (!self.uses_model) self.patchParam(at_model, "model".len);
         try self.w("}}\n\n", .{});
     }
@@ -2406,6 +2713,11 @@ pub const Gen = struct {
         for (self.lo_vals, 0..) |v, k| {
             try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
         }
+        for (self.hp_vals, 0..) |v, j| {
+            try self.w("    f{d}: {s}, // hoisted prefix\n", .{
+                self.lo_vals.len + j, zigTy(self.an.vty[@intFromEnum(v)]),
+            });
+        }
         try self.w("}} {{\n", .{});
         // §4.3: the STRICTEST mode of every consumer — `proof.FloatMode.strictest`
         // explains why the join has to absorb `.strict`.
@@ -2676,6 +2988,10 @@ pub const Gen = struct {
 
         const at = self.out.items.len;
         self.probing = true;
+        self.hp_bnd = 0;
+        self.hp_cut = 0;
+        self.hp_off = 0;
+        self.hp_dirty = false;
         self.oc_insts = 0;
         self.oc_cuts = 0;
         self.oc_returns = 0;
@@ -2708,6 +3024,7 @@ pub const Gen = struct {
         }
         self.scopeClose(self.out.items.len);
         self.probing = false;
+        self.hp_bnd = 0; // the real walk counts the same boundaries from zero
         self.out.shrinkRetainingCapacity(at);
 
         for (self.place.items) |*p| {
@@ -2715,6 +3032,13 @@ pub const Gen = struct {
             // is legal Zig, but the same code as an unused `const` is not.
             p.at_def = !p.pinned and p.defs == 1 and p.uses != 0 and
                 p.max_use < self.sc_end.items[p.scope];
+        }
+        // A value crossing the prefix guard has to be in a hoist ARRAY: the
+        // guard is a scope its `const` would not survive, and the else arm has
+        // to be able to assign it.
+        for (self.hp_vals) |v| {
+            const s = self.plan.slot[@intFromEnum(v)];
+            if (s != none_u32) self.place.items[s].at_def = false;
         }
     }
 
@@ -2856,6 +3180,10 @@ pub const Gen = struct {
         }
         if (!self.oc_on) {
             try self.emitTree(0, 1, target);
+            // The guard opened at boundary 0 is closed at boundary `hp_cut`;
+            // if the real walk never reached it the emitted brace is unbalanced,
+            // which is a generator bug and not something to ship.
+            assert(!self.hp_on or !self.emitting_common or self.hp_bnd > self.hp_cut);
             return;
         }
         // Chunked: this function is now the DRIVER — the hoist arrays above,
@@ -2891,6 +3219,10 @@ pub const Gen = struct {
     /// never cross a chunk boundary, and every value that does is in a hoist
     /// array (the probe's per-chunk scopes force exactly that).
     fn maybeCut(self: *Gen) Error!void {
+        // Same two call sites, same reason (see below): depth 1 is the only
+        // place a region boundary can land. The two are mutually exclusive —
+        // `planHoistPrefix` declines whenever `outline` is set.
+        try self.hpBoundary();
         if (!self.oc_on or self.oc_insts < self.outline) return;
         self.oc_insts = 0;
         self.oc_cuts += 1;
@@ -2985,10 +3317,21 @@ pub const Gen = struct {
             try self.b(";\n", .{});
             return;
         }
+        // An exit inside the prefix guard would skip the else arm's reloads and
+        // the whole body after them, so the region ends before it.
+        self.hp_dirty = true;
         try self.b("return .{{\n", .{});
         for (self.lo_vals, 0..) |v, k| {
             try self.ind(depth + 1);
             try self.b(".f{d} = ", .{k});
+            try self.renderVal(v, self.an.vty[@intFromEnum(v)]);
+            try self.b(",\n", .{});
+        }
+        // The prefix's live-outs ride out as ordinary fields — that is the only
+        // way `precompute` can see them (`planHoistPrefix`).
+        for (self.hp_vals, 0..) |v, j| {
+            try self.ind(depth + 1);
+            try self.b(".f{d} = ", .{self.lo_vals.len + j});
             try self.renderVal(v, self.an.vty[@intFromEnum(v)]);
             try self.b(",\n", .{});
         }
@@ -3002,6 +3345,7 @@ pub const Gen = struct {
             const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
             if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
             if (depth == 1) try self.maybeCut();
+            self.hpMarkInst(inst);
             self.oc_insts += 1;
             self.probeDef(self.plan.slot[i], true);
             // `or` short-circuits, so the straight-line path (`decl`, which runs
@@ -3130,6 +3474,10 @@ pub const Gen = struct {
                 // unit can observe in between, so emit the common action once.
                 if (self.plan.dead_branch[bi])
                     return self.emitEdge(bi, @intFromEnum(d.then_block), depth, target);
+                // The condition decides which arm's phi copies run, so a
+                // bias-dependent one ends the region even when both arms are
+                // parameter-only.
+                self.hpMark(d.cond);
                 try self.ind(depth);
                 try self.b("if (", .{});
                 try self.renderCond(d.cond);
@@ -3195,6 +3543,9 @@ pub const Gen = struct {
         for (phis) |inst| {
             if (!self.slotted(inst)) continue;
             const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+            // A phi is transparent to `hpPure` because THIS is where its value
+            // enters — one incoming copy per edge, each checked as it is written.
+            self.hpMark(self.an.phiIn(inst, from));
             self.oc_insts += 1;
             try self.ind(d2);
             if (par) {
@@ -6322,8 +6673,15 @@ pub const Gen = struct {
             \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
             \\
         , .{
-            if (self.pc_vals.len != 0) "    var pin = inst.*;\n    precompute(&pin, model);\n" else "",
-            if (self.pc_vals.len != 0) "&pin" else "inst",
+            // The hoisted core prefix rides the same seeding: without it the
+            // local copy's `hp_ok` is 0, the region runs, and the answer is the
+            // same — but `precompute` is what makes the flags agree with the
+            // batch's, and it is the only writer of `hp_*`.
+            if (self.pc_vals.len != 0 or self.hp_vals.len != 0)
+                "    var pin = inst.*;\n    precompute(&pin, model);\n"
+            else
+                "",
+            if (self.pc_vals.len != 0 or self.hp_vals.len != 0) "&pin" else "inst",
         });
         for (pairs, 0..) |p, pi| {
             const fi = @intFromEnum(self.an.rv(p.flag));
