@@ -362,6 +362,8 @@ pub const Gen = struct {
     helpers: []const u8 = "",
 
     // ---- the shared core ("WHY THIS EXISTS", further down this struct) ----
+    /// §4.6.4 `noise_gens` and `noisePsd`, one row each, built by `planNoise`.
+    noise_rows: []NoiseRow = &.{},
     /// Every unit function to emit, resolved before any of them is written.
     jobs: []Job = &.{},
     /// Position of this Value in the core's returned struct, or `none_u32`.
@@ -622,6 +624,9 @@ pub const Gen = struct {
         // Before `buildJobs`: §4.5.15 the algorithm arguments of every honoured
         // `$limit` become core live-outs, and `buildJobs` is what queues them.
         try cg_limit.collect(self);
+        // Before `buildJobs`: §4.6.4 the PSD arguments become core live-outs
+        // too, and `buildJobs` is what queues them.
+        try self.planNoise();
         try self.buildJobs();
         try self.planCommon();
         try self.planPrecompute();
@@ -928,7 +933,15 @@ pub const Gen = struct {
                 .jump => {},
             }
         }
-        for (self.jobs) |job| self.pcConsider(cls, root, job.target);
+        for (self.jobs) |job| {
+            // §4.6.4 EXCEPT the noise PSDs. Hoisting one moves it out of the
+            // `if (r > 0)` that declared it and evaluates it unconditionally —
+            // `4kT/0` — where staying a core live-out gives it the zero seed
+            // that is the right answer for a generator this bias does not have.
+            // See `buildJobs`'s `$noise` queue.
+            if (std.mem.eql(u8, job.name, "$noise")) continue;
+            self.pcConsider(cls, root, job.target);
+        }
 
         var vals: std.ArrayList(Mir.Value) = .empty;
         for (0..nv) |i| {
@@ -1415,13 +1428,15 @@ pub const Gen = struct {
         // they need `R` for the same reason `updateState` does. It stays out of
         // `buildPrelude`/`h.zig`: no UNIT body can reach these, because `$limit`
         // renders as the identity inside one. `collapse` reads the core the
-        // same way, so it opens `R` too.
+        // same way, so it opens `R` too — and so does §4.6.4 `noisePsd`, which
+        // is `updateState`'s shape exactly: one value-only core sweep at a
+        // state vector the caller hands in.
         // Before `emitDispatchers`: `emitSwitchRow` splits exactly these
         // branches, so the list has to exist before any residual is emitted.
         self.cpairs = try self.collapsePairs();
         const cpairs = self.cpairs;
         if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or self.pathLatches() or
-            self.hp_vals.len != 0)
+            self.hp_vals.len != 0 or self.noise_rows.len != 0)
         {
             try self.out.appendSlice(self.gpa, rscalar_txt);
             // Pinned to the contract's primitive list, same as tb.zig's
@@ -2551,6 +2566,52 @@ pub const Gen = struct {
         return false;
     }
 
+    /// One row of `noise_gens` AND of the `noisePsd` result — the two tables
+    /// are positional in each other (`PsdTerm` k belongs to `noise_gens[k]`),
+    /// so they are built once here rather than by two loops that could drift.
+    const NoiseRow = struct {
+        row: u16,
+        col: u16,
+        kind: Lower.NoiseKind,
+        source: usize,
+        /// §4.6.4.1/.2 the PSD itself: `S(f) = pwr` for white, `pwr/f^exp` for
+        /// flicker. rv-resolved, so `.f_zero` means "no generator at this bias".
+        pwr: Mir.Value,
+        exp: Mir.Value,
+    };
+
+    /// Flatten every contribution's generator set into `noise_rows`, in the
+    /// order `noise_gens` declares them. §4.6.4.6's shared-generator identity
+    /// (`NoiseSrc.id`) is renamed densely in first-seen order on the way.
+    fn planNoise(self: *Gen) Error!void {
+        var rows: std.ArrayList(NoiseRow) = .empty;
+        var ids: std.ArrayList(u32) = .empty;
+        for (self.lower.contributions.items) |c| {
+            // §1.3.1.1 ground is not an unknown: a to-ground generator is
+            // spelled row == col, and one on ground-ground has neither.
+            if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
+            const row = if (c.hi != Lower.ground) c.hi else c.lo;
+            const col = if (c.lo != Lower.ground) c.lo else row;
+            for (c.noise_srcs) |s| {
+                const sid = for (ids.items, 0..) |v, i| {
+                    if (v == s.id) break i;
+                } else blk: {
+                    try ids.append(self.arena, s.id);
+                    break :blk ids.items.len - 1;
+                };
+                try rows.append(self.arena, .{
+                    .row = row,
+                    .col = col,
+                    .kind = s.kind,
+                    .source = sid,
+                    .pwr = self.an.rv(s.pwr),
+                    .exp = self.an.rv(s.exp),
+                });
+            }
+        }
+        self.noise_rows = rows.items;
+    }
+
     fn buildJobs(self: *Gen) Error!void {
         var jobs: std.ArrayList(Job) = .empty;
         for (self.lower.contributions.items, 0..) |c, i| {
@@ -2644,6 +2705,39 @@ pub const Gen = struct {
                     .target = fret.runtime,
                     .mode = self.unitMode(j),
                     .comment = "§5.6.1.3 retention flag",
+                });
+            }
+        }
+        // §4.6.4 the PSD argument of every noise generator, so `noisePsd` can
+        // read the model's OWN expression out of the core instead of a host
+        // guessing it back off the Jacobian. Queued after the retention flags
+        // and before the §9.4 display job for the same insert-tolerance reason
+        // as every neighbour.
+        //
+        // The POWER is always routed through the core, even when it folds to a
+        // model constant, because §4.6.4's generators are CONDITIONAL: every
+        // series resistance in the tree spells `if (r > 0) I(a,b) <+
+        // white_noise(4kT/r)`, and a generator whose statement did not execute
+        // has to read back zero. A core live-out does exactly that (`h[k]` is
+        // seeded `S.con(0)` at entry and assigned only inside the branch);
+        // anything rendered outside the core evaluates unconditionally, and
+        // `4kT/0` is not zero, it is an infinity that reaches the host as a
+        // NaN the moment the collapsed branch gives it a zero adjoint gain.
+        // `planPrecompute` declines these targets for the same reason.
+        //
+        // The EXPONENT is exempt: a constant renders inline, because it is only
+        // ever read on a row whose power is non-zero — i.e. one that executed.
+        for (self.noise_rows) |nr| {
+            for ([_]Mir.Value{ nr.pwr, nr.exp }, 0..) |v, k| {
+                if (v == .f_zero) continue;
+                if (k == 1 and self.psdConst(v) != null) continue;
+                try jobs.append(self.arena, .{
+                    // Never written: like `$limit`/`$retained`, this job exists
+                    // only to put its target in the core.
+                    .name = "$noise",
+                    .target = v,
+                    .mode = .strict,
+                    .comment = "§4.6.4 noise PSD",
                 });
             }
         }
@@ -4904,7 +4998,9 @@ pub const Gen = struct {
 
         // §4.6.4 noise sources contribute in a small-signal noise analysis only;
         // their residual contribution is identically zero. The generator
-        // topology is exported through `noise_gens`.
+        // topology is exported through `noise_gens` and the PSD — which IS the
+        // call's argument, not anything derivable from the residual — through
+        // `noisePsd`, whose core fields the argument slice already holds.
         const noise = [_][]const u8{ "white_noise", "flicker_noise", "noise_table", "noise_table_log" };
         for (noise) |n| {
             if (std.mem.eql(u8, name, n)) return self.b("S.con(0.0)", .{});
@@ -6277,13 +6373,19 @@ pub const Gen = struct {
         try self.b("x[@intFromEnum(U.{s})]", .{self.u_names[node]});
     }
 
-    /// §4.6.4 noise generator topology. The PSD itself is left to the host's
-    /// Jacobian-derived fallback, which covers `.thermal` ONLY: 4kT·g is read
-    /// off the conductance the Jacobian already carries, and there is nothing
-    /// in a Jacobian from which §4.6.4.2's `kf·I^af / f^ef` could be derived.
-    /// So a `.flicker` row here is topology the host is told about and a PSD it
-    /// must decline — which is still strictly better than the row being absent,
-    /// because absent means the model never declared the source.
+    /// §4.6.4 noise generator topology AND the generators' own PSDs.
+    ///
+    /// `noise_gens[k]` is the branch and the tag; `noisePsd(x, m, i)[k]` is
+    /// the PSD, evaluated from the model's own expression at an arbitrary
+    /// state vector. THE TAG IS NOT THE PSD and never could be: §4.6.4.1's
+    /// `white_noise(pwr)` states the power spectral density outright, so
+    /// `white_noise(2·q·|I|)` (shot, 16 models in ARPice's device set write
+    /// exactly that) and `white_noise(4·k·T/R)` (thermal) are the same call
+    /// with different arguments. A host that saw only the tag had to guess,
+    /// and the only guess a Jacobian supports — 4kT·|∂I_row/∂V_col| — is off
+    /// by 2 on a junction (g = I/(N·V_t) ⇒ 4kT·g = (2/N)·2q·I) and off by
+    /// whatever the branch's other terms happen to be everywhere else.
+    /// §4.6.4.2's `kf·I^af / f^ef` it could not express at all.
     ///
     /// ONE ENTRY PER GENERATOR, not per contribution. §4.6.4's own shape is
     /// several sources on one branch, and `Lower.Contribution.noise_srcs` is a
@@ -6297,44 +6399,88 @@ pub const Gen = struct {
     ///
     /// Two §4.6.4 shapes are deliberately NOT in this table, and TODO.md §3
     /// carries them rather than leaving them to be rediscovered: §4.6.4.3/.4
-    /// `noise_table`/`noise_table_log` have no tag (`tools/contract.zig`'s
-    /// `NoiseGen.kind` and `PsdTerm` "land together"), and a generator on a
-    /// ground-ground branch has no row or column to name (§1.3.1.1).
-    ///
-    // ponytail: no `noisePsd` hook. Emitting one means running a third variant
-    // of each unit (white_noise(p) → p) against the plain-f64 scalar `R`; the
-    // machinery for that is already here (see `rscalar_txt`), it just needs a
-    // per-contribution noise unit.
+    /// `noise_table`/`noise_table_log` are piecewise PSD-vs-frequency, which
+    /// neither `NoiseGen.kind` nor `PsdTerm`'s `white + flicker/f^ef` can
+    /// state; and a generator on a ground-ground branch has no row or column
+    /// to name (§1.3.1.1).
     fn emitNoiseTable(self: *Gen) Error!void {
-        var n: usize = 0;
-        for (self.lower.contributions.items) |c| {
-            if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
-            n += c.noise_srcs.len;
-        }
-        if (n == 0) return;
-        // Dense `source` renaming, first-seen order — stable because the
-        // contributions and their `noise_srcs` are both in source order.
-        var ids: std.ArrayList(u32) = .empty;
+        if (self.noise_rows.len == 0) return;
         try self.w("/// §4.6.4 noise sources declared by the model.\npub const noise_gens = [_]contract.NoiseGen(Self){{\n", .{});
-        for (self.lower.contributions.items) |c| {
-            if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
-            // §1.3.1.1 ground is not an unknown: a to-ground generator is
-            // spelled row == col.
-            const row = if (c.hi != Lower.ground) c.hi else c.lo;
-            const col = if (c.lo != Lower.ground) c.lo else row;
-            for (c.noise_srcs) |s| {
-                const sid = for (ids.items, 0..) |v, i| {
-                    if (v == s.id) break i;
-                } else blk: {
-                    try ids.append(self.arena, s.id);
-                    break :blk ids.items.len - 1;
-                };
-                try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s}, .source = {d} }},\n", .{
-                    self.u_names[row], self.u_names[col], @tagName(s.kind), sid,
-                });
-            }
+        for (self.noise_rows) |nr| {
+            try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s}, .source = {d} }},\n", .{
+                self.u_names[nr.row], self.u_names[nr.col], @tagName(nr.kind), nr.source,
+            });
         }
         try self.w("}};\n\n", .{});
+
+        // §4.6.4.1/.2 the PSDs, positionally. One `core(R, …)` sweep at the
+        // caller's state vector, exactly like `updateState` — a generator
+        // whose declaring statement did not execute at this bias reads back
+        // the zero `probeBody` seeds a conditional live-out with, which is
+        // also its physical answer.
+        try self.w(
+            \\/// §4.6.4.1/.2 each generator's PSD at `x`: S(f) = white + flicker/f^ef.
+            \\/// Position k belongs to `noise_gens[k]`.
+            \\pub fn noisePsd(
+        , .{});
+        const at_x = self.out.items.len;
+        try self.w("x: [n_u]f64, ", .{});
+        const at_model = self.out.items.len;
+        try self.w("model: *const Model, ", .{});
+        const at_inst = self.out.items.len;
+        try self.w("inst: *const Instance) [noise_gens.len]contract.PsdTerm {{\n", .{});
+        const uses_core = for (self.noise_rows) |nr| {
+            if (self.coreIdx(nr.pwr) != null or self.coreIdx(nr.exp) != null) break true;
+        } else false;
+        if (uses_core) {
+            try self.w("    var xr: [n_u]R = undefined;\n", .{});
+            try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
+            try self.w("    const m = core(R, xr, model, inst);\n", .{});
+        } else {
+            self.patchParam(at_x, "x".len);
+            self.patchParam(at_model, "model".len);
+            self.patchParam(at_inst, "inst".len);
+        }
+        try self.w("    return .{{\n", .{});
+        for (self.noise_rows) |nr| {
+            const pwr = try self.psdRef(nr.pwr, false);
+            if (nr.kind == .flicker) {
+                try self.w("        .{{ .white = 0, .flicker = {s}, .ef = {s} }},\n", .{ pwr, try self.psdRef(nr.exp, true) });
+            } else {
+                try self.w("        .{{ .white = {s} }},\n", .{pwr});
+            }
+        }
+        try self.w("    }};\n}}\n\n", .{});
+    }
+
+    /// The core field holding `v`, or null when `v` is rendered inline —
+    /// structurally zero, or a constant `planCommon` never had to carry.
+    fn coreIdx(self: *const Gen, v: Mir.Value) ?u32 {
+        if (v == .f_zero) return null;
+        const k = self.lo_idx[@intFromEnum(v)];
+        return if (k == none_u32) null else k;
+    }
+
+    /// `v` as a compile-time f64, or null when only the core can answer.
+    fn psdConst(self: *const Gen, v: Mir.Value) ?f64 {
+        return switch (self.mir.valueDef(v)) {
+            .float_const => |x| x,
+            .int_const => |x| @floatFromInt(x),
+            else => null,
+        };
+    }
+
+    /// One PSD argument as an `f64` expression in `noisePsd`'s body. `is_exp`
+    /// allows the inline-constant shortcut — see `buildJobs` for why only the
+    /// exponent may take it.
+    fn psdRef(self: *Gen, v: Mir.Value, is_exp: bool) Error![]const u8 {
+        if (v == .f_zero) return "0";
+        if (is_exp) if (self.psdConst(v)) |c| return try std.fmt.allocPrint(self.arena, "{d}", .{c});
+        const k = self.lo_idx[@intFromEnum(v)];
+        // A live-out the planner dropped cannot happen (`buildJobs` queued it),
+        // but a zero is the one answer that cannot invent noise.
+        if (k == none_u32) return "0";
+        return try std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
     }
 
     // =======================================================================
@@ -8608,6 +8754,59 @@ test "codegen: §4.6.4 two noise sources on one branch export TWO generators" {
         std.mem.indexOf(u8, src, ".kind = .thermal").? <
             std.mem.indexOf(u8, src, ".kind = .flicker").?,
     );
+}
+
+test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads zero" {
+    var h: Harness = undefined;
+    // The shape EVERY series resistance in a real model card writes: the
+    // generator lives inside `if (r > 0)`, and its power divides by that very
+    // `r`. Hoisting `4kT/r` to `precompute` evaluates it at r == 0 — an
+    // infinity that becomes a NaN the instant the collapsed branch gives it a
+    // zero adjoint gain. It has to stay a core live-out, which `probeBody`
+    // seeds `S.con(0.0)` and only the taken branch assigns.
+    try Harness.run(std.testing.allocator,
+        \\module rn(p, n, m);
+        \\  inout p, n, m;
+        \\  electrical p, n, m;
+        \\  parameter real rs = 0.0;
+        \\  parameter real ich = 1e-3;
+        \\  analog begin
+        \\    I(p, n) <+ white_noise(2.0 * 1.602176634e-19 * abs(ich), "shot");
+        \\    if (rs > 0.0) begin
+        \\      I(n, m) <+ V(n, m) / rs;
+        \\      I(n, m) <+ white_noise(1.6e-23 / rs, "rs");
+        \\    end else begin
+        \\      V(n, m) <+ 0.0;
+        \\    end
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    // The hook exists and is positional against `noise_gens`.
+    const at = std.mem.indexOf(u8, src, "pub fn noisePsd(").?;
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const noise_gens").? < at);
+    // Both powers come out of the core, NOT off a Jacobian and NOT inline:
+    // §4.6.4.1 states the density as the call's argument, so the shot row is
+    // `2q|I|` and the thermal row is `4kT/rs` — the same call, different
+    // arguments, and only the model knows which.
+    const body = src[at..];
+    const ret = std.mem.indexOf(u8, body, "return .{").?;
+    try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "core(R, xr, model, inst)") != null);
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body[ret .. ret + 120], ".white = m.f"));
+    // The guarded power is a live-out seeded zero, never an `inst.pc__` read:
+    // a precompute field would have divided by rs == 0 unconditionally.
+    var k: usize = ret;
+    while (std.mem.indexOfPos(u8, body, k, ".white = m.f")) |i| {
+        const f = body[i + ".white = m.f".len ..];
+        const end = std.mem.indexOfScalar(u8, f, '.').?;
+        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = h[", .{f[0..end]});
+        defer std.testing.allocator.free(decl);
+        try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
+        k = i + 1;
+        if (k > ret + 120) break;
+    }
 }
 
 test "codegen: §5.6.7 indirect contribution is a nullor row, ASYMMETRIC-safe" {
