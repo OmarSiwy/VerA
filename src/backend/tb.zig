@@ -1058,10 +1058,14 @@ const runner_body =
     \\/// set bit that happens to be zero at this bias costs one stamp.
     \\fn patternCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
     \\    const xd = seed(x);
-    \\    if (comptime @hasDecl(D, "jac_pattern"))
-    \\        patAssert("res", D.jac_pattern, &D.eval(Dual, xd, model, inst, t));
-    \\    if (comptime @hasDecl(D, "q_pattern"))
-    \\        patAssert("q", D.q_pattern, &D.q(Dual, xd, model, inst, t));
+    \\    const r = D.eval(Dual, xd, model, inst, t);
+    \\    if (comptime @hasDecl(D, "jac_pattern")) patAssert("res", D.jac_pattern, &r);
+    \\    if (comptime @hasDecl(D, "jac_rows")) rowAssert("res", D.jac_rows, &r);
+    \\    if (comptime @hasDecl(D, "q")) {
+    \\        const qr = D.q(Dual, xd, model, inst, t);
+    \\        if (comptime @hasDecl(D, "q_pattern")) patAssert("q", D.q_pattern, &qr);
+    \\        if (comptime @hasDecl(D, "q_rows")) rowAssert("q", D.q_rows, &qr);
+    \\    }
     \\}
     \\
     \\fn patAssert(what: []const u8, pat: [n_u]u64, r: *const [n_u]Dual) void {
@@ -1071,6 +1075,22 @@ const runner_body =
     \\        std.debug.print("pattern_check FAIL: d{s}[{s}]/dx[{s}] = {e} is outside the declared pattern\n", .{ what, u_names[i], u_names[j], r[i].d[j] });
     \\        std.process.exit(1);
     \\    };
+    \\}
+    \\
+    \\/// The WRITTEN-ROW gate. A host drops a row outside `jac_rows`/`q_rows`
+    \\/// entirely — no residual stamp, no charge-tape entry — so a clear bit
+    \\/// with anything but a hard zero behind it is a term that vanishes from
+    \\/// the netlist with no diagnostic. This is the check that fails if
+    \\/// codegen ever writes `res[ru]` without going through `patRow`, and the
+    \\/// value, not the derivative, is what it looks at: `isource` writes rows
+    \\/// whose every partial is zero.
+    \\fn rowAssert(what: []const u8, rows: u64, r: *const [n_u]Dual) void {
+    \\    for (0..n_u) |i| {
+    \\        if ((rows >> @intCast(i)) & 1 != 0) continue;
+    \\        if (r[i].v == 0.0) continue;
+    \\        std.debug.print("row_check FAIL: {s}[{s}] = {e} but the row is declared never written\n", .{ what, u_names[i], r[i].v });
+    \\        std.process.exit(1);
+    \\    }
     \\}
     \\
     \\fn fusedAssert(what: []const u8, i: usize, a: f64, b: f64) void {

@@ -834,6 +834,26 @@ pub fn validate(comptime D: type) void {
             @compileError(name ++ ".q_pattern without a `q` residual to describe");
     }
 
+    // §5.6 which residual rows the half ever WRITES — ONE bitset, bit `ru` per
+    // row, not per column. `jac_rows` describes `eval`, `q_rows` describes `q`.
+    // Also optional, also over-approximate, also omitted above 64 unknowns.
+    //
+    // A SEPARATE declaration from the pattern, and it must stay one. The
+    // pattern answers for the DERIVATIVE: `res[ru] = <term with no unknown in
+    // it>` writes the row and ORs nothing into the column mask, so a clear
+    // pattern row does NOT mean a clear row. `isource` ships that exact shape —
+    // `jac_pattern = {0, 0}` and both rows written with the DC current — and a
+    // host that inferred "row dead" from "columns dead" would delete every
+    // independent current source in the netlist. On the reactive half the same
+    // mistake is quieter and worse: a `ddt()` of something varying in `t` and
+    // not in `x` would leave the host's per-state charge tape frozen at zero
+    // for a live state and its LTE bound silently gone.
+    //
+    // So the containment is checked here, in the only direction that is sound:
+    // every row with a live column must be a written row.
+    checkRowMask(D, name, "jac_rows", "eval", n);
+    checkRowMask(D, name, "q_rows", "q", n);
+
     // In-device noise PSDs: pure fn of ANY state vector (AC noise calls it
     // once at x_op, pnoise per PSS sample, tran-noise per step). Position k of
     // the result describes generator k. Devices without it keep the
@@ -1025,6 +1045,11 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "u_abstol", {} },
     .{ "jac_pattern", {} },
     .{ "q_pattern", {} },
+    // Which residual rows each half ever writes — one u64 of row bits, the
+    // companion the pattern deliberately cannot substitute for. See
+    // `checkRowMask` and its call site in `validate`.
+    .{ "jac_rows", {} },
+    .{ "q_rows", {} },
     .{ "noise_gens", {} },
     .{ "noisePsd", {} },
     .{ "ac_stamps", {} },
@@ -1101,6 +1126,52 @@ fn expectArray(comptime D: type, comptime decl: []const u8, comptime Child: type
     const info = @typeInfo(@TypeOf(@field(D, decl)));
     if (info != .array or info.array.child != Child)
         @compileError(@typeName(D) ++ "." ++ decl ++ " must be [k]" ++ @typeName(Child));
+}
+
+/// `jac_rows` / `q_rows`: one u64, bit `ru` set when residual half `half` ever
+/// writes `res[ru]`. Optional. Checked here rather than inline because both
+/// halves want the identical four rules, the last of which is the one that
+/// matters — a row with a live Jacobian column is unarguably a written row, so
+/// the mask must contain the pattern's nonzero rows. (The converse is exactly
+/// what must NOT be assumed; see the note at the call site.)
+fn checkRowMask(
+    comptime D: type,
+    comptime name: []const u8,
+    comptime decl: []const u8,
+    comptime half: []const u8,
+    comptime n: usize,
+) void {
+    if (rowMaskError(D, name, decl, half, n)) |m| @compileError(m);
+}
+
+/// The testable half — see `genericFnError` for why the message is returned
+/// rather than raised. The containment test is the interesting one and it runs
+/// in ONE direction only: a row with a live pattern column must be marked
+/// written, never the reverse.
+fn rowMaskError(
+    comptime D: type,
+    comptime name: []const u8,
+    comptime decl: []const u8,
+    comptime half: []const u8,
+    comptime n: usize,
+) ?[]const u8 {
+    if (!@hasDecl(D, decl)) return null;
+    if (@TypeOf(@field(D, decl)) != u64)
+        return name ++ "." ++ decl ++ " must be u64";
+    if (n > 64)
+        return name ++ "." ++ decl ++ " with |U| > 64 — omit it, the dense fallback is correct";
+    if (!@hasDecl(D, half))
+        return name ++ "." ++ decl ++ " without a `" ++ half ++ "` residual to describe";
+    const pat = if (std.mem.eql(u8, half, "q")) "q_pattern" else "jac_pattern";
+    if (!@hasDecl(D, pat)) return null;
+    const mask: u64 = @field(D, decl);
+    for (@field(D, pat), 0..) |row, ru| {
+        if (row == 0) continue;
+        if ((mask >> @intCast(ru)) & 1 != 0) continue;
+        return name ++ "." ++ decl ++ ": row " ++ std.fmt.comptimePrint("{d}", .{ru}) ++
+            " has live " ++ pat ++ " columns but is not marked written";
+    }
+    return null;
 }
 
 /// `decl` is meaningless without `needs` — a table with no hook to fill it, or
@@ -1376,6 +1447,15 @@ const MockAll = struct {
     pub const ac_stamps = [_]AcStamp{ .{ .row = 0, .col = 1 }, .{ .row = 1 } };
     pub const op_vars = [_]OpVar{.{ .name = "gd", .units = "S" }};
     pub const systf_calls = [_]Systf{.{ .name = "$sampnhold" }};
+    // Structural halves of the two residuals below: `eval` is g*(x0−x1) in both
+    // rows, `q` is diagonal. `*_rows` is the row-level companion, and every row
+    // here is written — the interesting case where a row is written with an
+    // EMPTY column mask is `isource`, and `checkRowMask` only rejects the
+    // reverse (live columns on a row not marked written).
+    pub const jac_pattern = [n_u]u64{ 0b11, 0b11 };
+    pub const q_pattern = [n_u]u64{ 0b01, 0b10 };
+    pub const jac_rows: u64 = 0b11;
+    pub const q_rows: u64 = 0b11;
 
     pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
         const i = x[0].sub(x[1]).scale(@as(f64, m.g));
@@ -1489,6 +1569,34 @@ test "display/opValues shapes: the generic 5-param form, wrong arities refused" 
     try testing.expect(comptime (genericFnError(MockAll, "display", "void") == null));
     try testing.expect(comptime (genericFnError(MockAll, "opValues", "[op_vars.len]S") == null));
     try testing.expect(comptime (genericFnError(MockAll, "eval", "[n_u]S") == null));
+}
+
+test "jac_rows: an empty pattern row may still be written; a live one may not be unwritten" {
+    // `isource`'s shape, and the whole reason the declaration exists: the DC
+    // current depends on no unknown, so both column masks are empty while both
+    // rows are written. A host that inferred "row dead" from "columns dead"
+    // would delete it — so this direction has to stay legal.
+    const Isrc = struct {
+        pub const jac_pattern = [2]u64{ 0, 0 };
+        pub const jac_rows: u64 = 0b11;
+        pub fn eval() void {}
+    };
+    try testing.expect(comptime (rowMaskError(Isrc, "Isrc", "jac_rows", "eval", 2) == null));
+
+    // The unsound direction: row 1 has a live partial, so it is unarguably
+    // written, and claiming otherwise deletes a real Jacobian entry.
+    const Bad = struct {
+        pub const jac_pattern = [2]u64{ 0, 0b10 };
+        pub const jac_rows: u64 = 0b01;
+        pub fn eval() void {}
+    };
+    try testing.expect(comptime (rowMaskError(Bad, "Bad", "jac_rows", "eval", 2) != null));
+
+    // And a mask with no residual to describe.
+    const Orphan = struct {
+        pub const q_rows: u64 = 0b11;
+    };
+    try testing.expect(comptime (rowMaskError(Orphan, "Orphan", "q_rows", "q", 2) != null));
 }
 
 test "validateHost: a systf is the host's to bind, and only when there is one" {
