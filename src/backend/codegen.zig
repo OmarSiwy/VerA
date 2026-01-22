@@ -457,6 +457,23 @@ pub const Gen = struct {
     /// COMPILE time; every bit here is a per-instance-per-iteration `+= 0.0`
     /// into a matrix slot that the device knows can never be anything else.
     pat: [2][]u64 = .{ &.{}, &.{} },
+    /// Which residual ROWS each half ever WRITES: bit `ru` of `rows[react]` is
+    /// set when the emitted `eval` (resp. `q`) contains any `res[ru] = ...`.
+    ///
+    /// NOT `pat[react][ru] != 0`, and the difference is the whole point. `pat`
+    /// answers for the DERIVATIVE: a term whose value depends on no unknown
+    /// ORs zero into the column mask while still writing the row. `isource` is
+    /// exactly that shape — both rows clear in `pat[0]`, both rows written with
+    /// the DC current — so a host that read a clear pattern row as "identically
+    /// zero" would delete every independent current source in the netlist. The
+    /// reactive version is quieter: a `ddt()` of something varying in `t` and
+    /// not in `x` leaves the host's per-state charge tape frozen at zero for a
+    /// live state, and its LTE bound silently disappears.
+    ///
+    /// Set beside `pat` in `patRow`, the single choke point every `res[...]`
+    /// writer already goes through — so a row shape cannot be added without
+    /// declaring itself here either.
+    rows: [2]u64 = .{ 0, 0 },
     /// Which half of `pat` the current `emitStamps` writes.
     pat_react: bool = false,
     /// Sanitized U-enum member name per unknown.
@@ -5576,6 +5593,7 @@ pub const Gen = struct {
         self.pat[1] = try self.arena.alloc(u64, self.n_u);
         @memset(self.pat[0], 0);
         @memset(self.pat[1], 0);
+        self.rows = .{ 0, 0 };
 
         try self.emitResidual(false);
         var any_q = false;
@@ -5614,9 +5632,35 @@ pub const Gen = struct {
             \\
         , .{});
         try self.emitPatternRows("jac_pattern", self.pat[0]);
+        try self.emitWrittenRows("jac_rows", "eval", self.rows[0]);
         if (!any_q) return;
         try self.w("/// Same, for `q`'s reactive residual (`dQ/dx`).\n", .{});
         try self.emitPatternRows("q_pattern", self.pat[1]);
+        try self.emitWrittenRows("q_rows", "q", self.rows[1]);
+    }
+
+    /// §5.6 which residual ROWS the emitted half ever writes. A row outside
+    /// this set is `S.con(0.0)` at every bias, every time, so a host may drop
+    /// the whole row — residual stamp, charge tape entry and all — and not just
+    /// the Jacobian columns `jac_pattern` clears.
+    ///
+    /// It exists because the host CANNOT infer it from the pattern. `patRow`
+    /// ORs `unknownDeps(value)` into the column mask, so a term with no unknown
+    /// in it leaves the mask clear while still writing the row — `isource` has
+    /// `jac_pattern` all zero and stamps its DC current into both rows. Reading
+    /// a clear pattern row as "identically zero" deletes it.
+    fn emitWrittenRows(self: *Gen, name: []const u8, half: []const u8, mask: u64) Error!void {
+        try self.w(
+            \\/// §5.6 which residual rows `{s}` ever WRITES: bit `ru` set means
+            \\/// `res[ru]` is assigned somewhere in it. A CLEAR bit is the only
+            \\/// licence to skip a row's stamp entirely — a clear PATTERN row is
+            \\/// not, because a term that depends on no unknown writes the row
+            \\/// with an empty column mask. Over-approximate the same way: a set
+            \\/// bit costs a stamp that happens to be zero.
+            \\pub const {s}: u64 = 0x{x:0>16};
+            \\
+            \\
+        , .{ half, name, mask });
     }
 
     fn emitPatternRows(self: *Gen, name: []const u8, rows: []const u64) Error!void {
@@ -6128,11 +6172,13 @@ pub const Gen = struct {
     /// Row `node` gained a term whose derivative lives in `bits`. Ground has no
     /// equation, so it has no row and no pattern. `pat_react` is set by the
     /// residual half currently emitting, so every writer of `res[...]` records
-    /// its columns with one call beside the line that emits them.
+    /// its columns with one call beside the line that emits them — and, in
+    /// `rows`, the fact that it wrote the row at all, whatever the columns are.
     fn patRow(self: *Gen, node: u16, bits: u64) void {
         if (node == Lower.ground) return;
         if (self.pat[@intFromBool(self.pat_react)].len == 0) return;
         self.pat[@intFromBool(self.pat_react)][node] |= bits;
+        self.rows[@intFromBool(self.pat_react)] |= uBit(node);
     }
 
     /// The column bit of one unknown. Out of `u64` range answers "every
