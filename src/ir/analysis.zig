@@ -972,6 +972,22 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                     const taken = if (c.f != 0) d.then_val else d.else_val;
                     return self.foldConst(taken, depth + 1, resolve_params);
                 },
+                // §9.15 a host-published `$simparam` under the SAME rule as
+                // `.param_ref` above: only a Model DEFAULT may look through it,
+                // and what it sees is Table 9-27's declared value. That is what
+                // `Model{}` means to a host that writes nothing; every other
+                // reader gets `model.<field>` (codegen's `f64Const`), so the
+                // §3.4 field initializer and the §6.3.4 `derive()` assignment
+                // split cleanly on `resolve_params`.
+                .call => {
+                    if (!resolve_params) return null;
+                    const d = self.mir.instData(inst).call;
+                    if (!std.mem.eql(u8, d.name, "$simparam") or d.args.len == 0) return null;
+                    const arg = self.mir.valueDef(self.rv(d.args[0]));
+                    if (arg != .str_const) return null;
+                    if (Lower.simparamHostField(arg.str_const) == null) return null;
+                    return .{ .f = self.lower.simparamValue(arg.str_const) orelse return null };
+                },
                 else => return null,
             }
         },
