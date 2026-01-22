@@ -143,7 +143,21 @@ pub const Options = struct {
     /// approximate Jacobian costs iterations, not the answer — but a model whose
     /// unknowns span more than f32's ~7 digits can lose a Newton direction
     /// outright. That is a fact about the physics, so it belongs at the physics.
+    ///
+    /// PERMISSION, NOT ORDER. A host may instantiate the same device at two
+    /// widths off this one decl — ESPice runs f32 in its GPU kernel and f64 on
+    /// its CPU path (`docs/perf/jac-width-2026-09-10.md`).
     jac_f32: bool = false,
+    /// Emit `pub const jac_f32_host = true` as well: the host should take the
+    /// permission on its CPU instantiation too, not only where f32 is free.
+    ///
+    /// Implies `jac_f32` (this emits both, and `tools/contract.zig` rejects the
+    /// pair with the permission missing). Separate from it because the two
+    /// questions are different: `jac_f32` asks whether the physics survives 7
+    /// digits, `jac_f32_host` asks whether a given host's Newton loop should
+    /// pay for it. Only the second is an economic choice, which is the only
+    /// reason it is a knob.
+    jac_f32_host: bool = false,
     /// Where a codegen-stage diagnostic goes (E0515). Optional: the unit tests
     /// and any caller that only wants text pass none, and codegen then reports
     /// a refusal through `fatal_out` alone.
@@ -220,7 +234,8 @@ pub fn generate(
         .lower = lower,
         .verdict = verdict,
         .display = opts.display,
-        .jac_f32 = opts.jac_f32,
+        .jac_f32 = opts.jac_f32 or opts.jac_f32_host,
+        .jac_f32_host = opts.jac_f32_host,
         .diags = opts.diags,
         .outline = opts.outline_chunk,
     };
@@ -431,6 +446,8 @@ pub const Gen = struct {
     display: Display = .drop,
     /// `Options.jac_f32` — emit the single-precision-Jacobian permission decl.
     jac_f32: bool = false,
+    /// `Options.jac_f32_host` — emit the host-should-take-it-too decl.
+    jac_f32_host: bool = false,
     /// `Options.diags` — where E0515 goes, when the caller kept a bag.
     diags: ?*diag.Bag = null,
     /// `<module>__display__tasks`, or empty when the model prints nothing (or
@@ -1613,7 +1630,16 @@ pub const Gen = struct {
         if (self.jac_f32) try self.w(
             \\/// This device permits a single-precision DERIVATIVE half in the
             \\/// host's scalar S. The residual stays f64 — see `--jac-f32`.
+            \\/// Permission, not order: a host may take it on one instantiation
+            \\/// (its GPU kernel) and decline it on another (its CPU path).
             \\pub const jac_f32 = true;
+            \\
+            \\
+        , .{});
+        if (self.jac_f32_host) try self.w(
+            \\/// ...and the host should take that permission on its CPU path too,
+            \\/// not only where f32 is free. See `--jac-f32-host`.
+            \\pub const jac_f32_host = true;
             \\
             \\
         , .{});
@@ -8027,6 +8053,13 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     const hdr = std.mem.lastIndexOf(u8, on[0..at], "/// This device permits").?;
     const stripped = try std.mem.concat(a, u8, &.{ on[0..hdr], on[at + decl.len ..] });
     try std.testing.expectEqualStrings(off, stripped);
+
+    // `--jac-f32-host` is the stronger request and emits the permission too:
+    // a host width without the permission is the one combination
+    // `tools/contract.zig` rejects, so codegen must never produce it.
+    const host = (try generate(a, a, &h.mir, &h.low, v, &fatal, .{ .jac_f32_host = true })).text;
+    try std.testing.expect(std.mem.indexOf(u8, host, decl) != null);
+    try std.testing.expect(std.mem.indexOf(u8, host, "pub const jac_f32_host = true;") != null);
 }
 
 test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate" {
