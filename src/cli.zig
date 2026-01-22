@@ -44,6 +44,12 @@
 //!                          `eval` is already generic over S and touches it only
 //!                          through f64-boundary primitives, so the width is the
 //!                          host's to pick and this only records the permission.
+//!                          It is a PERMISSION, not an order: ESPice takes it on
+//!                          its GPU kernel and declines it on its CPU path, from
+//!                          this one decl.
+//!   --jac-f32-host         also emit `pub const jac_f32_host = true`: the host
+//!                          should take that permission on its CPU
+//!                          instantiation too. Implies --jac-f32.
 //!                          The residual stays f64; only the Jacobian degrades,
 //!                          which under inexact Newton costs iterations and not
 //!                          the converged answer.
@@ -88,6 +94,7 @@ const usage_text =
     \\  --run                   --emit-exe, then run it
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
+    \\  --jac-f32-host          ...and ask the host to use it on its CPU path
 
     \\  --contract PATH         root of the `contract` module
     \\  --dyn PATH              root of the `dyn` module (--emit-so)
@@ -140,6 +147,7 @@ pub fn main(init: std.process.Init) !u8 {
     var run_exe = false;
     var display: vera.codegen.Display = .drop;
     var jac_f32 = false;
+    var jac_f32_host = false;
     var outline_chunk: u32 = (vera.Options{}).outline_chunk;
     // What the user actually TYPED, kept apart from the derived state above so
     // conflicting spellings can be refused by name after the loop — argument
@@ -194,6 +202,8 @@ pub fn main(init: std.process.Init) !u8 {
             display_drop_flag = true;
         } else if (std.mem.eql(u8, arg, "--jac-f32")) {
             jac_f32 = true;
+        } else if (std.mem.eql(u8, arg, "--jac-f32-host")) {
+            jac_f32_host = true;
         } else if (std.mem.eql(u8, arg, "--contract")) {
             contract_path = args.next() orelse return missing(err, "--contract", "a path");
         } else if (std.mem.eql(u8, arg, "--dyn")) {
@@ -337,6 +347,7 @@ pub fn main(init: std.process.Init) !u8 {
         .proof = .{ .unknown_bound = unknown_bound },
         .display = display,
         .jac_f32 = jac_f32,
+        .jac_f32_host = jac_f32_host,
         .outline_chunk = outline_chunk,
     }) catch |e| {
         try report(&bag, err, json, use_color);

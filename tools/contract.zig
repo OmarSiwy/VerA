@@ -72,6 +72,13 @@
 //! f32's ~7 digits can lose a Newton direction outright, and only the physics
 //! knows that. The permission is per DEVICE for exactly that reason.
 //!
+//! It is a permission and NOT an order, so it is also per INSTANTIATION: a host
+//! that compiles the same device twice may take it once and decline it once.
+//! ESPice does exactly that — f32 in the GPU kernel, f64 on the CPU path, one
+//! binary. `pub const jac_f32_host = true` (`--jac-f32-host`) is the separate,
+//! stronger request that the host take it on its CPU instantiation too; it
+//! implies the permission and `validate` refuses it without one.
+//!
 //! Optional scalar trait: `pub const collapse_applied: bool = true` promises
 //! the host has applied this device's `collapse()` aliases to its gather and
 //! scatter maps. Generated physics then omits the short's cancelling stamps,
@@ -761,6 +768,16 @@ pub fn validate(comptime D: type) void {
     // only says which widths this device's physics tolerates.
     if (@hasDecl(D, "jac_f32") and @TypeOf(D.jac_f32) != bool)
         @compileError(@typeName(D) ++ ".jac_f32 must be a bool");
+    // `jac_f32_host` is a request laid ON that permission — the host taking it
+    // on its CPU path too, not only wherever f32 is free. Asking without the
+    // permission means nothing, so it is refused here rather than silently
+    // ignored by whichever host happens to read only one of the two decls.
+    if (@hasDecl(D, "jac_f32_host")) {
+        if (@TypeOf(D.jac_f32_host) != bool)
+            @compileError(@typeName(D) ++ ".jac_f32_host must be a bool");
+        if (D.jac_f32_host and !(@hasDecl(D, "jac_f32") and D.jac_f32))
+            @compileError(@typeName(D) ++ ".jac_f32_host = true without jac_f32 = true");
+    }
 
     // Voltage limiting (pnjlim/fetlim) and cold-start seeding (SPICE
     // MODEINITJCT). seed returns absolute local voltages written into a
@@ -1049,6 +1066,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // "`jac_f32` must be a bool" guard); the S note in the header is the story.
     // Optional; absent means f64, which is the default a host must assume.
     .{ "jac_f32", {} },
+    // ...and the host-side request laid on it (`--jac-f32-host`). Checked in
+    // `validate` beside the permission, which it implies.
+    .{ "jac_f32_host", {} },
     // Lane-parallel permission: eval/q instantiated with a vector S (one
     // operating point per lane) is exact per lane — no `.val()` steering, no
     // per-call scalar draw, no value-collapsing helper on an x-dependent
@@ -1478,6 +1498,7 @@ const MockAll = struct {
     pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
+    pub const jac_f32_host = true;
     pub const lane_clean = true;
     pub const core_reads_simstate = true;
 
