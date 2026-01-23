@@ -104,8 +104,8 @@
 //! parameter of `analyze`, so the dependency is in the signature.
 
 const std = @import("std");
-const Mir = @import("../ir/mir.zig");
-const Analysis = @import("../ir/analysis.zig");
+const Mir = @import("ir").Mir;
+const Analysis = @import("ir").Analysis;
 // The emitter owns these: `Display` is its §9.4 mode, and the two `op*`/`call*`
 // helpers classify a call the same way for the plan and for the text. Mutual
 // import with codegen.zig is fine here — nothing in the cycle is a comptime

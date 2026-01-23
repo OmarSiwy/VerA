@@ -37,16 +37,14 @@
 //! the device. `filter_kernels.zig` was registered here as the one exception
 //! until wave 10 gave `zBilin` its test.
 //!
-//! ORPHAN: backend/kernels.zig — a test ROOT, not a pipeline stage. Reaching
-//! the six kernel files meant compiling codegen.zig and the IR behind it, which
-//! is why five of them had no tests at all; `zig build test-kernels` mounts
-//! this root and runs them in 306 ms instead. Nothing imports it ON PURPOSE:
-//! putting it in a device's import graph would pull test code into generated
-//! source. It cannot rot into another `eval_batch.zig` — it holds no logic, only
-//! a `test {}` of `@import`s, so an unreachable kernel still fails the guard.
+//! `backend/kernels.zig` is no longer registered here: it is a MODULE ROOT now
+//! (source_guards walks one root per module), and the six kernel files are
+//! reachable from it. It is both the dependency door — `ir` folds §9.13 calls
+//! with the same rng the device runs — and the test root that runs them without
+//! compiling codegen.
 //!
-//! That register is THIS block, it is machine-read, and it holds exactly the
-//! line above. An exception is one `//! ORPHAN: <path under src/> — <why>` line;
+//! That register is THIS block, it is machine-read, and it is EMPTY. An
+//! exception is one `//! ORPHAN: <path under src/> — <why>` line;
 //! `tools/source_guards.zig` parses them as the allowlist for its "every
 //! `src/backend/*.zig` is reachable from a root" test, and fails the build on a
 //! backend file that is neither reachable nor listed. Do not add a line to
@@ -83,13 +81,13 @@ pub const Preprocessor = @import("frontend").Preprocessor;
 const Lexer = @import("frontend").Lexer;
 const Ast = @import("frontend").Ast;
 const Parser = @import("frontend").Parser;
-const Mir = @import("ir/mir.zig");
-const Analysis = @import("ir/analysis.zig");
-const Ssa = @import("ir/ssa.zig");
-const Elaborate = @import("ir/elaborate.zig");
-const Lower = @import("ir/lower.zig");
-const ifconv = @import("ir/ifconv.zig");
-const proof = @import("ir/proof.zig");
+const Mir = @import("ir").Mir;
+const Analysis = @import("ir").Analysis;
+const Ssa = @import("ir").Ssa;
+const Elaborate = @import("ir").Elaborate;
+const Lower = @import("ir").Lower;
+const ifconv = @import("ir").ifconv;
+const proof = @import("ir").proof;
 pub const diag = @import("diag");
 const naming = @import("backend/naming.zig");
 pub const codegen = @import("backend/codegen.zig");
@@ -507,12 +505,8 @@ test {
     // `frontend` is a MODULE now — token/Preprocessor/Lexer/Ast/Parser live
     // across a boundary, so listing them here contributes zero. `test-frontend`
     // runs their 72 tests.
-    _ = Mir;
-    _ = Analysis;
-    _ = Ssa;
-    _ = Elaborate;
-    _ = Lower;
-    _ = proof;
+    // `ir` is a MODULE now — Mir/Analysis/Ssa/Elaborate/Lower/proof are across
+    // a boundary and contribute zero from here. `test-ir` runs their 66.
     _ = naming;
     _ = codegen;
     _ = UnitPlan;

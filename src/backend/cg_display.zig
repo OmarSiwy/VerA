@@ -13,9 +13,9 @@
 //! `Display == .drop` means nothing below ever runs — see `codegen.Display`.
 
 const std = @import("std");
-const Mir = @import("../ir/mir.zig");
-const Analysis = @import("../ir/analysis.zig");
-const Lower = @import("../ir/lower.zig");
+const Mir = @import("ir").Mir;
+const Analysis = @import("ir").Analysis;
+const Lower = @import("ir").Lower;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
@@ -741,7 +741,7 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
 const Preprocessor = @import("frontend").Preprocessor;
 const Lexer = @import("frontend").Lexer;
 const Parser = @import("frontend").Parser;
-const proof = @import("../ir/proof.zig");
+const proof = @import("ir").proof;
 const diag = @import("diag");
 
 /// The pipeline through `cg.generate` with §9.4 display ON, arena-lived — the

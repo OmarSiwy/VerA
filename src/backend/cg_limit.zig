@@ -38,8 +38,8 @@
 //! Zig cannot extend a struct across files.
 
 const std = @import("std");
-const Mir = @import("../ir/mir.zig");
-const Analysis = @import("../ir/analysis.zig");
+const Mir = @import("ir").Mir;
+const Analysis = @import("ir").Analysis;
 const cg = @import("codegen.zig");
 const Gen = cg.Gen;
 const Error = cg.Error;
