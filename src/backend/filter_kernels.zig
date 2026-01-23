@@ -137,3 +137,62 @@ pub fn zZiStep(
     }
     return u;
 }
+
+// ===========================================================================
+// Tests. They live HERE, beside the kernels, for the reason the header gives:
+// this file is the one source, so what the tests check is what the device
+// runs. codegen.zig's tests `@import` this file, so `zig build test-va`
+// collects them; `zig build test-kernels` runs them without codegen.
+//
+// NOT `std`: this file is embedded verbatim into device.zig, whose file-scope
+// `std` a test-local of the same name would shadow (AstGen error). Same
+// reason limit_kernels.zig spells it `stdx`.
+//
+// `zBilin` is NOT re-tested here beyond the degree below: codegen.zig's
+// "§4.5.11 the bilinear transform is the one the emitted filter runs" already
+// pins D = 0 and D = 2 exactly and the DC/Nyquist closed forms at D = 3.
+// `zSec`/`zLaplace`/`zLaplaceStep`/`zZiStep` remain uncovered — they need a
+// solver scalar type or a coefficient cascade, which is a fixture, not a
+// one-liner.
+// ===========================================================================
+
+test "zBilin: D = 1, the degree the other rows skip" {
+    const stdx = @import("std");
+    // P(s) = 2 + 3s, k = 10. Clearing (1+z⁻¹) by hand:
+    //   P·(1+z⁻¹) = 2(1+z⁻¹) + 3k(1−z⁻¹) = (2+3k) + (2−3k)z⁻¹.
+    // Dyadic, so exact. codegen.zig covers D = 0, 2 and 3; a first-order
+    // section is the commonest filter there is and was the gap between them.
+    const q = zBilin(1, .{ 2.0, 3.0 }, 10.0);
+    try stdx.testing.expectEqual([2]f64{ 32.0, -28.0 }, q);
+}
+
+test "zPush: newest first, and an empty history is a no-op" {
+    const stdx = @import("std");
+    var uh: [3]f64 = .{ 0, 0, 0 };
+    var yh: [3]f64 = .{ 0, 0, 0 };
+    for ([_]f64{ 1, 2, 3 }) |v| zPush(&uh, &yh, v, -v);
+    // Newest at index 0, oldest last — the order zSec/zSecR index with.
+    try stdx.testing.expectEqualSlices(f64, &.{ 3, 2, 1 }, &uh);
+    try stdx.testing.expectEqualSlices(f64, &.{ -3, -2, -1 }, &yh);
+
+    // A degree-0 section keeps no history; the guard is what makes that legal.
+    var none: [0]f64 = .{};
+    zPush(&none, &none, 1.0, 1.0);
+}
+
+test "zSecR: unit section is the identity, and gain is b0/a0" {
+    const stdx = @import("std");
+    const uh: [1]f64 = .{ 0 };
+    const yh: [1]f64 = .{ 0 };
+    try stdx.testing.expectApproxEqAbs(
+        @as(f64, 4.25),
+        zSecR(1, 4.25, .{ 1, 0 }, .{ 1, 0 }, &uh, &yh),
+        1e-12,
+    );
+    // b[0]/a[0] is the instantaneous gain the solver differentiates through.
+    try stdx.testing.expectApproxEqAbs(
+        @as(f64, 2.0),
+        zSecR(1, 4.0, .{ 3, 0 }, .{ 6, 0 }, &uh, &yh),
+        1e-12,
+    );
+}
