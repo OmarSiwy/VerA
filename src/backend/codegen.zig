@@ -7412,9 +7412,22 @@ const math_txt =
     \\/// branch IS the builtin, so host emission is numerically unchanged; its
     \\/// device branch is a self-contained soft port. sin/cos joined when the
     \\/// bjt reached tan through the StateKernel's scalar core (`fsin` cannot
-    \\/// select on NVPTX); expm1/log1p/atan stay on std.math (pure Zig).
+    \\/// select on NVPTX); log1p stays on std.math (pure Zig).
+    \\///
+    \\/// expm1 and atan are routed too, and NOT for a missing libcall -- NVPTX
+    \\/// takes both. Both raise the subnormal underflow flag through
+    \\/// `std.mem.doNotOptimizeAway`, which for a float is
+    \\/// `asm volatile ("" :: "rm" (v))`, and AMDGPU cannot match the `m`
+    \\/// alternative: "Could not match memory address. Inline asm failure!".
+    \\/// AMD-only, so a CUDA-only check never sees it.
     \\inline fn zDevExp(x: f64) f64 {
     \\    return contract.gm.exp(x);
+    \\}
+    \\inline fn zDevExpm1(x: f64) f64 {
+    \\    return contract.gm.expm1(x);
+    \\}
+    \\inline fn zDevAtan(x: f64) f64 {
+    \\    return contract.gm.atan(x);
     \\}
     \\inline fn zDevLog(x: f64) f64 {
     \\    return contract.gm.log(x);
@@ -8029,8 +8042,8 @@ const pscalar_txt =
     \\/// Value-only scalar for `precompute`, mirroring the ARPice host Dual's
     \\/// VALUE semantics op for op (gompute.math forwards to the builtins on
     \\/// the host): div is a*(1/b), abs/min/max/minC/maxC branch, expm1/log1p
-    \\/// are the Kahan corrections over exp/log. R (plain a/b, std.math.expm1)
-    \\/// is deliberately NOT reused: updateState keeps R, so accepted-state
+    \\/// are the Kahan corrections over exp/log. R (plain a/b, device-routed
+    \\/// expm1) is deliberately NOT reused: updateState keeps R, so accepted-state
     \\/// bits do not move; eval keeps the host's S, so a field read must
     \\/// reproduce the host chain it replaced bit for bit.
     \\const P = struct {
@@ -8101,7 +8114,7 @@ const rscalar_txt =
     \\    // host branch of each IS the builtin — host output is unchanged.
     \\    pub fn exp(a: T) T { return .{ .v = zDevExp(a.v) }; }
     \\    pub fn log(a: T) T { return .{ .v = zDevLog(a.v) }; }
-    \\    pub fn expm1(a: T) T { return .{ .v = std.math.expm1(a.v) }; }
+    \\    pub fn expm1(a: T) T { return .{ .v = zDevExpm1(a.v) }; }
     \\    pub fn log1p(a: T) T { return .{ .v = std.math.log1p(a.v) }; }
     \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
     \\    pub fn sin(a: T) T { return .{ .v = zDevSin(a.v) }; }
@@ -8109,7 +8122,7 @@ const rscalar_txt =
     \\    pub fn tanh(a: T) T { return .{ .v = zDevTanh(a.v) }; }
     \\    pub fn sinh(a: T) T { return .{ .v = zDevSinh(a.v) }; }
     \\    pub fn cosh(a: T) T { return .{ .v = zDevCosh(a.v) }; }
-    \\    pub fn atan(a: T) T { return .{ .v = std.math.atan(a.v) }; }
+    \\    pub fn atan(a: T) T { return .{ .v = zDevAtan(a.v) }; }
     \\    pub fn abs(a: T) T { return .{ .v = @abs(a.v) }; }
     \\    pub fn minC(a: T, c: f64) T { return .{ .v = @min(a.v, c) }; }
     \\    pub fn maxC(a: T, c: f64) T { return .{ .v = @max(a.v, c) }; }
