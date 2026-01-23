@@ -67,8 +67,10 @@ pub fn build(b: *std.Build) void {
         },
     });
 
-    const vera_mod = b.addModule("vera", .{
-        .root_source_file = b.path("src/root.zig"),
+    // MIR -> device. One module around the codegen/cg_* cycle, same reasoning
+    // as `ir`: the boundary goes around the cycle rather than through it.
+    const backend_mod = b.addModule("backend", .{
+        .root_source_file = b.path("src/backend/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -79,10 +81,29 @@ pub fn build(b: *std.Build) void {
         },
     });
 
+    // The facade. Re-export and pipeline driving only now — every stage it
+    // sequences is a module of its own.
+    const vera_mod = b.addModule("vera", .{
+        .root_source_file = b.path("src/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "diag", .module = diag_mod },
+            .{ .name = "frontend", .module = frontend_mod },
+            .{ .name = "ir", .module = ir_mod },
+            .{ .name = "backend", .module = backend_mod },
+            .{ .name = "kernels", .module = kernels_mod },
+        },
+    });
+
+    // The CLI takes the engine as a MODULE. It used to `@import("root.zig")`
+    // by path, which compiled the entire engine a SECOND time into this
+    // module's file set — 62k lines built twice per build.
     const cli_mod = b.createModule(.{
         .root_source_file = b.path("src/cli.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "vera", .module = vera_mod }},
     });
     const exe = b.addExecutable(.{ .name = "vera", .root_module = cli_mod });
     b.installArtifact(exe);
@@ -126,6 +147,11 @@ pub fn build(b: *std.Build) void {
     const run_ir_test = b.addRunArtifact(b.addTest(.{ .root_module = ir_mod }));
     b.step("test-ir", "Run elaborate/lower/ssa/proof tests").dependOn(&run_ir_test.step);
     test_step.dependOn(&run_ir_test.step);
+
+    // backend's 90 tests — 61 of them codegen's — leave `test-va` with it.
+    const run_backend_test = b.addRunArtifact(b.addTest(.{ .root_module = backend_mod }));
+    b.step("test-backend", "Run codegen/naming/tb/orchestrator tests").dependOn(&run_backend_test.step);
+    test_step.dependOn(&run_backend_test.step);
 
     // The emitted device-runtime kernels. `test-va` does reach them, but only
     // through codegen.zig's `@import`s — so touching a kernel meant compiling

@@ -89,13 +89,13 @@ const Lower = @import("ir").Lower;
 const ifconv = @import("ir").ifconv;
 const proof = @import("ir").proof;
 pub const diag = @import("diag");
-const naming = @import("backend/naming.zig");
-pub const codegen = @import("backend/codegen.zig");
-const UnitPlan = @import("backend/unit_plan.zig");
-const cg_display = @import("backend/cg_display.zig");
-const cg_filters = @import("backend/cg_filters.zig");
-pub const orchestrator = @import("backend/orchestrator.zig");
-pub const tb = @import("backend/tb.zig");
+const naming = @import("backend").naming;
+pub const codegen = @import("backend").codegen;
+const UnitPlan = @import("backend").UnitPlan;
+const cg_display = @import("backend").cg_display;
+const cg_filters = @import("backend").cg_filters;
+pub const orchestrator = @import("backend").orchestrator;
+pub const tb = @import("backend").tb;
 
 /// The three build targets. Frontend is identical for all three; the backend
 /// and float behavior differ.
@@ -507,16 +507,12 @@ test {
     // runs their 72 tests.
     // `ir` is a MODULE now — Mir/Analysis/Ssa/Elaborate/Lower/proof are across
     // a boundary and contribute zero from here. `test-ir` runs their 66.
-    _ = naming;
-    _ = codegen;
-    _ = UnitPlan;
-    _ = cg_display;
-    _ = cg_filters;
-    _ = orchestrator;
+    // `backend` is a MODULE now — naming/codegen/UnitPlan/cg_*/orchestrator/tb
+    // are across a boundary and contribute zero from here. `test-backend` runs
+    // their 90.
     // `diag` is a MODULE now: a cross-module `_ = @import(...)` contributes
     // zero tests, so listing it here would quietly drop 20. `test-diag` runs
     // them.
-    _ = tb;
 }
 
 const test_resistor =

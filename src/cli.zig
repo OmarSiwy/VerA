@@ -76,7 +76,7 @@
 //! a testbench exists to print, so dropping its prints is a contradiction.
 
 const std = @import("std");
-const vera = @import("root.zig");
+const vera = @import("vera");
 const diag = vera.diag;
 const Io = std.Io;
 
