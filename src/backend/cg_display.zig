@@ -738,9 +738,9 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
 // compare it to a literal — text a unit test over an emitter cannot execute.
 // ---------------------------------------------------------------------------
 
-const Preprocessor = @import("../frontend/preprocessor.zig");
-const Lexer = @import("../frontend/lexer.zig");
-const Parser = @import("../frontend/parser.zig");
+const Preprocessor = @import("frontend").Preprocessor;
+const Lexer = @import("frontend").Lexer;
+const Parser = @import("frontend").Parser;
 const proof = @import("../ir/proof.zig");
 const diag = @import("diag");
 

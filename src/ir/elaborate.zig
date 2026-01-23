@@ -58,8 +58,8 @@
 //! validated (E0915) and then configure nothing.
 
 const std = @import("std");
-const Ast = @import("../frontend/ast.zig");
-const Lexer = @import("../frontend/lexer.zig");
+const Ast = @import("frontend").Ast;
+const Lexer = @import("frontend").Lexer;
 const diag = @import("diag");
 // §9.13's argument table and the kernels it names — `rewriteParamsetDist` folds
 // an in-paramset draw with the SAME code a device embeds, so the two cannot
@@ -2242,8 +2242,8 @@ const Flatten = struct {
 // Tests
 // ---------------------------------------------------------------------------
 
-const Parser = @import("../frontend/parser.zig");
-const Preprocessor = @import("../frontend/preprocessor.zig");
+const Parser = @import("frontend").Parser;
+const Preprocessor = @import("frontend").Preprocessor;
 
 const Fixture = struct {
     arena: std.heap.ArenaAllocator,

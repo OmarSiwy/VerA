@@ -78,11 +78,11 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const token = @import("frontend/token.zig");
-pub const Preprocessor = @import("frontend/preprocessor.zig");
-const Lexer = @import("frontend/lexer.zig");
-const Ast = @import("frontend/ast.zig");
-const Parser = @import("frontend/parser.zig");
+const token = @import("frontend").token;
+pub const Preprocessor = @import("frontend").Preprocessor;
+const Lexer = @import("frontend").Lexer;
+const Ast = @import("frontend").Ast;
+const Parser = @import("frontend").Parser;
 const Mir = @import("ir/mir.zig");
 const Analysis = @import("ir/analysis.zig");
 const Ssa = @import("ir/ssa.zig");
@@ -504,11 +504,9 @@ fn freeArena(gpa: Allocator, a: *std.heap.ArenaAllocator) void {
 
 test {
     // One test root: pull in every stage so `zig build test` runs their tests.
-    _ = token;
-    _ = Preprocessor;
-    _ = Lexer;
-    _ = Ast;
-    _ = Parser;
+    // `frontend` is a MODULE now — token/Preprocessor/Lexer/Ast/Parser live
+    // across a boundary, so listing them here contributes zero. `test-frontend`
+    // runs their 72 tests.
     _ = Mir;
     _ = Analysis;
     _ = Ssa;

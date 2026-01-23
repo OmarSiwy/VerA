@@ -21,7 +21,7 @@
 const std = @import("std");
 const Mir = @import("../ir/mir.zig");
 const Lower = @import("../ir/lower.zig");
-const token = @import("../frontend/token.zig");
+const token = @import("frontend").token;
 
 /// Identifies one emitted source unit: §5.6 contribution or §4.5 analog operator.
 pub const Unit = struct {
@@ -329,7 +329,7 @@ fn assignDisambig(units: []Unit) void {
 // Tests
 // ---------------------------------------------------------------------------
 
-const Ast = @import("../frontend/ast.zig");
+const Ast = @import("frontend").Ast;
 const diag = @import("diag");
 
 const Fixture = struct {
