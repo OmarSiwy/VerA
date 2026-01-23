@@ -40,7 +40,7 @@
 
 const std = @import("std");
 const token = @import("token.zig");
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 
 pub const TokenList = std.MultiArrayList(token.Stored);
 

@@ -90,8 +90,7 @@ const Elaborate = @import("ir/elaborate.zig");
 const Lower = @import("ir/lower.zig");
 const ifconv = @import("ir/ifconv.zig");
 const proof = @import("ir/proof.zig");
-pub const diag = @import("diag.zig");
-const diag_code = @import("diag_code.zig");
+pub const diag = @import("diag");
 const naming = @import("backend/naming.zig");
 pub const codegen = @import("backend/codegen.zig");
 const UnitPlan = @import("backend/unit_plan.zig");
@@ -522,8 +521,9 @@ test {
     _ = cg_display;
     _ = cg_filters;
     _ = orchestrator;
-    _ = diag;
-    _ = diag_code;
+    // `diag` is a MODULE now: a cross-module `_ = @import(...)` contributes
+    // zero tests, so listing it here would quietly drop 20. `test-diag` runs
+    // them.
     _ = tb;
 }
 

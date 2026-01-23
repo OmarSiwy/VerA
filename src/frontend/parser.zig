@@ -28,7 +28,7 @@ const std = @import("std");
 const token = @import("token.zig");
 const lexer = @import("lexer.zig");
 const Ast = @import("ast.zig");
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 
 pub const Error = error{ OutOfMemory, ParseError };
 

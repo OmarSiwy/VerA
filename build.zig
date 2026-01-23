@@ -27,10 +27,21 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    // Bottom of the compiler DAG: diagnostics depend on nothing but std, and
+    // every stage depends on them. A module rather than a relative import so
+    // `zig build test-diag` runs its 20 tests without the engine, and so the
+    // layering is declared in the build graph instead of by convention.
+    const diag_mod = b.addModule("diag", .{
+        .root_source_file = b.path("src/diag.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const vera_mod = b.addModule("vera", .{
         .root_source_file = b.path("src/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "diag", .module = diag_mod }},
     });
 
     const cli_mod = b.createModule(.{
@@ -62,6 +73,13 @@ pub fn build(b: *std.Build) void {
     const run_va_test = b.addRunArtifact(b.addTest(.{ .root_module = vera_mod }));
     b.step("test-va", "Run the Verilog-A engine tests").dependOn(&run_va_test.step);
     test_step.dependOn(&run_va_test.step);
+
+    // Diagnostics. Their tests leave `test-va`'s root the moment `diag` becomes
+    // a module — a cross-module `_ = @import(...)` contributes zero — so this
+    // step is what keeps the 20 of them running at all.
+    const run_diag_test = b.addRunArtifact(b.addTest(.{ .root_module = diag_mod }));
+    b.step("test-diag", "Run diagnostic rendering tests").dependOn(&run_diag_test.step);
+    test_step.dependOn(&run_diag_test.step);
 
     // The emitted device-runtime kernels. `test-va` does reach them, but only
     // through codegen.zig's `@import`s — so touching a kernel meant compiling

@@ -18,7 +18,7 @@ const Ssa = @import("ssa.zig");
 const Elaborate = @import("elaborate.zig");
 const Lexer = @import("../frontend/lexer.zig");
 const Preprocessor = @import("../frontend/preprocessor.zig");
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 const assert = std.debug.assert;
 
 pub const Lower = @This(); // so `Lower.Lower` also resolves

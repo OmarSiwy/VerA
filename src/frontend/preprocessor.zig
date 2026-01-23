@@ -31,7 +31,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 /// §2.6.2 number decoding, for §10.3's `transition_time` operand, and the
 /// prelude's own token snapshot. The lexer does not depend on this file, so the
 /// edge only goes one way.

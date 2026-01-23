@@ -102,7 +102,7 @@ const Ast = @import("../frontend/ast.zig");
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
 const Analysis = @import("analysis.zig");
-const diag = @import("../diag.zig");
+const diag = @import("diag");
 const math = std.math;
 
 /// Per-unit float-mode decision. LRM §4.3 domains + finiteness.
