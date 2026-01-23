@@ -9535,8 +9535,34 @@ test "codegen: §5.6.5 a zero-short switch branch emits a collapse hook" {
     ) != null);
     // The internal node AND the branch-flow unknown both alias onto the port,
     // so the pair's stamps land on one slot and cancel.
-    try std.testing.expect(std.mem.indexOf(u8, src, "out[@intFromEnum(U.ai)] = @intFromEnum(U.a);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "out[@intFromEnum(U.flowZ28aZ2caiZ29)] = @intFromEnum(U.a);") != null);
+    //
+    // Asserted through the UNION-FIND emission, which replaced the
+    // last-write-wins `out[victim] = target` these rows used to match. That
+    // rewrite was the FIX for chained shorts — BSIM4 rgateMod=0 retains both
+    // V(g,gm) and V(gm,gi), sharing gm, and last-write-wins left the chain's
+    // first link dangling (see `collapse`'s own doc comment). The old spelling
+    // is gone, so matching it asserted the bug rather than the fix.
+    //
+    // `ai` is aliased by the union and then resolved by the `if (r != u)` loop
+    // over every unknown, so it is no longer written by name; the branch-flow
+    // row still is, because it is not a union member.
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        src,
+        "zCollapseUnion(&parent, @intFromEnum(U.ai), @intFromEnum(U.a));",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        src,
+        "out[@intFromEnum(U.flowZ28aZ2caiZ29)] = zCollapseRoot(&parent, @intFromEnum(U.a));",
+    ) != null);
+    // Min-index root, so `a` — a port at index 0 — is the target and never a
+    // mover. That ordering is what lets the host resolve aliases ascending.
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        src,
+        "if (ra < rb) parent[rb] = ra else parent[ra] = rb;",
+    ) != null);
 }
 
 test "codegen: no collapse hook without the zero-short pattern" {
