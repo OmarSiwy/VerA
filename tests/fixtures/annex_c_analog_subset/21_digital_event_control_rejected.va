@@ -21,17 +21,22 @@
 // reports each one: a fixture naming a single edge would leave the other
 // unproven.
 //
-// E0209 ("expected an expression", .lrm A.8.3) is a parser-recovery artifact
-// and names no C.7 rule — VerA has no subset gate here, it simply does not
-// parse `posedge` in an event expression. It is pinned only because it is what
-// VerA emits today; `posedge`/`negedge` are the load-bearing arms. If VerA ever
-// learns to parse the edge expressions, this cite must move to whatever code
-// then refuses them (E0201, "construct is not in the supported subset", .lrm C,
-// already exists) rather than being deleted.
+// This fixture used to pin E0209 ("expected an expression", .lrm A.8.3), a
+// parser-recovery artifact naming no C.7 rule — VerA had no subset gate here,
+// it simply did not parse `posedge` in an event expression. The note left here
+// said the cite must move to whatever code refuses the edges once VerA learned
+// to parse them. VerA has now learned: §5.10.1 edges parse for the digital
+// domain, so lowering is reached and refuses them.
+//
+// The code is E0704 ("posedge/negedge is digital-only", .lrm 5.10.1), not the
+// E0201 that note guessed at. What bites is the domain rule, not subset
+// membership: §5.10.5 sensitivity is precisely what C.7 drops, and E0704 is
+// the code that states it. E0201 would have said "not in the supported subset"
+// without naming which rule, which is the weaker diagnostic.
 //
 //! lrm C.7
 //! lrm 5.10.5
-//! reject E0209
+//! reject E0704
 //! reject posedge
 //! reject negedge
 module annex_c_digital_event_control_rejected(p);
