@@ -42,8 +42,16 @@ These are implemented pieces; the remaining work below still applies.
 eleven checked waveform comparisons remain failing; AC and history limitations
 also remain. Approximate Verilog-A replacements do not satisfy the migration.
 
+The **1,301/1,301** figure above is `zig build torture -- --strict`; `zig build
+test` does not run the fixture suite (`build.zig:462-468`). 452 of those 1301
+fixtures assert a *refusal*. The [clause audit](CLAUSE-AUDIT.md) reconciles the
+chapter `COVERAGE.md` files against the source, expands the inherited IEEE 1364
+§§17–18 obligations, and lists where this file and those files overstate what is
+implemented.
+
 See the [detailed implementation backlog](../../ARPice/docs/verilog-ams-conformance-plan.md),
 [transmission-line audit](../../ARPice/docs/native-transmission-line-migration.md),
+the [clause audit](CLAUSE-AUDIT.md),
 chapter `COVERAGE.md` files and the
 [Verilog-AMS standard](https://www.accellera.org/images/downloads/standards/v-ams/VAMS-LRM-2023.pdf)
 for scope, evidence and acceptance criteria.
