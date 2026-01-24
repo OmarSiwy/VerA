@@ -391,6 +391,7 @@ pub const Parser = struct {
             .functions = b.functions.items,
             .analog = b.analog.items,
             .discrete = b.discrete.items,
+            .assigns = b.assigns.items,
             // §2.9 — every attr_spec seen since the last module. Attributes
             // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
             // collected by `parseSource` and belong to this module too, which is
@@ -664,6 +665,7 @@ pub const Parser = struct {
         functions: std.ArrayList(Ast.FuncDecl) = .empty,
         analog: std.ArrayList(Ast.AnalogBlock) = .empty,
         discrete: std.ArrayList(Ast.DiscreteBlock) = .empty, // A.6.2, §7.2.2
+        assigns: std.ArrayList(Ast.ContAssign) = .empty, // A.6.1
         /// §6.6.1/§6.6.2 every named generate block of the module, with the
         /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
         /// is a declaration of a scope nothing downstream can reach yet
@@ -916,7 +918,7 @@ pub const Parser = struct {
             .kw_ground => {
                 self.pos += 1;
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, true);
+                try self.parseNetNames(b, disc, .wire, true);
             },
             // §6.5.2 non-ANSI port declarations
             .kw_input, .kw_output, .kw_inout => try self.parsePortDecl(b),
@@ -934,9 +936,27 @@ pub const Parser = struct {
             .kw_supply0,
             .kw_supply1,
             => {
+                const kind = netKind(self.peek());
                 self.pos += 1;
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, false);
+                try self.parseNetNames(b, disc, kind, false);
+            },
+            // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
+            // list_of_net_assignments ;`. Only the digital executor has nets
+            // with drivers to resolve; annex C.7 has no digital behavior, so
+            // outside a digital run this is the E0205 it has always been.
+            .kw_assign => {
+                if (!self.digital) return self.unsupportedItem();
+                self.pos += 1;
+                while (true) {
+                    const tok = self.pos;
+                    const target = try self.parseExpr();
+                    _ = try self.expect(.assign_eq);
+                    const value = try self.parseExpr();
+                    try b.assigns.append(self.arena, .{ .target = target, .value = value, .main_tok = tok });
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
             },
             // Analog reads retain Table 7-1's integer mapping and its width
             // gate. Digital execution preserves packed width/signedness here;
@@ -1019,7 +1039,7 @@ pub const Parser = struct {
                 }
                 const disc = try self.internTok(self.pos);
                 self.pos += 1;
-                try self.parseNetNames(b, disc, false);
+                try self.parseNetNames(b, disc, .wire, false);
             },
             else => return self.unsupportedItem(),
         }
@@ -1636,7 +1656,26 @@ pub const Parser = struct {
         };
     }
 
-    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, is_ground: bool) Error!void {
+    /// A.2.2.1 net_type keyword -> `Ast.NetKind`. Anything else is `.wire`,
+    /// which is what a declaration naming no net type resolves as (§7.9).
+    fn netKind(tag: token.Tag) Ast.NetKind {
+        return switch (tag) {
+            .kw_tri => .tri,
+            .kw_tri0 => .tri0,
+            .kw_tri1 => .tri1,
+            .kw_triand => .triand,
+            .kw_trior => .trior,
+            .kw_trireg => .trireg,
+            .kw_wand => .wand,
+            .kw_wor => .wor,
+            .kw_uwire => .uwire,
+            .kw_supply0 => .supply0,
+            .kw_supply1 => .supply1,
+            else => .wire,
+        };
+    }
+
+    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool) Error!void {
         const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
         while (true) {
             const tok = self.pos;
@@ -1679,6 +1718,7 @@ pub const Parser = struct {
             } else {
                 try b.nets.append(self.arena, .{
                     .name = name,
+                    .kind = kind,
                     .discipline = disc,
                     .is_ground = is_ground,
                     .range = range,

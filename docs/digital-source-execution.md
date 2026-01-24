@@ -8,8 +8,10 @@ execution path; it is not full digital or mixed-signal conformance.
 ## Supported source
 
 One ordinary portless module can declare scalar or packed `reg` variables,
-`reg signed` variables and signed 32-bit `integer` variables. Packed bounds must
-be nonnegative integer literals. State begins at X. Multiple `initial` and
+`reg signed` variables, signed 32-bit `integer` variables, one-dimensional
+unpacked arrays of any of those, and undisciplined nets of every §3.7 net type.
+Packed bounds must be nonnegative integer literals. Variable state begins at X
+and net state begins at Z. Multiple `initial` and
 `always` processes start at time zero. Sequential `begin`/`end` blocks, empty statements,
 whole-variable blocking and nonblocking assignments, statement `#delay` and
 `@` event controls, `if`/`else`, `case`/`casez`/`casex`, and `while`/`repeat`/`for` execute.
@@ -164,14 +166,59 @@ forms fail before any process output, including forms inside unreachable control
 bodies. Runtime-dependent timing overflow, unsupported negative repeat counts and
 allocation/output failures can still occur after earlier valid output.
 
+## Nets, drivers and resolution
+
+Variables, array elements and nets share one slot space, so one write path
+publishes all three and one waiter list resumes on all three. A net with no
+driver reads Z rather than the X a variable starts at; that difference is the
+whole of what makes a net a net here.
+
+Each continuous assignment is one driver of one net and keeps its own value.
+It evaluates at time zero and again whenever one of its operands changes — the
+operands are the identifiers its expression reads, resolved to slots when the
+assignment is compiled, exactly as an event term is. Its own resumption point is
+its own instruction, so a change re-drives without re-entering a process.
+
+A net's value is the IEEE 1364-2005 §7.9 wired-logic resolution of *all* its
+drivers, recomputed whole on every driver update and published through the same
+write path a variable write takes; `@(posedge w)` on a net therefore works.
+`wire`/`tri`/`uwire` conflict to X, `wand`/`triand` resolve by AND, and
+`wor`/`trior` by OR, with Z the identity of all three tables. Where no driver
+supplied a value, the net type does: `tri0`/`tri1` pull to 0/1, `supply0` and
+`supply1` are their constant (no continuous assignment reaches supply strength,
+so their drivers never win), and a `trireg` holds the charge it last had,
+starting at X. A `uwire` is the unresolved net type, so a second driver on one
+is rejected rather than resolved.
+
+§7.10 drive strengths and §7.11 strength resolution are **not** implemented:
+every driver is at the same strength, so disagreeing drivers conflict to X
+whether or not one of them would have won. `src/sim/digital.zig`'s `wired`
+carries the ceiling and the upgrade path.
+
+A net can only be driven by a continuous assignment and a variable only by a
+procedural one; each form rejects the other's target. Disciplined nets, `ground`
+declarations and net initializers belong to the analog solver and are refused.
+
+## Memories
+
+`reg [7:0] mem [0:255];` allocates one element slot per address. Elements are
+read and written by index, including under a nonblocking assignment, and an
+element operand of a continuous assignment wakes it on any element of that
+array. An index that is out of the declared bounds or contains X/Z names no
+storage: reading one gives X and writing to one is discarded. Bounds may be
+declared in either order. One unpacked dimension is implemented; a second needs
+a row-major address fold nothing asks for yet. Indices wider than 64 bits, bare
+array references (an array has no value of its own) and bit/part selects are
+all diagnosed.
+
 ## Open conformance work
 
-Ports, hierarchy, net driving/resolution, primitives, continuous assignments,
+Ports, hierarchy, drive strengths and strength resolution, primitives,
 implicit sensitivity lists (`@*`), named events, intra-assignment event
 controls, `forever`, `wait`, disable/jump
 statements, procedural fork/join, named blocks, block declarations, declaration
-initializers, parameters, time/real/string variables, arrays, remaining expression
-forms and unsized rules,
+initializers, parameters, time/real/string variables, multidimensional arrays,
+net delays, remaining expression forms and unsized rules,
 other system tasks/formats, module-specific/global timing across hierarchy, and
 analog/digital synchronization remain open. Analog compilation retains its
 existing parser behavior; this executor does not reinterpret analog device
@@ -211,6 +258,17 @@ Tape/targets/counters share the run arena; case exit-patch indices are temporary
 construction data in that arena. Compile nesting uses bounded u16 depth. These
 changes preserve the same causal execution axis and NBA ownership contract.
 
+Nets and memories add no second value representation and no second write path.
+Array elements and net storage are more rows of the existing `Int.Literal` slot
+table, so one `store` serves variables, elements and nets, and the existing
+waiter list resumes on all three. An array's shape is a sparse run-owned map
+keyed by its base slot; a net's resolution scratch is sized once at setup, so a
+driver update allocates nothing. Drivers are a flat run-owned array of AoS rows
+and each net holds a u32 slice of driver indices; a continuous assignment's
+sensitivity is a u32 slot list resolved at compile time, like an event term.
+Continuous assignments occupy the first instructions of the tape, which is what
+keeps a driver's resumption point from colliding with a process's.
+
 Replication counts add a sparse run-owned map keyed by existing ExprId handles,
 with checked u32 values. It also distinguishes validated zero-width replication
 metadata from uninferred type rows. Positive-width Literal planes remain the
@@ -239,8 +297,16 @@ failures.
 `zig build test-sim` also tests parser-to-executor semantics, initial X state, signed extension,
 four-state display, exact escapes, unsupported-source rejection, statement depth,
 64-bit repeat counts, an untimed 70,001-iteration loop and timing provenance. Both are dependencies of `zig build test`.
+The net tests drive one pair of drivers into a `wire`, a `wand` and a `wor` at
+once and print the whole §7.9 table row by row, check that undriven nets read Z
+where variables read X, that the pull/supply/charge types supply what no driver
+did, that a continuous assignment re-evaluates on each of its operands, and that
+a resolution resumes a `@(posedge)` on the net. The memory tests cover element
+read/write in both assignment regions, out-of-range and X/Z indices, descending
+declared bounds, and an element operand waking a continuous assignment.
 
-The relevant rules are IEEE 1364-2005 §5.1.14 (concatenation), §§5.4–5.5 (size and signedness), 9.2.1–9.2.2
+The relevant rules are IEEE 1364-2005 §5.1.14 (concatenation), §§5.4–5.5 (size and signedness), §6.1
+(continuous assignment), §7.9 (wired logic), §3.9 (memories), 9.2.1–9.2.2
 (assignments), 9.4–9.6 (procedural control), 9.7.1 (procedural delays),
 9.8–9.9 (sequential/initial processes),
 11 (scheduling), 17.1.1.1 (display escapes), 17.4.1 (`$finish`) and
