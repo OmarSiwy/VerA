@@ -8,15 +8,11 @@ Sixty-eight ids, forty-six of them carrying a fixture that exercises the
 construct. The other twenty-two get an empty cell and a sentence saying why,
 never a plausible file name.
 
-174 `.va` files and one data file (`ch09_table_model_2d.tbl`): 40 carry a `//! reject` arm,
-134 run and assert, and **NONE is `//! xfail`** (grep-measured over this directory). This
-paragraph used to say seventy-eight of the 164 were xfail and called that "by a wide margin
-the most indebted chapter in the suite"; 65 was the number actually in the tree when the
-claim was written, and it is 0 now. This chapter went from the largest debt in the suite to
-none of it, and the "four walls" section below is why: the rows were never independent
-defects.
+207 `.va` fixtures: 154 execute, 53 expect rejection, and 0 are marked xfail.
+This is a fixture inventory, not a conformance percentage. Unsupported-feature
+rejections and untested legal forms leave their requirements open.
 
-Every one of the 37 rejects passes. `136`/`137` (`$bound_step` E0803/E0802), `138`/`139`
+Rejection fixtures exercise these diagnostics: `136`/`137` (`$bound_step` E0803/E0802), `138`/`139`
 (`$discontinuity` E0804/E0805), `147` (§9.15 `$simparam` on an unknown name with no
 fallback), `161` (§9.4.3 format/argument pairing), the six §9.20 alias negatives `141`–`146`
 (E0812), the nine analog-context negatives `061`/`062`/`134`/`135`/`148`/`149`/`152`/`153`/
@@ -25,15 +21,9 @@ fallback), `161` (§9.4.3 format/argument pairing), the six §9.20 alias negativ
 call-site refusals (E0818), and `169` (E0813 — §9.5.4.2's scan codes are lower case, so
 `%D` is refused rather than silently scanning nothing).
 
-Reading the table: a row that says **green** names the code or substring the fixture pins.
-No section in this chapter is now in the state "the suite states it and the compiler does not
-meet it" — §9.6, §9.8, §9.9 and §9.16 were the last four and left it with the analog-context
-table and `$simprobe`. §9.4.2, §9.4.3 and §9.5.4.2 left it when the string formatter and
-scanner landed; §9.21 and its five subclauses when the table interpolator did; §9.13.1 and
-§9.13.2 when the probabilistic distributions did; §9.5.1, §9.5.2, §9.5.4.1, §9.5.5, §9.5.6,
-§9.5.7 and §9.5.8 when the descriptor table did. §9.22, §9.22.1–§9.22.3 and §9.23–§9.23.4 left it when the
-driver-access call-site rule did (E0818) — the eight fixtures there are rejects,
-and refusing the call is the whole of what §9.22 paragraph 3 requires.
+A passing row records only the behavior its assertions exercise. It does not
+close all of the cited clause. Runtime facilities, accepted/rejected side effects,
+digital-context tasks and the distribution limits below still need work.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
@@ -42,12 +32,12 @@ and refusing the call is the whole of what §9.22 paragraph 3 requires.
 | `s9.3` | how a task behaves across accepted vs. rejected solver iterations | — no fixture. Accept/reject is a kernel property the generated device cannot observe |
 | `s9.4` | display task family | — parent; carried by 9.4.1–9.4.3 below |
 | `s9.4.1` | `$strobe` `$display` `$write` `$monitor` `$debug` in the analog context | `01_display_strobe.va`, `02_display_display.va`, `03_display_write.va`, `04_display_monitor.va`, `05_display_debug.va` (each pins the argument *value*, since the transcript is not observable from inside the model); `06_display_formats.va` — green; Table 9-22's `%c` compiles (it used to be mapped to Zig verb `c` with `want=.int`, handing `std.fmt` an i64 where `{c}` takes a u8, which killed the generated testbench); `152_display_radix_variants_analog_rejected.va` (`$displayb/h/o`, `$strobeb`, `$writeh`, `$monitorb`, `$monitoron/off`) — green, `analog context`; `161_display_argument_pairing_rejected.va` — green, `format specifier`: the `%` count in a format string is checked against the argument list; `170_display_argument_runs.va` — green, the argument-list model itself at digit level: every string argument is its own format run, a leading expression displays in order, output concatenates with no inserted separators (each pinned by `$sformat` + a string comparison, so the transcript IS the `ok=` value) |
-| `s9.4.2` | Table 9-21 escapes `\ddd` `\t` `\\` `\"` | `06_display_formats.va` passes, but the escapes in it are a rendering a reader checks by eye — the two assertions it carries are the `%h`/`%o` round trips, not the escapes. Nothing else carries a single-backslash escape outside a file-I/O path name |
+| `s9.4.2` | Table 9-21 display escapes | `test-literal-output` checks exact generated-host bytes, including NUL, octal escapes and included macros. `188` verifies literal file bytes through numeric character reads. Direct output preserves NUL; string storage removes it. Other escape/format combinations still need systematic qualification. |
 | `s9.4.3` | Table 9-22/9-23 format specifications and `width.precision` | `06_display_formats.va`, `09_string_formatting.va` pass; `161_…_rejected.va` rejects at E0810. `06`'s `%h`/`%o` round trips through `$sformat`+`$sscanf` are the only digit-level assertions on a base in the chapter, and they are now real: the formatter writes into `zSBuf(<site>)` and `zScan` reads the digits back (`src/backend/str_kernels.zig`). `168_display_library_binding.va` uses that same round trip to pin the third member of the no-argument set, `%l`: an operand eaten for it shifts every later conversion left by one, which the two integers either side of it now catch. `171_display_c_format_flags.va` pins Table 9-23's "full formatting capabilities available in the C language" with string comparisons against hand-derived C output: `%e`'s default `1.500000e+00` (precision 6, signed two-digit exponent), `%10.4e`, `%05d`/`%+05d` zero-fill AFTER the sign, `%+d`/`% d` sign flags, and `%h` of a negative as the operand's 64-bit two's-complement pattern |
 | `s9.4.4` | `%m` prints the hierarchical name and takes no argument | — no fixture cites it. `%m` appears in `06_display_formats.va`'s second `$display` and in `161`, both unasserted (a transcript is not a value), and `06` does not compile |
-| `s9.4.5` | `%s` prints ASCII codes as characters | — same: `%s` sits in `06`'s first `$display` and in `162`'s scan string, neither asserting the right-justification/leading-zero rule this subclause is actually about |
+| `s9.4.5` | `%s` prints ASCII codes as characters | `188` and `test-literal-output` verify numeric byte order, supported widths, leading-only zero suppression, raw interior/trailing NUL, padding and file/string output. String storage removes NUL after formatting under §3.3; former stored-NUL expectations were incorrect and are replaced with raw-output checks. Real operands and general digital packed expressions remain open. |
 | `s9.4.6` | no display output except `$debug` unless the iteration is accepted | — no fixture. `043_fdebug.va` quotes the rule in its header and does not test it; the harness runs one accepted solve |
-| `s9.4.7` | `%r`/`%R` on reals **in the digital context** | — no fixture. The `%r` in `03_display_write.va` and `06` is the Table 9-23 *analog* engineering-notation specifier; Verilog-A has no digital context for this extension to apply to |
+| `s9.4.7` | `%r`/`%R` on reals **in the digital context** | — no fixture. The `%r` in `03_display_write.va` and `06` is the Table 9-23 *analog* engineering-notation specifier; digital-context formatting remains an open full-AMS coverage requirement |
 | `s9.5` | file-I/O family, Table 9-2 | `153_file_io_digital_only_analog_rejected.va` (`$fdisplayb`, `$fwriteh`, `$fstrobeo`, `$fmonitorb`, `$swriteh`, `$fgetc`, `$ungetc`, `$fread`, `$readmemb`, `$sdf_annotate`) — green, `analog context` |
 | `s9.5.1` | `$fopen` descriptor forms, `$fclose` | `07_file_open_close.va`, `08_file_output.va`, `039_fdisplay.va`, `047_fscanf.va`, `052_fflush.va`, `053_ferror.va`, `10_file_read_scan.va`, `11_file_position_status.va`, `158_fopen_multichannel_descriptor.va` — **all nine pass**, and both descriptor shapes are pinned at the bit: an fd with bit 31 set and a channel number above the three pre-opened streams, an mcd with bit 31 clear and exactly one bit set that is not bit 0, and 0 for a missing file opened `r`/`r+`. `$fclose` frees the channel, which `158` observes through the reuse §9.5.1 requires |
 | `s9.5.1.1` | reopening a write-mode file across analyses appends | — no fixture. Needs two analyses in one process, which the harness does not run |
@@ -80,14 +70,14 @@ and refusing the call is the whole of what §9.22 paragraph 3 requires.
 | `s9.15` | `$temperature` `$vt` `$simparam` `$simparam$str` | `21_temperature_vt.va`, `094_temperature.va`, `095_vt_ambient.va`, `096_vt_temperature.va` (all `//! temp`-driven), `22_simparam.va` (unknown name returns its fallback verbatim), `23_simparam_string.va`. All three branches of the clause's `$simparam` sentence are now green: `147_simparam_unknown_no_fallback_rejected.va` is a **reject VerA meets** (E0811 — the unknown name with no fallback), and `157_simparam_timescale.va` pins Table 9-27's two source-derived rows, `"timeUnit"`/`"timePrecision"` in seconds, which the preprocessor now parses out of `` `timescale `` and publishes for `Lower.simparamValue` |
 | `s9.16` | `$simprobe(inst_name, param_name [, expr])` | `36_simprobe.va` — green. The pair resolves as ONE flat name, `inst_name.param_name`, against the elaborated design, which is the identity every §6.7 reference rides on; a name that does not resolve takes the clause's fallback expression, and with no fallback it is E0817. A name built at run time cannot resolve here — that is the piece Ruling E gave up, and the fallback is the LRM's own cover for it |
 | `s9.17` | analog kernel control family | — parent; carried by 9.17.1–9.17.3 |
-| `s9.17.1` | `$discontinuity`, degree `0` and `-1` | `24_discontinuity.va`; `138_discontinuity_arity_rejected.va` (E0804) and `139_discontinuity_nonconstant_rejected.va` (E0805) — **rejects VerA already meets** |
+| `s9.17.1` | `$discontinuity`, nonnegative degree or `-1` | `24_discontinuity.va`; `138_discontinuity_arity_rejected.va` (E0804) and `139_discontinuity_nonconstant_rejected.va` (E0805), and `185_discontinuity_negative_degree_rejected.va` (E0820) |
 | `s9.17.2` | `$bound_step` | `25_bound_step.va` (`//! analysis tran`); `136_bound_step_negative_rejected.va` (E0803) and `137_bound_step_arity_rejected.va` (E0802) — **rejects VerA already meets** |
-| `s9.17.3` | `$limit`, all three Syntax 9-12 forms | All three: `26_limit.va` (`$limit(V(p,n))`), `27_limit_named.va` (`$limit(V(p,n), "pnjlim", $vt, 0.7)`), `156_limit_user_function.va` (an `analog_function_identifier` is resolved as the limiter, not looked up as a value) and its negative `164_limit_user_function_output_arg_rejected.va` (E0814, "shall all be declared input"). The limiting REQUEST is declined for form three — §4.5.15 permits that, and the return is then the clause's converged answer, the probe itself; a non-identity limiter would be able to tell the difference |
+| `s9.17.3` | `$limit`, all three Syntax 9-12 forms | All three: `26_limit.va` (`$limit(V(p,n))`), `27_limit_named.va` (`$limit(V(p,n), "pnjlim", $vt, 0.7)`), `156_limit_user_function.va` (an `analog_function_identifier` is resolved as the limiter, not looked up as a value) and its negative `164_limit_user_function_output_arg_rejected.va` (E0814, "shall all be declared input"). Fixtures 177–183 exercise per-access history, iteration initialization, unused constant returns, derivative history and nonlinear convergence rejection. `tests/limiter_host.zig` checks generated commit/revert and solve initialization; consuming hosts must implement the separate iteration hooks |
 | `s9.18` | `$mfactor` `$xposition` `$yposition` `$angle` `$hflip` `$vflip` | `28_hierarchical_parameters.va` plus atomics `097`–`102`, one per name. `163_aliasparam_mfactor.va` — green: a `system_identifier` is a legal `aliasparam` target, so §3.4.7's own printed example parses, and the ALIAS holds the storage (`$mfactor` has none on a model card, being an `Instance` field the host writes) |
 | `s9.19` | `$param_given` and `$port_connected` | `29_binding_detection.va`, `103_param_given.va` (overridden), `159_param_given_not_overridden.va` (the 0 direction, one deleted `//! param` line away), `165_param_given_override_equals_default.va` (override *equal to* the default is still an override — the input that separates a flag from a value comparison, and VerA now carries a real `__given` flag, `codegen.zig:867`), `104_port_connected.va` |
 | `s9.20` | `$analog_node_alias` / `$analog_port_alias` | `30_node_alias_calls.va`, `105_analog_node_alias.va`, `106_analog_port_alias.va` pass — see the note below on *why* they pass. All six negatives now reject at E0812, one code for the clause's whole validity list: `141` (outside `analog initial`), `142` (first argument a port), `143` (bit select), `144` (non-constant string), `145` (target is another call's `analog_net_reference`), `146` (inside a conditional the simulation can move). All six are checked in `lower.zig` `checkAliasCall`, because every one of them is a property of the CALL — the block, the guard, the argument's shape — and none of a value. The topology edit itself is still not performed; see the note below. `167_node_alias_status_is_integer.va` pins the RETURN TYPE rather than the value: the three positives above assign the status into an `integer` variable, where a §4.2.1.1 conversion hides a `real`, so `167` puts the call under `<<` and `~` where nothing can hide it |
 | `s9.21` | `$table_model` | `37_table_model.va` (file-backed, with `ch09_table_model_2d.tbl`), `131_table_model_array_control.va` (array-backed), `155_table_model_lrm_sample_set.va` — **all three green**. The isoline interpolator is `src/backend/table_kernels.zig`, emitted into the device like the §4.5.11 filter kernels; the call is rewritten into a self-describing one by `Lower.lowerTableModel`, which is also where a scheme VerA does not implement is refused (E0815) |
-| `s9.21.1` | data source: file or real arrays | Both forms present and both green: `37` supplies `"ch09_table_model_2d.tbl"` (read at COMPILE time and emitted as constants — "The state of the data source is captured on the first call ... Any change after this point is ignored" is what makes that exact, and a residual has no business re-reading a file per Newton iteration), `131` supplies independent/dependent real arrays. The clause's sort-into-isolines sentence is honoured (`zTabSort`), pinned by the reversed-row row of the codegen test |
+| `s9.21.1` | data source: file or real arrays | `187_table_snapshot*.va` and `test-table-snapshot-host` check first-call array capture, guarded execution, ignored mutations, independent instances and rejected-trial persistence. Source-order effects retain unused calls. Repeated calls to one analog-function body share its syntactic table site: this is an inference from §§4.7 and 9.21.1, not an explicit LRM example. File sources (`37`) are still read at compile time; changes before the first runtime call remain a conformance gap. `zTabSort` handles unsorted isolines. |
 | `s9.21.2` | control-string grammar | `37`'s `"1LL,1LL;1"` and `131`'s `"1LL;1"` are parsed by `Lower.parseTableCtl`: per-dimension sub-strings outermost-first, the one-character and two-character extrapolation forms, the defaults for an absent character or an absent string, and the dependent selector. Table 9-30's `D`/`2`/`3`/`I` and Table 9-31's `E` are refused at E0815, not approximated. No fixture pins a refusal — the five malformed strings are in the CLI checks only |
 | `s9.21.3` | Table 9-32 example control strings | `37`'s `"1LL,1LL;1"` is verbatim the table's fourth row and is now read as such; `131`'s `"1LL;1"` is that row in one dimension. The `"D,1,3"`, `"I,..."` and `"3,D,I,1;3"` rows name schemes VerA refuses |
 | `s9.21.4` | closest-point, linear and cubic-spline interpolation | LINEAR only, and the other three are refused rather than substituted. `155` serves the linear half: it recomputes Figure 9-2's `f(3.5, 0.25) = 2.0` by hand from the printed twelve-row sample set under the default rule, and that is the number it now reads back. Both Table 9-31 extrapolations work, per end, which the codegen test pins with an asymmetric `"CL"` |
@@ -140,7 +130,7 @@ variable, so `048_sscanf.va`, `162_sscanf_conversion_rules.va`, `06`, `09` and
 same scanner over a line the file kernels read, which is what §9.5.4.2 states one
 set of conversion rules for both spellings in order to mean.
 
-**RNG: the wall is down (26 fixtures), and the stream is IEEE 1364 §17.9.3's.**
+**RNG implementation and reference-stream evidence (partial).**
 `$random`, `$arandom`, seven `$dist_*`
 and six `$rdist_*` used to be one blanket E0801 at the function name, on the
 argument that a draw changing between Newton iterations makes the residual
@@ -232,3 +222,21 @@ only the three §9.22 names); credited `15_conversion_functions.va` with `$rtoi`
 default, which `codegen.zig` no longer does. Its two closing inventories listed
 several dozen file names that no longer exist under those names, and duplicated
 the ones that do.
+
+`186_table_model_discrete.va` exercises Table 9-30 `D`, signed midpoint ties,
+endpoint behavior and mixed discrete/linear dimensions. Kernel tests also check
+zero derivatives in discrete coordinates and retained inner-dimension slopes.
+
+`188_numeric_string_local_width.va` now verifies all eight bytes from a 64-bit
+localparam. Its previous width rejection was removed after parameter model
+initialization and derivation stopped passing the integral value through f64.
+General expression sizing and host-overridden untyped widths remain rejected
+for numeric `%s`.
+
+The `189_rng_*` cases cover counts above 4096, reference value/seed progression,
+and explicit unsupported-count/paramset conversion diagnostics. The compiled C
+oracle and both runtime error paths run under `zig build test-rng-reference`.
+`test-rng-effects` additionally executes generated-device checks for unused values,
+skipped branches, short-circuit operands, loops and source-ordered errors.
+Fractional real counts, large-mean Poisson precision, and reference nonfinite
+results remain limits; see [RNG-REFERENCE-LIMITS](../../../docs/RNG-REFERENCE-LIMITS.md).

@@ -1,0 +1,26 @@
+// A limiter return used only as next-iteration state must survive dead-code
+// elimination, including a return that folds to a constant.
+//! lrm 9.17.3
+//! time 0, 1, 2
+//! bias V(p) = 3
+`include "check.vh"
+module ch09_limit_constant_history(p, n);
+  inout p, n; electrical p, n;
+  real old, unused;
+  analog function real previous;
+    input vnew, vold;
+    real vnew, vold;
+    previous = vold;
+  endfunction
+  analog function real constant_limit;
+    input vnew, vold;
+    real vnew, vold;
+    constant_limit = 3.0;
+  endfunction
+  analog begin
+    old = $limit(V(p,n), previous);
+    unused = $limit(V(p,n), constant_limit);
+    `CHECK("constant return persists without a contribution",
+           old - (($abstime >= 1.0) ? 3.0 : 0.0), 0.0, 1e-12);
+  end
+endmodule

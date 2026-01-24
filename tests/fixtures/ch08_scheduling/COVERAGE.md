@@ -1,16 +1,33 @@
 # Chapter 8 coverage
 
+Full-AMS status: the digital and mixed-signal rows below are open requirements.
+Historical analog-subset exclusions and passing unsupported-feature rejection
+fixtures do not close them. See `docs/CONFORMANCE-GAPS.md` and the cross-repository
+implementation plan for the execution work and required evidence.
+
 Source: `docs/ch8-scheduling.html`, read section by section.
 
 HTML section-ID audit: `s8-1` `s8-2` `s8-3` `s8-3-1` `s8-3-2` `s8-3-3` `s8-4` `s8-4-1` `s8-4-2` `s8-4-3` `s8-4-3-1` `s8-4-3-2` `s8-4-3-3` `s8-4-4` `s8-4-5` `s8-4-6` `s8-4-7` `s8-5` `s8-5-1` `s8-5-2` `s8-5-3` `s8-5-3-1` `s8-5-3-2` `s8-5-3-3` `s8-5-3-4` `s8-5-3-5` `s8-5-3-6` `s8-5-3-7`.
 
-Eight of the twenty-eight sections carry a fixture that asserts something. The
+In the historical `.va` inventory, eight of the twenty-eight sections carry a fixture that asserts something. The
 other twenty do not, and the table says so with an empty column rather than a
 plausible name. Two thirds of this chapter — 8.4's mixed-signal cycle and all of
-8.5's digital engine — needs a discrete kernel, which VerA does not have. Ten `//! reject`
+8.5's digital engine — requires digital process execution and mixed-signal integration, which remain open. Ten `//! reject`
 fixtures inventory those source forms, and they pin the diagnostic and nothing else: the
 queue regions, delays and boundary rounding that are the actual content of those clauses
-are never reached.
+are never reached by those rejection fixtures.
+
+Additional execution evidence: `zig build test-sim` passes 39 tests: fourteen
+scheduler tests, nine time-conversion tests and sixteen source-runner tests.
+`zig build test-digital` checks the actual CLI scheduling transcript in
+`tests/digital/scheduling.v`. Initial processes now exercise captured NBA values,
+lexical NBA order, inactive-region resumption, integral delays and finish.
+General processes and analog synchronization remain open; see the
+[source scope](../../../docs/digital-source-execution.md) and
+[scheduler contract](../../../docs/simulator-scheduler.md).
+The core follows the D2A-before-inactive order in §§8.5.1 and 8.5.3.6;
+§8.5.2 reverses those two regions in its pseudocode. This interpretation remains
+subject to standards clarification and does not close D05.
 
 WHAT THOSE TEN PIN HAS CHANGED, and the header of each says so. They used to rest on Annex
 C.7 ("No digital behavior or events are supported in Verilog-A") and C.10 ("The
@@ -37,36 +54,36 @@ coverage of the clause its construct belongs to.
 | `s8-3-1` | `f(v,t) = dq/dt + i(v,t) = 0`, KFL row per node | `static_nodal.va` (static half), `dynamic_nodal.va` (dynamic half), `multi_branch_kfl.va` (three branches, rows sum to zero), `multiple_analog_blocks.va` (two blocks summed into one row), `integrator_state.va` |
 | `s8-3-2` | time derivative replaced by a finite difference over discrete points | `transient_derivative.va` (`//! analysis tran`, four points, constant history); `dynamic_nodal.va` pins only the dc corner where 4.5.3 zeroes `ddt` |
 | `s8-3-3` | models must behave under unreasonable iterate values | `nonlinear_safe.va` (`limexp` equals `exp` at the reported solution) |
-| `s8-4` | mixed-signal cycle | — AMS only (Annex C.10) |
-| `s8-4-1` | circuit initialization, analog and digital | partly. `analog_digital_initial_order.va` (was `_unsupported`, was a `//! reject` inventory) is green and asserts COMPLETENESS: the §5.2.1 `analog initial` and the A.6.2 digital `initial` are both accepted in one module and the analog block reads 1.0 + 1. Their relative ORDER is still unobserved, and deliberately — the only direction the question is decidable in is a digital value read from the `analog initial` block, which §5.2.1 forbids (`ch05_analog_behavior/analog_initial_digital_access_rejected.va`, E0431) |
-| `s8-4-2` | iterated analog DC + time-0 digital to A/D steady state | — AMS only |
-| `s8-4-3` | mixed-signal transient | — AMS only |
+| `s8-4` | mixed-signal cycle | — open full-AMS integration requirement |
+| `s8-4-1` | circuit initialization, analog and digital | partly. `analog_digital_initial_order.va` (was `_unsupported`, was a `//! reject` inventory) is green and asserts acceptance of both forms: the §5.2.1 `analog initial` and the A.6.2 digital `initial` are both accepted in one module and the analog block reads 1.0 + 1. Their relative order is unobserved; this fixture does not establish the mixed-signal initialization algorithm. §5.2.1 separately forbids digital-value access from `analog initial` (`ch05_analog_behavior/analog_initial_digital_access_rejected.va`, E0431) |
+| `s8-4-2` | iterated analog DC + time-0 digital to A/D steady state | — open full-AMS integration requirement |
+| `s8-4-3` | mixed-signal transient | — open full-AMS integration requirement |
 | `s8-4-3-1` | concurrency without shared-memory reordering | `multiple_analog_blocks.va` (`//! lrm 8.4.3.1`): the earlier block's write is visible to the later one |
 | `s8-4-3-2` | early self-wakeup by timer; sensitivity limited by event guards | `timer_wakeup.va` (`//! lrm 8.4.3.2`, `//! analysis tran`, fires at `start_time` and only there), `explicit_guard.va` (`//! lrm 8.4.3.2`, guarded probe does not leak) |
 | `s8-4-3-3` | A/D time quantization and the zero-delay round trip | — `digital_boundary_unsupported.va` says in its own header that it pins nothing here: the `always` item is refused before the `cross()` threshold or the rounding is read |
-| `s8-4-4` | synchronization loop, wake-up scheduling, event cancellation | — host/kernel property; no generated device code |
-| `s8-4-5` | synchronization and communication algorithm | — host/kernel property |
-| `s8-4-6` | `absdelta()` interpolated A2D events | — no fixture here. 5.10.3.4 allows `absdelta()` only in an `initial`/`always` block, which C.7 excludes; the rejection lives in `ch05_analog_behavior/absdelta_digital_only.va` |
-| `s8-4-7` | digital granularity, analog solution accept/reject | — host/kernel contract |
-| `s8-5` | digital engine scheduling semantics | — Verilog-A has no digital engine (C.7); `digital_process_unsupported.va` records the source form |
-| `s8-5-1` | the seven stratified event-queue regions | — |
-| `s8-5-2` | digital reference-model loop | — |
+| `s8-4-4` | synchronization loop, wake-up scheduling, event cancellation | — open host integration; scheduler cancellation tests alone do not establish synchronization |
+| `s8-4-5` | synchronization and communication algorithm | — open host integration requirement |
+| `s8-4-6` | `absdelta()` interpolated A2D events | — no fixture here. 5.10.3.4 allows `absdelta()` only in an `initial`/`always` block. Legal digital use remains open; `ch05_analog_behavior/absdelta_digital_only.va` rejects misuse in an analog block |
+| `s8-4-7` | digital granularity, analog solution accept/reject | — open host integration requirement |
+| `s8-5` | digital engine scheduling semantics | partial: scheduler tests plus the initial-process CLI transcript. `digital_process_unsupported.va` still records the analog device pipeline boundary; general digital execution remains open |
+| `s8-5-1` | the seven stratified event-queue regions | partial: `test-sim` checks region traces and future promotion; see the ordering interpretation above |
+| `s8-5-2` | digital reference-model loop | partial: queue tests and source initial-process execution check re-entry, cancellation, time advance and termination; general processes and mixed-signal integration remain open |
 | `s8-5-3` | scheduling implication of assignments | — |
 | `s8-5-3-1` | continuous assignment lands in the active region | — `digital_assignment_unsupported.va` refuses the `assign` module item |
-| `s8-5-3-2` | procedural continuous assign/deassign/force/release | — `procedural_assign_unsupported.va`, `procedural_deassign_unsupported.va`, `procedural_force_unsupported.va`, `procedural_release_unsupported.va`, `procedural_continuous_unsupported.va`; all masked at the `reg`/`initial`/`always` module item |
-| `s8-5-3-3` | blocking assignment delay and event control timing | — `blocking_timing_unsupported.va`; the three timing forms are inside a refused `initial` block |
-| `s8-5-3-4` | nonblocking update region | — `nonblocking_unsupported.va`; refused at `always` |
-| `s8-5-3-5` | bidirectional switch processing | — `switch_primitive_accepted.va` pins A.4.1's *syntax*, not this clause: `tran (a, b);` is accepted and warned about (W0250, "stamps nothing"), and the module's analog block still runs. Switch processing itself is digital-cycle and stays out of scope, so there is nothing here to credit even now that the construct parses |
-| `s8-5-3-6` | explicit D2A events, region 1b | — |
-| `s8-5-3-7` | analog macro-process events, region 3b | — queue placement is a host property; `analog_macro_process.va` covers only the 8.1 definition |
+| `s8-5-3-2` | procedural continuous assign/deassign/force/release | — `procedural_assign_unsupported.va`, `procedural_deassign_unsupported.va`, `procedural_force_unsupported.va`, `procedural_release_unsupported.va`, `procedural_continuous_unsupported.va`; unsupported source forms; rejection does not exercise their scheduling |
+| `s8-5-3-3` | blocking assignment delay and event control timing | partial: source tests execute blocking assignments and statement delays. Intra-assignment delays and event controls remain open; `blocking_timing_unsupported.va` records the analog pipeline boundary |
+| `s8-5-3-4` | nonblocking update region | partial: queue and source tests check NBA order, captured RHS values and inactive-before-NBA behavior. `nonblocking_unsupported.va` is still refused at `always`; general controls remain open |
+| `s8-5-3-5` | bidirectional switch processing | — `switch_primitive_accepted.va` pins A.4.1's *syntax*, not this clause: `tran (a, b);` is accepted and warned about (W0250, "stamps nothing"), and the module's analog block still runs. Switch processing remains an open full-AMS requirement; syntax acceptance does not establish its behavior |
+| `s8-5-3-6` | explicit D2A events, region 1b | partial: `test-sim` checks D2A queue ordering; process evaluation and analog synchronization remain open |
+| `s8-5-3-7` | analog macro-process events, region 3b | partial: `test-sim` checks analog queue placement and duplicate pending-event suppression; no analog solver integration. `analog_macro_process.va` covers only the 8.1 definition |
 
 ## The xfail ledger
 
 Empty. No fixture in this folder is `//! xfail`. `switch_primitive_*.va` used to
 sit here and does not any more: A.4.1's `pass_switchtype` parses, and a `tran`
 instance is accepted with a W0250 saying it contributes nothing to the device —
-8.5.3.5 gives a pass switch only a discrete-cycle meaning, so there is no
-continuous equation for the row to be waiting on. `above_initial_event.va`
+Only the syntax fixture changed status; §8.5.3.5 switch behavior remains
+unimplemented and requires digital execution tests. `above_initial_event.va`
 used to sit here for §5.10.3.2 and does not any more: `above()` is edge-
 triggered now, and the clause's initialisation case is the `__prev = 0.0` the
 history field starts at. `analog_initial_parameter_sweep.va` used to sit here for
@@ -91,11 +108,11 @@ above:
 `ch05_analog_behavior/event_or.va` and their siblings, so these four are the
 scheduling-flavoured duplicates, not the primary coverage of those clauses.
 
-## What a mixed-signal-capable tool would add
+## Remaining full-AMS integration
 
-Nothing in 8.4.4–8.4.7 or 8.5 is reachable from Verilog-A source, so these are
-not debts against VerA — they are the shape of the language boundary. The rows
-stay empty until this compiler is a Verilog-AMS compiler. The one row that *is*
+Sections 8.4.4–8.4.7 and 8.5 require the mixed-signal and digital engines. They
+are implementation debts against the full Verilog-AMS target, even though the
+analog-subset runner cannot execute them. The one row that was
 a debt disguised as a boundary is `s8-4-3-3`: A/D boundary timing is AMS-only by
 C.10, but `digital_boundary_unsupported.va` was previously credited with covering
 it, which it never did.

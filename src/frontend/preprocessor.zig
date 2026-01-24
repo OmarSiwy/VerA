@@ -76,6 +76,8 @@ pub const Options = struct {
     /// "timePrecision", which are the only two rows of that table whose value
     /// comes out of the SOURCE rather than out of a simulator's preferences.
     timescale: ?*?Timescale = null,
+    /// Positional timing records, including malformed directives/resetall.
+    timescale_events: ?*[]const TimescaleEvent = null,
     /// Where diagnostics go, and where the file table and the source map are
     /// published. Required: preprocessing that nobody can hear is not useful.
     bag: *diag.Bag,
@@ -172,6 +174,8 @@ pub const DefaultTransition = struct {
 /// makes both operands readable, "Time unit as specified in `timescale, in
 /// seconds", and they are the only two rows of that table that are a property
 /// of the SOURCE rather than of a simulator's preference file.
+pub const TimescaleEvent = struct { at: u32, scale: ?Timescale };
+
 pub const Timescale = struct {
     unit: f64,
     precision: f64,
@@ -200,7 +204,6 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     // are parsed here and published (`Options.defaults`, `Pp.line_*`).
     .{ "default_discipline", .default_discipline },
     .{ "line", .line },
-
     .{ "default_transition", .default_transition }, // §10.3 — read by §4.5.8
 
     .{ "timescale", .timescale }, // IEEE 1364 §19.9 — §9.15 reads it back
@@ -288,6 +291,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
     if (opts.defaults) |d| d.* = try pp.defaults.toOwnedSlice(arena);
     if (opts.transitions) |t| t.* = try pp.transitions.toOwnedSlice(arena);
     if (opts.timescale) |t| t.* = pp.timescale;
+    if (opts.timescale_events) |t| t.* = try pp.timescale_events.toOwnedSlice(arena);
 
     opts.bag.map = .{
         .segs = try pp.segs.toOwnedSlice(arena),
@@ -622,6 +626,7 @@ const Pp = struct {
     // ponytail: make it a positional event list, exactly like `defaults`, the
     // day a fixture puts a `timescale between two module definitions.
     timescale: ?Timescale = null,
+    timescale_events: std.ArrayList(TimescaleEvent) = .empty,
     /// IEEE 1364 §19.7 `line remap, for §10.7 `__LINE__` / `__FILE__`. Null
     /// when the current file is numbered naturally. `from` is the PHYSICAL
     /// 1-based line the remap starts at (the one after the directive), `to`
@@ -1084,11 +1089,13 @@ fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             // value, and `timescale's default is "none specified" — which is
             // what §9.15 answers "not known" for.
             pp.timescale = null;
+            if (pp.opts.timescale_events != null)
+                try pp.timescale_events.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .scale = null });
         },
         .default_discipline => try handleDefaultDiscipline(pp, text[j..end], j),
         .default_transition => try handleDefaultTransition(pp, text[j..end], j),
         .line => try handleLine(pp, text[j..end], at, j),
-        .timescale => handleTimescale(pp, text[j..end]),
+        .timescale => try handleTimescale(pp, text[j..end]),
         .ignored => {},
         // §10.6: passed through instead of being blanked out, so the lexer and
         // parser see it. The slice carries its own newlines, so the
@@ -1708,7 +1715,12 @@ fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void {
 // (E0811) instead of a number nobody wrote. IEEE 1364 makes the malformed form
 // an error in its own right; no fixture demands it, and the E0811 route already
 // refuses to invent a value. Add a class-1 code here when one does.
-fn handleTimescale(pp: *Pp, rest: []const u8) void {
+fn handleTimescale(pp: *Pp, rest: []const u8) Allocator.Error!void {
+    // The digital consumer must distinguish malformed timing from no directive.
+    // Keep a positional null unless the complete directive validates below.
+    const event = pp.timescale_events.items.len;
+    if (pp.opts.timescale_events != null)
+        try pp.timescale_events.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .scale = null });
     var r: Rest = .{ .s = rest };
     const unit = timeLiteral(&r) orelse return;
     r.skipSpace();
@@ -1719,6 +1731,9 @@ fn handleTimescale(pp: *Pp, rest: []const u8) void {
     // (§19.9). A card that has them backwards is not a timescale.
     if (precision > unit) return;
     pp.timescale = .{ .unit = unit, .precision = precision };
+    r.skipSpace();
+    if (pp.opts.timescale_events != null and r.i == r.s.len)
+        pp.timescale_events.items[event].scale = pp.timescale;
 }
 
 /// One IEEE 1364 Table 19-1 time literal — `1`, `10` or `100` glued to one of
@@ -3391,7 +3406,7 @@ test "the prelude AST snapshot parses exactly what parsing the whole text produc
         }
         try testing.expectEqualSlices(u32, long.exprs.pool.items, seeded.exprs.pool.items);
         try testing.expectEqualSlices(f64, long.exprs.reals.items, seeded.exprs.reals.items);
-        try testing.expectEqualSlices(i64, long.exprs.ints.items, seeded.exprs.ints.items);
+        try testing.expectEqualDeep(long.exprs.ints.items, seeded.exprs.ints.items);
 
         // --- statements ---
         try testing.expectEqualSlices(u32, long.stmt_toks.items, seeded.stmt_toks.items);

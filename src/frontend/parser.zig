@@ -58,6 +58,8 @@ pub const Parser = struct {
     /// for module scope, so the position is the only thing that tells them
     /// apart. See `parseFuncDecl`, E0226 and E0227.
     in_analog_fn: bool = false,
+    /// Opt-in shared grammar for the digital source executor.
+    digital: bool = false,
     /// Inside a §7.6 `connectmodule` body. Two things read it: `parseDiscrete`,
     /// because a connect module is the one design element whose body has the
     /// discrete context LEGALLY (§7.2.2), so E0205 must not fire there; and
@@ -936,40 +938,31 @@ pub const Parser = struct {
                 const disc = try self.optDiscipline();
                 try self.parseNetNames(b, disc, false);
             },
-            // A.2.1.3 `reg [ range ] list_of_variable_identifiers ;` — §7.3.1's
-            // discrete net. ACCEPTED: `reg` is a Verilog-AMS declaration
-            // (A.2.1.3), and VerA targets Verilog-AMS, so refusing it was
-            // encoding annex C's Verilog-A subset rather than the language. The
-            // names go into `b.vars` as INTEGERS, which is Table 7-1's own
-            // mapping for a bit grouping read from a continuous context — "the
-            // lowest bit of the bit grouping is mapped to the zeroth bit of the
-            // integer", zero-extended, sign bit always 0.
-            //
-            // What is NOT accepted is anything that would need a digital kernel
-            // to drive the grouping: see `Lower.collectInitialState` for the
-            // exact shape of `initial` block VerA lowers (constant assignments,
-            // nothing else) and E0433 for everything past it. A `reg` no
-            // `initial` block assigns simply starts at zero, like every other
-            // §3.2 variable.
-            //
-            // §7.3.1 Table 7-1's width rule is judged HERE, on the way past,
-            // because the parser is the only stage that sees the declared range:
-            // nothing below this point keeps a bit width.
+            // Analog reads retain Table 7-1's integer mapping and its width
+            // gate. Digital execution preserves packed width/signedness here;
+            // its state starts at X and is driven by the source scheduler.
             .kw_reg => {
                 const tok = self.pos;
                 self.pos += 1;
-                if (self.peek() == .lbracket) {
-                    const d = try self.parseDim();
-                    if (self.literalWidth(d)) |w| {
-                        if (w > 31) _ = self.failAt(tok, .E0222, "{d} bits", .{w}) catch {};
-                    }
-                }
+                const signed = self.digital and self.eat(.kw_signed);
+                const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
+                if (!self.digital) if (range) |d| if (self.literalWidth(d)) |w| {
+                    if (w > 31) _ = self.failAt(tok, .E0222, "{d} bits", .{w}) catch {};
+                };
                 while (true) {
                     const name_tok = self.pos;
+                    const name = try self.expectIdent();
+                    const dims = if (self.digital) try self.parseDims() else &.{};
+                    const value = if (self.digital and self.eat(.assign_eq)) try self.parseExpr() else Ast.ExprId.none;
                     try b.vars.append(self.arena, .{
-                        .name = try self.expectIdent(),
+                        .name = name,
                         .ty = .integer,
                         .main_tok = name_tok,
+                        .storage = .reg,
+                        .packed_range = range,
+                        .is_signed = signed,
+                        .dims = dims,
+                        .init = value,
                     });
                     if (!self.eat(.comma)) break;
                 }
@@ -1197,6 +1190,7 @@ pub const Parser = struct {
     // path is the same one §7.6 insertion needs — a digital half in `Flatten` —
     // and until that exists an AST field would only be dead weight.
     fn parsePassSwitch(self: *Parser) Error!void {
+        if (self.digital) return self.failAt(self.pos, .E1100, "switch primitives are not implemented by digital execution", .{});
         const main_tok = self.pos;
         self.pos += 1;
         try self.bag.add(
@@ -1223,40 +1217,15 @@ pub const Parser = struct {
     /// A.6.2 `initial_construct ::= initial statement` /
     /// `always_construct ::= always statement` — §7.2.2's DISCRETE context.
     ///
-    /// The body goes through `parseStmt`, the ANALOG statement production, which
-    /// is exact for the assignment forms §7.2.2 and §7.3.2 use and a syntax error
-    /// (E0209) for everything a digital process adds — a delay, `<=`,
-    /// `force`/`release`, `fork`. That is the ceiling and it is the right one:
-    /// those need an event queue and delta cycles, which is a simulator, not a
-    /// compiler pass.
-    ///
-    /// `initial` IS ACCEPTED; `always` is still E0205. The asymmetry is not
-    /// dialect, it is what a compiler with no event queue can honestly promise.
-    /// An `initial` block of constant assignments has exactly one meaning — every
-    /// target holds that constant for the whole analysis — and §7.2.2's own first
-    /// sentence ("the domain of a variable is that of the context from which its
-    /// value is assigned") hands it to the discrete context without anything
-    /// having to execute. `Lower.collectInitialState` lowers that shape into the
-    /// variable's initial value and refuses the rest (E0433). An `always` block
-    /// has no such reading: it re-runs on an event, so its value is a function of
-    /// a schedule that does not exist here. Refusing it is the honest answer,
-    /// and it is annex A's `always_construct` VerA leaves out — not annex C's.
-    ///
-    /// Refused without setting `failed`; see `reportItem`.
-    ///
-    /// NOT refused inside a §7.6 `connectmodule`. That is the one design element
-    /// whose whole purpose is the discrete side of a mixed net, and §9.22.4's
-    /// `always @(driver_update clock)` is legal nowhere else — §9.22 paragraph 3:
-    /// "Driver access functions can only be called from connect modules." A
-    /// compiler that refused it would be refusing the only conforming spelling.
-    /// Nothing has to EXECUTE for that acceptance to be honest: VerA does no
-    /// §7.6 insertion, so a connect module is never instantiated (see
-    /// `elaborate.pickTop`) and its body is recorded and never lowered.
+    /// Shared statements retain the analog device pipeline's restrictions by
+    /// default. Digital mode adds delay/NBA syntax and leaves execution support
+    /// checks to the source runner. This keeps unsupported source explicit while
+    /// preserving analog context checks in Lower.checkDiscreteContext.
     fn parseDiscrete(self: *Parser, b: *Body) Error!void {
         const main_tok = self.pos;
         const is_always = self.peek() == .kw_always;
         self.pos += 1;
-        if (is_always and !self.in_connect_module) try self.reportItem(main_tok);
+        if (is_always and !self.in_connect_module and !self.digital) try self.reportItem(main_tok);
         const body = try self.parseStmtNoNull();
         try b.discrete.append(self.arena, .{
             .is_always = is_always,
@@ -1357,15 +1326,17 @@ pub const Parser = struct {
             .none;
         return self.file.addStmt(
             self.arena,
-            .{ .if_stmt = .{
-                .cond = cond,
-                .then_s = then_s,
-                .else_s = else_s,
-                // §6.6's "all expressions in generate schemes shall be constant
-                // expressions" is judged in lowering (E0428), which is the only
-                // stage that can evaluate one.
-                .is_generate = @TypeOf(gen) != @TypeOf(null),
-            } },
+            .{
+                .if_stmt = .{
+                    .cond = cond,
+                    .then_s = then_s,
+                    .else_s = else_s,
+                    // §6.6's "all expressions in generate schemes shall be constant
+                    // expressions" is judged in lowering (E0428), which is the only
+                    // stage that can evaluate one.
+                    .is_generate = @TypeOf(gen) != @TypeOf(null),
+                },
+            },
             tok,
         );
     }
@@ -1894,6 +1865,7 @@ pub const Parser = struct {
     /// A.2.1.3 integer/real/string declaration (§3.2, §3.3). One VarDecl per
     /// name; `variable_type ::= id { dimension } [ = expr ]` (A.2.2.1).
     fn parseVarDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void {
+        const storage: @FieldType(Ast.VarDecl, "storage") = if (self.peek() == .kw_time) .time else .variable;
         const ty: Ast.Type = switch (self.peek()) {
             .kw_integer, .kw_time => .integer,
             .kw_string => .string,
@@ -1911,6 +1883,7 @@ pub const Parser = struct {
                 .ty = ty,
                 .dims = dims,
                 .init = init_expr,
+                .storage = storage,
                 .main_tok = tok,
             });
             if (!self.eat(.comma)) break;
@@ -2262,7 +2235,7 @@ pub const Parser = struct {
     /// the rest of the block is still parsed, a second mistake is still
     /// reported, and `recoverStatement` is never involved.
     fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
-        if (self.peek() == .semicolon)
+        if (!self.digital and self.peek() == .semicolon)
             _ = self.failAt(self.pos, .E0219, "", .{}) catch {};
         return self.parseStmt();
     }
@@ -2276,6 +2249,15 @@ pub const Parser = struct {
     pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
         try self.skipAttributes();
         const tok = self.pos;
+        if (self.digital and self.eat(.hash)) {
+            const delay = if (self.eat(.lparen)) blk: {
+                const value = try self.parseExpr();
+                _ = try self.expect(.rparen);
+                break :blk value;
+            } else try self.parsePrimary();
+            const body = try self.parseStmt();
+            return self.file.addStmt(self.arena, .{ .event_control = .{ .event = delay, .body = body, .is_delay = true } }, tok);
+        }
         switch (self.peek()) {
             .semicolon => {
                 self.pos += 1;
@@ -2330,17 +2312,14 @@ pub const Parser = struct {
                 // is NOT a third spelling of §4.7.2.1's default. Outside a
                 // function `return` has no return slot at all and lowering
                 // owns that verdict (E0403).
-                const value: Ast.ExprId = if (self.peek() == .semicolon)
-                    v: {
-                        if (self.in_analog_fn) {
-                            var d = self.failWith(tok, .E0227);
-                            d.help("write `return <expr>;`", .{});
-                            try d.emit();
-                        }
-                        break :v .none;
+                const value: Ast.ExprId = if (self.peek() == .semicolon) v: {
+                    if (self.in_analog_fn) {
+                        var d = self.failWith(tok, .E0227);
+                        d.help("write `return <expr>;`", .{});
+                        try d.emit();
                     }
-                else
-                    try self.parseExpr();
+                    break :v .none;
+                } else try self.parseExpr();
                 _ = try self.expect(.semicolon);
                 return self.file.addStmt(self.arena, .{ .jump = .{ .kind = .ret, .value = value } }, tok);
             },
@@ -2513,6 +2492,15 @@ pub const Parser = struct {
             const sig = try self.parseExpr();
             return self.file.exprs.add(self.arena, .{ .tag = .event_driver_update, .main_tok = tok, .lhs = sig });
         }
+        // A.6.5 `event_expression ::= posedge expression | negedge expression`
+        // — DIGITAL like `driver_update`, but legal in any discrete event
+        // expression, not only a connect module's.
+        if (self.peek() == .kw_posedge or self.peek() == .kw_negedge) {
+            const edge: Ast.ExprTag = if (self.peek() == .kw_posedge) .event_posedge else .event_negedge;
+            self.pos += 1;
+            const sig = try self.parseExpr();
+            return self.file.exprs.add(self.arena, .{ .tag = edge, .main_tok = tok, .lhs = sig });
+        }
         const tag: Ast.ExprTag = switch (self.peek()) {
             .kw_initial_step => .event_initial_step,
             .kw_final_step => .event_final_step,
@@ -2555,7 +2543,12 @@ pub const Parser = struct {
     /// every operator in Table 4-3), then the operator decides the statement.
     pub fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
         const tok = self.pos;
-        const lhs = try self.parseExpr();
+        const lhs = if (self.digital) try self.parsePostfix() else try self.parseExpr();
+        if (self.digital and self.eat(.lt_eq)) {
+            const value = try self.parseExpr();
+            _ = try self.expect(.semicolon);
+            return self.file.addStmt(self.arena, .{ .assign = .{ .target = lhs, .value = value, .nonblocking = true } }, tok);
+        }
         switch (self.peek()) {
             .contribute => { // §5.6 / A.6.10
                 self.pos += 1;
@@ -3109,29 +3102,22 @@ pub const Parser = struct {
 
         if (self.tags[tok] == .int_literal) {
             const text = self.gluedNumberText(tok);
-            // §2.6.1 decoding — size truncation, the `s` two's-complement form
-            // and `_` — lives in `lexer.parseInt` so there is exactly ONE
-            // decoder. A second one here silently returned 65535 for `8'hFFFF`
-            // and 15 for `4'shf`.
-            const lit = lexer.parseInt(text) catch |e| return switch (e) {
-                error.FourStateDigit => blk: {
-                    var d = self.failWith(tok, .E0130);
-                    d.msg("`{s}`", .{text});
-                    d.help("the analog subset has no four-state value to hold x or z", .{});
-                    try d.emit();
-                    break :blk error.ParseError;
-                },
+            const lit = @import("integer.zig").parse(self.arena, text) catch |e| return switch (e) {
+                error.OutOfMemory => error.OutOfMemory,
+                error.FourStateDigit => self.failAt(tok, .E0130, "invalid mixed decimal digits in `{s}`", .{text}),
                 error.MissingBase => self.failAt(tok, .E0131, "`{s}`", .{text}),
                 error.MissingDigits => self.failAt(tok, .E0132, "`{s}`", .{text}),
                 else => self.failAt(tok, .E0133, "`{s}`", .{text}),
             };
-            // `lexer.parseInt` already applied the constant's own width (§2.6.1)
-            // — a sized literal is masked to its `size`, an unsized one to the
-            // implementation's integer width. Re-truncating to 32 here is what
-            // made `4294967296` lower to 0 while the MIR, codegen and the device
-            // contract all carry an `i64`; §2.5.1 only requires "at least 32".
-            // Pinned by tests/fixtures/exhaustive/122_bit_conversions.va.
-            return self.file.exprs.addInt(self.arena, tok, lit.value);
+            if (lit.asInt()) |value| {
+                defer self.arena.free(lit.planes);
+                return self.file.exprs.addIntLiteral(self.arena, tok, .{
+                    .value = value,
+                    .width = if (lit.sized) lit.width else 0,
+                    .signed = lit.signed,
+                });
+            }
+            return self.file.exprs.addLogic(self.arena, tok, lit);
         }
 
         const text = self.tokenText(tok);
@@ -3207,11 +3193,11 @@ pub const Parser = struct {
     /// expression, not two past the `{`: a `{` there opens the inner
     /// concatenation of a replication where a `,` or a `}` ends an ordinary
     /// operand. Two tokens past the `{` is not enough — `{2+1{a}}` is a
-    /// replication and `{2+1}` is not. A first operand that is ITSELF a
-    /// braced group is never a count (a count is a constant_expression, and
-    /// A.8.4 has no brace primary in one), so that case skips the lookahead.
+    /// replication and `{2+1}` is not. The analog folding path treats an
+    /// initial braced group directly as operands. Digital mode parses it as an
+    /// expression too, allowing a constant concatenation to be the multiplier.
     ///
-    /// Flattening here is what implements §4.2.13, because the widths a
+    /// The existing analog path flattens for §4.2.13, because the widths a
     /// concatenation joins live only in the token text (see `foldBitConcat`):
     /// `{4{2'b10}}` has to reach the fold as four sized operands and
     /// `{b, {3{a, b}}}` as seven, which is exactly what the clause says each
@@ -3223,17 +3209,24 @@ pub const Parser = struct {
     /// A count that is not a literal cannot be unrolled here, and must not be:
     /// §3.3 Table 3-3 allows a nonconstant multiplier when the result is a
     /// string (`{i{"Hi"}}`). That one keeps its `.multi_concat` node and
-    /// lowering repeats the string.
+    /// lowering repeats the string. Digital mode keeps every group and count:
+    /// flattening would erase zero-replication legality and operand evaluation.
     fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
         _ = try self.expect(.lbrace);
         if (self.eat(.rbrace)) return null;
 
-        if (self.peek() != .lbrace) {
+        if (self.digital or self.peek() != .lbrace) {
             const first = try self.parseExpr();
             if (self.peek() == .lbrace) {
                 var inner: std.ArrayList(Ast.ExprId) = .empty;
                 try self.braceGroup(&inner);
                 _ = try self.expect(.rbrace);
+                if (self.digital) {
+                    // Preserve the multiplier and grouping: zero replication
+                    // still evaluates its operands and has contextual legality.
+                    try items.appendSlice(self.arena, inner.items);
+                    return first;
+                }
                 const n = self.replCount(first) orelse {
                     try items.appendSlice(self.arena, inner.items);
                     return first;
@@ -3248,7 +3241,7 @@ pub const Parser = struct {
             }
         }
         while (true) {
-            if (self.peek() == .lbrace) {
+            if (!self.digital and self.peek() == .lbrace) {
                 try self.braceGroup(items);
             } else try items.append(self.arena, try self.parseExpr());
             if (!self.eat(.comma)) break;
@@ -3264,6 +3257,9 @@ pub const Parser = struct {
         var g: std.ArrayList(Ast.ExprId) = .empty;
         if (try self.braceOperands(&g)) |c| {
             try items.append(self.arena, try self.multiConcat(at, c, g.items));
+        } else if (self.digital) {
+            const off = try self.file.exprs.addExprList(self.arena, g.items);
+            try items.append(self.arena, try self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = at, .extra = off }));
         } else try items.appendSlice(self.arena, g.items);
     }
 
@@ -3302,28 +3298,29 @@ pub const Parser = struct {
     /// operation is only defined for operands that carry a width, and the ONLY
     /// Verilog-A expression that carries one is a §2.6.1 sized constant. (A
     /// variable could not help: §3.2.1 makes `integer` 32 bits, so two of them
-    /// already overflow the result type.) Widths exist only here — the AST
-    /// keeps a decoded value, not a literal's size — so the join happens here
-    /// and the folded constant is what lowering sees.
+    /// already overflow the current result type.) This existing analog fold
+    /// retains the result width; digital concatenations stay in the AST.
     ///
     /// Returns null when no operand is sized, which leaves `{a, b}` as a
     /// `.concat` node for the paths that (mis)use brace lists for §4.5.11
     /// filter coefficients and §3.2.2 array assignment, and for the §3.3
     /// Table 3-3 string form that lowering folds.
     fn foldBitConcat(self: *Parser, tok: u32, items: []const Ast.ExprId) Error!?Ast.ExprId {
+        if (self.digital) return null;
         const ex = &self.file.exprs;
         var any_sized = false;
         for (items) |it| {
+            if (ex.tag(it) == .logic_literal) return null;
             if (ex.tag(it) != .int_literal) continue;
-            if (self.sizedLit(ex.mainTok(it)) != null) any_sized = true;
+            if (ex.intLiteral(it).width != 0) any_sized = true;
         }
         if (!any_sized) return null;
 
         var acc: u64 = 0;
         var total: u64 = 0;
         for (items) |it| {
-            const lit = if (ex.tag(it) == .int_literal)
-                self.sizedLit(ex.mainTok(it))
+            const lit: ?lexer.IntLiteral = if (ex.tag(it) == .int_literal and ex.intLiteral(it).width != 0)
+                ex.intLiteral(it)
             else
                 null;
             const l = lit orelse {
@@ -3339,16 +3336,7 @@ pub const Parser = struct {
             const mask: u64 = (@as(u64, 1) << @intCast(l.width)) - 1;
             acc = (acc << @intCast(l.width)) | (@as(u64, @bitCast(l.value)) & mask);
         }
-        return try ex.addInt(self.arena, tok, @bitCast(acc));
-    }
-
-    /// The §2.6.1 decode of `tok` when it is a SIZED constant, else null.
-    /// `parseNumber` already reported any malformed literal, so a decode error
-    /// here just means "not usable as a concatenation operand".
-    fn sizedLit(self: *const Parser, tok: u32) ?lexer.IntLiteral {
-        if (self.tags[tok] != .int_literal) return null;
-        const lit = lexer.parseInt(self.tokenText(tok)) catch return null;
-        return if (lit.width == 0) null else lit;
+        return try ex.addIntLiteral(self.arena, tok, .{ .value = @bitCast(acc), .width = @intCast(total), .signed = false });
     }
 
     /// §2.7 string literal contents, with escapes processed, then §3.3's
@@ -3366,6 +3354,9 @@ pub const Parser = struct {
             return self.file.intern(self.arena, body);
         }
         const decoded = try lexer.stringContents(self.arena, raw);
+        // Direct display formats retain octal NUL bytes (§9.4.2). Digital
+        // string-variable conversion is not part of this executor yet.
+        if (self.digital) return self.file.intern(self.arena, decoded);
         // §3.3 spells the conversion out in three steps: "all the \0 characters
         // are ignored", an empty remainder becomes the empty string, otherwise
         // the rest is kept — so `"hello\0world"` is `helloworld`, NOT a
@@ -4175,8 +4166,6 @@ test "annex C rejections keep their pinned wording" {
     const arena = arena_state.allocator();
 
     const cases = [_]struct { src: []const u8, code: diag.Code, point: []const u8 = "" }{
-        // §2.6.1 x/z digits are not in the analog subset
-        .{ .src = "module m; integer v; analog v = 4'b01xz; endmodule", .code = .E0130 },
         // §2.9 "Nesting of attribute instances is disallowed. It shall be illegal
         // to specify the value of an attribute with a constant expression that
         // contains an attribute instance." The outer instance sits in a slot
@@ -4530,4 +4519,34 @@ test "analog functions, events, case and indirect contributions" {
         ),
         else => return error.WrongTag,
     }
+}
+
+test "§2.6.1 AST preserves exact digital literals and known literal metadata" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const res = try parseForTest(arena,
+        \\module literals;
+        \\  integer a, b, c, d;
+        \\  initial begin
+        \\    a = 85'hz3;
+        \\    b = 8'shf;
+        \\    c = 128'd18446744073709551617;
+        \\    d = 'hx;
+        \\    d = {4'b10xz, 4'hf};
+        \\  end
+        \\endmodule
+    );
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+    try std.testing.expectEqual(@as(usize, 4), res.file.exprs.logic.items.len);
+    try std.testing.expectEqual(@as(u32, 85), res.file.exprs.logic.items[0].width);
+    try std.testing.expectEqual(@as(u64, 3), res.file.exprs.logic.items[0].values()[0]);
+    try std.testing.expectEqual(@as(u32, 128), res.file.exprs.logic.items[1].width);
+    try std.testing.expect(!res.file.exprs.logic.items[2].sized);
+    try std.testing.expectEqual(@as(u32, 8), res.file.exprs.ints.items[0].width);
+    try std.testing.expect(res.file.exprs.ints.items[0].signed);
+    var copy: Ast.SourceFile = .empty;
+    try copy.seedFrom(arena, &res.file);
+    try std.testing.expect(copy.exprs.logic.items[0].planes.ptr != res.file.exprs.logic.items[0].planes.ptr);
+    try std.testing.expectEqualSlices(u64, res.file.exprs.logic.items[0].planes, copy.exprs.logic.items[0].planes);
 }

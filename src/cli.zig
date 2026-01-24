@@ -77,6 +77,7 @@
 
 const std = @import("std");
 const vera = @import("vera");
+const digital = @import("sim").digital;
 const diag = vera.diag;
 const Io = std.Io;
 
@@ -91,11 +92,10 @@ const usage_text =
     \\  --check                 type-check the generated device with zig
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
     \\  --emit-exe              build a runnable Verilog-A testbench; print its path
-    \\  --run                   --emit-exe, then run it
+    \\  --run                   run a .v initial-process program, or an analog testbench
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
     \\  --jac-f32-host          ...and ask the host to use it on its CPU path
-
     \\  --contract PATH         root of the `contract` module
     \\  --dyn PATH              root of the `dyn` module (--emit-so)
     \\  --work-dir DIR          scratch + artifact directory (--emit-so)
@@ -298,25 +298,16 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
 
-    // These four used to route to a second frontend that shelled out to
-    // verilator/sv2v/ghdl. It was removed rather than kept limping: it had no IR
-    // of its own — the translator spliced Zig statements into a template as
-    // strings — so it shared nothing with this side but the device contract.
-    // Verilog returns through the shared IR, which is what a netlist backend
-    // wants anyway. Naming the removal beats letting the preprocessor report a
-    // syntax error on line 1 of a Verilog file.
-    //
-    // ONLY these four. Every other extension reached the Verilog-A frontend
-    // before this check existed and still does, `.vams` included — the old
-    // router sent anything it did not recognize here.
-    for ([_][]const u8{ ".v", ".sv", ".vhd", ".vhdl" }) |ext| {
+    // Digital Verilog uses the shared frontend below. Other language families
+    // need their own standard-conforming frontend and remain explicit refusals.
+    for ([_][]const u8{ ".sv", ".vhd", ".vhdl" }) |ext| {
         if (!std.mem.eql(u8, std.fs.path.extension(in_path), ext)) continue;
         try err.print(
-            "error: {s}: vera compiles Verilog-A; the Verilog frontend was removed\n",
+            "error: {s}: this language extension has no enabled compilation path\n",
             .{in_path},
         );
         try err.writeAll(
-            "note: it returns through the shared IR, which is also what a netlist backend needs\n",
+            "note: use --run FILE.v for the documented digital Verilog execution subset\n",
         );
         return 2;
     }
@@ -337,6 +328,24 @@ pub fn main(init: std.process.Init) !u8 {
         .never => false,
         .auto => (stderr.file.isTty(io) catch false),
     };
+
+    if (std.mem.eql(u8, std.fs.path.extension(in_path), ".v")) {
+        if (!run_exe or lint_flag or emit_zig or check or emit_so or out_path != null) {
+            try err.writeAll("error: digital .v source currently requires --run; artifact generation is not implemented\n");
+            return 2;
+        }
+        var arena = std.heap.ArenaAllocator.init(gpa);
+        defer arena.deinit();
+        var digital_bag = diag.Bag.init(arena.allocator());
+        digital_bag.levels = levels;
+        digital.run(arena.allocator(), source, .{ .file_name = in_path, .include_dirs = include_dirs.items }, &digital_bag, out) catch |e| {
+            try report(&digital_bag, err, json, use_color);
+            if (e != error.DigitalFailed) try err.print("error: digital execution failed: {t}\n", .{e});
+            return 1;
+        };
+        try report(&digital_bag, err, json, use_color);
+        return 0;
+    }
 
     var result = vera.compileSourceOpts(gpa, source, if (codegen_flag == null) .lint else .release_fast, .{
         .file_name = in_path,

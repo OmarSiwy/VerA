@@ -64,9 +64,10 @@ routine does.
 | `s12-35` | `46_scan_not_va.va` | `vpi_scan` is E0512. |
 | `s12-36` | `47_sim_control_not_va.va` | `vpi_sim_control` is E0512. |
 
-## Debt ledger — `//! xfail`
+## Fixture ledger — `//! xfail`
 
-**Empty.** No fixture in this chapter carries `//! xfail` any more.
+**Empty.** No fixture in this chapter carries `//! xfail` any more. This does
+not close the standard VPI C API or its host integration requirements.
 
 `02_analog_systf_sampler_call.va` was the one, and it closed the way its own
 header predicted: §2.8.3 makes a `$name` grammatical and lists the VPI as one
@@ -75,12 +76,9 @@ a compiletf routine, and no clause makes an unregistered one an error — so
 refusing it was refusing legal source. VerA reads 0.0 and emits `W0852` at
 every call site.
 
-That zero is not the silent substitution the backend refuses elsewhere. Where
-the LRM fixes a number, a substitute would contradict it and the unit is
-refused outright (`E0515`); an unregistered systf has no such number — this
-clause's own listing hands back an uninitialised field — so the only thing
-left to report is the absent host, and the warning reports it.
-`--deny=W0852` restores the refusal for a build that must have a host.
+A warned zero fallback is not evidence of the registered function's behavior.
+`--deny=W0852` can reject a build without the needed host binding; neither the
+warning nor rejection establishes the standard VPI call contract.
 
 What the fixture proves is therefore that the §12.32.3 source *form* is
 accepted, and nothing about the value. Sample-and-hold *behaviour* needs a
@@ -122,8 +120,9 @@ to zero.
 conventions, derivative handles, callback reason tables, `s_vpi_*` struct
 fields, and `vlog_startup_routines`. None has a `.va` spelling, so none is
 reachable by a fixture in this tree. This is a real gap in *conformance to
-Clause 12*, not merely a gap in this directory — it is closed by a VPI host
-implementation and a C test suite, neither of which exists.
+Clause 12*, not merely a gap in this directory. Completion requires the
+standard VPI host API and C-level behavioral tests; a system-function bridge
+or scheduler-core unit tests do not establish those contracts.
 
 ## Literal fixture inventory
 

@@ -74,12 +74,11 @@
 // only READ by the residual — same discipline, different owner. `zRngNext`
 // (one plain `uniform()` step) is that latch's advance.
 //
-// ponytail: two deliberate ceilings the reference does not have, both inside a
-// Newton iteration on purpose — degrees of freedom / Erlang stages clamp at
-// 4096 (`zRngDf`; beyond it a normal approximation is the upgrade path), and
-// non-positive df/k, which `rtl_dist_*` rejects with a warning and a 0 before
-// its inner routine runs, returns the same 0 here (lowering already made
-// foldable violations E0816).
+// Supported counts follow the listing's positive signed-32 integer domain,
+// without a substitute count. AMS §9.13.2 also permits real df/stages; the
+// listing provides no fractional-count algorithm, so those legal inputs are
+// explicitly unsupported. Reference overflow/underflow remains observable:
+// Erlang's product can underflow and Student-t can return NaN or infinity.
 
 // There is deliberately no `const std` here — unlike `str_kernels.zig` this file
 // needs nothing from it, and every declaration below is emitted verbatim into
@@ -145,43 +144,54 @@ fn zRngExponentialCore(s: *u32, mean: f64) f64 {
 
 /// §17.9.3 `poisson(seed, mean)`: draw one uniform, then multiply uniforms
 /// into it until the cumulative product drops under exp(-mean). The count of
-/// multiplications is the variate. Terminates for every mean: each factor is a
-/// uniform strictly inside (0,1)-ish, so the product underflows to zero in a
-/// few thousand steps even when `exp(-mean)` is itself zero.
+/// multiplications is the variate. Large means lose accuracy when exp(-mean)
+/// underflows; retaining the reference algorithm does not resolve that limit.
 fn zRngPoissonCore(s: *u32, mean: f64) f64 {
     var n: f64 = 0.0;
     const p = @exp(-mean);
-    var q = zRngUniformCore(s, 0.0, 1.0);
-    while (p < q) {
+    var product = zRngUniformCore(s, 0.0, 1.0);
+    while (p < product) {
         n += 1.0;
-        q = zRngUniformCore(s, 0.0, 1.0) * q;
+        product = zRngUniformCore(s, 0.0, 1.0) * product;
     }
     return n;
 }
 
-/// The C cast the reference applied to a degree-of-freedom / stage-count
-/// argument at its integer boundary (truncation toward zero), with this file's
-/// one admitted ceiling on top.
-///
-/// ponytail: 4096 degrees of freedom is the ceiling — `chi_square`/`erlangian`
-/// walk one or two LCG steps PER DEGREE inside a Newton iteration, so an
-/// unbounded df is unbounded work per residual evaluation. A normal
-/// approximation is the upgrade path beyond it.
-fn zRngDf(df: f64) i32 {
-    if (df >= 4096.0) return 4096;
-    if (df <= 0.0) return 0;
-    return @intFromFloat(@trunc(df));
+fn zRngPositive(value: f64) void {
+    if (!(value > 0.0)) @panic("VerA: random distribution mean/df/stages shall be greater than zero");
+}
+
+/// Exact supported count domain. Do not truncate an AMS real count or replace
+/// it with a smaller count: either would change both the variate and seed.
+fn zRngDf(df: f64) u32 {
+    zRngPositive(df);
+    if (!(df <= 2147483647.0) or df != @trunc(df))
+        @panic("VerA: fractional or out-of-range random distribution df/stages are unsupported");
+    return @intFromFloat(df);
+}
+
+/// Live source effect for an otherwise unused distribution call. Rules use
+/// bits 0/1 for positive arguments, bit 2 for a count, bit 3 for ordered bounds.
+/// The preceding effect is evaluated first; no random number is drawn here.
+pub fn zRngCheck(previous: f64, rules: u4, a: f64, b: f64) f64 {
+    _ = previous;
+    if (rules & 1 != 0) zRngPositive(a);
+    if (rules & 2 != 0) zRngPositive(b);
+    if (rules & 4 != 0) _ = zRngDf(a);
+    if (rules & 8 != 0 and !(a < b))
+        @panic("VerA: random uniform start shall be smaller than end");
+    return 0;
 }
 
 /// §17.9.3 `chi_square(seed, deg_of_free)`: one squared normal for an odd df,
 /// then `2·exponential(seed, 1)` per even pair.
-fn zRngChiSquareCore(s: *u32, df: i32) f64 {
+fn zRngChiSquareCore(s: *u32, df: u32) f64 {
     var x: f64 = 0.0;
     if (@rem(df, 2) != 0) {
         const z = zRngNormalCore(s, 0.0, 1.0);
         x = z * z;
     }
-    var k: i32 = 2;
+    var k: u32 = 2;
     while (k <= df) : (k += 2) x += 2.0 * zRngExponentialCore(s, 1.0);
     return x;
 }
@@ -235,22 +245,18 @@ fn zRngIUniformCore(s: *u32, start_r: f64, end_r: f64) f64 {
     return zRngRandCore(s);
 }
 
-/// §17.9.3 `t(seed, deg_of_free)`: a fresh normal over the root of a
-/// chi-square per degree. The `chi2 <= 0` guard is not the listing's — it is
-/// the measure-zero corner where the chi-square comes back 0 (or 2⁻²³-sliver
-/// negative) and the reference divides by a zero root to a NaN; `proof`
-/// promises this family finite, so that corner answers 0 instead.
-fn zRngTCore(s: *u32, df: i32) f64 {
+/// §17.9.3 `t(seed, deg_of_free)`: always draw the normal, including when
+/// the reference chi-square result makes the division nonfinite.
+fn zRngTCore(s: *u32, df: u32) f64 {
     const chi2 = zRngChiSquareCore(s, df);
-    if (chi2 <= 0.0) return 0.0;
     return zRngNormalCore(s, 0.0, 1.0) / @sqrt(chi2 / @as(f64, @floatFromInt(df)));
 }
 
 /// §17.9.3 `erlangian(seed, k, mean)`: minus-log of a product of `k` uniforms,
 /// scaled by `mean / k`.
-fn zRngErlangCore(s: *u32, k: i32, mean: f64) f64 {
+fn zRngErlangCore(s: *u32, k: u32, mean: f64) f64 {
     var x: f64 = 1.0;
-    var i: i32 = 1;
+    var i: u32 = 1;
     while (i <= k) : (i += 1) x *= zRngUniformCore(s, 0.0, 1.0);
     return -mean * @log(x) / @as(f64, @floatFromInt(k));
 }
@@ -296,17 +302,15 @@ pub fn zRngIUniformNext(seed: i64, start: f64, end: f64) f64 {
 }
 
 /// §9.13.2 `$rdist_uniform` — Table 9-26 row one, the listing's `uniform`
-/// itself, with the real `start`/`end` the analog form passes where the digital
-/// caller passed ints. "The start and end arguments are real inputs which bound
-/// the values returned"; `start >= end` is the listing's degenerate arm and
-/// falls back to its [0, 2³¹−1] span (lowering already rejects the foldable
-/// case as E0816).
+/// itself, with the real bounds required by §9.13.2.
 pub fn zRngUniform(seed: i64, start: f64, end: f64) f64 {
+    if (!(start < end)) @panic("VerA: random uniform start shall be smaller than end");
     var s = zRngS32(seed);
     return zRngUniformCore(&s, start, end);
 }
 
 pub fn zRngUniformNext(seed: i64, start: f64, end: f64) f64 {
+    if (!(start < end)) @panic("VerA: random uniform start shall be smaller than end");
     var s = zRngS32(seed);
     _ = zRngUniformCore(&s, start, end);
     return zRngSOut(s);
@@ -327,37 +331,37 @@ pub fn zRngNormalNext(seed: i64, mean: f64, sd: f64) f64 {
 }
 
 /// §9.13.2 `$rdist_exponential` — Table 9-26 `exponential`. The domain rule
-/// ("mean … shall be greater than zero") is enforced in lowering where it
-/// folds; a runtime violation gets the reference wrapper's answer, 0.
+/// ("mean … shall be greater than zero") is checked on both entry paths.
 pub fn zRngExponential(seed: i64, mean: f64) f64 {
-    if (mean <= 0.0) return 0.0;
+    zRngPositive(mean);
     var s = zRngS32(seed);
     return zRngExponentialCore(&s, mean);
 }
 
 pub fn zRngExponentialNext(seed: i64, mean: f64) f64 {
     var s = zRngS32(seed);
-    if (mean > 0.0) _ = zRngExponentialCore(&s, mean);
+    zRngPositive(mean);
+    _ = zRngExponentialCore(&s, mean);
     return zRngSOut(s);
 }
 
 /// §9.13.2 `$rdist_poisson` — Table 9-26 `poisson`.
 pub fn zRngPoisson(seed: i64, mean: f64) f64 {
-    if (mean <= 0.0) return 0.0;
+    zRngPositive(mean);
     var s = zRngS32(seed);
     return zRngPoissonCore(&s, mean);
 }
 
 pub fn zRngPoissonNext(seed: i64, mean: f64) f64 {
     var s = zRngS32(seed);
-    if (mean > 0.0) _ = zRngPoissonCore(&s, mean);
+    zRngPositive(mean);
+    _ = zRngPoissonCore(&s, mean);
     return zRngSOut(s);
 }
 
 /// §9.13.2 `$rdist_chi_square` — Table 9-26 `chi_square`.
 pub fn zRngChiSquare(seed: i64, df: f64) f64 {
     const n = zRngDf(df);
-    if (n <= 0) return 0.0;
     var s = zRngS32(seed);
     return zRngChiSquareCore(&s, n);
 }
@@ -371,7 +375,6 @@ pub fn zRngChiSquareNext(seed: i64, df: f64) f64 {
 /// §9.13.2 `$rdist_t` — Table 9-26 `t`.
 pub fn zRngT(seed: i64, df: f64) f64 {
     const n = zRngDf(df);
-    if (n <= 0) return 0.0;
     var s = zRngS32(seed);
     return zRngTCore(&s, n);
 }
@@ -379,14 +382,14 @@ pub fn zRngT(seed: i64, df: f64) f64 {
 pub fn zRngTNext(seed: i64, df: f64) f64 {
     var s = zRngS32(seed);
     const n = zRngDf(df);
-    if (n > 0) _ = zRngTCore(&s, n);
+    _ = zRngTCore(&s, n);
     return zRngSOut(s);
 }
 
 /// §9.13.2 `$rdist_erlang` — Table 9-26 `erlang` (the listing's `erlangian`).
 pub fn zRngErlang(seed: i64, k_stage: f64, mean: f64) f64 {
     const k = zRngDf(k_stage);
-    if (k <= 0) return 0.0;
+    zRngPositive(mean);
     var s = zRngS32(seed);
     return zRngErlangCore(&s, k, mean);
 }
@@ -394,6 +397,7 @@ pub fn zRngErlang(seed: i64, k_stage: f64, mean: f64) f64 {
 pub fn zRngErlangNext(seed: i64, k_stage: f64, mean: f64) f64 {
     var s = zRngS32(seed);
     const k = zRngDf(k_stage);
-    if (k > 0) _ = zRngErlangCore(&s, k, mean);
+    zRngPositive(mean);
+    _ = zRngErlangCore(&s, k, mean);
     return zRngSOut(s);
 }

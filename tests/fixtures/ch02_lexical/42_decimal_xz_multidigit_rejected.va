@@ -9,15 +9,10 @@
 // 2.6.1 itself: it holds in full Verilog-AMS, mixed-signal context or not, so
 // no C.3 cite belongs here.
 //
-// KNOWN, so the next reader does not mistake this for proof: VerA's E0130 is
-// "x/z digit in a number literal" — the Annex C.3 subset rejection — so against
-// VerA today this file fires on the `x`, not on the two-digit arity, and it
-// proves nothing 05 does not already. The claim it states is still the 2.6.1
-// one, and a full Verilog-AMS compiler with mixed-signal context available must
-// reject it while accepting 05's `4'b01xz`; that is what the `//! lrm` cite
-// carries. Retarget this line the day VerA grows an arity-specific code.
+// E0133 now diagnoses the malformed decimal syntax before the analog
+// execution boundary. Legal single X/Z decimal digits parse successfully.
 //! lrm 2.6.1
-//! reject E0130
+//! reject E0133
 module ch02_decimal_xz_multidigit_rejected;
     integer value;
     analog value = 8'd1x;

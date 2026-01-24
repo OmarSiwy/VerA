@@ -1,0 +1,8 @@
+// Legal mixed context needs full expression signedness, not a value-sign guess.
+//! lrm 4.2.11
+//! reject E0364
+module dependent_control_shift_mixed;
+  parameter integer operand = -1;
+  parameter integer count = 0;
+  localparam integer mixed = (operand >> count) > 32'h1;
+endmodule

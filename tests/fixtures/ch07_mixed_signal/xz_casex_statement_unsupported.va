@@ -1,18 +1,9 @@
-// §7.3.2 shows a plain `case` over the four-state values of a digital net as
-// the alternative to the if-else-if chain above it; `casex` is the x/z-wildcard
-// form of that statement, and C.7 removes it by name: "casex and casez are not
-// supported in Verilog-A". So the rejection is conformance for this dialect,
-// not debt.
-//
-// The pin is E0209 because no diagnostic names the C.7 rule: VerA's parser has
-// no `casex` at all, so the keyword is simply not an expression and the
-// statement dies as a parse error. A subset diagnostic for `casex`/`casez` (the
-// shape of E0323 for `===`) is a code gap, recorded here rather than papered
-// over with a message substring.
-//
+// The frontend preserves this legal four-state casex statement.
+// Execution is still unavailable in the analog backend; E0130 records that
+// implementation boundary, not full-AMS conformance.
 //! lrm 7.3.2
 //! lrm C.7
-//! reject E0209
+//! reject E0130
 module ch7_xz_casex_statement(p, d);
   inout p; electrical p; input d; wire d; real result;
   analog begin

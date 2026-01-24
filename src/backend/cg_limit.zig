@@ -609,6 +609,7 @@ fn scBlock(sc: *Sc, b: u32, depth: u32) bool {
 pub fn planPrep(g: *Gen) Error!void {
     g.lp_idx = try g.arena.alloc(u32, g.an.nv);
     @memset(g.lp_idx, none_u32);
+    if (g.lower.table_samples.items.len != 0) return;
     if (g.limits.len == 0) return;
 
     var sc: Sc = .{
@@ -811,12 +812,13 @@ pub fn emit(g: *Gen) Error!void {
         if (needs_core) "model" else "_",
         if (reads_inst) "inst" else "_",
     });
+    const probe_inst = if (needs_core) try g.probeInstance() else "inst";
     if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
         \\    for (cur, 0..) |xv, i| xr[i] = R.con(xv);
-        \\    const m = core(R, xr, model, inst);
+        \\    const m = core(R, xr, model, {s});
         \\
-    , .{});
+    , .{probe_inst});
     try g.w("    var x = cur;\n", .{});
     // Only `pnjlim` ever reports non-convergence, so a fetlim/limvds-only
     // device has nothing to track and `var ok` would never be mutated.
@@ -895,7 +897,7 @@ fn signKey(g: *const Gen, v: Mir.Value) u32 {
 fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     const signed = lc.sign != .f_zero;
     try g.w("    {{ // $limit(V({s},{s}), \"{t}\"){s}\n", .{
-        uName(g, lc.hi), uName(g, lc.lo), lc.alg,
+        uName(g, lc.hi),                                          uName(g, lc.lo), lc.alg,
         if (signed) " in the frame of its sign argument" else "",
     });
     try g.w("        const vn = ", .{});
@@ -1082,12 +1084,13 @@ fn emitSeed(g: *Gen) Error!void {
         if (needs_core) "model" else "_",
         if (reads_inst) "inst" else "_",
     });
+    const probe_inst = if (needs_core) try g.probeInstance() else "inst";
     if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
         \\    for (&xr) |*p| p.* = R.con(0.0);
-        \\    const m = core(R, xr, model, inst);
+        \\    const m = core(R, xr, model, {s});
         \\
-    , .{});
+    , .{probe_inst});
     try g.w("    var s: [n_u]?f64 = .{{null}} ** n_u;\n", .{});
     for (g.limits) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;

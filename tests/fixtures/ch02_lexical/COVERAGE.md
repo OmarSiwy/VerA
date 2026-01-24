@@ -6,7 +6,7 @@ syntax box and both tables.
 HTML section-ID audit: `s2-1` `s2-2` `s2-3` `s2-4` `s2-5` `s2-6` `s2-6-1` `s2-6-2`
 `s2-7` `s2-8` `s2-8-1` `s2-8-2` `s2-8-3` `s2-8-4` `s2-9` `s2-9-1` `s2-9-2`.
 
-Sixty `.va` files. Thirty-two carry a `//! reject` arm, twenty-eight run; NONE
+Sixty-three `.va` files. Thirty-four carry a `//! reject` arm, twenty-nine run; NONE
 carries `//! xfail` any more (grep-measured: `grep -lc '//! xfail' *.va` is empty).
 Fifteen of the seventeen sections have a fixture that exercises the rule.
 Two do not, and the table says so with a dash rather than a plausible name.
@@ -25,7 +25,7 @@ repeated here: a fixture appears in a row only if grep finds the construct in it
 | `s2-4` | `//` to newline, `/*`…`*/`, no nesting, `//` inert inside a block comment | `01_whitespace_comments.va` (`2.0 /* // */ + 3.0`, and a `` `define `` inside each comment form that must not reach the preprocessor), `12_unclosed_comment.va` (`//! reject E0102`), `13_nested_comment_rejected.va` (`//! reject E0205`, the leftover `still_outer */`) |
 | `s2-5` | operators are one-, two- or three-character sequences; unary left, binary infix, conditional two characters over three operands | — no fixture in this directory, and `grep -rl 'lrm 2\.5' tests/fixtures/` finds none anywhere in the suite. `ch04_expressions` (149 files, `4.2.1`–`4.2.14`) owns operator semantics. `21` and `33` do contain `+`, `*` and `?:`, but only as carriers for an attribute, and neither cites 2.5 |
 | `s2-6` | Syntax 2-2, the number grammar | parent; every production is reached through 2.6.1 and 2.6.2 below. `51` cites the `size ::= non_zero_unsigned_number` box, `56`/`58` the `scale_factor` and `real_number1` boxes. No fixture cites a bare `2.6` |
-| `s2-6-1` | integer constants: bases, size, sign, underscores, truncation/padding, macro substitution | Positives: `04_integer_bases.va` (all four bases, underscores), `22_unsized_based_number.va` (`'h837ff`, `'o7460`, the 32-bit floor), `23_signed_based_number.va` (`4'shf`, `4'hf`, `-4'sd15`, `-8'd6`), `35_uppercase_bases_hex.va` (all eight base spellings, mixed-case hex digits), `40_size_truncation_and_padding.va` (five literals, three of them with the top bit set after truncation). Negatives: `25` (sign between base and digits), `41` (space between `'` and base letter), `49` (base letter outside the eight), `50` (`4af`, no apostrophe), `42` (multi-digit decimal x), `05`/`24` (x/z and `?`, withdrawn by Annex C.3). Debt: none. `36_based_number_digit_whitespace.va`, `37_macro_based_number_tokens.va` and `51_zero_size_rejected.va` were the three `//! xfail` rows and all three are green — the last of them (`37`, macro-substituted tokens) closed when `lexNumber` learned to join the size to the base format across white space |
+| `s2-6-1` | integer constants: bases, size, sign, underscores, truncation/padding, macro substitution | Positives: `04_integer_bases.va` (all four bases, underscores), `22_unsized_based_number.va` (`'h837ff`, `'o7460`, the 32-bit floor), `23_signed_based_number.va` (`4'shf`, `4'hf`, `-4'sd15`, `-8'd6`), `35_uppercase_bases_hex.va` (all eight base spellings, mixed-case hex digits), `40_size_truncation_and_padding.va` (five literals, three of them with the top bit set after truncation). Negatives: `25` (sign between base and digits), `41` (space between `'` and base letter), `49` (base letter outside the eight), `50` (`4af`, no apostrophe), `42` (multi-digit decimal x), `05`/`24` (historical x/z and `?` capability rejections, not full-AMS conformance). The historical xfail ledger is empty; four-state source execution remains open. `36_based_number_digit_whitespace.va`, `37_macro_based_number_tokens.va` and `51_zero_size_rejected.va` were the three `//! xfail` rows and all three are green — the last of them (`37`, macro-substituted tokens) closed when `lexNumber` learned to join the size to the base format across white space |
 | `s2-6-2` | real constants: 754 conversion, three notations, Table 2-1, underscores, the six invalid dotted forms | Positives: `06_real_notation.va` (decimal vs scientific vs dot-less exponent, `CHECKX` throughout), `07_si_scale_factors.va` (all eleven Table 2-1 symbols plus `24.7K` and `1.3u`), `34_real_underscores.va`, `01_whitespace_comments.va` (`1_000.0`). Negatives: the six invalid forms one file each — `14` (`.12`), `15` (`9.`), `16` (`4.E3`), `43` (`.2e-7`), `44` (`.1p`), `45` (`34.M`) — plus `46` (space before the scale symbol), `56` (`1g`: the alphabet is closed and case-bearing), `57` (`1._5`), `58` (`1.0e3K`: exponent and scale factor are different arms of one choice) |
 | `s2-7` | a string literal is single-line; as an operand it is a base-256 unsigned integer; Table 2-2 escapes | `19_multiline_string_rejected.va` and `38_string_line_continuation_rejected.va` (both `//! reject E0138`; `38` is `bsim4va.va:3658` verbatim, so it pins that VerA does *not* adopt the SystemVerilog `\`-continuation). Everything else in 2.7 — the operand semantics and all five rows of Table 2-2 — is in `08_string_escapes.va` alone, and it is green: seven `CHECKI`s, one per escape plus the multi-character `"AB"` == 16706 that pins the base-256 ORDER |
 | `s2-8` | simple identifiers, first character, `$` and `_`, case sensitivity, 1024-character floor | `02_simple_identifiers.va` (`gain_factor` vs `Gain_Factor` differ by 1.0, and the ports are `_port0` and the LRM's own `n$657`), `28_identifier_1024_chars.va` (exactly 1024 characters, written and read back through the full spelling), `59_uppercase_keyword_is_identifier.va` (also `//! lrm 2.8.2`), `17_identifier_digit_rejected.va` (`2gain`), `47_identifier_dollar_first_rejected.va` (`$gain`) |
@@ -86,25 +86,25 @@ cannot get a portable one — the limit is implementation-specified, so there is
 length a conforming compiler must refuse.
 
 **Syntax 2-9, port connection attributes.** No fixture. There is no module
-instantiation anywhere in this directory, because VerA is a flat single-module
-compiler; the instantiation gap itself is `ch08_scheduling` and `annex_a_syntax`.
+instantiation attribute fixture in this directory. Hierarchy support elsewhere
+does not establish this attribute placement.
 
 **Syntax 2-10, UDP attributes.** No fixture; `grep -l primitive *.va` is empty. UDPs
-are outside Verilog-A (Annex C.8) and outside VerA.
+remain an open full-AMS implementation and attribute-coverage requirement.
 
-**Syntax 2-8's `function_port_list` arm.** Not reachable from Verilog-A.
+**Syntax 2-8's `function_port_list` arm.** Uncovered digital-function syntax required by full AMS.
 `55_attribute_block_item_and_function_port.va` argues this in its own header:
 `function_port_list ::= { attribute_instance } tf_input_declaration …` belongs to a
 digital `function_declaration`, and A.2.6's `analog_function_item_declaration` carries
 no attribute slot on its `input_declaration` arm at all. The file covers the
 `block_item_declaration` half of Syntax 2-8 and says so; its name promises a function
-port it does not — and cannot — deliver.
+port it does not test; a digital-function fixture is still needed.
 
 **Most of Syntax 2-7's arms.** `continuous_assign`, `gate_instantiation`,
 `udp_instantiation`, `module_instantiation`, `initial_construct`, `always_construct`
-and the two generate constructs each carry an attribute slot. Every one of them is
-either outside Verilog-A (Annex C.7, C.8) or unimplemented in VerA, so the attribute
-slot on them is unreachable. What is proved is the three arms that are reachable:
+and the two generate constructs each carry an attribute slot. These positions
+are untested here; Annex C does not remove them from the full-AMS target.
+What these fixtures prove is limited to three arms:
 `analog_construct` (via `11`), `parameter_declaration` (via `11`, `20`, `30`, `53`,
 `54`) and the declaration arms of `module_or_generate_item_declaration` (via `11`).
 
@@ -116,9 +116,9 @@ are that list, one file each, in the LRM's own order. The same constraint is why
 `52`'s three sibling domain violations sit in a comment rather than in the source.
 
 **Reject is not always debt.** `05`, `24` and `42` refuse x, z and `?`, and `48`
-refuses `\$vt`. All four are conformance: Annex C.3 withdraws the four-state digits
-from Verilog-A, and 2.8.1 makes `\$vt` an ordinary user name that resolves to nothing.
-A compiler that accepted them would be wrong. `42` is the one to read carefully — its
+refuses `\$vt`. The legal four-state literals in `05`/`24` are unsupported-feature
+regressions, not full-AMS conformance. §2.8.1 makes `\$vt` an ordinary user name
+that resolves to nothing; rejecting that unresolved name remains correct. `42` is the one to read carefully — its
 own header says that against VerA today it fires on the `x` (E0130, the C.3 rejection)
 rather than on the two-digit arity that 2.6.1 actually prohibits, so it proves nothing
 `05` does not. The cite carries the claim; the diagnostic does not yet.
@@ -131,3 +131,21 @@ vs zero size), `23` ↔ `40` (the `s` designator vs plain unsigned truncation), 
 (the `$` may not be separated from its name, the name may not be absent, the pair may
 not be escaped), `11` ↔ `52` (in-domain vs out-of-domain standard attributes),
 `29`/`21`/`32`/`33` ↔ `54` (how far the attribute slots go, and where they stop).
+
+## Full-AMS literal boundary repair
+
+The frontend now retains exact packed four-state literals, arbitrary declared
+widths within the AST's u32 address space, explicit signedness and whether a
+size was present. Lexer/parser unit tests cover X/Z/? in all legal bases,
+unknown padding, truncation, 65/85/128/65536-bit values, and AST prefix cloning.
+Known analog literals retain their source width/sign rather than just an i64.
+Fixture `61` exercises required truncation after digit strings exceeding 64
+bits, including decimal carry and signed interpretation.
+
+Fixtures `62` and `63` document the current execution boundary: legal wide or
+four-state literals parse, then diagnose E0130 before analog lowering. These
+rejections are implementation debt, not positive full-AMS conformance evidence.
+Fixture `42` now diagnoses illegal multi-digit decimal X/Z syntax with E0133.
+The earlier “Debt: none” description applies only to its historical analog
+fixture inventory. Four-state operators, context sizing/extension, digital
+storage, nets/drivers and procedural execution remain required.

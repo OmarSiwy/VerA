@@ -918,7 +918,7 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                         .idiv => if (asI64(b2) == 0)
                             null
                         else
-                            .{ .f = @floatFromInt(Lower.wrap32(@divTrunc(asI64(a), asI64(b2)))) },
+                            .{ .f = @floatFromInt(@as(i32, @truncate(@divTrunc(@as(i65, asI64(a)), @as(i65, asI64(b2)))))) },
                         .pow => .{ .f = std.math.pow(f64, a.f, b2.f) },
                         .fmin, .imin => .{ .f = @min(a.f, b2.f) },
                         .fmax, .imax => .{ .f = @max(a.f, b2.f) },
@@ -927,7 +927,7 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                         // to — proof.zig's E0601 is the diagnostic, this just
                         // declines.
                         .fmod => if (b2.f == 0) null else .{ .f = @rem(a.f, b2.f) },
-                        .imod => if (asI64(b2) == 0) null else .{ .f = @floatFromInt(@rem(asI64(a), asI64(b2))) },
+                        .imod => if (asI64(b2) == 0) null else .{ .f = @floatFromInt(@rem(@as(i65, asI64(a)), @as(i65, asI64(b2)))) },
                         // §4.2.5/§4.2.7 relational and equality, §4.2.8 logical:
                         // integer 0/1. Both operand flavours compare in the f64
                         // carrier — a §3.2.1 integer is exact in it — so the `i`
@@ -956,6 +956,7 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                             if (row.op == .shl) break :blk Folded{
                                 .f = @floatFromInt(Lower.wrap32(asI64(a) << @as(u6, @intCast(sh)))),
                             };
+                            if (sh == 0) break :blk a;
                             if (sh > 31) break :blk Folded{ .f = 0 };
                             const lo: u32 = @bitCast(@as(i32, @truncate(asI64(a))));
                             break :blk Folded{ .f = @floatFromInt(lo >> @as(u5, @intCast(sh))) };
@@ -1013,23 +1014,24 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
 test "callTy and Lower.sysFuncTy agree on every ch9 return type" {
     const names = [_][]const u8{
         // §9.19, §9.12, §9.11 Table 9-8
-        "$param_given",     "$port_connected", "$test$plusargs", "$value$plusargs",
-        "$rtoi",            "$clog2",          "$realtobits",
+        "$param_given",       "$port_connected", "$test$plusargs", "$value$plusargs",
+        "$rtoi",              "$clog2",          "$realtobits",
         // §9.20 the two alias status functions
-        "$analog_node_alias",                  "$analog_port_alias",
+           "$analog_node_alias",
+        "$analog_port_alias",
         // §9.5 the descriptor family and the synthetic scan/read item names
-        "$fopen",           "$fgets",          "$fscanf",        "$fscanf$int",
-        "$ftell",           "$fseek",          "$rewind",        "$ferror",
-        "$feof",            "$sscanf",         "$sscanf$int",
+        "$fopen",          "$fgets",         "$fscanf",
+        "$fscanf$int",        "$ftell",          "$fseek",         "$rewind",
+        "$ferror",            "$feof",           "$sscanf",        "$sscanf$int",
         // The string-valued rows
-        "$simparam$str",    "$sformat",        "$sscanf$str",    "$fgets$str",
-        "$fscanf$str",      "$ferror$str",
+        "$simparam$str",      "$sformat",        "$sscanf$str",    "$fgets$str",
+        "$fscanf$str",        "$ferror$str",
         // Controls: five that must stay real. `$bitstoreal` is the one with a
         // history — it is §9.11's inverse of `$realtobits` and yields the real
         // the pattern stands for, which both tables get right only because each
         // says so out loud.
-        "$bitstoreal",      "$temperature",    "$abstime",       "$simparam",
-        "$random",
+            "$bitstoreal",    "$temperature",
+        "$abstime",           "$simparam",       "$random",
     };
     for (names) |n| {
         const want: VTy = switch (Lower.sysFuncTy(n)) {

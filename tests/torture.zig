@@ -358,7 +358,7 @@ fn runAndCheck(
         .ok => |p| p,
     };
 
-    const got = capture(gpa, io, bin, work) catch |err| {
+    const got = capture(gpa, io, bin, work, d.expected_exit) catch |err| {
         try w.print("FAIL {s}: running the testbench: {t}\n", .{ f.path, err });
         return .unmet;
     };
@@ -423,7 +423,7 @@ fn countVerdicts(text: []const u8) Tally {
 /// claims hold by construction rather than by everyone remembering to.
 ///
 /// `bin` is `<work>/<name>`, so from inside `work` it is `./<name>`.
-fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8) ![]const u8 {
+fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, expected_exit: u8) ![]const u8 {
     var argv0_buf: [std.fs.max_path_bytes]u8 = undefined;
     const argv0 = try std.fmt.bufPrint(&argv0_buf, "./{s}", .{std.fs.path.basename(bin)});
     var child = try std.process.spawn(io, .{
@@ -439,17 +439,15 @@ fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8) ![
     _ = reader.interface.streamRemaining(&aw.writer) catch {};
     var text = aw.toArrayList();
     errdefer text.deinit(gpa);
-    // A nonzero status is part of the transcript: `$finish`/`$fatal` and a panic
-    // in generated code both show up here, and silently dropping it would let a
-    // crashing testbench match a golden that records the output it managed to
-    // produce first.
+    // Exit status is part of the oracle, even when earlier assertions passed.
+    // Fatal-task fixtures opt into their expected status with `//! exit`.
     switch (try child.wait(io)) {
-        .exited => |c| if (c != 0) {
+        .exited => |c| if (c != expected_exit) {
             var line: [64]u8 = undefined;
-            const s = std.fmt.bufPrint(&line, "<testbench exited with status {d}>\n", .{c}) catch unreachable;
+            const s = std.fmt.bufPrint(&line, "FAIL: <testbench exit {d}, expected {d}>\n", .{ c, expected_exit }) catch unreachable;
             try text.appendSlice(gpa, s);
         },
-        else => try text.appendSlice(gpa, "<testbench did not exit normally>\n"),
+        else => try text.appendSlice(gpa, "FAIL: <testbench did not exit normally>\n"),
     }
     return text.toOwnedSlice(gpa);
 }
@@ -459,6 +457,35 @@ test "verdicts are counted, and a malformed one is not a pass" {
     try std.testing.expectEqual(Tally{ .total = 2, .failed = 0 }, countVerdicts("a ok=1\nb ok=1\n"));
     try std.testing.expectEqual(Tally{ .total = 2, .failed = 1 }, countVerdicts("a ok=1\nb ok=0\n"));
     try std.testing.expectEqual(Tally{ .total = 1, .failed = 1 }, countVerdicts("a ok=\n"));
+}
+
+test "a fatal exit after a passing assertion must be explicitly expected" {
+    const gpa = std.testing.allocator;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var report: Io.Writer.Allocating = .init(gpa);
+    defer report.deinit();
+    const source =
+        \\module exit_oracle(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog begin
+        \\    $strobe("before fatal got=1 want=1 ok=1");
+        \\    $fatal(1, "intentional exit");
+        \\  end
+        \\endmodule
+    ;
+    const fixture: Fixture = .{
+        .path = "exit_oracle.va",
+        .stem = "exit_oracle",
+        .dir = suite.fixture_root,
+        .slug = "harness_exit_status_selftest",
+    };
+    const unexpected = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{}, &report.writer);
+    try std.testing.expect(unexpected == .unmet);
+    try std.testing.expect(std.mem.indexOf(u8, report.written(), "exit 1, expected 0") != null);
+    const expected = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{ .expected_exit = 1 }, &report.writer);
+    try std.testing.expect(expected == .met);
 }
 
 test {

@@ -6,8 +6,8 @@
 //    mixed signal context."
 //
 // Two literals, because those are two separate sentences and `?` is a distinct
-// spelling the first one does not reach. The parser recovers from a bad literal
-// and reports the next, so both are genuinely diagnosed — each literal is pinned
+// spelling the first one does not reach. The analog lowering boundary reports
+// both preserved literals — each literal is pinned
 // as its own substring, so dropping either arm FAILs rather than passing on the
 // other's diagnostic.
 //

@@ -1,0 +1,17 @@
+// The specified Erlang product underflows. A nonfinite reference result
+// cannot be represented by the integer wrapper; diagnose before conversion.
+//! lrm 9.13.3
+//! reject E0816
+//! reject cannot be represented
+module ch09_rng_paramset_nonfinite_integer_rejected(p, n);
+  inout p, n; electrical p, n;
+  sampled u(p, n);
+endmodule
+paramset sampled base;
+  .r = $dist_erlang(7, 4097, 3, "global");
+endparamset
+module base(p, n);
+  inout p, n; electrical p, n;
+  parameter integer r = 0;
+  analog I(p,n) <+ V(p,n) + r;
+endmodule

@@ -299,6 +299,8 @@ pub const Code = enum(u16) {
     /// `$temperature`, an access function, `$random`, … — where the grammar
     /// requires a constant_mintypmax_expression.
     E0363,
+    /// Known mixed-signedness shift comparison needs missing context typing.
+    E0364,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -516,9 +518,17 @@ pub const Code = enum(u16) {
     E1002,
     /// The device's `U` is `enum(u8)`, so it holds at most 256 unknowns.
     E1003,
+    /// §6.3.4 a numeric default cannot be derived after host parameter writes.
+    E1004,
+    /// Shared-frontend digital execution boundary.
+    E1100,
     /// §3.4 a parameter whose default has no compile-time value and no
     /// `derive()` line either, so the model card field ships as 0.
     W1050,
+    /// §7.7.2.1 multiple discipline resolution rules match.
+    W0950,
+    /// §9.17.1 the only permitted negative discontinuity degree is -1.
+    E0820,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -880,16 +890,15 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0130 => .{
-            .title = "x/z digit in a number literal",
+            .title = "literal requires digital value support in the execution backend",
             .lrm = "2.6.1",
             .explain =
-            \\Verilog-AMS admits the four-state digits x, z and ? in a sized
-            \\literal, but the analog subset has no four-state value to hold
-            \\one: LRM annex C removes 4-state nets and the === / !== operators
-            \\along with them, and an unknown bit has no meaning in a
-            \\continuous equation.
+            \\The frontend preserves Verilog-AMS four-state and wide integer
+            \\literals. The current analog execution backend stores two-state
+            \\integers in 64 bits and cannot execute this literal exactly.
             \\
-            \\Use a definite value, or a parameter the model card supplies.
+            \\This diagnostic marks an implementation boundary, not a claim
+            \\that the literal is forbidden by full Verilog-AMS.
             ,
         },
         .E0131 => .{
@@ -2431,6 +2440,20 @@ fn infoOf(c: Code) Info {
             ,
         },
 
+        .E0364 => .{
+            .title = "mixed signedness around a shift is not implemented",
+            .lrm = "4.2.11",
+            .explain =
+            \\The analog MIR does not preserve enough expression signedness to
+            \\apply an unsigned comparison context to a signed shift operand.
+            \\For example, (a >> n) > 32'h1 with integer a = -1 and n = 0
+            \\requires unsigned comparison; comparing the signed i64 carrier
+            \\would silently give the wrong result. VerA rejects this known
+            \\mixed case until context typing is implemented. This is an
+            \\implementation limitation, not an illegal Verilog-AMS expression.
+            ,
+        },
+
         // ------------------------------------------------------------ class 4
         .E0401 => .{
             .title = "`disable` is not an analog statement",
@@ -3538,6 +3561,11 @@ fn infoOf(c: Code) Info {
             \\current operating point, so it must be known at compile time.
             ,
         },
+        .E0820 => .{
+            .title = "$discontinuity degree must be nonnegative or -1",
+            .lrm = "9.17.1",
+            .explain = "Nonnegative degrees describe a discontinuity in a derivative of the constitutive equation. The special degree -1 requests another Newton iteration; smaller degrees have no defined meaning.",
+        },
         .E0806 => .{
             .title = "system task is not supported in the analog context",
             .lrm = "9.2",
@@ -3859,9 +3887,10 @@ fn infoOf(c: Code) Info {
             \\under them takes 2.7's "unsigned constant number" view, one byte
             \\per character. Three pairings have no rendering VerA emits:
             \\
-            \\    %s over a real or an integer. 9.4.5's reading — the value as a
-            \\    string of 8-bit ASCII codes — is not implemented; %g or %d
-            \\    prints the number.
+            \\    %s over a real, or an integral expression whose width the
+            \\    current backend cannot preserve. Integer operands with a known
+            \\    supported width render as 9.4.5's sequence of 8-bit ASCII codes.
+            \\    Remaining numeric cases are implementation limitations.
             \\
             \\    %c over a string. Table 9-22's %c displays the low byte of an
             \\    INTEGER as a character; a string is not a code. Use %s for the
@@ -3871,10 +3900,9 @@ fn infoOf(c: Code) Info {
             \\    There is no numeric field to format; %s prints the text, %d
             \\    prints 2.7's integer view.
             \\
-            \\Formerly these compiled here and then failed the generated
-            \\device's own build, which reported an engine bug with no source
-            \\location. The mismatch is the model's, so it is reported at the
-            \\model, at the operand.
+            \\The diagnostic points to the operand before generated code is
+            \\compiled. An unsupported pairing is not necessarily illegal
+            \\Verilog-AMS; consult the conformance backlog for implementation gaps.
             ,
         },
         .E0817 => .{
@@ -4386,12 +4414,17 @@ fn infoOf(c: Code) Info {
             \\
             \\The candidate disciplines of this undeclared net (annex F.2.1
             \\step 4.b's list) match an exclude rule's discipline list
-            \\exactly, so the connection the rule exists to forbid is present.
+            \\under 7.7.2.1, so the connection the rule exists to forbid is present.
             \\Separate the nets, or delete the exclude rule.
             ,
         },
 
         // ----------------------------------------------------------- class 10
+        .W0950 => .{
+            .title = "multiple discipline resolution rules match",
+            .lrm = "7.7.2.1",
+            .explain = "The first matching rule is used. Exact matches take precedence over subset matches. Remove the ambiguity to silence this warning.",
+        },
         .E1001 => .{
             .title = "source contains no module declaration",
             .lrm = "6.2",
@@ -4456,6 +4489,25 @@ fn infoOf(c: Code) Info {
             \\Note the count is not the net count: LRM 6.5.2 expands a vector port
             \\to one unknown per element, and every LRM 5.6 potential contribution
             \\adds a branch-flow unknown for its own current.
+            ,
+        },
+        .E1100 => .{
+            .title = "digital source execution failed",
+            .lrm = "8.5",
+            .explain = "The digital executor supports a documented subset of source processes. Unsupported forms are diagnosed before simulation; timing and capacity failures stop execution explicitly. This does not make legal unsupported Verilog-AMS forms illegal.",
+        },
+        .E1004 => .{
+            .title = "unsupported dependent parameter expression",
+            .lrm = "6.3.4",
+            .explain =
+            \\A dependent parameter must follow the final values of the parameters
+            \\it references. VerA cannot yet render this expression for the host's
+            \\derive callback, so retaining its declared-default value would be wrong.
+            \\
+            \\Pure two-way conditional expressions and short-circuit logical
+            \\operators are supported. Arbitrary constant-function control flow,
+            \\loop-carried or multiway values, unsupported operators and expressions
+            \\beyond the renderer's recursion limit remain implementation gaps.
             ,
         },
         .W1050 => .{

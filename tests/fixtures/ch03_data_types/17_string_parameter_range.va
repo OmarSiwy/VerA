@@ -13,9 +13,7 @@
 // `filename` the empty string, which is why the `exclude` case is here: it is
 // the one where the mistake changes the answer.
 //
-// The other half of §3.4.2 — the set REJECTING an out-of-set instance value —
-// needs a string override, and `//! param` carries only numbers (see
-// src/backend/tb.zig), so it has no fixture yet.
+// Fixtures 84–87 use HDL instance overrides to test set membership and rejection.
 //
 //! lrm 3.4.2
 `include "check.vh"

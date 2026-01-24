@@ -59,6 +59,8 @@ pub const Error = std.mem.Allocator.Error || error{
     /// More than 256 solver unknowns, which `U`'s `enum(u8)` tag cannot spell.
     /// Reported as E1003 by `emitTopology`; see the ceiling argued there.
     TooManyUnknowns,
+    /// A numeric parameter default cannot follow host-written dependencies.
+    UnsupportedParameterDefault,
 };
 
 const none_u32 = std.math.maxInt(u32);
@@ -263,6 +265,11 @@ pub fn generate(
 
 /// The value-type lattice lives with the analysis that computes it.
 const VTy = Analysis.VTy;
+const array_index_types = std.StaticStringMap(VTy).initComptime(.{
+    .{ "$idx", .real },
+    .{ "$idx$int", .int },
+    .{ "$idx$str", .str },
+});
 
 /// Zero-sized context for `Gen.f64_cache`. The key is an f64's bit pattern,
 /// which is already in a register; `AutoContext` would run
@@ -638,10 +645,12 @@ pub const Gen = struct {
         self.plan.pc_on = self.pc_vals.len != 0;
         // LAST: §4.5.15 the clamp-argument hoist needs `lo_idx` filled, to name
         // the core field `emitPrep` reads each argument out of.
+        // These planners evaluate the whole core during parameter preparation.
+        // A first-call table must wait for the actual evaluation, not x = 0 prep.
         try cg_limit.planPrep(self);
         // After it, and before ANY emission: `emitInstance` and `emitPrecompute`
         // are both written above the core and both need the region's width.
-        try self.planHoistPrefix();
+        if (self.lower.table_samples.items.len == 0) try self.planHoistPrefix();
     }
 
     // ---------------------------------------------------- the shared core ----
@@ -1200,6 +1209,13 @@ pub const Gen = struct {
         try self.out.print(self.gpa, fmt, args);
     }
 
+    /// Auxiliary core sweeps must not initialize first-call state at a trial bias.
+    pub fn probeInstance(self: *Gen) Error![]const u8 {
+        if (self.lower.table_samples.items.len == 0) return "inst";
+        try self.w("    var table_probe = inst.*;\n", .{});
+        return "&table_probe";
+    }
+
     /// Body text. Same destination as `w` since the signature is back-patched
     /// (see `emitUnit`); kept as a separate name because the call sites read as
     /// "body" vs "file scaffolding".
@@ -1448,6 +1464,8 @@ pub const Gen = struct {
         try self.emitModel();
         try self.emitDerive();
         try self.emitInstance();
+        try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
+        if (self.lower.table_samples.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
         // Before `emitUnits`: its `plan.analyze` is the pass that clears the
         // precompute plan's live-set residue (unit_plan.zig's partial reset).
         try self.emitPrecompute();
@@ -1602,7 +1620,7 @@ pub const Gen = struct {
     /// `State` + `initState` + `updateState` as a set, which `emitStateMachine`
     /// emits together.
     fn hasStatefulOps(self: *const Gen) bool {
-        if (self.lower.held_vars.items.len != 0) return true;
+        if (self.lower.held_vars.items.len != 0 or self.lower.limit_slots.items.len != 0 or self.lower.uses_newton_iter or self.lower.reject_iteration_place != null) return true;
         for (self.units) |u| {
             if (u.role == .analog_op and opHasState(opKind(u.target))) return true;
         }
@@ -1897,10 +1915,15 @@ pub const Gen = struct {
             // `resolve_params = false` ⇒ this folds only if the default is
             // self-contained, which is exactly "not derived from a parameter".
             if (self.an.foldConst(p.default, 0, false) != null and !p.is_local) continue;
-            // Not renderable in the host's f64 domain (a default over an op
-            // `f64Const` does not carry): leave the folded field initializer, as
-            // before. Widening the op set there is the fix if a model asks.
-            const e = try self.f64Const(p.default, 0, false) orelse continue;
+            // Render in the parameter's numeric domain. A known initializer
+            // cannot stand in for a dependency that changes after a host write.
+            const e = (if (ty == .int) try self.i64Const(p.default, 0) else try self.f64Const(p.default, 0, false)) orelse {
+                // Defaults with no compile-time value retain W1050's explicit
+                // host-supplied-value contract (for example $simparam("gmin")).
+                if (!p.is_local and p.folded == null and self.an.foldConst(p.default, 0, true) == null) continue;
+                if (self.diags) |bag| try bag.add(.codegen, .E1004, self.lower.tokenSpan(p.tok), "host derivation of `{s}` uses an unsupported expression; its declared value cannot be frozen after parameter overrides", .{p.name});
+                return error.UnsupportedParameterDefault;
+            };
             // §6.3.4 gives the DEFAULT; an explicit host write wins. Only a
             // localparam is overwritten unconditionally ("shall not be
             // directly modified"). Unguarded, BSIMSOI's `VTH0 = VTHO` erased
@@ -1912,21 +1935,10 @@ pub const Gen = struct {
                 try self.w("    ", .{});
             switch (ty) {
                 .real => try self.w("model.{s} = {s};\n", .{ self.p_names[i], e }),
-                // §3.2's 32-bit result (`Lower.wrap32`) applied once, at the end.
-                // For +, - and * that is not an approximation: those three are
-                // the ring Z/2^32, so reducing after the whole expression is the
-                // same value as reducing at every step, which is what the fold
-                // and the device do. The ceiling is that `f64Const` renders the
-                // arithmetic in f64, so a chain whose INTERMEDIATE leaves 2^53,
-                // or one that wraps around a `/`, does not agree with them; a
-                // derived integer parameter needs its own int-typed renderer for
-                // that, and no model has asked.
-                // `lossyCast`, not `@intFromFloat`: `derive()` runs in the
-                // HOST on card values this compiler never saw, and a huge or
-                // NaN default expression is then runtime UB (ReleaseFast) or a
-                // panic (Debug). Saturate-then-wrap is the fold's own rule
-                // (`Analysis.asI64` + `Lower.wrap32`), so both agree.
-                .int => try self.w("model.{s} = @as(i32, @truncate(std.math.lossyCast(i64, @round({s}))));\n", .{ self.p_names[i], e }),
+                .int => if (p.integer32)
+                    try self.w("model.{s} = @as(i32, @truncate({s}));\n", .{ self.p_names[i], e })
+                else
+                    try self.w("model.{s} = {s};\n", .{ self.p_names[i], e }),
                 .str => unreachable,
             }
         }
@@ -1975,9 +1987,17 @@ pub const Gen = struct {
     /// value-level fold can see through. `Lower.constEval` folded the same
     /// default over the AST at declaration time, before the diamond existed,
     /// and §3.4 defines the default as exactly that fold; `ParamInfo.folded`
-    /// carries its result here. The MIR fold runs first, so the two agree
-    /// wherever both can answer and only the residue reaches the second.
+    /// carries its result here. Integral defaults use that exact result before
+    /// consulting the real-valued MIR fold, which cannot represent every i64.
     fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
+        if (want == .int) if (p.folded) |k| {
+            const value = switch (k) {
+                .int => |v| v,
+                .real => |v| std.math.lossyCast(i64, @round(v)),
+                .str => 0,
+            };
+            return std.fmt.allocPrint(self.arena, "{d}", .{if (p.integer32 and k == .int) Lower.wrap32(value) else value});
+        };
         const c = self.an.foldConst(p.default, 0, true);
         if (c == null) if (p.folded) |k| return switch (want) {
             .real => try self.fmtF64(k.asReal()),
@@ -2090,6 +2110,18 @@ pub const Gen = struct {
             \\    systf: ?*const contract.SystfHost = null,
             \\
         , .{});
+        for (self.lower.table_samples.items, 0..) |count, site| {
+            try self.w("    table_{d}: [{d}]f64 = @splat(0.0),\n", .{ site, count });
+        }
+        if (self.lower.table_samples.items.len != 0) try self.w("    // §9.21.1 permanent first-call state; not timestep rollback state.\n    table_ready: [{d}]bool = @splat(false),\n", .{self.lower.table_samples.items.len});
+        if (self.lower.limit_slots.items.len != 0) try self.w(
+            "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
+            .{self.lower.limit_slots.items.len},
+        );
+        if (self.lower.uses_newton_iter) try self.w(
+            "    newton_iteration: u32 = 1,\n",
+            .{},
+        );
         // §9.13.1's "internal seed", one slot per seedless call site. The
         // DEFAULT is the seed "the simulator picks" — a fixed value, not a clock
         // read, because §9.13.2's "shall always return the same value given the
@@ -2103,7 +2135,8 @@ pub const Gen = struct {
                     "    /// call site. Advanced by `updateState` on the ACCEPTED step and only\n" ++
                     "    /// READ by `eval`: a draw that moved between Newton iterations would\n" ++
                     "    /// make the residual non-deterministic and the solve would not converge.\n" ++
-                    "    rng_auto: [{d}]i64 = .{{", .{self.lower.rng_auto_sites},
+                    "    rng_auto: [{d}]i64 = .{{",
+                .{self.lower.rng_auto_sites},
             );
             for (0..self.lower.rng_auto_sites) |k| try self.w("{s}{d}", .{
                 if (k == 0) "" else ", ", 1 + 7919 * @as(u32, @intCast(k)),
@@ -2416,7 +2449,7 @@ pub const Gen = struct {
     /// advance on. They contribute nothing to `query` — the base moving is
     /// the integrator's business, not a step-reject condition.
     fn emitsStateCtl(self: *const Gen) bool {
-        return self.fsmStateCtl() or self.pathLatches();
+        return self.fsmStateCtl() or self.pathLatches() or self.lower.uses_newton_iter or self.lower.limit_slots.items.len != 0;
     }
 
     /// The hook body. `query` compares the HELD (discrete) state only; the
@@ -2431,10 +2464,10 @@ pub const Gen = struct {
         // ponytail: topology is fixed during emission; scan once for all three actions.
         const fsm = self.fsmStateCtl();
         try self.w(
-            \\pub fn stateCtl(_: *const Model, inst: *Instance, _: *State, op: contract.StateCtlOp) bool {{
+            \\pub fn stateCtl(_: *const Model, inst: *Instance, {s}: *State, op: contract.StateCtlOp) bool {{
             \\    if (op == .query) {{
             \\        return
-        , .{});
+        , .{if (self.lower.limit_slots.items.len != 0 or self.lower.uses_newton_iter) "state" else "_"});
         var first = true;
         for (self.held_names) |n| {
             if (!fsm) break;
@@ -2448,6 +2481,14 @@ pub const Gen = struct {
             \\    if (op == .commit) {{
             \\
         , .{});
+        if (self.lower.limit_slots.items.len != 0) try self.w(
+            "        state.limiter_previous = inst.limiter_previous;\n",
+            .{},
+        );
+        if (self.lower.uses_newton_iter) try self.w(
+            "        state.newton_iteration = inst.newton_iteration;\n",
+            .{},
+        );
         for (0..self.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
         for (0..self.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
         if (fsm) for (self.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
@@ -2460,6 +2501,14 @@ pub const Gen = struct {
             }
         }
         try self.w("    }} else {{\n", .{});
+        if (self.lower.limit_slots.items.len != 0) try self.w(
+            "        inst.limiter_previous = state.limiter_previous;\n",
+            .{},
+        );
+        if (self.lower.uses_newton_iter) try self.w(
+            "        inst.newton_iteration = state.newton_iteration;\n",
+            .{},
+        );
         if (fsm) for (self.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
         for (self.units, 0..) |u, i| {
             if (!fsm) break;
@@ -2680,6 +2729,18 @@ pub const Gen = struct {
                 });
             }
         }
+        for (self.lower.limit_slots.items) |slot| try jobs.append(self.arena, .{
+            .name = "$limit$old",
+            .target = self.an.rv(slot.final),
+            .mode = .strict,
+            .comment = "§9.17.3 next-iteration limiter value",
+        });
+        if (self.lower.reject_iteration_place != null) try jobs.append(self.arena, .{
+            .name = "$discontinuity(-1)",
+            .target = self.an.rv(self.lower.reject_iteration),
+            .mode = .strict,
+            .comment = "§9.17.1 iteration rejection",
+        });
         // §5.6.1.3 the retention flags of every runtime-selected branch row
         // (see `Retention.runtime`), so `emitResidual` can read them as core
         // fields. Queued after the limit arguments and before the §9.4 display
@@ -2741,6 +2802,12 @@ pub const Gen = struct {
                 });
             }
         }
+        if (self.lower.table_effect != .f_zero) try jobs.append(self.arena, .{
+            .name = "$table_effect",
+            .target = self.an.rv(self.lower.table_effect),
+            .mode = .strict,
+            .comment = "§9.21.1 table captures and §9.13 distribution checks in source order",
+        });
         // §9.4 the display tasks, as ONE unit. Queued last, so no existing job —
         // and therefore no existing declaration name — moves when a model gains
         // or loses a `$strobe`.
@@ -2863,7 +2930,7 @@ pub const Gen = struct {
         const at_model = self.out.items.len;
         try self.w("model: *const Model, ", .{});
         const at_inst = self.out.items.len;
-        try self.w("inst: *const Instance) struct {{\n", .{});
+        try self.w("inst: InstancePtr) struct {{\n", .{});
         for (self.lo_vals, 0..) |v, k| {
             try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
         }
@@ -2958,7 +3025,7 @@ pub const Gen = struct {
         const at_model = self.out.items.len;
         try self.w("model: *const Model, ", .{});
         const at_inst = self.out.items.len;
-        try self.w("inst: *const Instance) S {{\n", .{});
+        try self.w("inst: InstancePtr) S {{\n", .{});
         try self.w("    @setFloatMode(.{s});\n", .{mode});
         self.cur_strict = std.mem.eql(u8, mode, "strict");
         self.oc_name = name;
@@ -3411,7 +3478,7 @@ pub const Gen = struct {
         self.oc_at[1] = self.out.items.len;
         try self.w("model: *const Model, ", .{});
         self.oc_at[2] = self.out.items.len;
-        try self.w("inst: *const Instance", .{});
+        try self.w("inst: InstancePtr", .{});
         for ([_]VTy{ .real, .int, .str }) |ty| {
             const n = self.oc_n[@intFromEnum(ty)];
             if (n == 0) continue;
@@ -4477,6 +4544,16 @@ pub const Gen = struct {
             const site = self.intArg(args, 0) orelse 0;
             return self.b("S.con(@floatFromInt(inst.rng_auto[{d}]))", .{site});
         }
+        if (std.mem.eql(u8, tail, "check")) {
+            if (args.len != 4) return self.abort("malformed RNG validation effect", .{});
+            try self.b("S.con(zRngCheck(S.val(", .{});
+            try self.renderVal(args[0], .real);
+            try self.b("), {d}, S.val(", .{self.intArg(args, 1) orelse return self.abort("missing RNG validation rules", .{})});
+            try self.renderVal(args[2], .real);
+            try self.b("), S.val(", .{});
+            try self.renderVal(args[3], .real);
+            return self.b(")))", .{});
+        }
         // `zRngIUniform`, `zRngChiSquare`, … — the kernel's camel spelling of the
         // callee's tail, so the two lists cannot drift apart by a typo.
         var fn_name: std.ArrayList(u8) = .empty;
@@ -4503,7 +4580,7 @@ pub const Gen = struct {
 
     /// §9.21 `$table_model`, in the shape `Lower.lowerTableModel` rewrote it:
     ///
-    ///     (ND, NP, NCOL, dep, "<extrap>", in₀…, row₀…)
+    ///     (ND, NP, NCOL, dep, "<interp/extrap>", snapshot_site, previous_call, in₀…, row₀…)
     ///
     /// Every §9.21.1/§9.21.2 decision was made in lowering, where the control
     /// string and the array declarations exist, so this is a transcription: the
@@ -4516,7 +4593,7 @@ pub const Gen = struct {
     /// change after this point is ignored"), so a sample carries no derivative,
     /// while the lookup point is routinely a probe and its derivative is the
     /// Jacobian row the solver needs.
-    fn emitTable(self: *Gen, args: []const Mir.Value) Error!void {
+    fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void {
         // §9.21 zTable brackets on `.val()` — the cell choice is one scalar
         // decision, so a lane off the chosen cell would read a linear
         // extrapolation. Pins.
@@ -4526,25 +4603,35 @@ pub const Gen = struct {
         const ncol = self.intArg(args, 2) orelse 0;
         const dep = self.intArg(args, 3) orelse 0;
         const ext = self.strArg(args, 4) orelse "";
-        const head = 5 + nd;
+        const site = self.intArg(args, 5) orelse 0;
+        const head = 7 + nd;
         if (nd == 0 or np * ncol == 0 or args.len != head + np * ncol)
             return self.abort("malformed `$table_model` call reached codegen", .{});
-        try self.b("zTable(S, {d}, {d}, {d}, {d}, \"{s}\", [_]f64{{", .{ np, ncol, nd, dep, ext });
+        if (site != 0) {
+            self.uses_inst = true;
+            self.lane_pinned = true;
+            try self.b("tbl_{d}: {{ _ = S.val(", .{@intFromEnum(inst)});
+            try self.renderVal(args[6], .real);
+            try self.b("); if (!inst.table_ready[{d}]) {{ inst.table_{d} = [_]f64{{", .{ site - 1, site - 1 });
+        } else try self.b("zTable(S, {d}, {d}, {d}, {d}, \"{s}\", [_]f64{{", .{ np, ncol, nd, dep, ext });
         for (args[head..], 0..) |v, k| {
             if (k != 0) try self.b(", ", .{});
             try self.b("S.val(", .{});
             try self.renderVal(v, .real);
             try self.b(")", .{});
         }
-        try self.b("}}, [_]S{{", .{});
-        for (args[5..head], 0..) |v, k| {
+        if (site != 0) {
+            try self.b("}}; inst.table_ready[{d}] = true; }} break :tbl_{d} zTable(S, {d}, {d}, {d}, {d}, \"{s}\", inst.table_{d}, [_]S{{", .{ site - 1, @intFromEnum(inst), np, ncol, nd, dep, ext, site - 1 });
+        } else try self.b("}}, [_]S{{", .{});
+        for (args[7..head], 0..) |v, k| {
             if (k != 0) try self.b(", ", .{});
             try self.renderVal(v, .real);
         }
         try self.b("}})", .{});
+        if (site != 0) try self.b("; }}", .{});
     }
 
-    /// §3.2.2 runtime array index, in the shape `Lower.lowerIndex` rewrote it:
+    /// §§3.2/5.7 runtime array index, in the shape `Lower.lowerIndex` rewrote it:
     ///
     ///     (lo, i, e_lo … e_hi)
     ///
@@ -4553,9 +4640,9 @@ pub const Gen = struct {
     /// and every comparison on every read — `sel` is a mask primitive, not a
     /// branch — which made `for (k…) a[k]` quadratic in the DECLARED extent.
     ///
-    /// The `else` arm is element `lo`, which is what the chain's fallback was:
-    /// §3.2.2 leaves an out-of-range index undefined, and reproducing the old
-    /// answer keeps every existing device bit-identical.
+    /// Exact invalid-index values are not implemented, including inherited
+    /// Verilog unknowns. Fail explicitly instead of substituting another cell;
+    /// this remaining gap is tracked in CONFORMANCE-GAPS.md.
     ///
     /// Each arm is rendered lazily by the switch, so an element that is an
     /// inline expression is evaluated only when it is the one selected. That is
@@ -4579,9 +4666,7 @@ pub const Gen = struct {
             try self.renderVal(v, want);
             try self.b(",", .{});
         }
-        try self.b(" else => ", .{});
-        try self.renderVal(args[2], want);
-        try self.b(" }}", .{});
+        try self.b(" else => @panic(\"VerA: out-of-range array read is not implemented\") }}", .{});
     }
 
     /// A structural count lowering put in an argument list as a literal.
@@ -4603,8 +4688,9 @@ pub const Gen = struct {
 
     /// §4.2.11 `>>` — a LOGICAL shift over §3.2.1's 32-bit `integer`.
     ///
-    /// Narrow to 32 bits, shift as UNSIGNED so the vacated positions fill with
-    /// zeroes, widen back. §4.2.11's own worked example is `3 >> 1` giving
+    /// A zero count is identity, preserving the operand's signed value. For a
+    /// positive count, narrow to 32 bits and shift as UNSIGNED so the vacated
+    /// positions fill with zeroes. §4.2.11's own example is `3 >> 1` giving
     /// "0011 shifted to the right one position and zero-filled"; the arithmetic
     /// shift this replaced made `-16 >> 2` come out as -4 instead of
     /// 0xFFFFFFF0 >> 2 == 1073741820, i.e. it kept the sign the LRM says to drop.
@@ -4617,11 +4703,11 @@ pub const Gen = struct {
     /// §4.2.11's fill rule — the two are separate clauses that happen to want the
     /// same 32 bits, and `Lower.wrap32` is where that width is written down.
     fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
-        try self.b("@as(i64, zShr(@as(u32, @bitCast(@as(i32, @truncate(", .{});
+        try self.b("zShr(", .{});
         try self.renderVal(a, .int);
-        try self.b(")))), ", .{});
+        try self.b(", ", .{});
         try self.renderVal(b2, .int);
-        try self.b("))", .{});
+        try self.b(")", .{});
     }
 
     fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
@@ -4646,6 +4732,142 @@ pub const Gen = struct {
     // Calls: §4.5 analog operators, §4.6 noise, ch9 system functions
     // =======================================================================
 
+    /// Reuse the optimizer's select or reconstruct a pure two-way CFG merge.
+    /// Loop-carried/multiway phis and arms with calls remain unsupported here.
+    fn hostConditional(self: *const Gen, inst: Mir.Inst) ?Mir.InstData {
+        if (self.mir.instOp(inst) == .select) return self.mir.instData(inst);
+        if (self.mir.instOp(inst) != .phi or self.mir.instData(inst).phi.count != 2) return null;
+        const join = self.an.def_block[@intFromEnum(self.mir.instResult(inst))];
+        if (join == none_u32) return null;
+        const header = self.an.idom[join];
+        if (header == none_u32 or header == join) return null;
+        // SSA may append a phi after the terminator; Analysis already records
+        // the actual branch independently of its position in the chain.
+        const last = self.an.term[header];
+        if (last == .none or self.mir.instOp(last) != .branch) return null;
+        const branch = self.mir.instData(last).branch;
+        var arms: [2]Mir.Value = undefined;
+        inline for (.{ branch.then_block, branch.else_block }, 0..) |arm, i| {
+            var found = false;
+            for (0..2) |k| {
+                const pair = self.mir.phiPair(inst, @intCast(k));
+                const matches = if (@intFromEnum(arm) == join)
+                    @intFromEnum(pair.block) == header
+                else
+                    self.an.dominates(@intFromEnum(arm), @intFromEnum(pair.block));
+                if (matches) {
+                    if (found) return null;
+                    arms[i] = pair.value;
+                    found = true;
+                }
+            }
+            if (!found) return null;
+        }
+        // Value-only rendering must not lose calls or effects from an arm.
+        for (0..self.an.nb) |bi| {
+            const block_index: u32 = @intCast(bi);
+            if (block_index == header or !self.an.dominates(header, block_index) or self.an.dominates(join, block_index)) continue;
+            for (self.an.blockInstsFlat(block_index)) |op|
+                if (self.mir.instOp(op) == .call) return null;
+        }
+        return .{ .ternary = .{ .cond = branch.cond, .then_val = arms[0], .else_val = arms[1] } };
+    }
+
+    fn hostConditionalExpr(self: *Gen, inst: Mir.Inst, depth: u32, ty: VTy) Error!?[]const u8 {
+        const d = (self.hostConditional(inst) orelse return null).ternary;
+        const condition = try self.i64Const(d.cond, depth + 1) orelse return null;
+        const yes = (if (ty == .int) try self.i64Const(d.then_val, depth + 1) else try self.f64Const(d.then_val, depth + 1, false)) orelse return null;
+        const no = (if (ty == .int) try self.i64Const(d.else_val, depth + 1) else try self.f64Const(d.else_val, depth + 1, false)) orelse return null;
+        return try std.fmt.allocPrint(self.arena, "@as({s}, if (({s}) != 0) ({s}) else ({s}))", .{ if (ty == .int) "i64" else "f64", condition, yes, no });
+    }
+
+    /// Parameter derivation must preserve integral bits, including values beyond
+    /// f64's exact range. Integer operators retain the analog MIR's existing
+    /// 32-bit arithmetic rules; full expression sizing remains separate work.
+    fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
+        if (depth > 32) return null;
+        const v = self.an.rv(v0);
+        switch (self.mir.valueDef(v)) {
+            .int_const => |n| return try std.fmt.allocPrint(self.arena, "@as(i64, {d})", .{n}),
+            .float_const => |n| return try std.fmt.allocPrint(self.arena, "@as(i64, {d})", .{std.math.lossyCast(i64, @round(n))}),
+            .param_ref => |p| {
+                if (Analysis.tyOfParam(self.lower.params.items[p].ty) == .str) return null;
+                self.uses_model = true;
+                return switch (Analysis.tyOfParam(self.lower.params.items[p].ty)) {
+                    .int => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]}),
+                    .real => try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round(model.{s}))", .{self.p_names[p]}),
+                    .str => unreachable,
+                };
+            },
+            .inst_result => |inst| {
+                const row = self.mir.instRow(inst);
+                const av: Mir.Value = @enumFromInt(row.a);
+                const bv: Mir.Value = @enumFromInt(row.b);
+                if (self.an.tyOf(v) == .real or row.op == .fi_cast) {
+                    const f = try self.f64Const(if (row.op == .fi_cast) av else v, depth + 1, false) orelse return null;
+                    return try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round({s}))", .{f});
+                }
+                if (row.op == .select or row.op == .phi) return self.hostConditionalExpr(inst, depth, .int);
+                if (row.op == .feq or row.op == .fne or row.op == .flt or row.op == .fle or row.op == .fgt or row.op == .fge) {
+                    const a = try self.f64Const(av, depth + 1, false) orelse return null;
+                    const rhs = try self.f64Const(bv, depth + 1, false) orelse return null;
+                    const op = switch (row.op) {
+                        .feq => "==",
+                        .fne => "!=",
+                        .flt => "<",
+                        .fle => "<=",
+                        .fgt => ">",
+                        .fge => ">=",
+                        else => unreachable,
+                    };
+                    return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs });
+                }
+                if (Mir.opClass(row.op) != .unary and Mir.opClass(row.op) != .binary) return null;
+                const a = try self.i64Const(av, depth + 1) orelse return null;
+                if (Mir.opClass(row.op) == .unary) return switch (row.op) {
+                    .opt_barrier => a,
+                    .ineg => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(-%({s}))))", .{a}),
+                    .iabs => try std.fmt.allocPrint(self.arena, "zIabs({s})", .{a}),
+                    .bitnot => try std.fmt.allocPrint(self.arena, "~({s})", .{a}),
+                    .lognot => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) == 0))", .{a}),
+                    else => null,
+                };
+                const rhs = try self.i64Const(bv, depth + 1) orelse return null;
+                const op: []const u8 = switch (row.op) {
+                    .iadd => "+%",
+                    .isub => "-%",
+                    .imul => "*%",
+                    .bitand => "&",
+                    .bitor => "|",
+                    .bitxor, .bitxnor => "^",
+                    .ieq => "==",
+                    .ine => "!=",
+                    .ilt => "<",
+                    .ile => "<=",
+                    .igt => ">",
+                    .ige => ">=",
+                    else => "",
+                };
+                return switch (row.op) {
+                    .iadd, .isub, .imul => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(({s}) {s} ({s}))))", .{ a, op, rhs }),
+                    .bitand, .bitor, .bitxor => try std.fmt.allocPrint(self.arena, "(({s}) {s} ({s}))", .{ a, op, rhs }),
+                    .bitxnor => try std.fmt.allocPrint(self.arena, "~(({s}) ^ ({s}))", .{ a, rhs }),
+                    .ieq, .ine, .ilt, .ile, .igt, .ige => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs }),
+                    // The quotient can reach +2^63 for minInt(i64)/-1;
+                    // i65 holds that intermediate before the MIR's wrap32.
+                    .idiv => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @panic(\"VerA: zero divisor in integer parameter derivation is not implemented\") else @as(i64, @as(i32, @truncate(@divTrunc(@as(i65, {s}), @as(i65, {s}))))))", .{ rhs, a, rhs }),
+                    .imod => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @panic(\"VerA: zero divisor in integer parameter derivation is not implemented\") else @as(i64, @intCast(@rem(@as(i65, {s}), @as(i65, {s})))))", .{ rhs, a, rhs }),
+                    .logand, .logor => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool((({s}) != 0) {s} (({s}) != 0)))", .{ a, if (row.op == .logand) "and" else "or", rhs }),
+                    .shl => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(zShl({s}, {s}))))", .{ a, rhs }),
+                    .shr => try std.fmt.allocPrint(self.arena, "zShr({s}, {s})", .{ a, rhs }),
+                    .imin, .imax => try std.fmt.allocPrint(self.arena, "@as(i64, {s}({s}, {s}))", .{ if (row.op == .imin) "@min" else "@max", a, rhs }),
+                    else => null,
+                };
+            },
+            else => return null,
+        }
+    }
+
     /// A plain-f64 expression for an operator CONTROL argument (delay,
     /// transition time, initial condition, …), or null when the argument is not
     /// one the host can evaluate outside the S domain.
@@ -4666,22 +4888,15 @@ pub const Gen = struct {
     // ponytail: the op set is arithmetic, min/max, and the whole of Table 4-14
     // and Table 4-15 — every scalar math operator, because §6.3.4 puts no
     // restriction on which ones a dependent parameter's default may use and a
-    // missing case is SILENT there (no derive line, the field frozen at the
-    // fold-through-defaults value). What is still absent is the control flow a
-    // value can carry: `select`, `phi` and `fmod` get a diagnostic, not silence.
+    // missing case must be diagnosed there, rather than freezing the field at
+    // its declared value after a host write. Pure two-way conditionals render
+    // as lazy Zig if expressions; arbitrary control flow remains unsupported.
     // Ceiling: unlike `foldConst` this never looks through a parameter's
     // DEFAULT, because the host overrides parameters at run time.
     //
-    // ponytail: control flow is where the §6.3.4 half stops. `parameter real k
-    // = (w > 2) ? 1.5 : 2.5;` lowers to a diamond and a phi, so no `derive()`
-    // line is written for it and `k` keeps the value it has under `w`'s
-    // DECLARED default even if the host overrides `w`. The value is at least
-    // right (`ParamInfo.folded` carries `constEval`'s answer into
-    // `paramDefault`); what is missing is that it follows. The upgrade path is
-    // to render the diamond here as a Zig `if`, which is a statement and not an
-    // expression fragment — so it needs `emitDerive` to take a rendered
-    // STATEMENT, not the `[]const u8` expression this returns. No model in the
-    // tree asks; the day one does, that is the shape.
+    // ponytail: loop-carried and multiway phis are not expression fragments.
+    // Supporting them needs execution of the constant-function CFG; the
+    // two-way renderer deliberately does not guess their values.
     ///
     /// `in_unit` says the expression lands in a UNIT BODY rather than in a
     /// host-side `derive` line or `updateState`, and that changes two things.
@@ -4733,7 +4948,15 @@ pub const Gen = struct {
             if (!self.foldHidesSlot(v, 0)) {
                 if (self.an.foldConst(v, 0, false)) |k| return try self.fmtF64(k.f);
             }
-        } else if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
+        } else {
+            // A real parameter may depend on integer arithmetic. Evaluate that
+            // subtree at its integer width before converting its final value.
+            if (self.an.tyOf(v) == .int) {
+                const integer = try self.i64Const(v, depth + 1) orelse return null;
+                return try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt({s}))", .{integer});
+            }
+            if (self.an.foldConst(v0, 0, false)) |k| return try self.fmtF64(k.f);
+        }
         switch (self.mir.valueDef(v)) {
             .param_ref => |p| {
                 self.uses_model = true;
@@ -4746,6 +4969,7 @@ pub const Gen = struct {
             .inst_result => |inst| {
                 const row = self.mir.instRow(inst);
                 if (in_unit and !devSafe(row.op)) return null;
+                if (!in_unit and (row.op == .select or row.op == .phi)) return self.hostConditionalExpr(inst, depth, .real);
                 // §9.15 a host-published `$simparam` IS a Model field, so a
                 // §3.4 parameter default written over it renders here and
                 // `emitDerive` picks it up. Without this the default folded to
@@ -4801,6 +5025,11 @@ pub const Gen = struct {
                         return try std.fmt.allocPrint(self.arena, "{s}{s}{s}", .{ fix[0], a, fix[1] });
                     },
                     .binary => {
+                        if (row.op == .fmod) {
+                            const a = try self.f64Const(@enumFromInt(row.a), depth + 1, in_unit) orelse return null;
+                            const b2 = try self.f64Const(@enumFromInt(row.b), depth + 1, in_unit) orelse return null;
+                            return try std.fmt.allocPrint(self.arena, "(if (({s}) == 0.0) @panic(\"VerA: real parameter remainder divisor is zero\") else @rem({s}, {s}))", .{ b2, a, b2 });
+                        }
                         // Integer ops render in the f64 domain like `foldConst`
                         // folds them there; `idiv` is left out because its
                         // truncation is NOT what `/` does on an f64.
@@ -5081,6 +5310,7 @@ pub const Gen = struct {
     /// outlives the expression (a string slot is a `[]const u8`), and the
     /// instruction id is the per-call-site name `zSBuf` keys that storage by.
     fn emitSysCall(self: *Gen, name: []const u8, args: []const Mir.Value, inst: Mir.Inst) Error!void {
+        if (std.mem.eql(u8, name, "$display$width")) return self.renderVal(args[0], .int);
         const eq = std.mem.eql;
         // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In a
         // device they fall through to `void_tasks` below.
@@ -5163,6 +5393,10 @@ pub const Gen = struct {
         // here answered is the same set that escaped E0811 at lowering.
         if (eq(u8, name, "$simparam")) {
             const nm = self.strArg(args, 0) orelse "";
+            if (Lower.simparamIsRuntime(nm)) {
+                self.uses_inst = true;
+                return self.b("S.con(@floatFromInt(inst.newton_iteration))", .{});
+            }
             // Host-published first: `simparamValue` also answers `tnom`, but
             // only as the DECLARED default (`Lower.simparamHostField`).
             if (Lower.simparamHostField(nm)) |f| {
@@ -5248,6 +5482,10 @@ pub const Gen = struct {
             self.pinLanes(args[1]);
             return self.helper2("zLimitUf", args[0], args[1]);
         }
+        if (eq(u8, name, "$limit$old")) {
+            self.uses_inst = true;
+            return self.b("S.con(inst.limiter_previous[{d}])", .{self.intArg(args, 0) orelse unreachable});
+        }
         if (eq(u8, name, "$limit"))
             return self.renderVal(if (args.len > 0) args[0] else .f_zero, .real);
         if (eq(u8, name, "$clog2"))
@@ -5295,11 +5533,9 @@ pub const Gen = struct {
         // UNTOUCHED, which would need the assignment to become a select on a
         // per-item `found` flag. Reading a destination past the returned count is
         // the only way to observe the difference.
-        if (eq(u8, name, "$table_model")) return self.emitTable(args); // §9.21
-        // §3.2.2 runtime array index — one switch, see `emitIdx`.
-        if (eq(u8, name, "$idx")) return self.emitIdx(args, .real);
-        if (eq(u8, name, "$idx$int")) return self.emitIdx(args, .int);
-        if (eq(u8, name, "$idx$str")) return self.emitIdx(args, .str);
+        if (eq(u8, name, "$table_model")) return self.emitTable(inst, args); // §9.21
+        // §§3.2/5.7 runtime array index — one switch, see `emitIdx`.
+        if (array_index_types.get(name)) |ty| return self.emitIdx(args, ty);
         // §9.13 Table 9-10, in the shape `Lower.lowerRandom` rewrote it: the
         // seed's incoming value, then the distribution's parameters. Every one is
         // a pure function of that seed and carries no derivative — a variate is a
@@ -5324,13 +5560,12 @@ pub const Gen = struct {
         // `Lower.isFileCall` above now claims every §9.5 spelling in BOTH display
         // modes, so nothing in that family reaches this list.
         const void_tasks = [_][]const u8{
-            "$display",       "$displayb",  "$displayo",   "$displayh",
-            "$write",         "$writeb",    "$writeo",     "$writeh",
-            "$strobe",        "$strobeb",   "$strobeo",    "$strobeh",
-            "$monitor",       "$monitoron", "$monitoroff", "$debug",
-            "$finish",        "$stop",      "$fatal",      "$error",
-            "$warning",       "$info",
-            "$discontinuity", "$bound_step",
+            "$display", "$displayb",  "$displayo",      "$displayh",
+            "$write",   "$writeb",    "$writeo",        "$writeh",
+            "$strobe",  "$strobeb",   "$strobeo",       "$strobeh",
+            "$monitor", "$monitoron", "$monitoroff",    "$debug",
+            "$finish",  "$stop",      "$fatal",         "$error",
+            "$warning", "$info",      "$discontinuity", "$bound_step",
         };
         for (void_tasks) |t| {
             if (eq(u8, name, t)) return self.b("S.con(0.0)", .{});
@@ -5838,7 +6073,7 @@ pub const Gen = struct {
         if (self.display_name.len == 0) return;
         try self.w(
             \\/// §9.4 run this module's display tasks once, in source order.
-            \\pub fn display(comptime S: type, x: [n_u]S, model: *const Model, inst: *const Instance, _: f64) void {{
+            \\pub fn display(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) void {{
             \\    _ = {s}(S, x, model, inst);
             \\}}
             \\
@@ -5863,7 +6098,7 @@ pub const Gen = struct {
         const at_model = self.out.items.len;
         try self.w("model: *const Model, ", .{});
         const at_inst = self.out.items.len;
-        try self.w("inst: *const Instance, _: f64) [n_u]S {{\n    ", .{});
+        try self.w("inst: InstancePtr, _: f64) [n_u]S {{\n    ", .{});
         const at_mut = self.out.items.len;
         try self.w("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
         const stamps = try self.emitStamps(react);
@@ -5890,6 +6125,15 @@ pub const Gen = struct {
         // not recover this by itself — measured, see `planCommon`'s header — so
         // the number of times the model runs is decided here, in the emitter.
         var opened = false;
+        if (self.lower.table_effect != .f_zero) {
+            opened = true;
+            self.uses_x = true;
+            self.uses_model = true;
+            self.uses_inst = true;
+            self.core_wanted = true;
+            if (!self.core_hoisted) try self.b("    const m = core(S, x, model, inst);\n", .{});
+            try self.b("    _ = m.f{d};\n", .{self.coreIdx(self.an.rv(self.lower.table_effect)).?});
+        }
 
         for (self.lower.contributions.items, 0..) |c, i| {
             const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
@@ -6105,7 +6349,7 @@ pub const Gen = struct {
         const at_model = self.out.items.len;
         try self.w("model: *const Model, ", .{});
         const at_inst = self.out.items.len;
-        try self.w("inst: *const Instance, _: f64) struct {{ res: [n_u]S, q: [n_u]S }} {{\n", .{});
+        try self.w("inst: InstancePtr, _: f64) struct {{ res: [n_u]S, q: [n_u]S }} {{\n", .{});
         // Reserved: the hoisted `core` line is INSERTED here afterwards, once
         // both halves have said whether either wants one. Every offset taken
         // above is before this point, so none of them move.
@@ -6435,7 +6679,7 @@ pub const Gen = struct {
         if (uses_core) {
             try self.w("    var xr: [n_u]R = undefined;\n", .{});
             try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
-            try self.w("    const m = core(R, xr, model, inst);\n", .{});
+            try self.w("    const m = core(R, xr, model, {s});\n", .{try self.probeInstance()});
         } else {
             self.patchParam(at_x, "x".len);
             self.patchParam(at_model, "model".len);
@@ -6509,6 +6753,14 @@ pub const Gen = struct {
             \\/// §4.5.2 accepted-step bookkeeping for the analog operators.
             \\pub const State = struct {{
             \\    t_prev: f64 = 0.0,
+            \\
+        , .{});
+        if (self.lower.limit_slots.items.len != 0) try self.w(
+            "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
+            .{self.lower.limit_slots.items.len},
+        );
+        if (self.lower.uses_newton_iter) try self.w("    newton_iteration: u32 = 1,\n", .{});
+        try self.w(
             \\}};
             \\
             \\pub fn initState(_: *const Model, _: *Instance) State {{
@@ -6532,7 +6784,7 @@ pub const Gen = struct {
         // the inputs are fields of the same struct, so the accepted-step sweep
         // costs exactly one model evaluation however many operators there are.
         // `model` is always live because that call reads it. `dt` is not.
-        if (uses_core) try self.w("    const m = core(R, xr, model, inst);\n", .{});
+        if (uses_core) try self.w("    const m = core(R, xr, model, {s});\n", .{try self.probeInstance()});
         // §5.6.1.2 stage this iterate's path-latch operands. They become the
         // committed base ONLY at stateCtl(.commit): a rejected attempt leaves
         // pb/pq untouched, so the retry reopens on the accepted charge with a
@@ -6763,6 +7015,41 @@ pub const Gen = struct {
             \\
         , .{});
         if (self.emitsStateCtl()) try self.emitStateCtl();
+        try self.emitAdvanceIteration();
+    }
+
+    /// Called after evaluating a Newton iterate, with that iterate's x.
+    /// All return values are computed before any history slot is changed.
+    fn emitAdvanceIteration(self: *Gen) Error!void {
+        if (self.lower.limit_slots.items.len == 0 and !self.lower.uses_newton_iter and self.lower.reject_iteration_place == null) return;
+        if (self.lower.uses_newton_iter) try self.w(
+            "pub fn beginSolve(inst: *Instance) void {{\n    inst.newton_iteration = 1;\n}}\n\n",
+            .{},
+        );
+        var uses_core = false;
+        for (self.lower.limit_slots.items) |slot| uses_core = uses_core or self.coreIdx(self.an.rv(slot.final)) != null;
+        const uses_inst = uses_core or self.lower.uses_newton_iter or self.lower.limit_slots.items.len != 0;
+        try self.w("pub fn advanceIteration({s}: *const Model, {s}: *Instance, {s}: [n_u]f64) void {{\n", .{
+            if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_",
+        });
+        if (uses_core) try self.w(
+            "    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n    const m = core(R, xr, model, {s});\n",
+            .{try self.probeInstance()},
+        );
+        for (self.lower.limit_slots.items, 0..) |slot, k| {
+            if (self.coreIdx(self.an.rv(slot.final))) |lo|
+                try self.w("    inst.limiter_previous[{d}] = m.f{d}.v;\n", .{ k, lo })
+            else
+                try self.w("    inst.limiter_previous[{d}] = 0.0;\n", .{k});
+        }
+        if (self.lower.uses_newton_iter) try self.w("    inst.newton_iteration +|= 1;\n", .{});
+        try self.w("}}\n\n", .{});
+        if (self.lower.reject_iteration_place != null) {
+            try self.w("pub fn checkConvergence(model: *const Model, inst: *const Instance, x: [n_u]f64) bool {{\n", .{});
+            const probe_inst = try self.probeInstance();
+            try self.w("    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n" ++
+                "    return core(R, xr, model, {s}).f{d} == 0;\n}}\n\n", .{ probe_inst, self.coreIdx(self.an.rv(self.lower.reject_iteration)).? });
+        }
     }
 
     /// §5.10.5 `timer(start_time, period)` — the host's `nextBreakpoint` hook.
@@ -6975,9 +7262,11 @@ pub const Gen = struct {
             // batch's, and it is the only writer of `hp_*`.
             if (self.pc_vals.len != 0 or self.hp_vals.len != 0)
                 "    var pin = inst.*;\n    precompute(&pin, model);\n"
+            else if (self.lower.table_samples.items.len != 0)
+                "    var pin = inst.*;\n"
             else
                 "",
-            if (self.pc_vals.len != 0 or self.hp_vals.len != 0) "&pin" else "inst",
+            if (self.pc_vals.len != 0 or self.hp_vals.len != 0 or self.lower.table_samples.items.len != 0) "&pin" else "inst",
         });
         for (pairs, 0..) |p, pi| {
             const fi = @intFromEnum(self.an.rv(p.flag));
@@ -7205,6 +7494,12 @@ pub fn callArgIsValue(name: []const u8, i: usize, display: Display) bool {
     // `emitFileCallDropped`, which exists precisely so this answer can be one
     // rule instead of two.
     if (display == .emit and Lower.isFileCall(name)) return true;
+    if (eq(u8, name, "$rng$check")) return i != 1; // prior effect and checked values
+    // A live variate/Next call reads its seed and numeric parameters. The
+    // automatic-seed site's index is consumed by the emitter, not at runtime.
+    if (std.mem.startsWith(u8, name, "$rng$")) return !eq(u8, name, "$rng$auto");
+    if (array_index_types.has(name)) return i > 0; // index and selectable cells
+    if (eq(u8, name, "$limit$uf")) return i < 2;
     if (eq(u8, name, "ddx")) return i == 0;
     if (eq(u8, name, "limexp")) return i == 0;
     if (name.len == 0 or name[0] != '$') return false; // events, noise, analysis
@@ -7590,8 +7885,10 @@ const math_txt =
     \\fn zShl(a: i64, n: i64) i64 {
     \\    return if (n < 0) 0 else std.math.shl(i64, a, n);
     \\}
-    \\fn zShr(a: u32, n: i64) u32 {
-    \\    return if (n < 0) 0 else std.math.shr(u32, a, n);
+    \\fn zShr(a: i64, n: i64) i64 {
+    \\    if (n == 0) return a; // preserve signed/unsigned operand identity
+    \\    const bits: u32 = @bitCast(@as(i32, @truncate(a)));
+    \\    return if (n < 0) 0 else std.math.shr(u32, bits, n);
     \\}
     \\fn zClog2(a: i64) i64 { // §9.11 $clog2
     \\    if (a <= 1) return 0;
@@ -7944,6 +8241,7 @@ const prelude_head_txt =
     \\const U = dev.U;
     \\const Model = dev.Model;
     \\const Instance = dev.Instance;
+    \\const InstancePtr = contract.InstancePtr(dev);
     \\const AnalysisKind = dev.AnalysisKind;
     \\const n_u = contract.nU(dev);
     \\
@@ -9578,6 +9876,29 @@ test "codegen: §5.6.5 a zero-short switch branch emits a collapse hook" {
     ) != null);
 }
 
+test "codegen: table capture is isolated from topology queries" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module d(a, c);
+        \\  inout a, c; electrical a, c, ai;
+        \\  parameter real rs = 0.0 from [0:inf);
+        \\  branch (a, ai) rsb;
+        \\  real xs[0:1], ys[0:1];
+        \\  analog begin
+        \\    if (rs > 0.0) I(rsb) <+ V(rsb) / rs;
+        \\    else V(rsb) <+ 0.0;
+        \\    xs[0]=0; xs[1]=1; ys[0]=$abstime; ys[1]=$abstime+2;
+        \\    I(ai, c) <+ $table_model(0.5,xs,ys);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const collapse = src[std.mem.indexOf(u8, src, "pub fn collapse(") orelse return error.NoCollapse ..];
+    try std.testing.expect(std.mem.indexOf(u8, collapse, "var pin = inst.*;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, collapse, "core(R, xr, model, &pin)") != null);
+}
+
 test "codegen: no collapse hook without the zero-short pattern" {
     // An unconditional resistor has nothing to collapse.
     var h: Harness = undefined;
@@ -9711,6 +10032,41 @@ test "codegen: a systf call reassembles the host's value and partials into one S
     // brings the partial back; dropping either half is the failure this pins.
     try std.testing.expect(std.mem.indexOf(u8, src, ".val() }") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".addC(-zsv[0]).scale(zsp[0])") != null);
+}
+
+test "codegen: host parameter derivation reconstructs unconverted pure conditional phis" {
+    // Harness intentionally skips if-conversion. The public driver also tests
+    // the converted selects through the 90_dependent_control execution fixtures.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module conditional_parameter(p);
+        \\  inout p; electrical p;
+        \\  parameter real a = 0.0;
+        \\  parameter real b = 0.3;
+        \\  localparam integer decision = (a > 0.0) && (a < b);
+        \\  localparam real value = decision ? (b > 0.0 ? b : 2.0) : 3.0;
+        \\  analog I(p) <+ value * V(p);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "model.decision = ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "model.value = @as(f64, if (") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "(model.a) < (model.b)") != null);
+}
+
+test "codegen: an unsupported dependent default diagnoses instead of freezing" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module unsupported_parameter;
+        \\  parameter integer amount = 2;
+        \\  localparam integer size = $clog2(amount);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try std.testing.expectError(error.UnsupportedParameterDefault, h.gen(std.testing.allocator));
+    for (h.bag.messages()) |mi| if (h.bag.get(mi).code == .E1004) return;
+    return error.MissingDiagnostic;
 }
 
 test "codegen: §3.4 a default with no compile-time value is W1050, a derived one is silent" {
@@ -9878,8 +10234,8 @@ test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digi
     }
     try std.testing.expect(neg and pos);
     // Repeatability (§9.13.2 "shall always return the same value given the same
-    // seed") and finiteness — which `proof.callAbstract` asserts of the whole
-    // family, so a NaN here would be a wrong `.optimized`.
+    // seed") and finiteness for these particular seeds and ordinary parameters.
+    // The family is not finite in general; the proof pass must stay conservative.
     for ([_]i64{ -2147483647, -7, 0, 1, 7, 42, 2147483646 }) |s| {
         try std.testing.expectEqual(k.zRngNext(s), k.zRngNext(s));
         try std.testing.expect(k.zRngNext(s) != @as(f64, @floatFromInt(s))); // inout: different
@@ -10043,7 +10399,7 @@ test "codegen: §9.21 the emitted table interpolator is the one the fixtures ass
     // Figure 9-2's own lookup and its own answer: bracket y=0.25 by the 0.0/0.5
     // isolines, interpolate each at x=3.5 (1.75 and 2.25), interpolate those in
     // y. Every intermediate is dyadic, so this is exact.
-    const f = k.zTable(S, 12, 3, 2, 2, "LLLL", rows, [_]S{ .{ .v = 0.25 }, .{ .v = 3.5, .d = 1.0 } });
+    const f = k.zTable(S, 12, 3, 2, 2, "1LL1LL", rows, [_]S{ .{ .v = 0.25 }, .{ .v = 3.5, .d = 1.0 } });
     try std.testing.expectEqual(@as(f64, 2.0), f.v);
     // The scheme is piecewise linear and the samples lie on 0.5x + y, so ∂f/∂x
     // is 0.5 — the Jacobian entry a probe in the lookup slot owes the solver.
@@ -10056,34 +10412,55 @@ test "codegen: §9.21 the emitted table interpolator is the one the fixtures ass
     for (0..12) |r| for (0..3) |c| {
         back[r * 3 + c] = rows[(11 - r) * 3 + c];
     };
-    const g = k.zTable(S, 12, 3, 2, 2, "LLLL", back, [_]S{ .{ .v = 0.25 }, .{ .v = 3.5 } });
+    const g = k.zTable(S, 12, 3, 2, 2, "1LL1LL", back, [_]S{ .{ .v = 0.25 }, .{ .v = 3.5 } });
     try std.testing.expectEqual(@as(f64, 2.0), g.v);
 
     // 131_table_model_array_control.va: one dimension, two samples on f(x) = 2x,
     // "1LL;1" — halfway between them.
     const line = [_]f64{ 1.0, 2.0, 3.0, 6.0 };
-    const h1 = k.zTable(S, 2, 2, 1, 1, "LL", line, [_]S{.{ .v = 2.0, .d = 1.0 }});
+    const h1 = k.zTable(S, 2, 2, 1, 1, "1LL", line, [_]S{.{ .v = 2.0, .d = 1.0 }});
     try std.testing.expectEqual(@as(f64, 4.0), h1.v);
     try std.testing.expectEqual(@as(f64, 2.0), h1.d);
     // Table 9-31: linear extrapolation "extends linearly to the requested point
     // from the endpoint using a slope consistent with the selected interpolation
     // method" — so f(0) = 0 and f(5) = 10 off both ends…
-    try std.testing.expectEqual(@as(f64, 0.0), k.zTable(S, 2, 2, 1, 1, "LL", line, [_]S{.{ .v = 0.0 }}).v);
-    try std.testing.expectEqual(@as(f64, 10.0), k.zTable(S, 2, 2, 1, 1, "LL", line, [_]S{.{ .v = 5.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 0.0), k.zTable(S, 2, 2, 1, 1, "1LL", line, [_]S{.{ .v = 0.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 10.0), k.zTable(S, 2, 2, 1, 1, "1LL", line, [_]S{.{ .v = 5.0 }}).v);
     // …while constant extrapolation "returns the table endpoint value", and the
     // two ends are independent: `"CL"` clamps below 1.0 and still extrapolates
     // above 3.0. A swapped pair would pass every symmetric test there is.
-    const cl = k.zTable(S, 2, 2, 1, 1, "CL", line, [_]S{.{ .v = 0.0, .d = 1.0 }});
+    const cl = k.zTable(S, 2, 2, 1, 1, "1CL", line, [_]S{.{ .v = 0.0, .d = 1.0 }});
     try std.testing.expectEqual(@as(f64, 2.0), cl.v);
     try std.testing.expectEqual(@as(f64, 0.0), cl.d); // clamped ⇒ flat
-    try std.testing.expectEqual(@as(f64, 10.0), k.zTable(S, 2, 2, 1, 1, "CL", line, [_]S{.{ .v = 5.0 }}).v);
-    try std.testing.expectEqual(@as(f64, 6.0), k.zTable(S, 2, 2, 1, 1, "LC", line, [_]S{.{ .v = 5.0 }}).v);
-    try std.testing.expectEqual(@as(f64, 0.0), k.zTable(S, 2, 2, 1, 1, "LC", line, [_]S{.{ .v = 0.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 10.0), k.zTable(S, 2, 2, 1, 1, "1CL", line, [_]S{.{ .v = 5.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 6.0), k.zTable(S, 2, 2, 1, 1, "1LC", line, [_]S{.{ .v = 5.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 0.0), k.zTable(S, 2, 2, 1, 1, "1LC", line, [_]S{.{ .v = 0.0 }}).v);
     // §9.21.2's dependent selector picks a COLUMN: two dependents over the same
     // isolines, and `;2` reads the second.
     const two = [_]f64{ 1.0, 2.0, 20.0, 3.0, 6.0, 60.0 };
-    try std.testing.expectEqual(@as(f64, 4.0), k.zTable(S, 2, 3, 1, 1, "LL", two, [_]S{.{ .v = 2.0 }}).v);
-    try std.testing.expectEqual(@as(f64, 40.0), k.zTable(S, 2, 3, 1, 2, "LL", two, [_]S{.{ .v = 2.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 4.0), k.zTable(S, 2, 3, 1, 1, "1LL", two, [_]S{.{ .v = 2.0 }}).v);
+    try std.testing.expectEqual(@as(f64, 40.0), k.zTable(S, 2, 3, 1, 2, "1LL", two, [_]S{.{ .v = 2.0 }}).v);
+
+    // Discrete lookup preserves the chosen value and has zero derivative.
+    const discrete = [_]f64{ 3, 30, -1, 10, -3, -30, 1, 20 };
+    for ([_]f64{ -10, -2, -1.25, 0.25, 2, 10 }, [_]f64{ -30, -30, 10, 20, 30, 30 }) |at, expected| {
+        const picked = k.zTable(S, 4, 2, 1, 1, "DLL", discrete, [_]S{.{ .v = at, .d = 1 }});
+        try std.testing.expectEqual(expected, picked.v);
+        try std.testing.expectEqual(@as(f64, 0), picked.d);
+    }
+    const extreme = [_]f64{ -1.7e308, 4, -1.6e308, 8 };
+    try std.testing.expectEqual(@as(f64, 8), k.zTable(S, 2, 2, 1, 1, "DCL", extreme, [_]S{.{ .v = 1.7e308 }}).v);
+    // Different sample coordinates on each isoline; the selected outer line
+    // contributes its inner gradient, while the discrete coordinate stays flat.
+    const mixed = [_]f64{ -1, 0, 10, -1, 4, 18, 3, 1, 20, 3, 5, 32 };
+    const outer_d = k.zTable(S, 4, 3, 2, 2, "DLL1LL", mixed, [_]S{ .{ .v = 1, .d = 1 }, .{ .v = 3 } });
+    const inner_d = k.zTable(S, 4, 3, 2, 2, "DLL1LL", mixed, [_]S{ .{ .v = 1 }, .{ .v = 3, .d = 1 } });
+    try std.testing.expectEqual(@as(f64, 26), outer_d.v);
+    try std.testing.expectEqual(@as(f64, 0), outer_d.d);
+    try std.testing.expectEqual(@as(f64, 3), inner_d.d);
+    const outer_l = k.zTable(S, 4, 3, 2, 2, "1LLDLL", mixed, [_]S{ .{ .v = 0, .d = 1 }, .{ .v = 2, .d = 1 } });
+    try std.testing.expectEqual(@as(f64, 18.5), outer_l.v);
+    try std.testing.expectEqual(@as(f64, 0.5), outer_l.d);
 }
 
 test "codegen: §4.5.11 the bilinear transform is the one the emitted filter runs" {
@@ -10381,13 +10758,13 @@ test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
     // emission site calls `pinLanes` (see each site's comment) or because it
     // steers only on lane-UNIFORM state (dt, ic, inst history — never x).
     const pinned = [_][]const u8{
-        "zPow",    "zHypot", "zFmod", "zFloor", "zCeil",
-        "zAtan2",  "zLimexp", "zWrap",  "zLimitUf",
+        "zPow",   "zHypot",  "zFmod", "zFloor",   "zCeil",
+        "zAtan2", "zLimexp", "zWrap", "zLimitUf",
     };
     const uniform = [_][]const u8{
-        "zDdt", "zIdt", "zIdtAcc", "zIdtmod", "zSlew", "zTransFrac",
-        "zTransition", "zAbsdelay", "zLog10", "zTan", "zAsin", "zAcos",
-        "zAsinh", "zAcosh", "zAtanh", "zPadInt",
+        "zDdt",        "zIdt",      "zIdtAcc", "zIdtmod", "zSlew", "zTransFrac",
+        "zTransition", "zAbsdelay", "zLog10",  "zTan",    "zAsin", "zAcos",
+        "zAsinh",      "zAcosh",    "zAtanh",  "zPadInt",
     };
     const text = math_txt ++ ops_txt;
     var it = std.mem.splitSequence(u8, text, "\nfn ");
@@ -10446,4 +10823,49 @@ test "codegen: §4.5.15 only pnjlim reports non-convergence" {
     try std.testing.expect(std.mem.indexOf(u8, fet, "var ok = true;") == null);
     try std.testing.expect(std.mem.indexOf(u8, fet, "vl != vn") == null);
     try std.testing.expect(std.mem.indexOf(u8, fet, ".converged = true }") != null);
+}
+
+test "codegen: declared integer conversions reach real field initializers" {
+    // Fixture execution calls derive(); these assertions also cover Model{}
+    // before derivation, so correct derive code cannot hide an incorrect seed.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module converted(p);
+        \\  inout p; electrical p;
+        \\  parameter integer a = 4294967297.0;
+        \\  parameter real b = a / 2;
+        \\  parameter integer aa[1:0] = '{4294967297.0,4294967299.0};
+        \\  parameter real c = aa[1] / 2;
+        \\  parameter real d = aa[0] / 2;
+        \\  analog I(p) <+ (b+c+d) * V(p);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const generated = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, generated, "b: f64 = 0.0,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated, "c: f64 = 0.0,") != null);
+    try std.testing.expect(std.mem.indexOf(u8, generated, "d: f64 = 1.0,") != null);
+}
+
+test "codegen: unused distributions retain validation without forcing draw loops" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module d(p,n);
+        \\  inout p,n; electrical p,n;
+        \\  integer seed;
+        \\  real unused;
+        \\  analog begin
+        \\    seed = 7;
+        \\    unused = $rdist_chi_square(seed,2147483647);
+        \\    I(p,n) <+ V(p,n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // The draw functions are defined, but an unused variate and seed do not
+    // introduce a billion-iteration draw. Only the required check is invoked.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "zRngChiSquare("));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "zRngChiSquareNext("));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "zRngCheck("));
 }

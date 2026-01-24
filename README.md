@@ -1,6 +1,6 @@
 # VerA
 
-A Verilog-A compiler. One binary, one self-contained frontend, a device backend.
+A Verilog-A compiler with a full Verilog-AMS conformance target. Digital simulation and other required behavior remain unimplemented; see the [conformance backlog](docs/CONFORMANCE-GAPS.md).
 
 ```
 vera model.va                       lint
@@ -99,12 +99,11 @@ fixture tree in `tests/fixtures/` is organized to mirror.
 
 ## What is actually verified
 
-1237 `.va` fixtures. Each states its own expected behavior in the file — `//!
+The `.va` fixtures under `tests/fixtures/` exercise the implemented analog path. Each states its own expected behavior in the file — `//!
 reject <substring>` to demand a diagnostic, or a `CHECK` from `check.vh` whose
 `ok=1` column is the assertion. There are no sidecar files.
 
-They state what the **LRM** requires rather than what VerA does, so they are a
-conformance suite for any Verilog-AMS compiler. One judge, `tests/harness.zig`,
+Some rejection fixtures target the Verilog-A subset; those are not evidence that rejecting the same construct is conformant in full Verilog-AMS. One judge, `tests/harness.zig`,
 and two runners plug into it: `tests/torture.zig` (VerA, in-process, builds and
 RUNS each fixture) and `tests/external.zig` (any compiler that takes a `.va` path
 and exits nonzero when it refuses one).
@@ -120,21 +119,16 @@ correct and a reviewer's only job was to accept a diff they had no way to check.
 Now a fixture asserts against a number a human derived from the LRM, and
 `torture.zig` refuses a want that is anything but a numeric literal — an
 expression would let VerA supply its own expectation. See
-`tests/fixtures/README.md`.
+[`tests/torture.zig`](tests/torture.zig).
 
-A passing fixture is still not a claim that VerA is right where the fixture itself
-records debt: a rejection the LRM does not sanction opens with a `DEBT` banner
-naming the rule it violates. Three are left, down from 60 — the rest became real
-requirements over seven waves. They stay green on purpose: a suite exists to
-notice change, and a permanently-red fixture notices nothing.
-
-Current, measured on this tree: **1237/1237 behave as they say they do, 0 XFAIL,
-0 FAIL** (`--strict` passes), and no fixture asserts nothing.
+A passing suite establishes only the behavior its cases exercise. Run the strict
+suite and coverage report for current counts; the [conformance backlog](docs/CONFORMANCE-GAPS.md)
+records the audited baseline and open runtime requirements.
 
 ## VerA vs OpenVAF on the same fixtures — a wave-1 SNAPSHOT
 
 **Every number in this section is from `bb2f60c`, when the suite was 1150 files and
-VerA scored 812.** VerA's column is now 1237/1237 (above); OpenVAF's has not been
+VerA scored 812.** Neither column below is a current conformance score; OpenVAF has not been
 re-measured, and re-measuring one column alone would break the only thing the
 table is good for, which is that both were scored by one judge on one tree. Re-run
 `nix develop .#conformance` then `zig build conformance` before quoting it.

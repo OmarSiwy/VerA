@@ -118,6 +118,8 @@ pub const Directives = struct {
     /// `//! print none` leaves the transcript to the model's own `$strobe`s,
     /// which is what a fixture that tests §9.4 formatting wants.
     print_residual: bool = true,
+    /// Expected normal process exit status; signals always fail the fixture.
+    expected_exit: u8 = 0,
     /// `//! spice <one netlist line>`, one per line, joined with newlines in
     /// source order: SPICE netlist text this fixture is compiled AGAINST.
     ///
@@ -252,6 +254,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             d.solve_free = true;
         } else if (std.mem.eql(u8, kw, "analysis")) {
             d.analysis = std.meta.stringToEnum(Analysis, rest) orelse return error.BadSyntax;
+        } else if (std.mem.eql(u8, kw, "exit")) {
+            d.expected_exit = std.fmt.parseInt(u8, rest, 10) catch return error.BadNumber;
         } else if (std.mem.eql(u8, kw, "reject")) {
             // The whole rest of the line is ONE substring, verbatim: the
             // expectations being migrated are message fragments like
@@ -504,7 +508,6 @@ fn number(raw: []const u8) Error!f64 {
     return std.fmt.parseFloat(f64, buf[0 .. head.len + exp.len]) catch error.BadNumber;
 }
 
-
 // ---------------------------------------------------------------------------
 // Runner generation
 // ---------------------------------------------------------------------------
@@ -534,7 +537,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         // §9.19 `$param_given` is answered from a companion field when codegen
         // emitted one. Setting the value without it would make an explicit
         // override read as "not given".
-        try print(&out, arena,
+        try print(
+            &out,
+            arena,
             "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n",
             .{ std.zig.fmtString(p.name), std.zig.fmtString(p.name) },
         );
@@ -656,7 +661,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
                 try print(&out, arena, "        pm.{f} = {f};\n", .{ std.zig.fmtId(s.name), fmtF64(v) });
-                try print(&out, arena,
+                try print(
+                    &out,
+                    arena,
                     "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n",
                     .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) },
                 );
@@ -670,7 +677,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         // determine. Newton needs the distinction; a bare evaluation did not.
         // Its DEFAULT is the harness's netlist — every unknown tied to the
         // reference — and `//! solve` is what unties the ones no line names.
-        try print(&out, arena,
+        try print(
+            &out,
+            arena,
             "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n        var state = newState(&{s}, &inst);\n",
             .{ if (d.solve_free) "null" else "0.0", mdl },
         );
@@ -711,22 +720,12 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // the model print. Every `//!` value is still exactly itself — it
             // came in as a constraint row — and everything else is now the
             // number the device's own equations put there.
-            try print(&out, arena, "        solve(&x, &forced, &{s}, &inst);\n", .{mdl});
-            // §9.17.3 the `$limit` previous-iterate promotion, for a device that
-            // carries one — before the evaluation that reads it, exactly as a
-            // solver orders it (`stepPre`). No-op for every other device.
-            //
-            // Not before the FIRST evaluation, for the same reason the solver
-            // does not: `updateState` runs once per iterate on the iterate's
-            // own x, so before evaluation n there have been exactly n of them
-            // and the first has none. That is also what makes
-            // `$simparam("iteration")` read 1 there.
-            if (n != 0) try print(&out, arena, "        stepPre(&{s}, &inst, &x, &state);\n", .{mdl});
+            try print(&out, arena, "        const solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
             try print(&out, arena, "        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
             // of `Instance`, and only `updateState` ever writes it.
-            try print(&out, arena, "        stepPost(&{s}, &inst, &x, &state);\n", .{mdl});
+            try print(&out, arena, "        stepPost(&{s}, &inst, &x, &state, solved{d});\n", .{ mdl, n });
             n += 1;
         }
         try out.appendSlice(arena, "    }\n");
@@ -845,6 +844,8 @@ const runner_body =
     \\/// exempt from it: an exemption for the tool's own host is how a seam stops
     \\/// being tested, and this is the host that runs against every device the
     \\/// torture suite compiles.
+    \\pub const iteration_hooks = true;
+    \\pub const mutable_eval = true;
     \\pub fn systf(_: *const D.Model) ?*const contract.SystfHost {
     \\    return &no_vpi_app;
     \\}
@@ -987,7 +988,7 @@ const runner_body =
     \\/// for a vectorizer that contracts differently than the scalar pipeline.
     \\/// Prints nothing on success, so transcripts never move; a mismatch is a
     \\/// loud failure of the run.
-    \\fn laneCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\fn laneCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    if (comptime !(@hasDecl(D, "lane_clean") and D.lane_clean)) return;
     \\    var xs: [NL][n_u]f64 = undefined;
     \\    var xv: [n_u]Vec = undefined;
@@ -1033,7 +1034,7 @@ const runner_body =
     \\/// return. Same ops, same order, same core — bit equality, no epsilon.
     \\/// A mismatch means the shared-core hoist changed the physics, which is
     \\/// the only way this refactor can be wrong.
-    \\fn fusedCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\fn fusedCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    if (comptime !@hasDecl(D, "evalQ")) return;
     \\    const xd = seed(x);
     \\    const both = D.evalQ(Dual, xd, model, inst, t);
@@ -1056,7 +1057,7 @@ const runner_body =
     \\/// Jacobian entry, and that is the one way the declaration can be wrong.
     \\/// The converse is legal: the pattern over-approximates on purpose, and a
     \\/// set bit that happens to be zero at this bias costs one stamp.
-    \\fn patternCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\fn patternCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    const xd = seed(x);
     \\    const r = D.eval(Dual, xd, model, inst, t);
     \\    if (comptime @hasDecl(D, "jac_pattern")) patAssert("res", D.jac_pattern, &r);
@@ -1129,22 +1130,20 @@ const runner_body =
     \\    _ = D.updateState(model, inst, x.*, state);
     \\}
     \\
-    \\/// §9.17.3 `$limit` STATE MOVES BEFORE THE EVALUATION THAT READS IT.
-    \\///
-    \\/// A solver calls `updateState` on the new x and only THEN evaluates at it
-    \\/// (ARPice converger.zig `finalizeStep`: x += dx; applyLimits; updateStates;
-    \\/// next assemble), because that is what makes the promoted previous-iterate
-    \\/// slot hold what the previous `eval` returned. A device with no such slot
-    \\/// keeps the historical post-point call, so no existing transcript moves —
-    \\/// the §4.5 operator histories this runner was written for are latched at
-    \\/// the ACCEPTED point and read at the next one, which is the same order
-    \\/// either way.
-    \\const limit_state = @hasField(D.Instance, "lu__0");
-    \\fn stepPre(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) void {
-    \\    if (limit_state) step(model, inst, x, state);
-    \\}
-    \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State) void {
-    \\    if (!limit_state) step(model, inst, x, state);
+    \\/// Iteration history advances independently of accepted-time operators.
+    \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) void {
+    \\    if (@hasDecl(D, "advanceIteration")) if (!solved) {
+    \\        // Forced-point fixtures sample both lifetimes. Both updates must
+    \\        // read the same evaluated state, even when their inputs depend
+    \\        // on one another. These two fields are owned by iteration hooks.
+    \\        var next = inst.*;
+    \\        D.advanceIteration(model, &next, x.*);
+    \\        step(model, inst, x, state);
+    \\        if (@hasField(D.Instance, "limiter_previous")) inst.limiter_previous = next.limiter_previous;
+    \\        if (@hasField(D.Instance, "newton_iteration")) inst.newton_iteration = next.newton_iteration;
+    \\        return;
+    \\    };
+    \\    step(model, inst, x, state);
     \\}
     \\
     \\fn seed(x: *const [n_u]f64) [n_u]Dual {
@@ -1165,7 +1164,7 @@ const runner_body =
     \\
     \\/// One operating point: the bias, then whatever the model prints, then the
     \\/// residual it stamps and the Jacobian the solver would see.
-    \\fn point(n: usize, x: *const [n_u]f64, t: f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\fn point(n: usize, x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
     \\    std.debug.print("--- point {d} ---\n", .{n});
     \\    for (0..n_u) |i| std.debug.print("  x[{s}] = {e:.6}\n", .{ u_names[i], x[i] });
     \\    if (inst.abstime != 0.0 or inst.dt != 0.0)
@@ -1290,7 +1289,7 @@ const runner_body =
     \\/// it: a node whose only path is a capacitance stamps an all-zero `eval`
     \\/// row, so it takes the no-pivot branch and holds its declared value the
     \\/// way it always did. Fold q in when a fixture needs a transient solve.
-    \\fn solve(x: *[n_u]f64, forced: *const [n_u]?f64, model: *const D.Model, inst: *const D.Instance) void {
+    \\fn solve(x: *[n_u]f64, forced: *const [n_u]?f64, model: *const D.Model, inst: *D.Instance) bool {
     \\    // Nothing to determine: every unknown is one a `//!` line named, or the
     \\    // reference the harness ties the rest to without `//! solve`. x already
     \\    // holds the answer. Returning here is not only the cheap path — it is
@@ -1298,11 +1297,15 @@ const runner_body =
     \\    // was before there was a solver, so no §9.4 transcript moves.
     \\    for (forced) |f| {
     \\        if (f == null) break;
-    \\    } else return;
+    \\    } else return false;
+    \\    if (@hasDecl(D, "beginSolve")) D.beginSolve(inst);
+    \\    var previous = x.*;
     \\    var worst: usize = 0;
     \\    var worst_dx: f64 = 0.0;
     \\    var iter: usize = 0;
     \\    while (iter < solve_max_iter) : (iter += 1) {
+    \\        if (@hasDecl(D, "advanceIteration")) if (iter != 0) D.advanceIteration(model, inst, previous);
+    \\        previous = x.*;
     \\        const r = D.eval(Dual, seed(x), model, inst, inst.abstime);
     \\        var a: [n_u][n_u]f64 = undefined;
     \\        var b: [n_u]f64 = undefined;
@@ -1337,7 +1340,8 @@ const runner_body =
     \\            }
     \\        }
     \\        for (0..n_u) |i| x[i] += dx[i];
-    \\        if (settled) return;
+    \\        const can_converge = if (@hasDecl(D, "checkConvergence")) D.checkConvergence(model, inst, x.*) else true;
+    \\        if (settled and can_converge) return true;
     \\    }
     \\    // A testbench that does not converge must FAIL, loudly and by exit
     \\    // status, naming the unknown that would not settle. Falling through and
@@ -1505,11 +1509,11 @@ pub fn buildExe(
     defer gpa.free(opt);
 
     const argv = [_][]const u8{
-        opts.zig_exe,  "build-exe",  emit,
-        opt,           "--cache-dir", ".zig-cache",
-        "--dep",       "device",      "--dep",
-        "contract",    m_root,        "--dep",
-        "contract",    m_dev,         m_contract,
+        opts.zig_exe, "build-exe",   emit,
+        opt,          "--cache-dir", ".zig-cache",
+        "--dep",      "device",      "--dep",
+        "contract",   m_root,        "--dep",
+        "contract",   m_dev,         m_contract,
     };
 
     var child = try std.process.spawn(io, .{
@@ -1786,6 +1790,17 @@ test "§4.6.4 `//! noise` states the exported generator table" {
     try testing.expectEqual(@as(usize, 1), odd.noise.len);
 }
 
+test "expected process exit status is explicit and bounded" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    try testing.expectEqual(0, (try parse(arena, "")).expected_exit);
+    try testing.expectEqual(1, (try parse(arena, "//! exit 1\n")).expected_exit);
+    try testing.expectEqual(255, (try parse(arena, "//! exit 255\n")).expected_exit);
+    try testing.expectError(error.BadNumber, parse(arena, "//! exit 256\n"));
+    try testing.expectError(error.BadNumber, parse(arena, "//! exit -1\n"));
+}
+
 test "sweep expansion is the cartesian product, last fastest" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();
@@ -1821,12 +1836,7 @@ test "a wave is per-timepoint and holds its last value" {
     // one `step(...)` per point: the state has to advance or the operators
     // answer from zero history every time.
     try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        point("));
-    // One `stepPre` + one `stepPost` per point; exactly one of the two is live
-    // in any given device (`limit_state`), so the state still advances once.
     try testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "        stepPost(&model"));
-    // `stepPre` skips the first point (the solver's first eval has no preceding
-    // `updateState`), so three of the four.
-    try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "        stepPre(&model"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= newState("));
     try testing.expectEqual(@as(usize, 3), std.mem.count(u8, src, "set(&x, &forced, \"in\", 1);"));
 }
@@ -1857,8 +1867,8 @@ test "§5.10.2 global events mark the first and last point of each analysis" {
     const swept = try renderRunner(arena, "062_sweep", try parse(arena, "//! sweep V(a) = 0, 1, 2\n"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_initial_step = true;"));
     try testing.expectEqual(@as(usize, 1), std.mem.count(u8, swept, "inst.is_final_step = true;"));
-    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        inst.is_analog_initial = true;\n        solve(&x, &forced, &model, &inst);\n        point(0,") != null);
-    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        inst.is_analog_initial = true;\n        solve(&x, &forced, &model, &inst);\n        stepPre(&model, &inst, &x, &state);\n        point(2,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = true;\n        inst.is_final_step = false;\n        inst.is_analog_initial = true;\n        const solved0 = solve(&x, &forced, &model, &inst);\n        point(0,") != null);
+    try testing.expect(std.mem.indexOf(u8, swept, "inst.is_initial_step = false;\n        inst.is_final_step = true;\n        inst.is_analog_initial = true;\n        const solved2 = solve(&x, &forced, &model, &inst);\n        point(2,") != null);
     // §5.2.1 the `analog initial` flag is NOT `is_initial_step`: a dc sweep is one
     // analysis with three SUB-TASKS, so the block re-executes at all three points
     // while the global event fires at one.

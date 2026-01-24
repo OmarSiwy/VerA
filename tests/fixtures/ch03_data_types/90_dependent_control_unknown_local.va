@@ -1,0 +1,8 @@
+// A localparam cannot use an unsupported renderer's host-write escape hatch.
+//! lrm 3.4.5
+//! lrm 6.3.4
+//! reject E1004
+module dependent_control_unknown_local;
+  parameter integer amount = $simparam("gmin");
+  localparam integer size = $clog2(amount);
+endmodule

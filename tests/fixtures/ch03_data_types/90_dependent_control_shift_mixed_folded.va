@@ -1,0 +1,6 @@
+// Constant folding must not bypass the unsupported mixed-context diagnostic.
+//! lrm 4.2.11
+//! reject E0364
+module dependent_control_shift_mixed_folded;
+  localparam integer mixed = 32'h1 < (-1 >> 0);
+endmodule

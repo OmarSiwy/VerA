@@ -214,6 +214,20 @@ pub fn zScanS(src: []const u8, fmt: []const u8, k: i64) []const u8 {
     return zScan(src, fmt, k).s;
 }
 
+/// §3.3 string storage excludes NUL bytes. Compact the completed formatter
+/// output in its existing call-site scratch; padding counted the original bytes.
+/// ponytail: scalar compaction is bounded by the existing 512-byte formatter;
+/// consider mask-based compaction if that ceiling is removed and measured hot.
+pub fn zStringStore(bytes: []u8) []const u8 {
+    var used: usize = 0;
+    for (bytes) |byte| {
+        if (byte == 0) continue;
+        bytes[used] = byte;
+        used += 1;
+    }
+    return bytes[0..used];
+}
+
 /// Scratch for ONE `$sformat`/`$swrite` call site, keyed by the site's MIR
 /// instruction id. The formatted bytes have to outlive the expression that
 /// produced them — a string slot is a `[]const u8` and the writer is a
