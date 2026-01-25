@@ -103,6 +103,12 @@ pub const Code = enum(u16) {
     E0138,
     /// §10.4: the macro TEXT may not begin with __VAMS_.
     E0139,
+    /// IEEE 1364 §19.2: the operand of `default_nettype.
+    E0140,
+    /// IEEE 1364 §19.10: the operand of `unconnected_drive.
+    E0141,
+    /// IEEE 1364 §19.9: the operands of `timescale.
+    E0142,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -301,6 +307,8 @@ pub const Code = enum(u16) {
     E0363,
     /// Known mixed-signedness shift comparison needs missing context typing.
     E0364,
+    /// §3.6.5 / IEEE 1364 §19.2: an implicit net under `default_nettype none.
+    E0365,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -952,7 +960,7 @@ fn infoOf(c: Code) Info {
         },
         .E0135 => .{
             .title = "unsupported keyword set",
-            .lrm = "10.2",
+            .lrm = "10.6",
             .explain =
             \\`begin_keywords takes a quoted version specifier naming the
             \\keyword set to make active. VerA recognises the Verilog-AMS
@@ -962,7 +970,7 @@ fn infoOf(c: Code) Info {
         },
         .E0136 => .{
             .title = "`end_keywords without `begin_keywords",
-            .lrm = "10.2",
+            .lrm = "10.6",
             .explain =
             \\`end_keywords pops the keyword set that `begin_keywords pushed.
             \\This one has nothing to pop.
@@ -1007,6 +1015,70 @@ fn infoOf(c: Code) Info {
             \\10.5 predefined macro and shadow it.
             ,
         },
+        .E0140 => .{
+            .title = "`default_nettype takes one net type",
+            .lrm = "10.1",
+            .explain =
+            \\LRM 10.1 carries `default_nettype over from IEEE Std 1364
+            \\unchanged, and 1364 19.2 gives it a closed grammar with no
+            \\brackets round the operand:
+            \\
+            \\    `default_nettype default_nettype_value
+            \\    default_nettype_value ::=
+            \\        wire | tri | tri0 | tri1 | wand | triand
+            \\      | wor | trior | trireg | uwire | none
+            \\
+            \\So the operand is MANDATORY and the list is closed. The two
+            \\mistakes this catches are a missing operand and a word off the
+            \\list -- most often one of 10.2's `default_discipline qualifiers,
+            \\which is a longer list for a different directive: `integer`,
+            \\`real`, `reg`, `wreal`, `supply0` and `supply1` are qualifiers
+            \\but not net types an implicit net may have.
+            \\
+            \\`none` is the member that does something: it withdraws implicit
+            \\nets, so an undeclared identifier used as a net becomes E0365
+            \\instead of a silently created wire.
+            ,
+        },
+        .E0141 => .{
+            .title = "`unconnected_drive takes pull0 or pull1",
+            .lrm = "10.1",
+            .explain =
+            \\LRM 10.1 carries `unconnected_drive over from IEEE Std 1364
+            \\unchanged, and 1364 19.10 makes the operand a two-way
+            \\alternation with no bracket round it:
+            \\
+            \\    `unconnected_drive pull1 | pull0
+            \\
+            \\The form that takes no operand is a DIFFERENT directive and has
+            \\its own row in Table 10-1: `nounconnected_drive. So a bare
+            \\`unconnected_drive is not "restore the default", it is a
+            \\directive with its operand missing.
+            ,
+        },
+        .E0142 => .{
+            .title = "malformed `timescale",
+            .lrm = "10.1",
+            .explain =
+            \\LRM 10.1 carries `timescale over from IEEE Std 1364 unchanged.
+            \\1364 19.9 gives it a closed grammar --
+            \\
+            \\    `timescale <time_unit> / <time_precision>
+            \\
+            \\-- where each operand is 1, 10 or 100 glued to one of the six
+            \\unit names s, ms, us, ns, ps, fs (Table 19-1), plus one semantic
+            \\constraint: "The time precision shall be at least as precise as
+            \\the time unit". `timescale 1ps/1ns breaks that one.
+            \\
+            \\Nothing in the analog kernel rescales on this directive -- 9.10
+            \\`$abstime` is seconds whatever it says -- but 9.15 Table 9-27
+            \\publishes both operands as `$simparam("timeUnit")` and
+            \\`$simparam("timePrecision")`, and the digital executor builds its
+            \\tick from them. A directive with no reading cannot supply either,
+            \\so it is refused where it is written rather than at the far end
+            \\of the compilation.
+            ,
+        },
 
         // ------------------------------------------------------------ class 2
         .E0201 => .{
@@ -1021,12 +1093,18 @@ fn infoOf(c: Code) Info {
         },
         .E0202 => .{
             .title = "directive is only legal outside a design element",
-            .lrm = "10.2",
+            .lrm = "10.6",
             .explain =
             \\`begin_keywords and `end_keywords change which identifiers are
-            \\reserved words, so LRM 10.2 confines them to the space between
+            \\reserved words, so LRM 10.6 confines them to the space between
             \\design elements. Placing one inside a module would change the
             \\keyword set halfway through parsing it.
+            \\
+            \\The clause lists the elements it means, and it is not just
+            \\modules: "outside of a design element (module, primitive,
+            \\configuration, paramset, connectrules or connectmodule)". Of
+            \\those, VerA parses module, connectmodule, paramset and
+            \\connectrules, and all four report here.
             ,
         },
         .E0203 => retiredInfo(
@@ -2451,6 +2529,34 @@ fn infoOf(c: Code) Info {
             \\would silently give the wrong result. VerA rejects this known
             \\mixed case until context typing is implemented. This is an
             \\implementation limitation, not an illegal Verilog-AMS expression.
+            ,
+        },
+        .E0365 => .{
+            .title = "implicit net under `default_nettype none",
+            .lrm = "3.6.5",
+            .explain =
+            \\LRM 3.6.5: "Nets can be used in structural descriptions without
+            \\being declared. In this case, the net's discipline and domain
+            \\binding will be determined by discipline resolution." That is the
+            \\rule this name was relying on, and `default_nettype none
+            \\withdraws it.
+            \\
+            \\LRM 10.1 carries `default_nettype over from IEEE Std 1364
+            \\unchanged, and 1364 19.2 gives `none` its meaning: with it in
+            \\force there is no type for an implicit net to have, so an
+            \\undeclared identifier used as a net is an error instead of a
+            \\silently created wire. That is the whole point of writing it --
+            \\a mistyped net name is otherwise a new floating node, which
+            \\simulates, and simulates wrong.
+            \\
+            \\Two fixes, and which one is right depends on which you meant:
+            \\
+            \\    electrical n;        declare the net
+            \\    `default_nettype wire   go back to implicit nets
+            \\
+            \\The directive's scope is 10.1's: it runs from where it is
+            \\written, across file boundaries, until another `default_nettype
+            \\or a `resetall supersedes it.
             ,
         },
 

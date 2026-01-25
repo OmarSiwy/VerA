@@ -305,6 +305,21 @@ pub const Parser = struct {
         self.kw_set = set;
     }
 
+    /// §10.6's placement rule, on the design elements `parseModuleItem` does not
+    /// cover: "The `begin_keywords and `end_keywords directives can only be
+    /// specified outside of a design element (module, primitive, configuration,
+    /// paramset, connectrules or connectmodule)."
+    ///
+    /// Both were already refused inside a `paramset` and a `connectrules` — by
+    /// E0205 ("unsupported module item") and E0207 ("unexpected token"), which
+    /// describe a grammar that has no such production rather than the clause
+    /// that forbids it. One `peek` moves them onto E0202, which is the rule.
+    fn outsideDesignElement(self: *Parser, what: []const u8) Error!void {
+        const t = self.peek();
+        if (t != .dir_begin_keywords and t != .dir_end_keywords) return;
+        return self.failAt(self.pos, .E0202, "{s} inside a {s}", .{ token.Tag.lexeme(t).?, what });
+    }
+
     /// Skip to the next thing that can start a top-level description (A.1.2),
     /// past any `end*` keyword that closes the construct we bailed out of.
     fn recoverTopLevel(self: *Parser, before: u32) void {
@@ -435,6 +450,7 @@ pub const Parser = struct {
 
         while (true) {
             try self.skipAttributes();
+            try self.outsideDesignElement("paramset");
             switch (self.peek()) {
                 .eof, .kw_endparamset => break,
                 .kw_parameter, .kw_localparam => {
@@ -552,6 +568,7 @@ pub const Parser = struct {
         var insertions: std.ArrayList(Ast.ConnectInsertion) = .empty;
         var resolutions: std.ArrayList(Ast.ConnectResolution) = .empty;
         while (!self.eat(.kw_endconnectrules)) {
+            try self.outsideDesignElement("connectrules");
             const item_tok = try self.expect(.kw_connect);
             const first = try self.expectIdent();
             if (self.peek() == .comma or self.peek() == .kw_resolveto) {

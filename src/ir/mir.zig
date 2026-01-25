@@ -336,6 +336,17 @@ pub const InstData = union(OpClass) {
 pub const PhiPair = struct { block: Block, value: Value };
 
 name: []const u8 = "",
+/// IEEE 1364 §19.1, carried over by §10.1: was this module's declaration inside
+/// a `` `celldefine ``/`` `endcelldefine `` pair?
+///
+/// A TAG and nothing else — the directives change no semantics, which is why
+/// this is one bit beside the name rather than anything the lowering branches
+/// on. It exists so the fact survives the preprocessor: a cell module is a
+/// library cell, and the tools that care (a timing library, a dump filter, a
+/// netlister) ask the compiler because the source no longer says. `Lower` sets
+/// it from the positional `` `celldefine `` regions; ask any OTHER module's the
+/// same way, with `Preprocessor.CellRegion.inForce`.
+is_cell: bool = false,
 /// PROVENANCE CURSOR. Whoever builds the MIR sets this to the token index of
 /// the AST node currently being lowered; `addInst` stamps it onto every row.
 ///

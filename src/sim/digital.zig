@@ -793,7 +793,12 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         return r.fail(m.main_tok, "digital execution currently requires a portless module with only variables and initial processes", .{});
     for (times) |event| {
         if (event.at > r.starts[m.main_tok]) return r.fail(m.main_tok, "timescale/resetall after module start is not implemented for digital execution", .{});
-        const t = event.scale orelse return r.fail(m.main_tok, "malformed timescale or resetall timing state is not supported by digital execution", .{});
+        // A null scale is now only ever IEEE 1364 §19.6's `resetall, which
+        // returns `timescale to "none specified". A MALFORMED directive no
+        // longer reaches here at all: the preprocessor refuses it where it is
+        // written (E0142), which is a better place to hear about it than a
+        // consumer three stages away.
+        const t = event.scale orelse return r.fail(m.main_tok, "a resetall timing state is not supported by digital execution", .{});
         const unit = Time.Quantum.fromSeconds(t.unit) catch return r.fail(m.main_tok, "unsupported time unit", .{});
         const precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(m.main_tok, "unsupported time precision", .{});
         r.scale = Time.Scale.init(unit, precision, precision) catch return r.fail(m.main_tok, "invalid timescale", .{});
@@ -993,9 +998,12 @@ test "unsupported source is rejected before any process side effect" {
 
 test "timescale provenance rejects absent malformed or later directives" {
     try expectRejected("module m; initial #1 ; endmodule", "explicit valid timescale");
-    try expectRejected("`timescale 2ns/1ps\nmodule m; initial #1 ; endmodule", "malformed timescale");
-    try expectRejected("`timescale 1ns/1ps junk\nmodule m; initial #1 ; endmodule", "malformed timescale");
-    try expectRejected("`timescale 1ps/1ns\nmodule m; initial #1 ; endmodule", "malformed timescale");
+    // All three are refused by the preprocessor now (E0142), so what the digital
+    // executor sees is a failed preprocess and the message names the directive
+    // rather than the consumer that could not use it.
+    try expectRejected("`timescale 2ns/1ps\nmodule m; initial #1 ; endmodule", "is not a `timescale");
+    try expectRejected("`timescale 1ns/1ps junk\nmodule m; initial #1 ; endmodule", "is not a `timescale");
+    try expectRejected("`timescale 1ps/1ns\nmodule m; initial #1 ; endmodule", "coarser than the time unit");
     try expectRejected("`timescale 1ns/1ps\nmodule m; initial #1 ; endmodule\n`timescale 1ms/1us\n", "after module start");
     try expectRejected("`timescale 1ns/1ps\n`resetall\nmodule m; initial #1 ; endmodule", "resetall");
     try expectRejected("`timescale 1ns/1ns\nmodule m; initial #1.5 ; endmodule", "digital expression");

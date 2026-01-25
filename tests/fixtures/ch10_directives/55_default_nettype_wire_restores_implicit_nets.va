@@ -1,0 +1,43 @@
+// §10.1's scope sentence is what makes `default_nettype restorable: "The scope
+// of compiler directives extends from the point where it is processed, across
+// all files processed, TO THE POINT WHERE ANOTHER COMPILER DIRECTIVE SUPERSEDES
+// IT or the processing completes."
+//
+// So `none` is not a property of the compilation, it is a property of a REGION,
+// and a later `` `default_nettype wire `` ends that region. IEEE Std 1364 §19.2
+// names `wire` as the state a stream starts in ("If no `default_nettype
+// directive is present ... implicit nets are of type wire"), which is why it is
+// the word that restores rather than a bare form: §19.2 has no bare form.
+//
+// This file is 52 with the second directive added, and the verdict flips: `link`
+// sits in the `wire` region, so §3.6.5's implicit net is legal again and the
+// design elaborates. Delete the `` `default_nettype wire `` line and the file
+// becomes 52, E0365 and all — which is the discrimination, since a tool that
+// latched `none` for the whole compilation passes 52 and fails this.
+//
+// THE ORACLE is §1.3.1 through the child, as in 34_implicit_nets.va: the
+// assertion is the parent's own biased port, reachable only if the module
+// elaborated with the undeclared net in place.
+//
+//! lrm 10.1
+//! lrm 3.6.5
+//! bias V(p) = 1.5
+`include "check.vh"
+`default_nettype none
+`default_nettype wire
+module ch10_nettype_wire_child(a, b);
+    inout a, b;
+    electrical a, b;
+    analog I(a, b) <+ 0.001 * V(a, b);
+endmodule
+
+module ch10_default_nettype_wire_restores_implicit_nets(p);
+    inout p;
+    electrical p;
+
+    ch10_nettype_wire_child u(p, link);
+
+    analog begin
+        `CHECKX("the implicit net is legal again inside the `wire region", V(p), 1.5);
+    end
+endmodule

@@ -4,6 +4,14 @@
 //! `default_discipline), §2.4 (comments), §2.8.4 (directives), annex D.1
 //! (disciplines.vams), annex D.2 (constants.vams).
 //!
+//! §10.1's Table 10-1 carry-overs live here too, and the ones with state past
+//! their own line are published as `Region` event lists rather than applied:
+//! IEEE 1364 §19.2 `default_nettype, §19.1 `celldefine, §19.9 `timescale and
+//! §19.10 `unconnected_drive. What each one governs — whether a name may become
+//! a net, whether a module is a cell, how a blank port connection is driven —
+//! is a question only a later stage can ask, so this file parses the directive,
+//! refuses a malformed one, and records WHERE it took effect.
+//!
 //! Transformation: raw source text + include dirs → preprocessed text
 //! (macros expanded, comments stripped preserving newlines, `include inlined).
 //! The preprocessed bytes are the CACHE IDENTITY (hash these), so macro/include
@@ -78,6 +86,18 @@ pub const Options = struct {
     timescale: ?*?Timescale = null,
     /// Positional timing records, including malformed directives/resetall.
     timescale_events: ?*[]const TimescaleEvent = null,
+    /// Out-param: every IEEE 1364 §19.2 `default_nettype event, in text-stream
+    /// order, for §3.6.5 implicit-net creation to consult
+    /// (`Lower.rejectImplicitNet`). Arena-owned like the output.
+    nettypes: ?*[]const NetTypeRegion = null,
+    /// Out-param: every IEEE 1364 §19.1 `celldefine/`endcelldefine event, in
+    /// text-stream order. Read by whoever wants the cell tag of a module
+    /// (`Mir.is_cell`).
+    cells: ?*[]const CellRegion = null,
+    /// Out-param: every IEEE 1364 §19.10 `unconnected_drive/`nounconnected_drive
+    /// event, in text-stream order, for §6.2.2's blank port connections to
+    /// consult (`Lower.applyUnconnectedDrive`).
+    drives: ?*[]const DriveRegion = null,
     /// Where diagnostics go, and where the file table and the source map are
     /// published. Required: preprocessing that nobody can hear is not useful.
     bag: *diag.Bag,
@@ -107,6 +127,11 @@ pub const Directive = enum {
     default_transition, // §10.3 — parsed here, applied by §4.5.8 codegen
     line, // IEEE 1364 §19.7 — remaps §10.7 `__LINE__` / `__FILE__`
     timescale, // IEEE 1364 §19.9 — read back by §9.15 Table 9-27
+    default_nettype, // IEEE 1364 §19.2 — read by implicit-net creation
+    celldefine, // IEEE 1364 §19.1 — cell membership, `endcelldefine closes it
+    endcelldefine,
+    unconnected_drive, // IEEE 1364 §19.10 — read by §6.2.2 port binding
+    nounconnected_drive,
     ignored, // parsed, consumed to end of line, no effect
 };
 
@@ -181,6 +206,105 @@ pub const Timescale = struct {
     precision: f64,
 };
 
+/// One POSITIONAL compiler directive: the point at which its value changed, and
+/// the value it changed to.
+///
+/// §10.1 states the scope of EVERY directive in one sentence — "The scope of
+/// compiler directives extends from the point where it is processed, across all
+/// files processed, to the point where another compiler directive supersedes it
+/// or the processing completes". "Across all files processed" is why nothing
+/// here is reset at a file boundary: an `` `include `` is inlined into this
+/// stream, so a directive inside one keeps acting on the text after it, and the
+/// only thing that undoes it is another directive (or `` `resetall ``, which
+/// writes a reset event like any other).
+///
+/// That sentence is why a single latched value is the wrong shape: it answers
+/// the first directive or the last, never "the nearest one above THIS
+/// declaration". `DefaultDiscipline` and `DefaultTransition` publish their own
+/// hand-rolled version of this for the same reason; the three IEEE 1364
+/// directives below share this one.
+///
+/// `at` is an offset into the PREPROCESSED output, the currency every later
+/// stage reports in, so it compares directly against a token start.
+pub fn Region(comptime T: type) type {
+    return struct {
+        at: u32,
+        value: T,
+
+        /// What this directive said at output offset `off`; `initial` is its
+        /// value before the stream writes one (IEEE 1364 §19.6's "default
+        /// value", the one `` `resetall `` returns it to).
+        ///
+        /// A backwards linear scan, not a binary search: the list holds one
+        /// entry per directive OCCURRENCE in the file — single digits in every
+        /// source anyone writes — and the answer is almost always the last one.
+        /// ponytail: `std.sort.upperBound` over `at` the day a generated file
+        /// carries thousands of them.
+        pub fn inForce(events: []const @This(), off: u32, initial: T) T {
+            var i = events.len;
+            while (i > 0) {
+                i -= 1;
+                if (events[i].at <= off) return events[i].value;
+            }
+            return initial;
+        }
+    };
+}
+
+/// IEEE Std 1364 §19.2 `default_nettype_value` — the closed alternation
+///
+///   wire | tri | tri0 | tri1 | wand | triand | wor | trior | trireg
+///   | uwire | none
+///
+/// `supply0`/`supply1` are deliberately absent: they are net types, but not
+/// ones §19.2 lets an IMPLICIT net have, and §10.2's `qualifier` list (which
+/// does include them) is a different production for a different directive.
+///
+/// `.none` is the member with semantics rather than a name: it withdraws
+/// implicit nets outright, so an undeclared identifier used as a net is an
+/// error instead of a silently-created wire.
+pub const NetType = enum {
+    wire,
+    tri,
+    tri0,
+    tri1,
+    wand,
+    triand,
+    wor,
+    trior,
+    trireg,
+    uwire,
+    none,
+
+    /// IEEE 1364 §19.2: "If no `default_nettype directive is present or if the
+    /// `resetall directive is used, implicit nets are of type wire."
+    pub const default: NetType = .wire;
+};
+
+pub const NetTypeRegion = Region(NetType);
+
+/// IEEE Std 1364 §19.1 `` `celldefine ``/`` `endcelldefine ``: whether the
+/// design elements at this point are inside a cell. The directives "tag modules
+/// as cell modules" and nothing more — the tag is metadata a tool reads (a
+/// timing library, a `$dumpvars` filter), not a change to what the module
+/// means — so what this publishes is the membership and no behaviour.
+pub const CellRegion = Region(bool);
+
+/// IEEE Std 1364 §19.10 `` `unconnected_drive pull1 | pull0 `` and
+/// `` `nounconnected_drive ``: how an UNCONNECTED input port of a module
+/// declared in this region is driven.
+pub const Drive = enum {
+    /// `` `nounconnected_drive ``, and the state before either directive: the
+    /// port is left floating.
+    float,
+    pull0,
+    pull1,
+
+    pub const default: Drive = .float;
+};
+
+pub const DriveRegion = Region(Drive);
+
 pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     .{ "define", .define },
     .{ "undef", .undef },
@@ -207,12 +331,22 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     .{ "default_transition", .default_transition }, // §10.3 — read by §4.5.8
 
     .{ "timescale", .timescale }, // IEEE 1364 §19.9 — §9.15 reads it back
-    .{ "default_nettype", .ignored }, // IEEE 1364
-    .{ "celldefine", .ignored }, // IEEE 1364
-    .{ "endcelldefine", .ignored }, // IEEE 1364
-    .{ "unconnected_drive", .ignored }, // IEEE 1364
-    .{ "nounconnected_drive", .ignored }, // IEEE 1364
-    .{ "pragma", .ignored }, // IEEE 1364
+
+    // The three IEEE 1364 directives that, like §10.2's, carry state past their
+    // own line: §19.2 decides whether an undeclared name may become a net at
+    // all, §19.1 tags the modules that follow, §19.10 drives their unconnected
+    // inputs. All three are published as `Region` event lists.
+    .{ "default_nettype", .default_nettype },
+    .{ "celldefine", .celldefine },
+    .{ "endcelldefine", .endcelldefine },
+    .{ "unconnected_drive", .unconnected_drive },
+    .{ "nounconnected_drive", .nounconnected_drive },
+
+    // §10.1 lists `pragma, and IEEE 1364 §19.8 makes its content
+    // implementation-defined ("a pragma ... may influence the tool"). VerA
+    // defines no pragma, so every one of them is a directive it does not
+    // recognize — which §19.8 says a tool "shall ignore".
+    .{ "pragma", .ignored },
 });
 
 /// LRM §10.5. Defined for every compilation; `undef on these has no effect.
@@ -292,6 +426,9 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
     if (opts.transitions) |t| t.* = try pp.transitions.toOwnedSlice(arena);
     if (opts.timescale) |t| t.* = pp.timescale;
     if (opts.timescale_events) |t| t.* = try pp.timescale_events.toOwnedSlice(arena);
+    if (opts.nettypes) |n| n.* = try pp.nettypes.toOwnedSlice(arena);
+    if (opts.cells) |c| c.* = try pp.cells.toOwnedSlice(arena);
+    if (opts.drives) |d| d.* = try pp.drives.toOwnedSlice(arena);
 
     opts.bag.map = .{
         .segs = try pp.segs.toOwnedSlice(arena),
@@ -487,15 +624,19 @@ fn buildPrelude() Allocator.Error!*const Prelude {
         error.PreprocessFailed => unreachable,
     };
 
-    // Nothing the prelude writes may be left behind: these four are the rest of
+    // Nothing the prelude writes may be left behind: these are the rest of
     // `Pp`'s output surface, and each is empty because the shipped files hold no
-    // `default_discipline, no `default_transition, no `timescale and no unclosed
-    // `ifdef. An added prelude file that breaks one of these must extend
-    // `Prelude` rather than lose the event.
+    // `default_discipline, no `default_transition, no `timescale, no
+    // `default_nettype/`celldefine/`unconnected_drive and no unclosed `ifdef.
+    // An added prelude file that breaks one of these must extend `Prelude`
+    // rather than lose the event.
     std.debug.assert(pp.defaults.items.len == 0);
     std.debug.assert(pp.transitions.items.len == 0);
     std.debug.assert(pp.timescale == null);
     std.debug.assert(pp.conds.items.len == 0);
+    std.debug.assert(pp.nettypes.items.len == 0);
+    std.debug.assert(pp.cells.items.len == 0);
+    std.debug.assert(pp.drives.items.len == 0);
 
     var macros: std.ArrayList(Prelude.Def) = .empty;
     var it = pp.macros.iterator();
@@ -627,6 +768,12 @@ const Pp = struct {
     // day a fixture puts a `timescale between two module definitions.
     timescale: ?Timescale = null,
     timescale_events: std.ArrayList(TimescaleEvent) = .empty,
+    /// IEEE 1364 §19.2/§19.1/§19.10 events, in text-stream order. Published via
+    /// `Options.nettypes` / `.cells` / `.drives`. Positional for the reason
+    /// `Region` gives: §10.1 scopes a directive forward from where it sits.
+    nettypes: std.ArrayList(NetTypeRegion) = .empty,
+    cells: std.ArrayList(CellRegion) = .empty,
+    drives: std.ArrayList(DriveRegion) = .empty,
     /// IEEE 1364 §19.7 `line remap, for §10.7 `__LINE__` / `__FILE__`. Null
     /// when the current file is numbered naturally. `from` is the PHYSICAL
     /// 1-based line the remap starts at (the one after the directive), `to`
@@ -649,6 +796,13 @@ const Pp = struct {
     fn emitting(pp: *const Pp) bool {
         const n = pp.conds.items.len;
         return n == 0 or pp.conds.items[n - 1].active;
+    }
+
+    /// Record that a positional directive changed to `value` HERE. The offset
+    /// is the length of the output so far, which is where the directive's own
+    /// collapsed text ends and the region it governs begins.
+    fn mark(pp: *Pp, list: anytype, value: anytype) Allocator.Error!void {
+        try list.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .value = value });
     }
 
     /// Drop `span`'s text but keep its line count, so a dead `ifdef arm and a
@@ -1091,11 +1245,29 @@ fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             pp.timescale = null;
             if (pp.opts.timescale_events != null)
                 try pp.timescale_events.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .scale = null });
+            // The same §19.6 sentence, for the three directives that publish a
+            // `Region`. Written as ordinary events rather than by clearing the
+            // lists, because the lists are POSITIONAL: a `resetall halfway down
+            // a file must not unsay what the directive above it did to the text
+            // above it. IEEE 1364 spells each default out — §19.2 "implicit
+            // nets are of type wire", §19.1's tag applies only between the pair,
+            // §19.10's pull only until `nounconnected_drive.
+            try pp.mark(&pp.nettypes, NetType.default);
+            try pp.mark(&pp.cells, false);
+            try pp.mark(&pp.drives, Drive.default);
         },
         .default_discipline => try handleDefaultDiscipline(pp, text[j..end], j),
         .default_transition => try handleDefaultTransition(pp, text[j..end], j),
         .line => try handleLine(pp, text[j..end], at, j),
-        .timescale => try handleTimescale(pp, text[j..end]),
+        .timescale => try handleTimescale(pp, text[j..end], j),
+        .default_nettype => try handleDefaultNettype(pp, text[j..end], j),
+        .unconnected_drive => try handleUnconnectedDrive(pp, text[j..end], j),
+        // IEEE 1364 §19.1 and §19.10's closing half take no operand at all, so
+        // there is nothing to parse and nothing to get wrong. Anything written
+        // after them is on the directive's own line and collapses with it.
+        .celldefine => try pp.mark(&pp.cells, true),
+        .endcelldefine => try pp.mark(&pp.cells, false),
+        .nounconnected_drive => try pp.mark(&pp.drives, .float),
         .ignored => {},
         // §10.6: passed through instead of being blanked out, so the lexer and
         // parser see it. The slice carries its own newlines, so the
@@ -1709,31 +1881,136 @@ fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void {
 /// Both operands are on Table 19-1's closed grid — a magnitude of 1, 10 or 100
 /// and one of six unit names — so a hand-written table of six exponents is the
 /// whole conversion, and nothing here has to parse a general real.
-//
-// ponytail: a malformed operand leaves the timescale UNSET rather than raising
-// a diagnostic, so `$simparam("timeUnit")` on it reports §9.15's "not known"
-// (E0811) instead of a number nobody wrote. IEEE 1364 makes the malformed form
-// an error in its own right; no fixture demands it, and the E0811 route already
-// refuses to invent a value. Add a class-1 code here when one does.
-fn handleTimescale(pp: *Pp, rest: []const u8) Allocator.Error!void {
+///
+/// EVERY way of getting it wrong is E0142. §19.9 gives the directive a closed
+/// grammar and one semantic constraint ("The time precision shall be at least
+/// as precise as the time unit"), and a stream that breaks either wrote a
+/// directive with no reading — there is no second interpretation to fall back
+/// to. Until this code existed a malformed operand left the timescale UNSET,
+/// which pushed the mistake to §9.15's "not known" (E0811) at the far end of
+/// the compilation, or to the digital executor, or nowhere at all when the
+/// model never asked.
+fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     // The digital consumer must distinguish malformed timing from no directive.
-    // Keep a positional null unless the complete directive validates below.
+    // Kept, even though a malformed directive now fails the compilation: a
+    // `resetall writes the same null, and `resetall is not an error.
     const event = pp.timescale_events.items.len;
     if (pp.opts.timescale_events != null)
         try pp.timescale_events.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .scale = null });
     var r: Rest = .{ .s = rest };
-    const unit = timeLiteral(&r) orelse return;
+    const unit = timeLiteral(&r) orelse return badTimescale(pp, off, &r, "a Table 19-1 time unit");
     r.skipSpace();
-    if (r.peek() != '/') return;
+    if (r.peek() != '/') return badTimescale(pp, off, &r, "`/` and then the time precision");
     r.i += 1;
-    const precision = timeLiteral(&r) orelse return;
+    const precision = timeLiteral(&r) orelse return badTimescale(pp, off, &r, "a Table 19-1 time precision");
     // "The time precision shall be at least as precise as the time unit"
     // (§19.9). A card that has them backwards is not a timescale.
-    if (precision > unit) return;
-    pp.timescale = .{ .unit = unit, .precision = precision };
+    if (precision > unit) {
+        var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0142);
+        b.msg("the time precision is coarser than the time unit", .{});
+        b.note("§19.9: \"The time precision shall be at least as precise as the time unit\"", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
     r.skipSpace();
-    if (pp.opts.timescale_events != null and r.i == r.s.len)
+    if (r.i < r.s.len) return badTimescale(pp, off, &r, "nothing more");
+    pp.timescale = .{ .unit = unit, .precision = precision };
+    if (pp.opts.timescale_events != null)
         pp.timescale_events.items[event].scale = pp.timescale;
+}
+
+/// E0142 at the cursor, naming what §19.9's grammar wanted there. `r.i` is
+/// undefined after a failed `timeLiteral`, so the span is the whole operand
+/// list — which is the thing the user has to rewrite anyway.
+fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
+    const wrote = std.mem.trim(u8, r.s, " \t\r");
+    var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0142);
+    if (wrote.len == 0) {
+        b.msg("`timescale has no operands", .{});
+    } else {
+        b.msg("`{s}` is not a `timescale", .{wrote});
+    }
+    b.note("§19.9 is `timescale <time_unit>/<time_precision>; here it wanted {s}", .{wanted});
+    b.note("each operand is 1, 10 or 100 glued to one of s ms us ns ps fs", .{});
+    b.emit() catch |e| return e;
+    return error.PreprocessFailed;
+}
+
+/// IEEE Std 1364 §19.2:
+///
+///   default_nettype_compiler_directive ::= `default_nettype default_nettype_value
+///   default_nettype_value ::= wire | tri | tri0 | tri1 | wand | triand
+///                           | wor | trior | trireg | uwire | none
+///
+/// A CLOSED alternation with no brackets round it, so the operand is mandatory
+/// and anything off the list is a syntax error — the same shape as §10.2's
+/// `qualifier`, and E0140 says so the same way E0127 does. The two lists are
+/// NOT the same list: §10.2 admits `integer`, `real`, `reg`, `wreal`, `supply0`
+/// and `supply1`, none of which §19.2 lets an implicit net be, and §19.2 admits
+/// `uwire` and `none`, which are not qualifiers.
+///
+/// Nothing is applied here. §19.2 decides what happens to an UNDECLARED name
+/// used as a net, which is a question only name resolution can ask, so what
+/// this does is parse the directive and publish the region it opens —
+/// `Lower.nodeOf` and `Elaborate.walkInstances` are the two places that ask.
+fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
+    var r: Rest = .{ .s = rest };
+    const word = r.ident() orelse "";
+    const value = std.meta.stringToEnum(NetType, word) orelse {
+        var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0140);
+        if (word.len == 0) {
+            b.msg("`default_nettype needs a net type and this one has none", .{});
+        } else {
+            b.msg("`{s}` is not a net type", .{word});
+        }
+        b.note("§19.2 allows one of: wire, tri, tri0, tri1, wand, triand, wor, trior, trireg, uwire, none", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    };
+    r.skipSpace();
+    if (r.i < r.s.len) {
+        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0140);
+        b.msg("`{s}` follows the net type", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
+        b.note("§19.2 is `default_nettype default_nettype_value, and nothing more", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
+    try pp.mark(&pp.nettypes, value);
+}
+
+/// IEEE Std 1364 §19.10 `` `unconnected_drive pull1 | pull0 ``. The operand is
+/// a two-way alternation and it is mandatory; the directive that takes none is
+/// spelled `` `nounconnected_drive `` and is a different row of Table 10-1.
+fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void {
+    var r: Rest = .{ .s = rest };
+    const word = r.ident() orelse "";
+    // `.float` is `nounconnected_drive's value and has no spelling here, so it
+    // is excluded rather than looked up — `unconnected_drive float` is not a
+    // directive.
+    const value: Drive = if (std.mem.eql(u8, word, "pull0"))
+        .pull0
+    else if (std.mem.eql(u8, word, "pull1"))
+        .pull1
+    else {
+        var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0141);
+        if (word.len == 0) {
+            b.msg("`unconnected_drive needs a pull value and this one has none", .{});
+        } else {
+            b.msg("`{s}` is not a pull value", .{word});
+        }
+        b.note("§19.10 is `unconnected_drive pull1 | pull0; the form with no operand is `nounconnected_drive", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    };
+    r.skipSpace();
+    if (r.i < r.s.len) {
+        var b = pp.failWith(pp.spanAt(off + r.i, off + r.s.len), .E0141);
+        b.msg("`{s}` follows the pull value", .{std.mem.trim(u8, r.s[r.i..], " \t\r")});
+        b.note("§19.10 takes one operand and nothing more", .{});
+        try b.emit();
+        return error.PreprocessFailed;
+    }
+    try pp.mark(&pp.drives, value);
 }
 
 /// One IEEE 1364 Table 19-1 time literal — `1`, `10` or `100` glued to one of
@@ -3026,18 +3303,24 @@ test "§9.15 Table 9-27 reads `timescale back, in seconds" {
     try testing.expectEqual(@as(?Timescale, null), try T.ts("module m; endmodule\n"));
     // §19.6 `resetall returns it to that state.
     try testing.expectEqual(@as(?Timescale, null), try T.ts("`timescale 1ns/1ps\n`resetall\n"));
-    // Off Table 19-1 in each of the three ways, plus §19.9's ordering rule.
+    // Off Table 19-1 in each of the three ways, plus §19.9's ordering rule and
+    // the two ways of writing the wrong number of operands. All six are E0142
+    // now: a directive with no reading cannot publish a timescale, and while
+    // this was silent the mistake surfaced as §9.15's "not known" at the far end
+    // of the compilation, or — in a model that never asked — nowhere at all.
     for ([_][]const u8{
         "`timescale 2ns/1ps\n", // magnitude
         "`timescale 1sec/1ps\n", // unit name
         "`timescale 1ns 1ps\n", // no slash
         "`timescale 1ps/1ns\n", // precision coarser than the unit
-    }) |src| try testing.expectEqual(@as(?Timescale, null), try T.ts(src));
+        "`timescale 1ns/1ps junk\n", // §19.9 takes two operands and no more
+        "`timescale\n", // and they are not optional
+    }) |src| try expectFail(src, .E0142);
     // The last one in the stream is the one in force (one elaborated module).
     try testing.expectEqual(@as(f64, 1e-3), (try T.ts("`timescale 1ns/1ps\n`timescale 1ms/1us\n")).?.unit);
 }
 
-test "accepted-and-ignored directives, and rejected ones" {
+test "directives that contribute no text, and rejected ones" {
     try expectPp(
         "\n\n\n\n",
         "`timescale 1ns/1ps\n`default_nettype wire\n`celldefine\n`pragma f harmless\n",
@@ -3054,6 +3337,188 @@ test "accepted-and-ignored directives, and rejected ones" {
     try expectFail("`MISSING\n", .E0115); // fixture ch10 23
     try expectFail("`nosuchdirective_or_macro\n", .E0115);
     try expectFail("`define R `R\n`R\n", .E0118); // cycle guard
+}
+
+// ---------------------------------------------------------------------------
+// The three IEEE 1364 directives that scope FORWARD: §19.2 `default_nettype,
+// §19.1 `celldefine, §19.10 `unconnected_drive. §10.1's scope sentence is the
+// shared rule; `Region.inForce` is the shared reader.
+// ---------------------------------------------------------------------------
+
+/// Preprocess `src` and hand back the three region lists, which is the whole of
+/// what these directives contribute to a compilation.
+fn regionsOf(arena: Allocator, src: []const u8) !struct {
+    nettypes: []const NetTypeRegion,
+    cells: []const CellRegion,
+    drives: []const DriveRegion,
+} {
+    var bag: diag.Bag = .init(arena);
+    var out: @TypeOf(try regionsOf(arena, src)) = .{ .nettypes = &.{}, .cells = &.{}, .drives = &.{} };
+    _ = try process(arena, src, .{
+        .std_defs = false,
+        .nettypes = &out.nettypes,
+        .cells = &out.cells,
+        .drives = &out.drives,
+        .bag = &bag,
+    });
+    return out;
+}
+
+test "IEEE 1364 §19.2 `default_nettype publishes a region per directive" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // Every value on §19.2's closed list parses, `none` included. Eleven
+    // directives, eleven events, in text-stream order.
+    const all = try regionsOf(arena,
+        \\`default_nettype wire
+        \\`default_nettype tri
+        \\`default_nettype tri0
+        \\`default_nettype tri1
+        \\`default_nettype wand
+        \\`default_nettype triand
+        \\`default_nettype wor
+        \\`default_nettype trior
+        \\`default_nettype trireg
+        \\`default_nettype uwire
+        \\`default_nettype none
+        \\
+    );
+    try testing.expectEqual(@as(usize, 11), all.nettypes.len);
+    try testing.expectEqual(NetType.wire, all.nettypes[0].value);
+    try testing.expectEqual(NetType.uwire, all.nettypes[9].value);
+    try testing.expectEqual(NetType.none, all.nettypes[10].value);
+
+    // §19.2's list is CLOSED, and it is not §10.2's: `reg`, `real` and
+    // `supply0` are `default_discipline qualifiers and not net types.
+    for ([_][]const u8{
+        "`default_nettype reg\n",
+        "`default_nettype real\n",
+        "`default_nettype supply0\n",
+        "`default_nettype wires\n", // a typo, not a twelfth type
+        "`default_nettype\n", // no brackets in §19.2: mandatory
+        "`default_nettype wire tri\n", // and exactly one
+    }) |src| try expectFail(src, .E0140);
+
+    // §10.1: a region runs from the directive to the next one. Before the first
+    // there is no region, and §19.2 names the state there: wire.
+    const r = try regionsOf(arena, "module a; endmodule\n`default_nettype none\nmodule b; endmodule\n");
+    try testing.expectEqual(@as(usize, 1), r.nettypes.len);
+    try testing.expectEqual(NetType.wire, NetTypeRegion.inForce(r.nettypes, 0, .default));
+    try testing.expectEqual(NetType.none, NetTypeRegion.inForce(r.nettypes, r.nettypes[0].at, .default));
+    try testing.expectEqual(NetType.none, NetTypeRegion.inForce(r.nettypes, r.nettypes[0].at + 1, .default));
+
+    // IEEE 1364 §19.6, said twice: `resetall returns it to `wire`, and that is
+    // an EVENT and not an erasure — the region above the reset keeps its value.
+    const reset = try regionsOf(arena, "`default_nettype none\n`resetall\n");
+    try testing.expectEqual(@as(usize, 2), reset.nettypes.len);
+    try testing.expectEqual(NetType.none, reset.nettypes[0].value);
+    try testing.expectEqual(NetType.wire, reset.nettypes[1].value);
+    try testing.expectEqual(NetType.none, NetTypeRegion.inForce(reset.nettypes, reset.nettypes[0].at, .default));
+}
+
+test "IEEE 1364 §19.1 `celldefine tags the modules between the pair" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // The tag is a REGION, so what a consumer asks is "was this offset inside
+    // one". Three modules, one of them a cell.
+    const src =
+        \\module outside_before; endmodule
+        \\`celldefine
+        \\module the_cell; endmodule
+        \\`endcelldefine
+        \\module outside_after; endmodule
+        \\
+    ;
+    const r = try regionsOf(arena, src);
+    try testing.expectEqual(@as(usize, 2), r.cells.len);
+    try testing.expect(r.cells[0].value);
+    try testing.expect(!r.cells[1].value);
+    // Before the pair, inside it, after it.
+    try testing.expect(!CellRegion.inForce(r.cells, 0, false));
+    try testing.expect(CellRegion.inForce(r.cells, r.cells[0].at, false));
+    try testing.expect(!CellRegion.inForce(r.cells, r.cells[1].at, false));
+
+    // §19.6 again: the reset closes an open `celldefine.
+    const reset = try regionsOf(arena, "`celldefine\n`resetall\n");
+    try testing.expectEqual(@as(usize, 2), reset.cells.len);
+    try testing.expect(!reset.cells[1].value);
+}
+
+test "IEEE 1364 §19.10 `unconnected_drive publishes pull0/pull1 regions" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const r = try regionsOf(arena,
+        \\module before_any_directive; endmodule
+        \\`unconnected_drive pull1
+        \\`nounconnected_drive
+        \\`unconnected_drive pull0
+        \\
+    );
+    try testing.expectEqual(@as(usize, 3), r.drives.len);
+    try testing.expectEqual(Drive.pull1, r.drives[0].value);
+    try testing.expectEqual(Drive.float, r.drives[1].value);
+    try testing.expectEqual(Drive.pull0, r.drives[2].value);
+    // Above the first directive there is no region, and §19.10's state there is
+    // "not pulled". A query AT a directive's offset is inside its region — the
+    // offset is where the directive's own collapsed text ends — which is what
+    // makes a module declared on the next line the subject of it.
+    try testing.expectEqual(Drive.float, DriveRegion.inForce(r.drives, 0, .default));
+    try testing.expectEqual(Drive.pull1, DriveRegion.inForce(r.drives, r.drives[0].at, .default));
+
+    // §19.10's operand is a two-way alternation and it is not optional: the
+    // form that takes none is the separate directive `nounconnected_drive.
+    for ([_][]const u8{
+        "`unconnected_drive\n",
+        "`unconnected_drive pull2\n",
+        "`unconnected_drive float\n", // `.float` is the other directive's value
+        "`unconnected_drive pull1 pull0\n",
+    }) |src| try expectFail(src, .E0141);
+    // The operand-less directives do NOT police their line — `nounconnected_drive
+    // pull1` is accepted and the trailing word collapses with the directive,
+    // exactly as it does after `celldefine` and (necessarily) after `pragma`.
+    // ponytail: one more handler would catch the typo of writing the closing
+    // directive with the opening one's operand. Worth it the day a model does.
+    try testing.expectEqual(Drive.float, (try regionsOf(arena, "`nounconnected_drive pull1\n")).drives[0].value);
+
+    const reset = try regionsOf(arena, "`unconnected_drive pull1\n`resetall\n");
+    try testing.expectEqual(Drive.float, reset.drives[1].value);
+}
+
+test "§10.1 scopes a directive across a source file boundary" {
+    var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    // §10.1: "The scope of compiler directives extends from the point where it
+    // is processed, ACROSS ALL FILES PROCESSED, to the point where another
+    // compiler directive supersedes it or the processing completes." So an
+    // `include neither opens nor closes a region — the annex D files are the
+    // only ones this test can include without a filesystem, and they are enough
+    // because what is being checked is that the boundary changes NOTHING.
+    var bag: diag.Bag = .init(arena);
+    var nettypes: []const NetTypeRegion = &.{};
+    var cells: []const CellRegion = &.{};
+    _ = try process(arena,
+        \\`default_nettype none
+        \\`celldefine
+        \\`include "constants.vams"
+        \\module after_the_include; endmodule
+        \\
+    , .{ .std_defs = false, .nettypes = &nettypes, .cells = &cells, .bag = &bag });
+
+    // One event each — the included file wrote none — and both still in force
+    // at the end of the stream, which is the far side of the boundary.
+    try testing.expectEqual(@as(usize, 1), nettypes.len);
+    try testing.expectEqual(@as(usize, 1), cells.len);
+    const eof = std.math.maxInt(u32);
+    try testing.expectEqual(NetType.none, NetTypeRegion.inForce(nettypes, eof, .default));
+    try testing.expect(CellRegion.inForce(cells, eof, false));
 }
 
 test "§10.7 `__FILE__ and `__LINE__" {
