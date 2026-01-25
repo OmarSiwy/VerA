@@ -25,7 +25,7 @@ These are implemented pieces; the remaining work below still applies.
 | Digital values and hierarchy | Remaining expression forms/conversions, nets/drivers/strength resolution, memories, ports, elaboration and directive semantics. |
 | Mixed-signal simulation | Connect processes to the scheduler and analog solver; implement synchronization, time conversion, discipline resolution and connectmodule insertion. |
 | VPI | Standard C API, object handles/traversal, values, callbacks, analog derivatives and accepted-point notifications. |
-| Analog operators | Remaining table modes and runtime file loading, tabulated noise, complete delay/timer histories, and stateful-operator validation. |
+| Analog operators | Remaining table modes and runtime file loading, tabulated noise from a file or an array parameter (the constant-vector form of §4.6.4.3/.4 exports as `noise_tables`), complete delay/timer histories, and stateful-operator validation. |
 | Analog language | Branch/current equations, topology aliases, net initialization, paramset content, held state and event-controlled `disable`. |
 | Parameters and arrays | Final host/sweep range checks, complete conversions and constant-function derivation, array slices, invalid-index behavior and output/inout writeback. |
 | Runtime facilities | Distribution limits, host queries, remaining formatting/file I/O, identifier identity, and side effects across rejected trials. |

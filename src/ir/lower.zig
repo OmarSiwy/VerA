@@ -176,7 +176,9 @@ pub const PortProbe = struct { port: u16, u: u16 };
 /// §5.4.2.1 one access function READ, kept for the end-of-module probe sweep.
 pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
 
-pub const NoiseKind = enum(u8) { thermal, flicker }; // §4.6.4.1/.2
+/// §4.6.4.1/.2 the parametric forms, then §4.6.4.3/.4 the tabulated ones.
+/// APPENDED, so the two existing ordinals do not move.
+pub const NoiseKind = enum(u8) { thermal, flicker, table, table_log };
 
 /// §4.6.4 one noise GENERATOR a contribution carries: its PSD kind and its
 /// identity. `id` is the `Ast.ExprId` of the `white_noise`/`flicker_noise`
@@ -213,6 +215,14 @@ pub const NoiseSrc = struct {
     /// §4.6.4.2 arg 1, the frequency exponent. Unread on a `.thermal` row, and
     /// 1 for a one-argument `flicker_noise` — the same default either way.
     exp: Mir.Value = .f_one,
+    /// §4.6.4.3/.4 arg 0 of a `.table`/`.table_log` row: the vector, flattened
+    /// to `f0, p0, f1, p1, …` and still unfolded. Empty on every other kind,
+    /// and empty on a table call whose argument was not a vector — codegen
+    /// folds, sorts and validates it, because the constants it needs are the
+    /// ones `Analysis.foldConst` answers for.
+    table: []const Mir.Value = &.{},
+    /// The call's own token, for the diagnostics codegen raises over `table`.
+    tok: u32 = Mir.no_tok,
 };
 
 /// §3.6.1.2 tolerances of a discipline's two natures. Recorded for proof.zig
@@ -414,6 +424,12 @@ var_noise: std.StringHashMapUnmanaged([]const NoiseSrc) = .empty,
 /// `NoiseSrc` it appends — the walk runs on the AST, so this map is the only
 /// thing that still knows what the arguments lowered to.
 noise_psd: std.AutoHashMapUnmanaged(u32, [2]Mir.Value) = .empty,
+/// §4.6.4.3/.4 the same thing for the TABLE forms: the flattened
+/// `f0, p0, f1, p1, …` of `noise_table`'s vector argument, by `Ast.ExprId`.
+/// Absent (or empty) for a call whose argument was not a vector at all — the
+/// clause's file-name form — which is the shape codegen reports, since a table
+/// with no pairs in it is the one thing that cannot become a PSD.
+noise_tab: std.AutoHashMapUnmanaged(u32, []const Mir.Value) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
 /// §4.7.1 the function currently being inlined (return slot + exit block).
@@ -4960,23 +4976,29 @@ fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc))
             const n = self.file.strings.get(ex.strOf(e));
             // §4.6.3 ac_stim shares the small-signal grammar but is a STIMULUS,
             // not a noise source; listing it in `noise_gens` would invent a
-            // noise generator the model never declared. §4.6.4.3/.4
-            // noise_table/noise_table_log stay out too: `contract.NoiseGen`
-            // has no kind that names a piecewise PSD table, and tagging one
-            // `.thermal` would hand the host's 4kT·g fallback a generator
-            // whose PSD is nothing of the sort (TODO.md §3 carries this gap;
-            // the tag and the `noisePsd` replacement hook land together).
-            if (std.mem.eql(u8, n, "white_noise") or std.mem.eql(u8, n, "flicker_noise")) {
-                // §4.6.4.2 flicker_noise; white_noise is §4.6.4.1's kind.
-                const kind: NoiseKind = if (n[0] == 'f') .flicker else .thermal;
-                const psd = self.noise_psd.get(@intFromEnum(e)) orelse [2]Mir.Value{ .f_zero, .f_one };
-                try addNoiseSrc(self.arena, out, .{
-                    .kind = kind,
-                    .id = @intFromEnum(e),
-                    .pwr = psd[0],
-                    .exp = psd[1],
-                });
-            }
+            // noise generator the model never declared. It is the ONLY name in
+            // this grammar that is not a generator — §4.6.4.3/.4's tables are
+            // generators whose PSD happens to be a table, and they carry it in
+            // `NoiseSrc.table` rather than in `pwr`/`exp`.
+            const kind: NoiseKind = if (std.mem.eql(u8, n, "white_noise"))
+                .thermal // §4.6.4.1
+            else if (std.mem.eql(u8, n, "flicker_noise"))
+                .flicker // §4.6.4.2
+            else if (std.mem.eql(u8, n, "noise_table"))
+                .table // §4.6.4.3
+            else if (std.mem.eql(u8, n, "noise_table_log"))
+                .table_log // §4.6.4.4
+            else
+                return;
+            const psd = self.noise_psd.get(@intFromEnum(e)) orelse [2]Mir.Value{ .f_zero, .f_one };
+            try addNoiseSrc(self.arena, out, .{
+                .kind = kind,
+                .id = @intFromEnum(e),
+                .pwr = psd[0],
+                .exp = psd[1],
+                .table = self.noise_tab.get(@intFromEnum(e)) orelse &.{},
+                .tok = ex.mainTok(e),
+            });
         },
         // §4.6.4.6's own spelling: the source was assigned to a variable and
         // the contribution names the variable. Without this the walk stops at
@@ -7981,9 +8003,19 @@ fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // the fact, where the MIR values are no longer reachable from the id.
     var psd: [2]Mir.Value = .{ .f_zero, .f_one };
     var reals: usize = 0;
+    // §4.6.4.3/.4 the table itself. `appendVectorArg` writes the element COUNT
+    // and then the elements, so the pairs are the slice after that count — the
+    // same vector spelling §4.5.11's filter coefficients arrive in, which is
+    // why this needs no reader of its own.
+    var tab: ?struct { usize, usize } = null;
     for (ex.args(e)) |a| {
         if (a == .none) continue;
-        if (try self.appendVectorArg(&vals, a)) continue;
+        const at = vals.items.len;
+        if (try self.appendVectorArg(&vals, a)) {
+            // Indices, not a slice: `vals` keeps growing and may reallocate.
+            if (tab == null) tab = .{ at + 1, vals.items.len };
+            continue;
+        }
         const tv = try self.lowerExpr(a);
         if (tv.ty == .string) {
             try vals.append(self.arena, tv.v);
@@ -7998,6 +8030,11 @@ fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // `flicker_noise(pwr[, exp[, name]])` defaults `exp` to 1, so the `.f_one`
     // seed is the answer whenever the loop above did not overwrite it.
     try self.noise_psd.put(self.arena, @intFromEnum(e), psd);
+    if (tab) |r| try self.noise_tab.put(
+        self.arena,
+        @intFromEnum(e),
+        try self.arena.dupe(Mir.Value, vals.items[r[0]..r[1]]),
+    );
     return .{ .v = try self.call(name, vals.items), .ty = .real };
 }
 
