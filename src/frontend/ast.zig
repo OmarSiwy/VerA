@@ -533,7 +533,11 @@ pub const NetDecl = struct {
     is_ground: bool = false,
     /// §6.5.2 vector net range; `null` for a scalar.
     range: ?Dim = null,
-    /// A.2.4 net_decl_assignment (wreal only); `.none` otherwise.
+    /// A.2.4 net_decl_assignment; `.none` when the declaration has no `=`.
+    /// §3.6.3.2 makes this a NODESET value — "the initializer shall be a
+    /// constant_expression and will be used as a nodeset value for the
+    /// potential of the net by the analog solver" — an initial guess, not an
+    /// assignment and not a clamp. Folded by `Lower.lowerModule`.
     init: ExprId = .none,
     main_tok: u32 = 0,
 };

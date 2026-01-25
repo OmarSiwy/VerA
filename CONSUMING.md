@@ -180,6 +180,7 @@ table with no values or values with no table is a hook nobody can call.
 | `collapse` | node collapsing | — |
 | `initState` / `updateState` / `stateCtl` / `State` | accepted-step FSM state | each other |
 | `u_kinds` / `u_abstol` | §3.6.1.2 per-unknown kind and tolerance | — |
+| `u_nodeset` | §3.6.3.2 per-unknown starting guess, `[|U|]?f64` | — |
 | `noise_gens` / `noisePsd` | §4.6.4 topology / PSD | each other |
 | `ac_stamps` / `acStamp` | small-signal `G + jwC` | each other |
 | `op_vars` / `opValues` | §3.2.1 output variables | each other |
@@ -481,6 +482,15 @@ not a fudge:
   result (§9.5.4.1, §9.5.7, §9.5.8).
 - **No `u_abstol`** — you invent one tolerance for every unknown. Slower
   convergence, not a wrong answer.
+- **No `u_nodeset`** — you start the solve wherever you would have started it.
+  §3.6.3.2 makes the declared value "a nodeset value for the potential of the
+  net by the analog solver": an initial guess, never a constraint. Reading it
+  can only change how many Newton steps you take — and which solution you land
+  on if the circuit has more than one, which is exactly what the model author
+  wrote it for. `null` means that unknown was given no value; 0.0 is a real
+  nodeset and must not be confused with it. Do NOT treat it as an initial
+  condition — §5.10.2's `initial_step`/`.ic` is a value the solve must HOLD,
+  and this one it must be free to leave.
 
 Declining `systf` is **not** on this list. See §4.2.
 

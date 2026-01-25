@@ -176,6 +176,12 @@ pub const PortProbe = struct { port: u16, u: u16 };
 /// §5.4.2.1 one access function READ, kept for the end-of-module probe sweep.
 pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
 
+/// §3.6.3.2 one net_decl_assignment: the net's `node_order` slot and the folded
+/// initializer — "a nodeset value for the potential of the net by the analog
+/// solver". An initial guess, never a constraint, so it is metadata for a host
+/// and reaches nothing in the residual.
+pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
+
 pub const NoiseKind = enum(u8) { thermal, flicker }; // §4.6.4.1/.2
 
 /// §4.6.4 one noise GENERATOR a contribution carries: its PSD kind and its
@@ -295,6 +301,10 @@ node_dir: std.ArrayList(Ast.Direction) = .empty,
 /// its own solver unknown (`u`) and a row pinning it to the module's KCL sum
 /// at `port`; codegen emits that row. Append-only ⇒ deterministic.
 port_probes: std.ArrayList(PortProbe) = .empty,
+/// §3.6.3.2 the net_decl_assignments of this module, in declaration order and
+/// already folded. Sparse — most modules declare none — so codegen emits the
+/// optional `u_nodeset` table only when this is non-empty.
+nodesets: std.ArrayList(Nodeset) = .empty,
 num_ports: usize = 0, // §6.5
 /// §1.3.1 NET name → node_order index. Nets only: a §5.4.2/§5.4.3 flow unknown
 /// is not a net and is not reachable by name (`flow_unknowns` and `port_probes`
@@ -804,6 +814,7 @@ pub fn deinit(self: *Lower) void {
     self.node_disciplines.deinit(gpa);
     self.node_dir.deinit(gpa);
     self.port_probes.deinit(gpa);
+    self.nodesets.deinit(gpa);
     self.node_voltages.deinit(gpa);
     self.flow_unknowns.deinit(gpa);
     self.spellings.deinit(gpa);
@@ -1173,6 +1184,15 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.nets) |n| {
         const name = self.file.str(n.name);
         // §3.6.3 a vector net is N independent nets, scalarised here.
+        //
+        // ponytail: `n.init` is dropped on this path. §3.6.3.2's bus form is a
+        // constant ARRAY expression with holes — `electrical [0:4] bus =
+        // '{2.3,4.5,,6.0};`, where "a null value in the constant array
+        // indicates that no nodeset value is being specified for this element"
+        // — and A.8.1's assignment_pattern as this parser reads it has no null
+        // element, so there is nothing to pair with `r.at(k)` yet. The upgrade
+        // path is an empty slot in `parsePrimary`'s `'{ ... }` arm plus the
+        // same `recordNodeset` call per element, keyed by position.
         if (n.range) |d| {
             if (try self.foldDim(d, n.main_tok)) |r| {
                 for (0..r.size()) |k|
@@ -1229,7 +1249,11 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                 continue; // keep the FIRST declaration; do not silently overwrite it
             }
         };
-        _ = try self.internNode(name, self.strOrEmpty(n.discipline));
+        const idx = try self.internNode(name, self.strOrEmpty(n.discipline));
+        // §3.6.3.2 the net_decl_assignment, folded. `consts` is already loaded
+        // — the parameter loop runs above the port loop — so a nodeset written
+        // over a parameter folds here and not later.
+        if (n.init != .none) try self.recordNodeset(idx, n.init, n.main_tok, name);
     }
 
     // §7.4 discipline resolution, the one rule of it VerA implements: §10.2's
@@ -1280,6 +1304,26 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             base, dname, if (self.disciplines.get(dname).?.has_potential) "potential" else "flow",
         });
         b.help("declare `{s}` as `input` or `output`", .{base});
+        try b.emit();
+    }
+
+    // §3.6.3.2: "Nets with continuous disciplines are allowed to have
+    // initializers on their net discipline declarations; however, nets of
+    // non-continuous disciplines are not."
+    //
+    // HERE for the same reason E0360 is here and not at the declaration: a net
+    // and its discipline can arrive in two declarations, and §10.2's default
+    // arrives in the `applyDefaultToAll` loops above. A net that still has no
+    // discipline at this point is left alone — it is §3.6.5's implicit net,
+    // whose domain is decided by resolution (§7.4) and not by this module, and
+    // E0337 already rules on it if anything analog touches it.
+    for (self.nodesets.items) |ns| {
+        const dname = self.node_disciplines.items[ns.node];
+        const info = self.disciplines.get(dname) orelse continue;
+        if (!info.is_discrete) continue;
+        var b = self.errWith(ns.tok, .E0366);
+        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.node_order.items[ns.node], dname });
+        b.note("a nodeset is an initial guess for a POTENTIAL, and §3.6.2.2 leaves a discrete discipline with no nature to have one", .{});
         try b.emit();
     }
 
@@ -2374,6 +2418,34 @@ fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
     const idx = try self.appendNode(name, discipline, .net);
     gop.value_ptr.* = idx;
     return idx;
+}
+
+/// §3.6.3.2 fold one net_decl_assignment into a nodeset value for `node`.
+///
+/// "The initializer shall be a constant_expression" — so a fold that fails IS
+/// the rule, and E0365 is it. `constEval` looks through parameters, which is
+/// what the clause wants: §3.4 makes a parameter reference a constant
+/// expression, and `electrical n = vstart;` is the form a model card tunes.
+///
+/// A string folds to 0.0 through `asReal()` and is not separately diagnosed: a
+/// nodeset is a potential, `parameter string` cannot be one, and the value it
+/// lands on is the same 0.0 the unknown starts at without any nodeset at all.
+///
+/// ponytail: the value is frozen at the fold, so a nodeset written over a
+/// parameter keeps the parameter's DECLARED default even after a model card
+/// overrides it — a stale initial guess, never a wrong answer, since §3.6.3.2
+/// only feeds the solver's starting point. The upgrade path is the §6.3.4
+/// `derive()` shape: keep the `Ast.ExprId`, render it with codegen's
+/// `f64Const`, and export `nodeset(model)` instead of a comptime table.
+fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []const u8) Oom!void {
+    const c = self.constEval(e) orelse {
+        var b = self.errWith(tok, .E0365);
+        b.msg("the initializer of `{s}` is not a constant expression", .{name});
+        b.note("§3.6.3.2 gives it to the analog solver as a nodeset value for the potential of `{s}`, which is fixed before the solve starts", .{name});
+        try b.emit();
+        return;
+    };
+    try self.nodesets.append(self.arena, .{ .node = node, .value = c.asReal(), .tok = tok });
 }
 
 /// The one place a `node_order` slot is created: it fixes the slot's KIND and
