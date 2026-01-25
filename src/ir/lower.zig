@@ -176,6 +176,12 @@ pub const PortProbe = struct { port: u16, u: u16 };
 /// §5.4.2.1 one access function READ, kept for the end-of-module probe sweep.
 pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
 
+/// §3.6.3.2 one net_decl_assignment: the net's `node_order` slot and the folded
+/// initializer — "a nodeset value for the potential of the net by the analog
+/// solver". An initial guess, never a constraint, so it is metadata for a host
+/// and reaches nothing in the residual.
+pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
+
 /// §4.6.4.1/.2 the parametric forms, then §4.6.4.3/.4 the tabulated ones.
 /// APPENDED, so the two existing ordinals do not move.
 pub const NoiseKind = enum(u8) { thermal, flicker, table, table_log };
@@ -305,6 +311,10 @@ node_dir: std.ArrayList(Ast.Direction) = .empty,
 /// its own solver unknown (`u`) and a row pinning it to the module's KCL sum
 /// at `port`; codegen emits that row. Append-only ⇒ deterministic.
 port_probes: std.ArrayList(PortProbe) = .empty,
+/// §3.6.3.2 the net_decl_assignments of this module, in declaration order and
+/// already folded. Sparse — most modules declare none — so codegen emits the
+/// optional `u_nodeset` table only when this is non-empty.
+nodesets: std.ArrayList(Nodeset) = .empty,
 num_ports: usize = 0, // §6.5
 /// §1.3.1 NET name → node_order index. Nets only: a §5.4.2/§5.4.3 flow unknown
 /// is not a net and is not reachable by name (`flow_unknowns` and `port_probes`
@@ -448,12 +458,18 @@ inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
 /// (§4.7.2); names the context in the "not allowed here" diagnostic.
 restrict: ?[]const u8 = null,
-/// §9.20 the analog_net_reference of every alias call so far, in source order.
-/// The clause's last rule relates two calls — "It shall be an error for the
-/// hierarchical_reference_string to reference a node that is used as an
-/// analog_net_reference in ANOTHER ... call" — and this is the only state that
-/// needs. Names, not indices: the comparison is against a §6.7 path string.
-alias_refs: std.ArrayList([]const u8) = .empty,
+/// §9.20 the analog_net_reference of every alias call so far → the unknown that
+/// net was DECLARED with, before any alias moved it.
+///
+/// Two rules need this and neither can be answered from `node_voltages` once an
+/// alias has been applied. The relation between two calls — "It shall be an
+/// error for the hierarchical_reference_string to reference a node that is used
+/// as an analog_net_reference in ANOTHER ... call" — is the key set. And the
+/// clause's ban on a PORT as the analog_net_reference is about the net's own
+/// declaration: once `n1` has been aliased onto a port, `node_voltages` says it
+/// IS one, and the SECOND call of the last-writer rule would be refused for
+/// something the source never wrote.
+alias_home: std.StringHashMapUnmanaged(u16) = .empty,
 /// §9.5.3/§9.5.4.2 — does the module call `$sformat`/`$swrite`/`$sscanf`? Set at
 /// the call, read by codegen to decide whether `str_kernels.zig` is emitted. A
 /// flag rather than a site list because the SITE that needs a name (the format
@@ -820,6 +836,8 @@ pub fn deinit(self: *Lower) void {
     self.node_disciplines.deinit(gpa);
     self.node_dir.deinit(gpa);
     self.port_probes.deinit(gpa);
+    self.nodesets.deinit(gpa);
+    self.alias_home.deinit(gpa);
     self.node_voltages.deinit(gpa);
     self.flow_unknowns.deinit(gpa);
     self.spellings.deinit(gpa);
@@ -1189,6 +1207,15 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.nets) |n| {
         const name = self.file.str(n.name);
         // §3.6.3 a vector net is N independent nets, scalarised here.
+        //
+        // ponytail: `n.init` is dropped on this path. §3.6.3.2's bus form is a
+        // constant ARRAY expression with holes — `electrical [0:4] bus =
+        // '{2.3,4.5,,6.0};`, where "a null value in the constant array
+        // indicates that no nodeset value is being specified for this element"
+        // — and A.8.1's assignment_pattern as this parser reads it has no null
+        // element, so there is nothing to pair with `r.at(k)` yet. The upgrade
+        // path is an empty slot in `parsePrimary`'s `'{ ... }` arm plus the
+        // same `recordNodeset` call per element, keyed by position.
         if (n.range) |d| {
             if (try self.foldDim(d, n.main_tok)) |r| {
                 for (0..r.size()) |k|
@@ -1245,7 +1272,11 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                 continue; // keep the FIRST declaration; do not silently overwrite it
             }
         };
-        _ = try self.internNode(name, self.strOrEmpty(n.discipline));
+        const idx = try self.internNode(name, self.strOrEmpty(n.discipline));
+        // §3.6.3.2 the net_decl_assignment, folded. `consts` is already loaded
+        // — the parameter loop runs above the port loop — so a nodeset written
+        // over a parameter folds here and not later.
+        if (n.init != .none) try self.recordNodeset(idx, n.init, n.main_tok, name);
     }
 
     // §7.4 discipline resolution, the one rule of it VerA implements: §10.2's
@@ -1296,6 +1327,26 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             base, dname, if (self.disciplines.get(dname).?.has_potential) "potential" else "flow",
         });
         b.help("declare `{s}` as `input` or `output`", .{base});
+        try b.emit();
+    }
+
+    // §3.6.3.2: "Nets with continuous disciplines are allowed to have
+    // initializers on their net discipline declarations; however, nets of
+    // non-continuous disciplines are not."
+    //
+    // HERE for the same reason E0360 is here and not at the declaration: a net
+    // and its discipline can arrive in two declarations, and §10.2's default
+    // arrives in the `applyDefaultToAll` loops above. A net that still has no
+    // discipline at this point is left alone — it is §3.6.5's implicit net,
+    // whose domain is decided by resolution (§7.4) and not by this module, and
+    // E0337 already rules on it if anything analog touches it.
+    for (self.nodesets.items) |ns| {
+        const dname = self.node_disciplines.items[ns.node];
+        const info = self.disciplines.get(dname) orelse continue;
+        if (!info.is_discrete) continue;
+        var b = self.errWith(ns.tok, .E0366);
+        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.node_order.items[ns.node], dname });
+        b.note("a nodeset is an initial guess for a POTENTIAL, and §3.6.2.2 leaves a discrete discipline with no nature to have one", .{});
         try b.emit();
     }
 
@@ -2390,6 +2441,34 @@ fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
     const idx = try self.appendNode(name, discipline, .net);
     gop.value_ptr.* = idx;
     return idx;
+}
+
+/// §3.6.3.2 fold one net_decl_assignment into a nodeset value for `node`.
+///
+/// "The initializer shall be a constant_expression" — so a fold that fails IS
+/// the rule, and E0365 is it. `constEval` looks through parameters, which is
+/// what the clause wants: §3.4 makes a parameter reference a constant
+/// expression, and `electrical n = vstart;` is the form a model card tunes.
+///
+/// A string folds to 0.0 through `asReal()` and is not separately diagnosed: a
+/// nodeset is a potential, `parameter string` cannot be one, and the value it
+/// lands on is the same 0.0 the unknown starts at without any nodeset at all.
+///
+/// ponytail: the value is frozen at the fold, so a nodeset written over a
+/// parameter keeps the parameter's DECLARED default even after a model card
+/// overrides it — a stale initial guess, never a wrong answer, since §3.6.3.2
+/// only feeds the solver's starting point. The upgrade path is the §6.3.4
+/// `derive()` shape: keep the `Ast.ExprId`, render it with codegen's
+/// `f64Const`, and export `nodeset(model)` instead of a comptime table.
+fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []const u8) Oom!void {
+    const c = self.constEval(e) orelse {
+        var b = self.errWith(tok, .E0365);
+        b.msg("the initializer of `{s}` is not a constant expression", .{name});
+        b.note("§3.6.3.2 gives it to the analog solver as a nodeset value for the potential of `{s}`, which is fixed before the solve starts", .{name});
+        try b.emit();
+        return;
+    };
+    try self.nodesets.append(self.arena, .{ .node = node, .value = c.asReal(), .tok = tok });
 }
 
 /// The one place a `node_order` slot is created: it fixes the slot's KIND and
@@ -8146,9 +8225,17 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
     // §9.20 the two alias functions: six validity rules, all of them about the
-    // CALL rather than the value, so all of them here (E0812).
+    // CALL rather than the value, so all of them here (E0812) — and then the
+    // alias, which is a `node_voltages` write and a constant return. The call
+    // never reaches codegen: "one (1) if the hierarchical_reference_string
+    // points to a valid continuous node and zero (0) otherwise" is decided by a
+    // name lookup against the elaborated design, which is this pass's table.
     if (std.mem.eql(u8, name, "$analog_node_alias") or std.mem.eql(u8, name, "$analog_port_alias")) {
-        if (try self.checkAliasCall(e, name, sys_args)) return poison;
+        return switch (try self.checkAliasCall(e, name, sys_args)) {
+            .refused => poison,
+            .bound => .{ .v = try self.mir.addIntConst(self.arena, 1), .ty = .integer },
+            .unresolved => .{ .v = try self.mir.addIntConst(self.arena, 0), .ty = .integer },
+        };
     }
     // §9.17.3 Syntax 9-12's THIRD form, `$limit(access, analog_function_identifier,
     // arg_list)`. The second argument names a §4.7 function, so it is not a value
@@ -8652,8 +8739,30 @@ fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
     });
 }
 
-/// §9.20's validity list for `$analog_node_alias()` / `$analog_port_alias()`.
-/// True when the call was refused.
+/// §9.20's outcome for one `$analog_node_alias()` / `$analog_port_alias()`
+/// call: the six validity rules are errors, and what survives them is the
+/// clause's own return value.
+const AliasResult = enum {
+    /// One of §9.20's six "shall be an error" sentences (E0812). The call has
+    /// no value; lowering poisons it.
+    refused,
+    /// "the hierarchical_reference_string points to a valid continuous node":
+    /// the analog_net_reference now names that node's unknown, and the call
+    /// returns 1.
+    bound,
+    /// The string resolves to nothing this design contains. §9.20: the call
+    /// returns 0 and "the node referenced by the analog_net_reference shall be
+    /// treated as a normal continuous node declared in the module".
+    unresolved,
+};
+
+/// §9.20 one resolved `hierarchical_reference_string`: the unknown it names,
+/// and whether the name was a node of the flat design itself (`direct`) rather
+/// than a child port flattening bound to one.
+const AliasHit = struct { idx: u16, direct: bool };
+
+/// §9.20's validity list for `$analog_node_alias()` / `$analog_port_alias()`,
+/// then the alias itself.
 ///
 /// All six rules are checked HERE, in lowering, because every one of them is a
 /// property of the call and none of them is a property of a value: the block the
@@ -8666,7 +8775,15 @@ fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
 /// alias makes its node "refer to the same circuit matrix position" as the
 /// hierarchical reference, so it is a topology edit and topology is fixed before
 /// a solve — and each message quotes the sentence it enforces.
-fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const Ast.ExprId) Oom!bool {
+///
+/// The edit is HERE too, and for the same reason: a node's identity in this
+/// compiler is `node_voltages`, the name → unknown map every probe goes
+/// through, so "refer to the same circuit matrix position" is one `put`. Doing
+/// it at the call site is also what gives §9.20's last-writer rule — "if a
+/// particular node is involved in multiple calls ..., then the last evaluated
+/// call shall take precedence" — for free: the calls are lowered in source
+/// order and each overwrites the last.
+fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const Ast.ExprId) Oom!AliasResult {
     const ex = &self.file.exprs;
     // 1. "It shall be an error for the $analog_node_alias() and
     // $analog_port_alias() system functions to be used outside the analog
@@ -8674,7 +8791,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     // re-evaluated each sweep point of a dc sweep", i.e. between solves.
     if (!self.in_analog_initial) {
         try self.err(self.file.exprs.mainTok(e), .E0812, "`{s}` is used outside an analog initial block", .{name});
-        return true;
+        return .refused;
     }
     // 2. "shall not be used inside conditional ( if , case , or ?: ) statements
     // unless the conditional expression controlling the statement consists of
@@ -8693,7 +8810,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     // discounted (saturating, since rule 1 above is what guarantees it is there).
     if ((self.cond_depth -| 1) != self.static_cond_depth) {
         try self.err(self.file.exprs.mainTok(e), .E0812, "`{s}` is used inside conditional statement whose condition can change during the simulation", .{name});
-        return true;
+        return .refused;
     }
     // 3/4/5. The analog_net_reference. "The analog_net_reference shall be either
     // a scalar or vector continuous node declared in the module containing the
@@ -8701,15 +8818,20 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     const ref = if (args.len > 0) args[0] else Ast.ExprId.none;
     if (ref == .none) {
         try self.err(self.file.exprs.mainTok(e), .E0812, "`{s}` needs an analog_net_reference and a hierarchical_reference_string", .{name});
-        return true;
+        return .refused;
     }
+    // The analog_net_reference's own unknown, for the alias below.
+    var local: u16 = ground;
     switch (ex.tag(ref)) {
         .ident => {
             const rname = self.file.str(ex.strOf(ref));
-            const idx = self.node_voltages.get(rname);
+            // The net's own unknown: §9.20's last-writer rule means `rname` may
+            // already BE an alias, and every rule below is about the
+            // declaration, not about where the previous call pointed it.
+            const idx = self.alias_home.get(rname) orelse self.node_voltages.get(rname);
             if (idx == null or idx.? == ground or self.vars.contains(rname)) {
                 try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
-                return true;
+                return .refused;
             }
             // 4. "It shall be an error for the analog_net_reference to be a port
             // or to be involved in port connections." A port is already bound to
@@ -8717,8 +8839,9 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
             // would bind the same matrix position a second time.
             if (idx.? < self.num_ports) {
                 try self.err(self.file.exprs.mainTok(e), .E0812, "§9.20 does not allow the analog_net_reference to be a port: `{s}`", .{rname});
-                return true;
+                return .refused;
             }
+            local = idx.?;
         },
         // 5. "If the analog_net_reference is a vector node, it shall reference
         // the full vector node, it shall be an error for it to be a bit select
@@ -8726,11 +8849,11 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
         // scalar ELEMENT is what the hierarchical_reference_string may name.
         .index, .range => {
             try self.err(self.file.exprs.mainTok(e), .E0812, "a vector analog_net_reference must be the whole vector, not a bit select or part select", .{});
-            return true;
+            return .refused;
         },
         else => {
             try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
-            return true;
+            return .refused;
         },
     }
     // 6. "The hierarchical_reference_string shall be a CONSTANT string value
@@ -8744,7 +8867,7 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
             else => {},
         };
         try self.err(self.file.exprs.mainTok(e), .E0812, "the hierarchical_reference_string of `{s}` is not a constant string (a string literal or a string parameter)", .{name});
-        return true;
+        return .refused;
     };
     // "It shall be an error for the hierarchical_reference_string to reference a
     // node that is used as an analog_net_reference in ANOTHER
@@ -8757,15 +8880,130 @@ fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const A
     // where the path is being used", so a bare name resolves locally, while
     // `$root.top.a` names something this module does not declare.
     const ref_name = self.file.str(ex.strOf(args[0]));
-    if (std.mem.indexOfScalar(u8, target, '.') == null) {
-        for (self.alias_refs.items) |prev| {
-            if (!std.mem.eql(u8, prev, target)) continue;
+    if (std.mem.indexOfScalar(u8, target, '.') == null and !std.mem.eql(u8, target, ref_name)) {
+        if (self.alias_home.contains(target)) {
             try self.err(self.file.exprs.mainTok(e), .E0812, "`\"{s}\"` is already the analog_net_reference of another $analog_node_alias/$analog_port_alias call", .{target});
-            return true;
+            return .refused;
         }
     }
-    try self.alias_refs.append(self.arena, ref_name);
-    return false;
+    // First call for this net records its DECLARED unknown; a later one must
+    // not overwrite it with the alias the earlier call installed.
+    if (!self.alias_home.contains(ref_name)) try self.alias_home.put(self.arena, ref_name, local);
+    return self.bindAlias(name, ref_name, local, target);
+}
+
+/// §9.20's topology edit, and the validity list that decides whether it happens.
+///
+/// "The return value for both system functions shall be one (1) if the
+/// hierarchical_reference_string points to a valid continuous node and zero (0)
+/// otherwise. If the hierarchical_reference_string references a valid continuous
+/// node, then the analog_net_reference will be aliased to that hierarchical node
+/// and shall refer to the same circuit matrix position."
+///
+/// The clause's own three validity rules, in its order, plus resolution:
+///
+///   "shall refer to a scalar continuous node or a scalar element of a
+///    continuous vector node" — a vector BASE name is not a node here at all
+///    (lowering scalarises `[3:0] b` into `b[3]`…`b[0]`), so it resolves to
+///    nothing and takes the zero answer without an arm of its own;
+///   "the discipline of the analog_net_reference and the resolved hierarchical
+///    node reference shall be compatible (see 3.11)" — `disciplineConflict`,
+///    the same §3.11.1 rule list `checkNetCompat` applies to a branch;
+///   "for the $analog_port_alias() system function, the resolved hierarchical
+///    node reference shall be a port".
+///
+/// Everything that survives is one `node_voltages` write. The aliased net keeps
+/// its own `node_order` slot, which no probe can reach any more: an unknown with
+/// no equation, which is what a net the clause has just merged away IS. That is
+/// the same shape a declared-and-unused net already has here, and pruning it
+/// would renumber `U` — an ABI the host reads.
+///
+/// ponytail: the resolution is COMPILE TIME, so §9.20's "shall be re-evaluated
+/// each sweep point of a dc sweep" is satisfied vacuously — the answer cannot
+/// change between sweep points, because the only inputs are the string and the
+/// elaborated design. The one input that CAN move is a string PARAMETER the host
+/// overrides on the model card: that is frozen at its declared default here,
+/// exactly as §3.6.3.2's nodeset is. Making it move needs a device whose
+/// topology is a function of its model card, which is not what `U` is; the
+/// upgrade path is to refuse a parameter-valued string whose default and
+/// override could resolve differently, once a host exists that can tell us.
+fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u16, target: []const u8) Oom!AliasResult {
+    const hit = self.resolveAliasNode(target) orelse return .unresolved;
+    // §1.3.1.1 ground is not an unknown, but it IS a valid continuous node and
+    // the clause's own example aliases to it ("node n1 will be aliased to
+    // top.gnd"). Probing an aliased-to-ground net then yields the literal 0,
+    // which is what the reference node is.
+    if (hit.idx != ground) {
+        if (self.disciplineConflict(
+            self.node_disciplines.items[local],
+            self.node_disciplines.items[hit.idx],
+        ) != null) return .unresolved;
+        if (self.disciplines.get(self.node_disciplines.items[hit.idx])) |info| {
+            if (info.is_discrete) return .unresolved;
+        }
+    }
+    if (std.mem.eql(u8, fname, "$analog_port_alias")) {
+        // "the resolved hierarchical node reference shall be a port". A port of
+        // the ELABORATED device, which is the only port whose flow §5.4.3 can
+        // read: `I(<p>)` is a row pinning the module's KCL sum at `p`.
+        //
+        // ponytail: so a child instance's port — the clause's own
+        // `$analog_port_alias(n2, "top.r1.p")`, whose promise is that `I(<n2>)`
+        // "shall measure the flow through the port of the INSTANCE referred to"
+        // — takes the zero answer instead. Flattening binds that port to the
+        // parent net it was connected to (`hier_names`), and the flow through
+        // one instance's terminal is no longer a quantity the flat design has:
+        // every instance on that net shares it. Answering 1 and measuring the
+        // NET's flow would be a different number wearing the right name, and
+        // §9.20 gives the honest 0 a meaning ("the user is encouraged to check
+        // the return value"). The upgrade path is a per-instance terminal flow
+        // unknown, which is elaboration's to mint, not this function's.
+        if (!hit.direct or hit.idx == ground or hit.idx >= self.num_ports) return .unresolved;
+    }
+    // The alias itself: from here the analog_net_reference names the resolved
+    // node's unknown, so every later probe of it lands on that matrix position.
+    try self.node_voltages.put(self.arena, ref_name, hit.idx);
+    return .bound;
+}
+
+/// §6.7 resolve a `hierarchical_reference_string` against the ELABORATED design.
+/// `direct` says the name was a node of the flat design itself rather than a
+/// child port that flattening bound to one — see `bindAlias`'s port rule.
+///
+/// Flattening renames a child's net to `path.name` with `Elaborate.sep`, which
+/// IS a period, so the string §9.20 hands us and the name the flat design
+/// carries are the same bytes and this is a map lookup — the same identity
+/// `flatName` rides for a `.hier_ident` written in source. What differs is only
+/// that the path arrives as a string, so the two prefix rules are applied to
+/// bytes instead of to interned parts:
+///
+///   §6.2.1 `$root.` — "used to unambiguously refer to a top-level instance or
+///   to an instance path starting from the root of the instantiation tree";
+///   §6.7 the first name of a path "can also be the top of a hierarchy", with
+///   "the ambiguity ... resolved by giving priority to the local scope" — hence
+///   the unstripped lookup FIRST, and the device's own module name stripped
+///   only after it fails.
+fn resolveAliasNode(self: *Lower, path: []const u8) ?AliasHit {
+    if (self.lookupFlatNode(path)) |h| return h;
+    var p = path;
+    if (std.mem.startsWith(u8, p, "$root.")) p = p["$root.".len..];
+    if (self.module) |m| {
+        const mn = self.file.str(m.name);
+        if (p.len > mn.len + 1 and p[mn.len] == Elaborate.sep and std.mem.startsWith(u8, p, mn))
+            p = p[mn.len + 1 ..];
+    }
+    if (p.len == path.len) return null; // nothing stripped; already looked up
+    return self.lookupFlatNode(p);
+}
+
+fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
+    if (self.node_voltages.get(p)) |i| return .{ .idx = i, .direct = true };
+    // A child port bound to a parent net is the same signal as that net, and
+    // `Design.names` holds exactly those aliases (`flatName`'s one exception).
+    if (self.hier_names.get(p)) |flat| {
+        if (self.node_voltages.get(flat)) |i| return .{ .idx = i, .direct = false };
+    }
+    return null;
 }
 
 /// §9.16 the dynamic simulation probe function, Syntax 9-11:

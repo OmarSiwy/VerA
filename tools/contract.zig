@@ -1125,6 +1125,24 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "u_abstol") and @TypeOf(D.u_abstol) != [n]f64)
         @compileError(name ++ ".u_abstol must be [|U|]f64");
 
+    // §3.6.3.2 `electrical n = 5.0;`, per unknown: "the initializer ... will be
+    // used as a nodeset value for the potential of the net by the analog
+    // solver". OPTIONAL in the strongest sense — it is an initial GUESS, so a
+    // host that never reads it computes the same answer and only starts
+    // somewhere else. Absent whenever the module declares no initializer at
+    // all, which is almost every module.
+    //
+    // `?f64`, because "a null value in the constant array indicates that no
+    // nodeset value is being specified for this element" and 0.0 is a perfectly
+    // ordinary nodeset. A host takes `u_nodeset[i]` as the starting x for that
+    // unknown and leaves the nulls at whatever it would have used.
+    //
+    // NOT an initial condition: §5.10.2's `initial_step` and the `.ic` pass are
+    // a different mechanism with a different meaning — a value the solve must
+    // HOLD. Nothing here may be handed to a host as one.
+    if (@hasDecl(D, "u_nodeset") and @TypeOf(D.u_nodeset) != [n]?f64)
+        @compileError(name ++ ".u_nodeset must be [|U|]?f64");
+
     // §5.6 STRUCTURAL Jacobian, one bitset per residual row: bit `cu` of
     // `jac_pattern[ru]` is set when `∂eval(x)[ru]/∂x[cu]` can be nonzero, and
     // `q_pattern` says the same for `q`. OPTIONAL and OVER-APPROXIMATE — a host
@@ -1412,6 +1430,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "attempt", {} },
     .{ "u_kinds", {} },
     .{ "u_abstol", {} },
+    // §3.6.3.2 the declared nodeset per unknown, `?f64`. Optional; see the
+    // `u_nodeset` block in `validate`.
+    .{ "u_nodeset", {} },
     .{ "jac_pattern", {} },
     .{ "q_pattern", {} },
     // Which residual rows each half ever writes — one u64 of row bits, the
@@ -1813,6 +1834,9 @@ const MockAll = struct {
     pub const u_kinds = [n_u]UnknownKind{ .voltage, .voltage };
     // §3.6.1.2 electrical potential's abstol, both unknowns being voltages.
     pub const u_abstol = [n_u]f64{ 1e-6, 1e-6 };
+    // §3.6.3.2 one net declared `electrical p = 5.0;`, the other with no
+    // initializer — the mock carries both halves so `?f64` is exercised.
+    pub const u_nodeset = [n_u]?f64{ 5.0, null };
     pub const mc_param = "g";
     pub const constant: Constant = .{ .g = true };
     // §4.6.4: a parametric generator and a §4.6.4.4 tabulated one, so the
