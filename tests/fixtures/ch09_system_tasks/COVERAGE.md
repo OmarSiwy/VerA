@@ -75,7 +75,7 @@ digital-context tasks and the distribution limits below still need work.
 | `s9.17.3` | `$limit`, all three Syntax 9-12 forms | All three: `26_limit.va` (`$limit(V(p,n))`), `27_limit_named.va` (`$limit(V(p,n), "pnjlim", $vt, 0.7)`), `156_limit_user_function.va` (an `analog_function_identifier` is resolved as the limiter, not looked up as a value) and its negative `164_limit_user_function_output_arg_rejected.va` (E0814, "shall all be declared input"). Fixtures 177–183 exercise per-access history, iteration initialization, unused constant returns, derivative history and nonlinear convergence rejection. `tests/limiter_host.zig` checks generated commit/revert and solve initialization; consuming hosts must implement the separate iteration hooks |
 | `s9.18` | `$mfactor` `$xposition` `$yposition` `$angle` `$hflip` `$vflip` | `28_hierarchical_parameters.va` plus atomics `097`–`102`, one per name. `163_aliasparam_mfactor.va` — green: a `system_identifier` is a legal `aliasparam` target, so §3.4.7's own printed example parses, and the ALIAS holds the storage (`$mfactor` has none on a model card, being an `Instance` field the host writes) |
 | `s9.19` | `$param_given` and `$port_connected` | `29_binding_detection.va`, `103_param_given.va` (overridden), `159_param_given_not_overridden.va` (the 0 direction, one deleted `//! param` line away), `165_param_given_override_equals_default.va` (override *equal to* the default is still an override — the input that separates a flag from a value comparison, and VerA now carries a real `__given` flag, `codegen.zig:867`), `104_port_connected.va` |
-| `s9.20` | `$analog_node_alias` / `$analog_port_alias` | `30_node_alias_calls.va`, `105_analog_node_alias.va`, `106_analog_port_alias.va` pass — see the note below on *why* they pass. All six negatives now reject at E0812, one code for the clause's whole validity list: `141` (outside `analog initial`), `142` (first argument a port), `143` (bit select), `144` (non-constant string), `145` (target is another call's `analog_net_reference`), `146` (inside a conditional the simulation can move). All six are checked in `lower.zig` `checkAliasCall`, because every one of them is a property of the CALL — the block, the guard, the argument's shape — and none of a value. The topology edit itself is still not performed; see the note below. `167_node_alias_status_is_integer.va` pins the RETURN TYPE rather than the value: the three positives above assign the status into an `integer` variable, where a §4.2.1.1 conversion hides a `real`, so `167` puts the call under `<<` and `~` where nothing can hide it |
+| `s9.20` | `$analog_node_alias` / `$analog_port_alias` | `30_node_alias_calls.va`, `105_analog_node_alias.va`, `106_analog_port_alias.va` pass — see the note below on *why* they pass. The topology edit IS performed now: `191_node_alias_resolves.va`, `191_port_alias_resolves.va` and `191_node_alias_last_call_wins.va` are the clause's positive half, over a real two-module hierarchy, and each asserts the identity rather than the flag — the aliased net reads the hierarchical node's potential, the port-aliased net is legal as `I(<n>)` and reads that PORT's flow unknown, and two calls on one net leave the LAST alias standing. All six negatives now reject at E0812, one code for the clause's whole validity list: `141` (outside `analog initial`), `142` (first argument a port), `143` (bit select), `144` (non-constant string), `145` (target is another call's `analog_net_reference`), `146` (inside a conditional the simulation can move). All six are checked in `lower.zig` `checkAliasCall`, because every one of them is a property of the CALL — the block, the guard, the argument's shape — and none of a value. The alias itself is `lower.zig` `bindAlias`: a `node_voltages` write, which is what node identity IS here. `167_node_alias_status_is_integer.va` pins the RETURN TYPE rather than the value: the three positives above assign the status into an `integer` variable, where a §4.2.1.1 conversion hides a `real`, so `167` puts the call under `<<` and `~` where nothing can hide it |
 | `s9.21` | `$table_model` | `37_table_model.va` (file-backed, with `ch09_table_model_2d.tbl`), `131_table_model_array_control.va` (array-backed), `155_table_model_lrm_sample_set.va` — **all three green**. The isoline interpolator is `src/backend/table_kernels.zig`, emitted into the device like the §4.5.11 filter kernels; the call is rewritten into a self-describing one by `Lower.lowerTableModel`, which is also where a scheme VerA does not implement is refused (E0815) |
 | `s9.21.1` | data source: file or real arrays | `187_table_snapshot*.va` and `test-table-snapshot-host` check first-call array capture, guarded execution, ignored mutations, independent instances and rejected-trial persistence. Source-order effects retain unused calls. Repeated calls to one analog-function body share its syntactic table site: this is an inference from §§4.7 and 9.21.1, not an explicit LRM example. File sources (`37`) are still read at compile time; changes before the first runtime call remain a conformance gap. `zTabSort` handles unsorted isolines. |
 | `s9.21.2` | control-string grammar | `37`'s `"1LL,1LL;1"` and `131`'s `"1LL;1"` are parsed by `Lower.parseTableCtl`: per-dimension sub-strings outermost-first, the one-character and two-character extrapolation forms, the defaults for an absent character or an absent string, and the dependent selector. Table 9-30's `D`/`2`/`3`/`I` and Table 9-31's `E` are refused at E0815, not approximated. No fixture pins a refusal — the five malformed strings are in the CLI checks only |
@@ -196,18 +196,29 @@ still has four green fixtures and no evidence that the task produces output.
 §9.5.3 is no longer in that position: `044`/`045` still assert only the argument,
 but `06` and `09` read the formatted TEXT back through `$sscanf`.
 
-**The node-alias positives.** `30_node_alias_calls.va`, `105` and `106` pass,
-and `141`–`146` now reject, but the positives still pass for a reason narrower
-than the rule. All three
-positives use hierarchical reference strings (`"$root.top.n"`) that cannot
+**The node-alias positives — the narrow reason is gone.** `30_node_alias_calls.va`,
+`105` and `106` used to be the whole positive story, and all three pass for a
+reason narrower than the rule: their reference strings (`"$root.top.n"`) cannot
 resolve in a single-module compilation, so §9.20's "shall be zero otherwise"
-answer *is* zero — which is also what VerA's constant-0 return gives. The right
-answer for the wrong reason, and the reason the matrix-position merge itself is
-not implemented: a flat elaboration has no instance hierarchy for a
-`hierarchical_reference_string` to resolve INTO, so there is no second position
-to merge with and no fixture that can observe one. `30`'s own header says so, and
-explicitly disclaims the last-call-wins precedence rule that its two sequential
-assignments might be misread as testing.
+answer *is* zero, which was also what a compiler answering a constant 0 gave.
+The right answer for the wrong reason. The reason given for the missing
+matrix-position merge — "a flat elaboration has no instance hierarchy for a
+`hierarchical_reference_string` to resolve INTO" — was wrong at its first step:
+elaboration FLATTENS a hierarchy, and a flattened child's net keeps its path as
+its name (`Elaborate.sep` is a period), so the string and the design's own name
+for the node are the same bytes and resolution is a map lookup. The `191_*`
+trio is the observable half that follows, and it is what retires `30`'s explicit
+disclaimer of the last-call-wins precedence rule.
+
+Two ceilings remain, both named at `lower.zig` `bindAlias`. A reference to a
+child INSTANCE's port — the clause's own `"top.r1.p"`, whose promise is that
+`I(<n2>)` measures the flow through *that instance's* terminal — takes the
+honest 0 instead of a nearby number: flattening binds the port to the parent net
+it was connected to, and one instance's terminal flow is not a quantity the flat
+design still has. And the resolution happens at compile time, so a
+`hierarchical_reference_string` that is a string PARAMETER is frozen at its
+declared default; a host override that would resolve elsewhere cannot move the
+topology of an emitted `U`.
 
 ## What the previous file claimed that is not true
 

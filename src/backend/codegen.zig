@@ -5479,18 +5479,17 @@ pub const Gen = struct {
             // unconnected one is the host's business (§6.5.6).
             return self.b("@as(i64, 1)", .{});
         }
-        // §9.20 node aliases. Every §9.20 validity rule was decided at lowering
-        // (E0812), so what is left here is the RETURN: "one (1) if the
-        // hierarchical_reference_string points to a valid continuous node and
-        // zero (0) otherwise". This engine elaborates ONE FLAT MODULE, so there
-        // is no instance hierarchy for such a string to resolve into — no
-        // reference is valid, the answer is zero for every call, and there is no
-        // second matrix position to merge the named node with. That is why the
-        // topology edit itself is absent rather than stubbed: a wrong merge
-        // corrupts the solution silently, and a reference that cannot resolve is
-        // not an error but this value (tests/fixtures/ch09_system_tasks/105).
-        if (eq(u8, name, "$analog_node_alias") or eq(u8, name, "$analog_port_alias"))
-            return self.b("@as(i64, 0)", .{});
+        // §9.20 node aliases do NOT appear here, and used to: this arm answered
+        // the constant 0 on the argument that "this engine elaborates ONE FLAT
+        // MODULE, so there is no instance hierarchy for such a string to resolve
+        // into". The premise was false. Elaboration FLATTENS a hierarchy, and a
+        // flattened child's net keeps its path as its name (`Elaborate.sep` is a
+        // period), so the string §9.20 hands the compiler and the name the
+        // design carries are the same bytes. `Lower.bindAlias` resolves it
+        // against `node_voltages`, performs the clause's topology edit there —
+        // an alias is that map's business, since it is what every probe goes
+        // through — and folds the call to its 1 or its 0. This backend never
+        // sees one of these names.
         // §9.12 command-line plusargs: absent.
         if (eq(u8, name, "$test$plusargs") or eq(u8, name, "$value$plusargs"))
             return self.b("@as(i64, 0)", .{});
