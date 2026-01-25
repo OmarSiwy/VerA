@@ -492,9 +492,18 @@ that change what a host can do:
 - **`|U| <= 256`** — `U` is `enum(u8)`. E1003 past it. Upgrading to `enum(u16)`
   is an ABI break: every linked host recompiles.
 - **`absdelay`** — fixed 32-sample history, linear interpolation.
-- **§4.6.4.3/.4 `noise_table` / `noise_table_log`** reach `noise_gens` as
-  nothing: `NoiseGen.kind` has no tag for them and `PsdTerm` is a parametric
-  white/flicker form that cannot express a piecewise PSD-vs-frequency table.
+- **§4.6.4.3/.4 `noise_table` / `noise_table_log` are CONSTANT tables only.**
+  They export as `NoiseGen.kind = .table` plus the entry
+  `noise_tables[gen.table.?]` — `{ interp: .linear | .log, points: []const
+  [2]f64 }`, ascending in frequency, unique, validated by `contract.validate` —
+  and `contract.noiseTableAt(t, f)` is the clause's own interpolation, clamped
+  to the end powers outside the table's range. Such a row's `PsdTerm` reads
+  all-zero, so `white + flicker/f^ef + table` is one formula for every kind.
+  The ceiling is that the points are COMPTIME data: the clause's file form and
+  its array-parameter form are both E0519, the latter because a model card may
+  override a parameter after this compiler has gone and folding the default
+  would ignore it in silence. Upgrade path for both: build the points into
+  `Model` in `derive` and export an accessor instead of an array.
 - **§4.6.4.6 correlated noise is not expressible.** Sharing one generator
   between contributions needs a `source` field on `NoiseGen`, and there is
   none — two `.thermal` rows are indistinguishable from two independent

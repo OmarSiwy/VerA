@@ -371,6 +371,13 @@ pub const Gen = struct {
     // ---- the shared core ("WHY THIS EXISTS", further down this struct) ----
     /// §4.6.4 `noise_gens` and `noisePsd`, one row each, built by `planNoise`.
     noise_rows: []NoiseRow = &.{},
+    /// §4.6.4.3/.4 `noise_tables`, one entry per tabulated generator, folded
+    /// and sorted by `planNoise`. Position k is `noise_rows[j].table == k`.
+    noise_tabs: []const []const [2]f64 = &.{},
+    /// Set by `refuseNoise`: the §4.6.4 export VerA will not write, as the
+    /// message the generated `@compileError` carries. First one wins — a device
+    /// is refused once, and the diagnostics carry the rest.
+    noise_fatal: ?[]const u8 = null,
     /// Every unit function to emit, resolved before any of them is written.
     jobs: []Job = &.{},
     /// Position of this Value in the core's returned struct, or `none_u32`.
@@ -2625,8 +2632,11 @@ pub const Gen = struct {
         source: usize,
         /// §4.6.4.1/.2 the PSD itself: `S(f) = pwr` for white, `pwr/f^exp` for
         /// flicker. rv-resolved, so `.f_zero` means "no generator at this bias".
+        /// Both `.f_zero` on a §4.6.4.3/.4 row, whose PSD is `table` instead.
         pwr: Mir.Value,
         exp: Mir.Value,
+        /// §4.6.4.3/.4 index into `noise_tabs`, null on a parametric row.
+        table: ?u16 = null,
     };
 
     /// Flatten every contribution's generator set into `noise_rows`, in the
@@ -2635,16 +2645,40 @@ pub const Gen = struct {
     fn planNoise(self: *Gen) Error!void {
         var rows: std.ArrayList(NoiseRow) = .empty;
         var ids: std.ArrayList(u32) = .empty;
+        var tabs: std.ArrayList([]const [2]f64) = .empty;
         for (self.lower.contributions.items) |c| {
+            if (c.noise_srcs.len == 0) continue;
             // §1.3.1.1 ground is not an unknown: a to-ground generator is
-            // spelled row == col, and one on ground-ground has neither.
-            if (c.hi == Lower.ground and c.lo == Lower.ground) continue;
+            // spelled row == col, and one on ground-ground has neither. The
+            // residual may drop such a contribution in silence — KCL at the
+            // reference node is not an equation — but a GENERATOR that vanishes
+            // is a PSD the host will never ask for, so it is reported (E0520).
+            if (c.hi == Lower.ground and c.lo == Lower.ground) {
+                try self.refuseNoise(.E0520, c.noise_srcs[0].tok, "this noise generator is on a " ++
+                    "ground-ground branch, which has no row or column to export it in", .{});
+                continue;
+            }
             const row = if (c.hi != Lower.ground) c.hi else c.lo;
             const col = if (c.lo != Lower.ground) c.lo else row;
             for (c.noise_srcs) |s| {
-                const sid = for (ids.items, 0..) |v, i| {
+                const seen = for (ids.items, 0..) |v, i| {
                     if (v == s.id) break i;
-                } else blk: {
+                } else null;
+                // §4.6.4.3/.4 the table, before the row: a generator VerA
+                // cannot state gets no row, and the device is refused either
+                // way. §4.6.4.6's shared generator shares its TABLE too — one
+                // call is one generator, so folding it twice would export the
+                // same points under two indices.
+                const table: ?u16 = switch (s.kind) {
+                    .thermal, .flicker => null,
+                    .table, .table_log => if (seen) |i| rows_table: {
+                        for (rows.items) |r| {
+                            if (r.source == i and r.table != null) break :rows_table r.table;
+                        }
+                        break :rows_table (try self.planNoiseTable(&tabs, s)) orelse continue;
+                    } else (try self.planNoiseTable(&tabs, s)) orelse continue,
+                };
+                const sid = seen orelse blk: {
                     try ids.append(self.arena, s.id);
                     break :blk ids.items.len - 1;
                 };
@@ -2655,10 +2689,107 @@ pub const Gen = struct {
                     .source = sid,
                     .pwr = self.an.rv(s.pwr),
                     .exp = self.an.rv(s.exp),
+                    .table = table,
                 });
             }
         }
         self.noise_rows = rows.items;
+        self.noise_tabs = tabs.items;
+    }
+
+    /// §4.6.4.3/.4 one `noise_table`/`noise_table_log` argument, folded into a
+    /// comptime `(frequency, power)` table and appended to `tabs`.
+    ///
+    /// CONSTANTS ONLY, and that is a real restriction: §4.6.4.3 also allows "an
+    /// array parameter" and a file name, and neither can become the comptime
+    /// `noise_tables` this exports. Folding an array parameter through its
+    /// DECLARED DEFAULT would be worse than refusing — the model card's
+    /// override would be silently ignored, which is exactly the trap E0515
+    /// names — so `resolve_params` is false and a parameter table is E0519.
+    ///
+    /// ponytail: the ceiling is "the table is comptime data". The upgrade path
+    /// for both spellings is the same one: build the points into `Model` in
+    /// `derive` and export an accessor instead of an array, at which point a
+    /// parameter table and a file read at elaboration both fit.
+    ///
+    /// Sorting is done HERE, not by the host: §4.6.4.3 says "the simulator
+    /// shall internally sort the pairs into ascending frequency if required",
+    /// and a compiler is the cheapest simulator to do it in — the host then
+    /// gets an invariant instead of a chore. Uniqueness is the clause's own
+    /// requirement ("Each frequency value must be unique") and cannot be
+    /// repaired by sorting, so it is the one ordering fact that is an error.
+    fn planNoiseTable(self: *Gen, tabs: *std.ArrayList([]const [2]f64), s: Lower.NoiseSrc) Error!?u16 {
+        const vals = s.table;
+        if (vals.len == 0) {
+            try self.refuseNoise(.E0519, s.tok, "the argument is not a vector of " ++
+                "(frequency, power) pairs; a file name is not supported", .{});
+            return null;
+        }
+        if (vals.len % 2 != 0) {
+            try self.refuseNoise(.E0519, s.tok, "the table has {d} values, which is not " ++
+                "a whole number of (frequency, power) pairs", .{vals.len});
+            return null;
+        }
+        const pts = try self.arena.alloc([2]f64, vals.len / 2);
+        for (pts, 0..) |*p, i| {
+            const f = self.an.foldConst(vals[2 * i], 0, false);
+            const pwr = self.an.foldConst(vals[2 * i + 1], 0, false);
+            if (f == null or pwr == null) {
+                try self.refuseNoise(.E0519, s.tok, "the table must be constant: it is " ++
+                    "exported as comptime data, so an array parameter or a solve-time " ++
+                    "value has no value to export", .{});
+                return null;
+            }
+            p.* = .{ f.?.f, pwr.?.f };
+        }
+        std.mem.sort([2]f64, pts, {}, struct {
+            fn lt(_: void, x: [2]f64, y: [2]f64) bool {
+                return x[0] < y[0];
+            }
+        }.lt);
+        for (pts, 0..) |p, i| {
+            if (!(p[0] > 0) or !std.math.isFinite(p[0])) {
+                try self.refuseNoise(.E0519, s.tok, "frequency {d} is not a positive " ++
+                    "number of hertz", .{p[0]});
+                return null;
+            }
+            if (!(p[1] >= 0) or !std.math.isFinite(p[1])) {
+                try self.refuseNoise(.E0519, s.tok, "power {d} is not a non-negative " ++
+                    "spectral density", .{p[1]});
+                return null;
+            }
+            // §4.6.4.4 interpolates log(power), and log(0) is not a point on
+            // the line the clause's own formula draws.
+            if (s.kind == .table_log and p[1] == 0) {
+                try self.refuseNoise(.E0519, s.tok, "noise_table_log interpolates " ++
+                    "log(power), so a zero power at {d} Hz has no logarithm", .{p[0]});
+                return null;
+            }
+            if (i != 0 and pts[i - 1][0] == p[0]) {
+                try self.refuseNoise(.E0519, s.tok, "frequency {d} Hz appears twice, and " ++
+                    "LRM 4.6.4.3 requires each frequency value to be unique", .{p[0]});
+                return null;
+            }
+        }
+        try tabs.append(self.arena, pts);
+        return @intCast(tabs.items.len - 1);
+    }
+
+    /// One §4.6.4 export VerA refuses, reported the way E0515 reports a control
+    /// argument it cannot resolve: a SOURCE-LEVEL diagnostic plus a generated
+    /// `@compileError`, so a caller with no diagnostic bag still cannot build a
+    /// device whose noise table quietly lost a generator.
+    fn refuseNoise(
+        self: *Gen,
+        code: diag.Code,
+        tok: u32,
+        comptime fmt: []const u8,
+        args: anytype,
+    ) Error!void {
+        if (self.diags) |bag| try bag.add(.codegen, code, self.lower.tokenSpan(tok), fmt, args);
+        self.any_fatal = true;
+        if (self.noise_fatal == null)
+            self.noise_fatal = try std.fmt.allocPrint(self.arena, "LRM 4.6.4: " ++ fmt, args);
     }
 
     fn buildJobs(self: *Gen) Error!void {
@@ -6641,19 +6772,62 @@ pub const Gen = struct {
     /// that reached one call through a variable share one `source` and two
     /// textually separate calls never do.
     ///
-    /// Two §4.6.4 shapes are deliberately NOT in this table, and TODO.md §3
-    /// carries them rather than leaving them to be rediscovered: §4.6.4.3/.4
-    /// `noise_table`/`noise_table_log` are piecewise PSD-vs-frequency, which
-    /// neither `NoiseGen.kind` nor `PsdTerm`'s `white + flicker/f^ef` can
-    /// state; and a generator on a ground-ground branch has no row or column
-    /// to name (§1.3.1.1).
+    /// §4.6.4.3/.4 `noise_table`/`noise_table_log` are the fourth kind, and
+    /// their PSD is a piecewise (frequency, power) table that neither
+    /// `PsdTerm`'s `white + flicker/f^ef` nor any tag can state. It leaves
+    /// through a SECOND comptime export, `noise_tables`, with `NoiseGen.table`
+    /// naming the row's entry — data and not a function, because a host that
+    /// integrates a spectrum wants the knots (a log-log segment has a
+    /// closed-form integral and a sampled evaluator does not), and because the
+    /// clause's input is a property of the model rather than of a bias. Such a
+    /// row's `PsdTerm` is all-zero, so `white + flicker/f^ef + table` is the
+    /// whole spectrum for every kind at once.
+    ///
+    /// A generator that cannot be exported at all — a ground-ground branch
+    /// (§1.3.1.1, E0520) or a table that is not constant pairs (E0519) — takes
+    /// the whole `noise_gens` decl with it, rather than leaving a table that is
+    /// quietly missing a generator. See `refuseNoise`.
     fn emitNoiseTable(self: *Gen) Error!void {
+        if (self.noise_fatal) |msg| {
+            // A `@compileError` VALUE, not a statement: the decl exists, so a
+            // host that never touches noise still builds, and `contract.validate`
+            // — which reads `noise_gens` — reports this message instead of a
+            // table with a generator missing from it.
+            try self.w("/// §4.6.4 refused by codegen; see the diagnostic.\n", .{});
+            try self.w("pub const noise_gens = @compileError(\"{s}\");\n\n", .{msg});
+            return;
+        }
         if (self.noise_rows.len == 0) return;
+        if (self.noise_tabs.len != 0) {
+            try self.w(
+                \\/// §4.6.4.3/.4 the tabulated PSDs, ascending in frequency (the
+                \\/// clause's own sort, done here so the host never repeats it).
+                \\pub const noise_tables = [_]contract.NoiseTable{{
+                \\
+            , .{});
+            for (self.noise_tabs, 0..) |pts, k| {
+                const log = for (self.noise_rows) |nr| {
+                    if (nr.table == @as(u16, @intCast(k))) break nr.kind == .table_log;
+                } else false;
+                try self.w("    .{{ .interp = .{s}, .points = &.{{", .{if (log) "log" else "linear"});
+                for (pts, 0..) |p, i| {
+                    try self.w("{s}.{{ {s}, {s} }}", .{
+                        if (i == 0) " " else ", ",
+                        try self.fmtF64(p[0]),
+                        try self.fmtF64(p[1]),
+                    });
+                }
+                try self.w(" }} }},\n", .{});
+            }
+            try self.w("}};\n\n", .{});
+        }
         try self.w("/// §4.6.4 noise sources declared by the model.\npub const noise_gens = [_]contract.NoiseGen(Self){{\n", .{});
         for (self.noise_rows) |nr| {
-            try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s}, .source = {d} }},\n", .{
-                self.u_names[nr.row], self.u_names[nr.col], @tagName(nr.kind), nr.source,
+            try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s}, .source = {d}", .{
+                self.u_names[nr.row], self.u_names[nr.col], contractNoiseKind(nr.kind), nr.source,
             });
+            if (nr.table) |k| try self.w(", .table = {d}", .{k});
+            try self.w(" }},\n", .{});
         }
         try self.w("}};\n\n", .{});
 
@@ -6664,7 +6838,8 @@ pub const Gen = struct {
         // also its physical answer.
         try self.w(
             \\/// §4.6.4.1/.2 each generator's PSD at `x`: S(f) = white + flicker/f^ef.
-            \\/// Position k belongs to `noise_gens[k]`.
+            \\/// Position k belongs to `noise_gens[k]`. A §4.6.4.3/.4 `.table` row
+            \\/// reads zero here — its spectrum is `noise_tables[k]` instead.
             \\pub fn noisePsd(
         , .{});
         const at_x = self.out.items.len;
@@ -6687,14 +6862,29 @@ pub const Gen = struct {
         }
         try self.w("    return .{{\n", .{});
         for (self.noise_rows) |nr| {
-            const pwr = try self.psdRef(nr.pwr, false);
-            if (nr.kind == .flicker) {
-                try self.w("        .{{ .white = 0, .flicker = {s}, .ef = {s} }},\n", .{ pwr, try self.psdRef(nr.exp, true) });
-            } else {
-                try self.w("        .{{ .white = {s} }},\n", .{pwr});
+            switch (nr.kind) {
+                // §4.6.4.3/.4 the table IS the spectrum: anything here would be
+                // added to it, so the parametric part of a table row is zero.
+                .table, .table_log => try self.w("        .{{ .white = 0 }}, // noise_tables[{d}]\n", .{nr.table.?}),
+                .flicker => try self.w("        .{{ .white = 0, .flicker = {s}, .ef = {s} }},\n", .{
+                    try self.psdRef(nr.pwr, false), try self.psdRef(nr.exp, true),
+                }),
+                .thermal => try self.w("        .{{ .white = {s} }},\n", .{try self.psdRef(nr.pwr, false)}),
             }
         }
         try self.w("    }};\n}}\n\n", .{});
+    }
+
+    /// `Lower.NoiseKind` in the vocabulary `contract.NoiseGen.kind` speaks:
+    /// §4.6.4.3 and §4.6.4.4 are two spellings of ONE exported kind, because
+    /// what a host does with either is read `noise_tables`, and which
+    /// interpolation to use is the table's own `interp` field.
+    fn contractNoiseKind(k: Lower.NoiseKind) []const u8 {
+        return switch (k) {
+            .thermal => "thermal",
+            .flicker => "flicker",
+            .table, .table_log => "table",
+        };
     }
 
     /// The core field holding `v`, or null when `v` is rendered inline —
@@ -9117,6 +9307,146 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
         k = i + 1;
         if (k > ret + 120) break;
+    }
+}
+
+test "codegen: §4.6.4.3/.4 a noise table is exported sorted, with its own interpolation" {
+    var h: Harness = undefined;
+    // The two clauses' arguments are IDENTICAL in shape — "the meaning and
+    // restrictions on the input are the same as for noise_table()" — and they
+    // differ only in how the points are joined, so the difference has to be in
+    // the exported table and nowhere else. Written descending, because
+    // §4.6.4.3 makes sorting the simulator's job.
+    try Harness.run(std.testing.allocator,
+        \\module ntab(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    I(p, n) <+ noise_table('{1e6, 1e-24, 1.0, 1e-18});
+        \\    I(p, n) <+ noise_table_log('{1.0, 1e-18, 1e6, 1e-24});
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+
+    // Ascending, whichever order the model wrote them in, and each table keeps
+    // the interpolation of the FUNCTION that declared it. The literals are
+    // `fmtF64`'s, which is every other constant in the emitted device too.
+    const p18 = "0.000000000000000001"; // 1e-18
+    const p24 = "0.000000000000000000000001"; // 1e-24
+    try std.testing.expect(std.mem.indexOf(u8, src,
+        ".{ .interp = .linear, .points = &.{ .{ 1.0, " ++ p18 ++ " }, .{ 1000000.0, " ++ p24 ++ " } } }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src,
+        ".{ .interp = .log, .points = &.{ .{ 1.0, " ++ p18 ++ " }, .{ 1000000.0, " ++ p24 ++ " } } }") != null);
+    // One exported kind for both clauses, each row naming its own table, and
+    // both independent generators (§4.6.4.6: two calls, two sources).
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .table, .source = 0, .table = 0 }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .table, .source = 1, .table = 1 }") != null);
+    // `noise_tables` is read by `noise_gens`, so it has to be declared first.
+    try std.testing.expect(
+        std.mem.indexOf(u8, src, "pub const noise_tables").? <
+            std.mem.indexOf(u8, src, "pub const noise_gens").?,
+    );
+    // The parametric half of a table row is ZERO, or a host that adds
+    // `white + flicker/f^ef` to the table's answer would double-count.
+    const at = std.mem.indexOf(u8, src, "pub fn noisePsd(").?;
+    try std.testing.expectEqual(
+        @as(usize, 2),
+        std.mem.count(u8, src[at..], ".{ .white = 0 }, // noise_tables["),
+    );
+}
+
+test "codegen: §4.6.4.6 one tabulated source on two branches is one table" {
+    var h: Harness = undefined;
+    // The clause's Example 1 shape with a §4.6.4.4 source: "Perfectly
+    // correlated noise is generated by using the output of one noise function
+    // for more than one noise source." One call is one generator, so the two
+    // rows share a `source` — and must share the TABLE too, or the export
+    // describes one generator with two copies of its own spectrum.
+    try Harness.run(std.testing.allocator,
+        \\module nshare(a, b, c);
+        \\  inout a, b, c;
+        \\  electrical a, b, c;
+        \\  real nt;
+        \\  analog begin
+        \\    nt = noise_table_log('{1.0, 1e-18, 1e6, 1e-24});
+        \\    I(a, b) <+ nt;
+        \\    I(b, c) <+ 2.0 * nt;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, ".interp = ."));
+    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, ".source = 0, .table = 0 }"));
+}
+
+test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
+    // Both halves of the same rule: a `noise_gens` row that cannot be written
+    // must take the DECL with it. Silently dropping the row would tell a host
+    // the model declares no such noise, which is a PSD it can never ask for —
+    // and `@compileError` is how codegen refuses (see `f64Expr`/E0515).
+    const cases = [_][]const u8{
+        // §1.3.1.1 a ground-ground branch has no row and no column (E0520).
+        \\module ngnd(p);
+        \\  inout p;
+        \\  electrical p;
+        \\  ground g;
+        \\  electrical g;
+        \\  analog begin
+        \\    I(p) <+ V(p) * 1e-3;
+        \\    I(g, g) <+ white_noise(1e-20);
+        \\  end
+        \\endmodule
+        ,
+        // §4.6.4.3 "Each frequency value must be unique" (E0519).
+        \\module ndup(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ noise_table('{1.0, 1e-18, 1.0, 1e-24});
+        \\endmodule
+        ,
+        // §4.6.4.3 pairs, not an odd tail (E0519).
+        \\module nodd(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ noise_table('{1.0, 1e-18, 10.0});
+        \\endmodule
+        ,
+        // §4.6.4.3's file form, which a comptime table cannot hold (E0519).
+        \\module nfile(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ noise_table("table.tbl");
+        \\endmodule
+        ,
+        // An array PARAMETER: legal per §4.6.4.3, and refused rather than
+        // frozen at its default, which a model card may override.
+        \\module nparam(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real tbl[0:3] = '{1.0, 1e-18, 1e6, 1e-24};
+        \\  analog I(p, n) <+ noise_table(tbl);
+        \\endmodule
+        ,
+        // §4.6.4.4 interpolates log(power), and log(0) is not on the line.
+        \\module nlog0(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ noise_table_log('{1.0, 0.0, 1e6, 1e-24});
+        \\endmodule
+        ,
+    };
+    for (cases) |case| {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, case, &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const noise_gens = @compileError(\"LRM 4.6.4:") != null);
+        // And no half-written table beside it.
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const noise_tables") == null);
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub fn noisePsd(") == null);
     }
 }
 

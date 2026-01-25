@@ -387,6 +387,12 @@ pub const Code = enum(u16) {
     /// branch — the abrupt discontinuity the clause allows in a VARIABLE, put
     /// where the solver has to differentiate it.
     E0518,
+    /// §4.6.4.3/.4 a `noise_table`/`noise_table_log` argument that is not a
+    /// usable (frequency, power) table — codegen.zig.
+    E0519,
+    /// §4.6.4 + §1.3.1.1 a noise generator on a ground-ground branch, which has
+    /// no row and no column to name — codegen.zig.
+    E0520,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -3208,6 +3214,66 @@ fn infoOf(c: Code) Info {
             \\What the clause bans is the discontinuity landing directly in the
             \\equation system, where a branch quantity that steps
             \\instantaneously has no derivative for Newton-Raphson to work with.
+            ,
+        },
+        .E0519 => .{
+            .title = "noise table is not a usable (frequency, power) table",
+            .lrm = "4.6.4.3",
+            .explain =
+            \\LRM 4.6.4.3: "When the input is a vector it contains pairs of real
+            \\numbers: the first number in each pair is the frequency in Hertz
+            \\and the second is the power. The vector can either be specified as
+            \\an array parameter or an array assignment pattern." And: "Each
+            \\frequency value must be unique."
+            \\
+            \\So a table is an EVEN number of values, at least one pair, with
+            \\distinct positive frequencies and non-negative powers. Ordering is
+            \\NOT one of the rules — the same clause says "the simulator shall
+            \\internally sort the pairs into ascending frequency if required",
+            \\and VerA sorts at compile time, so a descending table compiles.
+            \\
+            \\4.6.4.4's noise_table_log interpolates log(power), so it wants
+            \\every power strictly positive as well; log(0) is not a point on a
+            \\log-log line.
+            \\
+            \\The table is exported as `noise_tables` — comptime data beside
+            \\`noise_gens` — so every value in it has to be a compile-time
+            \\constant. Two legal spellings are refused for that reason:
+            \\
+            \\  - the file form, `noise_table("noise.tbl")`. Reading the file at
+            \\    compile time is the upgrade path; nothing does it today.
+            \\  - an array PARAMETER, whose values a model card may override
+            \\    after this compiler has gone. Folding through the declared
+            \\    default would silently ignore the override, which is the same
+            \\    trap E0515 describes; refusing is the honest answer until a
+            \\    per-model table can be built.
+            \\
+            \\Write the pairs as an assignment pattern of literals:
+            \\
+            \\    I(p, n) <+ noise_table('{1.0, 1e-18, 1e6, 1e-24});
+            ,
+        },
+        .E0520 => .{
+            .title = "noise generator has no branch to sit on",
+            .lrm = "4.6.4",
+            .explain =
+            \\LRM 1.3.1.1 makes ground the reference node: it is not an unknown
+            \\of the system, so it has no row and no column. A contribution
+            \\between ground and ground therefore names NO branch — there is
+            \\nothing for a current to flow through and nothing for a voltage to
+            \\be measured across.
+            \\
+            \\For the large-signal residual that is harmless, and VerA drops
+            \\such a contribution silently: KCL at the reference node is the one
+            \\equation the solver does not write. A NOISE generator is different
+            \\because it is EXPORTED — `noise_gens` names the (row, col) a host
+            \\stamps the generator into, and this one has neither. Dropping it
+            \\would delete a declared noise source from the model without
+            \\telling anyone, and inventing a row would put noise on a branch
+            \\the model never wrote.
+            \\
+            \\Contribute the source to a real branch: give the generator a node
+            \\that is an unknown of the system, even if the other end is ground.
             ,
         },
 
