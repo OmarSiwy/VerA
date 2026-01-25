@@ -124,6 +124,13 @@ pub const Tag = enum(u8) {
     kw_initial, // 'analog initial' §5.2, and A.6.2 initial_construct
     // A.6.2 `always_construct ::= always statement`.
     kw_always,
+    // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
+    // list_of_net_assignments ;` — the structural driver of a net (§6.1). It
+    // gets a tag instead of staying `.kw_reserved` for the same reason `reg`
+    // and `initial` did: the digital executor runs it. Everywhere else it is
+    // still refused, by `parseModuleItem`'s E0205 outside a digital run and by
+    // A.6.4 offering no analog statement production for the procedural form.
+    kw_assign,
     kw_begin,
     kw_end,
     kw_generate, // §6.9
@@ -760,7 +767,10 @@ const reserved_keywords = [_][]const u8{
     // B.1 reserves the spelling and Verilog-AMS 2.4 then spends it on nothing
     // — no statement, no system function, no production in annex A. Being
     // unavailable as an identifier is the whole of what the word does.
-    "and",                "assert",        "assign",
+    // `assign` left this list when A.6.1 got a tag (`kw_assign`) — §10.6
+    // membership is keyed by spelling, so it is still reserved everywhere it
+    // was, and `keyword_intro` still finds it through `kw_1364_1995`.
+    "and",                "assert",
     "automatic",          "buf",           "bufif0",       "bufif1",
     "cmos",               "deassign",      "edge",
     "endprimitive",       "endspecify",    "endtable",     "endtask",

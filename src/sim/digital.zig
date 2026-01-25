@@ -21,6 +21,9 @@ const Type = struct { width: u32, signed: bool };
 // All fields in a row are consumed by one dispatch; expressions stay in the AST.
 const Instruction = union(enum(u4)) {
     statement: Ast.StmtId,
+    // §6.1 one continuous assignment: evaluate, drive, resolve, then suspend
+    // on its own operands. Its resumption point is its own pc.
+    continuous: u32,
     branch: struct { condition: Ast.ExprId, otherwise: u32 },
     jump: u32,
     case_select: struct { statement: Ast.StmtId, targets: u32, fallback: u32, ty: Type },
@@ -54,6 +57,83 @@ const Edge = enum(u2) {
 // resumption point and the process's identity while it is suspended: the terms
 // of one `or` share it, and retire together when any one of them fires.
 const Waiter = struct { slot: u32, edge: Edge, pc: u32 };
+// §3.9 an unpacked array is `count` consecutive element slots; the declared
+// name maps to the first. `low`/`high` are the declared address bounds, in
+// either order of declaration — no operation here observes element ORDER, only
+// which address names which element.
+const Array = struct { count: u32, low: i64, high: i64 };
+// §7.9 one net: its resolution function, its storage, and the drivers whose
+// wired-logic combination IS its value. `resolved` is the scratch the fold
+// writes before publishing through `store`; it is sized once, at setup.
+const Net = struct { kind: Ast.NetKind, slot: u32, resolved: Int.Literal, drivers: []const u32 = &.{} };
+// §6.1 one driver. It keeps its OWN value — the net's is the resolution of all
+// of them — and re-evaluates whenever one of its operands changes.
+const Driver = struct { net: u32, value: Ast.ExprId, sensitivity: []const u32, current: Int.Literal };
+
+/// A four-state value of `width` bits, every bit `fill`. This is the one place
+/// declared state gets its starting value: X for a variable, Z for an undriven
+/// net (§3.7 — that difference IS the net/variable difference).
+fn filled(a: std.mem.Allocator, width: u32, signed: bool, fill: Int.Bit) Error!Int.Literal {
+    const words = (@as(usize, width) - 1) / 64 + 1;
+    const planes = try a.alloc(u64, words * 2);
+    @memset(planes[0..words], if (@intFromEnum(fill) & 1 != 0) std.math.maxInt(u64) else 0);
+    @memset(planes[words..], if (@intFromEnum(fill) >> 1 != 0) std.math.maxInt(u64) else 0);
+    const tail: u6 = @truncate(width);
+    if (tail != 0) {
+        const keep = (@as(u64, 1) << tail) - 1;
+        planes[words - 1] &= keep;
+        planes[2 * words - 1] &= keep;
+    }
+    return .{ .width = width, .signed = signed, .sized = true, .planes = planes };
+}
+
+/// Write one packed bit. The read side is `Int.Literal.bit`; only the §7.9
+/// resolution fold writes bit by bit.
+fn setBit(value: Int.Literal, index: u32, b: Int.Bit) void {
+    const at = @as(u64, 1) << @truncate(index);
+    const word = index / 64;
+    if (@intFromEnum(b) & 1 != 0) value.values()[word] |= at else value.values()[word] &= ~at;
+    if (@intFromEnum(b) >> 1 != 0) value.unknowns()[word] |= at else value.unknowns()[word] &= ~at;
+}
+
+/// IEEE1364-2005 §7.9 wired logic, Tables 7-4/7-6/7-7: fold one more driver's
+/// bit into a net's accumulated bit. `z` is the identity of all three tables,
+/// which is exactly why an undriven net reads z.
+///
+/// ponytail: every driver here is at the SAME strength, so §7.10's eight drive
+/// strengths and §7.11's strength resolution are not implemented — two drivers
+/// that disagree conflict to x whether or not one of them would have won. The
+/// declared strength of `supply0`/`supply1`/`tri0`/`tri1` is the only part of
+/// that model which survives, and it survives as the special cases in
+/// `resolve`, not as a strength. The upgrade path is to carry a (strength0,
+/// strength1) pair per driver bit instead of one `Int.Bit`, fold by taking the
+/// maximum of each component across a net's drivers, and collapse to four
+/// states only on read: strength1 above strength0 is 1, the reverse is 0,
+/// equal and nonzero is x, both zero is z. That also needs A.2.2.3's
+/// `strong0`/`weak1`/`pull0`/`highz1`/... as lexer tags and A.6.1's
+/// `drive_strength` in `parseModuleItem`.
+fn wired(kind: Ast.NetKind, acc: Int.Bit, b: Int.Bit) Int.Bit {
+    if (acc == .z) return b;
+    if (b == .z) return acc;
+    return switch (kind) {
+        .wand, .triand => if (acc == .zero or b == .zero) .zero else if (acc == .one and b == .one) .one else .x,
+        .wor, .trior => if (acc == .one or b == .one) .one else if (acc == .zero and b == .zero) .zero else .x,
+        // wire/tri/uwire/tri0/tri1/trireg/supply*: agreement, else conflict.
+        else => if (acc == b) acc else .x,
+    };
+}
+
+/// §3.7 the value a net of this type shows with no driver at all: the pull of
+/// `tri0`/`tri1`, the constant of a supply net, the X a `trireg` starts at
+/// before it has any charge to hold, and Z for everything else.
+fn undriven(kind: Ast.NetKind) Int.Bit {
+    return switch (kind) {
+        .supply0, .tri0 => .zero,
+        .supply1, .tri1 => .one,
+        .trireg => .x,
+        else => .z,
+    };
+}
 const Cast = enum(u1) { make_signed, make_unsigned };
 const casts = std.StaticStringMap(Cast).initComptime(.{ .{ "$signed", .make_signed }, .{ "$unsigned", .make_unsigned } });
 const Task = enum(u1) { display, finish };
@@ -65,7 +145,14 @@ const Run = struct {
     bag: *diag.Bag,
     out: *std.Io.Writer,
     names: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty,
+    /// Variables, array elements and nets share one slot space, so one `store`
+    /// wakes event waiters for all three. Nets occupy `net_base..values.len`.
     values: []Int.Literal,
+    net_base: u32 = 0,
+    nets: []Net = &.{},
+    drivers: []Driver = &.{},
+    /// Keyed by the base slot of an unpacked array (§3.9).
+    arrays: std.AutoHashMapUnmanaged(u32, Array) = .empty,
     // Natural types, indexed by AST ExprId; width zero marks an unvisited row.
     types: []Type = &.{},
     replications: std.AutoHashMapUnmanaged(Ast.ExprId, u32) = .empty,
@@ -91,11 +178,43 @@ const Run = struct {
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
         return self.names.get(ex.strOf(e)) orelse self.exprFail(e, "undeclared digital variable");
     }
+    /// One declared bound. Digital execution takes literal bounds only: the
+    /// parameters and constant functions §3.9 also admits are not declared yet.
+    fn declaredBound(self: *Run, e: Ast.ExprId, tok: u32) Error!i64 {
+        if (self.file.exprs.tag(e) != .int_literal) return self.fail(tok, "declaration bounds must be literal integers", .{});
+        return self.file.exprs.intValue(e);
+    }
+    /// §3.3/§6.5.2 a packed `[msb:lsb]` range as a bit width.
+    fn declaredWidth(self: *Run, range: Ast.Dim, tok: u32) Error!u32 {
+        const hi = try self.declaredBound(range.msb, tok);
+        const lo = try self.declaredBound(range.lsb, tok);
+        if (hi < 0 or lo < 0 or @abs(hi - lo) >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
+        return @intCast(@abs(hi - lo) + 1);
+    }
+    fn bind(self: *Run, name: Ast.StrId, at: u32, tok: u32) Error!void {
+        const entry = try self.names.getOrPut(self.arena, name);
+        if (entry.found_existing) return self.fail(tok, "duplicate digital variable", .{});
+        entry.value_ptr.* = at;
+    }
+    /// A reference to ONE whole value. §3.9's unpacked array has no value of
+    /// its own — only its elements do — so a bare array name is refused here.
+    fn scalarSlot(self: *Run, e: Ast.ExprId) Error!u32 {
+        const at = try self.slot(e);
+        if (self.arrays.contains(at)) return self.exprFail(e, "an unpacked array reference requires an element index");
+        return at;
+    }
+    /// The array an `.index` selects from, or null when this is not an element
+    /// reference (a bit or part select, which is not implemented).
+    fn indexedArray(self: *Run, e: Ast.ExprId) Error!?Array {
+        const ex = &self.file.exprs;
+        if (ex.tag(e) != .index or ex.tag(ex.lhs(e)) != .ident) return null;
+        return self.arrays.get(try self.slot(ex.lhs(e)));
+    }
     fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
         const ex = &self.file.exprs;
         return switch (ex.tag(e)) {
             .ident => blk: {
-                const v = self.values[try self.slot(e)];
+                const v = self.values[try self.scalarSlot(e)];
                 break :blk .{ .width = v.width, .signed = v.signed };
             },
             .int_literal => blk: {
@@ -185,6 +304,15 @@ const Run = struct {
         const ex = &self.file.exprs;
         const ty: Type = switch (ex.tag(e)) {
             .int_literal, .logic_literal, .ident => try self.leafType(e),
+            // §3.9 an array element has the element's declared type; the index
+            // is self-determined and never widens the result.
+            .index => blk: {
+                if (try self.indexedArray(e) == null) return self.exprFail(e, "bit and part selects are not implemented; only unpacked array elements are indexed");
+                const index = try self.inferValue(ex.rhs(e), depth + 1);
+                if (index.width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
+                const v = self.values[try self.slot(ex.lhs(e))];
+                break :blk .{ .width = v.width, .signed = v.signed };
+            },
             .unary => blk: {
                 const operand = try self.inferValue(ex.lhs(e), depth + 1);
                 break :blk switch (ex.unOp(e)) {
@@ -241,10 +369,27 @@ const Run = struct {
         entry.* = ty;
         return ty;
     }
+    /// §3.9 the element an `.index` names right now, or the whole value a
+    /// scalar reference names. `null` is an out-of-bounds or X/Z index: it
+    /// names no storage, so a read of one is X and a write to one is discarded.
+    fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
+        const ex = &self.file.exprs;
+        if (ex.tag(e) != .index) return try self.slot(e);
+        const base = try self.slot(ex.lhs(e));
+        const arr = self.arrays.get(base).?; // infer proved this is an array
+        const at = (try self.eval(a, ex.rhs(e), 0)).asInt() orelse return null;
+        if (at < arr.low or at > arr.high) return null;
+        return base + @as(u32, @intCast(at - arr.low));
+    }
     fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
         const ex = &self.file.exprs;
         return switch (ex.tag(e)) {
             .ident => self.values[try self.slot(e)],
+            .index => blk: {
+                const ty = self.typeOf(e);
+                const at = (try self.address(a, e)) orelse break :blk try filled(a, ty.width, ty.signed, .x);
+                break :blk self.values[at];
+            },
             .logic_literal => ex.logicValue(e),
             .int_literal => blk: {
                 const n = ex.intLiteral(e);
@@ -267,10 +412,7 @@ const Run = struct {
         return result;
     }
     fn scalar(a: std.mem.Allocator, bit: Int.Bit) Error!Int.Literal {
-        const planes = try a.alloc(u64, 2);
-        planes[0] = @intFromEnum(bit) & 1;
-        planes[1] = @intFromEnum(bit) >> 1;
-        return .{ .width = 1, .signed = false, .sized = true, .planes = planes };
+        return filled(a, 1, false, bit);
     }
     // Assignment supplies width only (§5.5.3); its signedness cannot change
     // the RHS type. Operator contexts below propagate BOTH width and type.
@@ -288,7 +430,7 @@ const Run = struct {
     fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
         const ex = &self.file.exprs;
         switch (ex.tag(e)) {
-            .int_literal, .logic_literal, .ident => return normalize(a, try self.leaf(a, e), ty),
+            .int_literal, .logic_literal, .ident, .index => return normalize(a, try self.leaf(a, e), ty),
             .unary => {
                 const op = ex.unOp(e);
                 switch (op) {
@@ -512,7 +654,7 @@ const Run = struct {
                 for (exits) |at| self.code.items[at].jump = end;
             },
             .assign => |s| {
-                _ = try self.slot(s.target);
+                try self.checkTarget(s.target);
                 try self.checkExpr(s.value);
                 _ = try self.append(.{ .statement = id });
             },
@@ -621,6 +763,80 @@ const Run = struct {
             i = 0;
         }
     }
+    /// §7.9: a net's value is the wired-logic resolution of ALL its drivers, so
+    /// it is recomputed whole on every driver update and published through
+    /// `store` — the same path a variable write takes, which is what lets
+    /// `@(posedge w)` resume on a net.
+    fn resolve(self: *Run, net: u32) Error!void {
+        const n = self.nets[net];
+        const current = self.values[n.slot];
+        // ponytail: one bit at a time. The tables are 4x4 over two planes, so a
+        // plane-parallel fold is possible; do it when a wide bus resolves often
+        // enough to show up, not before.
+        for (0..n.resolved.width) |i| {
+            const at: u32 = @intCast(i);
+            // §7.9: a supply net drives at supply strength, which no continuous
+            // assignment can reach, so its own drivers never win.
+            var bit = undriven(n.kind);
+            if (n.kind != .supply0 and n.kind != .supply1) {
+                bit = .z;
+                for (n.drivers) |d| bit = wired(n.kind, bit, self.drivers[d].current.bit(at));
+                // §7.9/§7.10: where no driver supplied a value, the net type
+                // does — and a `trireg` supplies the charge it last held.
+                if (bit == .z) bit = if (n.kind == .trireg) current.bit(at) else undriven(n.kind);
+            }
+            setBit(n.resolved, at, bit);
+        }
+        try self.store(n.slot, n.resolved.planes);
+    }
+    /// §6.1 "a continuous assignment is evaluated whenever an operand changes".
+    /// The operands are the slots its expression reads; they resolve at compile
+    /// time, like an event term, so a resumption cannot fail mid-dispatch.
+    ///
+    /// ponytail: an array element operand watches EVERY element of that array,
+    /// because the element a dynamic index names is not known until it is read.
+    /// A per-array wake list would replace that if a big memory ever feeds one.
+    fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
+        const ex = &self.file.exprs;
+        switch (ex.tag(e)) {
+            .int_literal, .logic_literal => {},
+            .ident => try self.watch(try self.slot(e), out),
+            .index => {
+                const base = try self.slot(ex.lhs(e));
+                const arr = self.arrays.get(base).?; // infer proved this is an array
+                for (0..arr.count) |i| try self.watch(base + @as(u32, @intCast(i)), out);
+                try self.sensitivity(ex.rhs(e), out);
+            },
+            .unary => try self.sensitivity(ex.lhs(e), out),
+            .binary, .multi_concat => {
+                try self.sensitivity(ex.lhs(e), out);
+                try self.sensitivity(ex.rhs(e), out);
+            },
+            .ternary => {
+                try self.sensitivity(ex.lhs(e), out);
+                try self.sensitivity(ex.rhs(e), out);
+                try self.sensitivity(ex.ternaryElse(e), out);
+            },
+            .sys_call, .concat => for (ex.args(e)) |arg| try self.sensitivity(arg, out),
+            else => unreachable, // checkExpr admitted only the forms above
+        }
+    }
+    fn watch(self: *Run, at: u32, out: *std.ArrayList(u32)) Error!void {
+        for (out.items) |seen| if (seen == at) return;
+        try out.append(self.arena, at);
+    }
+    /// §6.2.2/§6.1: a net is driven by a continuous assignment and a variable by
+    /// a procedural one; neither accepts the other's form.
+    fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
+        const ex = &self.file.exprs;
+        if (try self.indexedArray(e) != null) {
+            try self.checkExpr(ex.rhs(e));
+            if (self.typeOf(ex.rhs(e)).width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
+            return;
+        }
+        if (try self.scalarSlot(e) >= self.net_base)
+            return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
+    }
     /// Event terms resolve to watched slots at compile time, so a resumption
     /// never has to fail in the middle of a dispatch.
     fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
@@ -630,8 +846,8 @@ const Run = struct {
                 try self.checkEvent(ex.lhs(e));
                 try self.checkEvent(ex.rhs(e));
             },
-            .event_posedge, .event_negedge => _ = try self.slot(ex.lhs(e)),
-            .ident => _ = try self.slot(e),
+            .event_posedge, .event_negedge => _ = try self.scalarSlot(ex.lhs(e)),
+            .ident => _ = try self.scalarSlot(e),
             else => return self.exprFail(e, "only variable and posedge/negedge event terms are implemented"),
         }
     }
@@ -686,6 +902,18 @@ const Run = struct {
                     continue;
                 },
                 .wait_event => |e| return self.suspendOn(e, pc + 1),
+                // §6.1: drive this assignment's own value, resolve the net from
+                // every driver of it, then suspend on the operands. The
+                // resumption point is this same pc, so a change re-drives.
+                .continuous => |at| {
+                    const d = self.drivers[at];
+                    const rhs = try self.eval(scratch, d.value, d.current.width);
+                    const value = try normalize(scratch, rhs, .{ .width = d.current.width, .signed = rhs.signed });
+                    @memcpy(d.current.planes, value.planes);
+                    try self.resolve(d.net);
+                    for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });
+                    return;
+                },
                 .restart => |s| {
                     // A suspension returns from this dispatch, so reaching the
                     // restart a second time within one proves a whole body ran
@@ -735,11 +963,14 @@ const Run = struct {
             };
             switch (self.file.stmt(id)) {
                 .assign => |s| {
-                    const target = try self.slot(s.target);
-                    const dest = self.values[target];
-                    const rhs = try self.eval(scratch, s.value, dest.width);
-                    const value = try normalize(if (s.nonblocking) self.arena else scratch, rhs, .{ .width = dest.width, .signed = rhs.signed });
-                    if (s.nonblocking) try self.enqueue(.{ .write = .{ .target = target, .value = value } }, null, true) else try self.store(target, value.planes);
+                    // §3.9: an out-of-range or X/Z index names no element, so
+                    // the write is discarded rather than landing somewhere.
+                    if (try self.address(scratch, s.target)) |target| {
+                        const dest = self.values[target];
+                        const rhs = try self.eval(scratch, s.value, dest.width);
+                        const value = try normalize(if (s.nonblocking) self.arena else scratch, rhs, .{ .width = dest.width, .signed = rhs.signed });
+                        if (s.nonblocking) try self.enqueue(.{ .write = .{ .target = target, .value = value } }, null, true) else try self.store(target, value.planes);
+                    }
                 },
                 .event_control => |s| {
                     const value = try self.eval(scratch, s.event, 0);
@@ -789,7 +1020,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena) };
     if (file.modules.len != 1 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires exactly one ordinary module", .{});
     const m = file.modules[0];
-    if (m.is_connect or m.ports.len != 0 or m.params.len != 0 or m.aliasparams.len != 0 or m.nets.len != 0 or m.branches.len != 0 or m.instances.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.events.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
+    if (m.is_connect or m.ports.len != 0 or m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.instances.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.events.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
         return r.fail(m.main_tok, "digital execution currently requires a portless module with only variables and initial processes", .{});
     for (times) |event| {
         if (event.at > r.starts[m.main_tok]) return r.fail(m.main_tok, "timescale/resetall after module start is not implemented for digital execution", .{});
@@ -798,33 +1029,78 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         const precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(m.main_tok, "unsupported time precision", .{});
         r.scale = Time.Scale.init(unit, precision, precision) catch return r.fail(m.main_tok, "invalid timescale", .{});
     }
-    if (m.vars.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many digital variables", .{});
-    r.values = try arena.alloc(Int.Literal, m.vars.len);
-    for (m.vars, 0..) |v, i| {
-        if (v.ty != .integer or v.dims.len != 0 or v.init != .none or v.storage == .time) return r.fail(v.main_tok, "only uninitialized scalar/packed reg and integer declarations are implemented", .{});
-        var width: u32 = if (v.storage == .reg) 1 else 32;
-        if (v.packed_range) |range| {
-            if (file.exprs.tag(range.msb) != .int_literal or file.exprs.tag(range.lsb) != .int_literal) return r.fail(v.main_tok, "packed reg bounds must be literal nonnegative integers", .{});
-            const hi = file.exprs.intValue(range.msb);
-            const lo = file.exprs.intValue(range.lsb);
-            if (hi < 0 or lo < 0 or @abs(hi - lo) >= std.math.maxInt(u32)) return r.fail(v.main_tok, "packed reg range is outside the supported u32 width", .{});
-            width = @intCast(@abs(hi - lo) + 1);
+    // Variables, then array elements, then nets — one slot space, so one
+    // `store` publishes all three and wakes the same event waiters.
+    var values: std.ArrayList(Int.Literal) = .empty;
+    for (m.vars) |v| {
+        if (v.ty != .integer or v.init != .none or v.storage == .time) return r.fail(v.main_tok, "only uninitialized scalar/packed reg and integer declarations are implemented", .{});
+        // ponytail: one unpacked dimension. §3.9 admits any number; the second
+        // one needs a row-major address fold this has no consumer for yet.
+        if (v.dims.len > 1) return r.fail(v.main_tok, "only one unpacked array dimension is implemented", .{});
+        const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else if (v.storage == .reg) 1 else 32;
+        const base: u32 = @intCast(values.items.len);
+        try r.bind(v.name, base, v.main_tok);
+        var count: u32 = 1;
+        if (v.dims.len == 1) {
+            const lo = try r.declaredBound(v.dims[0].lsb, v.main_tok);
+            const hi = try r.declaredBound(v.dims[0].msb, v.main_tok);
+            const low = @min(lo, hi);
+            const high = @max(lo, hi);
+            if (high - low >= std.math.maxInt(u32)) return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
+            count = @intCast(high - low + 1);
+            try r.arrays.put(arena, base, .{ .count = count, .low = low, .high = high });
         }
-        const words = (@as(usize, width) - 1) / 64 + 1;
-        const planes = try arena.alloc(u64, words * 2);
-        @memset(planes, std.math.maxInt(u64));
-        const tail: u6 = @truncate(width);
-        if (tail != 0) {
-            planes[words - 1] = (@as(u64, 1) << tail) - 1;
-            planes[2 * words - 1] = planes[words - 1];
-        }
-        r.values[i] = .{ .width = width, .signed = if (v.storage == .reg) v.is_signed else true, .sized = true, .planes = planes };
-        const entry = try r.names.getOrPut(arena, v.name);
-        if (entry.found_existing) return r.fail(v.main_tok, "duplicate digital variable", .{});
-        entry.value_ptr.* = @intCast(i);
+        if (count > std.math.maxInt(u32) - values.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
+        for (0..count) |_| try values.append(arena, try filled(arena, width, if (v.storage == .reg) v.is_signed else true, .x));
     }
+    r.net_base = @intCast(values.items.len);
+    if (m.nets.len > std.math.maxInt(u32) - values.items.len) return r.fail(m.main_tok, "too many digital storage slots", .{});
+    r.nets = try arena.alloc(Net, m.nets.len);
+    for (m.nets, 0..) |n, i| {
+        if (n.discipline != .none or n.is_ground or n.init != .none)
+            return r.fail(n.main_tok, "disciplined, ground and wreal-initialized nets are not implemented by digital execution", .{});
+        const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
+        const at: u32 = @intCast(values.items.len);
+        try r.bind(n.name, at, n.main_tok);
+        // §3.7: a net with no driver is Z, not X — except where the net type
+        // itself supplies a value. That is the whole net/variable difference.
+        try values.append(arena, try filled(arena, width, false, undriven(n.kind)));
+        r.nets[i] = .{ .kind = n.kind, .slot = at, .resolved = try filled(arena, width, false, .z) };
+    }
+    r.values = values.items;
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
     @memset(r.types, .{ .width = 0, .signed = false });
+    // §6.1 one continuous assignment is one driver of one net; §7.9 resolution
+    // needs them grouped, because every update reads all of a net's drivers.
+    //
+    // They compile FIRST so that no driver's pc can also be a process's
+    // resumption point: a `wait_event` resumes at its own pc plus one, and
+    // every instruction from here on belongs to a process.
+    if (m.assigns.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many continuous assignments", .{});
+    r.drivers = try arena.alloc(Driver, m.assigns.len);
+    const grouped = try arena.alloc(std.ArrayList(u32), m.nets.len);
+    @memset(grouped, .empty);
+    for (m.assigns, 0..) |a, i| {
+        const target = try r.scalarSlot(a.target);
+        if (target < r.net_base) return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
+        try r.checkExpr(a.value);
+        var watched: std.ArrayList(u32) = .empty;
+        try r.sensitivity(a.value, &watched);
+        r.drivers[i] = .{
+            .net = target - r.net_base,
+            .value = a.value,
+            .sensitivity = watched.items,
+            .current = try filled(arena, r.values[target].width, false, .z),
+        };
+        try grouped[target - r.net_base].append(arena, @intCast(i));
+        try r.enqueue(.{ .run_process = try r.append(.{ .continuous = @intCast(i) }) }, null, false);
+    }
+    for (r.nets, grouped, m.nets) |*n, g, decl| {
+        // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
+        // resolution question there, it is an error.
+        if (n.kind == .uwire and g.items.len > 1) return r.fail(decl.main_tok, "a uwire net accepts a single driver", .{});
+        n.drivers = g.items;
+    }
     for (m.discrete) |process| {
         const start: u32 = @intCast(r.code.items.len);
         try r.compileStmt(process.body, 0);
@@ -965,6 +1241,149 @@ test "a nonblocking write resumes a waiting process from the NBA region" {
     , "nba 01\n");
 }
 
+test "an undriven net reads Z where a variable reads X" {
+    try expectRun(
+        \\module example;
+        \\reg [3:0] r;
+        \\wire [3:0] w;
+        \\wire s;
+        \\initial $display("%b %b %b", r, w, s);
+        \\endmodule
+    , "xxxx zzzz z\n");
+}
+
+test "a continuous assignment drives its net and re-evaluates on every operand" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg a, b;
+        \\wire [1:0] w;
+        \\assign w = {a, a & b};
+        \\initial begin
+        \\  a = 0; b = 0;
+        \\  #1 $display("00 %b", w);
+        \\  a = 1;
+        \\  #1 $display("10 %b", w);
+        \\  b = 1;
+        \\  #1 $display("11 %b", w);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    , "00 00\n10 10\n11 11\n");
+}
+
+test "a net resolution resumes event waiters through the same write path" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg a;
+        \\wire w;
+        \\reg [1:0] hits;
+        \\assign w = a;
+        \\initial begin a = 0; hits = 0; end
+        \\always @(posedge w) begin hits = hits + 1; $display("net posedge %b", hits); end
+        \\initial begin #5 a = 1; #5 a = 0; #5 a = 1; #5 $finish(0); end
+        \\endmodule
+    , "net posedge 01\nnet posedge 10\n");
+}
+
+test "IEEE1364-2005 section 7.9 wired logic resolves all drivers of one net" {
+    // Each net has the same two drivers; only the resolution function differs.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg a, b;
+        \\wire w;
+        \\wand wa;
+        \\wor wo;
+        \\assign w = a, wa = a, wo = a;
+        \\assign w = b, wa = b, wo = b;
+        \\initial begin
+        \\  a = 0; b = 0; #1 $display("0 0 %b %b %b", w, wa, wo);
+        \\  a = 1;        #1 $display("1 0 %b %b %b", w, wa, wo);
+        \\  b = 1;        #1 $display("1 1 %b %b %b", w, wa, wo);
+        \\  a = 1'bz;     #1 $display("z 1 %b %b %b", w, wa, wo);
+        \\  b = 1'bx;     #1 $display("z x %b %b %b", w, wa, wo);
+        \\  b = 1'bz;     #1 $display("z z %b %b %b", w, wa, wo);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    ,
+        \\0 0 0 0 0
+        \\1 0 x 0 1
+        \\1 1 1 1 1
+        \\z 1 1 1 1
+        \\z x x x x
+        \\z z z z z
+        \\
+    );
+}
+
+test "the pull supply and capacitive net types supply what no driver did" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg d;
+        \\tri0 t0;
+        \\tri1 t1;
+        \\supply0 s0;
+        \\supply1 s1;
+        \\trireg c;
+        \\assign t0 = d, t1 = d, s0 = d, s1 = d, c = d;
+        \\initial begin
+        \\  $display("start %b %b %b %b %b", t0, t1, s0, s1, c);
+        \\  d = 0;    #1 $display("zero  %b %b %b %b %b", t0, t1, s0, s1, c);
+        \\  d = 1'bz; #1 $display("float %b %b %b %b %b", t0, t1, s0, s1, c);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    ,
+        \\start x x 0 1 x
+        \\zero  0 0 0 1 0
+        \\float 0 1 0 1 0
+        \\
+    );
+}
+
+test "unpacked array elements are addressed, and an out-of-range index reads X" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg [7:0] mem [5:2];
+        \\integer i;
+        \\initial begin
+        \\  for (i = 2; i < 6; i = i + 1) mem[i] = i * 3;
+        \\  mem[1] = 8'hff;
+        \\  mem[4] <= 8'h0f;
+        \\  $display("%b %b %b", mem[2], mem[5], mem[1]);
+        \\  #1 $display("%b %b", mem[4], mem[1'bx]);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    , "00000110 00001111 xxxxxxxx\n00001111 xxxxxxxx\n");
+}
+
+test "an array element operand wakes a continuous assignment" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg [3:0] mem [0:1];
+        \\integer i;
+        \\wire [3:0] w;
+        \\assign w = mem[i];
+        \\initial begin
+        \\  i = 0; mem[0] = 4'h1; mem[1] = 4'h2;
+        \\  #1 $display("%b", w);
+        \\  i = 1;
+        \\  #1 $display("%b", w);
+        \\  mem[1] = 4'h7;
+        \\  #1 $display("%b", w);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    , "0001\n0010\n0111\n");
+}
+
 fn expectRejected(source: []const u8, message: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena.deinit();
@@ -989,6 +1408,24 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $finish(2); endmodule", "only $finish");
     try expectRejected("module m; initial $display(\"%d\",1); endmodule", "only %b");
     try expectRejected("module m; reg a; initial a=1; integer a; endmodule", "duplicate digital");
+}
+
+test "the net and array declaration boundaries are explicit" {
+    // §6.1/§6.2.2: neither form of assignment accepts the other's target.
+    try expectRejected("module m; wire w; initial w = 1; endmodule", "no procedural assignment to a net");
+    try expectRejected("module m; reg r; initial $display(\"before\"); assign r = 1; endmodule", "can only drive a net");
+    try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "whole-variable");
+    // §7.9 uwire resolves nothing, so a second driver is an error.
+    try expectRejected("module m; uwire u; reg a,b; assign u = a; assign u = b; endmodule", "uwire net accepts a single driver");
+    // §3.9 an array has no value of its own, and a select is not an element.
+    try expectRejected("module m; reg [3:0] mem [0:3]; initial $display(\"%b\",mem); endmodule", "requires an element index");
+    try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
+    try expectRejected("module m; reg [3:0] a; initial $display(\"%b\",a[0]); endmodule", "bit and part selects");
+    try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"x\"); endmodule", "one unpacked array dimension");
+    try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
+    // §3.6 a disciplined net belongs to the analog solver, not to this executor.
+    try expectRejected("module m; electrical e; initial $display(\"x\"); endmodule", "disciplined, ground");
+    try expectRejected("module m; wire [p:0] w; initial $display(\"x\"); endmodule", "bounds must be literal integers");
 }
 
 test "timescale provenance rejects absent malformed or later directives" {
