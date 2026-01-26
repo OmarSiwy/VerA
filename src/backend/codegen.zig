@@ -4808,9 +4808,10 @@ pub const Gen = struct {
     /// and every comparison on every read — `sel` is a mask primitive, not a
     /// branch — which made `for (k…) a[k]` quadratic in the DECLARED extent.
     ///
-    /// Exact invalid-index values are not implemented, including inherited
-    /// Verilog unknowns. Fail explicitly instead of substituting another cell;
-    /// this remaining gap is tracked in CONFORMANCE-GAPS.md.
+    /// An out-of-range read returns the element type's zero (see the `else`
+    /// arm). Inherited Verilog UNKNOWNS are still not modelled here, so an
+    /// integer array cannot yield x; that remaining gap is tracked in
+    /// CONFORMANCE-GAPS.md.
     ///
     /// Each arm is rendered lazily by the switch, so an element that is an
     /// inline expression is evaluated only when it is the one selected. That is
@@ -4834,7 +4835,21 @@ pub const Gen = struct {
             try self.renderVal(v, want);
             try self.b(",", .{});
         }
-        try self.b(" else => @panic(\"VerA: out-of-range array read is not implemented\") }}", .{});
+        // §5.7 makes unpacked-array assignment "a subset of the requirements of
+        // IEEE Std 1800", and a read at an address the array does not have
+        // yields the element type's default there; §3.2 fixes that default here
+        // — an integer assigned in an analog context starts at zero, and "real
+        // variables are initialized to zero (0) at the start of a simulation".
+        //
+        // The two properties that do NOT depend on that delegation, and that
+        // this arm exists to keep: the read must not ALIAS a neighbouring
+        // element (clamping, wrapping or taking a modulus hands back another
+        // cell's value, which is a silently wrong model rather than a missing
+        // feature), and it must not abort — §4.3.2 reserves "shall report an
+        // error" for named cases and a subscript is not one of them, and a
+        // device that crashes reports nothing at all. This used to @panic,
+        // which killed the whole simulation from inside generated code.
+        try self.b(" else => {s} }}", .{zeroOf(want)});
     }
 
     /// A structural count lowering put in an argument list as a literal.
