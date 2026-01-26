@@ -1,0 +1,63 @@
+// §5.10.3.3 timer(), the enable sentence, whose last clause is the whole test:
+//
+//   "If enable is specified and nonzero, then timer() functions as just
+//    described. If enable argument is specified and it is zero, then timer() is
+//    inactive, meaning that it does not generate events as long as enable is
+//    zero. However, it will start generating events once enable returns to
+//    being nonzero AS IF IT HAD NEVER BEEN DISABLED."
+//
+// "As if it had never been disabled" is a statement about the SCHEDULE, not
+// about the counter: the absolute grid `start_time + k*period` keeps running
+// while the timer is off, so re-enabling resumes ON that grid. An
+// implementation that latches the schedule when the enable drops, or that
+// restarts it from the re-enable instant, fires at the wrong absolute times
+// forever after — which is exactly the failure a canceled-and-restored wakeup
+// produces.
+//
+// The enable here is a SOLVED quantity (`V(en) > 0.5`, driven by the `wave`
+// line), because that is the only form in which "returns to being nonzero"
+// means anything: a constant enable can never return.
+//
+// THE SCHEDULE. timer(1n, 2n) fires at 1, 3, 5, 7, 9 ns — five absolute times
+// fixed before any enable is considered. The enable is high at 0 and 1 ns, low
+// at 3 and 5 ns, high again at 7 and 9 ns:
+//
+//   t = 0     no fire scheduled            en=1   count 0
+//   t = 1n    FIRE                         en=1   count 1
+//   t = 3n    scheduled, suppressed        en=0   count 1
+//   t = 5n    scheduled, suppressed        en=0   count 1
+//   t = 7n    FIRE — on the original grid  en=1   count 2
+//   t = 9n    FIRE                         en=1   count 3
+//
+// Expected counts: 0, 1, 1, 1, 2, 3. The load-bearing row is t = 7n. A timer
+// whose schedule froze while disabled would have its next fire at 7n+2n... no:
+// it would still owe the 3n fire, and would fire at 7n AND again at 9n and 11n
+// off a shifted grid; a timer that RESTARTED at the re-enable would next fire
+// at 8n, which is not a declared row at all, so it would read 1 at 9n. Both
+// wrong answers are separated from 2/3 by this grid.
+//
+// time_tol is written as the explicit 0 the clause blesses — "If a value of
+// zero (0.0) is specified, the simulator shall apply a suitable value" — so
+// that the enable lands in argument position 4 and not in the tolerance's.
+// A tool that reads the arguments positionally wrong disables the timer
+// entirely and reads 0 everywhere.
+//
+//! lrm 5.10.3.3
+//! analysis tran
+//! time 0, 1n, 3n, 5n, 7n, 9n
+//! wave V(en) = 1, 1, 0, 0, 1, 1
+//! bias V(p) = 0
+//! print none
+`include "check.vh"
+module a10_timer_enable_resume(p, en);
+  inout p, en;
+  electrical p, en;
+  integer fired;
+  analog begin
+    @(timer(1n, 2n, 0, V(en) > 0.5)) fired = fired + 1;
+    `CHECKEQ("a re-enabled timer resumes on the absolute grid it never left", fired,
+             ($abstime < 0.5n) ? 0 : (($abstime < 6n) ? 1 : (($abstime < 8n) ? 2 : 3)), 0.0);
+    I(p) <+ 0.0;
+    I(en) <+ 0.0;
+  end
+endmodule

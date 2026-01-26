@@ -1,0 +1,55 @@
+// §4.6.4.4 noise_table_log — a STRAIGHT LINE ON A LOG-LOG PLOT.
+//
+//     noise_table_log ( input [ , name ] )
+//
+//     "The noise_table_log() function interpolates a set of values to model a
+//      process where the spectral density of the noise varies as a piecewise
+//      linear function of the base-10 logarithm of frequency. ... The
+//      difference is that noise_table_log() interpolates logarithmically. For
+//      a frequency f not specified in the input data, the noise power shall be
+//      computed using the two pairs (f1,p1) and (f2,p2) in the input ... where
+//      f1 is the largest frequency value in the input data less than f and f2
+//      is the smallest frequency larger than f (that is, f1 < f < f2); the
+//      noise power P is computed as:
+//
+//        P = pow(10, log(p1) + (log(p2)-log(p1)) * (log(f)-log(f1)) /
+//                              (log(f2)-log(f1)) )"
+//
+//     "As with noise_table(), for frequencies lower than the lowest frequency
+//      in the value set, noise_table_log() returns the power specified for the
+//      lowest frequency, and for frequencies higher than the highest
+//      frequency, noise_table_log() returns the power specified for the
+//      highest frequency."
+//
+// TWO POINTS ONLY, which is exactly the shape §4.6.4.4's own example uses
+// ("The noise_table_log() function produces a straight line on a log-log plot
+// from just two points"):
+//
+//     f [Hz]     S_I(f) [A^2/Hz]
+//       1.0e3      1.0e-18
+//       1.0e6      1.0e-24
+//
+// Slope on the log-log plane: log10(1e-24/1e-18) / log10(1e6/1e3) = -6/3 = -2,
+// so the closed form of the clause's formula over this table is
+//
+//     S_I(f) = 1.0e-18 * (f/1000)^-2      for 1e3 <= f <= 1e6
+//
+// A power-of-two decade is chosen so the interior expectations (f = 2000,
+// 3000) are exact rationals and are FAR from what §4.6.4.3's linear rule would
+// give on the same knots — 2.5e-19 versus 9.98999e-19 at 2000 Hz. That gap is
+// the whole point of Figure 4-14, and it is what makes this file a test of the
+// interpolation MODE and not merely of table lookup.
+//
+//! lrm 4.6.4.4
+//! noise table(p,n)#0
+`include "disciplines.vams"
+module a06_ntab_log(p, n);
+    inout p, n;
+    electrical p, n;
+
+    parameter real R = 1000.0 from (0:inf);
+
+    analog
+        I(p, n) <+ V(p, n) / R +
+            noise_table_log('{1.0e3, 1.0e-18, 1.0e6, 1.0e-24}, "tbl_log");
+endmodule

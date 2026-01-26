@@ -1,0 +1,56 @@
+// §5.10.3.3 timer(), the sentence that makes the schedule DYNAMIC:
+//
+//   "If the start_time or period expressions change value during the evaluation
+//    of the analog block, the next event will be scheduled based on the latest
+//    value of the start_time and period."
+//
+// and the preceding paragraph that permits such an argument at all: "The
+// start_time and period arguments are analog_expressions." §4.5.14's Table 4-20
+// — the constant-vs-dynamic table — lists the analog OPERATORS of clause 4 and
+// does not cover the clause 5 events, and this sentence is the clause 5 rule:
+// the period is re-read, and the NEXT event follows the value it had when the
+// previous one was scheduled.
+//
+// THE DERIVATION. `per` is 2 ns while V(ctl) is low and 4 ns once it goes high;
+// `V(ctl)` is driven by the `wave` line and steps high at t = 4n. start_time is
+// 0, so the schedule is computed forward, each fire scheduling the next from
+// the period in force AT THAT FIRE:
+//
+//   t = 0     start_time -> FIRE          count 1   next = 0 + 2n  = 2n
+//   t = 2n    scheduled  -> FIRE          count 2   next = 2n + 2n = 4n
+//   t = 4n    scheduled  -> FIRE          count 3   per is now 4n, so
+//                                                   next = 4n + 4n = 8n
+//   t = 6n    not scheduled               count 3
+//   t = 8n    scheduled  -> FIRE          count 4
+//
+// Expected counts: 1, 2, 3, 3, 4. The two rows that carry the claim are 6n and
+// 8n: a tool that froze the period at its first value fires at 6n and reads 4
+// there and 5 at 8n, and a tool that applies the new period retroactively (a
+// pure `k*period` grid from start_time) puts the next fire at 8n but has
+// already missed 2n, reading 2 and 3. Both differ from 3/4 on this grid.
+//
+// `per` is a plain real variable assigned from a probe, which is the shape the
+// clause's "change value during the evaluation of the analog block" describes;
+// a parameter cannot change during an analysis and so cannot exercise the rule.
+//
+//! lrm 5.10.3.3
+//! analysis tran
+//! time 0, 2n, 4n, 6n, 8n
+//! wave V(ctl) = 0, 0, 1, 1, 1
+//! bias V(p) = 0
+//! print none
+`include "check.vh"
+module a10_timer_dynamic_period(p, ctl);
+  inout p, ctl;
+  electrical p, ctl;
+  real per;
+  integer fired;
+  analog begin
+    per = (V(ctl) > 0.5) ? 4n : 2n;
+    @(timer(0, per)) fired = fired + 1;
+    `CHECKEQ("the next event uses the LATEST period, not the first one", fired,
+             ($abstime < 1n) ? 1 : (($abstime < 3n) ? 2 : (($abstime < 7n) ? 3 : 4)), 0.0);
+    I(p) <+ 0.0;
+    I(ctl) <+ 0.0;
+  end
+endmodule

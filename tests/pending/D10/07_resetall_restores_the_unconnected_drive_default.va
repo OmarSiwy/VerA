@@ -1,0 +1,122 @@
+// §10.1 Table 10-1 lists `resetall alongside `unconnected_drive and defers both
+// to IEEE Std 1364, where `resetall returns every directive to its default
+// value. ch10_directives pins that for two of the four directives that carry
+// state — 36 for §10.2's default discipline and 56 for §19.2's default nettype
+// — and for neither of the two IEEE 1364 region directives. This is the third:
+// `resetall is the OTHER way out of an `unconnected_drive region, the one that
+// does not name the directive it undoes.
+//
+// WHY THE FILE HAS TWO CHILDREN AND NOT ONE. The previous version of this
+// fixture was ch10_directives/58 with `nounconnected_drive swapped for
+// `resetall, asserting V(u.a) = 0.5 and I = 0 — which is exactly what a tool
+// that has never heard of `unconnected_drive prints, so it could not fail for
+// its own subject's reason. "The region is closed" is only ever observable as
+// an ABSENCE, so the file has to contain the presence as well: a first child
+// that IS pulled, in the same compilation, whose 1.0 and +5e-4 no such tool can
+// produce. Then the second child's 0.5 means "the region closed" rather than
+// "the directive was never implemented".
+//
+// EACH CHILD IS PAIRED WITH ITS OWN INSTANTIATION inside a wrapper module, and
+// each wrapper lies wholly on one side of the `resetall. That is deliberate:
+// whether §19.10 attaches at the module definition or at the instantiation that
+// leaves the terminal blank is not settled by anything in docs/ (IEEE Std 1364
+// §19.10 itself is not offline here; §6.2.2, the nearest on-disk sentence,
+// points at the connection). SPEC.md records that question as withdrawn. With
+// definition and instantiation on the same side, both readings give the same
+// two numbers and this file tests only `resetall.
+//
+// TWO CONSEQUENCES OF USING `resetall, both deliberate and both visible below:
+//
+//   - it removes every user text macro, so `check.vh` is included AFTER the
+//     reset. NOT a citation: a user text macro is §10.4's `define, but §10.4
+//     says nothing about `resetall and neither does any other clause in docs/ —
+//     §10.1 Table 10-1 marks `resetall "[IEEE Std 1364 Verilog]" and that text
+//     is not offline here. So this one is MEASURED, not cited: move the
+//     `include above the `resetall and the file dies at
+//     "error[E0115]: undefined macro: `CHECKX" on the first `CHECKX below
+//     (run against zig-out/bin/vera at HEAD; counterfactual in SPEC.md).
+//     Included
+//     before the reset, `CHECKX would not exist by the time the
+//     top module needs it, and the fixture would fail for a reason that has
+//     nothing to do with §19.10. The first child and its wrapper are above the
+//     reset and use no macro, so nothing is lost. ch10_directives/56 makes the
+//     same arrangement for the same reason and its header says so;
+//   - it withdraws any default discipline (§10.2's "In addition to `resetall"),
+//     so every module declares `electrical` explicitly rather than relying on a
+//     default. Nothing here is testing §10.2.
+//
+// THE ORACLE, derived here and not copied.
+//
+//   mi.u.a — declared and instantiated while `unconnected_drive pull1 is in
+//            force. The pull holds the unconnected input at 1 of the potential
+//            nature's units; that the digit is one volt rather than some other
+//            level is 58's argument and this file inherits it, the load-bearing
+//            half being that the port is DRIVEN AT ALL. V(mi.u.a) = 1.0, and
+//            with `b` bound to `p` at 0.5 V the child's one 1 kΩ resistor
+//            carries I(a,b) = 0.001 * (1.0 - 0.5) = +5.0e-4 A, a->b. The sign
+//            is positive because `a` is the high end; -5.0e-4 is the pull0
+//            case and belongs to fixture 06.
+//   mo.u.a — after the `resetall. Nothing drives it, so §1.3.2 KCL at `a` has
+//            exactly one term, that resistor's current, which must therefore be
+//            zero; §1.3.1 then makes the branch potential of a zero-current
+//            resistor zero, so `a` sits wherever `b` does, at V(p) = 0.5.
+//            V(mo.u.a) = 0.5 and I(mo.u.a, mo.u.b) = 0.
+//
+// 1.0, 0.5 and 0.0 are binary-exact; 5e-4 is 0.001's double halved, exact
+// scaling by a power of two, so it is the same double the solver computes.
+// CHECKX with no tolerance throughout, as in 06.
+//
+// WHAT ELSE FAILS IT. A tool that implements `resetall by CLEARING the
+// directive's positional event list rather than by appending a reset event gets
+// the second pair right and breaks ch10_directives/58, whose region is still
+// open when its own module is parsed. The positional reading is the only one
+// that satisfies both files.
+//
+//! lrm 10.1
+//! lrm 6.2.2
+//! bias V(p) = 0.5
+//! solve
+`unconnected_drive pull1
+module d10_resetall_open_child(a, b);
+    input a;
+    inout b;
+    electrical a, b;
+    analog I(a, b) <+ 0.001 * V(a, b);
+endmodule
+
+module d10_resetall_open_wrapper(b);
+    inout b;
+    electrical b;
+    d10_resetall_open_child u( , b);
+endmodule
+`resetall
+`include "check.vh"
+
+module d10_resetall_closed_child(a, b);
+    input a;
+    inout b;
+    electrical a, b;
+    analog I(a, b) <+ 0.001 * V(a, b);
+endmodule
+
+module d10_resetall_closed_wrapper(b);
+    inout b;
+    electrical b;
+    d10_resetall_closed_child u( , b);
+endmodule
+
+module d10_resetall_restores_the_unconnected_drive_default(p);
+    inout p;
+    electrical p;
+
+    d10_resetall_open_wrapper   mi(p);
+    d10_resetall_closed_wrapper mo(p);
+
+    analog begin
+        `CHECKX("above the `resetall the pull is in force", V(mi.u.a), 1.0);
+        `CHECKX("and drives: 0.001*(1.0 - 0.5) A flows a->b", I(mi.u.a, mi.u.b), 5e-4);
+        `CHECKX("`resetall put §19.10 back to its default, so this input floats", V(mo.u.a), 0.5);
+        `CHECKX("and no current flows into it", I(mo.u.a, mo.u.b), 0.0);
+        I(p) <+ 0.0;
+    end
+endmodule

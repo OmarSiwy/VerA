@@ -1,0 +1,153 @@
+// Verilog-AMS LRM 2.4 §9.22, paragraphs 2-4, verbatim:
+//
+//   "Access to individual drivers and net resolution is necessary for accurate
+//    implementation of connect modules (see 7.5). A driver of a signal is a
+//    process which assigns a value to the signal, or a connection of the signal
+//    to an output port of a module instance or simulation primitive.
+//
+//    The driver access functions described here only access drivers found in
+//    ordinary modules and not to those found in connect modules. Driver access
+//    functions can only be called from connect modules."
+//
+// and §9.22.1:
+//
+//   "$driver_count returns an integer representing the number of drivers
+//    associated with the signal in question. ... The drivers are arbitrarily
+//    numbered from 0 to N-1, where N is the total number of ordinary drivers
+//    contributing to the signal value."
+//
+// TWO SENTENCES THAT PULL IN OPPOSITE DIRECTIONS, AND THAT IS THE POINT. The
+// call site must be a connect module, and the connect module's OWN driver must
+// not be counted. §9.22.5 forces the collision to be real rather than
+// hypothetical: the connect module drives its digital port ("assign d = out;"),
+// so at the netlist level `d` genuinely has three drivers here. The clause says
+// the answer is two.
+//
+// tests/fixtures/ch09_system_tasks/31_driver_access.va already pins the
+// call-site half from the refusing side (an ordinary module may not call these).
+// Nothing pins the counting half, because nothing in the suite has ever had a
+// connect module INSERTED on a real net. This file is that design.
+//
+// WHY THE ASSERTION IS A COUNT AND NOT A VOLTAGE. Everything below is decided by
+// the elaborated topology: two ordinary output-port connections on the mixed
+// net, one connect-module driver, one ordinary receiver. No number here depends
+// on the analog solve, on the 1 kohm load, or on when a threshold is crossed —
+// so the fixture cannot be made to pass or fail by tightening a tolerance.
+//
+//! lrm 9.22
+//! lrm 9.22.1
+//! lrm 7.8.4
+//! timescale 1ns/1ns
+//
+// HAND DERIVATION
+//   `net` in m04_dc_top is `electrical`, so it has an analog segment; the three
+//   digital modules put ddiscrete ports on it, so it is a MIXED signal (§7.8.4:
+//   "signals which have an analog discipline in one or more of the contexts ...
+//   and a digital discipline in one or more of the contexts"). The connect
+//   statement matches, connect_mode is `merged`, and §7.8.4's fourth insertion
+//   rule puts ONE m04_dc_c2e instance between `net` and all three ddiscrete
+//   ports.
+//
+//   Drivers of the digital segment, by §9.22's definition:
+//     hi.o   -> a connection of the signal to an output port  -> driver 1
+//     lo.o   -> a connection of the signal to an output port  -> driver 2
+//     ear.i  -> an INPUT port; a receiver, not a driver       -> not counted
+//     the connect module's own `assign d = out;`              -> EXCLUDED by
+//                                                                §9.22 para 3
+//   so $driver_count(d) == 2.
+//
+//   The count is a property of elaboration, so it is the same at t=1 and t=40,
+//   after every driver has changed value twice. The second sample exists to
+//   pin that: an implementation that recomputed the count from "drivers that
+//   have assigned something recently" would read 0 at t=1 or would drift.
+//
+// THE WIDTH OF THE `got=` COLUMN. §9.22.1 says $driver_count "returns an
+// integer", and §3.2 gives an integer the range -2**31 .. 2**31-1, i.e. 32
+// bits. %b is the only integer conversion `src/sim/digital.zig` implements;
+// §9.4.3 Table 9-22 gives %b no width modifier, and IEEE Std 1364 — reached
+// through §1.1 — makes the printed field width of %b the SIZE OF THE
+// EXPRESSION, not the number of significant digits. So the `got=` column is
+// exactly 32 binary digits, zero-padded on the left:
+//
+//   decimal 2 -> 00000000000000000000000000000010
+//
+// The `ok=` column is the fixture's own assertion, in the shape
+// tests/fixtures/check.vh uses for the analog suite. It is the result of an
+// `==`, which IEEE Std 1364 self-determines at ONE bit, so it prints as the
+// single digit `1` — and it, not the `got=` column, is what a wrong count
+// fails on.
+//
+// CORRECTED AFTER REVIEW. The `got=` column previously held the minimum-width
+// string "10". VerA's %b is width-exact, and its own passing regression in
+// `src/sim/digital.zig` prints `integer 11111111111111111111111111111111` for
+// a 32-bit integer. The old transcript therefore failed a conforming
+// implementation, and the cheapest way to make it pass was to make %b
+// minimum-width — which would have broken that green regression.
+
+`timescale 1ns/1ns
+`include "disciplines.vams"
+
+connectrules m04_dc_rules;
+  connect m04_dc_c2e merged input ddiscrete, output electrical;
+endconnectrules
+
+// §9.22.6's connect module, reduced to the one query this file is about.
+connectmodule m04_dc_c2e(d, a);
+  input d;
+  output a;
+  ddiscrete d;
+  electrical a;
+
+  reg out;
+  // §9.22.5: "the digital port will be used to read the driver values as well
+  // as to set the receiver value". This IS a driver of `d`, and it is the one
+  // §9.22 paragraph 3 says $driver_count must not see.
+  assign d = out;
+
+  initial begin
+    out = 1'b0;
+    #1;
+    $display("connect_module_driver_is_not_counted got=%b ok=%b",
+             $driver_count(d), $driver_count(d) == 2);
+    #39;
+    $display("count_is_elaboration_time_not_activity got=%b ok=%b",
+             $driver_count(d), $driver_count(d) == 2);
+    $finish(0);
+  end
+
+  analog V(a) <+ 0.0;
+endmodule
+
+// Two ordinary drivers, one ordinary receiver.
+module m04_dc_drv(o);
+  output o;
+  ddiscrete o;
+  reg o;
+  initial begin
+    o = 1'b0;
+    #10 o = 1'b1;
+    #10 o = 1'b0;
+  end
+endmodule
+
+module m04_dc_ear(i);
+  input i;
+  ddiscrete i;
+endmodule
+
+module m04_dc_load(a);
+  inout a;
+  electrical a;
+  electrical g;
+  ground g;
+  analog I(a, g) <+ V(a, g) / 1.0e3;
+endmodule
+
+module m04_dc_top;
+  electrical net;
+
+  m04_dc_drv  hi(.o(net));
+  m04_dc_drv  lo(.o(net));
+  m04_dc_ear  ear(.i(net));
+  m04_dc_load ld(.a(net));
+endmodule

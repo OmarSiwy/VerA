@@ -1,0 +1,85 @@
+// §4.3.2 Transcendental functions:
+//
+//   "All operands shall be numeric (integer or real) and are converted to real
+//    if necessary. ... INPUT VALUES OUTSIDE OF THE VALID RANGE FOR THE OPERATOR
+//    SHALL REPORT AN ERROR."
+//
+// and Table 4-15 gives the range this fixture uses:
+//
+//   $asin(x) / asin(x) — Arc-sine — Domain: -1 <= x <= 1
+//
+// The sentence is about INPUT VALUES, not about constant expressions. VerA
+// already refuses a constant out-of-domain argument at compile time
+// (tests/fixtures/ch04_expressions/113_transcendental_domain_rejected.va,
+// 114_standard_math_domain_rejected.va), which is the same rule applied to the
+// arguments it can see; this fixture is the half where the argument is a signal
+// and the check has to happen during the solve.
+//
+// THE SHAPE, copied from tests/fixtures/ch09_system_tasks/173_fatal_terminates.va,
+// because "an error was reported" is not a number a `CHECK` can compare: the
+// TERMINATION is the assertion. Two swept points, and the harness checks the
+// process exit status as well as the `ok=` columns.
+//
+//   point 0, V(p) = 0.5 — in domain. Both assertions print `ok=1`.
+//   point 1, V(p) = 2.0 — outside `-1 <= x <= 1`. §4.3.2 says an error shall be
+//                         reported; the run stops, so point 1 prints nothing
+//                         and the exit status is 1.
+//
+// Without the check, point 1 evaluates `asin(2.0)`, gets a quiet NaN, prints
+// `got=-nan want=0.523599 ok=0` and the guard `V(p,n) <= 1.0` prints `ok=0` as
+// well — two hard failures rather than an absence, so this fixture cannot pass
+// by accident in the silent direction either.
+//
+// THE DERIVATION of the one number, by hand.
+//
+//   asin(0.5) = pi/6 = 0.52359877559829887307710723054658381403...
+//
+//   The two IEEE 754 doubles bracketing that are
+//     0.52359877559829881565889309058547951281070709228515625   (below, 5.74e-17 away)
+//     0.5235987755982989266811955531011335551738739013671875    (above, 5.36e-17 away)
+//   so the correctly rounded double is the upper one, printed 0.5235987755982989.
+//   NOTE that this is NOT the same double as `pi/6` computed as a quotient,
+//   which lands one ulp low at 0.5235987755982988 — writing the quotient's
+//   digits here would make the fixture demand a one-ulp error, which is why the
+//   bracketing is spelled out. The tolerance 1e-16 is under one ulp of this
+//   magnitude (1.11e-16), so it admits the correctly rounded result and
+//   nothing else.
+//
+//   `V(p,n) <= 1.0` is §4.2.1 relational-on-reals, "an integer value 0 (false)
+//   or 1 (true)", and at point 0 the bias is 0.5, so it is 1. Its only job is
+//   to be a second, cheap witness that point 1 never ran.
+//
+//   `r` is bound before the check because check.vh expands its GOT twice and a
+//   call that is required to raise a runtime error is not a pure expression.
+//
+// WHY IT FAILS TODAY. VerA lowers `asin` straight to the host `@asin`/libm call
+// with no domain guard, so an out-of-range argument produces a quiet NaN that
+// propagates into the residual. Observed today, on a single-point version of
+// this file at a 2.0 bias:
+//
+//   asin out of domain got=-nan want=0 ok=0
+//
+// and the run exits 0. THE SOFT PART OF THIS FIXTURE is the exit CODE: §4.3.2
+// says "report an error" and does not say the run terminates, so 1 is taken
+// from §9.7.3's $fatal convention, which VerA already uses. If the project
+// decides a domain violation is a continuable §9.7 `$error` instead, delete the
+// `//! exit 1` line and keep the two assertions — the NaN is wrong either way.
+//
+//! lrm 4.3.2
+//! lrm 4.2.1
+//! exit 1
+//! sweep V(p) = 0.5, 2.0
+//! print none
+`include "check.vh"
+module a01_transcendental_domain_runtime_error(p, n);
+  inout p, n;
+  electrical p, n;
+  real r;
+
+  analog begin
+    `CHECKI("printed at the in-domain point only", V(p, n) <= 1.0, 1);
+    r = asin(V(p, n));
+    `CHECK("asin(0.5) is pi/6, correctly rounded", r, 0.5235987755982989, 1e-16);
+    I(p, n) <+ V(p, n);
+  end
+endmodule

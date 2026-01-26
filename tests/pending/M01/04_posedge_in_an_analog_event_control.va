@@ -1,0 +1,66 @@
+// §7.3.4 Syntax 7-2 gives `analog_event_expression ::= ... | posedge expression
+// | negedge expression | ...`, and the clause's own example is a `posedge` of a
+// digital `wire` inside an `analog` block. §7.3.6.2 fixes WHEN the guarded
+// statement runs: "When it is determined the event has occurred in the digital
+// domain, the statements under the event control shall be executed in the
+// analog domain at the time corresponding to a real promotion of the digital
+// time (e.g., 27ns to 27.0e-9)."
+//
+// This file is §7.3.4's `sampler3` with the `cross` half of its `or` dropped —
+// that half is already green as `tests/fixtures/ch05_analog_behavior/
+// event_cross_*.va`, and keeping it here would let a tool pass on the analog
+// event alone.
+//
+// THE RAMP IS THE CLOCK. Sampling a constant would only show THAT the event
+// fired, never WHEN. V(in) is walked linearly so that V(in) = $abstime / 10n
+// volts, which turns the sampled value into a readout of the promotion rule:
+//
+//   //! time  0     5n    10n   20n
+//   //! wave  0.0   0.5   1.0   2.0
+//
+//   t = 0     clk1 = 1'b0, no edge yet          vout = 0.0  (§3.2 default)
+//   t = 5n    still 0                           vout = 0.0
+//   t = 10n   clk1 0 -> 1; promoted to 10.0e-9  vout = V(in)(10n) = 1.0
+//   t = 20n   no further edge                   vout = 1.0
+//
+// oracle ($abstime >= 10n) ? 1.0 : 0.0, exact in binary at every point.
+//
+// Every plausible mistake changes a digit. Executing at the NEXT analog point
+// instead of the promoted digital one reads 2.0; executing at the previous one
+// reads 0.5; missing the edge entirely leaves 0.0 for the whole run; firing on
+// the 1 -> 0 that never happens is caught by there being no falling edge to fire
+// on. A tool that fired on ANY change would also read 1.0 here, which is what
+// fixture 05 separates out.
+//
+// WHAT FAILS TODAY. `error[E0704]: posedge/negedge is digital-only`, whose own
+// note cites §5.10.1. The token parses — that much was fixed — but lowering
+// refuses it on a Verilog-A subset rule (annex C.7) that Verilog-AMS does not
+// have. Before that, `error[E0209]: expected an expression: found `#`` on the
+// clock stimulus.
+//
+//! lrm 7.3.4
+//! lrm 7.3.6.2
+//! lrm 5.10.5
+//! analysis tran
+//! time 0, 5n, 10n, 20n
+//! wave V(in) = 0.0, 0.5, 1.0, 2.0
+`timescale 1ns/1ns
+`include "check.vh"
+module m01_posedge_sampler(in, out);
+  inout in, out;
+  electrical in, out;
+  reg clk1;
+  real vout;
+
+  initial begin
+    clk1 = 1'b0;
+    #10 clk1 = 1'b1;
+  end
+
+  analog begin
+    @(posedge clk1)
+      vout = V(in);
+    `CHECKEQ("posedge at digital tick 10 samples the analog ramp at 10.0e-9", vout, ($abstime >= 10n) ? 1.0 : 0.0, 0.0);
+    V(out) <+ vout;
+  end
+endmodule

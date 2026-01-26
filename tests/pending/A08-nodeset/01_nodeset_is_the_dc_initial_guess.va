@@ -1,0 +1,97 @@
+// §3.6.3.2 Net Discipline Initial (Nodeset) Values (Accellera Verilog-AMS,
+// docs/ch3-datatypes.html — NOT IEEE 1800.2, which is UVM):
+//
+//   "The initializer shall be a constant_expression and will be used as a
+//    nodeset value for the potential of the net by the analog solver."
+//
+// tests/fixtures/ch03_data_types/21_net_nodeset.va already pins the negative
+// half of that sentence — a nodeset is a HINT, so the net is not clamped to it.
+// Nothing anywhere pins the POSITIVE half: that the solver actually starts its
+// DC iteration from the declared number. On a circuit with one solution that
+// claim is unobservable, which is exactly why it has gone untested. So this
+// fixture uses a circuit with THREE.
+//
+// THE CIRCUIT. One net `p` against ground, carrying a cubic conductance:
+//
+//     I(p,g) = (V - 1)(V - 2)(V - 3)
+//
+// Its DC operating points are the roots of that cubic: V = 1, V = 2, V = 3.
+// All three are genuine static solutions — a tunnel-diode / latch shape written
+// with exact integer roots instead of an exponential, so every number below is
+// hand-checkable and no tolerance argument is needed to name the answer.
+//
+// THE DERIVATION, re-derived for this revision, Newton-Raphson on
+// f(V) = V^3 - 6V^2 + 11V - 6 with f'(V) = 3V^2 - 12V + 11 — which is precisely
+// the residual and Jacobian the generated device stamps, so this is the
+// harness's own iteration. Each line is V, f(V), f'(V), and the step -f/f':
+//
+//   from V = 0        (no nodeset: the harness seeds x with @splat(0.0))
+//     0.000000   -6.000000   11.000000   +0.545455  -> 0.545455
+//     0.545455   -1.622840    5.347107   +0.303499  -> 0.848953
+//     0.848953   -0.373985    2.974726   +0.125721  -> 0.974674
+//     0.974674   -0.052592    2.153880   +0.024417  -> 0.999092
+//     0.999092   -0.001819    2.005453   +0.000907  -> 0.999999
+//     converges to V = 1
+//
+//   from V = 2.75     (the nodeset declared below)
+//     2.750000   -0.328125    0.687500   +0.477273  -> 3.227273
+//     3.227273   +0.621243    3.518595   -0.176560  -> 3.050713
+//     3.050713   +0.109271    2.311991   -0.047263  -> 3.003450
+//     3.003450   +0.006936    2.020735   -0.003432  -> 3.000018
+//     3.000018   +0.000035    2.000106   -0.000018  -> 3.000000
+//     converges to V = 3
+//
+// (The previous revision of this header printed 1.622645, 0.374110/2.975028 and
+// "- 0.590.../7.211..." for three of those residuals. Recomputed above; the
+// iterates 0.848953, 0.974674, 3.050713 and the conclusion are unchanged.)
+//
+// So the asserted value is 3.0 and it is reachable ONLY from the nodeset.
+// The fixture therefore cannot pass by accident in either direction:
+//
+//   * ignore the nodeset   -> V = 1,    the assertion fails;
+//   * clamp to the nodeset -> V = 2.75, the assertion fails;
+//   * honour it as an initial guess -> V = 3, the assertion passes.
+//
+// That middle line is the whole anti-clamp claim, carried by this one number:
+// 3.0 is not 2.75. A previous revision spelled it out a second time as
+// `CHECK(V(p,g) - 2.75, 0.25, 1e-9)`; at the same tolerance that is
+// algebraically the first assertion rearranged and cannot fail independently of
+// it, so it is gone. The anti-clamp property is additionally pinned, on a
+// circuit where clamping is the ONLY failure mode, by the already-green
+// tests/fixtures/ch03_data_types/21_net_nodeset.va.
+//
+// 2.75 is 11/4, exact in binary, so the seed carries no rounding of its own.
+// The tolerance is 1e-9 and not `CHECKX` only because the harness's ground row
+// can settle a denormal off zero; the three roots are a whole unit apart, so
+// nothing about which root was reached rides on that tolerance.
+//
+// ON CONFORMANCE. §3.6.3.2 does not say which of three DC solutions a solver
+// shall report; what it says is that the declared number is used AS THE NODESET
+// VALUE by the analog solver, i.e. as the potential the DC solve starts from.
+// This fixture asserts exactly that and nothing more: it reads the root that
+// Newton from 2.75 reaches. An implementation that replaces the declared start
+// with its own continuation has not used the initializer as a nodeset value,
+// which is the case the clause forbids.
+//
+// WHY IT FAILS TODAY. codegen emits `pub const u_nodeset = [n_u]?f64{ 2.75,
+// null }` for this module (src/backend/codegen.zig `emitNodesets`), and nothing
+// reads it: src/backend/tb.zig opens every operating point with
+// `var x: [n_u]f64 = @splat(0.0);` and the host has no reference to the symbol
+// at all. Observed today: `x[p] = 1.000000e0`.
+//
+//! lrm 3.6.3.2
+//! bias V(g) = 0.0
+//! solve
+//! print none
+`include "check.vh"
+module a08_nodeset_initial_guess(p, g);
+    inout p, g;
+    electrical g;
+    // §3.6.3.2's own first example shape: `electrical a = 5.0;`.
+    electrical p = 2.75;
+
+    analog begin
+        `CHECK("the nodeset seeds Newton, so it lands on the high root", V(p, g), 3.0, 1e-9);
+        I(p, g) <+ (V(p, g) - 1.0) * (V(p, g) - 2.0) * (V(p, g) - 3.0);
+    end
+endmodule

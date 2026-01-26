@@ -1,0 +1,4 @@
+connect_module_is_inserted_and_sees_the_ordinary_driver got=00000000000000000000000000000001 ok=1
+default_receiver_reads_the_unassigned_driver x
+default_receiver_reads_a_one_driver 1
+default_receiver_reads_a_zero_driver 0

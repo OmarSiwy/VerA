@@ -1,0 +1,54 @@
+// §4.6.3 / A.8.2: the analysis name of `ac_stim` is a STRING LITERAL, not an
+// expression.
+//
+//     analog_small_signal_function_call ::=
+//           ac_stim ( [ " analysis_identifier " [ , analog_expression
+//                                               [ , analog_expression ] ] ] )
+//
+// The quotation marks are part of the production. Both numeric arguments are
+// `analog_expression` — `a06_ac_stim_dynamic_magnitude.va` is the fixture that
+// requires them to be — and the name is deliberately not one: §4.6.3 makes the
+// source's activation a property of the ANALYSIS ("the name of a small-signal
+// analysis is implementation dependent"), which a simulator resolves before it
+// begins solving, so there is nothing for a solve-time string to mean.
+//
+// A string PARAMETER is the interesting near-miss, and it is what this fixture
+// passes: §4.6.4.3 explicitly allows one for a noise table's file name ("The
+// file name argument shall be constant and will be either a string literal or a
+// string parameter"), so the two clauses differ, and a compiler that treats all
+// string arguments alike gets this one wrong.
+//
+// The rule broken is A.8.2's production. What must NOT happen is what happens
+// today: `vera` accepts the module and then emits a device that does not
+// compile —
+//
+//     error: unused function parameter   (device.zig, the `eval` signature)
+//
+// — which the harness reports as an ENGINE bug rather than a model error.
+//
+// THE `//! reject` PATTERN, corrected. An earlier draft wrote
+// `//! reject ac_stim`, reasoning that no diagnostic code is assigned yet so
+// only the construct's name could be demanded. That pattern has no teeth:
+// `failureContains` (tests/torture.zig:211-220) matches the pattern against
+// `f.generated` — the generated Zig — before it ever reaches a diagnostic, and
+// the generated Zig contains the string `ac_stim` twice, inside this module's
+// own name. So `//! reject ac_stim` is satisfied by TODAY's failure, the
+// unused-function-parameter engine bug, which is exactly the outcome this
+// fixture exists to forbid: it would have gone green on the defect.
+//
+// `DiagnosticsReported` is the repo's convention for "a refusal is required,
+// the code is not assigned yet" (48 files use it) and is the right demand here:
+// it holds only if the failure carries at least one vera diagnostic, so a
+// generated-Zig compile failure that emits none does NOT satisfy it. When
+// A.8.2's string-literal rule is given a code, replace this with that code.
+//
+//! lrm 4.6.3
+//! lrm A.8.2
+//! reject DiagnosticsReported
+module a06_ac_stim_name_not_literal_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter string nm = "ac";
+
+    analog I(p, n) <+ V(p, n) / 1000.0 + ac_stim(nm, 2.0, 0.0);
+endmodule

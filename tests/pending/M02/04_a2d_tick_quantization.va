@@ -1,0 +1,81 @@
+// §8.4.3.3 A/D boundary timing, verbatim: "In the analog kernel, time is a
+// floating point value. In the digital kernel time is an integer value. Hence,
+// A2D events generally do not occur exactly at digital integer clock ticks. For
+// the purpose of reporting results and scheduling delayed future events, the
+// digital kernel converts analog event times to digital times such that the error
+// is limited to half the precision base for the module where the conversion
+// occurs. For the examples below the timescale is 1ns/1ns, so the maximum
+// scheduling error when swapping a digital module for its analog counterpart will
+// be 0.5ns."
+//
+// §8.5.1 places the A2D events themselves: "Note that A2D events must be analog
+// event controlled statements (e.g., @cross, @timer). These are scheduled just
+// like other event controlled statements in Verilog-HDL (e.g., @posedge)."
+//
+// DERIVATION. `//! wave` walks V(vi) up a straight line of slope 0.1 V/ns
+// (0 V at 0, 1.0 V at 10 ns); every declared point lies on that line, so the
+// crossing times are read straight off it:
+//
+//   cross(V(vi) - 0.52, +1):  0.52 V is 0.02 V above the 5 ns sample, and
+//                             0.02 / 0.1 = 0.2, so the crossing is at 5.2 ns.
+//                             round(5.2) = 5  -> digital tick 5, error 0.2 ns.
+//   cross(V(vi) - 0.76, +1):  0.76 V is 0.06 V above the 7 ns sample, and
+//                             0.06 / 0.1 = 0.6, so the crossing is at 7.6 ns.
+//                             round(7.6) = 8  -> digital tick 8, error 0.4 ns.
+//
+// Both errors are under the 0.5 ns the clause allows, and the pair is chosen so
+// one rounds DOWN and the other rounds UP: a tool that truncates instead of
+// rounding reports tick 7 for the second and fails, and a tool that reports the
+// raw analog time as the tick fails both.
+//
+// $time is the digital time scaled to the module's `timescale` unit, so its unit
+// here is the nanosecond and the wants are the integers 5 and 8. $abstime is
+// seconds in the analog kernel (§9.10), so the same crossing reads 5.2e-9 there —
+// the second check is what makes the first one mean "rounded", rather than
+// "the analog solver happened to land on 5.0 ns".
+//
+// WHY THE PARTITION IS ON V(vi) AND NOT ON $abstime. §5.10.3.1 makes cross()
+// control the timestep, so a conforming simulator inserts a timepoint of its own
+// AT 5.2 ns, which the runner will also assert at. A time-based partition would be
+// wrong exactly there. `V(vi) > 0.52` is the same partition of the run stated in
+// the quantity that defines it, and the clause guarantees the event fires after
+// the crossing, so it is right at the inserted point too. None of the declared
+// samples sit on either threshold.
+//
+// The 1 ps tolerance on the analog crossing time is the `time_tol` passed to
+// cross() — §5.10.3.1 places the event "while the signal remains in the box
+// defined by actual crossing and expr_tol and time_tol", so 1e-12 is the width
+// this fixture itself asked for, not a fudge factor.
+//
+//! lrm 8.4.3.3
+//! lrm 8.5.1
+//! lrm 5.10.3.1
+//! analysis tran
+//! time 0, 5n, 6n, 7n, 8n, 10n
+//! wave V(vi) = 0, 0.5, 0.6, 0.7, 0.8, 1.0
+`timescale 1ns/1ns
+`include "check.vh"
+module m02_a2d_tick_quantization(vi, vo);
+  inout vi, vo; electrical vi, vo;
+  integer tick_lo, tick_hi;
+  real    ana_lo;
+  // §3.2: "Integer variables whose values are assigned in a digital context
+  // default to the unknown value x" — only ANALOG-context assignment defaults to
+  // zero. Both of these are written from an `always`, so without this block they
+  // are x until the first crossing and the pre-crossing arm of each CHECKI below
+  // would compare x against 0. `ana_lo` is analog-context and needs no such
+  // initialization; it is left alone deliberately, to keep the contrast visible.
+  initial begin tick_lo = 0; tick_hi = 0; end
+  always @(cross(V(vi) - 0.52, +1, 1p, 1u)) tick_lo = $time;
+  always @(cross(V(vi) - 0.76, +1, 1p, 1u)) tick_hi = $time;
+  analog begin
+    @(cross(V(vi) - 0.52, +1, 1p, 1u)) ana_lo = $abstime;
+    `CHECKI("a 5.2 ns A2D crossing is reported by the digital kernel at tick 5",
+            tick_lo, (V(vi) > 0.52) ? 5 : 0);
+    `CHECKI("a 7.6 ns A2D crossing rounds UP, to tick 8",
+            tick_hi, (V(vi) > 0.76) ? 8 : 0);
+    `CHECK("while the analog kernel keeps the unrounded crossing time",
+           ana_lo, (V(vi) > 0.52) ? 5.2n : 0.0, 1p);
+    V(vo) <+ tick_lo * 0.1;
+  end
+endmodule

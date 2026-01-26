@@ -1,0 +1,31 @@
+// §5.10.3.1 cross(), the half of the clause that is about the SIMULATOR and not
+// about the model:
+//
+//   "In addition, cross() CONTROLS THE TIMESTEP to accurately resolve the
+//    crossing."
+//
+//   "expr_tol and time_tol are absolute tolerances ... They represent the
+//    maximum allowable error between the true crossing point and when the event
+//    triggers. The event shall occur AFTER the threshold crossing, and while the
+//    signal remains in the box defined by actual crossing and expr_tol and
+//    time_tol."
+//
+// time_tol is written here as an explicit 1 us so the box has a width a deck
+// can be built around: the latch must be low everywhere before the crossing and
+// high by 1 us after it, whatever the deck's own step control would have
+// preferred.
+//
+// The latched level is contributed directly, with no transition() filter, on
+// purpose: a filter would smear the edge over its own rise time and the
+// resulting waveform would no longer say WHEN the event happened.
+`include "disciplines.vams"
+
+module a10_cross_latch(vin, vout);
+  inout vin, vout;
+  electrical vin, vout;
+  real state;
+  analog begin
+    @(cross(V(vin) - 0.5, +1, 1e-6)) state = 1.0;
+    V(vout) <+ state;
+  end
+endmodule

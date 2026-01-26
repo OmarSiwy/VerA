@@ -1,0 +1,112 @@
+// §4.6.3 + §4.5.6: WHAT THE SMALL-SIGNAL ANALYSIS IS SOLVED WITH.
+//
+// §4.6.3, first sentence: "A small-signal analysis computes the steady-state
+// response of a system which has been LINEARIZED ABOUT ITS OPERATING POINT and
+// is driven by a small sinusoid." So an ac analysis needs two things from the
+// device and they are different things: the derivative of the residual at the
+// operating point (the conductance matrix the sinusoid is pushed through), and
+// the stimulus itself. This fixture pins that the two do not contaminate each
+// other, using §4.5.6's `ddx` — "The operator returns the partial derivative of
+// its first argument with respect to the unknown indicated by the second
+// argument, holding all other unknowns fixed and evaluated at the current
+// operating point" — because that is the same partial derivative the host
+// receives, written where a fixture can assert it. (§4.5.10 is `last_crossing`
+// and has nothing to do with `ddx`; an earlier draft of this fixture cited it,
+// wrongly, in its prose and in its `//! lrm` line. Both are corrected below.)
+//
+// §4.5.6 is also strictly the better clause, because its FIRST example is this
+// fixture's device verbatim —
+//
+//     idio = IS * (limexp(V(a,c)/$vt) - 1);
+//     gdio = ddx(idio, V(a));
+//
+// — so the conductance asserted here is the one the LRM itself names, and its
+// sentence "If the expression does not depend explicitly on the unknown, then
+// ddx() returns zero (0)" is the exact licence for the `ddx(stim, V(a)) = 0`
+// check below. §4.5.10 licenses neither.
+//
+// THE DEVICE. A junction, exactly §4.6.4.5's, biased at 0.6 V:
+//
+//   id = is·(exp(V(a,c)/$vt) − 1),  is = 1e-14 A, `//! temp 300.0`
+//
+// WHY $vt IS NOT PINNED TO A LITERAL HERE. §9.15 is the clause that defines it
+// — "$vt … returns the thermal voltage (kT/q) at the given temperature" — and it
+// supplies NO NUMBER. (§9.10 is Simulator Time System Functions and says nothing
+// about $vt; an earlier draft of this fixture cited it, wrongly.) Which k and q
+// an implementation uses is therefore implementation-defined in the last digits:
+// Annex D.2's default fall-through is `P_K`/`P_Q` = NIST1998, giving
+// k/q = 8.617342301212761e-5, while VerA hard-codes CODATA2018's
+// 8.617333262145179e-5 at src/backend/codegen.zig:5519. The two differ by
+// 1.05e-6 relative, which the diode exponential amplifies by V/$vt ≈ 23.2 to
+// 2.4e-5 in `id`.
+//
+// A fixture that wrote either constant's digits down would fail every
+// implementation that picked the other one, and the cheapest way to make it pass
+// would be to change the compiler's constants to match the test. So the identity
+// is asserted against the LRM's OWN macros instead, with a tolerance that admits
+// any defensible constant set (the two above differ by 2.71e-8 absolute at
+// 300 K) and still catches a $vt that is wrong in kind — wrong temperature,
+// q/kT inverted, a missing factor.
+//
+// The DERIVATIVE is likewise asserted as §4.5.6's identity rather than as
+// digits, for the same reason and one more: it is the identity that carries the
+// fixture's real claim.
+//
+//   ∂id/∂V(a) = is·exp(V/$vt)/$vt = (id + is)/$vt
+//
+// The `+ is` is the whole point of the 1e-15 absolute tolerance. At this bias
+// the conductance is ≈4.6458e-3 S and dropping the `+ is` moves it by 3.87e-13
+// — the 11th digit — so a tolerance of 1e-15 still separates them, while a
+// conductance from a finite difference with any sane step lands further away
+// than either. The assertion distinguishes an EXACT derivative from a numerical
+// one, and an inexact ac conductance is an ac response wrong by the same
+// fraction at every frequency.
+//
+// THE STIMULUS. `ac_stim` is an INDEPENDENT source: §4.6.3 says it "models a
+// source with magnitude mag and phase phase", and a source's magnitude does not
+// depend on any node potential. So its contribution to the conductance matrix
+// is exactly zero, and the branch's total derivative is the junction's alone:
+//
+//   ddx(ac_stim("ac", 2.0, 0.0), V(a)) = 0.0        exactly
+//   ddx(id + ac_stim("ac", 2.0, 0.0), V(a)) = ddx(id, V(a))
+//
+// A compiler that folded the stimulus into the linearization — the mistake a
+// `mag·something(x)` lowering invites — fails the fourth and fifth checks while
+// still reporting the right stimulus value.
+//
+//! lrm 4.6.3
+//! lrm 4.5.6
+//! lrm 9.15
+//! analysis ac
+//! temp 300.0
+//! bias V(a) = 0.6
+//! bias V(c) = 0.0
+`include "check.vh"
+module a06_small_signal_linearization(a, c);
+    inout a, c;
+    electrical a, c;
+    parameter real is = 1e-14 from (0:inf);
+    real id, stim;
+
+    analog begin
+        id = is * (exp(V(a, c) / $vt) - 1.0);
+        stim = ac_stim("ac", 2.0, 0.0);
+
+        // §9.15's identity, against the LRM's own Annex D.2 constants. The
+        // 1e-7 band admits any defensible k/q (NIST1998 and CODATA2018 differ
+        // by 2.71e-8 here) and still fails a $vt that is wrong in kind.
+        `CHECKEQ("$vt is kT/q; the last digits of k and q are implementation-defined",
+            $vt, $temperature * (`P_K / `P_Q), 1e-7);
+        // Loose enough to survive either constant set (they spread `id` by
+        // 2.4e-5), tight enough to catch a wrong `is` or a wrong exponent.
+        `CHECKR("junction current at 0.6 V", id, 1.2010369553128491e-4, 1e-4);
+        `CHECKEQ("the operating-point conductance is exactly (id + is)/$vt",
+            ddx(id, V(a)), (id + is) / $vt, 1e-15);
+        `CHECKX("an independent source has no conductance", ddx(stim, V(a)), 0.0);
+        `CHECKEQ("so the branch derivative is the junction's alone",
+            ddx(id + stim, V(a)), (id + is) / $vt, 1e-15);
+        `CHECKX("while the stimulus itself is still the declared magnitude", stim, 2.0);
+
+        I(a, c) <+ id + stim;
+    end
+endmodule

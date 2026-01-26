@@ -461,6 +461,43 @@ pub fn build(b: *std.Build) void {
     if (b.args) |a| run_torture.addArgs(a);
     b.step("torture", "Run the Verilog-A torture suite").dependOn(&run_torture.step);
 
+    // The SAME runner over `tests/pending`, which is the approved-but-not-yet-
+    // implemented suite. These fixtures are SUPPOSED to fail: each one encodes
+    // behavior the standard requires and this compiler does not have yet, so a
+    // nonzero exit is the expected state and this step is deliberately NOT on
+    // `test` or on any gate. Its output is the number that matters during
+    // implementation — how many of them have started passing — which until now
+    // could not be obtained at all, because `fixture_root` was one hardcoded
+    // path and nothing walked `tests/pending`.
+    //
+    // A separate options object and work_root rather than a `-Dfixture-root`
+    // knob on the existing one: the 1323/1323 gate should keep meaning exactly
+    // what it means today, and two runners writing testbenches for
+    // same-named fixtures into one directory would race.
+    const pending_suite_opts = b.addOptions();
+    pending_suite_opts.addOption([]const u8, "fixture_root", b.pathFromRoot("tests/pending"));
+    pending_suite_opts.addOption([]const u8, "docs_root", b.pathFromRoot("docs"));
+    const pending_torture_opts = b.addOptions();
+    pending_torture_opts.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-tb-pending"));
+    pending_torture_opts.addOption([]const u8, "contract", contract_path);
+    pending_torture_opts.addOption([]const u8, "zig_exe", b.graph.zig_exe);
+    pending_torture_opts.addOption([]const u8, "fixture_optimize", "Debug");
+    const pending_mod = b.createModule(.{
+        .root_source_file = b.path("tests/torture.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "vera", .module = vera_mod }},
+    });
+    pending_mod.addOptions("torture_options", pending_torture_opts);
+    pending_mod.addOptions("suite_options", pending_suite_opts);
+    const run_pending = b.addRunArtifact(b.addExecutable(.{
+        .name = "vera-torture-pending",
+        .root_module = pending_mod,
+    }));
+    if (b.args) |a| run_pending.addArgs(a);
+    b.step("torture-pending", "Run the approved-but-unimplemented suite (expected to fail)")
+        .dependOn(&run_pending.step);
+
     // The runner's own unit tests (the assertion lint, the verdict tally) DO
     // belong in `test`: they are milliseconds and they are what stops a fixture
     // from asserting nothing while looking like it asserts something.

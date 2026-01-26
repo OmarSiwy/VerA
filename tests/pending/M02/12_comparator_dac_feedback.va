@@ -1,0 +1,70 @@
+// The comparator/DAC loop M02 names, assembled from the two clauses that fix its
+// timing. §8.4.3.3: "Consequently an A2D event that results in a D2A event being
+// scheduled with zero (0) delay, shall have its effect propagated back to the
+// analog kernel with zero (0) delay." §8.5.1 rows 3 and 3b put the nonblocking
+// update ahead of the analog macro-process event, so the whole A2D -> digital ->
+// D2A round trip completes INSIDE one digital time and the analog kernel's
+// accepted solution at the crossing already carries the new DAC output.
+//
+// THE LOOP. Two comparator thresholds on the same analog input; each trip
+// increments a 2-bit code through a NONBLOCKING assignment (zero delay); the code
+// drives a 4-level DAC back into the analog domain. Per crossing the sequence
+// inside one digital time is: analog solution -> A2D event (region 1 wakes the
+// always block) -> code <= code + 1 queued (region 3) -> region 3 flush ->
+// region 3b macro-process solve reading the new code.
+//
+// DERIVATION. V(vi) is a 0.1 V/ns ramp, every declared sample on the line:
+//
+//   trip 1: 0.52 V is 0.02 above the 5 ns sample -> 5 + 0.02/0.1 = 5.2 ns
+//           round(5.2) = tick 5, code 2'd0 -> 2'd1
+//   trip 2: 0.76 V is 0.06 above the 7 ns sample -> 7 + 0.06/0.1 = 7.6 ns
+//           round(7.6) = tick 8, code 2'd1 -> 2'd2
+//
+//   DAC step = 0.25 V, so the output is the staircase
+//
+//       V(vi) <= 0.52   ->  0.25 * 0 = 0.00 V
+//       V(vi) >  0.52   ->  0.25 * 1 = 0.25 V
+//       V(vi) >  0.76   ->  0.25 * 2 = 0.50 V
+//
+// 0.25 is 2^-2, so every product is exact and the tolerance is CHECKX's.
+//
+// WHY THE PARTITION IS ON V(vi). §5.10.3.1 makes cross() control the timestep, so
+// a conforming simulator inserts its own analog timepoint at 5.2 ns and at 7.6 ns
+// and the runner asserts there too. Partitioning on the comparator input states
+// the staircase in exactly the quantity the comparator uses, so it is right at
+// those inserted points - and that is where the claim bites: the D2A must have
+// come back with ZERO delay, so the 5.2 ns solution already reads 0.25 V. A tool
+// that defers the DAC update to the next analog step reads 0.00 V at 5.2 ns and
+// fails; one that applies it a tick later reads 0.00 V at 6 ns and fails too.
+//
+// The checks are read at $strobe time, which IEEE 1364 §17.1 defines as the end of
+// the time step, so what is asserted at each timepoint is the SETTLED value of the
+// loop and not an intermediate iterate - which is the right oracle for a feedback
+// fixture and the reason check.vh is built on $strobe.
+//
+// NOT CLAIMED HERE: anything about a loop that does not settle. §8.4.2's iterative
+// A/D settlement is 01's subject; this ramp trips each comparator once and the
+// loop is feed-forward after each trip, so there is a unique fixed point at every
+// timepoint.
+//
+//! lrm 8.4.3.3
+//! lrm 8.5.1
+//! lrm 5.10.3.1
+//! analysis tran
+//! time 0, 5n, 6n, 7n, 8n, 10n
+//! wave V(vi) = 0, 0.5, 0.6, 0.7, 0.8, 1.0
+`timescale 1ns/1ns
+`include "check.vh"
+module m02_comparator_dac_feedback(vi, vdac);
+  inout vi, vdac; electrical vi, vdac;
+  reg [1:0] code;
+  initial code = 2'd0;
+  always @(cross(V(vi) - 0.52, +1, 1p, 1u)) code <= code + 2'd1;
+  always @(cross(V(vi) - 0.76, +1, 1p, 1u)) code <= code + 2'd1;
+  analog begin
+    `CHECKX("each comparator trip reaches the DAC within the same digital time",
+            0.25 * code,
+            (V(vi) > 0.76) ? 0.5 : ((V(vi) > 0.52) ? 0.25 : 0.0));
+    V(vdac) <+ 0.25 * code;
+  end
+endmodule

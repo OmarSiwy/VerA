@@ -1,0 +1,76 @@
+// H04 — E.4.1's multiplicity factor, applied to a subcircuit that came from a
+// SPICE netlist. Four copies in parallel is four times the current.
+//
+// THE CLAUSE. E.4.1 "Multiplicity factor on subcircuits":
+//
+//     "Some SPICE simulators support a multiplicity factor (M) parameter on
+//      subcircuits without the parameter being explicitly being declared. This
+//      factor is typically used to indicate the subcircuit should be modeled as
+//      if there are a specified number of copies in parallel. ... Starting with
+//      LRM Version 2.2, the multiplicity factor is supported for subcircuits
+//      defined as modules in Verilog-AMS using the hierarchical system parameter
+//      $mfactor, as described in 6.3.6."
+//
+// E.2 makes a netlist subcircuit a module definition, so "subcircuits defined as
+// modules" covers this one, and §6.3.6 supplies the arithmetic: every flow
+// contributed inside the instance is multiplied by the resolved $mfactor. §9.18
+// resolves it as `$mfactor_specified * $mfactor_hier`; the top of this hierarchy
+// contributes 1.0, so the resolved value at `x1` is the 4 written on its
+// instantiation.
+//
+// THE NETLIST is one card inside one subcircuit, so the only thing in motion is
+// the factor:
+//
+//     .SUBCKT RUNIT A B
+//     R1 A B 1K
+//     .ENDS RUNIT
+//
+// THE DIGITS, BY HAND. `//! bias` holds a at 1.0 V and b at 0.0 V, so 1.0 V sits
+// across the subcircuit's port pair. Inside, one Table E.1 resistor with no
+// tc1/tc2, so its factor (1 + tc1*T + tc2*T^2) is 1 and it carries
+//
+//     I_one = V / r = 1.0 / 1000 = 1.0e-3 A
+//
+// §6.3.6 multiplies that contribution by the resolved $mfactor of 4:
+//
+//     I(x1.a, x1.b) = 4 * 1.0e-3 = 4.0e-3 A
+//
+// which is the same current four such subcircuits in parallel would draw, which
+// is what E.4.1 says M means. `#(.$mfactor(4))` is A.4.1's own spelling for the
+// override (§6.3.6 prints `module_b #(.$mfactor(2)) B1(p,n);`).
+//
+// WHAT VerA DOES TODAY, MEASURED. The equivalent written entirely in Verilog-AMS
+// — `module runit(p,n); resistor #(.r(1k)) r1(p,n); endmodule` instantiated
+// `runit #(.$mfactor(4)) x1(c,b);` — reports `I(x1.p,x1.n) got=0.001
+// want=0.004`, and the residual at the node confirms it: `res[c] = 1.000000e-3`.
+// So the factor is carried through elaboration (`Unit.mfactor`,
+// `src/ir/elaborate.zig`) and never reaches the contributions. The netlist path
+// fails for that reason on top of fixture 06's empty body, so 06 has to be read
+// first: if 06 is green and this is red, §6.3.6 is the cause on its own.
+//
+//! lrm E.4.1
+//! lrm E.2
+//! lrm 6.3.6
+//! lrm 9.18
+//! lrm 6.7.1
+//! bias V(a) = 1.0, V(b) = 0.0, V(c) = 1.0
+//! spice .SUBCKT RUNIT A B
+//! spice R1 A B 1K
+//! spice .ENDS RUNIT
+`include "check.vh"
+module h04_subckt_mfactor(a, b, c);
+  inout a, b, c; electrical a, b, c;
+  rUnit #(.$mfactor(4)) x1(a, b);
+  // The SAME subcircuit with no override, on its own node pair at the same
+  // 1.0 V: the control that makes the 4x attributable to $mfactor and to
+  // nothing else. §9.18: an instance with no `.$mfactor` propagates the
+  // parent's, which at the top of this hierarchy is 1.0.
+  rUnit x2(c, b);
+  analog begin
+    `CHECKR("one unscaled copy is Table E.1's I = V/r = 1.0/1000",
+            I(x2.a, x2.b), 1.0e-3, 1e-14);
+    // E.4.1's "a specified number of copies in parallel": four of them.
+    `CHECKR("6.3.6 scales the subcircuit's flow by $mfactor: 4 * 1.0/1000",
+            I(x1.a, x1.b), 4.0e-3, 1e-14);
+  end
+endmodule

@@ -1,0 +1,63 @@
+// §5.6.8.2 Hierarchical direct contributions to branches:
+//
+//   "Hierarchical direct contributions to named and unnamed branches is allowed
+//    provided that the branch is suitable for such contributions. REASONS THAT A
+//    HIERARCHICAL BRANCH CONTRIBUTION WOULD NOT BE ALLOWED ARE:
+//      — Invalid access function used for the contribution to the particular
+//        branch
+//      — THE HIERARCHICAL CONTRIBUTION CHANGES THE BRANCH INTO A SWITCH BRANCH"
+//
+// The rule is narrow and it is not a restatement of §5.6.1.3. Inside ONE module,
+// `V(br) <+ 1.0;` followed by `I(br) <+ 1m;` is perfectly legal — value
+// retention discards the potential and converts the branch to a flow source, and
+// tests/fixtures/ch05_analog_behavior/value_retention.va pins that very sequence
+// and its answer of 7.0. §5.6.8.2 forbids the same sequence when the two halves
+// live in different modules, because §5.6.5's switch branch is a decision the
+// owning module makes per iteration and the parent has no ordering relationship
+// with the child's analog block that would make "which kind wins" well defined.
+//
+// Below, the child makes `br` a potential source of 1.0 V and the parent
+// contributes a flow to the same named branch. That is a branch that switches
+// kind across a module boundary — the second bullet, exactly.
+//
+// WHY THIS FILE IS A REJECT AND 08 IS NOT. Fixture 08 is the legal form of the
+// same construct: the parent contributes a POTENTIAL to a branch the child also
+// potential-sources, so §5.6.1.2's accumulation applies and 0.5 + 1.8 = 2.3 is
+// well defined. The two files differ in one access function, and a fix for
+// either has to keep the other's verdict.
+//
+// OBSERVED TODAY: accepted silently. The parent's flow contribution converts the
+// child's branch and the design solves with `x[drv.x] = 0` — no diagnostic, and
+// the number it produces belongs to neither a potential source nor a documented
+// switch. The neighbouring prohibition in the same clause IS implemented
+// (`E0409`, hierarchical contribution to an indirectly-contributed branch), so
+// this one is a hole in an otherwise-checked rule.
+//
+// The `//! reject` line below carries PROSE and not an `Exxxx` code because no
+// code is allocated for this rule yet. Whoever implements it should allocate one
+// and replace this line with it; the harness matches the directive as a plain
+// substring of the diagnostic, so the message must contain this phrase either
+// way for the fixture to be honest about which rule it is testing.
+//
+//! lrm 5.6.8.2
+//! lrm 5.6.5
+//! reject changes the branch into a switch branch
+module a02_hier_switch_branch(g);
+  inout g;
+  electrical g;
+  a02_hier_switch_branch_child drv(g);
+  analog begin
+    I(drv.br) <+ 1m;
+    I(g) <+ 0.0;
+  end
+endmodule
+
+module a02_hier_switch_branch_child(b);
+  inout b;
+  electrical b, x;
+  branch (x, b) br;
+  analog begin
+    V(br) <+ 1.0;
+    I(b) <+ 0.0;
+  end
+endmodule

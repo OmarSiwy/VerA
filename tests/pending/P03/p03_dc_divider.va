@@ -1,0 +1,40 @@
+`include "disciplines.vams"
+// The DC circuit the value-format and query fixtures read.
+//
+// One ideal 1.25 V source across one 500 ohm resistor. Ohm's law, which is all
+// this has to be:
+//
+//     V(a, gnd) = 1.25 V                   exactly
+//     I through r1 = 1.25 / 500 = 2.5e-3 A exactly
+//
+// 1.25 and 2.5e-3 are both exactly representable in binary64 (1.25 = 5*2^-2;
+// 2.5e-3 is not, but is the correctly-rounded quotient of two exact operands,
+// so an ideal solver reproduces it to the last bit). That is why these numbers
+// and not 1/3: fixture 08 asserts the %e and %g SPELLINGS of the value, and a
+// value whose decimal expansion depends on the solver's rounding could not be
+// spelled in a fixture at all.
+//
+// Used by: 01 (as a transient, for the t=0 queries), 08, 91.
+
+module p03_vsrc(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real dc = 1.25;
+    analog
+        V(p, n) <+ dc;
+endmodule
+
+module p03_res500(p, n);
+    inout p, n;
+    electrical p, n;
+    parameter real r = 500.0 from (0:inf);
+    analog
+        I(p, n) <+ V(p, n) / r;
+endmodule
+
+module p03_dc_divider;
+    electrical a, gnd;
+    ground gnd;
+    p03_vsrc   #(.dc(1.25))  v1(.p(a), .n(gnd));
+    p03_res500 #(.r(500.0))  r1(.p(a), .n(gnd));
+endmodule

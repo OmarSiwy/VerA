@@ -1,0 +1,171 @@
+// Verilog-AMS LRM 2.4 §9.22.4 driver_update, verbatim and in full:
+//
+//   "The status of drivers for a given signal can be monitored with the event
+//    detection keyword driver_update. It can be used in conjunction with the
+//    event detection operator @ to detect updates to any of the drivers of the
+//    signal.
+//
+//      always @(driver_update clock)
+//        statement;
+//
+//    causes the statement to execute any time a driver of the signal clock is
+//    updated. Here, an update is defined as the addition of a new pending value
+//    to the driver. This is true whether or not there is a change in the
+//    resolved value of the signal."
+//
+// THE LAST SENTENCE IS THE WHOLE ROW. Every other event in this language fires
+// on a CHANGE: `@(net)` fires when the net's value differs, `cross()` fires when
+// a crossing happens, `@(posedge x)` fires on a transition. `driver_update` is
+// the one that does not. It fires on the ASSIGNMENT, and the clause spells out
+// the case that distinguishes the two — re-driving a driver with the value it
+// already holds, so that the resolved signal cannot have moved.
+//
+// tests/fixtures/ch09_system_tasks/38_driver_update_connectmodule.va says so
+// itself: "how often it fires depends on how many drivers the elaborated
+// netlist puts on `d` — a property of the instantiating design, not of this
+// source. Counting firings here would pin the harness, not the LRM." That file
+// therefore asserts only acceptance. THIS file is the instantiating design it
+// was missing, so the count becomes a property of the LRM again.
+//
+// WHY THE COUNT IS UNAMBIGUOUS. Every driver assignment below is at a distinct
+// time, at least 10 ticks from its neighbours, and every sample is taken 5
+// ticks after the last assignment that could affect it. So no ordering within a
+// timestep, no delta-cycle count and no simultaneity is being asserted — only
+// "one assignment to a driver produces exactly one firing".
+//
+//! lrm 9.22.4
+//! lrm 9.22.2
+//! timescale 1ns/1ns
+//
+// HAND DERIVATION — two ordinary drivers on the mixed net, `a` and `b`.
+//
+//   t=10  a := 1'b1   a moves x -> 1   : update #1
+//   t=20  b := 1'b1   b moves x -> 1   : update #2
+//   t=30  a := 1'b1   a ALREADY HOLDS 1, and b holds 1 too, so nothing about
+//                     the signal's resolved value can differ before and after.
+//                     §9.22.4 sentence 4 makes it   : update #3
+//   t=50  a := 1'b0   a moves 1 -> 0                : update #4
+//
+//   Samples and their expected counts:
+//     t=15  updates = 1   ones = 1   driver states: one 1, one x
+//     t=25  updates = 2   ones = 2   driver states: two 1s
+//     t=35  updates = 3   ones = 2   driver states: two 1s   <- IDENTICAL to t=25
+//     t=55  updates = 4   ones = 1   driver states: one 1, one 0
+//
+//   The t=25 / t=35 pair is the assertion, and it is deliberately printed as
+//   TWO columns on one line: the update counter must differ (2 -> 3) while the
+//   driver-state histogram must not (ones = 2 on both lines). A tool that
+//   implemented driver_update as "@(the resolved net)" reads 2 on both.
+//
+//   The ones histogram is printed rather than an indexed state because
+//   §9.22.1 numbers the drivers arbitrarily (see 11_driver_state_histogram.va).
+//
+// THE WIDTH OF THE `updates=` AND `ones=` COLUMNS. Both are `integer`s; §3.2
+// gives an integer the range -2**31 .. 2**31-1, i.e. 32 bits. %b is the only
+// integer conversion `src/sim/digital.zig` implements; §9.4.3 Table 9-22 gives
+// %b no width modifier, and IEEE Std 1364 makes the printed field width of %b
+// the SIZE OF THE EXPRESSION, not the number of significant digits. So both
+// columns are exactly 32 binary digits, zero-padded on the left:
+//
+//   decimal 1 -> 00000000000000000000000000000001
+//   decimal 2 -> 00000000000000000000000000000010
+//   decimal 3 -> 00000000000000000000000000000011
+//   decimal 4 -> 00000000000000000000000000000100
+//
+// `ok=%b` is the result of an `==`, self-determined at ONE bit, so it stays a
+// single digit — and it, not the printed counter, is what a wrong count fails
+// on.
+//
+// CORRECTED AFTER REVIEW. These columns previously held the minimum-width
+// strings "1", "10", "11", "100". VerA's %b is width-exact, and its own passing
+// regression in `src/sim/digital.zig` prints
+// `integer 11111111111111111111111111111111` for a 32-bit integer. This is the
+// row's headline fixture and as written it could not pass any conforming
+// implementation; the cheap repair would have been to make %b minimum-width,
+// which would have broken that green regression.
+
+`timescale 1ns/1ns
+`include "disciplines.vams"
+
+connectrules m04_du_rules;
+  connect m04_du_c2e merged input ddiscrete, output electrical;
+endconnectrules
+
+connectmodule m04_du_c2e(d, a);
+  input d;
+  output a;
+  ddiscrete d;
+  electrical a;
+
+  reg out;
+  integer updates, i, ones;
+
+  assign d = out;
+
+  always @(driver_update d)
+    updates = updates + 1;
+
+  task ones_now;
+    begin
+      ones = 0;
+      for (i = 0; i < $driver_count(d); i = i + 1)
+        if ($driver_state(d, i) === 1'b1) ones = ones + 1;
+    end
+  endtask
+
+  initial begin
+    out = 1'b0;
+    updates = 0;
+    #15 ones_now;
+    $display("first_driver_assignment updates=%b ones=%b ok=%b",
+             updates, ones, updates == 1);
+    #10 ones_now;
+    $display("second_driver_assignment updates=%b ones=%b ok=%b",
+             updates, ones, updates == 2);
+    #10 ones_now;
+    $display("redriving_the_same_value_still_updates updates=%b ones=%b ok=%b",
+             updates, ones, updates == 3);
+    #20 ones_now;
+    $display("real_transition_updates updates=%b ones=%b ok=%b",
+             updates, ones, updates == 4);
+    $finish(0);
+  end
+
+  analog V(a) <+ 0.0;
+endmodule
+
+module m04_du_drv_a(o);
+  output o;
+  ddiscrete o;
+  reg o;
+  initial begin
+    #10 o = 1'b1;
+    #20 o = 1'b1;   // §9.22.4: an update, though the value does not change
+    #20 o = 1'b0;
+  end
+endmodule
+
+module m04_du_drv_b(o);
+  output o;
+  ddiscrete o;
+  reg o;
+  initial begin
+    #20 o = 1'b1;
+  end
+endmodule
+
+module m04_du_load(a);
+  inout a;
+  electrical a;
+  electrical g;
+  ground g;
+  analog I(a, g) <+ V(a, g) / 1.0e3;
+endmodule
+
+module m04_du_top;
+  electrical net;
+
+  m04_du_drv_a a(.o(net));
+  m04_du_drv_b b(.o(net));
+  m04_du_load  ld(.a(net));
+endmodule

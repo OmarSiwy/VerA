@@ -1,0 +1,124 @@
+// §4.6.4.5's diode, and the rule its example depends on: a noise power is an
+// ANALOG EXPRESSION evaluated at the operating point, not a constant.
+//
+// §4.6.4.5 prints it verbatim:
+//
+//     I(a,c) <+ is*(exp(V(a,c) / (n * $vt)) - 1)
+//        + white_noise(2*`P_Q*I(<a>))
+//        + flicker_noise(kf*pow(abs(I(<a>)), af), ef);
+//
+// Both powers are functions of the bias current. That is the whole reason a
+// noise analysis is preceded by an operating-point analysis (§4.6.1 Table 4-22:
+// "static" is true in "the DC analysis which precedes an AC or noise
+// analysis") — the spectrum is a property of the solved state, and a device
+// that exported a bias-frozen power would report a diode's shot noise at
+// whatever voltage it happened to be compiled with.
+//
+// This fixture writes the clause's example with the branch current bound to a
+// variable instead of re-probed, so every number below is a closed form.
+//
+// THE NUMBERS, at `//! temp 300.0` and V(a,c) = 0.6 V, n = 1, is = 1e-14 A.
+// §9.15 — not §9.10, which an earlier draft of this fixture cited wrongly — is
+// the clause that defines $vt, as "the thermal voltage (kT/q) at the given
+// temperature". It supplies no number, so k/q is implementation-defined in its
+// last digits. VerA hard-codes CODATA2018 (src/backend/codegen.zig:5519):
+//
+//   $vt = 8.617333262145179e-5 · 300.0 = 0.025851999786435535 V
+//   id  = 1e-14 · (exp(0.6 / 0.025851999786435535) − 1)
+//       = 1.2010369553128491e-4 A
+//
+// Annex D.2's default fall-through is `P_K`/`P_Q` = NIST1998, whose k/q is
+// 8.617342301212761e-5. The diode exponential amplifies that 1.05e-6 difference
+// in the constant by V/$vt ≈ 23.2, so `id` — and everything proportional to it
+// below — moves by 2.4e-5 relative depending on which set the implementation
+// picks. The `CHECKR` tolerances are therefore 1e-4: wide enough that BOTH
+// defensible constant sets pass, narrow enough to catch a wrong `is`, a wrong
+// exponent, or the factor-of-2 confusion described under DISCRIMINATION.
+//
+// Mixing $vt's k/q with `P_Q in the shot-noise power is not an inconsistency —
+// §4.6.4.1's pwr = 2q|I| means the charge, and `P_Q is how the LRM spells it.
+//
+// Annex D.2's fall-through arm gives `P_Q = `P_Q_NIST1998 = 1.602176462e-19 C,
+// so the shot-noise density (§4.6.4.1, pwr = 2q|I|) is
+//
+//   white = 2 · 1.602176462e-19 · 1.2010369553128491e-4
+//         = 3.8485462795887857e-23 A²/Hz
+//
+// and the flicker coefficient (§4.6.4.2, pwr = kf·|I|^af at af = 1, kf = 1e-20)
+// is
+//
+//   flicker = 1e-20 · 1.2010369553128491e-4 = 1.2010369553128491e-24 A²/Hz
+//
+// with ef = 1.0 as written. Both are pinned on the EXPORT, because §4.6.4 makes
+// the source itself read zero everywhere a `CHECK` can see it; the `CHECK`s
+// below pin the two powers as arithmetic, so the export assertion and the
+// model's own evaluation have to agree on the same bias.
+//
+// DISCRIMINATION. A device that evaluated `noisePsd` at the zero state vector
+// instead of the host's would report id = 0 and therefore white = 0 and
+// flicker = 0 — a diode with no shot noise. A device that guessed the power
+// from the Jacobian instead of reading the argument would report the thermal
+// form 4kT·g, and on a junction at n = 1 that is exactly twice the right
+// answer: g = I/$vt = I·q/(kT), so 4kT·g = 4qI = 2·(2qI). Numerically
+// 4·1.3806503e-23·300·4.645818371246582e-3 = 7.697100633608527e-23 A²/Hz
+// against the correct 3.8485462795887857e-23 — the factor of 2 §4.6.4's own
+// note warns about.
+//
+// THE TWO `//! noise` LINES BELOW CARRY `rtol=1e-4`, for the same reason the
+// `CHECKR`s do. Both densities are proportional to `id`, and `id` moves by
+// 2.4e-5 relative depending on which k/q set §9.15 leaves the implementation
+// free to pick. SPEC.md's directive grammar defaults numeric fields to 1e-12
+// relative, which is right for `a06_psd_white_flicker_export.va` (pure `P_K`
+// arithmetic, no $vt in the path) and WRONG here: at 1e-12 an implementation
+// using Annex D.2's own default constants would fail this fixture, which is
+// precisely the trap the $vt `CHECKEQ` below exists to avoid. The digits
+// written are one defensible evaluation of 2q|I| and kf|I|^af; the band, not
+// the digits, is the claim. The directive is unimplemented today —
+// `validNoiseEntry` at src/backend/tb.zig:341 rejects
+// `name=`/`white=`/`flicker=`/`ef=`/`rtol=` alike — so this fixture fails at
+// `//!` directive: BadSyntax, which is the gap it holds open.
+//
+//! lrm 4.6.4.5
+//! lrm 4.6.4.1
+//! lrm 4.6.4.2
+//! lrm 9.15
+//! noise thermal(a,c)#0 name=shot white=3.8485462795887857e-23 rtol=1e-4
+//! noise flicker(a,c)#1 name=flicker flicker=1.2010369553128491e-24 ef=1.0 rtol=1e-4
+//! analysis noise
+//! temp 300.0
+//! bias V(a) = 0.6
+//! bias V(c) = 0.0
+`include "check.vh"
+module a06_psd_bias_dependent(a, c);
+    inout a, c;
+    electrical a, c;
+    parameter real is = 1e-14 from (0:inf);
+    parameter real n = 1.0 from (0:inf);
+    parameter real kf = 1e-20 from [0:inf);
+    parameter real af = 1.0 from [0:inf);
+    parameter real ef = 1.0 from [0:inf);
+    real id;
+
+    analog begin
+        id = is * (exp(V(a, c) / (n * $vt)) - 1.0);
+
+        // §9.15's identity, against the LRM's own Annex D.2 constants, for the
+        // same reason a06_small_signal_linearization.va states it that way:
+        // §9.15 supplies no digits, so the two defensible k/q sets differ at
+        // 300 K by 2.71e-8 absolute and no literal is writable. The 1e-7 band
+        // admits both and still fails a $vt that is wrong in kind.
+        `CHECKEQ("$vt is kT/q; the last digits of k and q are implementation-defined",
+            $vt, $temperature * (`P_K / `P_Q), 1e-7);
+        // 1e-4 admits either Annex D.2 or CODATA2018 k/q (they spread `id` by
+        // 2.4e-5 through the exponential); see THE NUMBERS above.
+        `CHECKR("the junction current at 0.6 V", id, 1.2010369553128491e-4, 1e-4);
+        `CHECKR("shot-noise power 2q|I| at that bias",
+            2.0 * `P_Q * abs(id), 3.8485462795887857e-23, 1e-4);
+        `CHECKR("flicker coefficient kf|I|^af at that bias",
+            kf * pow(abs(id), af), 1.2010369553128491e-24, 1e-4);
+
+        I(a, c) <+ id
+            + white_noise(2.0 * `P_Q * abs(id), "shot")
+            + flicker_noise(kf * pow(abs(id), af), ef, "flicker");
+    end
+endmodule

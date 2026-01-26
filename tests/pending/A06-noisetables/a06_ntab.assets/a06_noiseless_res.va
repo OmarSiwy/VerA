@@ -1,0 +1,26 @@
+// A06 helper: a 1 kOhm resistor that declares NO noise generator.
+//
+// §4.6.4 makes noise a property of what the model CONTRIBUTES: "noise_table()
+// ... interpolates a set of values to model a process where the spectral
+// density of the noise varies as a piecewise linear function of frequency."
+// A module with no `white_noise`/`flicker_noise`/`noise_table` call emits no
+// `noise_gens` row at all, so the host's `collect_noise` hook is null for this
+// batch and it contributes exactly zero to the output spectrum.
+//
+// WHY THIS EXISTS INSTEAD OF A SPICE `R`. A built-in `R` carries 4kT/R, which
+// would put a temperature-dependent term into every expected value in this row
+// and bury the thing under test. This device is a pure conductance: every
+// electron of noise in the A06 decks comes from the tabulated source, so the
+// arithmetic in SPEC.md is exact and has no kB, no T and no tolerance slack.
+//
+//! lrm 4.6.4
+`include "disciplines.vams"
+module a06_noiseless_res(p, n);
+    inout p, n;
+    electrical p, n;
+
+    parameter real R = 1000.0 from (0:inf);
+
+    analog
+        I(p, n) <+ V(p, n) / R;
+endmodule
