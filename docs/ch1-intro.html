@@ -75,7 +75,7 @@ nav a:hover { text-decoration: underline; }
 
 <p>With conservative systems it is also useful to define the concept of a branch. A branch is a path of flow between two nodes through a component. Every branch has an associated potential (the potential difference between the two nodes) and flow.</p>
 
-<p>A behavioral description of a conservative component is constructed as a collection of interconnected branches. The constitutive equations of the component are formulated so as to relate the branch potentials and flows. Refer to 5.4.2 for further details on the probe/source approach. In the probe/source approach, the branch potential or flow is specified as a function of branch potentials and flows. If the branch potential and flow are left unspecified, not on the left-hand side of a contribution statement, then the branch acts as a <em>probe</em>. In this case, if the branch flow appears in an expression, the branch potential is forced to zero (<code>0</code>). Otherwise the branch flow is assumed to be zero (<code>0</code>) and the branch potential is available for use in an expression. The potential and flow of a probe branch may not both appear in expressions in a given module, nor is it allowed to specify both the potential and flow of a source branch simultaneously. (While these last two conditions are not really necessary, they do eliminate conditions which are useless and confusing.)</p>
+<p>A behavioral description of a conservative component is constructed as a collection of interconnected branches. The constitutive equations of the component are formulated so as to relate the branch potentials and flows. Refer to 5.4.2 for further details on the probe/source approach.</p>
 
 <h4 id="s1-3-1-1">1.3.1.1 Reference nodes</h4>
 
@@ -251,7 +251,7 @@ endmodule</code></pre>
 <div class="syntax">parameter_type ::= <b>integer</b> | <b>real</b> | <b>realtime</b> | <b>time</b> | <b>string</b></div></li>
 <li>Square brackets ( [ ] ) that are not in boldface-red enclose optional items. For example:
 <div class="syntax">name_of_module_instance ::= module_instance_identifier [ range ]</div></li>
-<li>Braces ( { } ) that are not in boldface-red enclose a repeated item unless the braces appear in boldface, in which case they stand for themselves. The item may appear zero or more times; the repetitions occur from left to right as with an equivalent left-recursive rule. Thus, the following two rules are equivalent:
+<li>Braces ( { } ) that are not in boldface-red enclose a repeated item. The item may appear zero or more times; the repetitions occur from left to right as with an equivalent left-recursive rule. Thus, the following two rules are equivalent:
 <div class="syntax">list_of_param_assignments ::= param_assignment { <b>,</b> param_assignment }
 list_of_param_assignments ::=
    param_assignment

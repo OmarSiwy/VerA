@@ -28,7 +28,7 @@ nav a:hover { text-decoration: underline; }
 <nav><a href="index.html">Index</a> <a href="ch6-hierarchy.html">&larr; Prev</a> <a href="ch8-scheduling.html">Next &rarr;</a> </nav>
 <h1>7. Mixed signal</h1>
 
-<div class="note">Checked against <a href="../../../docs/VAMS-LRM-2023.pdf#page=177">VAMS-LRM-2023.pdf, physical pages 177&ndash;212</a> (printed pages 164&ndash;199). Section numbers, BNF, tables, and examples follow the 2023 source. Diagrams are not redrawn: each figure callout links to the exact source reproduction.</div>
+<div class="note">Checked against <a href="VAMS-LRM-2023.pdf#page=177">VAMS-LRM-2023.pdf, physical pages 177&ndash;212</a> (printed pages 164&ndash;199). Section numbers, BNF, tables, and examples follow the 2023 source. Diagrams are not redrawn: each figure callout links to the exact source reproduction.</div>
 
 <h2 id="s7-1">7.1 Overview</h2>
 
@@ -58,17 +58,13 @@ nav a:hover { text-decoration: underline; }
 
 <h3 id="s7-2-2">7.2.2 Contexts</h3>
 
-<p>Statements in a Verilog-AMS HDL module description can appear in the body of an <b>analog</b> block, in the body of an <b>initial</b> or <b>always</b> block, or outside of any block (in the body of the module itself). Those statements which appear in the body of an <b>analog</b> block are said to be in the <em>continuous</em> (analog) <em>context</em>; all others are said to be in the <em>discrete</em> (digital) <em>context</em>. A given variable can be assigned values only in one context or the other, but not in both. The domain of a variable is that of the context from which its value is assigned.</p>
-
 <p>The domain of a variable is determined based upon the context in which it is assigned. Assignment statements which appear within an <b>analog</b> block or <b>analog initial</b> block are considered to be in the <em>continuous</em> (analog) context. Assignment statements within an <b>initial</b> or <b>always</b> block, or within a <em>continuous_assign</em> statement, are said to be within the <em>discrete</em> (digital) context. Module-level variable declaration assignments are considered to be context free and do not associate the variable with a particular domain. It shall be an error to assign to a given variable in both contexts. The domain of an unassigned variable is undefined and left up to implementations to determine. The implementation may issue a warning if an unassigned variable is referenced.</p>
-
-<div class="note">Source fidelity: the first paragraph above is 7.2.2 as printed in the source. The second paragraph restates the same context rule with two refinements that the printed paragraph does not make: it names the <b>analog initial</b> block and the <em>continuous_assign</em> statement explicitly, and it treats module-level variable declaration assignments as context free rather than as statements &ldquo;outside of any block&rdquo; in the discrete context. Where the two differ on a declaration assignment, the printed rule governs.</div>
 
 <h3 id="s7-2-3">7.2.3 Nets, nodes, ports, and signals</h3>
 
 <p>In Verilog-AMS HDL, hierarchical structures are created when higher-level modules create instances of lower level modules and communicate with them through input, output, and bidirectional ports. A <em>port</em> represents the physical connection between an expression in the instantiating or parent module and an expression in the instantiated or child module. The expressions involved are referred to as <em>nets</em>, although they can include registers, variables, and nets of both continuous and discrete disciplines. A port of an instantiated module has two nets, the upper connection (<code>vpiHiConn</code>) which is a net in the instantiating module and the lower connection (<code>vpiLoConn</code>) which is a net in the instantiated module, as shown in Figure 7-1. The <code>vpiLoConn</code> and <code>vpiHiConn</code> connections to a port are frequently referred to as the <em>formal</em> and <em>actual connection</em>s respectively.</p>
 
-<div class="note"><strong>Figure 7-1&mdash;Signal &ldquo;out&rdquo; hierarchy of net segments.</strong> The diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=178">exact source figure on physical PDF page 178 (printed page 165)</a>.</div>
+<div class="note"><strong>Figure 7-1&mdash;Signal &ldquo;out&rdquo; hierarchy of net segments.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=178">exact source figure on physical PDF page 178 (printed page 165)</a>.</div>
 
 <p>A net can be declared with either a discrete or analog <em>discipline</em> or no <em>discipline</em> (neutral interconnect). Within the Verilog-AMS language, only digital blocks and primitives can drive a discrete net (<em>drivers</em>), and only <b>analog</b> blocks can contribute to an analog net (<em>contributions</em>). A <em>signal</em> is a hierarchical collection of nets which, because of port connections, are contiguous. If all the nets that make up a signal are in the discrete domain, the signal is a <em>digital signal</em>. If all the nets that make up a signal are in the continuous domain, the signal is an <em>analog signal</em>. A signal that consists of nets from both domains is called a <em>mixed signal</em>.</p>
 
@@ -124,7 +120,7 @@ nav a:hover { text-decoration: underline; }
       | function_call
       | system_function_call
       | ( mintypmax_expression )
-      | string
+      | string_literal
       | branch_probe_function_call
       | port_probe_function_call
 
@@ -218,7 +214,7 @@ endcase</code></pre>
       var2 = 1'bz;          // error
       var1 = 1 + dnet;      // error after #50
 
-      if (dnet == 1'bx)     // error
+      if (dnet === 1'bx)    // error
          $display("Error to access x bit in continuous context");
 
       V(anet) &lt;+ 1'bz;      // error
@@ -274,13 +270,13 @@ analog_event_expression ::=
       | analog_event_expression or analog_event_expression
 analog_event_functions ::=
         cross ( analog_expression [ , analog_expression_or_null
-            [ , constant_expression_or_null [ , constant_expression_or_null [ , analog_expression ] ] ] ] )
-      | above ( analog_expression [ , constant_expression_or_null
-            [ , constant_expression_or_null [ , analog_expression ] ] ] )
+            [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] ] )
+      | above ( analog_expression [ , analog_expression_or_null
+            [ , analog_expression_or_null [ , analog_expression ] ] ] )
       | timer ( analog_expression [ , analog_expression_or_null
-            [ , constant_expression_or_null [ , analog_expression ] ] ] )
+            [ , analog_expression_or_null [ , analog_expression ] ] ] )
       | absdelta ( analog_expression , analog_expression
-            [ , constant_expression_or_null [ , constant_expression_or_null [ , analog_expression ] ] ] )
+            [ , analog_expression_or_null [ , analog_expression_or_null [ , analog_expression ] ] ] )
 analog_event_statement ::=
         { attribute_instance } analog_loop_statement
       | { attribute_instance } analog_case_statement
@@ -294,7 +290,7 @@ analog_event_statement ::=
 
 <b>Syntax 7-2&mdash;Syntax for event control statement</b></div>
 
-<div class="note">Source fidelity: in the <code>cross</code>, <code>above</code>, and <code>timer</code> productions the tolerance arguments are <code>constant_expression_or_null</code>, not <code>analog_expression_or_null</code>; only the first argument of each function, the second argument of <code>cross</code> and <code>timer</code> (the expected crossing direction and the timer period), and the trailing <em>enable</em> argument are analog expressions. Syntax 7-2 as printed in 7.3.4 lists only <code>cross</code>, <code>above</code>, and <code>timer</code>; the <code>absdelta</code> production is retained above from the full <em>analog_event_functions</em> rule given in 5.10.3.4 and A.6.5.</div>
+<div class="note"><strong>Source fidelity:</strong> the <code>timer</code> production is printed in 7.3.4 with a typographical error in its second argument, <code>analogt_expression_or_null</code>; it is transcribed above as <code>analog_expression_or_null</code>, which is the nonterminal used by the other three productions here and by the <em>analog_event_functions</em> rule in A.6.5. Syntax 7-2 as printed in 7.3.4 lists all four event functions&mdash;<code>cross</code>, <code>above</code>, <code>timer</code>, and <code>absdelta</code>&mdash;and every tolerance argument in them is <code>analog_expression_or_null</code>.</div>
 
 <p>The following example shows a discrete event being detected in an <b>analog</b> block.</p>
 
@@ -424,7 +420,7 @@ end</code></pre>
 
 <p>In the example shown in Figure 7-2, <code>NetA</code> and <code>NetB</code> are undeclared interconnects. <code>NetB</code> has <code>cmos3</code> and <code>cmos4</code> at the lower connection ports, while it is an upper connection.</p>
 
-<div class="note"><strong>Figure 7-2&mdash;Compatible discipline resolution.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=187">exact source figure on physical PDF page 187 (printed page 174)</a>. The source figure also prints these connect statements:
+<div class="note"><strong>Figure 7-2&mdash;Compatible discipline resolution.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=187">exact source figure on physical PDF page 187 (printed page 174)</a>. The source figure also prints these connect statements:
 <pre><code>connect cmos3 cmos4 resolveto cmos3;
 connect cmos1 cmos2 cmos3 resolveto cmos1;</code></pre></div>
 
@@ -458,7 +454,7 @@ connect cmos1 cmos2 cmos3 resolveto cmos1;</code></pre></div>
 
 <p>In the example shown in Figure 7-3, <code>NetA</code>, <code>NetB</code>, <code>NetC</code>, and <code>NetD</code> are undeclared interconnects.</p>
 
-<div class="note"><strong>Figure 7-3&mdash;Discipline resolution mode: basic.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=188">exact source figure on physical PDF page 188 (printed page 175)</a>. The source figure also prints these connect statements:
+<div class="note"><strong>Figure 7-3&mdash;Discipline resolution mode: basic.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=188">exact source figure on physical PDF page 188 (printed page 175)</a>. The source figure also prints these connect statements:
 <pre><code>connect cmos3 cmos4 resolveto cmos3;
 connect cmos1 cmos2 cmos3 resolveto cmos1;</code></pre></div>
 
@@ -476,7 +472,7 @@ connect cmos1 cmos2 cmos3 resolveto cmos1;</code></pre></div>
 
 <p>In the example shown in Figure 7-4, <code>NetA</code>, <code>NetB</code>, <code>NetC</code>, and <code>NetD</code> are undeclared interconnects.</p>
 
-<div class="note"><strong>Figure 7-4&mdash;Discipline resolution mode: detail.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=189">exact source figure on physical PDF page 189 (printed page 176)</a>. The source figure also prints these connect statements:
+<div class="note"><strong>Figure 7-4&mdash;Discipline resolution mode: detail.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=189">exact source figure on physical PDF page 189 (printed page 176)</a>. The source figure also prints these connect statements:
 <pre><code>connect cmos3 cmos4 resolveto cmos3; // discrete resolveto's ignored
 connect cmos1 cmos2 cmos3 resolveto cmos1; // discrete resolveto's ignored</code></pre></div>
 
@@ -496,7 +492,7 @@ connect cmos1 cmos2 cmos3 resolveto cmos1; // discrete resolveto's ignored</code
 
 <p>The example in Figure 7-5 shows several effects of coercion on auto-insertion.</p>
 
-<div class="note"><strong>Figure 7-5&mdash;Coercion effects on auto-insertion.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=190">exact source figure on physical PDF page 190 (printed page 177)</a>. The source figure also prints these connect statements:
+<div class="note"><strong>Figure 7-5&mdash;Coercion effects on auto-insertion.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=190">exact source figure on physical PDF page 190 (printed page 177)</a>. The source figure also prints these connect statements:
 <pre><code>connect cmos3 cmos4 resolveto cmos3; // discrete resolveto's ignored
 connect cmos1 cmos2 cmos3 resolveto cmos1; // discrete resolveto's ignored</code></pre></div>
 
@@ -796,7 +792,7 @@ endconnectrules</code></pre>
 
 <p>Figure 7-6 shows an example of auto-insertion with coercion.</p>
 
-<div class="note"><strong>Figure 7-6&mdash;Auto-insertion with coercion.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=197">exact source figure on physical PDF page 197 (printed page 184)</a>. The source figure also prints:
+<div class="note"><strong>Figure 7-6&mdash;Auto-insertion with coercion.</strong> The hierarchy diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=197">exact source figure on physical PDF page 197 (printed page 184)</a>. The source figure also prints:
 <pre><code>// All digital modules have only output ports of discipline cmos1
 connect cmos_d2a input cmos1 output electrical;</code></pre></div>
 
@@ -836,7 +832,7 @@ connect cmos_d2a input cmos1 output electrical;</code></pre></div>
 
 <p>Figure 7-7 shows how to model the loading effect of each individual digital port on the analog node.</p>
 
-<div class="note"><strong>Figure 7-7&mdash;Signal segmentation by connect modules.</strong> The diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=199">exact source figure on physical PDF page 199 (printed page 186)</a>.</div>
+<div class="note"><strong>Figure 7-7&mdash;Signal segmentation by connect modules.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=199">exact source figure on physical PDF page 199 (printed page 186)</a>.</div>
 
 <h3 id="s7-8-3">7.8.3 connect_mode parameter</h3>
 
@@ -852,7 +848,7 @@ connect cmos_d2a input cmos1 output electrical;</code></pre></div>
 
 <p>Connection of the <code>electrical</code> signal to the <code>ttl</code> inout ports and <code>ttl</code> input ports results in a single connector module, <code>bidir</code>, being inserted between the ports and the <code>electrical</code> signal. The <code>ttl</code> output ports are merged, but with a different connect module; i.e., there is one connector module inserted between the electrical signal and all of the <code>ttl</code> output ports.</p>
 
-<div class="note"><strong>Figure 7-8</strong> (the source prints an empty caption) and <strong>Figure 7-9&mdash;Connector insertion using merged.</strong> The diagrams are not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=201">exact source figures on physical PDF page 201 (printed page 188)</a>. The source figure also prints:
+<div class="note"><strong>Figure 7-8</strong> (the source prints an empty caption) and <strong>Figure 7-9&mdash;Connector insertion using merged.</strong> The diagrams are not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=201">exact source figures on physical PDF page 201 (printed page 188)</a>. The source figure also prints:
 <pre><code>connectrules example;
    connect d2a merged input ttl, output electrical ;
    connect bidir merged output electrical, input ttl ;
@@ -879,7 +875,7 @@ endconnectrules</code></pre></div>
 
 <p>Connection of the <code>electrical</code> signal to <code>ttl</code> input ports results in a single instance of the <code>a2d</code> connect module being inserted between the <code>electrical</code> signal and all the <code>ttl</code> input ports. This is mandated by merged parameter. This behavior is also seen for the <code>ttl</code> inout ports where the <b>merged</b> parameter is used.</p>
 
-<div class="note"><strong>Figure 7-10&mdash;Connect module insertion with signal segmentation.</strong> The diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=202">exact source figure on physical PDF page 202 (printed page 189)</a>. The source figure also prints:
+<div class="note"><strong>Figure 7-10&mdash;Connect module insertion with signal segmentation.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=202">exact source figure on physical PDF page 202 (printed page 189)</a>. The source figure also prints:
 <pre><code>connectrules example;
    connect d2a split input ttl, output electrical;
    connect a2d merged output electrical, input ttl ;
@@ -1258,6 +1254,6 @@ endconnectrules</code></pre>
 
 <p>Thus, digital transitions are propagated from drivers to receivers by way of analog (through using connect module instances). Figure 7-11 shows driver-receiver segregation in modules having bidirectional and unidirectional ports, respectively.</p>
 
-<div class="note"><strong>Figure 7-11&mdash;Driver-receiver segregation in modules with bidirectional ports.</strong> The diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=212">exact source figure on physical PDF page 212 (printed page 199)</a>.</div>
+<div class="note"><strong>Figure 7-11&mdash;Driver-receiver segregation in modules with bidirectional ports.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=212">exact source figure on physical PDF page 212 (printed page 199)</a>.</div>
 
 </body></html>

@@ -30,7 +30,7 @@ nav a:hover { text-decoration: underline; }
 
 <h1>6. Hierarchical structures</h1>
 
-<div class="note">Checked against <a href="../../../docs/VAMS-LRM-2023.pdf#page=147">VAMS-LRM-2023.pdf, physical pages 147&ndash;176</a> (printed pages 134&ndash;163). Section numbers, BNF, tables, and examples follow the 2023 source. Diagrams are not redrawn: each figure callout links to the exact source reproduction.</div>
+<div class="note">Checked against <a href="VAMS-LRM-2023.pdf#page=147">VAMS-LRM-2023.pdf, physical pages 147&ndash;176</a> (printed pages 134&ndash;163). Section numbers, BNF, tables, and examples follow the 2023 source. Diagrams are not redrawn: each figure callout links to the exact source reproduction.</div>
 
 <!-- 6.1 Overview -->
 <h2 id="s6.1">6.1 Overview</h2>
@@ -56,7 +56,7 @@ nav a:hover { text-decoration: underline; }
 
 <p>The keyword <code>macromodule</code> can be used interchangeably with <code>module</code>. An implementation may choose to treat module definitions beginning with <code>macromodule</code> differently.</p>
 
-<h3>Syntax 6-1&mdash;Syntax for module</h3>
+<h4>Syntax 6-1&mdash;Syntax for module</h4>
 
 <pre class="syntax">module_declaration ::=
     { attribute_instance } module_keyword module_identifier [ module_parameter_port_list ]
@@ -75,7 +75,6 @@ list_of_ports ::= ( port { , port } )
 
 list_of_port_declarations ::=
     ( port_declaration { , port_declaration } )
-  | ()
 
 port ::=
     [ port_expression ]
@@ -138,7 +137,7 @@ parameter_override ::= defparam list_of_defparam_assignments ;</pre>
 <!-- 6.2.1 Top-level modules and $root -->
 <h3 id="s6.2.1">6.2.1 Top-level modules and $root</h3>
 
-<p>Top-level modules are modules that are included in the source text but do not appear in any module instantiation statement. This applies even if the module instantiation appears in a generate block that is not itself instantiated.</p>
+<p>Top-level modules are modules that are included in the source text but do not appear in any module instantiation statement. This applies even if the module instantiation appears in a generate block that is not itself instantiated (see Syntax 6.6).</p>
 
 <p>Verilog-AMS incorporates hierarchical identifier prefix <code>$root</code> from IEEE Std 1800 SystemVerilog. The name <code>$root</code> is used to unambiguously refer to a top-level instance or to an instance path starting from the root of the instantiation tree. <code>$root</code> is the root of the instantiation tree.</p>
 
@@ -150,7 +149,7 @@ $root.A.B.C     // item C within instance B within top instance A</code></pre>
 <!-- 6.2.2 Module instantiation -->
 <h3 id="s6.2.2">6.2.2 Module instantiation</h3>
 
-<p>Instantiation allows one module to incorporate a copy of another module into itself. Module definitions do not nest. A module definition nests another module by instantiating it. The module instantiation statement creates one or more named instances of a defined module.</p>
+<p>Instantiation allows one module to incorporate a copy of another module into itself. Module definitions do not nest. That is, one module definition does not contain the text of another module definition within its <code>module...endmodule</code> keyword pair. A module definition nests another module by instantiating it. The module instantiation statement creates one or more named instances of a defined module.</p>
 
 <h4>Syntax 6-2&mdash;Syntax for module instantiation</h4>
 
@@ -184,7 +183,7 @@ named_port_connection ::= { attribute_instance } . port_identifier ( [ expressio
 
 <p>Instantiations of modules can contain a range specification, allowing an array of instances to be created. One or more module instances (identical copies of a module definition) can be specified in a single module instantiation statement.</p>
 
-<p>The list of module connections shall be provided only for modules defined with ports. The parentheses are always required. When using the ordered port connection method, the first element in the list connects to the first port declared in the module, the second to the second port, and so on. See <a href="#s6.5">6.5</a> for a more detailed discussion of ports and port connection rules.</p>
+<p>The list of module connections shall be provided only for modules defined with ports. The parentheses, however, are always required. When a list of port connections is given using the ordered port connection method, the first element in the list shall connect to the first port declared in the module, the second to the second port, and so on. See <a href="#s6.5">6.5</a> for a more detailed discussion of ports and port connection rules.</p>
 
 <p>A connection can be a simple reference to a variable or a net identifier, an expression or a blank. An expression can be used for supplying a value to a module input port if it is a digital port. A blank port connection shall represent the situation where the port is not to be connected.</p>
 
@@ -229,7 +228,7 @@ endmodule</code></pre>
 
 <p>The comparator instance <code>C1</code> and the integrator instance <code>I1</code> in Figure 6-1 use named port connections, whereas the comparator instance <code>C2</code> and the <code>d2a</code> (not described here) instance <code>D1</code> use ordered port connections. Note the integrator instance <code>I1</code> overrides gain parameter positionally, whereas the <code>d2a</code> instance <code>D1</code> overrides width parameter by named association.</p>
 
-<div class="note"><strong>Figure 6-1&mdash;Comparator and integrator modules.</strong> The diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=151">exact source figure on physical PDF page 151 (printed page 138)</a>.</div>
+<div class="note"><strong>Figure 6-1&mdash;Comparator and integrator modules.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=151">exact source figure on physical PDF page 151 (printed page 138)</a>.</div>
 
 <!-- 6.3 Overriding module parameter values -->
 <h2 id="s6.3">6.3 Overriding module parameter values</h2>
@@ -382,7 +381,7 @@ endmodule</code></pre>
 <li>The module's value of <code>$mfactor</code> is also propagated to any module instantiated by the original module, according to the rules in 9.18.</li>
 </ul>
 
-<p>Application of these rules guarantees behavior identical to <code>$mfactor</code> identical modules with the same connections, while the simulator only evaluates the module once.</p>
+<p>Application of these rules guarantees that the behavior of the module in the design is identical to the behavior of a quantity <code>$mfactor</code> of identical modules with the same connections; however, the simulator only has to evaluate the module once.</p>
 
 <p>Verilog-AMS does not provide a method to disable the automatic <code>$mfactor</code> scaling. The simulator shall issue a warning if it detects misuse that would result in double-scaling.</p>
 
@@ -454,7 +453,7 @@ endmodule</code></pre>
 <!-- 6.4 Paramsets -->
 <h2 id="s6.4">6.4 Paramsets</h2>
 
-<p>A paramset definition is enclosed between the keywords <code>paramset</code> and <code>endparamset</code>. The first identifier following <code>paramset</code> is the name of the paramset. The second identifier is usually the name of a module with which the paramset is associated. The second identifier may instead be the name of a second paramset. A chain of paramsets may be defined, but the last paramset in the chain shall reference a module.</p>
+<p>A paramset definition is enclosed between the keywords <code>paramset</code> and <code>endparamset</code>. The first identifier following <code>paramset</code> is the name of the paramset being defined. The second identifier is usually the name of a module with which the paramset is associated. The second identifier may instead be the name of a second paramset. A chain of paramsets may be defined in this way, but the last paramset in the chain shall reference a module.</p>
 
 <p>The paramset itself contains no behavioral code; all of the behavior is determined by the associated module. The restrictions on statements in the paramset are described in <a href="#s6.4.1">6.4.1</a>.</p>
 
@@ -567,7 +566,7 @@ endmodule</code></pre>
 
 <p>Paramset identifiers need not be unique: multiple paramsets can be declared using the same <code>paramset_identifier</code>, and they may refer to different modules. During elaboration, the simulator shall choose an appropriate paramset from the set sharing a given name for every instance that references that name.</p>
 
-<h4>Selection rules (all must be satisfied):</h4>
+<p>When choosing an appropriate paramset, the following rules shall be enforced:</p>
 <ul>
 <li>All parameters overridden on the instance shall be parameters of the paramset.</li>
 <li>The parameters of the paramset, with overrides and defaults, shall all be within the allowed ranges specified in the paramset parameter declaration.</li>
@@ -575,16 +574,16 @@ endmodule</code></pre>
 <li>The underlying module shall have a port declared for each port connected in the instance line.</li>
 </ul>
 
-<h4>Tie-breaking rules (applied in order until unique):</h4>
+<p>The rules above may not be sufficient for the simulator to pick a unique paramset, in which case the following rules shall be applied in order until a unique paramset has been selected:</p>
 <ol>
 <li>The paramset with the fewest number of un-overridden parameters shall be selected.</li>
 <li>The paramset with the greatest number of local parameters with specified ranges shall be selected.</li>
 <li>The paramset with the fewest ports not connected in the instance line shall be selected.</li>
 </ol>
 
-<p>It shall be an error if there are still more than one applicable paramset after applying these rules.</p>
+<p>It shall be an error if there are still more than one applicable paramset for an instance after application of these rules.</p>
 
-<p>If a paramset assigns a value to a module parameter outside the range specified for that module parameter, it shall be an error. The simulator considers only the ranges of the paramset's own parameters when choosing a paramset.</p>
+<p>If a paramset assigns a value to a module parameter and this value is outside the range specified for that module parameter, it shall be an error. The simulator shall consider only the ranges of the paramset's own parameters when choosing a paramset.</p>
 
 <p>The following example illustrates some of the rules for paramset selection. Consider a design that includes the two paramsets defined previously (in the examples of <a href="#s6.4">6.4</a> and <a href="#s6.4.1">6.4.1</a>) as well as the following paramsets:</p>
 
@@ -615,12 +614,7 @@ nch #(.l(1u), .w(10u))        m3 (.d(g), .g(g), .s(0), .b(0));
 nch #(.l(3u), .w(5u), .ad(1.2p), .as(1.3p))
                                m4 (.d(d1), .g(g2), .s(d2), .b(0));</code></pre>
 
-<table>
-<tr><th>Instance</th><th>Selected Paramset</th><th>Reason</th></tr>
-<tr><td><code>m1</code>, <code>m2</code></td><td>mismatch paramset</td><td>Only paramset where <code>mm</code> is a parameter</td></tr>
-<tr><td><code>m3</code></td><td>default paramset</td><td>Mismatch paramset excluded (default <code>mm</code> out of range); discriminates against long-channel (fewer un-overridden params)</td></tr>
-<tr><td><code>m4</code></td><td>long-channel paramset</td><td>Short-channel also has <code>ad</code>/<code>as</code> but <code>l=3u</code> is out of range for short-channel</td></tr>
-</table>
+<p>The instances <code>m1</code> and <code>m2</code> will use the mismatch paramset from <a href="#s6.4.1">6.4.1</a>, because it is the only one for which <code>mm</code> is a parameter. The instance <code>m4</code> will use the long-channel paramset defined in this example, because while the short-channel paramset also has <code>ad</code> and <code>as</code> as parameters, the length of <code>m4</code> is only allowed by the range for <code>l</code> in the long-channel paramset. The instance <code>m3</code> will use the default paramset defined in <a href="#s6.4">6.4</a>; it cannot use the mismatch paramset because the default value of <code>mm</code> for that paramset is not allowed by the range, and it discriminates against the long-channel paramset because that paramset would have two un-overridden parameters.</p>
 
 <!-- 6.4.3 -->
 <h3 id="s6.4.3">6.4.3 Paramset output variables</h3>
@@ -640,6 +634,8 @@ nch #(.l(3u), .w(5u), .ad(1.2p), .as(1.3p))
     .cjc=3.0e-14; .vjc=0.6; .mjc=0.3; .xcjc=0.2;
     ft = .gm/(`M_TWO_PI*(.cpi + .cmu));
 endparamset</code></pre>
+
+<div class="note"><strong>Source fidelity:</strong> the source prints <code>.br=10; rb=145; .rc=75</code>; the missing period before <code>rb</code> is a typographical error in the published LRM, and this transcription prints the corrected <code>.rb=145</code>.</div>
 
 <p>This declares an output variable <code>ft</code> computed from the module's output variables <code>gm</code>, <code>cpi</code>, and <code>cmu</code>. If the module <code>npn</code> had an output variable named <code>ft</code>, the paramset's output variable would replace it.</p>
 
@@ -1001,7 +997,7 @@ generate_block_or_null ::=
 <ul>
 <li>Both the initialization and iteration assignments shall assign to the same genvar.</li>
 <li>The initialization assignment shall not reference the loop index variable on the right-hand side.</li>
-<li>Within the generate block, there is an implicit <code>localparam</code> declaration with the same name and type as the loop index variable, whose value is the genvar value at the time the instance was elaborated. This parameter can be used anywhere within the generate block that a normal parameter with an integer value can be used. It can be referenced with a hierarchical name.</li>
+<li>Within the generate block of a loop generate construct, there is an implicit <code>localparam</code> declaration. This is an integer parameter that has the same name and type as the loop index variable, and its value within each instance of the generate block is the value of the index variable at the time the instance was elaborated. This parameter can be used anywhere within the generate block that a normal parameter with an integer value can be used. It can be referenced with a hierarchical name.</li>
 <li>Because this implicit localparam has the same name as the genvar, any reference to this name inside the loop generate block will be a reference to the localparam, not to the genvar. As a consequence, it is not possible to have two nested loop generate constructs that use the same genvar.</li>
 <li>Generate blocks in loop constructs can be named or unnamed, and can consist of only one item (without <code>begin</code>/<code>end</code>). Even if the begin/end keywords are absent, it is still a generate block, which, like all generate blocks, comprises a separate scope and a new level of hierarchy when it is instantiated.</li>
 <li>If the generate block is named, it declares an array of generate block instances. The index values are the genvar values during elaboration. This can be a sparse array because the genvar values do not have to form a contiguous range of integers. The array is considered declared even if no instances result.</li>
@@ -1083,12 +1079,12 @@ endmodule</code></pre>
     end
 endmodule</code></pre>
 
-<p>In the named block example, for each block instance created by the generate loop, the generate block identifier is indexed by appending <code>[genvar_value]</code>. These names can be used in hierarchical path names (see <a href="#s6.7">6.7</a>).</p>
+<p>In the named block example, for each block instance created by the generate loop, the generate block identifier for the loop is indexed by adding the <code>"[genvar value]"</code> to the end of the generate block identifier. These names can be used in hierarchical path names (see <a href="#s6.7">6.7</a>).</p>
 
 <!-- 6.6.2 -->
 <h3 id="s6.6.2">6.6.2 Conditional generate constructs</h3>
 
-<p>The conditional generate constructs, if-generate and case-generate, select at most one generate block from a set of alternative generate blocks based on constant expressions evaluated during elaboration.</p>
+<p>The conditional generate constructs, if-generate and case-generate, select at most one generate block from a set of alternative generate blocks based on constant expressions evaluated during elaboration. The selected generate block, if any, is instantiated into the model.</p>
 
 <p>Rules:</p>
 <ul>
@@ -1263,7 +1259,7 @@ endmodule</code></pre>
 
 <p>Figure 6-2 illustrates the hierarchy implicit in the example code.</p>
 
-<div class="note"><strong>Figure 6-2&mdash;Hierarchy in a model.</strong> The diagram is not redrawn or paraphrased here; see the <a href="../../../docs/VAMS-LRM-2023.pdf#page=174">exact source figure on physical PDF page 174 (printed page 161)</a>.</div>
+<div class="note"><strong>Figure 6-2&mdash;Hierarchy in a model.</strong> The diagram is not redrawn or paraphrased here; see the <a href="VAMS-LRM-2023.pdf#page=174">exact source figure on physical PDF page 174 (printed page 161)</a>.</div>
 
 <p>Figure 6-3 is a list of the hierarchical forms of the names of all the objects defined in the example code.</p>
 
@@ -1273,12 +1269,12 @@ endmodule</code></pre>
 <tr><td><code>op2</code></td><td><code>op2.inp</code>, <code>op2.inm</code>, <code>op2.out</code>, <code>op2.gain</code></td></tr>
 </table>
 
-<p><strong>Figure 6-3&mdash;Hierarchical path names in a design</strong> (faithful text transcription; <a href="../../../docs/VAMS-LRM-2023.pdf#page=174">source reproduction on physical PDF page 174</a>)</p>
+<p><strong>Figure 6-3&mdash;Hierarchical path names in a design</strong> (faithful text transcription; <a href="VAMS-LRM-2023.pdf#page=174">source reproduction on physical PDF page 174</a>)</p>
 
 <!-- 6.7.1 -->
 <h3 id="s6.7.1">6.7.1 Usage of hierarchical references</h3>
 
-<p>The following rules and semantic restrictions apply to analog identifiers referred hierarchically using an out-of-module reference (OOMR):</p>
+<p>The following usage rules and semantic restrictions shall be applied to analog identifiers referred hierarchically using an out-of-module reference (OOMR) in a mixed signal module:</p>
 
 <ul>
 <li>Potential and flow access for named and unnamed branches (including port branches) can be done hierarchically.</li>
@@ -1310,7 +1306,7 @@ endmodule</code></pre>
 
 <p>An identifier shall be used to declare only one item within a scope. This means it is illegal to declare two or more variables with the same name, or to name a task the same as a variable within the same module, or to give an instance the same name as a net connected to its output. For generate blocks, this rule applies regardless of whether the generate block is instantiated. An exception is made for generate blocks in a conditional generate construct (see <a href="#s6.6.3">6.6.3</a>).</p>
 
-<p>If an identifier is referenced directly (without a hierarchical path) within a named block or generate block, it shall be declared either locally or within a module or block higher in the same branch of the name tree. If declared locally, the local item shall be used; if not, the search continues upward until an item by that name is found or a module boundary is encountered. For variables, the search stops at a module boundary; for named blocks or generate blocks, it continues to higher-level modules.</p>
+<p>If an identifier is referenced directly (without a hierarchical path) within a named block or generate block, it shall be declared either locally or within a module or block higher in the same branch of the name tree. If declared locally, the local item shall be used; if not, the search continues upward until an item by that name is found or a module boundary is encountered. If the item is a variable, it shall stop at a module boundary; if the item is a named block or generate block, it continues to search higher-level modules until found.</p>
 
 <p>Because of the upward searching process, path names which are not strictly on a downward path can be used.</p>
 
@@ -1334,7 +1330,7 @@ endmodule</code></pre>
 <!-- 6.9.3 -->
 <h3 id="s6.9.3">6.9.3 Elaboration and connectmodules</h3>
 
-<div class="note">Automatic insertion of connect modules is a post-elaboration operation. Discipline resolution can only occur after elaboration of generate constructs once all net connections have been resolved, and after paramset selection (as the choice for a particular module instantiation may affect the disciplines of connected nets). This is described in detail in 7.8.</div>
+<div class="note">Automatic insertion of connect modules is a post-elaboration operation, as first the disciplines of the various nets needs to be resolved. Discipline resolution can only occur after elaboration of the generate constructs once the connections of all nets have been resolved. It should also occur after the paramset selection as the choice for a particular module instantiation may affect the disciplines of the connected nets. This is described in detail in 7.8.</div>
 
 <!-- 6.9.4 -->
 <h3 id="s6.9.4">6.9.4 Order of elaboration</h3>

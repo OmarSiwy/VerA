@@ -119,6 +119,8 @@ z_digit ::= z | Z | ?
 
 <strong>Syntax 2-2&mdash;Syntax for integer and real constants</strong></div>
 
+<div class="note"><strong>Source fidelity:</strong> The published LRM prints the <code>hex_base</code> production with a single colon (<code>hex_base<sup>1</sup> :=</code>) where every other production in Syntax 2-2 uses <code>::=</code>; that is a typographical error in the source. The correct <code>::=</code> is shown here. Annex A.8.7 prints this production as <code>::=</code>.</div>
+
 <h3 id="s2-6-1">2.6.1 Integer constants</h3>
 
 <p><em>Integer constants</em> can be specified in decimal, hexadecimal, octal, or binary format. There are two forms to express integer constants. The first form is a simple decimal number, which shall be specified as a sequence of digits 0 through 9, optionally starting with a plus or minus unary operator. The second form specifies a based constant, which shall be composed of up to three tokens&mdash;an optional size constant, an apostrophe character (', ASCII 0x27) followed by a base format character, and the digits representing the value of the number. It shall be legal to macro substitute these three tokens.</p>
@@ -309,7 +311,6 @@ n$657</code></pre>
 <div class="syntax">analog_system_task_enable ::=                                              // from A.6.9
         analog_system_task_identifier [ ( [ analog_expression ] { , [ analog_expression ] } ) ] ;
 system_task_enable ::= system_task_identifier [ ( [ expression ] { , [ expression ] } ) ] ;
-task_enable ::= hierarchical_task_identifier [ ( expression { , expression } ) ] ;
 analog_system_function_call ::=                                            // from A.8.2
         analog_system_function_identifier [ ( [ analog_expression ] { , [ analog_expression ] } ) ]
 system_function_call ::= system_function_identifier
@@ -330,7 +331,7 @@ system_task_identifier<sup>1</sup> ::= $ [ a-zA-Z0-9_$ ] { [ a-zA-Z0-9_$ ] }
 <li>Additional $<em>identifier</em> system tasks and functions defined by software implementations.</li>
 </ul>
 
-<p>Any valid identifier, including keywords already in use in contexts other than this construct, can be used as a system task or function name. The system tasks and functions described in Clause 17 and Clause 18 of IEEE Std 1364 Verilog are part of this standard.</p>
+<p>Any valid identifier, including keywords already in use in contexts other than this construct, can be used as a system task or function name.</p>
 
 <p>Examples:</p>
 
@@ -349,8 +350,6 @@ $finish;</code></pre>
 </ul>
 
 <p>Any valid identifier, including keywords already in use in contexts other than this construct, can be used as a compiler directive name.</p>
-
-<p>The compiler directives described in Clause 19 of IEEE Std 1364 Verilog are part of this standard.</p>
 
 <p>Example:</p>
 
