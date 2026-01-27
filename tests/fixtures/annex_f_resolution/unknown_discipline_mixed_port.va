@@ -44,7 +44,7 @@
 // line is a CODE, not a message fragment, per the suite contract — E0903 was
 // the code RESERVED for the unresolvable-plus-mixed-port error, next to E0902
 // for the step-3 conflict, in class 9 (hierarchy and elaboration,
-// src/diag_code.zig), and reserving the number is why this line never had to
+// lib/diag_code.zig), and reserving the number is why this line never had to
 // change when the rule landed: `Elaborate.resolveMultiCandidates` now collects
 // the SET of a signal's segment disciplines, partitions it by domain (4.a),
 // matches it against the `connectrules` block's resolution statements (4.b

@@ -44,7 +44,7 @@
 // reading inside the analog block, and §4.6.4 gives an ACTIVE noise function no
 // deterministic scalar value either — so no `CHECK` can observe a name, a
 // density, or their combination. This fixture fails today at `//!` directive:
-// BadSyntax (`validNoiseEntry`, src/backend/tb.zig:341, requires everything
+// BadSyntax (`validNoiseEntry`, lib/backend/tb.zig:341, requires everything
 // after `#` to be digits), which is the gap it exists to hold open.
 //
 // An earlier draft padded that out with four `CHECK`s, none of which could go

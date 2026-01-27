@@ -24,7 +24,7 @@
 //
 // There is no value to CHECK: the only observable is the diagnostic. The
 // reject line is a CODE, not a message fragment, per the suite contract —
-// E0917 is the class-9 code for exactly this rule (src/diag_code.zig), and a
+// E0917 is the class-9 code for exactly this rule (lib/diag_code.zig), and a
 // generic pattern could be satisfied by any unrelated refusal.
 //
 //! lrm 7.7.2

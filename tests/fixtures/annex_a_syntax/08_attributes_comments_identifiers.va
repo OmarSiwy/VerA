@@ -5,7 +5,7 @@
 // the identifier at the `+` would read back 0.0 (or fail to compile).
 //
 // `+ 0.0` is not decoration: VerA's preprocessor trims each macro argument
-// (src/frontend/preprocessor.zig:741), which eats the whitespace that TERMINATES
+// (lib/frontend/preprocessor.zig:741), which eats the whitespace that TERMINATES
 // an escaped identifier, so a bare `\punctuated+identifier ` as the last token
 // of an argument goes on to swallow the `)` that follows it. Anything after the
 // identifier restores the terminator.

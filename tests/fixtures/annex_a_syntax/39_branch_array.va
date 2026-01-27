@@ -29,7 +29,7 @@
 // This is written as a run fixture, not a `//! reject`: A.2.3 makes the source
 // legal, so demanding a diagnostic would invert it and only VerA would pass.
 //
-// Side note for whoever closes this: src/diag_code.zig carries E0305 "branch
+// Side note for whoever closes this: lib/diag_code.zig carries E0305 "branch
 // arrays are not supported", which no fixture references and which this syntax
 // never reaches, because the parser errors on the `[` first.
 //

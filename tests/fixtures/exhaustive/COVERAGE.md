@@ -53,7 +53,7 @@ Two independent claims per fixture, and neither is a snapshot of the compiler:
 `//! print none` drops the second when a fixture is about the language rather
 than about a device.
 
-## Directives (src/backend/tb.zig)
+## Directives (lib/backend/tb.zig)
 
 | Line | Effect |
 |---|---|
@@ -74,13 +74,13 @@ than about a device.
 |---|---|---|
 | `010_display_formats` | §9.4.2–9.4.4 | every conversion, width, precision, escape, `%m`, `$write`'s missing newline |
 | `011_severity_tasks` | §9.7.3 | `$info`/`$warning`/`$error`/`$fatal` carry their level; `$finish`/`$stop` stay void |
-| `012_directives` | src/backend/tb.zig | every `//!` line is observable in the transcript |
+| `012_directives` | lib/backend/tb.zig | every `//!` line is observable in the transcript |
 | `020_real_arithmetic` | §4.1, §4.2.4 | precedence, associativity, `**` right-associativity, `%` sign rule |
 | `021_integer_arithmetic` | §3.2, §4.2.4 | truncation toward zero, `%` sign, abs/min/max |
 | `022_comparison_logic` | §4.2.5–4.2.7 | relational/equality/logical, all yielding integer 0/1 |
 | `023_bitwise_shift` | §4.2.8–4.2.9 | and/or/xor/xnor/not, `<<`/`>>` incl. a negative operand |
 | `024_conditional_operator` | §4.2.10 | both arms, nesting, a real condition |
-| `025_type_conversions` | §4.2.1 | real→int ROUNDS (both signs), int→real is exact, promotion. NOT `$rtoi`/`$itor`: Table 9-8 marks both analog-context No, so `ch09_system_tasks/061`+`062` own them |
+| `025_type_conversions` | §4.2.1 | real→int ROUNDS (both signs), int→real is exact, promotion. NOT `$rtoi`/`$itor`: VerA implements neither, and both are legal in the analog context — §9.11 extends "$bitstoreal and $realtobits, $rtoi and $itor", Table 9-8 reads `$rtoi Yes Yes`, `$itor Yes Yes`. The gap is in the compiler and is pinned by the M04 row (`tests/fixtures/ch07_mixed_signal/m04_SPEC.md`), with the digital side listed open under D09/S01;` `ch09_system_tasks/061`+`062`, which claimed the opposite on 2.4-contaminated text, have been deleted |
 | `040_exp_log_pow` | §4.3.1 | exp/ln/`log` is base 10/sqrt/pow/hypot |
 | `041_rounding_selection` | §4.3.1 | floor/ceil/abs/min/max, exactly |
 | `042_trigonometric` | §4.3.2 | sin/cos/tan/asin/acos/atan/atan2 across quadrants |

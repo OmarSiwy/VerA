@@ -8,7 +8,7 @@
 // the discipline.
 //
 // The expectation is the phase label. It WAS `//! reject E0423`, a code that
-// does not exist — src/diag_code.zig allocates class 4 up to E0422 (line 181) —
+// does not exist — lib/diag_code.zig allocates class 4 up to E0422 (line 181) —
 // so no diagnostic VerA can emit would ever match it and the XPASS could never
 // fire. It must equally NOT be pinned as `GeneratedCompileError`: codegen used to
 // refuse every single-nature directional contribution for its own generic reason,

@@ -58,7 +58,7 @@
 //   its GOT twice, and a call with an output formal is not a pure expression.
 //
 // WHY IT FAILS TODAY. The writeback in `inlineUserFuncPre`
-// (`src/ir/lower.zig`) ends in `const slot = try self.resolveLvalue(actual)`,
+// (`lib/ir/lower.zig`) ends in `const slot = try self.resolveLvalue(actual)`,
 // and `resolveLvalue`'s `.index` arm requires `constEval` to succeed on every
 // subscript. VerA otherwise HAS a runtime-index write path
 // (`assignRuntimeIndex`, one masked write per cell) — it is simply not reached

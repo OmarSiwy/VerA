@@ -1,0 +1,3 @@
+receiver_count_counts_the_ordinary_receivers got=00000000000000000000000000000010 ok=1
+driver_count_is_a_different_number got=00000000000000000000000000000001 ok=1
+receiver_count_is_elaboration_time_not_activity got=00000000000000000000000000000010 ok=1

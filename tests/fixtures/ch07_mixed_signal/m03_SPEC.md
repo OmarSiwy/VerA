@@ -13,14 +13,14 @@ What VerA **does** have, verified by reading the source:
 
 | thing | where | what it does |
 |---|---|---|
-| `connectmodule` keyword | `src/frontend/token.zig:117`, `parser.zig:206` | parses as A.1.2's third `module_keyword`; sets `Ast.Module.is_connect` |
-| `connectrules` block | `src/frontend/parser.zig:248`, `ast.zig:868-940` | parses into `Ast.ConnectRulesDecl` (`ConnectInsertion`, `ConnectResolution`) |
-| connect_mode / `#(...)` / port overrides | `src/frontend/ast.zig:884-900` | parsed into fields whose own doc comment says they are carried for round-tripping and have no consumer |
-| `E0915` | `src/ir/elaborate.zig:1646-1657` | the ONLY semantic check on a `connect_insertion`: the named identifier must exist and must be declared `connectmodule` |
-| `connect … resolveto` | `src/ir/elaborate.zig:1610-1638` | genuinely implemented — exact/subset matching, source-order tie-break, `exclude` (E0916); unit tests at `elaborate.zig:2591-2695` |
+| `connectmodule` keyword | `lib/frontend/token.zig:117`, `parser.zig:206` | parses as A.1.2's third `module_keyword`; sets `Ast.Module.is_connect` |
+| `connectrules` block | `lib/frontend/parser.zig:248`, `ast.zig:868-940` | parses into `Ast.ConnectRulesDecl` (`ConnectInsertion`, `ConnectResolution`) |
+| connect_mode / `#(...)` / port overrides | `lib/frontend/ast.zig:884-900` | parsed into fields whose own doc comment says they are carried for round-tripping and have no consumer |
+| `E0915` | `lib/ir/elaborate.zig:1646-1657` | the ONLY semantic check on a `connect_insertion`: the named identifier must exist and must be declared `connectmodule` |
+| `connect … resolveto` | `lib/ir/elaborate.zig:1610-1638` | genuinely implemented — exact/subset matching, source-order tie-break, `exclude` (E0916); unit tests at `elaborate.zig:2591-2695` |
 
 What VerA **does not** have — insertion itself is declared absent in the file's
-own header, `src/ir/elaborate.zig:54-58`:
+own header, `lib/ir/elaborate.zig:54-58`:
 
 > "The §7.8 connect-module INSERTION phase is also not here, deliberately and
 > without a fixture owed: VerA emits ONE analog device, §7.6 puts insertion
@@ -33,7 +33,7 @@ own header, `src/ir/elaborate.zig:54-58`:
 legacy filename but its own header says it is "no longer a `//! reject`", and
 measured: 9 of the 11 positive fixtures here elaborate their hierarchy, solve,
 and print a failing `ok=0` on their own assertion. `$analog_node_alias` is not a
-blocker either — §9.20 is implemented at `src/ir/lower.zig:8352` and
+blocker either — §9.20 is implemented at `lib/ir/lower.zig:8352` and
 `:8861-9000`; fixture 10's alias call simply never runs because the connect
 module that contains it is never instantiated.
 
@@ -218,7 +218,7 @@ copied from the review.
    `ch06_hierarchy/module_instantiation_unsupported.va` — a file whose own header
    says it is no longer a rejection, and whose feature demonstrably works here.
    `10` said "no `$analog_node_alias`"; §9.20 is implemented
-   (`src/ir/lower.zig:8352`). All five now name the single real blocker, §7.8
+   (`lib/ir/lower.zig:8352`). All five now name the single real blocker, §7.8
    insertion, and quote the value the fixture reads without it.
 
 Where the review and this row **agree but the wording mattered**: the review

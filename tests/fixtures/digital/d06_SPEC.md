@@ -5,13 +5,13 @@ same shape as `tests/digital/*.v` + `*.expected.txt`.
 
 ## Ground truth as of this writing (read from source, not from COVERAGE.md)
 
-Verified by reading `src/frontend/parser.zig`, `src/frontend/ast.zig`,
+Verified by reading `lib/frontend/parser.zig`, `lib/frontend/ast.zig`,
 `src/sim/digital.zig` and by running the compiler.
 
 **Implemented.**
 
-- `assign <net> = <expr>;` — parsed at `src/frontend/parser.zig:965`
-  (`.kw_assign` arm), lowered to `Ast.ContAssign` (`src/frontend/ast.zig:654`),
+- `assign <net> = <expr>;` — parsed at `lib/frontend/parser.zig:965`
+  (`.kw_assign` arm), lowered to `Ast.ContAssign` (`lib/frontend/ast.zig:654`),
   executed as one driver per `net_assignment` in `src/sim/digital.zig:1078`.
 - Reevaluation on operand change, with the update queued as an active event
   (`src/sim/digital.zig:792`, `:908`). In-tree unit tests at
@@ -24,7 +24,7 @@ Verified by reading `src/frontend/parser.zig`, `src/frontend/ast.zig`,
 
 The `.kw_assign` arm goes straight from the keyword to `parseExpr`: it parses
 neither `drive_strength` nor `delay3`, both of which annex A.6.1 puts there.
-The parser's own comment at `src/frontend/parser.zig:961` quotes the full
+The parser's own comment at `lib/frontend/parser.zig:961` quotes the full
 `continuous_assign` production it does not implement.
 
 | surface | today |
@@ -119,7 +119,7 @@ Reject state today — captured, see *Observed today* below, not typed:
 
 Neither directive is *enforced* yet: `build.zig:428` points the torture runner's
 `fixture_root` at `tests/fixtures`, and the runner walks `.va`, so no `.v` file
-in this tree is read by `src/backend/tb.zig`'s directive parser at all. Today
+in this tree is read by `lib/backend/tb.zig`'s directive parser at all. Today
 they are documented intent, checked by hand. They become live the moment these
 files are moved onto a diagnostics step (see *How to run*).
 
@@ -280,7 +280,7 @@ The ordering the fixture depends on — Pu 5 above We 3 — is unchanged; only t
 description of the encoding is corrected.
 
 **2. Both reject fixtures carried a bare `//! reject`** (review §5.1). A bare
-`reject` is worse than weak here: `src/backend/tb.zig:264` treats an empty rest
+`reject` is worse than weak here: `lib/backend/tb.zig:264` treats an empty rest
 as `error.BadSyntax`, and the `DiagnosticsReported` fallback at
 `tests/torture.zig:223` returns true for *any* diagnostic, so both files scored
 as satisfied by today's incidental "expected an expression: found `#`" and would
@@ -296,7 +296,7 @@ parser complained about.
 - `reject_delay4.v` → `//! reject E0210` (*expected `')'`*). A.2.2.3's innermost
   bracket pair closes after the third `mintypmax_expression`, so the only
   terminal admitted at the fourth comma is `)`. VerA already emits E0210 for a
-  group that is not closed (`src/frontend/parser.zig:1911`), so this states the
+  group that is not closed (`lib/frontend/parser.zig:1911`), so this states the
   rule without inventing a diagnostic code. The fixture is consequently unmet
   today (it gets E0209), which is the correct score for a feature that does not
   exist.

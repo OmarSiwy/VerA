@@ -10,7 +10,7 @@
 // deliverable: a compiler has to SAY so.
 //
 // WHAT HAPPENS TODAY: the compiler crashes. `Const.asInt`
-// (`src/ir/lower.zig:800`) is
+// (`lib/ir/lower.zig:800`) is
 //
 //   .real => |r| @intFromFloat(@round(r)),
 //
@@ -19,9 +19,9 @@
 // one. Reproduced verbatim:
 //
 //   thread ... panic: integer part of floating point value out of bounds
-//   src/ir/lower.zig:804:26: in asInt
+//   lib/ir/lower.zig:804:26: in asInt
 //               .real => |r| @intFromFloat(@round(r)),
-//   src/ir/lower.zig:6769:29: in lowerKernelCtl
+//   lib/ir/lower.zig:6769:29: in lowerKernelCtl
 //               degree = c.asInt();
 //   exit status 134
 //

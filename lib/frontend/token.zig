@@ -499,7 +499,7 @@ const kw_len_start: [kw_max_len + 2]u16 = blk: {
 /// bite is, if there is ever a reason to take it). Before this it was the
 /// single largest entry in the profile at 6.34%.
 ///
-/// MEASURED end to end (`zig build bench -Doptimize=ReleaseFast -- fixtures`,
+/// MEASURED end to end (`zig build benchmark -Doptimize=ReleaseFast -- fixtures`,
 /// min of 25, best of 3 runs): `lint` 181.2 → 170.6 ms, `codegen` 199.4 → 188.0
 /// ms, both −5.8%; `pp` unchanged, as it must be — it never lexes.
 pub fn lookupKeyword(name: []const u8) ?Tag {

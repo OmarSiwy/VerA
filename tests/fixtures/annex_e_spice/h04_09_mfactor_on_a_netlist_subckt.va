@@ -44,7 +44,7 @@
 // `runit #(.$mfactor(4)) x1(c,b);` — reports `I(x1.p,x1.n) got=0.001
 // want=0.004`, and the residual at the node confirms it: `res[c] = 1.000000e-3`.
 // So the factor is carried through elaboration (`Unit.mfactor`,
-// `src/ir/elaborate.zig`) and never reaches the contributions. The netlist path
+// `lib/ir/elaborate.zig`) and never reaches the contributions. The netlist path
 // fails for that reason on top of fixture 06's empty body, so 06 has to be read
 // first: if 06 is green and this is red, §6.3.6 is the cause on its own.
 //

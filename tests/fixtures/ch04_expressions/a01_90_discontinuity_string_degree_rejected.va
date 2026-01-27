@@ -24,7 +24,7 @@
 // tests/fixtures/ch09_system_tasks/139_discontinuity_nonconstant_rejected.va).
 //
 // WHAT HAPPENS TODAY: it compiles, silently, as degree 0. `Const.asInt`
-// (`src/ir/lower.zig:800`) has the arm
+// (`lib/ir/lower.zig:800`) has the arm
 //
 //   .str => 0,
 //

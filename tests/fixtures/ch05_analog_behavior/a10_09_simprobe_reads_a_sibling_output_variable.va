@@ -40,7 +40,7 @@
 // of the two probes resolved. -1.0 is a value neither correct answer can take,
 // so an unresolved probe is visible as `got=-1` rather than as silence.
 //
-// WHY CLAIM 1 FAILS TODAY. `Lower.lowerSimprobe` (src/ir/lower.zig) resolves
+// WHY CLAIM 1 FAILS TODAY. `Lower.lowerSimprobe` (lib/ir/lower.zig) resolves
 // the pair by building the flat path `inst_name . param_name` and looking it up
 // in `param_index` — the PARAMETER table. An output variable ((* desc *) real)
 // is not in that table, so the probe falls through to the fallback and returns

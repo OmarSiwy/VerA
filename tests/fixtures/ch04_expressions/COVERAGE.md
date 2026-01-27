@@ -39,7 +39,7 @@ the prose, never silently promoted.
 | 4.2.7 Logical equality operators | `04_relational_logical.va`, `51_logical_equal.va`, `52_logical_unequal.va` |
 | 4.2.8 Logical operators | `04_relational_logical.va`, `53_logical_and.va`, `54_logical_or.va`, `55_logical_not.va` |
 | 4.2.9 Bitwise operators | `56_bitwise_and.va`, `57_bitwise_or.va`, `58_bitwise_xor.va`, `59_bitwise_xnor.va` (both `^~` and `~^`), `62_bitwise_not.va` |
-| 4.2.10 Reduction operators | both fixtures are green (`06` on the substrings `reduction`/`analog block`, `07` on E0320). `06_reduction_rejected.va` — VerA lowers unary `&`, `\|`, `~&`, `~\|` in the analog block as IEEE 1364 32-bit reductions instead of diagnosing them; `src/diag_code.zig` has E0319/E0320 but no code for the 4.2.10 analog-block ban itself. `07_reduction_xor_rejected.va` — the expression parser has no unary `^` at all, so `^bits` dies at E0215 before any subset check; E0320 exists and nothing raises it |
+| 4.2.10 Reduction operators | both fixtures are green (`06` on the substrings `reduction`/`analog block`, `07` on E0320). `06_reduction_rejected.va` — VerA lowers unary `&`, `\|`, `~&`, `~\|` in the analog block as IEEE 1364 32-bit reductions instead of diagnosing them; `lib/diag_code.zig` has E0319/E0320 but no code for the 4.2.10 analog-block ban itself. `07_reduction_xor_rejected.va` — the expression parser has no unary `^` at all, so `^bits` dies at E0215 before any subset check; E0320 exists and nothing raises it |
 | 4.2.11 Shift operators | positive: `60_shift_left.va`, `61_shift_right.va`. Negative, both halves of the arithmetic-shift ban: `05_bitwise_shift.va` (`>>>`, E0324 — the filename is stale, it is a reject) and `117_arithmetic_shift_left_rejected.va` (`<<<`, E0324) |
 | 4.2.12 Conditional operator | `08_conditional_operator.va` (nesting, right association). `125_short_circuit_ternary.va`, as under 4.2.3 — "expression3 is evaluated and used as the result" names one arm, and only that arm is evaluated |
 | 4.2.13 Concatenations | `30_concatenation.va` (the joining form); `116_concatenation_unsized_rejected.va` (E0216, unsized constant); `31_replication.va` — three of the clause's four replication rules, `{4{2'b10}}`, the nested `{b, {3{a, b}}}` and the zero count, all unrolled in the parser where the operand widths still exist; `137_replication_lhs_rejected.va` (E0317, "expressions containing replications shall not appear on the left-hand side") |
@@ -107,7 +107,7 @@ chapter: `126_idtmod_modulus_rejected.va` (non-positive modulus),
 `128_transition_negative_time_rejected.va` (negative `td`/`rise_time`/`fall_time`/
 `time_tol`), `129_slew_rate_sign_rejected.va` (wrongly-signed rates) and
 `130_last_crossing_direction_rejected.va` (direction outside {+1, −1, 0}). Every one used
-to compile with only W0650 and `src/diag_code.zig` had no code to give them; each now
+to compile with only W0650 and `lib/diag_code.zig` had no code to give them; each now
 refuses, and each pins the message substrings of Table 4-19/4-20's own bound rather than a
 code, so the diagnostic can be renumbered without touching a fixture. The four 4.7.1/4.7.2.2
 function rules that sat beside them — the named-block ban, the minimum of one formal, the

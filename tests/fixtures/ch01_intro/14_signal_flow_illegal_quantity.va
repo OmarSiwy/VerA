@@ -7,7 +7,7 @@
 // well-formed device; the sole defect is the flow contribution to `vonly`.
 //
 // The expectation is the phase label and NOT E0501. E0501 is "unknown access
-// function", `.lrm = "3.6.1.4"` (src/diag_code.zig:1463) — a NAME MISMATCH
+// function", `.lrm = "3.6.1.4"` (lib/diag_code.zig:1463) — a NAME MISMATCH
 // between an access function and a nature's `access =` attribute. This rule is a
 // different one: the discipline binds no flow nature at all, so there is no
 // spelling to mismatch. lower.zig checkAccessMatch says so in as many words —

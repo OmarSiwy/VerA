@@ -3,7 +3,7 @@
 //
 // A replication builds a VALUE by repeating bits; it does not name storage, and
 // there is no rule that says which of the repeated copies an assignment would
-// have written to. src/diag_code.zig E0317 already quotes this exact sentence.
+// have written to. lib/diag_code.zig E0317 already quotes this exact sentence.
 //
 // 31_replication.va is the legal right-hand-side use.
 //

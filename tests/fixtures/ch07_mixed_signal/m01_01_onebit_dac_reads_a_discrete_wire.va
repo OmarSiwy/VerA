@@ -48,7 +48,7 @@
 //
 // WHAT FAILS TODAY, in the order the compiler reaches it. First
 // `error[E0205]: unsupported module item: found `assign`` — a continuous assign
-// is gated on `self.digital` (`src/frontend/parser.zig:966`), which a `.va`
+// is gated on `self.digital` (`lib/frontend/parser.zig:966`), which a `.va`
 // file never sets. With the driver removed, the read itself is
 // `error[E0315]: net must be read through an access function: `in``: VerA
 // refuses to read a net by name at all, which is right for a CONTINUOUS net

@@ -1321,7 +1321,7 @@ pub fn validate(comptime D: type) void {
 /// is the only outcome that cannot be mistaken for a working device.
 ///
 /// `vera`'s own testbench binds a stub rather than being exempt from this — see
-/// `src/backend/tb.zig`. An exemption for the tool's own host is how a seam
+/// `lib/backend/tb.zig`. An exemption for the tool's own host is how a seam
 /// stops being tested.
 pub fn validateHost(comptime H: type, comptime D: type) void {
     if (@hasDecl(D, "mutable_eval") and D.mutable_eval) {

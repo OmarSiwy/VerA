@@ -1,7 +1,7 @@
 // §9.5 Table 9-2 gives $readmemb and $readmemh "Supported in digital context:
-// Yes / Supported in analog context: No". They are in src/ir/lower.zig:6822's
+// Yes / Supported in analog context: No". They are in lib/ir/lower.zig:6822's
 // `isDigitalOnlySysFunc` refusal list and nowhere else as a digital behavior;
-// src/backend/file_kernels.zig mentions the names only in the analog file-I/O
+// lib/backend/file_kernels.zig mentions the names only in the analog file-I/O
 // machinery. The conformance plan files the inherited definition as its 17.2.9
 // row and notes it "Requires memories from D03" — the runner does have
 // one-dimensional unpacked arrays (docs/digital-source-execution.md), so the

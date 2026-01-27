@@ -16,7 +16,7 @@ independent measures, none of which reduce to each other:
 
 | Measure | Open | Total | Source |
 |---|---|---|---|
-| Pending fixtures not yet behaving as stated | **151** | 193 `.va` | `zig build torture-pending -- --strict` |
+| Pending fixtures not yet behaving as stated | **140** | 193 `.va` | `zig build benchmark -- --fixture-root=tests/pending --strict` |
 | Pending fixtures **not measured at all** | **145** | 338 all kinds | §3.3 below |
 | Inherited IEEE 1364 obligations open | **83** | 119 | `docs/CLAUSE-AUDIT.md` §7.1 |
 | AMS clauses lacking two-way evidence | **463** | 611 | `docs/CLAUSE-AUDIT.md` §7.2 |
@@ -43,8 +43,9 @@ Reproduce all of it from a clean checkout:
 ```sh
 cd VerA
 zig build test --summary all          # 404/404 tests, 128/128 steps
-zig build torture -- --strict         # 1323/1323 — HARD GATE, never break
-zig build torture-pending -- --strict # 42/193 (140 FAILED, 11 XFAIL) — expected to fail
+zig build benchmark -- --strict       # 1323/1323 — HARD GATE, never break
+zig build benchmark -- --fixture-root=tests/pending --strict
+                                      # 53/193 (129 FAILED, 11 XFAIL) — expected to fail
 zig build install                     # ./zig-out/bin/vera
 
 cd ../ARPice
@@ -68,7 +69,7 @@ run establishes nothing. `ARPice@4b43d53` already records this.
 |---|---|---|
 | ARPice | `678c7ce` | Q03: tree did not compile in any mode; lazy analysis hid it |
 | VerA | `3e88218` | `asInt` aborted the compiler on a real with no nearest integer |
-| VerA | `308f978` | `torture-pending` step + the fixture tree as a baseline |
+| VerA | `308f978` | the `tests/pending` run + the fixture tree as a baseline |
 | VerA | `20d6961` | out-of-range array read `@panic`ed from inside generated device code |
 
 Both repos clean. VerA on `ddt-capform`, ARPice on `spice-audit`.
@@ -129,10 +130,10 @@ it wherever the LRM specifies a relationship but no digits — see §2.4.
 
 ### 2.3 Gates and scope
 
-- `zig build torture -- --strict` = **1323/1323**. This is the gate. Breaking it
+- `zig build benchmark -- --strict` = **1323/1323**. This is the gate. Breaking it
   is a failed change, not a tradeoff.
 - `zig build test` = 404/404. Also a gate.
-- `torture-pending` is **expected to fail** and carries no `expectExitCode`. It
+- The `tests/pending` run is **expected to fail** and carries no `expectExitCode`. It
   is a progress meter, not a gate.
 - `tests/fixtures/` is frozen. Do not add, edit or delete anything there while
   working on pending rows.
@@ -204,7 +205,7 @@ parsing.
 | — | 108 | compiles, wrong value | all | — |
 | `E0205` | 21 | unsupported module item (`always`) | M01 6, M02 8, M03 2, M04 5 | needs the coordinator |
 | `E0209` | 14 | expected an expression | M01 7, M02 5, A08 1 | parser gaps |
-| `E0815` | 11 | `$table_model` source/control string | A05 | `lower.zig:8660` |
+| `E0815` | 11 | `$table_model` source/control string | A05 | `lower.zig:8660` — **mostly fixed by uncommitted work, see §3.2** |
 | `E0904` | 10 | instance names no module | H04 9, H01 1 | elaboration / D07 |
 | `E0515` | 5 | control arg not constant | A04 3, A06 1, A10 1 | |
 | `E0907` | 4 | override names no parameter | M03 3, H04 1 | |
@@ -214,8 +215,14 @@ parsing.
 
 ### 3.2 Recommended order
 
-**Next task: A05 `$table_model`.** 11 fixtures, one self-contained feature, zero
-architectural dependency, squarely a spec obligation. Needs:
+**A05 `$table_model` is ALREADY IN PROGRESS in the working tree** — uncommitted
+changes to `lib/backend/table_kernels.zig` (+281) and `lib/ir/lower.zig` (+~70)
+implementing quadratic and cubic splines with natural/clamped boundary
+conditions, citing Tables 9-30/9-31 and §9.21.4, plus `I`-column projection.
+It builds, and it takes A05 from 2/13 to **12/13 compiling**. Whoever picks this
+up: finish and commit that work rather than starting over, and check the gate
+(§1) before anything else. The remainder below is what was still open when this
+file was written:
 - quadratic (`2`) and cubic (`3`) spline modes with the boundary conditions
   §9.21.2 specifies — **read the clause, do not pick a textbook spline**; several
   cubics are defensible and only one is correct here
@@ -224,7 +231,7 @@ architectural dependency, squarely a spec obligation. Needs:
   §9.21 requires loading at the first *executed* runtime call. Separate, larger
   change — do not half-convert it.
 
-Constraints for whoever does it: `src/backend/table_kernels.zig` is `@embedFile`d
+Constraints for whoever does it: `lib/backend/table_kernels.zig` is `@embedFile`d
 verbatim into every device *and* imported by codegen's tests, so the numerics
 tested are the numerics that run — preserve that. The lookup is a **recursion
 over dimensions** where every interpolation is one-dimensional (§9.21's own
@@ -247,7 +254,7 @@ Then, roughly in this order:
 
 ### 3.3 Unmeasured fixtures — 145 of 338
 
-`torture-pending` walks only `.va` under `VerA/tests/pending`. Invisible today:
+`--fixture-root=tests/pending` walks only `.va` under `VerA/tests/pending`. Invisible today:
 
 | Kind | Count | Rows | Needs |
 |---|---|---|---|
@@ -256,7 +263,7 @@ Then, roughly in this order:
 | `.sp` (VerA) | 7 | H04 | a `--spice` CLI flag, which does not exist |
 | ARPice `.sp`+`.va` | 35 | A09, X01, Q03 | `ARPice/tests/fixture_catalog.zig:6` opens `tests/fixtures` only |
 
-**Wire these before trusting any progress number.** 42/193 looks like 22%; across
+**Wire these before trusting any progress number.** 53/193 looks like 27%; across
 all 338 the real figure is unknown.
 
 ### 3.4 The mixed-signal coordinator (M01–M04, ~53 fixtures)
@@ -319,7 +326,7 @@ need a human call, not another agent pass.
 
 ## 4. Ground rules
 
-1. `torture --strict` 1323/1323 and `zig build test` 404/404 are gates. Gate on
+1. `benchmark --strict` 1323/1323 and `zig build test` 404/404 are gates. Gate on
    `$?`, not on reading the tail of a log.
 2. Fix at the root. `asInt` had ten callers; guarding the crash site would have
    left nine able to abort.

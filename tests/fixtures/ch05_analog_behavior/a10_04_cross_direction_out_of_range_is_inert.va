@@ -31,7 +31,7 @@
 // claim: the guarded statement must never have run, so the variable it writes
 // must still hold its initializer.
 //
-// WHY IT FAILS TODAY. `Gen.crossTest` (src/backend/codegen.zig) folds the
+// WHY IT FAILS TODAY. `Gen.crossTest` (lib/backend/codegen.zig) folds the
 // direction argument and switches on it: +1 gets the rising test, -1 the
 // falling test, and EVERYTHING ELSE falls into the `else` arm, which is the
 // both-edges test. So dir = 2 is currently a synonym for dir = 0 and this

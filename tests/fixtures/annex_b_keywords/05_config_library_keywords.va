@@ -3,9 +3,13 @@
 // is a syntax error in any conforming compiler.
 //
 // The `config`/`library` family of IEEE 1364-2005 A.1.1, made part of Verilog-AMS
-// by §1.1. Annex C.16 lists the keywords Verilog-A does not use — connect,
+// by §1.1. Annex C.16 lists the nine keywords Verilog-A does not use — connect,
 // connectmodule, connectrules, driver_update, endconnectrules, merged,
-// net_resolution, resolvedto, split, wreal — and none of these is on it. The
+// resolveto, split, wreal — and none of these is on it. (This list used to name
+// ten, including `net_resolution`, which the 2023 edition removed from both
+// Annex B and C.16, and to spell `resolveto` as `resolvedto`; both were read
+// from an HTML transcription contaminated with Verilog-AMS 2.4 text, and the
+// corrected sources are cited in annex_c_analog_subset/COVERAGE.md.) The
 // earlier fixture here spelled a well-formed library/config source and demanded
 // an error, which a conforming AMS tool would refuse to give.
 //

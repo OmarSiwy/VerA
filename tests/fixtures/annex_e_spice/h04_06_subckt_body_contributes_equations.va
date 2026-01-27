@@ -47,7 +47,7 @@
 // unconstrained; the harness's solve then drives it to 0.0, so both checks fail
 // with got=0 and got=1.
 //
-// WHAT VerA DOES TODAY, and why this fixture exists. `src/frontend/spice_cards.zig`
+// WHAT VerA DOES TODAY, and why this fixture exists. `lib/frontend/spice_cards.zig`
 // emits `module rdiv(in, out, gnd); inout ...; electrical ...; endmodule` and
 // says so at the site: "EMPTY BODY. The subcircuit's contents are device cards
 // written in SPICE, which this reader does not read ... under `//! solve` an

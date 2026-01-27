@@ -21,7 +21,7 @@
 // one-argument member of the family and is how a flat spectrum is spelled, so
 // nothing legal is lost by refusing this.
 //
-// VerA accepts it today — `src/ir/lower.zig` seeds the exponent slot with
+// VerA accepts it today — `lib/ir/lower.zig` seeds the exponent slot with
 // `.f_one` and notes that "`flicker_noise(pwr[, exp[, name]])` defaults `exp`
 // to 1" — and the generated device exports a `flicker` row with `.ef = 1`.
 // Grammar, not folklore: the LRM's brackets say otherwise.

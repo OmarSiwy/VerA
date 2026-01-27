@@ -24,7 +24,7 @@
 // a bet on wording, and the generic `DiagnosticsReported` would XPASS on the
 // first unrelated diagnostic VerA ever learns to emit on this source, losing the
 // step-3 requirement quietly. E0902 is the step-3 conflict, in class 9
-// (hierarchy and elaboration, src/diag_code.zig). lower.zig raises it from the
+// (hierarchy and elaboration, lib/diag_code.zig). lower.zig raises it from the
 // net-declaration loop, the one site that can see a second declaration for a
 // name the port loop already interned. conflicting_ooc_declarations.va pins the
 // same code for the other half of the same sentence and is still xfail: that

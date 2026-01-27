@@ -38,7 +38,7 @@
 // half. Two separate things are missing and both are named in tests/torture's
 // own source: the generated device does emit a charge row for the port unknown
 // (`q[flowZ28Z3cpZ3eZ29] = -1e-9` with the correct derivative), but
-// src/backend/tb.zig's `solve` carries a `ponytail:` note reading "the RESISTIVE
+// lib/backend/tb.zig's `solve` carries a `ponytail:` note reading "the RESISTIVE
 // residual only ... Fold q in when a fixture needs a transient solve" — this is
 // that fixture. Whether the remaining gap after that is in the harness or in
 // codegen is for the implementer to find; the number above is what the clause

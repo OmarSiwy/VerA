@@ -28,7 +28,7 @@ Verified by running `zig-out/bin/vera --run` on a probe of each form:
 | `forever` | `E0209: expected an expression: found `forever`` |
 
 `fork`, `join`, `task`, `endtask`, `wait`, `automatic`, `force`, `release` and
-`deassign` are in `src/frontend/token.zig`'s reserved-but-unimplemented table
+`deassign` are in `lib/frontend/token.zig`'s reserved-but-unimplemented table
 (the block at lines 774–792), so they are not even tokens with tags. The row is
 greenfield from the lexer up.
 

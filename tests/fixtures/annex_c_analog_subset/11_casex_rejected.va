@@ -3,7 +3,7 @@
 // digits in either operand as don't-cares, which is 4-state digital matching.
 //
 // The pinned code is E0416, "casex/casez are not in the analog subset", whose
-// own .lrm is "C.7" (src/diag_code.zig) — it names THIS rule. The fixture used
+// own .lrm is "C.7" (lib/diag_code.zig) — it names THIS rule. The fixture used
 // to pin E0209 (A.8.3, "expected an expression") instead, which is what VerA
 // actually emits; that is a parser-recovery artifact naming no subset rule, so
 // the arm was satisfied by any failure to parse casex for any reason.

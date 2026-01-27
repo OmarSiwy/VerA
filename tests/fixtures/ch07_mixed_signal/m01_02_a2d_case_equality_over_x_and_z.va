@@ -34,7 +34,7 @@
 //
 // WHAT FAILS TODAY, in the order the compiler reaches it: `error[E0209]:
 // expected an expression: found `#`` — a `.va` file is parsed with `digital =
-// false` (src/frontend/parser.zig:2324 gates `#` on it), so the discrete
+// false` (lib/frontend/parser.zig:2324 gates `#` on it), so the discrete
 // stimulus cannot be written at all. With the delays removed the next wall is
 // `error[E0323]: case equality is not in the analog subset`, then
 // `error[E0130]: x/z digit in a number literal`, then `error[E0315]: net must

@@ -20,7 +20,7 @@
 // so implementing the rule closes both instead of one.
 //
 // That expectation is the phase label. It WAS `//! reject E0424`, a code that
-// does not exist — src/diag_code.zig allocates class 4 up to E0422 (line 181) —
+// does not exist — lib/diag_code.zig allocates class 4 up to E0422 (line 181) —
 // so nothing VerA can emit would match, and the "RESERVE E0424 FOR THIS RULE"
 // comment that used to sit here reserved nothing: a `.va` comment is not a
 // mechanism. The phase label matches whichever code the rule gets.

@@ -5,7 +5,7 @@
 //
 // VerA emits a `derive(model: *Model)` seam that recomputes dependent
 // parameters from the CURRENT model values. The renderer behind it (`f64Const`
-// in src/backend/codegen.zig) once knew only arithmetic, abs, sqrt, min, max
+// in lib/backend/codegen.zig) once knew only arithmetic, abs, sqrt, min, max
 // and pow; a default it could not render got NO derive line at all and silently
 // kept the initializer folded against the DECLARED default of `a`, so `curved`
 // froze at exp(2.0) and an override of `a` never reached it. This file was

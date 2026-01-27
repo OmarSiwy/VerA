@@ -8490,14 +8490,20 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 ///
 /// — the dimensionality, the sample count, the column count, the dependent
 /// COLUMN the selector picked, one interpolation and two extrapolation control characters per
-/// dimension, then the lookup point and the flat row-major sample block.
+/// dimension, then the lookup point and the flat row-major sample block. The
+/// block has been projected onto the columns the lookup reads, so the column
+/// count is always `nd + 1` and the dependent is always the last of them.
 ///
 /// Everything §9.21.2 and §9.21.1 decide is decided HERE, and the reason is the
 /// same one that puts §9.20's rules in lowering: none of it is a value. The
-/// control string is a constant, so a scheme VerA cannot honour has to be
-/// reported rather than approximated (E0815); the data source is a set of ARRAY
-/// IDENTIFIERS or a file name, neither of which survives into MIR. What reaches
-/// codegen is a call whose every operand is a number, a string or a probe.
+/// control string is a constant, so a string that is not one §9.21.2 describes
+/// is reported rather than approximated (E0815) and §9.21.2's `I` columns are
+/// projected out of the block before it is emitted; the data source is a set of
+/// ARRAY IDENTIFIERS or a file name, neither of which survives into MIR. What
+/// reaches codegen is a call whose every operand is a number, a string or a
+/// probe. The schemes themselves (Table 9-30) and the runtime conditions
+/// (Table 9-31's `E`, §9.21's conflicting duplicates) belong to the kernel,
+/// because both need the lookup point.
 ///
 /// A FILE data source is currently read at compile time. Runtime file capture
 /// remains a conformance gap when the file changes before the first call.
@@ -8600,7 +8606,24 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
 
     const ext = try self.arena.alloc(u8, 3 * nd);
-    const dep = (try self.parseTableCtl(e, ctl, nd, ncol, ext)) orelse return poison;
+    // `keep[0..nd]` is the source column of each dimension, outermost first;
+    // `keep[nd]` is the dependent the selector picked.
+    const keep = try self.arena.alloc(usize, nd + 1);
+    keep[nd] = (try self.parseTableCtl(e, ctl, nd, ncol, ext, keep[0..nd])) orelse return poison;
+
+    // Project the sample block onto the columns the lookup actually reads.
+    // §9.21.2's `I` ("Ignore this input column") and every dependent the
+    // selector did NOT pick are dead weight in a device that snapshots its rows,
+    // and dropping them here is what keeps the kernel's `dim`-is-`column`
+    // indexing — and its sort — true for the general case. After this the block
+    // is `nd` independents outermost-first followed by the one dependent.
+    const proj = try self.arena.alloc(Mir.Value, np * (nd + 1));
+    for (0..np) |r| for (keep, 0..) |c, j| {
+        proj[r * (nd + 1) + j] = rows[r * ncol + c];
+    };
+    rows = proj;
+    ncol = nd + 1;
+    const dep = nd;
 
     const site = if (cols.items.len == 0) 0 else blk: {
         if (std.mem.indexOfScalar(Ast.ExprId, self.table_sources.items, e)) |existing| break :blk existing + 1;
@@ -8718,15 +8741,25 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
 }
 
 /// §9.21.2 the control string. Writes `3*nd` control bytes into `ext`
-/// (interpolation, low extrapolation, high extrapolation) and returns the dependent
-/// COLUMN index, or null when the string asks for something VerA does not
-/// implement.
+/// (interpolation, low extrapolation, high extrapolation) and the source COLUMN
+/// each dimension reads into `cmap`, and returns the dependent COLUMN index — or
+/// null when the string is not one §9.21.2 describes.
 ///
-/// Table 9-30's `1` and `D` select linear interpolation and closest-point
-/// lookup. Each dimension retains its interpolation character and two
-/// extrapolation characters. Spline/ignored-column modes and fatal extrapolation
-/// still require implementation; rejecting them avoids substituting a result.
-fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: usize, ext: []u8) Oom!?usize {
+/// Table 9-30's `D`, `1`, `2` and `3` all become the dimension's interpolation
+/// byte and are decided in the kernel. `I` never reaches the kernel: it is
+/// "Ignore this input column", a statement about the DATA SOURCE and not about a
+/// dimension, so it spends a column in `cmap` without spending a dimension and
+/// the caller projects that column out of the sample block entirely.
+///
+/// THE DEPENDENT COLUMN is therefore counted in columns, not in dimensions.
+/// Table 9-32 states the arithmetic twice by example — `"I,1CC,1CC;3"` has "at
+/// least 6 column[s]" (3 leading + selector 3) and `"3,D,I,1;3"` interpolates
+/// "dependent variable 3 (column 7)" (4 leading + 3) — and its first row states
+/// the no-sub-string case, "Dimensionality of the data is assumed to be N.
+/// Column N+1 is taken as the dependent", with N the number of `table_inputs`.
+/// Both are the one rule `leading = nd + (ignored columns)`: a dimension without
+/// a sub-string still owns a column.
+fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: usize, ext: []u8, cmap: []usize) Oom!?usize {
     // "the function defaults to performing linear interpolation and linear
     // extrapolation in both dimensions" (§9.21.5), which Table 9-32's first row
     // states for every dimension: `""` is "default linear interpolation and
@@ -8744,15 +8777,23 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
         const tail = std.mem.trim(u8, ctl[s + 1 ..], " \t");
         if (tail.len != 0) sel = std.fmt.parseInt(usize, tail, 10) catch 0;
     }
-    if (sel == 0 or nd + sel - 1 >= ncol) {
-        try self.err(self.file.exprs.mainTok(e), .E0815, "dependent selector {d} names no dependent column: the data source has {d} column(s) and {d} independent(s)", .{ sel, ncol, nd });
-        return null;
-    }
 
     var d: usize = 0;
+    var col: usize = 0; // the source column the next sub-string is spent on
     var it = std.mem.splitScalar(u8, head, ',');
     while (it.next()) |raw| {
         const s = std.mem.trim(u8, raw, " \t");
+        // Table 9-30 `I`, "Ignore this input column". It marks a COLUMN, so it
+        // takes no dimension and admits no extrapolation characters — there is
+        // no end of an ignored column to extrapolate off.
+        if (s.len != 0 and s[0] == 'I') {
+            if (s.len != 1) {
+                try self.err(self.file.exprs.mainTok(e), .E0815, "`{s}`: Table 9-30's `I` ignores a column and takes no extrapolation characters", .{s});
+                return null;
+            }
+            col += 1;
+            continue;
+        }
         if (d >= nd) {
             // One sub-string per independent variable, "with the first
             // sub-string applying to the outermost dimension and so on".
@@ -8760,13 +8801,11 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
             try self.err(self.file.exprs.mainTok(e), .E0815, "the control string has more interpolation sub-strings than the {d} lookup input(s)", .{nd});
             return null;
         }
+        cmap[d] = col;
+        col += 1;
         defer d += 1;
         var j: usize = 0;
-        if (s.len != 0 and std.mem.indexOfScalar(u8, "ID123", s[0]) != null) {
-            if (s[0] != '1' and s[0] != 'D') {
-                try self.err(self.file.exprs.mainTok(e), .E0815, "VerA implements Table 9-30's `1` and `D`; `{c}` is not implemented", .{s[0]});
-                return null;
-            }
+        if (s.len != 0 and std.mem.indexOfScalar(u8, "D123", s[0]) != null) {
             ext[3 * d] = s[0];
             j = 1;
         }
@@ -8775,8 +8814,8 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
             try self.err(self.file.exprs.mainTok(e), .E0815, "`{s}`: a control sub-string carries at most 2 extrapolation characters", .{s});
             return null;
         }
-        for (xs) |c| if (c != 'C' and c != 'L') {
-            try self.err(self.file.exprs.mainTok(e), .E0815, "`{c}` is not an extrapolation method VerA implements (Table 9-31 `C` or `L`)", .{c});
+        for (xs) |c| if (std.mem.indexOfScalar(u8, "CLE", c) == null) {
+            try self.err(self.file.exprs.mainTok(e), .E0815, "`{c}` is not a Table 9-30 interpolation character or a Table 9-31 extrapolation character", .{c});
             return null;
         };
         // "When one extrapolation method character is given, the specified
@@ -8791,7 +8830,19 @@ fn parseTableCtl(self: *Lower, e: Ast.ExprId, ctl: []const u8, nd: usize, ncol: 
             ext[3 * d + 2] = xs[1];
         }
     }
-    return nd + sel - 1;
+    // Fewer sub-strings than dimensions: the rest keep the `1LL` default and
+    // take the columns that follow, so `leading` is still one column per
+    // dimension plus one per ignored column.
+    while (d < nd) : (d += 1) {
+        cmap[d] = col;
+        col += 1;
+    }
+
+    if (sel == 0 or col + sel - 1 >= ncol) {
+        try self.err(self.file.exprs.mainTok(e), .E0815, "dependent selector {d} names no dependent column: the data source has {d} column(s) and {d} leading column(s)", .{ sel, ncol, col });
+        return null;
+    }
+    return col + sel - 1;
 }
 
 /// The §4.7 function a `$limit` second argument names, or null when the argument

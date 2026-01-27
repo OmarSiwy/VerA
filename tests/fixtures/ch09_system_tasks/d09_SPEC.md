@@ -19,10 +19,10 @@ review" at the end.
 * `$timeformat`, `$printtimescale`, `$readmemb`, `$readmemh`, `$time`,
   `$stime`, `$realtime`, the sixteen `$async`/`$sync` PLA spellings, the five
   `$q_*` tasks and the `$display`/`$write` radix variants **do** appear in
-  `src/ir/lower.zig` — exclusively inside `isDigitalOnlySysFunc`
+  `lib/ir/lower.zig` — exclusively inside `isDigitalOnlySysFunc`
   (lines 6806-6856), a list of names to **refuse** in an analog block. That is
-  a rejection list, not an implementation. `src/backend/file_kernels.zig` and
-  `src/backend/cg_display.zig` implement the ANALOG side of the overlapping
+  a rejection list, not an implementation. `lib/backend/file_kernels.zig` and
+  `lib/backend/cg_display.zig` implement the ANALOG side of the overlapping
   tasks; the plan (lines 231-234) says in as many words that this is not
   evidence for the digital row, and `cg_display.zig:128` even documents two
   deliberate deviations from the 1364 display-sizing heritage that must not
@@ -32,7 +32,7 @@ review" at the end.
   number is not copied out of it again — this row did exactly that.)
 * `$dumpfile` / `$dumpvars` / `$dumpports` appear **nowhere** in `src/`. The
   single hit for `$dumpvars` in the tree is an unrelated doc-comment example at
-  `src/frontend/preprocessor.zig:289`. Matches `docs/CLAUSE-AUDIT.md:357`.
+  `lib/frontend/preprocessor.zig:289`. Matches `docs/CLAUSE-AUDIT.md:357`.
 * `specify` / `endspecify` / `specparam` / `$setup` / `$hold` / `$width` appear
   nowhere in `src/`. A module containing `specparam` is rejected at PARSE time
   with `E0205 unsupported module item: found specparam`.
@@ -194,7 +194,7 @@ timestamps, the one-record-per-settled-step rule — is normative.
   suppression, embedded bytes). The plan assigns this to row **S01**, not D09.
   Left there to avoid two rows owning one expectation.
 * **`%r` engineering notation** (§9.4.7 + Table 9-23 + §2.6.2 Table 2-1). This
-  is a genuine gap on BOTH sides — `src/backend/cg_display.zig:673` maps `'r'`
+  is a genuine gap on BOTH sides — `lib/backend/cg_display.zig:673` maps `'r'`
   to a plain `{d}` and its own comment says "§9.4.3's engineering-notation `%r`
   scale suffix is NOT reproduced". It is not fixtured because §2.6.2 gives the
   input spellings (`K` and `k` both mean 1e3) without fixing the OUTPUT
@@ -274,7 +274,7 @@ Order of work, and what each step must be able to assert:
 
 Sixteen names, the full cross product of `$async`/`$sync` × `$and`/`$nand`/
 `$or`/`$nor` × `$array`/`$plane`, all listed in Table 9-5 as digital-only and
-all already present in `src/ir/lower.zig:6832-6837` as analog-context refusals.
+all already present in `lib/ir/lower.zig:6832-6837` as analog-context refusals.
 Note the lexical point that file already makes: the embedded `$` is an ordinary
 identifier character (§2.8.3), so `$async$and$array` is ONE token — the lexer
 must not split it.
@@ -302,7 +302,7 @@ dump.
 ### 17.6 — Stochastic analysis queues (§9.9: AMS "does not extend" them)
 
 `$q_initialize`, `$q_add`, `$q_remove`, `$q_exam`, `$q_full`; Table 9-6, all
-digital-only, all present in `src/ir/lower.zig:6840-6842` as refusals only.
+digital-only, all present in `lib/ir/lower.zig:6840-6842` as refusals only.
 
 What a fixture must assert:
 

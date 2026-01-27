@@ -51,10 +51,10 @@ the merge tier.
 | `w2/sync` | D05, M02 | **abandon** | none | D05's analog macro-process region (scheduler has the six-region enum and heap but no solver connection), region-trace / delta-cycle / far-future / removal-during-dispatch tests; D04 sync primitives (`wait`, named events, `->`, fork/join, `disable`) absent from `src/`; all of M02. |
 | `w2/procedural` | D04 (+D05) | **abandon** | none | D04's open bullets: `@*`, named events, intra-assignment event controls, `wait`, tasks/functions with argument passing, automatic/static lifetimes, `disable`, fork/join, procedural assign/deassign and force/release. |
 | `w2/selects` | D02 | **abandon** | none | Bit/part selects, indexed part selects `+:`/`-:`, select direction for `[7:0]` and `[0:7]`, out-of-range and X/Z index behavior, lvalue selects, constant folding that agrees with runtime. `docs/CONFORMANCE-GAPS.md:25` still lists these; grep for `partSelect`/`bit_select` over `src/` returns nothing. |
-| `w2/gates` | D08 | **abandon** | none | All of D08. `src/frontend/token.zig` (~194-196, ~755-828) lexes the entire gate vocabulary as `kw_reserved` — deliberate rejection, not support. No parser production, no strength lattice, no switch solver, no UDP evaluator. Also depends on D03 drive strengths, still open. |
+| `w2/gates` | D08 | **abandon** | none | All of D08. `lib/frontend/token.zig` (~194-196, ~755-828) lexes the entire gate vocabulary as `kw_reserved` — deliberate rejection, not support. No parser production, no strength lattice, no switch solver, no UDP evaluator. Also depends on D03 drive strengths, still open. |
 | `w2/stateful` | A04 (+A03) | **abandon** | none | A04's argument-complete operator audit across DC/transient/AC/noise, removal of fixed history capacities, rollback rollback, initialization/reset values, pole/zero forms, explicit resource-failure diagnostics. Re-baseline against `ddt-capform`, which already carries some `ddt` capacitor-form work. |
 | `w2/tables` | A05 | **abandon** | none | A05: quadratic/cubic spline modes, fatal (`E`) extrapolation at runtime rather than E0815 at compile time, full Table 9-31 control-string coverage, file-backed tables loaded on first *executed* call, derivative correctness through the lookup. Existing `$table_model` fixtures predate this branch. |
-| `w2/fileio` | S01, D09 | **abandon** | none | b/h/o radix file tasks, `$fgetc`/`$ungetc`/`$fread`, `$readmemb`/`$readmemh`, `$sdf_annotate` (no digital-context impl at all); the `zFRead` over-consumption deviation admitted at `src/backend/file_kernels.zig:298`; digital/procedural-context file I/O; format-conversion audit; scratch-buffer isolation. |
+| `w2/fileio` | S01, D09 | **abandon** | none | b/h/o radix file tasks, `$fgetc`/`$ungetc`/`$fread`, `$readmemb`/`$readmemh`, `$sdf_annotate` (no digital-context impl at all); the `zFRead` over-consumption deviation admitted at `lib/backend/file_kernels.zig:298`; digital/procedural-context file I/O; format-conversion audit; scratch-buffer isolation. |
 | `w2/systasks` | D09, S01 | **abandon** | none | `src/sim/digital.zig` dispatches exactly four names (`$signed`, `$unsigned`, `$display`, `$finish` at :138/:140/:1473). All of IEEE 1364-2005 §§17–18 in the digital runner. Analog-side `file_kernels.zig`/`cg_display.zig` are reusable components, **not** evidence the digital row is closed. |
 | `w2/vcd` | D09 (§18) | **abandon** | none | All of §18.1–18.4. `grep -rn "dumpvars\|dumpfile" tests/` = 0 hits, matching `docs/CLAUSE-AUDIT.md:357`. Extended VCD §18.3 strength encoding is additionally blocked on D03 drive strengths. |
 | `w2/vpi2` | P02, P03 | **abandon** | none | `src/vpi/root.zig` exports 11 routines; the entire value and callback surface is absent. All of P02 and P03. P01 is already merged via the `vpi` worktree and is unaffected. |
@@ -93,9 +93,9 @@ sema-checks `hb.zig`.
 real bug — `hb.zig` re-reads the environment once per Newton iteration. `link_libc` is already
 true on every artifact that reaches `hb.zig` (`build.zig:299`, `:361`, `:210`/`:228`).
 
-**Site 2** (found by the sweep, same structural cause). `src/frontend/tests/prepared.zig:38,
+**Site 2** (found by the sweep, same structural cause). `lib/frontend/tests/prepared.zig:38,
 :51, :54` call `buildJob(dir, node_id, sources, cards)` with 4 arguments;
-`src/frontend/prepare.zig:702` declares 6 (`node_neg: u32, ports: [4]u32` were added) and the
+`lib/frontend/prepare.zig:702` declares 6 (`node_neg: u32, ports: [4]u32` were added) and the
 only production caller, `prepare.zig:338`, was updated while the test file was not. `zig build
 test-prepared` → "expected 6 argument(s), found 4". Internal drift, not a Zig API removal.
 
@@ -139,12 +139,12 @@ exits 1 with `error.MissingPath` — the step just wants a `-- <path>` argument
 ### A08 — `u_nodeset` is exported and read by nobody
 
 VerA emits `pub const u_nodeset = [n_u]?f64{ … }` from
-`/home/omare/Documents/Projects/Zig/VerA/src/backend/codegen.zig:1743` (`emitNodesets`), fed by
-`lower.nodesets` (`src/ir/lower.zig:316`), indexed by the `U` unknown enum. `?f64` because
+`/home/omare/Documents/Projects/Zig/VerA/lib/backend/codegen.zig:1743` (`emitNodesets`), fed by
+`lower.nodesets` (`lib/ir/lower.zig:316`), indexed by the `U` unknown enum. `?f64` because
 §3.6.3.2's "a null value … indicates that no nodeset value is being specified".
 
 Nothing reads it. `grep -rn u_nodeset ARPice/src ARPice/include` → zero hits. VerA's own
-testbench does not read it either: `src/backend/tb.zig:688` opens every operating point with
+testbench does not read it either: `lib/backend/tb.zig:688` opens every operating point with
 `var x: [n_u]f64 = @splat(0.0);`. The defect is demonstrable entirely inside VerA.
 
 *The call site that must consume it, unchanged:*
@@ -212,8 +212,8 @@ the reason claimed — the row's real pressure, which is often lower than the fi
 | A02 | Branch equations and topology | 13 (12/1) | 8 | §5.4.1–§5.4.4, §5.5.1, §5.6.1.1–§5.6.1.3, §5.6.5, §5.6.6, §5.6.8.1, §5.6.8.2, A.8.9, §9.20, §5.2.1 | partial | Nothing; fixture 09 blocked only by the grammar production it tests. Fixture 90 only gradeable under `zig build torture`. |
 | A03 | Analog control flow and held state | 12 (11/1) | 7 | §5.3, §5.3.2, §5.9, §5.10, §5.10.2, §5.10.3.3, §5.10.4, §4.7.1–§4.7.2.4, A.6.4, A.6.5, §6.7, §3.2 | partial | `lowerDisable` is a two-arm error stub (E0401/E0402); held-state re-keying from bare name onto (scope, name); hierarchical resolution of a named-block local (E0901). |
 | A04 | Stateful analog operators | 13 (12/1) | 9 (8 of 12 `.va` + rollback) | §4.5.3–§4.5.9, §4.5.11, §4.5.12, §4.5.15, Table 4-20 | partial | Nothing structural. The documented `zig test` command for the rollback host does not compile (missing `--dep contract` on the device module). |
-| A05 | Table-model lookup | 13 (11/2) | 12 | §9.21–§9.21.5, Tables 9-30/9-31/9-32, Syntax 9-16, §4.5.6 | partial | E0815 in `src/ir/lower.zig:8660` (rejects `2`/`3`/`I`/`E`) and the eager `readTableFile` at `:8624`. |
-| A06 | Small-signal and noise behavior | 13 (11/2) | 10 (6 + 4 directive-blocked) | §4.6, §4.6.1 (T4-21/4-22), §4.6.3, §4.6.4–§4.6.4.6, Table 4-20, A.8.2 | partial (thin) | `//! noise … name=/white=/flicker=/ef=/interp=/points=` — blocked at `src/backend/tb.zig:341` `validNoiseEntry`; `//! acstim` directive absent; `//! reject` unenforced outside `zig build torture`. |
+| A05 | Table-model lookup | 13 (11/2) | 12 | §9.21–§9.21.5, Tables 9-30/9-31/9-32, Syntax 9-16, §4.5.6 | partial | E0815 in `lib/ir/lower.zig:8660` (rejects `2`/`3`/`I`/`E`) and the eager `readTableFile` at `:8624`. |
+| A06 | Small-signal and noise behavior | 13 (11/2) | 10 (6 + 4 directive-blocked) | §4.6, §4.6.1 (T4-21/4-22), §4.6.3, §4.6.4–§4.6.4.6, Table 4-20, A.8.2 | partial (thin) | `//! noise … name=/white=/flicker=/ef=/interp=/points=` — blocked at `lib/backend/tb.zig:341` `validNoiseEntry`; `//! acstim` directive absent; `//! reject` unenforced outside `zig build torture`. |
 | A10 | Analog event scheduling and host queries | 15 (13/2) | 8 of 12 `.va`; 0 of 3 decks | §5.10.3.1–§5.10.3.3, §9.15 (T9-27/9-28), §9.16, §9.17.2, §4.5.14 (T4-20), §4.6.1 (T4-21) | partial | Nothing infrastructural — ARPice builds and all three decks were re-run from a fresh source build. The decks pass; that is a statement about the host, not about the decks. |
 | D03 | Digital declarations, memories, ports, drivers | 13 (11/2) | 13 | A.2.1.3, A.2.2.1–A.2.2.3, A.6.1, A.4.1, §1.1, §6.5.7.1 | **clean** | Strength lexer/parser + `(strength0, strength1)` fold; net `delay3`; charge-decay timer. Fixtures 10/11 need D07 instance elaboration (E1100). |
 | D04 | Procedural execution | 15 (14/1) | 15 | §1.1, §1.2, §5.10, §5.10.4, §8.5.1, §8.5.3.3, §8.5.3.4, A.2.1.3, A.2.6, A.2.7, A.6.2–A.6.5, A.8.2 | partial | Greenfield from the lexer up: `fork`/`join`/`task`/`endtask`/`wait`/`automatic` reserved-but-untagged; `@*` not lexed; intra-assignment `#`/`@` unaccepted; named blocks rejected; E1100 portless-module bail. |
@@ -222,9 +222,9 @@ the reason claimed — the row's real pressure, which is often lower than the fi
 | D10 | Compiler directive semantics | 11 (10/1) | **2** | §10.1 (T10-1), §10.2, §10.5, §10.6, §6.2.2, Annex G T G.3, + 1364 §19.10, §7.9–§7.11, §3.7 | partial | Fixture 09: one string in `preprocessor.zig`'s `predefined_macros`. Fixture 11: strength model in `src/sim/digital.zig` `wired()`, multi-module `--run`, and a `--run`-path consumer for the preprocessor's `DriveRegion` list. |
 | H01 | Parameters, paramsets, elaborated identity | 12 (11/1) | 8 | §2.8.1, §3.2, §3.4.1, §3.4.2, §3.4.4, §3.4.6, §3.6.3, §4.2.1.1, §4.2.9, §4.2.11, §6.3.4, §6.4, §6.4.1, §6.4.2, §6.9.2, §8.2, §9.19 | partial | Nothing. All 12 run today. |
 | H04 | SPICE interoperability (Annex E) | 11 (10/1) | 10 | E.1, E.1.1, E.1.2, E.2, E.2.1, E.2.2.1–E.2.2.3, E.3 (Table E.1), E.3.3, E.4.1, E.4.2, §4.6.1–§4.6.3, §2.6.2, §6.7.1, §9.18 | partial | `build.zig:428` hardcodes `fixture_root` to `tests/fixtures` (pending is never collected); no `--spice` CLI flag, so 8 of 11 cannot be run singly; `spice_cards.zig` cannot parse the value half of a `k=v` card token; `.SUBCKT` bodies unread; §6.3.6 contribution scaling. |
-| M01 | Reading and triggering across domains | 13 (11/2) | 13 | §7.2.1, §7.2.2, §7.3–§7.3.7 (Syntax 7-2/7-3), §5.10.3.1, §5.10.3.3, §5.10.3.4, §5.10.4, §5.10.5, §3.2 | partial | The two dialects must merge: `src/cli.zig` sets `Parser.digital` only for `.v`; `parser.zig` gates `always` (:1265), `assign` (:966), `#` (:2324) on it. 11 of 13 need one or both. Fixture 01 also needs D06. 06/09/10 need the digital kernel joined to the analog testbench — `tb.zig:695` is a fixed-grid evaluator with no way to insert a solver timepoint. |
+| M01 | Reading and triggering across domains | 13 (11/2) | 13 | §7.2.1, §7.2.2, §7.3–§7.3.7 (Syntax 7-2/7-3), §5.10.3.1, §5.10.3.3, §5.10.3.4, §5.10.4, §5.10.5, §3.2 | partial | The two dialects must merge: `src/main.zig` sets `Parser.digital` only for `.v`; `parser.zig` gates `always` (:1265), `assign` (:966), `#` (:2324) on it. 11 of 13 need one or both. Fixture 01 also needs D06. 06/09/10 need the digital kernel joined to the analog testbench — `tb.zig:695` is a fixed-grid evaluator with no way to insert a solver timepoint. |
 | M02 | Mixed-signal synchronization | 13 (13/0) | 13 | §8.4.1–§8.4.7, §8.5, §8.5.1, §8.5.3.1, §8.5.3.6, §8.5.3.7, §5.10.3.1, §5.10.3.4 | partial | `src/sim/digital.zig` (~:1023) refuses any module with ports, parameters, instances, branches, events, functions or an analog block. Parser accepts neither module-scope `always` nor `#` in `initial`. The seven-region queue exists but nothing posts `.analog` or `.explicit_d2a`. `absdelta` refused with E0513. |
-| M03 | Connectmodule insertion | 13 (11/2) | 13 | §7.5, §7.6 (T7-2), §7.7.1–§7.7.4, §7.8–§7.8.6, §9.20, §3.11.1, §6.3.1, §6.7.1 | partial | (a) digital process items inside a module that also has an analog block (E0205) — dead scaffolding in 6 of them, load-bearing in 09/11; (b) the §7.8 insertion phase itself (`src/ir/elaborate.zig:54-58` documents its absence; E0915 only checks the name); (c) §7.8.5 generated names as defparam targets (E0907). **Not** blocked on module instantiation — fixture 10 elaborates a two-instance hierarchy and solves. |
+| M03 | Connectmodule insertion | 13 (11/2) | 13 | §7.5, §7.6 (T7-2), §7.7.1–§7.7.4, §7.8–§7.8.6, §9.20, §3.11.1, §6.3.1, §6.7.1 | partial | (a) digital process items inside a module that also has an analog block (E0205) — dead scaffolding in 6 of them, load-bearing in 09/11; (b) the §7.8 insertion phase itself (`lib/ir/elaborate.zig:54-58` documents its absence; E0915 only checks the name); (c) §7.8.5 generated names as defparam targets (E0907). **Not** blocked on module instantiation — fixture 10 elaborates a two-instance hierarchy and solves. |
 | M04 | Driver/receiver access and real nets | 14 (12/2) | 14 | §3.7 (Syntax 3-8), §6.5.2, §6.5.3, §7.9, §9.11, §9.22–§9.22.6, §9.23–§9.23.2, §1.1 | partial | `wreal` as net type and port net type (today `kw_reserved`); real variables and `%g` in the digital engine; `assign` as a connectmodule item; `#` delay in an ordinary module under `--run`; module instantiation under `--run` (E1100). 10–15 additionally need M03 insertion + an M01/M02 kernel. |
 | S01 | Formatting, strings and files | 13 (13/0) | 12 | §2.6.2 (T2-1), §9.4.1, §9.4.3 (T9-23), §9.4.6, §9.5.1 (T9-24), §9.5.2, §9.5.3, §9.5.4.1, §9.5.4.2, §9.5.5, §9.5.8, §9.5.9 | partial | Nothing infrastructural. Fixture 11 needs the `$fscanf` real-destination lowering fixed (codegen type error); 12 needs `%r`/`%m` in the scan code set; 05/06 need reshaping before they specify §9.4.1 at all. |
 | P02 | VPI values, scheduling, system tasks | 13 (12/1) | 13 (all at `cc`) | §11.6.16, §11.6.25, §12.6, §12.13–§12.16 (T12-4), §12.22.1/.2, §12.24–§12.28, §12.30, §12.31.1/.2/.4, §12.32/.1, §12.33.1/.2, §12.34, §12.36 | partial | `src/vpi/vpi_user.h` types/constants/17 declarations; the 17 routines in `root.zig` (11 exist, none of P02's); `tests/vpi_host.zig` must actually *run* the simulation (lint-only today) — 11 of 13 need a running scheduler; `p02_scales.v` cannot execute (E1100, one-ordinary-module) and `p02_systf.v` cannot (E1100, systf call form). |
@@ -748,7 +748,7 @@ scope violation. Any verdict that reported them as one was working from a stale 
 /home/omare/Documents/Projects/Zig/ARPice    M src/analysis/pss/hb.zig
                                              M src/analysis/root.zig
                                              M src/analysis/solvers/converger.zig
-                                             M src/frontend/tests/prepared.zig
+                                             M lib/frontend/tests/prepared.zig
                                              ?? tests/pending/
 ```
 
@@ -915,7 +915,7 @@ Derived from the `blocked_on` fields above and the plan's stated chain
 
 **Phase 0 — commit the build fix. It is applied but uncommitted.**
 `Q03`'s two sites are fixed in ARPice's working tree (`hb.zig:286` via `converger.hbTrace()`, the
-`buildJob` arity in `src/frontend/tests/prepared.zig`), and with them the tree compiles: 297/297
+`buildJob` arity in `lib/frontend/tests/prepared.zig`), and with them the tree compiles: 297/297
 unit tests, 351/353 build steps. `A09`, `A10`'s three host decks, `X01` and `A06-noisetables` were
 all re-measured from a fresh source build this pass and every published figure reproduced. What is
 left is bookkeeping and the two unapplied guards: commit the fix as its own change so those rows can
@@ -924,7 +924,7 @@ next Site 2 cannot rot unobserved.
 
 **Phase 1 — analog rows that are blocked on nothing.**
 `A01`, `A02`, `A03`, `A04`, `H01`. All run against HEAD today with the documented CLI. `A05`
-joins as soon as `E0815` (`src/ir/lower.zig:8660`) and the eager `readTableFile` (`:8624`) lift.
+joins as soon as `E0815` (`lib/ir/lower.zig:8660`) and the eager `readTableFile` (`:8624`) lift.
 These are independent of the digital chain and can be worked in parallel with Phase 2.
 
 **Phase 2 — the digital chain, in its stated order.**
@@ -954,7 +954,7 @@ State this plainly: **`M01`, `M02`, `M03` and `M04` cannot begin in earnest toda
 request coalescing — **but the analog solver is not connected to the `.analog` macro-process
 region, and nothing posts `.analog` or `.explicit_d2a` to the queue.** On top of that,
 `src/sim/digital.zig` (~:1023) refuses any module with ports, parameters, instances, branches,
-events, functions or an analog block, and `src/backend/tb.zig:695` is a fixed-grid evaluator that
+events, functions or an analog block, and `lib/backend/tb.zig:695` is a fixed-grid evaluator that
 walks only the declared `//! time` list with no mechanism to insert a solver timepoint — which is
 not merely a blocker but the reason M01's and M02's SPECs defer several claims to each other
 (§5.0). Order within the phase, from M02's own analysis: (1) parser accepts `always` + `#` delay
@@ -962,7 +962,7 @@ not merely a blocker but the reason M01's and M02's SPECs defer several claims t
 (cross → digital tick with §8.4.3.3 half-precision-base rounding) unlocks M02 04/08/11;
 (4) implicit D2A + region 3b unlocks 02/10/12; (5) explicit D2A + region 1b unlocks 03/05/06/09;
 (6) `absdelta` interpolation unlocks 13; (7) §8.4.2 DC iteration unlocks 01. `M03` additionally
-needs the §7.8 insertion phase (`src/ir/elaborate.zig:54-58` documents its absence) and §7.8.5
+needs the §7.8 insertion phase (`lib/ir/elaborate.zig:54-58` documents its absence) and §7.8.5
 generated names as defparam targets. `M04` additionally needs `wreal` as a net type and port net
 type, and real variables + `%g` in the digital engine.
 

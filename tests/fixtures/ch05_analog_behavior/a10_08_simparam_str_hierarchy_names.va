@@ -46,7 +46,7 @@
 // example only shows it inside a named task, and this clause does not say what
 // it appends for a call sitting directly in an analog block.
 //
-// WHY IT FAILS TODAY. `Gen.emitSysCall` (src/backend/codegen.zig) answers
+// WHY IT FAILS TODAY. `Gen.emitSysCall` (lib/backend/codegen.zig) answers
 // "module" with `self.mir.name` — the name of the FLATTENED module, i.e. the
 // top one, for every call site at every depth — and answers "instance" (and
 // "path", "cwd", "analysis_name") with the empty string, on the argument that a

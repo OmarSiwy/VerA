@@ -39,7 +39,7 @@
 //   exact equality and no tolerance argument is involved.
 //
 // STATUS: THIS ONE PASSES TODAY, deliberately. `assignRuntimeIndex`
-// (`src/ir/lower.zig`) lowers a runtime-indexed write to one masked write per
+// (`lib/ir/lower.zig`) lowers a runtime-indexed write to one masked write per
 // cell, `select(index == k, value, old)`, over a flat index that
 // `runtimeArrayIndex` forces to -1 when any subscript is out of its dimension —
 // so every cell keeps `old` and the clause holds. It is kept because the read

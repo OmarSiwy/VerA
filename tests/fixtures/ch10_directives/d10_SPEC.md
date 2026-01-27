@@ -18,9 +18,9 @@ not mention. Read from the source, not from the docs:
 
 | directive | where it is handled | what consumes it |
 |---|---|---|
-| `` `default_nettype `` | `src/frontend/preprocessor.zig:335` → `NetTypeRegion` | `src/ir/lower.zig` `rejectImplicitNet` (E0367) |
+| `` `default_nettype `` | `lib/frontend/preprocessor.zig:335` → `NetTypeRegion` | `lib/ir/lower.zig` `rejectImplicitNet` (E0367) |
 | `` `celldefine ``/`` `endcelldefine `` | `preprocessor.zig:340-341` → `CellRegion` | `Mir.is_cell` |
-| `` `unconnected_drive ``/`` `nounconnected_drive `` | `preprocessor.zig:342-343` → `DriveRegion` | `src/ir/lower.zig:2523` `applyUnconnectedDrive` |
+| `` `unconnected_drive ``/`` `nounconnected_drive `` | `preprocessor.zig:342-343` → `DriveRegion` | `lib/ir/lower.zig:2523` `applyUnconnectedDrive` |
 | `` `pragma `` | `preprocessor.zig:349` → `.ignored` | nothing, deliberately — comment cites IEEE 1364 §19.8 "shall ignore" |
 | `` `begin_keywords ``/`` `end_keywords `` | `preprocessor.zig:324-325` → emitted verbatim, `dir_begin_keywords` | the parser, which nests and restores |
 | `` `resetall `` | `preprocessor.zig:1227-1258` | appends a reset **event** to all four positional lists |
@@ -42,7 +42,7 @@ copied from the reviewer.
 ### What actually fails
 
 1. **§10.5's tool-specific predefined macro does not exist.** `predefined_macros`
-   in `src/frontend/preprocessor.zig` has exactly two entries,
+   in `lib/frontend/preprocessor.zig` has exactly two entries,
    `__VAMS_ENABLE__` and `__VAMS_COMPACT_MODELING__`. §10.5's last paragraph is
    a "shall" and it is unmet. Fixture `09`.
 2. **`` `unconnected_drive `` never meets a strength model**, because D03 has
@@ -197,7 +197,7 @@ ordered form, stub an Annex G extension while still advertising it).
   sentences of one paragraph. A conformance fixture on a self-contradictory
   clause tests the reader, not the tool.
 - **`` `celldefine ``.** The tag changes no value a model can print; it is a
-  unit test in `src/root.zig` and `ch10_directives/COVERAGE.md` says so.
+  unit test in `lib/root.zig` and `ch10_directives/COVERAGE.md` says so.
 - **"*Not* defined if any extension is unsupported."** This is the half of
   §10.5's biconditional that stays out of reach: source text has no way to ask
   "is X missing?" except by using it, which is what fails to compile when it is
@@ -214,7 +214,7 @@ ordered form, stub an Annex G extension while still advertising it).
   points at the connection, and IEEE Std 1364 §19.10 — the clause §10.1 Table
   10-1 defers to — is not offline here, so neither reading has a citation that
   survives being opened. VerA hard-codes the definition-site reading with a
-  comment at `src/ir/elaborate.zig:663-667`; asserting it transcribed the
+  comment at `lib/ir/elaborate.zig:663-667`; asserting it transcribed the
   implementation. **No other row owns this claim; it is parked here.** It comes
   back the day IEEE Std 1364 clause 19 lands in `docs/`, as a file in the
   *converse* arrangement — child defined inside the region, instantiated outside
@@ -412,3 +412,84 @@ zig build torture -- --strict ch10
 `11` belongs in `tests/digital/` with a `build.zig` `addRunArtifact` +
 `expectStdOutEqual` pair alongside `scheduling.v`, and only once D03's strength
 model and `--run` module instantiation exist. It is blocked on both.
+
+## Added later: `assert` and `net_resolution` are ordinary identifiers (`d10_11`, `d10_12`)
+
+Two fixtures written after the row was assembled, for the 2023 reserved-word set.
+They belong to the approved-but-unimplemented tree: VerA reserves both words.
+
+### why these two live in D10
+
+The row's scope, quoted from the plan above, includes **"keyword-set transitions
+via `` `begin_keywords ``/`` `end_keywords ``"**. Both fixtures are exactly that:
+a module wrapped in `` `begin_keywords "VAMS-2023" `` whose only claim is which
+spellings that set reserves. They are not about `` `default_nettype ``, macros or
+pragmas, and they do not belong to `annex_b_keywords` or
+`annex_c_analog_subset` — those rows pin what the *annexes* say, and the switches
+that put a named set into effect are §10.6, which is this row.
+
+### clause
+
+§2.8.2 ("All keywords are defined in lowercase only. Annex B lists all defined
+Verilog-AMS HDL keywords."), §10.6 (`"VAMS-2023" specifies that only the
+identifiers listed as reserved keywords in the Verilog-AMS HDL are considered to
+be reserved words`), and Annex B's opening sentence making Table B.1 the closed
+and complete list. Two spellings are not in it in 2023:
+
+| spelling | what the edition says | fixture |
+|---|---|---|
+| `assert` | in neither printing; §10.6's own worked example makes the argument for `logic` ("not a keyword in Verilog-AMS 2023, whereas it is a keyword in the IEEE Std 1800") | `d10_11_assert_is_an_ordinary_identifier.va` |
+| `net_resolution` | Annex G item 5027: "Removed unused keyword net_resolution — B.1, C.16"; the 2.4 edition's C.16 list had ten words, 2023's has nine | `d10_12_net_resolution_is_an_ordinary_identifier.va` |
+
+Both are therefore ordinary identifiers, and `real assert;` / `real
+net_resolution;` must compile. Both fixtures instead use them as a **port and a
+net name** so the assertion is a reading of the potential across the net, not a
+declaration that gets discarded.
+
+`tests/fixtures/annex_b_keywords/13_assert_reserved.va` and
+`tests/fixtures/annex_c_analog_subset/20_net_resolution_reserved.va` asserted
+the opposite and are the two fixtures being withdrawn. The second read C.16 as
+listing ten words — the 2.4 count — and its own header admits the word "was for
+a long time the one word of the ten VerA did not reserve, so it carried
+`//! xfail`", which is the shape of a fixture arguing an implementation into a
+bug. Neither is edited here; both are elsewhere and neither is this row's.
+
+### fixtures
+
+| fixture | wants | derivation |
+|---|---|---|
+| `d10_11_assert_is_an_ordinary_identifier.va` | `V(assert, n) == 1.0` | `//! bias V(assert) = 1.25, V(n) = 0.25`; §1.3.1 makes the branch potential the difference of the node potentials, 1.25 − 0.25. Both operands are binary-exact, so the difference is, and the check is CHECKX rather than a tolerance |
+| `d10_12_net_resolution_is_an_ordinary_identifier.va` | `V(net_resolution, n) == 1.0` | identical, with `net_resolution` in the branch |
+
+Both use the `` `begin_keywords "VAMS-2023" `` wrapper on purpose. §10.6: with no
+directive above it, the keyword set is "the implementation's default set", so an
+unwrapped file would pass for an implementation defaulting to 1364-2005 (where
+both words are free for reasons unrelated to this claim) and fail for one
+defaulting to VAMS-2.3. Naming the set removes both escapes: the file compiles
+if and only if the VAMS-2023 set really is the Annex B list.
+`d10_02_begin_keywords_region_survives_the_include_that_opened_it.va` makes the
+same argument at length.
+
+### Observed today
+
+```
+FAIL tests/fixtures/ch10_directives/d10_11_assert_is_an_ordinary_identifier.va: did not compile: NoModule
+error[E0208]: expected an identifier: found assert
+  = note: LRM 2.8
+FAIL tests/fixtures/ch10_directives/d10_12_net_resolution_is_an_ordinary_identifier.va: did not compile: NoModule
+error[E0208]: expected an identifier: found net_resolution
+  = note: LRM 2.8
+```
+
+`NoModule` rather than `CompileFailed` is the phase, not a second problem: the
+reservation is enforced in the parser, so the port list never becomes a module
+declaration and elaboration has nothing to select. E0208 is the diagnostic, and
+it cites §2.8.2 — the clause that makes Annex B the whole list, which does not
+contain either word.
+
+The reservation is specific to the AMS sets and not to the spelling: the
+identical modules under `` `begin_keywords "1364-2005" `` compile today. So the
+defect is one table entry per word, in `lib/frontend/token.zig`'s `kw_reserved`,
+and not a parsing problem. `m04_SPEC.md` records the same list as the place
+`wreal` is reserved, which is why `13`'s removal sentence in Table G.7 ("B.1,
+C.16") names the two clauses a fix has to move together.

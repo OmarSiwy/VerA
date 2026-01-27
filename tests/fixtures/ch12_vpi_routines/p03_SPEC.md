@@ -16,8 +16,8 @@ Verified at `ddt-capform` HEAD (45b505d):
   acbElapsedTime|acbConvergenceTest|vpi_get_analog_*|vpi_register_cb|
   vpi_remove_cb|vpi_handle_multi|vpiDerivative|stf_partials|
   vpi_register_analog_systf` outside `src/vpi/vpi_user.h` returns **only prose
-  hits** — five comments in `src/backend/codegen.zig`, two in
-  `src/diag_code.zig`. Zero code.
+  hits** — five comments in `lib/backend/codegen.zig`, two in
+  `lib/diag_code.zig`. Zero code.
 * `src/vpi/vpi_user.h` says so itself: P02 values and P03 callbacks are listed
   as "WHAT IS NOT HERE YET".
 * `tests/fixtures/ch12_vpi_routines/` is 38 `.va` files. Two (`01_analog_systf_
@@ -32,7 +32,7 @@ Verified at `ddt-capform` HEAD (45b505d):
 
 **One thing IS implemented and is spec'd here anyway**, because it was
 implemented without evidence: `tools/contract.zig` declares `Systf` and
-`SystfHost`, and `src/backend/codegen.zig:emitSystfCall` emits a
+`SystfHost`, and `lib/backend/codegen.zig:emitSystfCall` emits a
 value-plus-partials crossing that reconstructs the dual —
 `zsr.add(arg.addC(-arg.val()).scale(partial))` — explicitly citing §12.22.1 and
 §12.32's `derivtf`. So VerA's *generated device* side of partial-derivative

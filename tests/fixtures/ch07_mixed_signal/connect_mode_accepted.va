@@ -25,7 +25,7 @@
 // WHAT IS NOT CLAIMED. Segregation itself: merged-vs-split is a difference in
 // what the INSERTION phase builds (§7.8.3.1/§7.8.3.2 — one shared instance per
 // signal versus one per port), VerA does no insertion, and the parsed mode has
-// no consumer — src/frontend/ast.zig's ConnectInsertion says so in one place
+// no consumer — lib/frontend/ast.zig's ConnectInsertion says so in one place
 // rather than a fixture implying otherwise. §7.8.3's "default is merged" is
 // likewise about a phase that does not run.
 //

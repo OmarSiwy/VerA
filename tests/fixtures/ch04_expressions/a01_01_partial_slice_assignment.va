@@ -54,7 +54,7 @@
 //                             whole array (which would also give 3).
 //
 // WHY IT FAILS TODAY. VerA scalarizes every array and requires the subscript
-// count to equal the dimension count — `src/ir/lower.zig` `checkSubscriptCount`,
+// count to equal the dimension count — `lib/ir/lower.zig` `checkSubscriptCount`,
 // diagnostic E0356. Its own header comment names this exact case as the reason
 // the check exists ("a caller that checked only the range would read
 // `flag_array[3]`, a whole ROW, as if it were a scalar"), so the short form is

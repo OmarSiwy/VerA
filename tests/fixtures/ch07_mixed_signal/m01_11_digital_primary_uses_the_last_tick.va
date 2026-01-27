@@ -45,7 +45,7 @@
 // whole integers apart.
 //
 // WHAT FAILS TODAY. `error[E0209]: expected an expression: found `#``: the
-// `.va` dialect has no `#` delay (`src/frontend/parser.zig:2324` gates it on
+// `.va` dialect has no `#` delay (`lib/frontend/parser.zig:2324` gates it on
 // `self.digital`, which is set by file extension), so a discrete variable
 // cannot change value at a time at all. VerA does already read a `reg [3:0]`
 // written by a CONSTANT `initial` assignment into the analog block as an

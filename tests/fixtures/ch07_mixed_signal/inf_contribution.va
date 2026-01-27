@@ -18,7 +18,7 @@
 // 7-1. Writing `I(p) <+ inf` would put a syntax error in the file in place of
 // the §7.3.2.1 violation, and a conforming compiler would then diagnose the
 // grammar and never reach the rule this fixture demands. (VerA does accept
-// `inf` as a primary — src/frontend/parser.zig maps the keyword to `.pos_inf`
+// `inf` as a primary — lib/frontend/parser.zig maps the keyword to `.pos_inf`
 // — which is precisely why the fixture must not lean on it.) Same construction
 // as the two siblings: neg_inf_contribution_rejected.va uses -1.0/0.0 and
 // nan_contribution_rejected.va uses 0.0/0.0.

@@ -1,4 +1,8 @@
-//! VerA engine — module index & pipeline driver.
+//! VerA engine — module index & pipeline driver. The root of `lib/`, the
+//! COMPILER, which is a library: `src/` is the binary and everything that runs
+//! after compilation, and it imports this. Never the reverse — `build.zig`'s
+//! `module_specs` declares every `lib/` module before every `src/` one, so the
+//! one direction is a build-time panic rather than a review note.
 //!
 //! Each file owns one engine "class" (a group of Verilog-AMS LRM sections).
 //! This file is the facade: it re-exports every stage and owns the drivers that
@@ -19,10 +23,15 @@
 //!  backend/   → codegen.zig+naming (classes 4,5,8,10) MIR → device.zig
 //!             → orchestrator.zig  (§8.3 ABI) device.zig → .so (+ GPU kernels)
 //!
-//! The pipeline ENDS at the .so. There is no runtime stage here: §8.3's
+//! The pipeline ENDS at the .so, and `lib/` is now exactly that pipeline. §8.3's
 //! simulation cycle — assemble, factor, iterate — belongs to the host that
 //! dlopens the artifact, and VerA's contribution to its speed is the code it
 //! emits, not a loop of its own. `tools/contract.zig` is the whole promise.
+//!
+//! What `src/` holds is the other kind of runtime, the one VerA does own:
+//! `src/sim` executes digital Verilog off the shared AST (it imports
+//! `frontend/` and nothing below it — an interpreter, not a pipeline
+//! consumer), and `src/vpi` is §11's object model over an elaborated design.
 //!
 //! `frontend/` and `ir/` are shared by all targets; only `backend/` differs. The
 //! split exists so a second frontend lowering into this MIR, or a second backend
@@ -46,7 +55,7 @@
 //! That register is THIS block, it is machine-read, and it is EMPTY. An
 //! exception is one `//! ORPHAN: <path under src/> — <why>` line;
 //! `tools/source_guards.zig` parses them as the allowlist for its "every
-//! `src/backend/*.zig` is reachable from a root" test, and fails the build on a
+//! `lib/backend/*.zig` is reachable from a root" test, and fails the build on a
 //! backend file that is neither reachable nor listed. Do not add a line to
 //! silence it without the `<why>`: an orphan that stayed silent is how
 //! `eval_batch.zig` reached 702 lines nothing could call, and wave 12 deleted

@@ -25,7 +25,7 @@
 //
 // After the `=`, `net_assignment` admits an `expression` and nothing else, and
 // `#` cannot begin one. The diagnostic is therefore E0209, title "expected an
-// expression" (`src/diag_code.zig:1196`), pointed at the `#`.
+// expression" (`lib/diag_code.zig:1196`), pointed at the `#`.
 //
 // This is the one place in the row where today's error is already the RIGHT
 // error. `#` after `=` is unparseable now and stays unparseable after `delay3`

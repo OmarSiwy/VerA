@@ -1,17 +1,16 @@
 .{
     .name = .vera,
-    .version = "0.1.0",
+    .version = "0.9.0",
     .fingerprint = 0x6b0632dec2e307f,
     .minimum_zig_version = "0.16.0",
     .dependencies = .{},
     .paths = .{
         "build.zig",
         "build.zig.zon",
+        "lib",
         "src",
-        // Shipped, not compiler source: `contract` is a module here AND a PATH
-        // a consumer hands to a child `zig` (CONSUMING §1). Omitting it built
-        // fine as a `.path` dependency and would have broken the day anyone
-        // switched to `.url`+hash.
+
+        // These are just helpers, not source code
         "tools",
         "tests",
         "docs",

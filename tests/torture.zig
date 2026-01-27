@@ -1,4 +1,9 @@
-//! The torture suite — VerA plugged into the conformance harness.
+//! VerA plugged into the conformance harness — the torture suite.
+//!
+//! NOT AN ENTRY POINT. `tests/bench.zig` owns `main` and the only step,
+//! `benchmark`; this file is a value it imports: one `harness.Compiler`, plus
+//! the accept/reject-only reduction of the same compiler that the head-to-head
+//! against OpenVAF needs (see `acceptRejectCompiler`).
 //!
 //! `tests/harness.zig` owns the fixture format, the verdict algebra and the
 //! report; this file owns the one thing that is VerA's alone: what it MEANS for
@@ -13,8 +18,10 @@
 //! compiler can be held to accept-or-refuse and no more; VerA is called
 //! in-process, its device is handed to `zig build-exe`, and the resulting binary
 //! is executed — so the `ok=` column, which is the only assertion this suite
-//! has, is actually evaluated. That is the depth `zig build conformance` cannot
-//! reach against a foreign compiler, and the reason both steps exist.
+//! has, is actually evaluated. That is the depth `--against-openvaf` cannot
+//! reach, and the reason the report has a VerA-ONLY section: the `ok=` columns
+//! are not a score the other compiler lost, they are a question it was never
+//! asked.
 //!
 //! WHY A TRANSCRIPT SNAPSHOT IS NOT AN ORACLE, and what replaces it. The
 //! deleted `.expected.zig` files were VerA's own output fed back to it: a wrong
@@ -48,49 +55,99 @@
 //! ask the separate, real question "does this still pass under optimization?",
 //! deliberately and not by default.
 //!
-//!   zig build torture                     # every fixture
-//!   zig build torture -- ch04             # only paths matching `ch04`
-//!   zig build torture -- --strict         # unasserted, refused and xfail FAIL instead of warn
-//!   zig build torture -- --coverage       # LRM clauses cited, one-sided and uncited
-//!   zig build torture -- -j1              # one at a time, streaming; the debugging path
-//!   zig build torture -- --fixture-opt=ReleaseFast
+//!   zig build benchmark                   # every fixture
+//!   zig build benchmark -- ch04           # only paths matching `ch04`
+//!   zig build benchmark -- --strict       # unasserted, refused and xfail FAIL
+//!   zig build benchmark -- --coverage     # LRM clauses cited, one-sided, uncited
+//!   zig build benchmark -- -j1            # one at a time, streaming; for debugging
+//!   zig build benchmark -- --fixture-opt=ReleaseFast
+//!   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
 
 const std = @import("std");
 const vera = @import("vera");
 const harness = @import("harness.zig");
-const options = @import("torture_options");
+const options = @import("suite_options");
 /// The two directories the SUITE owns, shared with `harness.zig` and the other
 /// runner: which fixtures to walk, and which LRM their `//! lrm` lines cite.
-const suite = @import("suite_options");
+const suite = options;
 
 const Io = std.Io;
 const Fixture = harness.Fixture;
 const Result = harness.Result;
 
-pub fn main(init: std.process.Init) !u8 {
-    // `-Doptimize` builds the RUNNER; this builds the per-fixture testbench
-    // binaries the runner spawns a `zig build-exe` for. Two different programs,
-    // so two different knobs.
-    var fixture_opt = std.meta.stringToEnum(std.builtin.OptimizeMode, options.fixture_optimize).?;
-    return harness.run(init, .{
+/// VerA at full depth: compile, build a testbench, run it, read the `ok=`
+/// columns. `fixture_opt` is borrowed — it lives in the caller's `Config`.
+pub fn compiler(fixture_opt: *std.builtin.OptimizeMode) harness.Compiler {
+    return .{
         .name = "vera",
         .runs = true,
         .owns_xfail = true,
-        .ctx = &fixture_opt,
+        .ctx = fixture_opt,
         .check = check,
-        .arg = arg,
-    });
+    };
 }
 
-fn arg(ctx: *anyopaque, a: []const u8) bool {
-    const fixture_opt: *std.builtin.OptimizeMode = @ptrCast(@alignCast(ctx));
-    if (!std.mem.startsWith(u8, a, "--fixture-opt=")) return false;
-    const name = a["--fixture-opt=".len..];
-    fixture_opt.* = std.meta.stringToEnum(std.builtin.OptimizeMode, name) orelse {
-        std.debug.print("torture: not an optimize mode: {s}\n", .{name});
-        std.process.exit(1);
+/// VerA held to exactly what a foreign compiler can be held to: did it accept
+/// what the LRM says must compile and refuse what it says must not?
+///
+/// This exists so the head-to-head's agreement column is the SAME question for
+/// both sides. Scoring VerA with the plug above instead would compare a
+/// compile-build-run verdict against an accept-or-refuse one and print the
+/// difference as if it were about the compilers. It is a strictly weaker claim
+/// than `compiler` makes, and the report says so where it prints it.
+pub fn acceptRejectCompiler() harness.Compiler {
+    return .{
+        .name = "vera",
+        .runs = false,
+        // `//! xfail` is VerA's debt, but it is debt against the FULL claim —
+        // a fixture VerA compiles and then gets a wrong number from is unmet
+        // there and met here, and honouring the marker would turn that into an
+        // XPASS failure of a run that is not asking the question.
+        .owns_xfail = false,
+        .ctx = &no_ctx,
+        .check = checkAcceptReject,
     };
-    return true;
+}
+
+var no_ctx: u8 = 0;
+
+fn checkAcceptReject(
+    _: *anyopaque,
+    gpa: std.mem.Allocator,
+    _: Io,
+    _: std.mem.Allocator,
+    f: Fixture,
+    source: []const u8,
+    d: vera.tb.Directives,
+    w: *Io.Writer,
+) anyerror!Result {
+    var outcome = try compileFixture(gpa, f, source, d);
+    defer outcome.deinit(gpa);
+    const must_reject = d.reject.len != 0;
+    if ((outcome == .accepted) == !must_reject) return .met;
+    if (must_reject) {
+        try w.print("FAIL {s}: the LRM says this must not compile, and vera accepted it.\n", .{f.path});
+    } else {
+        try w.print("FAIL {s}: must compile, and vera refused it: {s}\n", .{ f.path, outcome.refused.error_name });
+    }
+    return .unmet;
+}
+
+/// ONE accept/reject compilation, which is the unit the head-to-head times:
+/// source in, emitted device size out, or null when VerA refused it. Exactly
+/// the work `--against-openvaf` gives the other compiler and no more — no
+/// testbench is built and nothing is run, because nothing can be on that side.
+///
+/// It is this and not `check` because the `ok=` half costs a `zig build-exe`
+/// per fixture, which would put the Zig compiler's wall clock inside a number
+/// labelled as VerA's.
+pub fn compileOnce(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !?usize {
+    var outcome = try compileFixture(gpa, f, source, d);
+    defer outcome.deinit(gpa);
+    return switch (outcome) {
+        .accepted => |n| n,
+        .refused => null,
+    };
 }
 
 fn check(
@@ -119,6 +176,25 @@ const Failure = struct {
     generated: ?[]const u8 = null,
 };
 
+/// What one compilation did. `accepted` carries the emitted device's SIZE and
+/// not its text: the reject half never looks at it, and the head-to-head wants
+/// a number, so holding a megabyte of Zig alive past the compilation would only
+/// be there to be freed.
+const Outcome = union(enum) {
+    accepted: usize,
+    refused: Failure,
+
+    fn deinit(self: *Outcome, gpa: std.mem.Allocator) void {
+        switch (self.*) {
+            .accepted => {},
+            .refused => |*bad| {
+                if (bad.generated) |g| gpa.free(g);
+                bad.diags.deinit(gpa);
+            },
+        }
+    }
+};
+
 // ---------------------------------------------------------------------------
 // The reject half: the expected behavior is a diagnostic
 // ---------------------------------------------------------------------------
@@ -130,14 +206,15 @@ fn verifyRejected(
     d: vera.tb.Directives,
     w: *Io.Writer,
 ) !Result {
-    var bad = try compileFixture(gpa, f, source, d) orelse {
-        try w.print("FAIL {s}: expected a diagnostic, but it compiled cleanly\n", .{f.path});
-        return .unmet;
+    var outcome = try compileFixture(gpa, f, source, d);
+    defer outcome.deinit(gpa);
+    const bad = switch (outcome) {
+        .accepted => {
+            try w.print("FAIL {s}: expected a diagnostic, but it compiled cleanly\n", .{f.path});
+            return .unmet;
+        },
+        .refused => |b| b,
     };
-    defer {
-        if (bad.generated) |g| gpa.free(g);
-        bad.diags.deinit(gpa);
-    }
 
     for (d.reject) |pattern| {
         if (!failureContains(bad, pattern)) {
@@ -150,17 +227,17 @@ fn verifyRejected(
     return .met;
 }
 
-/// One compilation, returning a `Failure` or null. Two failure modes are not
-/// Zig errors and get synthetic names, matching the vocabulary the fixtures use:
+/// One compilation. Two failure modes are not Zig errors and get synthetic
+/// names, matching the vocabulary the fixtures use:
 ///   `DiagnosticsReported`  — compiled, but a stage reported a message.
 ///   `GeneratedCompileError` — codegen deliberately emitted `@compileError`.
-fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !?Failure {
+fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !Outcome {
     var diags: vera.diag.Bag = .init(gpa);
     // `.debug` (not `.lint`) so stage 6 runs: some fixtures are rejected by
     // codegen emitting `@compileError`, which `.lint` would never see.
     var result = vera.compileSourceOpts(gpa, source, .debug, .{
         .file_name = f.path,
-        .include_dirs = &.{ f.dir, suite.fixture_root },
+        .include_dirs = &.{ f.dir, f.root },
         .diags = &diags,
         // Annex E.2: the fixture's `//! spice` cards, read as a netlist.
         .spice_netlist = d.spice,
@@ -169,12 +246,12 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
             diags.deinit(gpa);
             return error.OutOfMemory;
         }
-        return .{ .error_name = @errorName(err), .diags = diags };
+        return .{ .refused = .{ .error_name = @errorName(err), .diags = diags } };
     };
     defer result.deinit();
 
     if (diags.failed()) {
-        return .{ .error_name = "DiagnosticsReported", .diags = diags };
+        return .{ .refused = .{ .error_name = "DiagnosticsReported", .diags = diags } };
     }
 
     const generated = result.generateDevice() catch |err| {
@@ -182,20 +259,20 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
             diags.deinit(gpa);
             return error.OutOfMemory;
         }
-        return .{ .error_name = @errorName(err), .diags = diags };
+        return .{ .refused = .{ .error_name = @errorName(err), .diags = diags } };
     };
     if (std.mem.indexOf(u8, generated, "@compileError") != null) {
         // Transfer the GPA-owned text before dropping the compilation.
         result.device.text = "";
-        return .{
+        return .{ .refused = .{
             .error_name = "GeneratedCompileError",
             .diags = diags,
             .generated = generated,
-        };
+        } };
     }
 
     diags.deinit(gpa);
-    return null;
+    return .{ .accepted = generated.len };
 }
 
 /// A rejection is described by more than the returned error value: the `//!
@@ -300,7 +377,7 @@ fn runAndCheck(
 
     var result = vera.compileSourceOpts(gpa, source, .release_fast, .{
         .file_name = f.path,
-        .include_dirs = &.{ f.dir, suite.fixture_root },
+        .include_dirs = &.{ f.dir, f.root },
         .diags = &diags,
         .lint = levels,
         .display = .emit,
@@ -326,7 +403,12 @@ fn runAndCheck(
     // One work directory per fixture, keyed on the whole relative path: two
     // fixtures may declare the same module name AND share a file name, and a
     // shared scratch would race them onto one `device.zig`.
-    const work = try std.fs.path.join(arena, &.{ options.work_root, f.slug });
+    const work = try std.fs.path.join(arena, &.{
+        options.work_root,
+        "torture",
+        std.fs.path.basename(f.root),
+        f.slug,
+    });
     const built = vera.tb.buildExe(gpa, io, device, runner, .{
         .work_dir = work,
         .contract = options.contract,
@@ -479,6 +561,7 @@ test "a fatal exit after a passing assertion must be explicitly expected" {
         .path = "exit_oracle.va",
         .stem = "exit_oracle",
         .dir = suite.fixture_root,
+        .root = suite.fixture_root,
         .slug = "harness_exit_status_selftest",
     };
     const unexpected = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{}, &report.writer);

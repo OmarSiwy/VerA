@@ -36,7 +36,7 @@
 // `OHM`; the reactive spelling is fixture 04's `C=1E-3`, deliberately written
 // without a suffix so the two failures stay separable.
 //
-// WHAT VerA DOES TODAY. `src/frontend/spice_cards.zig` does not read the value
+// WHAT VerA DOES TODAY. `lib/frontend/spice_cards.zig` does not read the value
 // half of a `k=v` pair at all — `isSpiceName` rejects any token containing `=`
 // and the card's parameters never leave the reader. So `r1.r` does not resolve
 // and the instance is the prelude's 1 ohm.

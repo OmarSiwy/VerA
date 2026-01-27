@@ -43,7 +43,7 @@ EMPTY, and measured rather than asserted: no `.va` in this folder carries a
 `//! xfail` line. The table used to hold four rows and every one of them is closed.
 
 The three based-number rows were one defect wearing three hats — `36`, `37` and
-`51` were all `src/frontend/lexer.zig` treating a based constant as a single
+`51` were all `lib/frontend/lexer.zig` treating a based constant as a single
 indivisible scan, which is what 2.6.1 denies in the same sentence that describes
 it ("composed of up to three tokens … It shall be legal to macro substitute these
 three tokens"). `36` (white space before the digits) and `51` (a zero size

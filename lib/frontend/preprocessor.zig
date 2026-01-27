@@ -463,7 +463,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
 /// of comments plus ~12 KB of output — the bound is those three literals, and
 /// nothing at runtime can add a fourth.
 ///
-/// MEASURED, `zig build bench -- fixtures` on this tree, before → after, **in
+/// MEASURED, `zig build benchmark -- fixtures` on this tree, before → after, **in
 /// DEBUG** — that invocation takes the default `-Doptimize`, which is Debug, and
 /// the run predates the bench printing its mode:
 /// `pp` 902.5 ms → 186.0 ms and `lint` 2.700 s → 1.970 s over the 1164-fixture

@@ -59,7 +59,7 @@
 //                             carry the weight and this one is the guard.
 //
 // WHY IT FAILS TODAY. Same refusal as 01: `checkSubscriptCount`
-// (`src/ir/lower.zig`) demands one subscript per declared dimension, so
+// (`lib/ir/lower.zig`) demands one subscript per declared dimension, so
 // `flag_array[src]` on a 2-D array is E0356 before the dynamic question is ever
 // reached. Once slices exist, this is the fixture that says they are not
 // required to be compile-time constants.

@@ -33,7 +33,7 @@ The last three closed by making E.1.1's ANTECEDENT true rather than by arguing a
 defined in a SPICE NETLIST, and E.1.1 conditions the whole family on the tool: "if a
 simulator which supports Verilog-AMS HDL is also able to read SPICE netlists of a particular
 flavor". VerA now is, for one flavor: `//! spice <one netlist line>` hands a fixture's cards
-to the compiler verbatim (`src/backend/tb.zig`), and `src/frontend/spice_cards.zig` reads
+to the compiler verbatim (`lib/backend/tb.zig`), and `lib/frontend/spice_cards.zig` reads
 `.MODEL` and `.SUBCKT` out of them and emits a Verilog-AMS module for each into the same
 prepended-text channel Table E.1 already uses. So E.2's "the subcircuits and models contained
 within the SPICE netlist are treated as module definitions" is met by them BEING module
@@ -165,7 +165,7 @@ down, and both sides compile.
 
 **Empty.** It held three entries, all one reason wearing three hats — the object the instance
 names is defined in a SPICE netlist, and VerA read none — and the reason is now false rather
-than excused. `//! spice` plus `src/frontend/spice_cards.zig` make E.1.1's antecedent true
+than excused. `//! spice` plus `lib/frontend/spice_cards.zig` make E.1.1's antecedent true
 for `.MODEL` and `.SUBCKT` declarations, so:
 
 | Was blocked on | Sections | Now |

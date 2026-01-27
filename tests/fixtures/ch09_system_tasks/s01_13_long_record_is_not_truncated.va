@@ -37,7 +37,7 @@
 // fixed and the reader is not, the first pair passes and this one still fails.
 //
 // WHAT THIS CATCHES TODAY. Both ceilings are 512 bytes of per-call-site scratch
-// (src/backend/str_kernels.zig zSBuf, src/backend/file_kernels.zig ZFSlot.line)
+// (lib/backend/str_kernels.zig zSBuf, lib/backend/file_kernels.zig ZFSlot.line)
 // and both are documented as deliberate shortcuts rather than as limits any
 // clause states. The write ceiling does not truncate — it drops the record
 // entirely and the file ends up 0 bytes long — and the read ceiling returns 512

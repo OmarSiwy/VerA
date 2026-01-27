@@ -16,7 +16,7 @@ and macro families instead.
 | Annex D construct | Fixture or disposition |
 |---|---|
 | **D.1** `DISCIPLINES_VAMS` multiple-inclusion guard | `disciplines_vams_guard_idempotent.va` (double `include`, `electrical` and `P_CELSIUS0` still usable after) |
-| D.1 `discipline \logic` — escaped name, `domain discrete`, natureless | `literal_logic_discipline.va` — green, `//! reject E0501`: the escaped name resolves to the prelude's discipline, which binds no natures, and `checkAccessMatch` (`src/ir/lower.zig`) now diagnoses the half that binds nothing instead of returning early |
+| D.1 `discipline \logic` — escaped name, `domain discrete`, natureless | `literal_logic_discipline.va` — green, `//! reject E0501`: the escaped name resolves to the prelude's discipline, which binds no natures, and `checkAccessMatch` (`lib/ir/lower.zig`) now diagnoses the half that binds nothing instead of returning early |
 | D.1 `discipline ddiscrete` — `domain discrete`, natureless | `discrete_disciplines.va` — green, `//! reject E0501`, same check |
 | D.1 `_ABSTOL` override arms (16 `ifdef`/`else` pairs) | `abstol_override_branches.va` defines all sixteen before `include "disciplines.vams"` and re-declares the shape locally so the `ifdef` arm is provably taken even on a prepending compiler |
 | D.1 electrical natures `Current` `Charge` `Voltage` `Flux` (`I` `Q` `V` `Phi`) | `electrical_definitions.va` writes the block in the annex's own §3.6.1/§3.6.2 syntax under prefixed names; `literal_electrical_disciplines.va` reads the implementation's `V`/`I`; `Phi` is exercised as magnetic's flow in `literal_magnetic_discipline.va`; `Q` only through the reject in `unbound_nature_charge_rejected.va` |
@@ -47,7 +47,7 @@ and macro families instead.
 | D.2 selector chain, `PHYSICAL_CONSTANTS_NIST2010` arm | `physical_constants_nist2010.va` |
 | D.2 selector chain, innermost `else` (NIST1998 fallback) | `physical_constants_nist1998.va` — the one arm needing no `undef` plumbing |
 | D.2 the twenty `P_{Q,K,H,EPS0}_{SPICE,OLD,NIST1998,NIST2010,NIST2018}` base macros | *not read directly* — every fixture reads them through `P_Q`/`P_K`/`P_H`/`P_EPS0` after selection. A `constants.vams` that omitted a base name but inlined the right value in the chain would pass |
-| **D.3** the implementation must *supply* `driver_access.vams` | `driver_access_include.va` — green: `src/frontend/preprocessor.zig`'s `builtin_includes` has three entries now, so the `` `include `` resolves and all twelve `DRIVER_*` masks come out of the shipped file rather than out of the fixture |
+| **D.3** the implementation must *supply* `driver_access.vams` | `driver_access_include.va` — green: `lib/frontend/preprocessor.zig`'s `builtin_includes` has three entries now, so the `` `include `` resolves and all twelve `DRIVER_*` masks come out of the shipped file rather than out of the fixture |
 | D.3 the twelve `DRIVER_*` bit positions | `driver_flags_low.va` (UNKNOWN…BEHAVIORAL) and `driver_flags_high.va` (SDF…WAND) pin each mask and the two disjointness sums 31 and 2016 — but they `define` the masks themselves, so what runs is the lexer's `32'b` conversion, not D.3. `driver_access_include.va` is the half that reads the annex file |
 | D.3 `DRIVER_ACCESS_VAMS` guard | *half* — `driver_access_include.va` takes the guard's defining arm (VerA preloads only D.1/D.2, so D.3 must be asked for and the twelve `define`s must run for the file to assert anything). The suppression direction — a second `` `include `` costing nothing, which `disciplines_vams_guard_idempotent.va` states for D.1/D.2 — has no fixture. `driver_flags_low.va`/`_high.va` deliberately do **not** wrap in the guard: with it, an implementation that ships D.3 erases the whole module and the fixture asserts nothing |
 
@@ -81,7 +81,7 @@ reasons name checks that must not silently regress:
    description at all. Closed together with group 2.
 2. **Half-bound signal-flow disciplines** — `signal_flow_flow_access_rejected.va`,
    `signal_flow_potential_access_rejected.va`. The root cause of all four was one early
-   return in `checkAccessMatch` (`src/ir/lower.zig`) when the discipline bound no nature
+   return in `checkAccessMatch` (`lib/ir/lower.zig`) when the discipline bound no nature
    for the half being accessed; the E0501 arm that replaced it fires for both halves, so
    fixing it cleared groups 1 and 2 at once, exactly as this ledger predicted. §4.4's
    generic `potential()`/`flow()` are exempt from the *name* match only and still go

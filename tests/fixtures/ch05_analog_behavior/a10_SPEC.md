@@ -47,11 +47,11 @@ is legal), §4.6.1 (analysis names), §6.7 (hierarchical names).
 
 | claim | where | evidence |
 |---|---|---|
-| timer breakpoints reach the host | `src/backend/codegen.zig:7635 emitNextBreakpoint` → `tb.zig:1182` / `ARPice/src/analysis/Circuit.zig:699` | the host lands rows at *exactly* `2.5e-4` and `6.25e-4` — dumped from `/tmp/a10_bp.raw`, both coordinates bit-equal to the literal |
+| timer breakpoints reach the host | `lib/backend/codegen.zig:7635 emitNextBreakpoint` → `tb.zig:1182` / `ARPice/src/analysis/Circuit.zig:699` | the host lands rows at *exactly* `2.5e-4` and `6.25e-4` — dumped from `/tmp/a10_bp.raw`, both coordinates bit-equal to the literal |
 | `$bound_step` reaches the host | `codegen.zig:7156` writes `inst.bound_step`; `ARPice/src/analysis/tran/tran.zig:615-629` reads it | max accepted `dt` = `5.000000000000013e-05` on `a10_bound_step.sp`, exactly `0.05/freq`; the deck's own ceiling was `2e-5`… and would have been `2e-4` without it |
 | a cross() is resolved sharply | `ARPice/src/analysis/tran/tran.zig:605-613` (`stateCtl(.query)` reject-and-shrink) | the latch in `a10_cross_timestep.sp` switches at `t = 5.0000005117e-4`, 0.5 ns past a crossing at `5e-4` |
 | tolerance-without-direction is refused | E0517 | `error[E0517]: … a tolerance is given but the direction slot is empty` |
-| `$simprobe` resolves a sibling *parameter* | `src/ir/lower.zig:9150 lowerSimprobe` | fixture 09 claim 2 reads `got=2` |
+| `$simprobe` resolves a sibling *parameter* | `lib/ir/lower.zig:9150 lowerSimprobe` | fixture 09 claim 2 reads `got=2` |
 | `$simparam$str` with a *foldable* string variable | constant propagation, then `codegen.zig:5588 strArg` | fixture 07 claims 1-3 pass |
 
 **Not implemented.** Each is a fixture below, and each was confirmed by running

@@ -1,9 +1,15 @@
 // §9.11 conversion system functions in the analog context. The extension is
-// TWO functions and this file tests both of them: "Verilog AMS HDL extends the
-// conversion functions defined in IEEE Std 1364-2005 Verilog HDL so that
-// $bitstoreal and $realtobits can be used in the analog context." Table 9-8
-// marks the other four rows ($itor, $rtoi, $signed, $unsigned) analog "No" —
-// they are pinned as rejects in 061/062/134/135, not exercised here.
+// FOUR names in two pairs: "Verilog AMS HDL extends the conversion functions
+// defined in IEEE Std 1364 Verilog so that $bitstoreal and $realtobits, $rtoi
+// and $itor can be used in the analog context." Table 9-8 (printed p.221,
+// physical p.234) says the same row by row — `$bitstoreal Yes Yes`,
+// `$realtobits Yes Yes`, `$rtoi Yes Yes`, `$itor Yes Yes`. The only analog "No"
+// cells in the family are `$signed` and `$unsigned`, pinned as rejects in
+// 134/135 and not exercised here. ($rtoi and $itor are legal here and
+// unimplemented by VerA — a gap in the compiler, pinned by the M04 row
+// (tests/fixtures/ch07_mixed_signal/m04_SPEC.md), not a rule this folder can
+// assert. 061/062 used to claim the opposite and were removed; see COVERAGE.md
+// §s9.11.)
 //
 // $realtobits yields the 64-bit IEEE-754 PATTERN of the real and $bitstoreal
 // maps that pattern back, so the pair is the identity on any real: bit-exact,
