@@ -160,7 +160,7 @@ pub const Directives = struct {
     /// exports something else it gets `//! xfail`, in the ordinary way — writing
     /// the gap into the `want` instead would invert the fixture and fail a
     /// conforming compiler.
-    noise: []const []const u8 = &.{},
+    noise: []const NoiseWant = &.{},
     /// Whether any `//! noise` line was written at all. Separate from
     /// `noise.len`, because `//! noise none` is an ASSERTION that the table is
     /// empty and an absent directive is not — without this the runner could not
@@ -189,6 +189,54 @@ pub const Directives = struct {
     xfail: ?[]const u8 = null,
 };
 
+/// One `//! noise` line, split into the part that names the ROW and the parts
+/// that state its CONTENTS:
+///
+///     //! noise <kind>(<row>,<col>)#<src> [name=<s>] [white=<v>] [flicker=<v>]
+///                                        [ef=<v>] [rtol=<v>]
+///     //! noise table(<row>,<col>)#<src> [name=<s>] interp=linear|log
+///                                        points=<f>:<p>,<f>:<p>,…
+///
+/// Every field after `topo` is OPTIONAL and asserts nothing when absent, so
+/// every line written before this existed keeps meaning exactly what it did:
+/// the row is at this position, on this branch, with this correlation id.
+///
+/// The split exists because the topology is a COMPTIME property of the model
+/// and the PSD is not. `topo` is checked against `noise_gens` once; `white`,
+/// `flicker` and `ef` are read from `noisePsd` at the FIRST operating point,
+/// which is what lets a fixture pin a bias-dependent density at a stated bias
+/// instead of at whatever the last sweep step happened to be.
+pub const NoiseWant = struct {
+    /// `kind(row,col)#source`, verbatim, compared byte-exact against the
+    /// device's own spelling of the row.
+    topo: []const u8,
+    /// §4.6.4.1/.2/.3 the source label. Byte-exact; `name=` with an empty
+    /// value asserts the model supplied no name.
+    name: ?[]const u8 = null,
+    /// §4.6.4.1 `S(f) = white`, and §4.6.4.2's `flicker`/`ef` in `S(f) =
+    /// flicker/f^ef`. Each is read out of `noisePsd(x, model, inst)[k]`.
+    white: ?f64 = null,
+    flicker: ?f64 = null,
+    ef: ?f64 = null,
+    /// Relative tolerance for the three above. The default is tight because a
+    /// fixture asserts a number it DERIVED, not a measurement; a line whose
+    /// value travels through §9.15's implementation-defined k/q has to say so
+    /// by widening this, and say why in its header.
+    rtol: f64 = 1e-12,
+    /// §4.6.4.3/.4 `noise_tables[noise_gens[k].table.?]`. `interp` is the
+    /// clause — `linear` is §4.6.4.3 and `log` is §4.6.4.4 — and `points` is
+    /// the sorted knot list the device exports, which is not the order the
+    /// model necessarily wrote them in.
+    interp: ?[]const u8 = null,
+    points: ?[]const [2]f64 = null,
+
+    /// Does this line assert anything that needs a BIAS? The comptime topology
+    /// block can answer everything else without solving.
+    fn needsPoint(self: NoiseWant) bool {
+        return self.white != null or self.flicker != null or self.ef != null;
+    }
+};
+
 /// Guard against a fixture that asks for a million points and a gigabyte of
 /// generated Zig. Hit only by a mistake — a real sweep is tens of points.
 pub const max_points: usize = 4096;
@@ -210,7 +258,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var reject: std.ArrayList([]const u8) = .empty;
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
-    var noise: std.ArrayList([]const u8) = .empty;
+    var noise: std.ArrayList(NoiseWant) = .empty;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
@@ -268,8 +316,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             // directive: "this model declares no generator" is a claim, and a
             // missing line is not one.
             if (!std.mem.eql(u8, rest, "none")) {
-                if (!validNoiseEntry(rest)) return error.BadSyntax;
-                try noise.append(arena, try arena.dupe(u8, rest));
+                try noise.append(arena, try parseNoiseEntry(arena, rest));
             }
             d.asserts_noise = true;
         } else if (std.mem.eql(u8, kw, "spice")) {
@@ -358,6 +405,52 @@ fn validNoiseEntry(s: []const u8) bool {
     const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return false;
     return std.mem.trim(u8, inner[0..comma], " \t").len != 0 and
         std.mem.trim(u8, inner[comma + 1 ..], " \t").len != 0;
+}
+
+/// One `//! noise` line: the topology, then whatever `key=value` fields follow.
+///
+/// The topology is taken as the run from the start of the line to the first
+/// space AFTER the `#`, not to the first space anywhere, because the branch may
+/// be written `thermal(p, n)#0` — `validNoiseEntry` already trims inside the
+/// parentheses, so splitting on any space would cut a legal entry in half.
+fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
+    const hash = std.mem.indexOfScalar(u8, s, '#') orelse return error.BadSyntax;
+    var end = hash + 1;
+    while (end < s.len and s[end] != ' ' and s[end] != '\t') end += 1;
+    const topo = s[0..end];
+    if (!validNoiseEntry(topo)) return error.BadSyntax;
+
+    var w: NoiseWant = .{ .topo = try arena.dupe(u8, topo) };
+    var fields = std.mem.tokenizeAny(u8, s[end..], " \t");
+    while (fields.next()) |f| {
+        const at = std.mem.indexOfScalar(u8, f, '=') orelse return error.BadSyntax;
+        const key = f[0..at];
+        const val = f[at + 1 ..];
+        if (std.mem.eql(u8, key, "name")) {
+            w.name = try arena.dupe(u8, val);
+        } else if (std.mem.eql(u8, key, "white")) {
+            w.white = try number(val);
+        } else if (std.mem.eql(u8, key, "flicker")) {
+            w.flicker = try number(val);
+        } else if (std.mem.eql(u8, key, "ef")) {
+            w.ef = try number(val);
+        } else if (std.mem.eql(u8, key, "rtol")) {
+            w.rtol = try number(val);
+        } else if (std.mem.eql(u8, key, "interp")) {
+            if (!std.mem.eql(u8, val, "linear") and !std.mem.eql(u8, val, "log")) return error.BadSyntax;
+            w.interp = try arena.dupe(u8, val);
+        } else if (std.mem.eql(u8, key, "points")) {
+            var pts: std.ArrayList([2]f64) = .empty;
+            var it = std.mem.tokenizeScalar(u8, val, ',');
+            while (it.next()) |pair| {
+                const colon = std.mem.indexOfScalar(u8, pair, ':') orelse return error.BadSyntax;
+                try pts.append(arena, .{ try number(pair[0..colon]), try number(pair[colon + 1 ..]) });
+            }
+            if (pts.items.len == 0) return error.BadSyntax;
+            w.points = pts.items;
+        } else return error.BadSyntax;
+    }
+    return w;
 }
 
 /// `V(a)`, `x[a]` and a bare `a` all name the unknown `a`. The first two are
@@ -598,7 +691,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\        const want = [_][]const u8{
             \\
         );
-        for (d.noise) |e| try print(&out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
+        for (d.noise) |e| try print(&out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e.topo)});
         try out.appendSlice(arena,
             \\        };
             \\        if (comptime @hasDecl(D, "noise_gens")) {
@@ -635,6 +728,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             \\    }
             \\
         );
+        try emitNoiseComptime(arena, &out, d);
     }
 
     // --- one straight-line block per operating point ------------------------
@@ -727,6 +821,12 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // number the device's own equations put there.
             try print(&out, arena, "        const solved{d} = solve(&x, &forced, &{s}, &inst);\n", .{ n, mdl });
             try print(&out, arena, "        point({d}, &x, {f}, &{s}, &inst);\n", .{ n, fmtF64(t), mdl });
+            // §4.6.4.1/.2 the PSD is a function of the BIAS, so unlike the
+            // topology it cannot be printed once beside the comptime table.
+            // The first point is the one a fixture states: it is the only
+            // point every fixture has, and pinning a density at a named bias
+            // is the whole content of a bias-dependent `white=`.
+            if (n == 0) try emitNoisePsd(arena, &out, d, mdl);
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
             // of `Instance`, and only `updateState` ever writes it.
@@ -748,6 +848,133 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\
     );
     return out.items;
+}
+
+/// The relative compare the `white`/`flicker`/`ef`/`points` fields use, emitted
+/// as a local rather than added to the prelude: it exists only where a `//!
+/// noise` line asked for a number, and a prelude declaration would be dead in
+/// every other testbench.
+const noise_close =
+    \\        const nclose = struct {
+    \\            fn f(g: f64, w: f64, rt: f64) bool {
+    \\                return @abs(g - w) <= rt * @max(@abs(g), @abs(w));
+    \\            }
+    \\        }.f;
+    \\
+;
+
+/// The §4.6.4 fields that are COMPTIME properties of the device: the source
+/// label (§4.6.4.1/.2/.3) and the tabulated spectrum (§4.6.4.3/.4). Emitted
+/// beside the topology block, one guarded statement per asserting line, so a
+/// fixture that asserts none of them adds nothing.
+fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+    var any_points = false;
+    for (d.noise) |w| {
+        if (w.points != null) any_points = true;
+    }
+    var any = any_points;
+    for (d.noise) |w| {
+        if (w.name != null or w.interp != null) any = true;
+    }
+    if (!any) return;
+    try out.appendSlice(arena, "    if (comptime @hasDecl(D, \"noise_gens\")) {\n");
+    if (any_points) try out.appendSlice(arena, noise_close);
+    for (d.noise, 0..) |w, k| {
+        if (w.name == null and w.interp == null and w.points == null) continue;
+        try print(out, arena, "        if (comptime D.noise_gens.len > {d}) {{\n", .{k});
+        if (w.name) |nm| try print(
+            out,
+            arena,
+            "            std.debug.print(\"noise[{d}].name got={{s}} want={{s}} ok={{d}}\\n\", .{{\n" ++
+                "                D.noise_gens[{d}].name, \"{f}\",\n" ++
+                "                @intFromBool(std.mem.eql(u8, D.noise_gens[{d}].name, \"{f}\")),\n" ++
+                "            }});\n",
+            .{ k, k, std.zig.fmtString(nm), k, std.zig.fmtString(nm) },
+        );
+        if (w.interp != null or w.points != null) {
+            // A `.table` row and only a `.table` row has a spectrum here. A
+            // fixture that asserts `points` on a parametric row is asserting
+            // something the export cannot carry, and that is a FAIL with a
+            // reason rather than a crash on `g.table.?`.
+            try print(out, arena,
+                \\            if (D.noise_gens[{d}].table) |ti| {{
+                \\                const tbl = D.noise_tables[ti];
+                \\
+            , .{k});
+            if (w.interp) |ip| try print(
+                out,
+                arena,
+                "                std.debug.print(\"noise[{d}].interp got={{s}} want={{s}} ok={{d}}\\n\", .{{\n" ++
+                    "                    @tagName(tbl.interp), \"{s}\",\n" ++
+                    "                    @intFromBool(std.mem.eql(u8, @tagName(tbl.interp), \"{s}\")),\n" ++
+                    "                }});\n",
+                .{ k, ip, ip },
+            );
+            if (w.points) |pts| {
+                try out.appendSlice(arena, "                const want_pts = [_][2]f64{");
+                for (pts, 0..) |p, i| try print(out, arena, "{s}.{{ {f}, {f} }}", .{
+                    if (i == 0) " " else ", ", fmtF64(p[0]), fmtF64(p[1]),
+                });
+                try print(out, arena,
+                    \\ }};
+                    \\                var pts_ok = tbl.points.len == want_pts.len;
+                    \\                if (pts_ok) for (tbl.points, want_pts) |g, wp| {{
+                    \\                    if (!nclose(g[0], wp[0], {f}) or !nclose(g[1], wp[1], {f})) {{
+                    \\                        pts_ok = false;
+                    \\                        break;
+                    \\                    }}
+                    \\                }};
+                    \\                std.debug.print("noise[{d}].points got={{any}} want={{any}} ok={{d}}\n", .{{
+                    \\                    tbl.points, want_pts, @intFromBool(pts_ok),
+                    \\                }});
+                    \\
+                , .{ fmtF64(w.rtol), fmtF64(w.rtol), k });
+            }
+            try print(out, arena,
+                \\            }} else std.debug.print("noise[{d}].table got=none want=a table ok=0\n", .{{}});
+                \\
+            , .{k});
+        }
+        try out.appendSlice(arena, "        }\n");
+    }
+    try out.appendSlice(arena, "    }\n");
+}
+
+/// §4.6.4.1/.2 `white`, `flicker` and `ef`, read out of `noisePsd` at the
+/// operating point this is emitted into. `model` is the caller's card name,
+/// which `//! psweep` renames.
+fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
+    var any = false;
+    for (d.noise) |w| {
+        if (w.needsPoint()) any = true;
+    }
+    if (!any) return;
+    try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"noisePsd\")) {\n");
+    try out.appendSlice(arena, noise_close);
+    try print(out, arena, "            const psd = D.noisePsd(x, &{s}, &inst);\n", .{mdl});
+    for (d.noise, 0..) |w, k| {
+        if (!w.needsPoint()) continue;
+        try print(out, arena, "            if (comptime D.noise_gens.len > {d}) {{\n", .{k});
+        const fields = [_]struct { []const u8, ?f64 }{
+            .{ "white", w.white },
+            .{ "flicker", w.flicker },
+            .{ "ef", w.ef },
+        };
+        for (fields) |f| {
+            const want = f[1] orelse continue;
+            try print(
+                out,
+                arena,
+                "                std.debug.print(\"noise[{d}].{s} got={{d}} want={{d}} ok={{d}}\\n\", .{{\n" ++
+                    "                    psd[{d}].{s}, {f},\n" ++
+                    "                    @intFromBool(nclose(psd[{d}].{s}, {f}, {f})),\n" ++
+                    "                }});\n",
+                .{ k, f[0], k, f[0], fmtF64(want), k, f[0], fmtF64(want), fmtF64(w.rtol) },
+            );
+        }
+        try out.appendSlice(arena, "            }\n");
+    }
+    try out.appendSlice(arena, "        }\n");
 }
 
 /// The cartesian product of the sweep lines, last varying fastest. One
@@ -1775,8 +2002,14 @@ test "§4.6.4 `//! noise` states the exported generator table" {
     const d = try parse(arena, "//! noise thermal(a,b)#0\n//! noise flicker(d,s)#null\n");
     try testing.expect(d.asserts_noise);
     try testing.expectEqual(@as(usize, 2), d.noise.len);
-    try testing.expectEqualStrings("thermal(a,b)#0", d.noise[0]);
-    try testing.expectEqualStrings("flicker(d,s)#null", d.noise[1]);
+    try testing.expectEqualStrings("thermal(a,b)#0", d.noise[0].topo);
+    try testing.expectEqualStrings("flicker(d,s)#null", d.noise[1].topo);
+    // A line with no `key=value` tail asserts the topology and NOTHING else,
+    // which is what keeps every pre-existing `//! noise` line meaning what it
+    // meant: an absent field is not an assertion that the field is empty.
+    try testing.expect(d.noise[0].name == null);
+    try testing.expect(d.noise[0].white == null);
+    try testing.expect(!d.noise[0].needsPoint());
 
     // `none` is a CLAIM that the table is empty. It has to be distinguishable
     // from an absent directive, or a fixture could not say "this model declares
@@ -1805,6 +2038,50 @@ test "§4.6.4 `//! noise` states the exported generator table" {
     // module has, and a wrong one is the assertion working rather than a typo.
     const odd = try parse(arena, "//! noise shot(nosuchnode,b)#3\n");
     try testing.expectEqual(@as(usize, 1), odd.noise.len);
+}
+
+test "§4.6.4 a `//! noise` line states the row's contents as well as its place" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try parse(arena,
+        \\//! noise thermal(p,n)#0 name=thermal white=4e-18
+        \\//! noise flicker(p,n)#1 name=flicker flicker=1e-20 ef=1.25 rtol=1e-4
+        \\//! noise table(p,n)#2 name=tbl interp=log points=1.0:1e-18,1e3:1e-21
+        \\
+    );
+    try testing.expectEqual(@as(usize, 3), d.noise.len);
+
+    // The topology is what it always was — the fields are a TAIL, so the same
+    // string still reaches `noise_gens`'s compare.
+    try testing.expectEqualStrings("thermal(p,n)#0", d.noise[0].topo);
+    try testing.expectEqualStrings("thermal", d.noise[0].name.?);
+    try testing.expectEqual(@as(f64, 4e-18), d.noise[0].white.?);
+    try testing.expectEqual(@as(f64, 1e-12), d.noise[0].rtol); // the default
+    try testing.expect(d.noise[0].needsPoint());
+
+    try testing.expectEqual(@as(f64, 1e-20), d.noise[1].flicker.?);
+    try testing.expectEqual(@as(f64, 1.25), d.noise[1].ef.?);
+    try testing.expectEqual(@as(f64, 1e-4), d.noise[1].rtol);
+
+    // `interp`/`points` are comptime table data, so the table row asserts
+    // nothing that needs a bias.
+    try testing.expectEqualStrings("log", d.noise[2].interp.?);
+    try testing.expectEqualSlices([2]f64, &.{ .{ 1.0, 1e-18 }, .{ 1e3, 1e-21 } }, d.noise[2].points.?);
+    try testing.expect(!d.noise[2].needsPoint());
+
+    // A branch written with a space inside the parentheses still parses: the
+    // topology ends at the first space AFTER the `#`, not at the first space.
+    const spaced = try parse(arena, "//! noise thermal(p, n)#0 name=x\n");
+    try testing.expectEqualStrings("thermal(p, n)#0", spaced.noise[0].topo);
+
+    // An unknown key is a fixture asserting something the runner will silently
+    // not check, which is the one failure mode this directive cannot afford.
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a,b)#0 whte=1\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a,b)#0 name\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise table(a,b)#0 interp=spline\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! noise table(a,b)#0 points=1.0\n"));
 }
 
 test "expected process exit status is explicit and bounded" {

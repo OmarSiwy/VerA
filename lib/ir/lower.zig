@@ -229,6 +229,15 @@ pub const NoiseSrc = struct {
     table: []const Mir.Value = &.{},
     /// The call's own token, for the diagnostics codegen raises over `table`.
     tok: u32 = Mir.no_tok,
+    /// §4.6.4.1/.2/.3 the optional trailing `name` argument, verbatim; empty
+    /// when the call did not supply one. It is a LABEL and nothing else: the
+    /// clause says "the contributions of noise sources with the same name from
+    /// the same instance of a module are combined in the noise contribution
+    /// summary", which is a property of the host's REPORT and not of the
+    /// generators — §4.6.4.6 keeps two separate calls uncorrelated whatever
+    /// they are called. So this never merges rows or touches `id`; it rides
+    /// out to `contract.NoiseGen.name` for a host that prints the summary.
+    name: []const u8 = "",
 };
 
 /// §3.6.1.2 tolerances of a discipline's two natures. Recorded for proof.zig
@@ -5194,6 +5203,25 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
 /// in both arms of a ?: still counts its generator once, while two textually
 /// separate calls of the same kind stay two generators (§4.6.4.6: "each noise
 /// function generates noise which is uncorrelated").
+/// §4.6.4.1/.2/.3 the optional `name`, read straight off the AST rather than
+/// recorded by `lowerNoise`: the label is a string LITERAL in the source, so
+/// the call node still carries it here and a side map would only be a second
+/// copy to keep in step.
+///
+/// The name is the TRAILING string argument of a call that has more than one,
+/// which is the one rule all three forms share — `white_noise(pwr, name)`,
+/// `flicker_noise(pwr, exp, name)`, `noise_table(input, name)`. The arity test
+/// is what keeps §4.6.4.3's one-argument `noise_table("file.tbl")` a FILENAME
+/// and not a label.
+fn noiseName(self: *const Lower, e: Ast.ExprId) []const u8 {
+    const ex = &self.file.exprs;
+    const args = ex.args(e);
+    if (args.len < 2) return "";
+    const last = args[args.len - 1];
+    if (last == .none or ex.tag(last) != .str_literal) return "";
+    return self.file.str(ex.strOf(last));
+}
+
 fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc)) error{OutOfMemory}!void {
     if (e == .none) return;
     const ex = &self.file.exprs;
@@ -5224,6 +5252,7 @@ fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc))
                 .exp = psd[1],
                 .table = self.noise_tab.get(@intFromEnum(e)) orelse &.{},
                 .tok = ex.mainTok(e),
+                .name = self.noiseName(e),
             });
         },
         // §4.6.4.6's own spelling: the source was assigned to a variable and
