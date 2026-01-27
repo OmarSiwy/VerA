@@ -342,7 +342,7 @@ pub fn main(init: std.process.Init) !u8 {
         defer arena.deinit();
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
-        digital.run(arena.allocator(), source, .{ .file_name = in_path, .include_dirs = include_dirs.items }, &digital_bag, out) catch |e| {
+        digital.run(arena.allocator(), source, .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io }, &digital_bag, out) catch |e| {
             try report(&digital_bag, err, json, use_color);
             if (e != error.DigitalFailed) try err.print("error: digital execution failed: {t}\n", .{e});
             return 1;
