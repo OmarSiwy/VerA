@@ -76,6 +76,7 @@
 //
 //! lrm 4.6.4.6
 //! lrm 4.5.6
+//! xfail the per-use coefficient does not reach the export: both rows report white = pwr = 1e-18 instead of c1²·pwr and c2²·pwr, so a host computes this module's output noise 4x (and 9x) low. tools/contract.zig:665 names the fix — a `coeff` on PsdTerm, evaluated by noisePsd because it may depend on the bias, with S_k(f) = coeff²·(white + flicker/f^ef) and the §4.6.4.6 cross term coeff_i·coeff_j·pwr. Delete this line and rewrite the two want values when it lands.
 //! noise thermal(a,b)#0 name=shared white=4e-18
 //! noise thermal(c,d)#0 name=shared white=9e-18
 //! analysis noise
