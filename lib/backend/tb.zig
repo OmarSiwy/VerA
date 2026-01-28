@@ -786,7 +786,26 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         try print(
             &out,
             arena,
-            "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n        var state = newState(&{s}, &inst);\n",
+            "        var x: [n_u]f64 = @splat(0.0);\n        var forced: [n_u]?f64 = @splat({s});\n" ++
+                // §3.6.3.2: "the value ... will be used as a nodeset value by
+                // the analog solver". A nodeset is an INITIAL GUESS and nothing
+                // more — it seeds `x` and does not touch `forced`, so Newton is
+                // free to walk away from it. On a system with more than one
+                // solution that is the entire point: `a08_nodeset_01`'s cubic
+                // has roots at 1, 2 and 3, and which one the solve lands on is
+                // decided right here.
+                //
+                // VerA has emitted `u_nodeset` for as long as it has parsed net
+                // initializers, and nothing had ever read it — so the clause
+                // was implemented up to the device boundary and no further.
+                //
+                // Before the `//! bias` lines below, so a fixture that names an
+                // unknown outright still wins: a bias is a constraint, a
+                // nodeset is a suggestion.
+                "        if (comptime @hasDecl(D, \"u_nodeset\")) for (D.u_nodeset, 0..) |nodeset_i, i| {{\n" ++
+                "            if (nodeset_i) |v| x[i] = v;\n" ++
+                "        }};\n" ++
+                "        var state = newState(&{s}, &inst);\n",
             .{ if (d.solve_free) "null" else "0.0", mdl },
         );
         for (d.bias) |b|

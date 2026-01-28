@@ -353,6 +353,17 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
 const predefined_macros = [_][]const u8{
     "__VAMS_ENABLE__",
     "__VAMS_COMPACT_MODELING__",
+    // §10.5's third, and the only one whose SPELLING is the implementation's to
+    // choose: "Verilog-AMS simulators shall also provide a predefined macro so
+    // that the module can conditionally include (or exclude) portions of the
+    // source text specific to a particular simulator. This macro shall be
+    // documented in the Verilog-AMS section of the simulator manual."
+    //
+    // `shall`, so its absence was a conformance gap and not a policy decision:
+    // a model carrying a VerA-specific workaround had no way to ask whether
+    // VerA was compiling it. The name does not start with `__VAMS_`, which the
+    // same clause reserves against user `define.
+    "__VERA__",
 };
 
 /// Built-in annex D files, resolvable by `include even with no include_dirs.
@@ -3680,9 +3691,11 @@ test "the prelude snapshot replays exactly what running annex D.2/D.1/E.1 produc
         try testing.expectEqual(a.in_start, b.in_start);
         try testing.expectEqual(a.file, b.file);
     }
-    // The macro sets agree, both ways: `+2` is §10.5's predefined pair, which
-    // the snapshot deliberately does not carry.
-    try testing.expectEqual(pp.macros.count(), p.macros.len + 2);
+    // The macro sets agree, both ways. The difference is exactly §10.5's
+    // predefined set, which the snapshot deliberately does not carry — taken
+    // from the array rather than written as a number, so adding one is not a
+    // test edit.
+    try testing.expectEqual(pp.macros.count(), p.macros.len + predefined_macros.len);
     for (p.macros) |d| {
         const live = pp.macros.get(d.name) orelse return error.MissingMacro;
         try testing.expectEqualStrings(live.body, d.macro.body);
