@@ -7716,13 +7716,30 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // current is pinned by the branch row codegen emits for it. Both of
             // those keep the unknown and read it.
             if (self.flowAccum(t)) |acc| {
-                // ponytail: the resistive half only, at BOTH read positions
-                // (mid-block and the display's end-of-block). A reactive flow
-                // contribution retains a CHARGE (§5.6.1.2 strips the `ddt`), so
-                // reading the branch flow back would have to differentiate it
-                // again; that needs a second `ddt` operator instance and no
-                // fixture reads the current of a capacitive branch.
-                const v = try self.builder.readVariable(acc.resist, self.cur);
+                // §5.6.1.2: the retained value of a source branch is the WHOLE
+                // of what was contributed to it, and §5.4.2.2 makes that whole
+                // readable. No clause lets a reactive term count for the node
+                // equation and not for a probe.
+                //
+                // The reactive half is retained as a CHARGE — the clause strips
+                // one `ddt` off the contributed term — so reading the FLOW back
+                // has to differentiate it again. That is a second `ddt`
+                // instance with its own operator state, which is what this
+                // `call` mints, and it is the honest cost: the current of a
+                // capacitor IS a derivative. A model computing its own
+                // dissipation, a charge-conservation check, or §5.4.3's
+                // transit-time term read zero until this existed.
+                //
+                // Only when there IS a reactive half. `.f_zero` is what the
+                // entry-block seed leaves when nothing wrote the place, so an
+                // ordinary resistive branch emits no operator and cannot newly
+                // trip §5.8.1's conditional-operator rule.
+                const r = try self.builder.readVariable(acc.resist, self.cur);
+                const q = try self.builder.readVariable(acc.react, self.cur);
+                const v = if (q == .f_zero) r else blk: {
+                    const dq = try self.call("ddt", &.{q});
+                    break :blk if (r == .f_zero) dq else try self.emit(.fadd, &.{ r, dq });
+                };
                 return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
             }
             const u = try self.flowUnknown(t.hi, t.lo);

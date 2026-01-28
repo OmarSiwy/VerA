@@ -1071,7 +1071,7 @@ pub fn checkAssertions(source: []const u8) AssertionCheck {
             // literal is mangled on one side. Two identical EXPRESSIONS cannot
             // fail at all, whatever the compiler does.
             if (!isNumericLiteral(got)) return .{ .tautology = site };
-        } else if (!relational and !isNumericLiteral(want)) {
+        } else if (!relational and !isNumericLiteral(want) and !isTimePiecewiseWant(want)) {
             return .{ .computed_want = site };
         }
     }
@@ -1272,6 +1272,46 @@ fn isNumericLiteral(s: []const u8) bool {
     return seen_digit;
 }
 
+/// The one widening of the literal rule: a want that is piecewise in TIME.
+///
+/// A transient fixture's expectation often changes at a `//! time` point —
+/// §4.5.3 makes `ddt` zero at the DC point that opens the analysis and the ramp
+/// slope after it, so "0 then 1.0" is one claim about one branch and splitting
+/// it across two fixtures would test less, not more. Writing it as
+/// `($abstime > 0) * 1.0` is not the thing the literal rule exists to stop: the
+/// DIGITS are still typed by a human, and `$abstime` is a harness INPUT — the
+/// `//! time` line supplies it — not something the compiler under test derives.
+///
+/// The exemption is therefore exactly as narrow as that argument: the want may
+/// mention `$abstime` and nothing else with a name. Every other identifier is
+/// refused, so a want cannot smuggle in `V(p)`, a parameter, or a call and
+/// launder the compiler's own answer through a conditional. A want with NO
+/// identifier at all is not exempt either — `2.0*1e-18` restates a derivation
+/// instead of stating a number, which is the original rule's point.
+///
+/// An identifier is a run starting at a letter, `_` or `$` that is not preceded
+/// by one — so the `n` of `1n` (§2.6's scale factor) is part of the number and
+/// not a name.
+fn isTimePiecewiseWant(s: []const u8) bool {
+    var found_abstime = false;
+    var i: usize = 0;
+    while (i < s.len) {
+        const c = s[i];
+        const starts = (std.ascii.isAlphabetic(c) or c == '_' or c == '$') and
+            (i == 0 or !(std.ascii.isAlphanumeric(s[i - 1]) or s[i - 1] == '_' or s[i - 1] == '.'));
+        if (!starts) {
+            i += 1;
+            continue;
+        }
+        var j = i;
+        while (j < s.len and (std.ascii.isAlphanumeric(s[j]) or s[j] == '_' or s[j] == '$')) j += 1;
+        if (!std.mem.eql(u8, s[i..j], "$abstime")) return false;
+        found_abstime = true;
+        i = j;
+    }
+    return found_abstime;
+}
+
 /// The macro call as one line, for an error message. A CHECK often spans lines
 /// via `\` continuations, and a four-line quote buries the point.
 fn trimLine(s: []const u8) []const u8 {
@@ -1302,6 +1342,29 @@ test "an assertion whose want is the got cannot fail" {
     try std.testing.expect(checkAssertions(
         \\`CHECKI("above threshold?", V(p, n) > vth, (V(p, n) > vth));
     ) == .tautology);
+    // A want piecewise in TIME is exempt: the digits are still a human's and
+    // `$abstime` is what the `//! time` line put there, not something the
+    // compiler under test worked out.
+    try std.testing.expect(checkAssertions(
+        \\`CHECK("ddt is zero at the DC point and the slope after it", I(cap), ($abstime > 0) * 1.0, 1e-9);
+    ) == .ok);
+    try std.testing.expect(checkAssertions(
+        \\`CHECKX("three levels", Vgain * val, ($abstime < 4n) ? 0.25 : (($abstime < 12n) ? 0.5 : 0.75));
+    ) == .ok);
+    // ...and exactly that narrow. One other name in the want and the
+    // exemption is gone, or a conditional would launder the compiler's own
+    // answer past the rule.
+    try std.testing.expect(checkAssertions(
+        \\`CHECK("laundered", I(cap), ($abstime > 0) * V(p, n), 1e-9);
+    ) == .computed_want);
+    try std.testing.expect(checkAssertions(
+        \\`CHECK("laundered through a parameter", I(cap), ($abstime > 0) * c, 1e-9);
+    ) == .computed_want);
+    // A want with no name at all restates a derivation instead of stating a
+    // number, which is the rule's original point and is still refused.
+    try std.testing.expect(checkAssertions(
+        \\`CHECK("arithmetic", x, 2.0 * 1e-18, 1e-30);
+    ) == .computed_want);
     // The marked relational form may pin two expressions together...
     try std.testing.expect(checkAssertions(
         \\`CHECKEQ("branch probe equals the node pair", V(br), V(a, b), 0.0);
