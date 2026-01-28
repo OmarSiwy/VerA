@@ -40,16 +40,52 @@
 // the whole point of Figure 4-14, and it is what makes this file a test of the
 // interpolation MODE and not merely of table lookup.
 //
+// WHAT THIS FILE ASSERTS ON ITS OWN, i.e. without the deck and its oracle.
+//
+// The `//! noise` line carries the TABLE: both knots as the device exports
+// them, with `interp=log` — §4.6.4.4 and not §4.6.4.3. That tag is the whole
+// difference between the two clauses on these knots, and it is a comptime
+// property of the model, so it needs no solve to read.
+//
+// The two `CHECK`s carry the two sentences that say what a noise generator is
+// NOT, both of which are readable inside the analog block:
+//
+//   §4.6.4, on every one of the four functions: "The noise functions are only
+//   active in small-signal noise analyses and return zero (0) otherwise." This
+//   run is the default dc analysis, so `noise_table_log()` reads exactly 0.0 —
+//   an exact want, because the clause gives a literal zero.
+//
+//   §4.5.6: "If the expression does not depend explicitly on the unknown, then
+//   ddx() returns zero (0)." The tabulated density is a constant vector, so the
+//   branch conductance is the resistor's alone, 1/R = 1.0e-3 S exactly at the
+//   declared default, with a band of 1e-18 S against it.
+//
+// The call is bound to a variable first, as check.vh's own warning requires: a
+// macro expands its operands twice and a noise call is a generator-creating
+// site, not a pure expression.
+//
+//! lrm 4.6.4
 //! lrm 4.6.4.4
-//! noise table(p,n)#0
-`include "disciplines.vams"
+//! lrm 4.5.6
+//! noise table(p,n)#0 name=tbl_log interp=log points=1000.0:1e-18,1000000.0:1e-24
+//! bias V(p) = 1.0
+//! bias V(n) = 0.0
+`include "check.vh"
 module a06_ntab_log(p, n);
     inout p, n;
     electrical p, n;
 
     parameter real R = 1000.0 from (0:inf);
+    real ntab;
 
-    analog
-        I(p, n) <+ V(p, n) / R +
-            noise_table_log('{1.0e3, 1.0e-18, 1.0e6, 1.0e-24}, "tbl_log");
+    analog begin
+        ntab = noise_table_log('{1.0e3, 1.0e-18, 1.0e6, 1.0e-24}, "tbl_log");
+
+        `CHECKX("a noise function is inactive outside a small-signal noise analysis",
+            ntab, 0.0);
+        `CHECK("the tabulated generator is outside the branch linearization",
+            ddx(V(p, n) / R + ntab, V(p)), 1.0e-3, 1e-18);
+
+        I(p, n) <+ V(p, n) / R + ntab;
+    end
 endmodule

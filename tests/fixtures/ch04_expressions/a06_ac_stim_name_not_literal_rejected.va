@@ -45,6 +45,7 @@
 //! lrm 4.6.3
 //! lrm A.8.2
 //! reject DiagnosticsReported
+//! xfail VerA accepts a string PARAMETER where A.8.2's production writes a quoted terminal — `ac_stim ( [ " analysis_identifier " ... ] )` — and emits a device with no diagnostic; §4.6.4.3 is the clause that does allow a string parameter, for a noise table file name, so the two are not interchangeable
 module a06_ac_stim_name_not_literal_rejected(p, n);
     inout p, n;
     electrical p, n;

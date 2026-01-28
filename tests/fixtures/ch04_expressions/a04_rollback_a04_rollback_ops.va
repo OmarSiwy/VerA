@@ -11,17 +11,60 @@
 // The contributions are scaled by 1e-3 so each operator lands in its own
 // residual row: f[p] = 1e-3 · idt, f[q] = 1e-3 · ddt.
 //
-// This file is NOT a torture fixture — it makes no `CHECK` and asserts nothing
-// on its own. The rollback behaviour it exists for is a sequence of HOST calls
-// (eval, updateState, stateCtl(.revert), eval again) that the `//!` directive
-// language cannot express, so the assertions live in the host driver beside
-// it, exactly as tests/limiter_host.zig does for §4.5.15 limiting.
+// WHAT THE HOST OWNS AND WHAT THIS FILE OWNS. The ROLLBACK behaviour — eval,
+// updateState, stateCtl(.revert), eval again — is a sequence of host calls the
+// `//!` directive language cannot express, so it stays in the host driver
+// beside this file, exactly as tests/limiter_host.zig does for §4.5.15
+// limiting. What the host CANNOT do without this file first being right is
+// distinguish "the revert was dropped" from "the operator was never correct on
+// an accepted step at all", so the accepted-step half of its own table is
+// asserted here, in the directive language, and the host is left with the one
+// row it alone can reach.
+//
+// THE ACCEPTED-STEP ROWS, from the host's table and from the clauses:
+//
+//   t       idt                       ddt
+//   0       0.0   §4.5.4 "When used in DC or IC analyses, idt() returns the
+//                 initial condition (ic) if specified" — the ic here is 0.0
+//         · 0.0   §4.5.3 "In DC analysis, ddt() returns zero (0)."
+//   1ns     1.0   1e9 A/s · 1e-9 s, and exactly that under EITHER integration
+//                 rule, because the integrand is a constant: trapezoid and
+//                 backward Euler agree on a horizontal line.
+//         · 1e9   V(p) is driven to t/1ns volts, so the slope is 1 V/ns.
+//   2ns     2.0
+//         · 1e9
+//
+// so the want is written once, piecewise in `$abstime`: `$abstime * 1e9` for
+// the integral (t seconds × 1e9 per second) and `($abstime > 0) * 1e9` for the
+// derivative, whose first point is the DC one the clause zeroes.
+//
+// Both operators are bound to a variable before the `CHECK`, as check.vh's own
+// warning requires: a macro expands its operands twice, and `idt`/`ddt` are
+// stateful, so an unbound one would be advanced twice per time point.
+//
+//! lrm 4.5.3
+//! lrm 4.5.4
+//! time 0, 1n, 2n
+//! wave V(p) = 0.0, 1.0, 2.0
+//! bias V(n) = 0.0
+//! bias V(q) = 0.0
+`include "check.vh"
 module a04_rollback_ops(p, n, q);
     inout p, n, q;
     electrical p, n, q;
 
+    real acc, der;
+
     analog begin
-        I(p, n) <+ 1e-3 * idt(1e9, 0.0);
-        I(q, n) <+ 1e-3 * ddt(V(p, n));
+        acc = idt(1e9, 0.0);
+        der = ddt(V(p, n));
+
+        `CHECK("the constant 1e9 integrates to exactly 1.0 per nanosecond",
+            acc, $abstime * 1.0e9, 1e-12);
+        `CHECK("ddt is zero at the DC point and the 1 V/ns ramp slope after it",
+            der, ($abstime > 0) * 1.0e9, 1.0);
+
+        I(p, n) <+ 1e-3 * acc;
+        I(q, n) <+ 1e-3 * der;
     end
 endmodule
