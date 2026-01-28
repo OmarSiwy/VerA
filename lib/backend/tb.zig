@@ -215,6 +215,13 @@ pub const NoiseWant = struct {
     name: ?[]const u8 = null,
     /// §4.6.4.1 `S(f) = white`, and §4.6.4.2's `flicker`/`ef` in `S(f) =
     /// flicker/f^ef`. Each is read out of `noisePsd(x, model, inst)[k]`.
+    ///
+    /// `white` and `flicker` are the EFFECTIVE density the branch carries —
+    /// `coeff²·white` — and not the raw field. §4.6.4.6's coefficient is a
+    /// property of the use and not of the generator, so which of the two
+    /// exported fields carries the factor is an implementation's business; the
+    /// spectrum reaching a host is not. `ef` is an exponent and is untouched
+    /// by it.
     white: ?f64 = null,
     flicker: ?f64 = null,
     ef: ?f64 = null,
@@ -955,21 +962,27 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
     for (d.noise, 0..) |w, k| {
         if (!w.needsPoint()) continue;
         try print(out, arena, "            if (comptime D.noise_gens.len > {d}) {{\n", .{k});
-        const fields = [_]struct { []const u8, ?f64 }{
-            .{ "white", w.white },
-            .{ "flicker", w.flicker },
-            .{ "ef", w.ef },
+        // §4.6.4.6: a density is scaled by the square of the use's
+        // coefficient, an exponent is not scaled at all.
+        const fields = [_]struct { []const u8, ?f64, bool }{
+            .{ "white", w.white, true },
+            .{ "flicker", w.flicker, true },
+            .{ "ef", w.ef, false },
         };
         for (fields) |f| {
             const want = f[1] orelse continue;
+            const got = if (f[2])
+                try std.fmt.allocPrint(arena, "psd[{d}].{s} * psd[{d}].coeff * psd[{d}].coeff", .{ k, f[0], k, k })
+            else
+                try std.fmt.allocPrint(arena, "psd[{d}].{s}", .{ k, f[0] });
             try print(
                 out,
                 arena,
                 "                std.debug.print(\"noise[{d}].{s} got={{d}} want={{d}} ok={{d}}\\n\", .{{\n" ++
-                    "                    psd[{d}].{s}, {f},\n" ++
-                    "                    @intFromBool(nclose(psd[{d}].{s}, {f}, {f})),\n" ++
+                    "                    {s}, {f},\n" ++
+                    "                    @intFromBool(nclose({s}, {f}, {f})),\n" ++
                     "                }});\n",
-                .{ k, f[0], k, f[0], fmtF64(want), k, f[0], fmtF64(want), fmtF64(w.rtol) },
+                .{ k, f[0], got, fmtF64(want), got, fmtF64(want), fmtF64(w.rtol) },
             );
         }
         try out.appendSlice(arena, "            }\n");

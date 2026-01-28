@@ -229,6 +229,25 @@ pub const NoiseSrc = struct {
     table: []const Mir.Value = &.{},
     /// The call's own token, for the diagnostics codegen raises over `table`.
     tok: u32 = Mir.no_tok,
+    /// §4.6.4.6 the coefficient this CONTRIBUTION applies to the generator:
+    /// the `c1` of `V(a,b) <+ c1*n`. The generator's own power is `pwr`, and
+    /// the density the branch actually carries is `coeff²·pwr` — so a row
+    /// exporting `pwr` alone understates a scaled source by `c²`, silently.
+    ///
+    /// Per (contribution, generator) and NOT per generator, which is the whole
+    /// point: one shared `white_noise` reaching two branches through a
+    /// variable is ONE source with TWO coefficients, and their product is the
+    /// cross-spectrum the clause's Example 1 is about. It is signed, because
+    /// opposite signs are anti-correlation and no squared density can say so.
+    ///
+    /// `.f_zero` is "no contribution has claimed this row yet"; the first use
+    /// replaces it and later ones add. A row that reaches codegen still at
+    /// zero never appeared in a contributed value, which `planNoise` reads as
+    /// the 1 it always assumed.
+    coeff: Mir.Value = .f_zero,
+    /// The generator appears in a shape no single factor describes. `coeff` is
+    /// then 1 — the pre-coefficient behaviour — and stays there.
+    nonlinear: bool = false,
     /// §4.6.4.1/.2/.3 the optional trailing `name` argument, verbatim; empty
     /// when the call did not supply one. It is a LABEL and nothing else: the
     /// clause says "the contributions of noise sources with the same name from
@@ -468,6 +487,10 @@ noise_psd: std.AutoHashMapUnmanaged(u32, [2]Mir.Value) = .empty,
 /// clause's file-name form — which is the shape codegen reports, since a table
 /// with no pairs in it is the one thing that cannot become a PSD.
 noise_tab: std.AutoHashMapUnmanaged(u32, []const Mir.Value) = .empty,
+/// §4.6.4 the RESULT value of every lowered noise call, by `Ast.ExprId`. It is
+/// the variable `noiseCoeff` differentiates a contribution with respect to —
+/// the AST says which generator, this says which SSA value carries it.
+noise_val: std.AutoHashMapUnmanaged(u32, Mir.Value) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
 /// §4.7.1 the function currently being inlined (return slot + exit block).
@@ -4326,6 +4349,38 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
         var srcs: std.ArrayList(NoiseSrc) = .empty;
         try srcs.appendSlice(self.arena, self.contributions.items[idx].noise_srcs);
         try self.noiseSrcsOf(rhs, &srcs);
+        // §4.6.4.6 the per-use coefficient. It ADDS across statements, because
+        // two `<+` lines on one branch sum into one source: `V(a,b) <+ c1*n`
+        // followed by `V(a,b) <+ c2*n` drives the branch with (c1+c2)·n, and
+        // `addNoiseSrc` has already collapsed them onto one row.
+        //
+        // Read off `split.resist`: a noise function is an amplitude, not a
+        // reactive quantity, so the generator only ever appears in the
+        // resistive half. The §1.3.1.2 sign flip is applied for the same
+        // reason it is applied above — `I(n,p) <+ c*n` drives the branch
+        // with −c, and the sign is what separates correlation from
+        // anti-correlation.
+        if (split.resist) |v0| {
+            for (srcs.items) |*s| {
+                if (s.nonlinear) continue;
+                const g = self.noise_val.get(s.id) orelse continue;
+                switch (try self.noiseCoeff(v0, g, 0)) {
+                    .absent => {},
+                    // No factor describes this use. Fall back to 1, which is
+                    // what the export carried before coefficients existed, and
+                    // stop accumulating so a later statement cannot make the
+                    // row claim more than it knows.
+                    .nonlinear => {
+                        s.nonlinear = true;
+                        s.coeff = .f_one;
+                    },
+                    .value => |d| {
+                        const signed = if (target.neg) try self.coeffNeg(d) else d;
+                        s.coeff = if (s.coeff == .f_zero) signed else try self.emit(.fadd, &.{ s.coeff, signed });
+                    },
+                }
+            }
+        }
         self.contributions.items[idx].noise_srcs = srcs.items;
     }
 }
@@ -8308,7 +8363,120 @@ fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         @intFromEnum(e),
         try self.arena.dupe(Mir.Value, vals.items[r[0]..r[1]]),
     );
-    return .{ .v = try self.call(name, vals.items), .ty = .real };
+    const result = try self.call(name, vals.items);
+    try self.noise_val.put(self.arena, @intFromEnum(e), result);
+    return .{ .v = result, .ty = .real };
+}
+
+/// §4.6.4.6 `∂contribution/∂generator`, over the MIR that is already built.
+///
+/// A noise function is an AMPLITUDE and a contribution combines amplitudes
+/// linearly — that is what makes "perfectly correlated noise is generated by
+/// using the output of one noise function for more than one noise source"
+/// meaningful — so the derivative is a CONSTANT with respect to the generator
+/// and is exactly the factor the branch applies to it.
+///
+/// Over the DAG and not over the AST: re-lowering the expression to read its
+/// shape would duplicate every side effect in it, and the values this needs
+/// (the other operand of each multiply) already exist as SSA names. Nothing
+/// here evaluates anything; it emits a handful of arithmetic nodes that
+/// reference values the contribution already computed.
+///
+/// Three answers, and the difference between the last two is the whole reason
+/// this is not an optional:
+///   absent     the generator does not occur here, so its coefficient is 0 and
+///              this statement adds nothing to the branch's total;
+///   nonlinear  it occurs in a shape no single factor describes (squared, in a
+///              denominator, inside a call), so there IS no coefficient;
+///   value      the factor.
+const Coeff = union(enum) { absent, nonlinear, value: Mir.Value };
+
+/// `-v`, folded when `v` is a literal. A coefficient is very often a bare
+/// parameter or number, and a folded one renders inline in `noisePsd` instead
+/// of taking a core live-out slot for `0.0 - 3.0`.
+fn coeffNeg(self: *Lower, v: Mir.Value) Oom!Mir.Value {
+    if (self.mir.valueDef(self.mir.resolveAlias(v)) == .float_const)
+        return self.mir.addFloatConst(self.arena, -self.mir.valueDef(self.mir.resolveAlias(v)).float_const);
+    return self.emit(.fneg, &.{v});
+}
+
+/// `a · b`, with the identity folded away. The derivative of `c * n` is
+/// `c * 1`, and emitting that multiply would hide the constant from
+/// `psdConst`.
+fn coeffMul(self: *Lower, a: Mir.Value, b: Mir.Value) Oom!Mir.Value {
+    if (a == .f_one) return b;
+    if (b == .f_one) return a;
+    return self.emit(.fmul, &.{ a, b });
+}
+
+fn noiseCoeff(self: *Lower, v: Mir.Value, n: Mir.Value, depth: u16) Oom!Coeff {
+    if (depth == 64) return .nonlinear;
+    const value = self.mir.resolveAlias(v);
+    const gen = self.mir.resolveAlias(n);
+    if (value == gen) return .{ .value = .f_one };
+    const inst = switch (self.mir.valueDef(value)) {
+        .inst_result => |i| i,
+        // A constant, a parameter or a probe cannot contain the generator.
+        else => return .absent,
+    };
+    switch (self.mir.instData(inst)) {
+        .unary => |u| {
+            const d = try self.noiseCoeff(u.operand, gen, depth + 1);
+            if (d == .absent) return .absent;
+            if (u.op != .fneg or d == .nonlinear) return .nonlinear;
+            return .{ .value = try self.coeffNeg(d.value) };
+        },
+        .binary => |b| {
+            const da = try self.noiseCoeff(b.lhs, gen, depth + 1);
+            const db = try self.noiseCoeff(b.rhs, gen, depth + 1);
+            if (da == .absent and db == .absent) return .absent;
+            if (da == .nonlinear or db == .nonlinear) return .nonlinear;
+            switch (b.op) {
+                .fadd, .fsub => {
+                    // A side that does not mention the generator contributes
+                    // the zero this skips rather than emits.
+                    if (da == .absent) return .{
+                        .value = if (b.op == .fadd) db.value else try self.coeffNeg(db.value),
+                    };
+                    if (db == .absent) return .{ .value = da.value };
+                    return .{ .value = try self.emit(if (b.op == .fadd) .fadd else .fsub, &.{ da.value, db.value }) };
+                },
+                // The generator on both sides of a multiply is the generator
+                // SQUARED, which is not a linear source and has no coefficient.
+                .fmul => {
+                    if (da != .absent and db != .absent) return .nonlinear;
+                    if (da == .absent) return .{ .value = try self.coeffMul(b.lhs, db.value) };
+                    return .{ .value = try self.coeffMul(da.value, b.rhs) };
+                },
+                // Dividing BY the generator is nonlinear for the same reason.
+                .fdiv => {
+                    if (db != .absent) return .nonlinear;
+                    return .{ .value = try self.emit(.fdiv, &.{ da.value, b.rhs }) };
+                },
+                else => return .nonlinear,
+            }
+        },
+        // §4.2.12 `?:` — either arm may carry the generator, and which arm runs
+        // is a solve-time question, so the coefficient is the same conditional.
+        .ternary => |t| {
+            const dy = try self.noiseCoeff(t.then_val, gen, depth + 1);
+            const dn = try self.noiseCoeff(t.else_val, gen, depth + 1);
+            if (dy == .absent and dn == .absent) return .absent;
+            if (dy == .nonlinear or dn == .nonlinear) return .nonlinear;
+            return .{ .value = try self.emit(.select, &.{
+                t.cond,
+                if (dy == .absent) .f_zero else dy.value,
+                if (dn == .absent) .f_zero else dn.value,
+            }) };
+        },
+        // A call's arguments are reachable, so "does the generator occur in
+        // here at all" is answerable even though the derivative is not.
+        .call => |c| {
+            for (c.args) |arg| if (try self.noiseCoeff(arg, gen, depth + 1) != .absent) return .nonlinear;
+            return .absent;
+        },
+        else => return .nonlinear,
+    }
 }
 
 // ---- ch9 system functions ---------------------------------------------------
