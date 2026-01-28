@@ -23,6 +23,7 @@
 //
 //! lrm 5.10.3.3
 //! reject non-negative
+//! xfail VerA accepts a negative literal time_tol on timer(); §5.10.3.3 says "The tolerance (time_tol) is an analog_expression and shall be non-negative", and $bound_step's identical rule is already refused as E0803, so the event operators are the hole
 module a10_timer_negative_time_tol(p);
   inout p;
   electrical p;

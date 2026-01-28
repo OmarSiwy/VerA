@@ -42,6 +42,7 @@
 //! lrm 5.6.8.2
 //! lrm 5.6.5
 //! reject changes the branch into a switch branch
+//! xfail VerA accepts a parent flow contribution to a child branch the child potential-sources and solves the design silently; §5.6.8.2 lists "The hierarchical contribution changes the branch into a switch branch" as a reason the contribution shall not be allowed, and the neighbouring bullet in the same clause IS checked (E0409)
 module a02_hier_switch_branch(g);
   inout g;
   electrical g;
