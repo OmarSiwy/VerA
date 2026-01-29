@@ -31,6 +31,59 @@ const Pending = union(enum) {
     /// §17.1.3 "something changed this timestep, ask the standing monitor".
     /// One per timestep, coalesced by `monitor_pending`.
     monitor_tick,
+    /// A.6.1's `[ delay3 ]` on a continuous assignment: the driver's value
+    /// arrives this late. `gen` is how §6.1.3's inertial cancel is free — see
+    /// `Inertial`.
+    drive: struct { driver: u32, gen: u32, value: Int.Literal },
+    /// A.2.1.3's `[ delay3 ]` on the net declaration: the same delay one level
+    /// down, on the RESOLVED value rather than on one driver's.
+    net_update: struct { net: u32, gen: u32, value: Int.Literal },
+    /// A.2.1.3's third `delay3` value on a `trireg`: the charge that has now
+    /// been held long enough to be worth nothing.
+    decay: struct { net: u32, gen: u32 },
+};
+
+/// IEEE 1364-2005 §6.1.3: a delayed continuous assignment is INERTIAL — "if
+/// the value changes before the delay has elapsed, the scheduled event is
+/// cancelled". So a driver or a net has at most ONE transition in flight, and
+/// the cheapest cancel is a counter: the event carries the generation it was
+/// scheduled under, and a later evaluation bumps it, which makes every earlier
+/// event a no-op on arrival without touching the scheduler's queues.
+const Inertial = struct {
+    gen: u32 = 0,
+    /// What the event in flight will publish, or null when none is. Compared
+    /// against rather than the published value, so that a re-evaluation landing
+    /// on the value already on its way leaves the timer alone instead of
+    /// restarting it.
+    target: ?Int.Literal = null,
+};
+
+/// A.2.2.3's three values, already in scheduler ticks. `present` is false for
+/// every construct that names no delay, and that is the path the engine took
+/// before delays existed — an immediate store.
+const Delay = struct {
+    rise: u64 = 0,
+    fall: u64 = 0,
+    off: u64 = 0,
+    present: bool = false,
+
+    /// IEEE 1364-2005 §7.14: the delay is chosen by the value being
+    /// transitioned TO, and a transition to x takes the SMALLEST of the three —
+    /// x is "the value is somewhere in here", and it is true from the first
+    /// moment any of the three transitions could have begun.
+    ///
+    /// ponytail: one delay for the whole vector, taken from bit 0. §7.14's
+    /// delays are per-bit, which matters only for a bus whose bits transition
+    /// to different values in one update; give `Delay` a per-bit loop when a
+    /// vector fixture needs it.
+    fn to(self: Delay, b: Int.Bit) u64 {
+        return switch (b) {
+            .one => self.rise,
+            .zero => self.fall,
+            .z => self.off,
+            .x => @min(self.rise, @min(self.fall, self.off)),
+        };
+    }
 };
 const Type = struct { width: u32, signed: bool };
 // All fields in a row are consumed by one dispatch; expressions stay in the AST.
@@ -89,6 +142,19 @@ const Net = struct {
     /// the capacitive state asserts. `medium` is §3.8's default and is ignored
     /// outright by every other net type.
     charge: Ast.Strength = .medium,
+    /// A.2.1.3 `[ delay3 ]` on the declaration, applied to the RESOLVED value.
+    delay: Delay = .{},
+    transition: Inertial = .{},
+    /// A.2.1.3's third `delay3` value on a `trireg`: how long the capacitive
+    /// state may last before the charge is worth nothing. `null` — which is
+    /// what a `trireg` with no `delay3` gets — is IEEE 1364-2005 §3.8's
+    /// indefinite hold.
+    decay: ?u64 = null,
+    /// Whether the last resolution found no driver asserting anything, which is
+    /// §3.8's capacitive state. The decay countdown restarts on each ENTRY into
+    /// it, so the transition is what is watched, not the state.
+    capacitive: bool = false,
+    charge_gen: Inertial = .{},
 };
 // §6.1 one driver. It keeps its OWN value — the net's is the resolution of all
 // of them — and re-evaluates whenever one of its operands changes. `s0`/`s1`
@@ -101,6 +167,9 @@ const Driver = struct {
     current: Int.Literal,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
+    /// A.6.1 `[ delay3 ]`.
+    delay: Delay = .{},
+    transition: Inertial = .{},
 };
 
 /// IEEE 1364-2005 clause 7's strength pair: what ONE contributor asserts on the
@@ -489,6 +558,34 @@ const Run = struct {
         if (self.file.exprs.tag(e) != .int_literal) return self.fail(tok, "declaration bounds must be literal integers", .{});
         return self.file.exprs.intValue(e);
     }
+    /// A.2.2.3 `delay_value ::= unsigned_number | real_number | identifier`, in
+    /// scheduler ticks. Elaboration-time, because a net's or a driver's delay is
+    /// fixed for the run — only a procedural `#` re-evaluates.
+    ///
+    /// ponytail: the `identifier` alternative is refused. It would name a
+    /// `parameter`, and digital execution has no parameters at all yet; the
+    /// upgrade is one call to the constant folder once it does.
+    fn declaredDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!u64 {
+        const scale = self.scale orelse return self.fail(tok, "a delay needs an explicit valid timescale", .{});
+        return switch (self.file.exprs.tag(e)) {
+            .real_literal => scale.realDelay(self.file.exprs.realValue(e)),
+            .int_literal => scale.signedDelay(self.file.exprs.intValue(e)),
+            else => self.fail(tok, "a declared delay must be a literal number", .{}),
+        } catch self.fail(tok, "digital delay cannot be represented", .{});
+    }
+
+    /// One A.2.2.3 `delay3` as the three tick counts §7.14 chooses between. The
+    /// two-value form leaves `off` unwritten because the clause derives it —
+    /// "the smallest of the delays" — rather than spelling it.
+    fn declaredDelay3(self: *Run, d: Ast.Delay3, tok: u32) Error!Delay {
+        if (!d.any()) return .{};
+        var out: Delay = .{ .present = true };
+        out.rise = try self.declaredDelay(d.rise, tok);
+        out.fall = try self.declaredDelay(d.fall, tok);
+        out.off = if (d.off != .none) try self.declaredDelay(d.off, tok) else @min(out.rise, out.fall);
+        return out;
+    }
+
     /// §3.3/§6.5.2 a packed `[msb:lsb]` range as a bit width.
     fn declaredWidth(self: *Run, range: Ast.Dim, tok: u32) Error!u32 {
         const hi = try self.declaredBound(range.msb, tok);
@@ -1466,6 +1563,7 @@ const Run = struct {
         // plane-parallel fold is possible; do it when a wide bus resolves often
         // enough to show up, not before.
         const tables = wiredLogic(n.kind);
+        var floating: u32 = 0;
         for (0..n.resolved.width) |i| {
             const at: u32 = @intCast(i);
             var bit: Int.Bit = .z;
@@ -1488,12 +1586,65 @@ const Run = struct {
                 // the capacitive state, and what it asserts there is the charge
                 // it last held, at its charge strength. Checked before the net
                 // type's own pull so that a driven trireg never sees it.
-                if (n.kind == .trireg and acc.none()) acc = Pair.of(current.bit(at), n.charge, n.charge);
+                if (n.kind == .trireg and acc.none()) {
+                    acc = Pair.of(current.bit(at), n.charge, n.charge);
+                    floating += 1;
+                }
                 bit = acc.max(netPull(n.kind)).collapse();
             }
             setBit(n.resolved, at, bit);
         }
+        if (n.kind == .trireg) try self.chargeState(net, floating == n.resolved.width);
+        // A.2.1.3's `[ delay3 ]` delays the net's own transition, so it sits
+        // between the resolution and the publish — every driver has already
+        // been folded in by the time it applies.
+        if (n.delay.present) {
+            if (try self.schedule(self.values[n.slot], n.resolved, &self.nets[net].transition)) |copy| {
+                const st = self.nets[net].transition;
+                try self.enqueue(.{ .net_update = .{ .net = net, .gen = st.gen, .value = copy } }, n.delay.to(copy.bit(0)), false);
+            }
+            return;
+        }
         try self.store(n.slot, n.resolved.planes);
+    }
+
+    /// §6.1.3's inertial rule, shared by a driver's delay and a net's: "if the
+    /// value changes before the delay has elapsed, the scheduled event is
+    /// cancelled". Returns the delay a new transition needs, having already
+    /// cancelled whatever it displaced, or null when there is nothing to do.
+    ///
+    /// Null covers the two cases that make a pulse shorter than the delay
+    /// vanish rather than arrive late: the value is back to what is published,
+    /// and the value is what is already on its way.
+    fn schedule(self: *Run, from: Int.Literal, to: Int.Literal, st: *Inertial) Error!?Int.Literal {
+        const settled = st.target orelse from;
+        if (std.mem.eql(u64, settled.planes, to.planes)) return null;
+        // Every earlier event now carries a stale generation, which is the
+        // cancel — the scheduler's queues are never touched.
+        st.gen +%= 1;
+        const copy = try filled(self.arena, to.width, to.signed, .z);
+        @memcpy(copy.planes, to.planes);
+        st.target = copy;
+        return copy;
+    }
+
+    /// §3.8 charge decay. The countdown restarts on each ENTRY into the
+    /// capacitive state, so this is called with the state and acts on the edge.
+    ///
+    /// ponytail: whole-net, not per-bit. A vector `trireg` with some bits driven
+    /// and some floating decays all of them together; per-bit needs one
+    /// generation per bit, which no fixture asks for.
+    fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
+        const n = &self.nets[net];
+        const was = n.capacitive;
+        n.capacitive = floating;
+        // Leaving the state, or entering one that never decays, only has to
+        // strand whatever countdown was running.
+        if (was == floating) return;
+        n.charge_gen.gen +%= 1;
+        if (!floating) return;
+        const after = n.decay orelse return;
+        try self.enqueue(.{ .decay = .{ .net = net, .gen = n.charge_gen.gen } }, after, false);
     }
     /// §6.1 "a continuous assignment is evaluated whenever an operand changes".
     /// The operands are the slots its expression reads; they resolve at compile
@@ -1654,8 +1805,18 @@ const Run = struct {
                     const d = self.drivers[at];
                     const rhs = try self.eval(scratch, d.value, d.current.width);
                     const value = try normalize(scratch, rhs, .{ .width = d.current.width, .signed = rhs.signed });
-                    @memcpy(d.current.planes, value.planes);
-                    try self.resolve(d.net);
+                    // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,
+                    // not what the net shows: the other drivers are unaffected
+                    // and the net re-resolves when the delayed value lands.
+                    if (d.delay.present) {
+                        if (try self.schedule(d.current, value, &self.drivers[at].transition)) |copy| {
+                            const st = self.drivers[at].transition;
+                            try self.enqueue(.{ .drive = .{ .driver = at, .gen = st.gen, .value = copy } }, d.delay.to(copy.bit(0)), false);
+                        }
+                    } else {
+                        @memcpy(d.current.planes, value.planes);
+                        try self.resolve(d.net);
+                    }
                     for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });
                     return;
                 },
@@ -1853,12 +2014,8 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     if (m.nets.len > std.math.maxInt(u32) - values.items.len) return r.fail(m.main_tok, "too many digital storage slots", .{});
     r.nets = try arena.alloc(Net, m.nets.len);
     for (m.nets, 0..) |n, i| {
-        if (n.discipline != .none or n.is_ground or n.init != .none)
-            return r.fail(n.main_tok, "disciplined, ground and wreal-initialized nets are not implemented by digital execution", .{});
-        // A.2.2.3 now PARSES on a net declaration, so it has to be refused
-        // here: a delay that is read and then dropped is a wrong answer, and a
-        // wrong answer is worse than the syntax error it replaced.
-        if (n.delay.any()) return r.fail(n.main_tok, "a net delay is not implemented by digital execution", .{});
+        if (n.discipline != .none or n.is_ground)
+            return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
         const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
         const at: u32 = @intCast(values.items.len);
         try r.bind(n.name, at, n.main_tok);
@@ -1876,26 +2033,38 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     // They compile FIRST so that no driver's pc can also be a process's
     // resumption point: a `wait_event` resumes at its own pc plus one, and
     // every instruction from here on belongs to a process.
-    if (m.assigns.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many continuous assignments", .{});
-    r.drivers = try arena.alloc(Driver, m.assigns.len);
-    const grouped = try arena.alloc(std.ArrayList(u32), m.nets.len);
-    @memset(grouped, .empty);
-    for (m.assigns, 0..) |a, i| {
+    // A.2.4 `net_decl_assignment` is a continuous assignment written on the
+    // declaration, so it is one more driver of that net and not a separate
+    // construct. Its delay is the NET's (`wire #3 y = ~a;` — A.2.1.3 puts the
+    // `delay3` before the name list, not on the `=`), which is why the row it
+    // contributes carries none of its own.
+    const Wire = struct { slot: u32, value: Ast.ExprId, s0: Ast.Strength, s1: Ast.Strength, delay: Ast.Delay3, tok: u32 };
+    var wires: std.ArrayList(Wire) = .empty;
+    for (m.assigns) |a| {
         const target = try r.scalarSlot(a.target);
         if (target < r.net_base) return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
-        if (a.delay.any()) return r.fail(a.main_tok, "a continuous assignment delay is not implemented by digital execution", .{});
+        try wires.append(arena, .{ .slot = target, .value = a.value, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
+    }
+    for (m.nets, 0..) |n, i| if (n.init != .none)
+        try wires.append(arena, .{ .slot = r.nets[i].slot, .value = n.init, .s0 = .strong, .s1 = .strong, .delay = .{}, .tok = n.main_tok });
+    if (wires.items.len > std.math.maxInt(u32)) return r.fail(m.main_tok, "too many continuous assignments", .{});
+    r.drivers = try arena.alloc(Driver, wires.items.len);
+    const grouped = try arena.alloc(std.ArrayList(u32), m.nets.len);
+    @memset(grouped, .empty);
+    for (wires.items, 0..) |a, i| {
         try r.checkExpr(a.value);
         var watched: std.ArrayList(u32) = .empty;
         try r.sensitivity(a.value, &watched);
         r.drivers[i] = .{
-            .net = target - r.net_base,
+            .net = a.slot - r.net_base,
             .value = a.value,
             .sensitivity = watched.items,
-            .current = try filled(arena, r.values[target].width, false, .z),
-            .s0 = a.strength0,
-            .s1 = a.strength1,
+            .current = try filled(arena, r.values[a.slot].width, false, .z),
+            .s0 = a.s0,
+            .s1 = a.s1,
+            .delay = try r.declaredDelay3(a.delay, a.tok),
         };
-        try grouped[target - r.net_base].append(arena, @intCast(i));
+        try grouped[a.slot - r.net_base].append(arena, @intCast(i));
         try r.enqueue(.{ .run_process = try r.append(.{ .continuous = @intCast(i) }) }, null, false);
     }
     for (r.nets, grouped, m.nets) |*n, g, decl| {
@@ -1903,6 +2072,15 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
         // resolution question there, it is an error.
         if (n.kind == .uwire and g.items.len > 1) return r.fail(decl.main_tok, "a uwire net accepts a single driver", .{});
         n.drivers = g.items;
+        n.delay = try r.declaredDelay3(decl.delay, decl.main_tok);
+        // A.2.1.3 gives `trireg` its own alternatives, and in them the third
+        // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
+        // a trireg in the capacitive state does not turn off, it holds — so the
+        // net's own turn-off falls back to §7.14's "smallest of the delays".
+        if (n.kind == .trireg and decl.delay.off != .none) {
+            n.decay = n.delay.off;
+            n.delay.off = @min(n.delay.rise, n.delay.fall);
+        }
     }
     for (m.discrete) |process| {
         const start: u32 = @intCast(r.code.items.len);
@@ -1924,6 +2102,24 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
             .monitor_tick => {
                 r.monitor_pending = false;
                 try r.monitorPrint(scratch.allocator(), false);
+            },
+            // §6.1.3: an event whose generation has moved on was cancelled by a
+            // later evaluation and does nothing at all.
+            .drive => |d| if (d.gen == r.drivers[d.driver].transition.gen) {
+                r.drivers[d.driver].transition.target = null;
+                @memcpy(r.drivers[d.driver].current.planes, d.value.planes);
+                try r.resolve(r.drivers[d.driver].net);
+            },
+            .net_update => |u| if (u.gen == r.nets[u.net].transition.gen) {
+                r.nets[u.net].transition.target = null;
+                try r.store(r.nets[u.net].slot, u.value.planes);
+            },
+            // §3.8: the charge has been held for the decay time, and what a
+            // trireg holds once it is worth nothing is x.
+            .decay => |d| if (d.gen == r.nets[d.net].charge_gen.gen) {
+                const n = r.nets[d.net];
+                for (0..n.resolved.width) |i| setBit(n.resolved, @intCast(i), .x);
+                try r.store(n.slot, n.resolved.planes);
             },
         }
     }
@@ -2212,6 +2408,75 @@ test "a supply net outranks every strength an assign can write but its own" {
     );
 }
 
+test "a delayed continuous assignment is inertial and swallows a short pulse" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg a;
+        \\wire y;
+        \\assign #(3, 7) y = a;
+        \\initial begin
+        \\  a = 0;
+        \\  #10 #0 $display("t10 %b", y);
+        \\  a = 1; #1 a = 0;
+        \\  #5 #0 $display("pulse_gone %b", y);
+        \\  a = 1;
+        \\  #2 #0 $display("t18 %b", y);
+        \\  #1 #0 $display("t19 %b", y);
+        \\  a = 0;
+        \\  #6 #0 $display("t25 %b", y);
+        \\  #1 #0 $display("t26 %b", y);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    ,
+    // The 1 at t=11 would have landed at 14; the 0 at t=12 cancels it and is
+    // itself the value already published, so nothing happens at all. The rise
+    // at t=16 lands at 19 and the fall at t=19 lands at 26 — the two delays are
+    // chosen by the value transitioned TO, not by the direction of the source.
+        \\t10 0
+        \\pulse_gone 0
+        \\t18 0
+        \\t19 1
+        \\t25 1
+        \\t26 0
+        \\
+    );
+}
+
+test "a trireg holds its charge for the decay time and then gives up" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module example;
+        \\reg d;
+        \\trireg (large) #(0, 0, 20) c;
+        \\trireg forever_c;
+        \\assign c = d, forever_c = d;
+        \\initial begin
+        \\  d = 1;
+        \\  #5 d = 1'bz;
+        \\  #19 $display("t24 %b %b", c, forever_c);
+        \\  #2 $display("t26 %b %b", c, forever_c);
+        \\  d = 0; #1 d = 1'bz;
+        \\  #19 $display("restarted %b %b", c, forever_c);
+        \\  #1000 $display("late %b %b", c, forever_c);
+        \\  $finish(0);
+        \\end
+        \\endmodule
+    ,
+    // Released at t=5, so the decay is at t=25 — sampled at 24 and 26 and never
+    // AT it, because what a sample in the same timestep as the decay sees is an
+    // intra-timestep ordering this pins nothing about. The countdown then
+    // RESTARTS from the second release at t=28, which is what "restarted" is
+    // for: a decay measured from the FIRST release would have fired by t=46.
+        \\t24 1 1
+        \\t26 x 1
+        \\restarted 0 0
+        \\late x 0
+        \\
+    );
+}
+
 test "the pull supply and capacitive net types supply what no driver did" {
     try expectRun(
         \\`timescale 1ns/1ns
@@ -2320,11 +2585,13 @@ test "the net and array declaration boundaries are explicit" {
     // type" would accept both of these.
     try expectRejected("module m; wire w; reg a; assign (strong0, pull0) w = a; endmodule", "pairs one 0-side with one 1-side");
     try expectRejected("module m; wire (small) w; reg a; assign w = a; endmodule", "charge strength is only legal on a trireg");
-    // A.2.2.3 parses on both, and neither is executed yet — see the refusals in
-    // `run`. These two are what keeps a parsed-and-dropped delay from silently
-    // producing a zero-delay answer.
-    try expectRejected("`timescale 1ns/1ns\nmodule m; wire #3 w; reg a; assign w = a; endmodule", "net delay is not implemented");
-    try expectRejected("`timescale 1ns/1ns\nmodule m; wire w; reg a; assign #3 w = a; endmodule", "assignment delay is not implemented");
+    // Both delay3 positions now RUN, so the boundary that remains is the fold,
+    // not the syntax: A.2.2.3's `delay_value` admits an `identifier`, and
+    // digital execution has no parameter for one to name.
+    try expectRejected("`timescale 1ns/1ns\nmodule m; wire #w y; reg a; assign y = a; endmodule", "must be a literal number");
+    // A delay has to be measured against something, and §17.3 takes the
+    // design's precision from a `timescale and nowhere else.
+    try expectRejected("module m; wire w; reg a; assign #3 w = a; endmodule", "explicit valid timescale");
     // §3.9 an array has no value of its own, and a select is not an element.
     try expectRejected("module m; reg [3:0] mem [0:3]; initial $display(\"%b\",mem); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
@@ -2332,7 +2599,9 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"x\"); endmodule", "one unpacked array dimension");
     try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
     // §3.6 a disciplined net belongs to the analog solver, not to this executor.
-    try expectRejected("module m; electrical e; initial $display(\"x\"); endmodule", "disciplined, ground");
+    // A net's `=` no longer joins them: A.2.4's `net_decl_assignment` is a
+    // continuous assignment on an UNdisciplined net, and it runs.
+    try expectRejected("module m; electrical e; initial $display(\"x\"); endmodule", "disciplined and ground");
     try expectRejected("module m; wire [p:0] w; initial $display(\"x\"); endmodule", "bounds must be literal integers");
 }
 
