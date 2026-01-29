@@ -885,19 +885,77 @@ pub const Complex = struct {
     im: f64 = 0,
 };
 
-/// §4.6.3 / §4.5.11 / §4.5.12 small-signal stamp topology, sparse. Position k
+/// §4.5.11 / §4.5.12 small-signal stamp topology, sparse. Position k
 /// of `ac_stamps` describes element k of the `acStamp(...)` result:
-///   col == null — an independent complex SOURCE on `row` (`ac_stim`)
+///   col == null — an independent complex SOURCE on `row`
 ///   col != null — a complex Jacobian entry (row, col)
 ///
 /// This exists for exactly the responses `G + jwC` cannot represent, i.e. the
-/// ones transcendental in s: `absdelay`/`transition` (e^-s·td), `zi_*`
-/// (e^sT), and `ac_stim`'s phase. A RATIONAL response (`laplace_*`) does NOT
-/// belong here — it is realizable as internal unknowns with real G/C, which is
-/// correct in tran/ac/noise/pss/pz alike.
+/// ones transcendental in s: `absdelay`/`transition` (e^-s·td) and `zi_*`
+/// (e^sT). A RATIONAL response (`laplace_*`) does NOT belong here — it is
+/// realizable as internal unknowns with real G/C, which is correct in
+/// tran/ac/noise/pss/pz alike.
+///
+/// §4.6.3's `ac_stim` is NOT this, and used to be listed here as the `col ==
+/// null` case. It is `ac_gens`/`acStim` below, for two reasons a source row
+/// cannot carry: a stimulus lives on a BRANCH, so it stamps `+I` on one row and
+/// `−I` on another and the two entries are ONE source whose sign relation a
+/// pair of independent rows cannot state; and it is active only in the analysis
+/// it NAMES, which there is nowhere here to put.
 pub const AcStamp = struct {
     row: u8,
     col: ?u8 = null,
+};
+
+/// §4.6.3 AC stimulus topology. Position k of `ac_gens` names one `ac_stim`
+/// call on the (row, col) branch, and position k of the `acStim(...)` result
+/// carries that call's phasor — exactly the `noise_gens`/`noisePsd` split, for
+/// the same reason: the branch and the analysis name are properties of the
+/// MODEL TEXT, the magnitude and phase are properties of the model card.
+///
+/// "When the name of the small-signal analysis matches analysis_name, the
+/// source becomes active and models a source with magnitude mag and phase
+/// phase … The AC stimulus function returns zero (0) during large-signal
+/// analyses (such as DC and transient) as well as on all small-signal analyses
+/// using names which do not match analysis_name."
+///
+/// **What a host that ignores this export gets wrong.** VerA also lowers
+/// `ac_stim` into the residual, as `mag·cos(phase)` — the phasor's REAL PART,
+/// because a residual is real. So a host that reads only the residual sees a
+/// source whose quadrature component has been deleted: a stimulus at phase π/2
+/// disappears from the analysis entirely instead of being in quadrature with
+/// one at phase 0. This table is the whole phasor. A host that solves a complex
+/// small-signal system reads it INSTEAD OF the residual term, not in addition
+/// — both spell the same source, and adding them counts its real part twice.
+pub fn AcGen(comptime D: type) type {
+    const n = nU(D);
+    return struct {
+        row: std.math.IntFittingRange(0, n - 1),
+        col: std.math.IntFittingRange(0, n - 1),
+        /// §4.6.3 `analysis_name`: the source is active only while the
+        /// small-signal analysis in force carries this name (§4.6.1's Table
+        /// 4-21 vocabulary — "ac", "noise", "xf", …). "ac" is the clause's own
+        /// default for `ac_stim()`.
+        name: []const u8 = "ac",
+    };
+}
+
+/// §4.6.3 one AC stimulus' phasor, `mag·e^(j·phase)`, returned by the optional
+/// `acStim` hook (position k = `ac_gens[k]`).
+///
+/// Polar and not `Complex`, because polar is what the clause states and what
+/// the model wrote: converting here would round `cos(π/2)` to 6.1e-17 and hand
+/// a host a source that is 6.1e-17 out of quadrature for no reason.
+///
+/// `mag` may be NEGATIVE: §4.6.4.6's per-use coefficient applies to a stimulus
+/// too (`I(a,b) <+ -2*ac_stim("ac")`), and a real factor folds into the
+/// magnitude exactly, sign and all — `−m·e^(jφ)` is `m·e^(j(φ+π))`. A host that
+/// takes `@abs(mag)` inverts such a source.
+pub const AcPhasor = struct {
+    /// Magnitude, in the contributed nature's units. §4.6.3's default is 1.
+    mag: f64 = 1,
+    /// Phase, in RADIANS — "phase is given in radians". Default 0.
+    phase: f64 = 0,
 };
 
 /// Result of a limiting pass. `converged` is the device's own verdict on
@@ -1270,6 +1328,14 @@ pub fn validate(comptime D: type) void {
         }
     }
 
+    // §4.6.3 the AC stimulus sources. Same twin shape as noise_gens/noisePsd:
+    // the hook needs a table to be positional against, and `row`/`col` are
+    // range-checked by `AcGen`'s own integer widths.
+    expectArray(D, "ac_gens", AcGen(D));
+    requireWith(D, "acStim", "ac_gens");
+    if (@hasDecl(D, "acStim"))
+        expectFn(D, "acStim", fn (*const D.Model, *const D.Instance) [D.ac_gens.len]AcPhasor);
+
     // Small-signal stamp: the complex contribution `G + jwC` cannot carry.
     // Sparse — `ac_stamps` is the comptime pattern, `acStamp` the values at a
     // frequency, same idiom as noise_gens/noisePsd.
@@ -1490,6 +1556,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "noise_tables", {} },
     .{ "ac_stamps", {} },
     .{ "acStamp", {} },
+    // §4.6.3 the AC stimulus sources and their phasors.
+    .{ "ac_gens", {} },
+    .{ "acStim", {} },
     .{ "op_vars", {} },
     .{ "opValues", {} },
     // §2.8.3/§12.32 the `$name`s left to a VPI application. Pub because the
@@ -1895,6 +1964,9 @@ const MockAll = struct {
         .{ .interp = .log, .points = &.{ .{ 1, 1e-18 }, .{ 1e6, 1e-24 } } },
     };
     pub const ac_stamps = [_]AcStamp{ .{ .row = 0, .col = 1 }, .{ .row = 1 } };
+    // §4.6.3: one stimulus on the (0,1) branch, so the `ac_gens`/`acStim`
+    // pairing and `AcPhasor`'s polar shape are both somewhere `validate` sees.
+    pub const ac_gens = [_]AcGen(Self){.{ .row = 0, .col = 1, .name = "ac" }};
     pub const op_vars = [_]OpVar{.{ .name = "gd", .units = "S" }};
     pub const systf_calls = [_]Systf{.{ .name = "$sampnhold" }};
     // The over-approximate masks, plus their row-level companions. All-ones is
@@ -1968,6 +2040,9 @@ const MockAll = struct {
     }
     pub fn acStamp(_: [n_u]f64, _: *const Model, _: *const Instance, _: f64) [ac_stamps.len]Complex {
         return .{ .{}, .{} };
+    }
+    pub fn acStim(_: *const Model, _: *const Instance) [ac_gens.len]AcPhasor {
+        return .{.{ .mag = 1, .phase = 0 }};
     }
     pub fn derive(_: *Model) void {}
     pub fn precompute(_: *Instance, _: *const Model) void {}

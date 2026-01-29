@@ -182,9 +182,18 @@ pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
 /// and reaches nothing in the residual.
 pub const Nodeset = struct { node: u16, value: f64, tok: u32 };
 
-/// §4.6.4.1/.2 the parametric forms, then §4.6.4.3/.4 the tabulated ones.
-/// APPENDED, so the two existing ordinals do not move.
-pub const NoiseKind = enum(u8) { thermal, flicker, table, table_log };
+/// §4.6.4.1/.2 the parametric forms, then §4.6.4.3/.4 the tabulated ones, then
+/// §4.6.3's stimulus. APPENDED, so no existing ordinal moves.
+///
+/// `ac_stim` is NOT noise and never reaches `noise_gens` — codegen routes it to
+/// `ac_gens` instead. It rides in this enum because it rides in the same
+/// A.8.2 grammar node (`analog_small_signal_function_call`) and therefore
+/// through the same collection walk: `noiseSrcsOf`, `addNoiseSrc`'s identity
+/// dedup and `var_noise`'s "the source was assigned to a variable first" path
+/// are all exactly what §4.6.3 needs too, and a second copy of them keyed on a
+/// second struct would be the same code twice with one of the two forgetting
+/// the variable case.
+pub const NoiseKind = enum(u8) { thermal, flicker, table, table_log, ac_stim };
 
 /// §4.6.4 one noise GENERATOR a contribution carries: its PSD kind and its
 /// identity. `id` is the `Ast.ExprId` of the `white_noise`/`flicker_noise`
@@ -217,9 +226,17 @@ pub const NoiseSrc = struct {
     id: u32,
     /// §4.6.4.1/.2 arg 0. `.f_zero` only for a generator whose call never
     /// lowered, which cannot happen through `lowerNoise`.
+    ///
+    /// On an `.ac_stim` row this is §4.6.3's `mag`, the first NUMERIC argument
+    /// (the analysis name is a string and does not take a slot), defaulting to
+    /// the clause's 1.
     pwr: Mir.Value = .f_zero,
     /// §4.6.4.2 arg 1, the frequency exponent. Unread on a `.thermal` row, and
     /// 1 for a one-argument `flicker_noise` — the same default either way.
+    ///
+    /// On an `.ac_stim` row this is §4.6.3's `phase` in radians, defaulting to
+    /// the clause's 0 — which is why `lowerNoise` seeds the pair differently
+    /// for a stimulus than for a generator.
     exp: Mir.Value = .f_one,
     /// §4.6.4.3/.4 arg 0 of a `.table`/`.table_log` row: the vector, flattened
     /// to `f0, p0, f1, p1, …` and still unfolded. Empty on every other kind,
@@ -5277,6 +5294,23 @@ fn noiseName(self: *const Lower, e: Ast.ExprId) []const u8 {
     return self.file.str(ex.strOf(last));
 }
 
+/// §4.6.3 `ac_stim`'s LEADING string argument — the analysis the stimulus is
+/// active in. A.8.2 puts the quotation marks inside the production
+/// (`ac_stim ( [ " analysis_identifier " …`), so a literal is the only spelling
+/// there is; "ac" is the clause's own default for the absent one.
+///
+/// The opposite end of the call from `noiseName`, and that is the whole
+/// difference between the two: §4.6.4's label is trailing and optional, §4.6.3's
+/// analysis name is leading and selects the analysis. Sharing one reader would
+/// have read `ac_stim("ac", 2.0, 0.0)` as unnamed and `ac_stim("noise")` as a
+/// noise LABEL rather than as the analysis it names.
+fn acAnalysisName(self: *const Lower, e: Ast.ExprId) []const u8 {
+    const ex = &self.file.exprs;
+    const args = ex.args(e);
+    if (args.len == 0 or args[0] == .none or ex.tag(args[0]) != .str_literal) return "ac";
+    return self.file.str(ex.strOf(args[0]));
+}
+
 fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc)) error{OutOfMemory}!void {
     if (e == .none) return;
     const ex = &self.file.exprs;
@@ -5288,7 +5322,10 @@ fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc))
             // noise generator the model never declared. It is the ONLY name in
             // this grammar that is not a generator — §4.6.4.3/.4's tables are
             // generators whose PSD happens to be a table, and they carry it in
-            // `NoiseSrc.table` rather than in `pwr`/`exp`.
+            // `NoiseSrc.table` rather than in `pwr`/`exp`. It is collected
+            // HERE, on the same walk, and separated by `kind` in codegen, which
+            // is what gives the stimulus §4.6.4.6's "assigned to a variable
+            // first" path without a second copy of this function.
             const kind: NoiseKind = if (std.mem.eql(u8, n, "white_noise"))
                 .thermal // §4.6.4.1
             else if (std.mem.eql(u8, n, "flicker_noise"))
@@ -5297,9 +5334,13 @@ fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc))
                 .table // §4.6.4.3
             else if (std.mem.eql(u8, n, "noise_table_log"))
                 .table_log // §4.6.4.4
+            else if (std.mem.eql(u8, n, "ac_stim"))
+                .ac_stim // §4.6.3
             else
                 return;
-            const psd = self.noise_psd.get(@intFromEnum(e)) orelse [2]Mir.Value{ .f_zero, .f_one };
+            const psd = self.noise_psd.get(@intFromEnum(e)) orelse
+                if (kind == .ac_stim) [2]Mir.Value{ .f_one, .f_zero } // §4.6.3 mag 1, phase 0
+                else [2]Mir.Value{ .f_zero, .f_one };
             try addNoiseSrc(self.arena, out, .{
                 .kind = kind,
                 .id = @intFromEnum(e),
@@ -5307,7 +5348,7 @@ fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc))
                 .exp = psd[1],
                 .table = self.noise_tab.get(@intFromEnum(e)) orelse &.{},
                 .tok = ex.mainTok(e),
-                .name = self.noiseName(e),
+                .name = if (kind == .ac_stim) self.acAnalysisName(e) else self.noiseName(e),
             });
         },
         // §4.6.4.6's own spelling: the source was assigned to a variable and
@@ -8346,7 +8387,14 @@ fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // `flicker_noise` is the exponent. Recorded HERE — this is the only place
     // the call's arguments are lowered, and `noiseSrcsOf` walks the AST after
     // the fact, where the MIR values are no longer reachable from the id.
-    var psd: [2]Mir.Value = .{ .f_zero, .f_one };
+    // §4.6.3 has its OWN defaults for the same two slots — "The default
+    // magnitude is one (1) and the default phase is zero (0)" — and seeding
+    // them here is what makes a bare `ac_stim()` export the unit source the
+    // clause describes instead of a magnitude of zero.
+    var psd: [2]Mir.Value = if (std.mem.eql(u8, name, "ac_stim"))
+        .{ .f_one, .f_zero }
+    else
+        .{ .f_zero, .f_one };
     var reals: usize = 0;
     // §4.6.4.3/.4 the table itself. `appendVectorArg` writes the element COUNT
     // and then the elements, so the pairs are the slice after that count — the

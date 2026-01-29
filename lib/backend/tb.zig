@@ -166,6 +166,21 @@ pub const Directives = struct {
     /// empty and an absent directive is not — without this the runner could not
     /// tell "expect nothing" from "does not ask".
     asserts_noise: bool = false,
+    /// `//! acstim (<row>,<col>) [name=<analysis>] [mag=<v>] [phase=<v>]`, one
+    /// per expected `ac_gens` entry, in table order. `//! acstim none` asserts
+    /// the table is empty.
+    ///
+    /// §4.6.3's twin of `noise`, and it exists for the same reason: a stimulus
+    /// is a PHASOR, and the only real number a `CHECK` inside the analog block
+    /// could read off one is `mag*cos(phase)` — which is precisely the
+    /// real-part-only lowering the export exists to fix, so writing it down
+    /// would bless the defect as the specification. The (magnitude, phase) pair
+    /// leaves through `ac_gens`/`acStim` to a host that solves a complex
+    /// system, and this line is how a fixture reaches it.
+    acstim: []const AcWant = &.{},
+    /// Whether any `//! acstim` line was written. Same split as
+    /// `asserts_noise`: `//! acstim none` is a claim and silence is not.
+    asserts_acstim: bool = false,
     /// `//! reject <substring>`, one per line. Non-empty makes this a REJECT
     /// fixture: it must NOT compile, and every substring here must appear
     /// somewhere in the resulting diagnostic. A fixture that cannot run states
@@ -244,6 +259,39 @@ pub const NoiseWant = struct {
     }
 };
 
+/// One `//! acstim` line:
+///
+///     //! acstim (<row>,<col>) [name=<analysis>] [mag=<v>] [phase=<v>] [rtol=<v>]
+///
+/// `NoiseWant` one clause over, and split for the same reason: the BRANCH and
+/// §4.6.3's `analysis_name` are properties of the model TEXT and are checked
+/// against `ac_gens` once, while `mag` and `phase` are the model CARD's — a
+/// parameter is a legal magnitude — and are read out of `acStim(...)` at the
+/// first operating point.
+///
+/// Every field after `topo` is optional and asserts nothing when absent.
+pub const AcWant = struct {
+    /// `(row,col)`, canonicalised at parse time so `(p, n)` and `(p,n)` are the
+    /// same want, then compared byte-exact against the device's own spelling.
+    topo: []const u8,
+    /// §4.6.3 `analysis_name` — which small-signal analysis this source is
+    /// active in, NOT a label: §4.6.4's `name` is a report heading and this one
+    /// selects the analysis. Byte-exact.
+    name: ?[]const u8 = null,
+    /// §4.6.3 "models a source with magnitude mag and phase phase … phase is
+    /// given in radians". Read out of `acStim(model, inst)[k]`.
+    mag: ?f64 = null,
+    phase: ?f64 = null,
+    /// Relative tolerance for the two above, tight by default for the reason
+    /// `NoiseWant.rtol` gives: a fixture asserts a number it derived.
+    rtol: f64 = 1e-12,
+
+    /// Does this line need the model card — i.e. a point block — to answer?
+    fn needsPoint(self: AcWant) bool {
+        return self.mag != null or self.phase != null;
+    }
+};
+
 /// Guard against a fixture that asks for a million points and a gigabyte of
 /// generated Zig. Hit only by a mistake — a real sweep is tens of points.
 pub const max_points: usize = 4096;
@@ -266,6 +314,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var lrm: std.ArrayList([]const u8) = .empty;
     var spice: std.ArrayList([]const u8) = .empty;
     var noise: std.ArrayList(NoiseWant) = .empty;
+    var acstim: std.ArrayList(AcWant) = .empty;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
@@ -326,6 +375,12 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 try noise.append(arena, try parseNoiseEntry(arena, rest));
             }
             d.asserts_noise = true;
+        } else if (std.mem.eql(u8, kw, "acstim")) {
+            // `none` is the empty table, for the reason `noise none` is.
+            if (!std.mem.eql(u8, rest, "none")) {
+                try acstim.append(arena, try parseAcEntry(arena, rest));
+            }
+            d.asserts_acstim = true;
         } else if (std.mem.eql(u8, kw, "spice")) {
             // Verbatim, including a leading `+`: the reader joins continuations
             // itself, so what it sees is the card as the annex prints it.
@@ -358,6 +413,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.reject = reject.items;
     d.lrm = lrm.items;
     d.noise = noise.items;
+    d.acstim = acstim.items;
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.
     if (spice.items.len != 0) d.spice = try std.mem.join(arena, "\n", spice.items);
@@ -455,6 +511,43 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
             }
             if (pts.items.len == 0) return error.BadSyntax;
             w.points = pts.items;
+        } else return error.BadSyntax;
+    }
+    return w;
+}
+
+/// One `//! acstim` line: the branch, then whatever `key=value` fields follow.
+///
+/// Simpler than `parseNoiseEntry` because §4.6.3 has less to say: there is no
+/// kind tag (a stimulus has exactly one form) and no `#source` (§4.6.4.6's
+/// correlation is a property of noise generators, and two stimuli at the same
+/// phase are not "correlated", they are two sources). So the topology is the
+/// parenthesised branch alone, and it is CANONICALISED rather than compared
+/// verbatim — `(p, n)` and `(p,n)` are the same want, and the device's own
+/// spelling has no space in it.
+fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
+    if (s.len == 0 or s[0] != '(') return error.BadSyntax;
+    const close = std.mem.indexOfScalar(u8, s, ')') orelse return error.BadSyntax;
+    const inner = s[1..close];
+    const comma = std.mem.indexOfScalar(u8, inner, ',') orelse return error.BadSyntax;
+    const row = std.mem.trim(u8, inner[0..comma], " \t");
+    const col = std.mem.trim(u8, inner[comma + 1 ..], " \t");
+    if (row.len == 0 or col.len == 0) return error.BadSyntax;
+
+    var w: AcWant = .{ .topo = try std.fmt.allocPrint(arena, "({s},{s})", .{ row, col }) };
+    var fields = std.mem.tokenizeAny(u8, s[close + 1 ..], " \t");
+    while (fields.next()) |f| {
+        const at = std.mem.indexOfScalar(u8, f, '=') orelse return error.BadSyntax;
+        const key = f[0..at];
+        const val = f[at + 1 ..];
+        if (std.mem.eql(u8, key, "name")) {
+            w.name = try arena.dupe(u8, val);
+        } else if (std.mem.eql(u8, key, "mag")) {
+            w.mag = try number(val);
+        } else if (std.mem.eql(u8, key, "phase")) {
+            w.phase = try number(val);
+        } else if (std.mem.eql(u8, key, "rtol")) {
+            w.rtol = try number(val);
         } else return error.BadSyntax;
     }
     return w;
@@ -738,6 +831,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         try emitNoiseComptime(arena, &out, d);
     }
 
+    // --- §4.6.3 the exported AC stimulus topology ---------------------------
+    if (d.asserts_acstim) try emitAcTopology(arena, &out, d);
+
     // --- one straight-line block per operating point ------------------------
     //
     // The SWEEP is the outer loop and TIME the inner one, and the §4.5 operator
@@ -834,6 +930,11 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             // point every fixture has, and pinning a density at a named bias
             // is the whole content of a bias-dependent `white=`.
             if (n == 0) try emitNoisePsd(arena, &out, d, mdl);
+            // §4.6.3 the magnitude and phase are the model CARD's — a parameter
+            // is a legal `mag` — so they need a card, which is this block's
+            // `mdl`; `//! psweep` gives each point its own and the first point
+            // is the one a fixture states, exactly as for the PSD above.
+            if (n == 0) try emitAcStim(arena, &out, d, mdl);
             // §4.5.2 accepted-step bookkeeping. This is the whole reason the
             // stateful operators are observable at all: `eval` reads history out
             // of `Instance`, and only `updateState` ever writes it.
@@ -983,6 +1084,104 @@ fn emitNoisePsd(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: [
                     "                    @intFromBool(nclose({s}, {f}, {f})),\n" ++
                     "                }});\n",
                 .{ k, f[0], got, fmtF64(want), got, fmtF64(want), fmtF64(w.rtol) },
+            );
+        }
+        try out.appendSlice(arena, "            }\n");
+    }
+    try out.appendSlice(arena, "        }\n");
+}
+
+/// §4.6.3 the COMPTIME half of the AC stimulus export: how many sources there
+/// are, which branch each is on, and which analysis it answers to. One block,
+/// not one per line: unlike `noise_gens`'s per-row tables there is nothing here
+/// that needs a `k`-indexed statement of its own.
+fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+    try out.appendSlice(arena,
+        \\
+        \\    // §4.6.3: what this device tells a host about its AC stimuli. The
+        \\    // model's own text cannot see this either — what a `CHECK` on
+        \\    // `ac_stim` reads back is the residual's real part, `mag*cos(phase)`
+        \\    // — so the phasor leaves through `ac_gens`/`acStim` and a
+        \\    // `//! acstim` line is how a fixture reaches it.
+        \\    {
+        \\        const want = [_][]const u8{
+        \\
+    );
+    for (d.acstim) |e| try print(out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e.topo)});
+    try out.appendSlice(arena, "        };\n");
+    // A parallel `?[]const u8` column rather than a second guarded block per
+    // line: `inline for` makes the index comptime, so one lookup covers every
+    // line and a line that asserts no name simply has none.
+    try out.appendSlice(arena, "        const want_name = [_]?[]const u8{");
+    for (d.acstim, 0..) |e, i| {
+        if (e.name) |nm|
+            try print(out, arena, "{s}\"{f}\"", .{ if (i == 0) " " else ", ", std.zig.fmtString(nm) })
+        else
+            try print(out, arena, "{s}null", .{if (i == 0) " " else ", "});
+    }
+    try out.appendSlice(arena,
+        \\ };
+        \\        _ = &want_name;
+        \\        if (comptime @hasDecl(D, "ac_gens")) {
+        \\            std.debug.print("acstim count got={d} want={d} ok={d}\n", .{
+        \\                D.ac_gens.len, want.len, @intFromBool(D.ac_gens.len == want.len),
+        \\            });
+        \\            inline for (D.ac_gens, 0..) |g, i| {
+        \\                var buf: [192]u8 = undefined;
+        \\                // `U`'s tag names ARE the spelling contract, same as the
+        \\                // `//! noise` block and the same as `//! bias`.
+        \\                const got = std.fmt.bufPrint(&buf, "({s},{s})", .{
+        \\                    @tagName(@as(D.U, @enumFromInt(g.row))),
+        \\                    @tagName(@as(D.U, @enumFromInt(g.col))),
+        \\                }) catch "<too long>";
+        \\                const w_i: []const u8 = if (i < want.len) want[i] else "<none>";
+        \\                std.debug.print("acstim[{d}] got={s} want={s} ok={d}\n", .{
+        \\                    i, got, w_i, @intFromBool(std.mem.eql(u8, got, w_i)),
+        \\                });
+        \\                if (i < want_name.len) if (want_name[i]) |wn| {
+        \\                    std.debug.print("acstim[{d}].name got={s} want={s} ok={d}\n", .{
+        \\                        i, g.name, wn, @intFromBool(std.mem.eql(u8, g.name, wn)),
+        \\                    });
+        \\                };
+        \\            }
+        \\        } else {
+        \\            // No table at all is the empty table, for the reason the
+        \\            // `noise_gens` block gives.
+        \\            std.debug.print("acstim count got=0 want={d} ok={d}\n", .{
+        \\                want.len, @intFromBool(want.len == 0),
+        \\            });
+        \\        }
+        \\    }
+        \\
+    );
+}
+
+/// §4.6.3 `mag` and `phase`, read out of `acStim` at the operating point this
+/// is emitted into. `model` is the caller's card name, which `//! psweep`
+/// renames — the same contract `emitNoisePsd` has.
+fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
+    var any = false;
+    for (d.acstim) |w| {
+        if (w.needsPoint()) any = true;
+    }
+    if (!any) return;
+    try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"acStim\")) {\n");
+    try out.appendSlice(arena, noise_close);
+    try print(out, arena, "            const stim = D.acStim(&{s}, &inst);\n", .{mdl});
+    for (d.acstim, 0..) |w, k| {
+        if (!w.needsPoint()) continue;
+        try print(out, arena, "            if (comptime D.ac_gens.len > {d}) {{\n", .{k});
+        const fields = [_]struct { []const u8, ?f64 }{ .{ "mag", w.mag }, .{ "phase", w.phase } };
+        for (fields) |f| {
+            const want = f[1] orelse continue;
+            try print(
+                out,
+                arena,
+                "                std.debug.print(\"acstim[{d}].{s} got={{d}} want={{d}} ok={{d}}\\n\", .{{\n" ++
+                    "                    stim[{d}].{s}, {f},\n" ++
+                    "                    @intFromBool(nclose(stim[{d}].{s}, {f}, {f})),\n" ++
+                    "                }});\n",
+                .{ k, f[0], k, f[0], fmtF64(want), k, f[0], fmtF64(want), fmtF64(w.rtol) },
             );
         }
         try out.appendSlice(arena, "            }\n");
@@ -2095,6 +2294,45 @@ test "§4.6.4 a `//! noise` line states the row's contents as well as its place"
     try testing.expectError(error.BadSyntax, parse(arena, "//! noise thermal(a,b)#0 name\n"));
     try testing.expectError(error.BadSyntax, parse(arena, "//! noise table(a,b)#0 interp=spline\n"));
     try testing.expectError(error.BadSyntax, parse(arena, "//! noise table(a,b)#0 points=1.0\n"));
+}
+
+test "§4.6.3 `//! acstim` states the exported stimulus table" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try parse(arena,
+        \\//! acstim (p,n) name=ac mag=2.0 phase=1.0471975511965976
+        \\//! acstim (q, n) mag=1.0 phase=1.5707963267948966 rtol=1e-6
+        \\
+    );
+    try testing.expect(d.asserts_acstim);
+    try testing.expectEqual(@as(usize, 2), d.acstim.len);
+    try testing.expectEqualStrings("(p,n)", d.acstim[0].topo);
+    try testing.expectEqualStrings("ac", d.acstim[0].name.?);
+    try testing.expectEqual(@as(f64, 2.0), d.acstim[0].mag.?);
+    try testing.expectEqual(@as(f64, 1e-12), d.acstim[0].rtol); // the default
+    try testing.expectEqual(@as(f64, 1e-6), d.acstim[1].rtol);
+    try testing.expect(d.acstim[0].needsPoint());
+
+    // Canonicalised, so the space a human writes is not a different want than
+    // the one the device spells.
+    try testing.expectEqualStrings("(q,n)", d.acstim[1].topo);
+    // `name=` is OPTIONAL — an absent one asserts nothing, because §4.6.3
+    // defaults `analysis_name` to "ac" and a fixture may not care.
+    try testing.expect(d.acstim[1].name == null);
+
+    // "This model declares no stimulus" is a claim and silence is not.
+    const none = try parse(arena, "//! acstim none\n");
+    try testing.expect(none.asserts_acstim);
+    try testing.expectEqual(@as(usize, 0), none.acstim.len);
+
+    // An unknown key is a fixture asserting something nothing will check.
+    try testing.expectError(error.BadSyntax, parse(arena, "//! acstim (a,b) magnitude=1\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! acstim (a,b) mag\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! acstim a,b mag=1\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! acstim (a) mag=1\n"));
+    try testing.expectError(error.BadSyntax, parse(arena, "//! acstim (,b) mag=1\n"));
 }
 
 test "expected process exit status is explicit and bounded" {
