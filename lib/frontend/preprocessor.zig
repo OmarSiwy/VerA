@@ -2586,8 +2586,20 @@ pub const disciplines_vams =
 /// `dc`, `mag` and `phase` lead the parameter list of every independent source
 /// row and appear in NONE of their Behavior expressions: they are the §4.6.1
 /// analysis-dependent values (DC operating point, AC magnitude and phase) rather
-/// than terms of the transient waveform. They are declared, in Table E.1's
-/// order, and unused — selecting on `$analysis`/`analysis()` is the ceiling.
+/// than terms of the transient waveform. E.3 makes those names REQUIRED, and a
+/// required parameter no equation reads is a parameter that does nothing — so
+/// the Behavior column is guarded by `analysis("static") && !analysis("tran")`
+/// on every source row, which is §4.6.1's ".OP or .DC analysis" and not a
+/// transient's own initial operating point, and `dc` is what the source holds
+/// there. E.2.2.3 is the annex using it: `VA VCC GND 5`, a plain 5 V supply, is
+/// translated `vsine #(.dc(5)) Vcc (vcc, gnd);` with every waveform parameter
+/// left at its default.
+///
+/// ponytail: `mag` and `phase` are still declared and unused. §4.6.3's
+/// `ac_stim(analysis_name, mag, phase)` is the shape they want, and the reason
+/// they do not have it is that a source contributing an AC stimulus on top of
+/// its large-signal value needs the complex side §4.6.3's own ceiling in
+/// `codegen.analysisMatch` does not have yet.
 ///
 /// E.3.1's ccvs, cccs and mutual inductor are ABSENT on purpose: they take a
 /// controlling INSTANCE name as a parameter, "Verilog-AMS HDL does not support
@@ -2662,7 +2674,10 @@ pub const spice_primitives =
     \\   parameter real td1 = 1.0;
     \\   parameter real tau1 = 1.0 from (0:inf);
     \\   analog begin
-    \\      if ($abstime <= td0)
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         I(p, n) <+ dc;
+    \\      else if ($abstime <= td0)
     \\         I(p, n) <+ val0;
     \\      else if ($abstime <= td1)
     \\         I(p, n) <+ val1 - (val1 - dc) * exp((td0 - $abstime) / tau0);
@@ -2696,7 +2711,10 @@ pub const spice_primitives =
     \\      tp = $abstime - td;
     \\      if (period > 0.0 && tp > 0.0)
     \\         tp = tp - period * floor(tp / period);
-    \\      if (tp <= 0.0)
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         I(p, n) <+ dc;
+    \\      else if (tp <= 0.0)
     \\         I(p, n) <+ val0;
     \\      else if (tp <= rise)
     \\         I(p, n) <+ val0 + (val1 - val0) * tp / rise;
@@ -2733,7 +2751,11 @@ pub const spice_primitives =
     \\            iw = wave[i+1] + (wave[i+3] - wave[i+1])
     \\                             * ($abstime - wave[i]) / (wave[i+2] - wave[i]);
     \\      end
-    \\      I(p, n) <+ iw;
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         I(p, n) <+ dc;
+    \\      else
+    \\         I(p, n) <+ iw;
     \\   end
     \\endmodule
     \\
@@ -2764,7 +2786,11 @@ pub const spice_primitives =
     \\   parameter real fmmodindex = 0.0;
     \\   parameter real fmmodfreq = 0.0;
     \\   analog
-    \\      I(p, n) <+ offset + ampl
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         I(p, n) <+ dc;
+    \\      else
+    \\         I(p, n) <+ offset + ampl
     \\         * (1.0 - ammodindex * cos(`M_TWO_PI * ammodfreq * ($abstime - td)
     \\                                   - ammodphase))
     \\         * (1.0 - damp * ($abstime - td))
@@ -2789,7 +2815,10 @@ pub const spice_primitives =
     \\   parameter real td1 = 1.0;
     \\   parameter real tau1 = 1.0 from (0:inf);
     \\   analog begin
-    \\      if ($abstime <= td0)
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         V(p, n) <+ dc;
+    \\      else if ($abstime <= td0)
     \\         V(p, n) <+ dc;
     \\      else if ($abstime <= td1)
     \\         V(p, n) <+ val1 - (val1 - dc) * exp((td0 - $abstime) / tau0);
@@ -2819,7 +2848,10 @@ pub const spice_primitives =
     \\      tp = $abstime - td;
     \\      if (period > 0.0 && tp > 0.0)
     \\         tp = tp - period * floor(tp / period);
-    \\      if (tp <= 0.0)
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         V(p, n) <+ dc;
+    \\      else if (tp <= 0.0)
     \\         V(p, n) <+ val0;
     \\      else if (tp <= rise)
     \\         V(p, n) <+ val0 + (val1 - val0) * tp / rise;
@@ -2852,7 +2884,11 @@ pub const spice_primitives =
     \\            vw = wave[i+1] + (wave[i+3] - wave[i+1])
     \\                             * ($abstime - wave[i]) / (wave[i+2] - wave[i]);
     \\      end
-    \\      V(p, n) <+ vw;
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         V(p, n) <+ dc;
+    \\      else
+    \\         V(p, n) <+ vw;
     \\   end
     \\endmodule
     \\
@@ -2877,7 +2913,11 @@ pub const spice_primitives =
     \\   parameter real fmmodindex = 0.0;
     \\   parameter real fmmodfreq = 0.0;
     \\   analog
-    \\      V(p, n) <+ offset + ampl
+    \\      // §4.6.1: `dc` at an operating point that is not a transient's own.
+    \\      if (analysis("static") && !analysis("tran"))
+    \\         V(p, n) <+ dc;
+    \\      else
+    \\         V(p, n) <+ offset + ampl
     \\         * (1.0 - ammodindex * cos(`M_TWO_PI * ammodfreq * ($abstime - td)
     \\                                   - ammodphase))
     \\         * (1.0 - damp * ($abstime - td))
