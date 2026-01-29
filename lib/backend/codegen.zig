@@ -374,6 +374,11 @@ pub const Gen = struct {
     /// §4.6.4.3/.4 `noise_tables`, one entry per tabulated generator, folded
     /// and sorted by `planNoise`. Position k is `noise_rows[j].table == k`.
     noise_tabs: []const []const [2]f64 = &.{},
+    /// §4.6.3 `ac_gens` and `acStim`, one row each. Same walk as `noise_rows`
+    /// and separated from it by `kind`: a stimulus is not a generator and must
+    /// never reach `noise_gens`, but it reaches codegen through the same
+    /// `Contribution.noise_srcs` set.
+    ac_rows: []NoiseRow = &.{},
     /// Set by `refuseNoise`: the §4.6.4 export VerA will not write, as the
     /// message the generated `@compileError` carries. First one wins — a device
     /// is refused once, and the diagnostics carry the rest.
@@ -1504,6 +1509,7 @@ pub const Gen = struct {
             std.mem.indexOf(u8, units_text, "inst.is_final_step") != null;
         try self.emitDispatchers();
         try self.emitNoiseTable();
+        try self.emitAcTable();
         try self.emitSystfTable();
         // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
         // advance, which is the ONLY place a stream may move: a per-iteration draw
@@ -2686,8 +2692,15 @@ pub const Gen = struct {
     /// Flatten every contribution's generator set into `noise_rows`, in the
     /// order `noise_gens` declares them. §4.6.4.6's shared-generator identity
     /// (`NoiseSrc.id`) is renamed densely in first-seen order on the way.
+    ///
+    /// §4.6.3's `ac_stim` arrives on the same set and leaves in `ac_rows`
+    /// instead: it is a STIMULUS, and a row of it in `noise_gens` would be a
+    /// noise generator the model never declared. Everything before the split —
+    /// the branch, the §1.3.1.1 ground collapse, the E0520 refusal — is the
+    /// same question for both, which is why they share one walk.
     fn planNoise(self: *Gen) Error!void {
         var rows: std.ArrayList(NoiseRow) = .empty;
+        var ac: std.ArrayList(NoiseRow) = .empty;
         var ids: std.ArrayList(u32) = .empty;
         var tabs: std.ArrayList([]const [2]f64) = .empty;
         for (self.lower.contributions.items) |c| {
@@ -2698,13 +2711,30 @@ pub const Gen = struct {
             // reference node is not an equation — but a GENERATOR that vanishes
             // is a PSD the host will never ask for, so it is reported (E0520).
             if (c.hi == Lower.ground and c.lo == Lower.ground) {
-                try self.refuseNoise(.E0520, c.noise_srcs[0].tok, "this noise generator is on a " ++
+                try self.refuseNoise(.E0520, c.noise_srcs[0].tok, "this small-signal source is on a " ++
                     "ground-ground branch, which has no row or column to export it in", .{});
                 continue;
             }
             const row = if (c.hi != Lower.ground) c.hi else c.lo;
             const col = if (c.lo != Lower.ground) c.lo else row;
             for (c.noise_srcs) |s| {
+                // §4.6.3 a stimulus has no PSD, no table and no §4.6.4.6
+                // identity — one call is one source, and `addNoiseSrc` has
+                // already made two uses of one call one row. `source` is
+                // carried only so the struct is shared; nothing reads it.
+                if (s.kind == .ac_stim) {
+                    try ac.append(self.arena, .{
+                        .row = row,
+                        .col = col,
+                        .kind = s.kind,
+                        .source = 0,
+                        .pwr = self.an.rv(s.pwr), // mag
+                        .exp = self.an.rv(s.exp), // phase, radians
+                        .name = s.name, // analysis_name
+                        .coeff = if (s.coeff == .f_zero) .f_one else self.an.rv(s.coeff),
+                    });
+                    continue;
+                }
                 const seen = for (ids.items, 0..) |v, i| {
                     if (v == s.id) break i;
                 } else null;
@@ -2714,7 +2744,7 @@ pub const Gen = struct {
                 // call is one generator, so folding it twice would export the
                 // same points under two indices.
                 const table: ?u16 = switch (s.kind) {
-                    .thermal, .flicker => null,
+                    .thermal, .flicker, .ac_stim => null,
                     .table, .table_log => if (seen) |i| rows_table: {
                         for (rows.items) |r| {
                             if (r.source == i and r.table != null) break :rows_table r.table;
@@ -2741,6 +2771,7 @@ pub const Gen = struct {
         }
         self.noise_rows = rows.items;
         self.noise_tabs = tabs.items;
+        self.ac_rows = ac.items;
     }
 
     /// §4.6.4.3/.4 one `noise_table`/`noise_table_log` argument, folded into a
@@ -6940,9 +6971,112 @@ pub const Gen = struct {
                     try self.psdRef(nr.pwr, false), try self.psdRef(nr.exp, true), coeff,
                 }),
                 .thermal => try self.w("        .{{ .white = {s}, .coeff = {s} }},\n", .{ try self.psdRef(nr.pwr, false), coeff }),
+                // Split off by `planNoise`; a stimulus never reaches this table.
+                .ac_stim => unreachable,
             }
         }
         try self.w("    }};\n}}\n\n", .{});
+    }
+
+    /// §4.6.3 the AC stimulus topology AND each stimulus' phasor.
+    ///
+    /// `ac_gens[k]` is the branch and the analysis name; `acStim(m, i)[k]` is
+    /// `(mag, phase)`. The split is `noise_gens`/`noisePsd`'s, for the same
+    /// reason: the branch and the name are model TEXT, the two numbers are the
+    /// model CARD — `ac_stim("ac", AMPL)` with `AMPL` a parameter has a
+    /// magnitude the card sets, and a comptime table could only have frozen
+    /// its declared default.
+    ///
+    /// WHY THIS EXPORT EXISTS AT ALL, given that `emitCall` also lowers
+    /// `ac_stim` into the residual. The residual is REAL, so what it can carry
+    /// is `mag·cos(phase)` — the phasor's real part — and the quadrature half
+    /// is gone: a source at phase π/2 contributes 6.1e-17 instead of a unit
+    /// imaginary excitation, which is not a rounding error but a missing
+    /// source. This table is the whole phasor, for a host that solves a
+    /// complex system. Both spell the SAME source, so such a host reads this
+    /// INSTEAD OF the residual term — see `contract.AcGen`.
+    ///
+    /// ponytail: the ceiling is A.8.2's `analog_expression` arguments. VerA
+    /// folds mag/phase through `f64Const`, which answers for literals,
+    /// parameters and arithmetic over them and not for anything the solve
+    /// computes — so `ac_stim("ac", V(ctrl))` is E0515 from the residual
+    /// lowering and this table is refused with it. Lifting that means giving
+    /// this hook the `[n_u]f64` state vector `noisePsd` already takes and a
+    /// core sweep to read it with; the signature is deliberately not carrying
+    /// an `x` it would have to ignore until then.
+    fn emitAcTable(self: *Gen) Error!void {
+        if (self.ac_rows.len == 0) return;
+
+        // Rendered BEFORE anything is written, so the `model`/`inst` parameters
+        // can be patched to `_` when nothing reached them — same bookkeeping
+        // `emitUnit` does, and the flags are saved because they are Gen-wide.
+        const saved_model = self.uses_model;
+        const saved_inst = self.uses_inst;
+        self.uses_model = false;
+        self.uses_inst = false;
+        const vals = try self.arena.alloc([2][]const u8, self.ac_rows.len);
+        var all_stated = true;
+        for (self.ac_rows, vals) |nr, *v| {
+            // §4.6.4.6's per-use coefficient, FOLDED into the magnitude rather
+            // than exported beside it. A phasor is scaled by a real factor
+            // exactly — `c·m·e^(jφ)` — including the sign, which rides as a
+            // negative magnitude (`−m·e^(jφ)` is `m·e^(j(φ+π))`). §4.6.4.6's
+            // own reason for keeping it separate does not apply here: there is
+            // no cross-spectrum between two stimuli and no comptime table to
+            // keep a bias-dependent factor out of.
+            const mag = try self.f64Const(nr.pwr, 0, false);
+            const phase = try self.f64Const(nr.exp, 0, false);
+            const coeff = try self.f64Const(nr.coeff, 0, false);
+            if (mag == null or phase == null or coeff == null) {
+                all_stated = false;
+                break;
+            }
+            v.* = .{
+                if (nr.coeff == .f_one) mag.? else try std.fmt.allocPrint(self.arena, "({s}) * ({s})", .{ mag.?, coeff.? }),
+                phase.?,
+            };
+        }
+        const reads_model = self.uses_model;
+        const reads_inst = self.uses_inst;
+        self.uses_model = saved_model or reads_model;
+        self.uses_inst = saved_inst or reads_inst;
+        if (!all_stated) return self.refuseAc();
+
+        try self.w("/// §4.6.3 AC stimulus sources declared by the model.\npub const ac_gens = [_]contract.AcGen(Self){{\n", .{});
+        for (self.ac_rows) |nr| {
+            try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .name = \"{f}\" }},\n", .{
+                self.u_names[nr.row], self.u_names[nr.col], std.zig.fmtString(nr.name),
+            });
+        }
+        try self.w("}};\n\n", .{});
+
+        try self.w(
+            \\/// §4.6.3 each stimulus' phasor: mag·e^(j·phase), phase in radians.
+            \\/// Position k belongs to `ac_gens[k]`.
+            \\pub fn acStim(
+        , .{});
+        const at_model = self.out.items.len;
+        try self.w("model: *const Model, ", .{});
+        const at_inst = self.out.items.len;
+        try self.w("inst: *const Instance) [ac_gens.len]contract.AcPhasor {{\n", .{});
+        if (!reads_model) self.patchParam(at_model, "model".len);
+        if (!reads_inst) self.patchParam(at_inst, "inst".len);
+        try self.w("    return .{{\n", .{});
+        for (vals) |v| try self.w("        .{{ .mag = {s}, .phase = {s} }},\n", .{ v[0], v[1] });
+        try self.w("    }};\n}}\n\n", .{});
+    }
+
+    /// §4.6.3 a stimulus VerA cannot state, as a `@compileError` VALUE on
+    /// `ac_gens` — the shape `refuseNoise` gives `noise_gens`, so a host that
+    /// never asks for stimuli still builds and one that does is told why.
+    ///
+    /// No diagnostic of its own: the only way to get here is a mag or phase
+    /// `f64Const` will not answer for, and `emitCall` lowered the same argument
+    /// into the residual first and already reported E0515 on the same token.
+    fn refuseAc(self: *Gen) Error!void {
+        try self.w("/// §4.6.3 refused by codegen; see the diagnostic.\n", .{});
+        try self.w("pub const ac_gens = @compileError(\"LRM 4.6.3: an ac_stim magnitude or " ++
+            "phase must be a constant or parameter expression\");\n\n", .{});
     }
 
     /// `Lower.NoiseKind` in the vocabulary `contract.NoiseGen.kind` speaks:
@@ -6954,6 +7088,8 @@ pub const Gen = struct {
             .thermal => "thermal",
             .flicker => "flicker",
             .table, .table_log => "table",
+            // §4.6.3 has no `NoiseGen.kind` because it has no `noise_gens` row.
+            .ac_stim => unreachable,
         };
     }
 
@@ -9506,6 +9642,47 @@ test "codegen: §4.6.4.6 one tabulated source on two branches is one table" {
     const src = try h.gen(std.testing.allocator);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, ".interp = ."));
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, ".source = 0, .table = 0 }"));
+}
+
+test "codegen: §4.6.3 an ac_stim exports its phasor and no noise generator" {
+    var h: Harness = undefined;
+    // The whole of the export in one module: the stimulus reaches the
+    // contribution through a VARIABLE (which is how every fixture writes it),
+    // the phase is a quadrature one where `mag*cos(phase)` is 6.1e-17, and the
+    // model also declares a real noise generator so the two tables are
+    // observably separate.
+    try Harness.run(std.testing.allocator,
+        \\module stim(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real amp = 2.0;
+        \\  real s;
+        \\  analog begin
+        \\    s = ac_stim("xf", amp, 1.5707963267948966);
+        \\    I(p, n) <+ V(p, n) * 1e-3 + 3.0 * s;
+        \\    I(p, n) <+ white_noise(1e-18);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // §4.6.3 is not §4.6.4: the stimulus has its own table and puts no row in
+    // `noise_gens`, which would be a generator the model never declared.
+    try std.testing.expect(std.mem.indexOf(u8, src, ".name = \"xf\" }") != null);
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "contract.NoiseGen(Self){"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "contract.AcGen(Self){"));
+    // One call is one source: the variable reaching two places (the value and
+    // the contribution) must not become two rows.
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, ".name = \"xf\" }"));
+    // The magnitude is a PARAMETER, so it cannot be comptime data: `acStim`
+    // reads the card. And §4.6.4.6's per-use factor folds into it — a phasor
+    // scales exactly — or a host is low by 3 on this source.
+    const at = std.mem.indexOf(u8, src, "pub fn acStim(").?;
+    try std.testing.expect(std.mem.indexOf(u8, src[at..], "(model.amp) * (3") != null);
+    // Polar, not rectangular: `cos(π/2)` is 6.1e-17 and a stimulus that has
+    // been through a complex conversion here is that far out of quadrature
+    // before the host has done anything.
+    try std.testing.expect(std.mem.indexOf(u8, src[at..], ".phase = 1.5707963267948966") != null);
 }
 
 test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
