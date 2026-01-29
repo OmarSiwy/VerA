@@ -35,6 +35,7 @@
 //! lrm 4.2.1.1
 //! lrm 3.2
 //! reject LRM 4.2.1.1
+//! xfail VerA accepts `parameter integer overflowed = 1.0/0.0` and emits `overflowed: i64 = 9223372036854775807`, which is outside §3.2's -2**31..2**31-1 range for the type; §4.2.1.1 defines the conversion by rounding to the nearest integer and an infinity has none, so the clause supplies no value at all
 `include "check.vh"
 module h01_nonfinite(p, n);
   inout p, n; electrical p, n;

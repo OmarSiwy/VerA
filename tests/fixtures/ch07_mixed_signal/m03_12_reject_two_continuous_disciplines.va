@@ -34,6 +34,7 @@
 //! lrm 7.7.1
 //! lrm 3.11.1
 //! reject one shall be discrete and the other continuous
+//! xfail VerA accepts a connect statement whose two port-override disciplines are both continuous; §7.8 says "When two disciplines are specified in a connect statement, one shall be discrete and the other continuous", and only §7.7.1's weaker check that the named identifier is a declared connectmodule (E0915) exists today
 
 discipline m03_elec2;
   potential Voltage;

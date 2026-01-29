@@ -51,6 +51,7 @@
 //! lrm 7.7.1
 //! lrm 7.7.2.1
 //! reject matches more than one connect statement
+//! xfail VerA accepts two connect statements that match the same mixed port with the same discipline pair and directions; §7.8.4 requires "the port shall match one (and only one) connect statement", and the two bridges here differ in rin, so silently picking one makes the node voltage depend on source order
 
 connectmodule m03_a2d_fast(el, cm);
   input el;
