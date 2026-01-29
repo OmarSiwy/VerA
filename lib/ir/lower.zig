@@ -165,6 +165,13 @@ pub const Contribution = struct {
     /// accumulation is a property of `<+`, and each indirect statement is its
     /// own equation with its own source.
     kind: Kind = .direct,
+    /// `Ast.AnalogBlock.unit` of the block that OPENED this accumulator — the
+    /// module instance whose §5.4.1 branch it is. Read by `discardOpposite`
+    /// alone, so an entry that later absorbed a same-kind `<+` from another
+    /// instance (two resistors in parallel) keeps the first one's id: the two
+    /// devices aggregate, which is right, and neither can be discarded by the
+    /// third instance wired across them, which is the point.
+    unit: u32 = 0,
 };
 
 pub const Kind = enum(u8) { direct, indirect };
@@ -568,6 +575,9 @@ include_dirs: []const []const u8 = &.{},
 /// the call site is still "within an analog initial block", which is what the
 /// sentence constrains.
 in_analog_initial: bool = false,
+/// `Ast.AnalogBlock.unit` of the block being lowered — the module instance that
+/// wrote it. Read by `discardOpposite` only; see `newContrib`.
+cur_unit: u32 = 0,
 /// True while lowering the body of an `@(...)` — i.e. while the statement
 /// position is A.6.4 `analog_event_statement` rather than `analog_statement`.
 /// The two productions differ in BOTH directions, so this flag gates two
@@ -1621,6 +1631,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §5.2 analog blocks, concatenated (§6.9.1).
     for (module.analog) |blk| {
+        self.cur_unit = blk.unit;
         if (blk.is_initial) {
             // §5.2.1 executed once per analysis, before a matrix solution
             // exists. Guarded rather than split into a second CFG so codegen
@@ -5001,6 +5012,7 @@ fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
         .hi = t.hi,
         .lo = t.lo,
         .kind = kind,
+        .unit = self.cur_unit,
     });
     const acc: Accum = .{
         .resist = self.builder.newPlace(),
@@ -5046,6 +5058,12 @@ fn discardOpposite(self: *Lower, t: Target) Oom!void {
         // branch is discarded. A parallel named branch over the same pair is a
         // different source and keeps what it retained.
         if (c.br != t.br) continue;
+        // And so is a parallel INSTANCE over the same pair. §5.4.1 gives branch
+        // identity per module instance; flattening collapses every instance's
+        // unnamed branch onto the node pair, so without this a load wired across
+        // a source deletes the source — `resistor load(p,n)` beside
+        // `vsine v1(p,n)`, which is the first circuit anyone draws.
+        if (c.unit != self.cur_unit) continue;
         try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
         try self.builder.writeVariable(acc.react, self.cur, .f_zero);
         try self.builder.writeVariable(acc.wrote, self.cur, .f_zero);
