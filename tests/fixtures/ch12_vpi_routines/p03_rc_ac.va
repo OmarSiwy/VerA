@@ -1,4 +1,3 @@
-`include "disciplines.vams"
 `include "constants.vams"
 // The small-signal circuit fixture 09 reads vpi_get_analog_freq() and the
 // IMAGINARY half of Figure 12-3's s_vpi_analog_value against.
@@ -29,7 +28,40 @@
 // fixture 09.
 //
 // Used by: 09, 10.
+//
+// WHAT THIS FILE ASSERTS ON ITS OWN. Fixture 09 owns the complex number — the
+// real and imaginary halves of Figure 12-3's s_vpi_analog_value are a
+// small-signal result and nothing inside an analog block can read one. What is
+// assertable here is the three things that number is MADE of, and they are the
+// three ways it could silently come out wrong:
+//
+//   §4.6.1, on the small-signal source functions: "The small-signal source
+//   functions only affect the behavior of a module during small-signal
+//   analyses. ... When not active, the small-signal source functions return
+//   zero (0)." So in this dc solve `ac_stim` is exactly 0.0, and with it the
+//   whole large-signal solution: V(a,gnd) = 0 V, which is the other half of
+//   fixture 09 (§12.8 fixes vpi_get_analog_freq() == 0 at that solution).
+//   `//! solve` leaves the node free, so that zero is solved for, not pinned.
+//
+//   THE 45-DEGREE SIZING, which is why the expected value is a round 500-500j
+//   and not a decade corner: C is declared as 1e-3/(2*pi*1e3), so
+//
+//       2*pi*1e3*C == 1.0e-3 == 1/R      exactly
+//
+//   The equality is exact in binary64 and not merely close — the division and
+//   the multiplication are by the same correctly-rounded operand, so the
+//   round trip returns the literal 1e-3 bit for bit, and `CHECKX` says so.
+//   Fixture 09 asserts the SPELLING of 500.0 and -500.0, and a susceptance a
+//   few ulp off the conductance would move that string.
+//
+//   §4.5.6 ddx on the resistive leg: the conductance is 1/R = 1.0e-3 S
+//   exactly, which is the number the susceptance above has to match.
 
+//! lrm 4.6.1
+//! lrm 4.5.6
+//! lrm 12.8
+//! solve
+`include "check.vh"
 module p03_acsrc(p, n);
     inout p, n;
     electrical p, n;
@@ -37,8 +69,12 @@ module p03_acsrc(p, n);
     // Negated so the branch current p->n is an injection INTO p when the
     // instance is wired (a, gnd): I(p,n) is defined positive flowing out of p
     // through the branch.
-    analog
-        I(p, n) <+ -ac_stim("ac", mag, 0.0);
+    real stim;
+    analog begin
+        stim = -ac_stim("ac", mag, 0.0);
+        `CHECKX("ac_stim is inactive outside a small-signal analysis", stim, 0.0);
+        I(p, n) <+ stim;
+    end
 endmodule
 
 module p03_rc_ac;
@@ -55,14 +91,22 @@ module p03_rload(p, n);
     inout p, n;
     electrical p, n;
     parameter real r = 1.0e3 from (0:inf);
-    analog
+    analog begin
+        `CHECKX("the large-signal operating point of this deck is identically zero",
+            V(p, n), 0.0);
+        `CHECK("and the resistive leg is a 1 mS conductance",
+            ddx(V(p, n) / r, V(p)), 1.0e-3, 1e-18);
         I(p, n) <+ V(p, n) / r;
+    end
 endmodule
 
 module p03_cload(p, n);
     inout p, n;
     electrical p, n;
     parameter real c = 1.0e-9 from (0:inf);
-    analog
+    analog begin
+        `CHECKX("at 1 kHz the susceptance equals the conductance exactly",
+            2.0 * `M_PI * 1.0e3 * c, 1.0e-3);
         I(p, n) <+ c * ddt(V(p, n));
+    end
 endmodule
