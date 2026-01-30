@@ -1,4 +1,4 @@
-// Verilog-AMS LRM 2.4 §9.23 Supplementary Connectmodule Driver Access System
+// §9.23 Supplementary Connectmodule Driver Access System
 // Functions, verbatim:
 //
 //   "These driver access functions are provided for access to digital events
@@ -47,8 +47,7 @@
 //! lrm 9.23
 //! lrm 9.23.1
 //! lrm 9.23.2
-//! lrm 9.22.2
-//! timescale 1ns/1ns
+//! lrm 9.22.3
 //
 // HAND DERIVATION — one ordinary driver on the mixed net, so §9.22.1's
 // "arbitrarily numbered from 0 to N-1" leaves index 0 as the only legal index

@@ -1,4 +1,4 @@
-// Verilog-AMS LRM 2.4 §7.9 Driver-receiver segregation, verbatim:
+// §7.9 Driver-receiver segregation, verbatim:
 //
 //   "Within digital segments of a mixed-signal net, drivers and receivers of
 //    ordinary modules shall be segregated, so transitions are not propagated
@@ -8,7 +8,7 @@
 //    grouped with the ordinary module receivers and the ordinary module drivers
 //    shall be grouped with the connect module receivers."
 //
-// and §9.22.5 Receiver Net Resolution, which says how a connect module exercises
+// and §9.22.6 Receiver Net Resolution, which says how a connect module exercises
 // that grouping:
 //
 //   "Since a single digital port is used in the connect module, the user must
@@ -17,7 +17,7 @@
 //    will be used to read the driver values as well as to set the receiver
 //    value. ... Anything else is done explicitly, such as:
 //
-//      reg out; // value of out determined in CM, see example in 9.22.6
+//      reg out; // value of out determined in CM, see example in 9.22.7
 //      assign d = out;
 //
 //    In this case, the digital port of the connect module will drive the
@@ -32,10 +32,10 @@
 // single ordinary driver, and the ordinary receiver is asserted to read that
 // inverse. An implementation that propagates the driver straight through to the
 // receiver (which is the correct behaviour for a purely digital net, and is
-// §9.22.5's own default) prints the complement of every line below.
+// §9.22.6's own default) prints the complement of every line below.
 //
 // 14_receiver_default_bypass.va is this file's twin: the same design with the
-// `assign d = out;` removed, where §9.22.5's default DOES apply and the
+// `assign d = out;` removed, where §9.22.6's default DOES apply and the
 // receiver reads the driver. The two transcripts are exact complements, which
 // is the cleanest statement that the `assign` is what selects between them.
 //
@@ -48,9 +48,8 @@
 // claim and drops the numerics, so this fixture cannot be tuned into passing.
 //
 //! lrm 7.9
-//! lrm 9.22.5
-//! lrm 9.22.2
-//! timescale 1ns/1ns
+//! lrm 9.22.6
+//! lrm 9.22.3
 //
 // HAND DERIVATION — one ordinary driver, one ordinary receiver, one merged
 // connect module. §9.22.1 numbers the ordinary drivers 0..N-1 and here N is 1,
@@ -84,7 +83,7 @@ connectmodule m04_seg_c2e(d, a);
 
   reg out;
 
-  // §9.22.5: with this statement present, the receivers see `out`, not the
+  // §9.22.6: with this statement present, the receivers see `out`, not the
   // drivers. Without it the default `assign d_receivers = d_drivers` applies.
   assign d = out;
 

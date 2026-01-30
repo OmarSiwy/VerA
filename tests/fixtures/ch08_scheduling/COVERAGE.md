@@ -43,7 +43,7 @@ An `always` block stays E0205 for a reason that is not dialect: it re-runs on an
 its value is a function of §8.5's simulation cycle. None of the ten is credited below as
 coverage of the clause its construct belongs to.
 
-30 `.va` files: 10 carry a `//! reject` arm, 20 run and assert, and NONE is `//! xfail`
+33 `.va` files: 10 carry a `//! reject` arm, 21 run and assert, and 2 are `//! xfail`
 (grep-measured over this directory).
 
 | HTML id | Rule | Fixtures |
@@ -57,7 +57,7 @@ coverage of the clause its construct belongs to.
 | `s8-4` | mixed-signal cycle | — open full-AMS integration requirement |
 | `s8-4-1` | circuit initialization, analog and digital | partly. `analog_digital_initial_order.va` (was `_unsupported`, was a `//! reject` inventory) is green and asserts acceptance of both forms: the §5.2.1 `analog initial` and the A.6.2 digital `initial` are both accepted in one module and the analog block reads 1.0 + 1. Their relative order is unobserved; this fixture does not establish the mixed-signal initialization algorithm. §5.2.1 separately forbids digital-value access from `analog initial` (`ch05_analog_behavior/analog_initial_digital_access_rejected.va`, E0431) |
 | `s8-4-2` | iterated analog DC + time-0 digital to A/D steady state | — open full-AMS integration requirement |
-| `s8-4-3` | mixed-signal transient | — open full-AMS integration requirement |
+| `s8-4-3` | mixed-signal transient | the clause's first sentence, "Analog processes that share conservative nodes are 'solved' jointly", is `shared_conservative_node.va` (`//! lrm 8.4.3`): two instances, one node, two contributions whose sum fixes it at 1.25 with each contribution asserted separately. The rest of the sentence is either the implementation's choice ("single matrix, multiple matrices or uses other techniques") or the node-tolerance rule, which no expression reports. The clause as a *mixed-signal transient* remains an open full-AMS integration requirement |
 | `s8-4-3-1` | concurrency without shared-memory reordering | `multiple_analog_blocks.va` (`//! lrm 8.4.3.1`): the earlier block's write is visible to the later one |
 | `s8-4-3-2` | early self-wakeup by timer; sensitivity limited by event guards | `timer_wakeup.va` (`//! lrm 8.4.3.2`, `//! analysis tran`, fires at `start_time` and only there), `explicit_guard.va` (`//! lrm 8.4.3.2`, guarded probe does not leak) |
 | `s8-4-3-3` | A/D time quantization and the zero-delay round trip | — `digital_boundary_unsupported.va` says in its own header that it pins nothing here: the `always` item is refused before the `cross()` threshold or the rounding is read |
@@ -68,10 +68,10 @@ coverage of the clause its construct belongs to.
 | `s8-5` | digital engine scheduling semantics | partial: scheduler tests plus the initial-process CLI transcript. `digital_process_unsupported.va` still records the analog device pipeline boundary; general digital execution remains open |
 | `s8-5-1` | the seven stratified event-queue regions | partial: `test-sim` checks region traces and future promotion; see the ordering interpretation above |
 | `s8-5-2` | digital reference-model loop | partial: queue tests and source initial-process execution check re-entry, cancellation, time advance and termination; general processes and mixed-signal integration remain open |
-| `s8-5-3` | scheduling implication of assignments | — |
+| `s8-5-3` | scheduling implication of assignments | — lead-in sentence, "Assignments are translated into processes and events as follows"; every rule it announces is in 8.5.3.1–8.5.3.7 below |
 | `s8-5-3-1` | continuous assignment lands in the active region | — `digital_assignment_unsupported.va` refuses the `assign` module item |
-| `s8-5-3-2` | procedural continuous assign/deassign/force/release | — `procedural_assign_unsupported.va`, `procedural_deassign_unsupported.va`, `procedural_force_unsupported.va`, `procedural_release_unsupported.va`, `procedural_continuous_unsupported.va`; unsupported source forms; rejection does not exercise their scheduling |
-| `s8-5-3-3` | blocking assignment delay and event control timing | partial: source tests execute blocking assignments and statement delays. Intra-assignment delays and event controls remain open; `blocking_timing_unsupported.va` records the analog pipeline boundary |
+| `s8-5-3-2` | procedural continuous assign/deassign/force/release | the two sentences of the clause are `procedural_continuous_semantics.va` (`//! lrm 8.5.3.2`, **`//! xfail`**): the force is a process sensitive to its source, and the release deactivates it. Its literals separate a compiler whose release works from one whose release does nothing. Still refused as source forms: `procedural_assign_unsupported.va`, `procedural_deassign_unsupported.va`, `procedural_force_unsupported.va`, `procedural_release_unsupported.va`, `procedural_continuous_unsupported.va` — rejection does not exercise the scheduling, and none of the five was credited here |
+| `s8-5-3-3` | blocking assignment delay and event control timing | the clause's first sentence, "computes the right-hand side value using the current values", is `blocking_assignment_delay.va` (`//! lrm 8.5.3.3`, **`//! xfail`**): `y = #5 x;` followed by `x = 2;` leaves y at 1, so a compiler that samples the right-hand side at resume time reads 2 and fails it. Also partial: source tests execute blocking assignments and statement delays. Intra-assignment delays and event controls remain open; `blocking_timing_unsupported.va` records the analog pipeline boundary |
 | `s8-5-3-4` | nonblocking update region | partial: queue and source tests check NBA order, captured RHS values and inactive-before-NBA behavior. `nonblocking_unsupported.va` is still refused at `always`; general controls remain open |
 | `s8-5-3-5` | bidirectional switch processing | — `switch_primitive_accepted.va` pins A.4.1's *syntax*, not this clause: `tran (a, b);` is accepted and warned about (W0250, "stamps nothing"), and the module's analog block still runs. Switch processing remains an open full-AMS requirement; syntax acceptance does not establish its behavior |
 | `s8-5-3-6` | explicit D2A events, region 1b | partial: `test-sim` checks D2A queue ordering; process evaluation and analog synchronization remain open |
@@ -79,7 +79,25 @@ coverage of the clause its construct belongs to.
 
 ## The xfail ledger
 
-Empty. No fixture in this folder is `//! xfail`. `switch_primitive_*.va` used to
+Two, and both are §8.5.3's: `procedural_continuous_semantics.va` (§8.5.3.2) and
+`blocking_assignment_delay.va` (§8.5.3.3). Each states the clause's own rule
+with the literal a conforming compiler prints, and each says on its `//! xfail`
+line that VerA refuses the block instead — there is no statement production for
+`force` or for a `#` delay in an `initial` block, so the parser lands where an
+expression was expected (E0209) and no transcript exists to read.
+`procedural_release_unsupported.va` and `blocking_timing_unsupported.va` pin
+that same refusal as a `//! reject`; the pair is deliberate, because a fixture
+that only demands the diagnostic goes stale the day the diagnostic stops being
+the answer, while these two XPASS into a real claim on that day.
+
+A caveat worth recording with them: the two fixtures need a digital schedule
+BEFORE the assertion can run at all, and the harness that decides the `ok=`
+columns has no event queue — it walks time points and evaluates the device. So
+the day VerA parses `#` these may still fail on the host rather than on the
+compiler, and the `//! xfail` reason would then need rewriting from "refused" to
+"unscheduled". They are xfail either way; the reason is what to check.
+
+The rest of this ledger is the record. `switch_primitive_*.va` used to
 sit here and does not any more: A.4.1's `pass_switchtype` parses, and a `tran`
 instance is accepted with a W0250 saying it contributes nothing to the device —
 Only the syntax fixture changed status; §8.5.3.5 switch behavior remains

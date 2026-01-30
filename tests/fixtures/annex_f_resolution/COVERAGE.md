@@ -5,6 +5,12 @@ Source: `docs/annex-f-resolution.html`, read section by section.
 HTML section-ID audit: `sF-1` `sF-2` `sF-2-1` `sF-2-2`. Four sections, and Annex F
 is normative.
 
+The bare `F` clause that `tests/harness.zig` reads out of `Annex F (normative) Discipline
+resolution methods` is untestable, and no fixture cites it. The annex title carries no body
+text of its own in `docs/annex-f-resolution.html` — the page goes from the heading straight
+to F.1 — so there is no sentence to exercise; F.1's and F.2's rows below are where the
+content is.
+
 Eleven fixtures live in this folder: 4 carry a `//! reject` arm, 7 run and assert, and
 **none is `//! xfail`** — grep-measured. Two of the eleven — `continuous_discipline.va`
 and `in_context_declaration.va` — cite no Annex F clause at all and are counted at the

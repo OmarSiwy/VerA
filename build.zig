@@ -173,6 +173,57 @@ pub fn build(b: *std.Build) void {
     dev.addArg("devices");
     b.step("test-devices", "Run `vera --run` over the digital fixtures and diff their transcripts")
         .dependOn(&dev.step);
+
+    // The VPI acceptance test, and the reason `test-vpi` is not just the module
+    // loop's `addTest`: a VPI implementation is only tested FROM C. The loop
+    // above already gave `vpi` its Zig tests, and a Zig test calling these
+    // functions checks that VerA agrees with itself. `tests/vpi_app.c` is a real
+    // C translation unit compiled against `src/vpi/vpi_user.h` — so every
+    // constant it names is the HEADER's number rather than the implementation's,
+    // and an assertion like `vpi_get(vpiType, m) == vpiModule` is what keeps the
+    // two in step — and linked against the `export fn`s in `src/vpi/root.zig`.
+    // That is the only way the ABI — the constant VALUES, the parameter types,
+    // the `char *` lifetimes — is under test at all.
+    //
+    // `tests/vpi_host.zig` is the SIMULATOR half: it elaborates
+    // `tests/vpi_design.va`, installs the object model, and calls §12.33.2's
+    // `vlog_startup_routines`, which is the application's only entry point.
+    //
+    // All three files were deleted by `2cc1c08`, a DOCS commit, and restored
+    // here from `2cc1c08^`. Nothing else in the tree had been updated to reflect
+    // their absence, which is why `src/vpi/root.zig` never stopped citing them.
+    const vpi_host_mod = b.createModule(.{
+        .root_source_file = b.path("tests/vpi_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "vera", .module = byName(mods, "vera") },
+            .{ .name = "vpi", .module = byName(mods, "vpi") },
+        },
+    });
+    vpi_host_mod.addCSourceFile(.{
+        .file = b.path("tests/vpi_app.c"),
+        .flags = &.{ "-std=c99", "-Wall", "-Werror" },
+    });
+    vpi_host_mod.addIncludePath(b.path("src/vpi"));
+    const vpi_app = b.addRunArtifact(b.addExecutable(.{
+        .name = "vera-vpi-app",
+        .root_module = vpi_host_mod,
+    }));
+    vpi_app.expectExitCode(0);
+    // The counts are the design's own shape (tests/vpi_design.va: three levels,
+    // two instances of one definition), and `checks` is how many assertions the
+    // application reached — a walk that returned early counts fewer of them and
+    // still exits 0, which is the failure this number is here to catch. The
+    // census line is asserted as well as the exit code, because an exit code
+    // alone cannot tell "every check passed" from "the startup table was never
+    // called".
+    vpi_app.expectStdOutEqual("vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711\n");
+    test_step.dependOn(&vpi_app.step);
+    // `test-vpi` is a top-level step the module loop already created; this is
+    // the C half joining it, rather than a second step with the same name.
+    b.top_level_steps.get("test-vpi").?.step.dependOn(&vpi_app.step);
 }
 
 /// Create every module in `module_specs`, resolving each spec's imports against

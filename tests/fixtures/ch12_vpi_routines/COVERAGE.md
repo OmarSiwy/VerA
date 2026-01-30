@@ -124,10 +124,147 @@ Clause 12*, not merely a gap in this directory. Completion requires the
 standard VPI host API and C-level behavioral tests; a system-function bridge
 or scheduler-core unit tests do not establish those contracts.
 
+### The nine, re-examined clause by clause
+
+"No `.va` spelling" is the claim a later reader is most likely to want to
+overturn, so here is the evidence rather than the verdict — re-checked on
+2026-09-20 against HEAD `0984a12`, not against the plan. No fixture was added,
+and the reason is structural in both directions.
+
+**The VPI host is back, and it still does not pin these nine.** The paragraph
+that stood here said the three files that would have been the pattern —
+`tests/vpi_app.c`, `tests/vpi_host.zig`, `tests/vpi_design.va` — had been
+deleted in `2cc1c08` ("docs: the 2023 LRM replaces 2.4, and the stale prose goes
+with it"). That was true when it was written. They have since been restored from
+`2cc1c08^`, `build.zig` now compiles `vpi_app.c` against `src/vpi/vpi_user.h`
+and links it to the `export fn`s in `src/vpi/root.zig`, and `zig build test-vpi`
+runs the 14 Zig tests AND the C application, which asserts exit 0 and the census
+line `vpi: scopes=5 ports=11 nets=6 regs=2 params=8 checks=711`.
+
+What that buys is the **§11.6 object model over a lint-only elaboration** — 711
+ABI checks that the header's constants and the implementation's agree. What it
+does NOT buy is any of the nine clauses below, and the distinction is the whole
+point of this section: those clauses are about VALUES, SCHEDULING and
+CALLBACKS, and `vpi_host.zig` stops at `.lint` (`compileSource(..., .lint)`), so
+there is no running simulation for a value to be read out of or a callback to
+fire in. A `.va` fixture still cannot stand in for a C application, and the 13
+`p02_*.c` files in `ch11_vpi/` remain uncompiled by anything.
+
+**And the host the suite DOES bind is a stub by construction.** The generated
+testbench binds `inst.systf = &no_vpi_app` for any device that declares
+`systf_calls` (`lib/backend/tb.zig:670`), and `noVpiApp` returns `0` with
+every partial `0` (`lib/backend/tb.zig:1082`). That binding is written into the
+emitted runner, so no `.va` file can reach past it — not to a nonzero value,
+not to a nonzero derivative, not to a callback of any kind. This is why `01`
+and `02` assert what they assert and no more, and it is why a `//! lrm 12.22.1`
+here could only ever be a claim about a crossing that no run in this suite
+reaches.
+
+Per clause:
+
+- `s12-1` **Overview.** The write-up conventions (Synopsis / Syntax / Returns
+  / Arguments / Related routines) and the two tags. Its only normative
+  sentence — "All arguments shall be considered mandatory unless specifically
+  noted in the definition of the PLI routine" — is a rule about reading the C
+  prototypes that follow. Nothing in it constrains a `$name`, an argument
+  count, or any source text. Nothing to draft either: a C suite would test
+  arity, which is the routine's own clause.
+- `s12-22-1` **Derivatives for analog system task/functions.** A `.va` file has
+  no handle surface: it writes `$name(args)` and receives a value, while the
+  derivative objects are C handles an application allocates in `derivtf`. The
+  one source-visible consequence — a declared partial reaching the Jacobian —
+  is unreachable for the `no_vpi_app` reason above.
+- `s12-31-1` **Simulation-event reasons.** `cbValueChange`, `cbStmt`,
+  `cbForce`/`cbRelease`, `cbAssign`/`cbDeassign`, `cbDisable` are discrete
+  simulation events and a host's queue state. The only argument for a `.va`
+  fixture is the `always @(...)` text that produces them, and that is a §7/§8
+  rule with its own clause; citing `12.31.1` for it would credit this clause
+  with an event it only *reacts to*.
+- `s12-31-2` **Simulation-time reasons.** The five reasons, their time fields,
+  and the `cbNextSimTime` exception ("the time structure is ignored"). Host
+  time-queue state throughout.
+- `s12-31-3` **Analog and related reasons.** The six `acb*` entries. The
+  source-level `initial_step` / `final_step` events are a Chapter 5 construct
+  that ch05's fixtures pin; the LRM does not connect the two, and `12.31.3`'s
+  text is about registering a callback, not about an event keyword.
+- `s12-31-4` **Action and feature reasons.** `cbUnresolvedSystf` is the one
+  that touches this directory, and the clause's own words are why it cannot be
+  cited: features "might not exist in all VPI-compliant products", unlike
+  actions which "shall occur in all". An implementation may therefore never
+  deliver it, and no `.va` verdict follows.
+- `s12-32-1` **System task and function callbacks.** The one near miss — see
+  below.
+- `s12-32-2` **Declaring derivatives.** `t_vpi_stf_partials` and the `derivtf`
+  protocol are C structures; the `.va`-visible half is again the crossing, and
+  the crossing is the stub's blind spot.
+- `s12-33-2` **Initializing callbacks.** Not merely unpinned — it HAS coverage
+  in this tree, just not here: `src/vpi/root.zig:1520`, `test "§12.33.2 runs
+  every entry of the table, in order, and stops at the 0"`, passing under
+  `zig build test-vpi`. It drives `runStartupTable` with a table handed to it
+  and pins what the clause says — a null table is a no-op, both entries run in
+  order, the entry after the `0` is not reached. That is the right kind of test
+  for it and needs no fixture. The clause's other half — the `@extern`
+  reference to the link-time symbol and the vendor-defined linking procedure —
+  was unpinned while `tests/vpi_host.zig` was deleted, and is pinned again now
+  that it is restored: `vpi_host.zig` calls `runStartupRoutines()`, which
+  resolves `vlog_startup_routines` at LINK time against the table
+  `tests/vpi_app.c` defines. A table that failed to link, or linked and was
+  never walked, fails the step's census assertion rather than passing quietly.
+  This is the one clause of the nine the host restore actually closed.
+
+### The near miss: `12.32.1` is already pinned, under `12.33.1`
+
+`12.32.1` is the only one of the nine with a sentence that has a source-level
+consequence, and it is the sentence `12.33.1` states in the same words:
+"Callbacks to the application pointed to by the calltf routine shall occur
+each time the system task or function is invoked during simulation execution."
+`12.32.1` then imports `12.33.1` wholesale for the analog domain — "The usage
+of the compiletf, sizetf, and calltf routines for the analog system
+task/function are identical to those of digital system task/functions
+registered with `vpi_register_systf()`" — which is why `48`'s header cites
+`12.33.1`, where that content lives.
+
+A `//! lrm 12.32.1` line on `48` was considered and deliberately NOT added.
+What `48` observes is the number of INVOCATIONS (which §5.3.1 sequences), and
+the calltf callback the cite would be crediting is a C object this suite
+cannot construct. Adding it would mark a `s_vpi_*`-structure clause covered on
+the strength of a source-level call form — the same inflation the 35 atomic
+fixtures disclaim one section above. The clause's other content (`type`
+"shall be an integer constant of `vpiAnalogSysTask` or `vpiAnalogSysFunction`",
+`sysfunctype`, the NULL-able `sizetf`/`derivtf` pointers, `user_data`) is C and
+stays in the row above.
+
+### Drafted, and not yet wired
+
+Neither directory that owns the C half has a build step, so every `.c` below
+is compiled by nothing and the row it belongs to is red by construction.
+
+- here: `p03_01`–`p03_11`, `p03_90`, `p03_91` — `12.22.1`, `12.31.3`,
+  `12.32.2`, `12.33.2`, plus `12.7`–`12.9`, `12.13`, `12.34` and `12.32`'s
+  uniqueness rule. `p03_SPEC.md` is their specification, and its "Build and
+  run" section is the missing step: compile the plugin, compile the design
+  through the engine to a linked host that can actually solve, install the
+  elaborated design as the VPI object model, call `vlog_startup_routines`
+  before the first analysis, run the analyses in one process, diff stdout.
+  Every one of those is a C-side obligation a `.va` fixture has no spelling
+  for.
+- `tests/fixtures/ch11_vpi/p02_01`–`p02_13` — `12.31.1`, `12.31.2`, `12.31.4`
+  and the `vpi_get_value`/`vpi_put_value` family. Those are that directory's
+  clauses; they are named here only so the two halves of one C surface are not
+  mistaken for one another.
+
+Until that step exists the nine stay uncited. Seven of them are named by a `.c`
+above, none of which any step compiles; `12.33.2` additionally has a passing
+Zig unit test in `src/vpi/root.zig`; and `12.1` and `12.32.1` have nothing at
+all — `12.1` is the write-up conventions, and `12.32.1`'s one source-level
+sentence is `12.33.1`'s, already pinned by `48`.
+
 ## Literal fixture inventory
 
-38 `.va` files: 35 carry a `//! reject` arm, 3 run and assert, and NONE is `//! xfail`
-(grep-measured over this directory). Every one appears in the table above.
+38 fixtures, all `.va`: 35 carry a `//! reject` arm, 3 run and assert, and NONE
+is `//! xfail` (grep-measured over this directory). Every one appears in the
+table above. The directory holds 43 `.va` files — the other five are the P03
+design decks, below.
 
 - `01_analog_systf_resistor_call.va`
 - `02_analog_systf_sampler_call.va`
@@ -175,3 +312,13 @@ credited for all four `mcd` sections — carried no `//! lrm` cite, and are now
 duplicated exactly by `23` and `37` in the one-routine-per-file set `14`-`47`.
 Deleted, not renumbered: renumbering would break every citation of the
 surviving files to spare a cosmetic gap.
+
+The five `p03_*.va` files are designs, not fixtures, and are not in the table:
+`p03_ramp_load.va`, `p03_dc_divider.va`, `p03_rc_ac.va`, `p03_sampnhold.va`,
+`p03_systf_devices.va`. They are the decks the C plugins in this directory are
+written against — the analysable half of the P03 plan, each with a closed-form
+solution named in `p03_SPEC.md` — and they carry no `//! lrm` cite because
+nothing in them is being asserted. The walk collects them anyway and reports
+all five `unasserted`, which is the correct verdict for source that compiles
+and asserts nothing, and a FAIL under `--strict`. They are recorded here so the
+43/38 split is not mistaken for 43 fixtures.

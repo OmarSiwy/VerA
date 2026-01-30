@@ -48,7 +48,7 @@
 // way. Making a compiler accept the invented spelling would have been the suite
 // teaching VerA a dialect; the fixture had to move.
 //
-//! lrm 9.22.4
+//! lrm 9.22.5
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 connectmodule ch09_driver_update_connectmodule(d, a);

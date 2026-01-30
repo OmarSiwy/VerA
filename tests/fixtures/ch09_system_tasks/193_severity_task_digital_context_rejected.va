@@ -1,0 +1,74 @@
+// §9.7 Simulation Control System Tasks, third paragraph verbatim:
+//
+//   "Verilog AMS HDL also supports three new simulation control tasks in the
+//    analog context only; $fatal, $error, $warning."
+//
+// The same rule is a TABLE, and the table is the one with teeth. §9.7 is the
+// subclause of Table 9-4, "Simulation Control System Tasks" (printed p.217):
+//
+//     $finish    Yes  Yes
+//     $stop      Yes  Yes
+//     $fatal     No   Yes
+//     $warning   No   Yes
+//     $error     No   Yes
+//     $info      No   Yes
+//
+// Four of the six rows have a digital "No" and an analog "Yes", and this file is
+// the digital half of that column. The analog half is 057/058/059/060, 13 and
+// 173, and it is the half that works: those four tasks in an `analog` block are
+// accepted, print, and (for $fatal) terminate. The clause's digital "No" is the
+// half nothing pinned, because the four analog fixtures never call one from
+// anywhere else.
+//
+// SO THE RULE ON TRIAL IS A CALL SITE, and it needs no netlist and no runtime:
+// an `initial` block is the discrete (digital) context per §7.2.2, and a
+// severity task written there is a row of Table 9-4 whose digital cell is No.
+//
+// WHY THIS IS A REJECT AND NOT AN ASSERTION. The requirement is a diagnostic —
+// the construct is not supported here — so the verdict is "must not compile" and
+// there is no `want` to write. Same shape as 153_file_io_digital_only_analog_-
+// rejected.va, which is this file's mirror image: a Table 9-2 analog "No" column
+// refused at the call site with `analog context` in the message.
+//
+// WHY IT CARRIES `xfail`, AND WHAT THE DEBT IS EXACTLY. VerA DOES refuse this
+// file — but not for the reason Table 9-4 gives, and the distinction is not
+// cosmetic. Every statement in an `initial` block is refused here by E0433,
+// "statement in an initial block is not a constant assignment: only assignments
+// of constant expressions are supported here", whose own note is §7.2.2 and not
+// §9.2 or §9.7. That diagnostic is VerA's ceiling on `initial` blocks as such
+// (see ch07_mixed_signal/digital_initial_accepted.va) and it fires identically
+// for `x = 1;`. A user who writes $error in a digital context is told their
+// initial block is too complicated to compile, not that §9.2's table has no yes
+// for it — and a compiler whose `initial` blocks DID accept arbitrary statements
+// would have to consult Table 9-4 to refuse this at all.
+//
+// The pinned substring is `digital context` because that is the vocabulary this
+// directory already pins for the mirror rule (153 and friends pin `analog
+// context`, Table 9-1/9-2's column heading). Pinning the text VerA happens to
+// emit instead — `initial block` — would freeze an implementation's wording as
+// the conformance requirement, and a compiler that refused in the table's own
+// vocabulary would fail a file that is right about the LRM. The gap this records
+// is therefore real and precisely stated: the refusal exists, the reason does
+// not.
+//
+// WHEN IT GOES GREEN. The day a severity task in a discrete context is refused
+// by name (the E0806 family's digital twin), this file XPASSes into a hard FAIL
+// and the marker comes off.
+//
+//! lrm 9.2
+//! lrm 9.7
+//! lrm 9.7.3
+//! reject digital context
+//! xfail VerA refuses these calls under §7.2.2's initial-block model (E0433, "statement in an initial block is not a constant assignment"), never under Table 9-4's digital column, so the diagnostic does not name the context
+module ch09_severity_task_digital_context_rejected(p, n);
+  inout p, n; electrical p, n;
+  initial begin
+    $fatal(1, "fatal");
+    $error("error");
+    $warning("warning");
+    $info("info");
+  end
+  analog begin
+    I(p,n) <+ V(p,n);
+  end
+endmodule

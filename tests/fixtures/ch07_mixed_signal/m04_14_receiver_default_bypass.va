@@ -1,4 +1,4 @@
-// Verilog-AMS LRM 2.4 §9.22.5 Receiver Net Resolution, the DEFAULT half,
+// §9.22.6 Receiver Net Resolution, the DEFAULT half,
 // verbatim:
 //
 //   "By not specifying the receiver value directly in the connect module
@@ -23,18 +23,18 @@
 // sample time are identical to 13; only `reg out; assign d = out;` and the
 // process that sets it are gone. The three receiver lines are exact complements
 // of 13's on lines 2 and 3 and differ on line 1 by x versus 1. That
-// relationship is one of the two claims: §9.22.5's two cases are selected by
+// relationship is one of the two claims: §9.22.6's two cases are selected by
 // the presence of the `assign`, and nothing else in the design distinguishes
 // them.
 //
 // CORRECTED AFTER REVIEW — WHY THE $driver_count LINE IS HERE. As originally
 // written this file's whole transcript was `x / 1 / 0`, which is EXACTLY what a
 // simulator with no connect-module insertion, no driver-receiver segregation
-// and no §9.22.5 handling prints: on a plain digital net the receiver reads the
+// and no §9.22.6 handling prints: on a plain digital net the receiver reads the
 // driver, and that is the same answer. The file therefore had no independent
 // force at all — it was meaningful only when diffed against 13 — while its
 // header claimed it stood on its own. That is not repairable by rewording,
-// because §9.22.5's default IS the bypass: the default answer and the
+// because §9.22.6's default IS the bypass: the default answer and the
 // feature-absent answer necessarily coincide.
 //
 // So the file now also asserts, from INSIDE the connect module, that the
@@ -49,10 +49,9 @@
 // counted the receiver, prints ok=0. THAT is the line the three bypass lines
 // now hang off, and the pair is what this file claims.
 //
-//! lrm 9.22.5
+//! lrm 9.22.6
 //! lrm 9.22.1
 //! lrm 7.9
-//! timescale 1ns/1ns
 //
 // HAND DERIVATION — one ordinary driver, one ordinary receiver, no receiver
 // assignment in the connect module, so `d_receivers = d_drivers` throughout.
@@ -99,7 +98,7 @@ connectmodule m04_byp_c2e(d, a);
   ddiscrete d;
   electrical a;
 
-  // NO `assign d = ...;`  -> §9.22.5's default, d_receivers = d_drivers.
+  // NO `assign d = ...;`  -> §9.22.6's default, d_receivers = d_drivers.
   // Consequently this connect module contributes no driver of `d`, and the
   // only driver §9.22.1 can count is the ordinary one in m04_byp_drv.
 

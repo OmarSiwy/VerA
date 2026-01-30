@@ -28,12 +28,32 @@
 //   the input is I(p,n), an ampere, so the nature is `Current` here too. It is
 //   NOT `Charge`: coulombs are the units of idt's output.
 //
+// §4.5.2 is why the nature form exists at all, in its own words: "Occasionally,
+// analog operators require new equations and new unknowns be introduced by the
+// simulator to convert a module description into a set of first-order
+// differential equations. In this case, the simulator attempts to determine
+// from context which tolerance to associate with the new equation and new
+// unknown. ALTERNATIVELY, THESE OPERATORS CAN BE USED TO SPECIFY TOLERANCES."
+// The two calls below are that alternative: a `nature` argument is a model
+// naming the tolerance for the equation the operator introduces, rather than
+// leaving the simulator to infer one from context. A compiler that implemented
+// only the literal-abstol spelling the sibling fixtures use would reject this
+// file.
+//
+// The remainder of 4.5.2 is not source-observable and is not pinned anywhere:
+// "each equation, at a minimum, shall have a tolerance defined and associated
+// with it" constrains the solver, not a model description, and the clause's
+// closing sentence — "Specifying natures also directly enforces reusability and
+// allows other signal attributes to be accessed by the simulator" — gives the
+// rationale for the form rather than a second rule about it.
+//
 // The tolerance changes no value — 4.5.3: it "is the largest signal level that
 // is considered negligible" — so the wants are the same ones the two siblings
 // assert: 4.5.3's "In DC analysis, ddt() returns zero (0)", and 4.5.4's "When
 // used in DC or IC analyses, idt() returns the initial condition (ic) if
 // specified". The claim being made is that the SHAPE is accepted.
 //
+//! lrm 4.5.2
 //! lrm 4.5.3
 //! lrm 4.5.4
 //! print none

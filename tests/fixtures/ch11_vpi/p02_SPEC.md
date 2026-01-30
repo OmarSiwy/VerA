@@ -26,7 +26,7 @@ coverage. The branch `w2/vpi2` contributes nothing: it is the same commit as
 
 What *does* exist and is reused: `tests/vpi_app.c` (the P01 application, and the
 style every file here copies), `tests/vpi_host.zig` (the simulator half), the
-build wiring at `build.zig:600-626`, and a working digital scheduler with
+build wiring at `build.zig:177-228`, and a working digital scheduler with
 timescales at `src/sim/scheduler.zig` and `src/sim/time.zig`. The existing
 `tests/fixtures/ch11_vpi/**` and `tests/fixtures/ch12_vpi_routines/**` files are
 compiler accept/reject fixtures — they say what `.va` source is legal, never
@@ -447,7 +447,7 @@ not the implementation.
 These compile against a `vpi_user.h` that does not yet declare most of what they
 call, so today they fail at the C compiler. Once the header and the routines
 land, wire them the way `tests/vpi_app.c` is already wired at
-`build.zig:600-626` — one executable per `.c`, each pairing the application with
+`build.zig:177-228` — one executable per `.c`, each pairing the application with
 its design:
 
     zig build test-vpi
