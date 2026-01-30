@@ -105,6 +105,9 @@ const usage_text =
     \\  --work-dir DIR          scratch + artifact directory (--emit-so)
     \\  --zig PATH              zig executable to drive (default: zig)
     \\  -I DIR                  add an `include search directory
+    \\  --spice PATH            read a SPICE netlist alongside the source; Annex
+    \\                          E.2's .MODEL and .SUBCKT cards in it become
+    \\                          module definitions the .va can instantiate
     \\  --no-std-defs           do not prepend the annex D prelude
     \\  --diagnostics=text|json how to report (default: text)
     \\  --color=auto|always|never
@@ -165,6 +168,7 @@ pub fn main(init: std.process.Init) !u8 {
     var dyn_path: ?[]const u8 = null;
     var work_dir: ?[]const u8 = null;
     var zig_exe: []const u8 = "zig";
+    var spice_path: ?[]const u8 = null;
 
     var args = init.minimal.args.iterate();
     _ = args.skip();
@@ -222,6 +226,8 @@ pub fn main(init: std.process.Init) !u8 {
             codegen_flag = arg;
         } else if (std.mem.startsWith(u8, arg, "--expect-module=")) {
             expect_module = arg["--expect-module=".len..];
+        } else if (std.mem.eql(u8, arg, "--spice")) {
+            spice_path = args.next() orelse return missing(err, "--spice", "a path");
         } else if (std.mem.eql(u8, arg, "-I")) {
             try include_dirs.append(gpa, args.next() orelse return missing(err, "-I", "a directory"));
         } else if (std.mem.eql(u8, arg, "--no-std-defs")) {
@@ -351,9 +357,25 @@ pub fn main(init: std.process.Init) !u8 {
         return 0;
     }
 
+    // E.1.1's antecedent, made true from the command line: "if a simulator which
+    // supports Verilog-AMS HDL is also able to read SPICE netlists ... certain
+    // objects defined in that flavor of SPICE netlist can be referenced from
+    // within a Verilog-AMS HDL structural description". Read whole, because
+    // `spice_cards.synthesize` works on the text and a `+` continuation makes a
+    // card longer than a line.
+    const netlist: []const u8 = if (spice_path) |p|
+        Io.Dir.cwd().readFileAlloc(io, p, gpa, .limited(64 * 1024 * 1024)) catch |e| {
+            try err.print("error: cannot read `{s}`: {t}\n", .{ p, e });
+            return 2;
+        }
+    else
+        "";
+    defer if (spice_path != null) gpa.free(netlist);
+
     var result = vera.compileSourceOpts(gpa, source, if (codegen_flag == null) .lint else .release_fast, .{
         .file_name = in_path,
         .include_dirs = include_dirs.items,
+        .spice_netlist = netlist,
         .std_defs = std_defs,
         .diags = &bag,
         .lint = levels,
