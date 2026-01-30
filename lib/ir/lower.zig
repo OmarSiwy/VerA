@@ -672,9 +672,23 @@ active_genvars: std.ArrayList([]const u8) = .empty,
 /// declaration at the top of every evaluation. Each entry gets a persistent
 /// `Instance` slot instead; codegen reads it directly.
 held_vars: std.ArrayList(HeldVar) = .empty,
-/// Source names `markHeldVars` found under an `@(...)`, collected BEFORE the
-/// module's variables are declared. Empty for a module with no event control.
+/// Variables `markHeldVars` found assigned under an `@(...)`, collected BEFORE
+/// the module's variables are declared. Empty for a module with no event
+/// control.
+///
+/// Keyed on §5.3.2's "unique location", i.e. the pair (scope, name) spelled as
+/// a dotted path: a module variable is its bare name, a named block's local is
+/// `<label>.<name>` (`<outer>.<inner>.<name>` when nested). A bare name would
+/// make `lo.n`, `hi.n` and the module's own `n` one slot.
 held_names: std.StringHashMapUnmanaged(void) = .empty,
+/// The enclosing NAMED blocks during `scanHeld`, so a target resolves to the
+/// nearest declaration of it — a module variable assigned from inside a block
+/// still keys bare, because the block does not declare it.
+held_frames: std.ArrayList(HeldFrame) = .empty,
+/// §5.3.2 the dotted prefix of the named block being lowered ("" at module
+/// scope, "lo." inside `begin : lo`). The lowering-side half of `held_names`'
+/// key; see `declareVarDecl`.
+block_path: []const u8 = "",
 /// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
 /// Collected by `scanCallSites` before the analog block is lowered.
 limit_slots: std.ArrayList(LimitSlot) = .empty,
@@ -823,6 +837,10 @@ const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
 /// ENCLOSING named block, so an inner and an outer block of the same nesting
 /// are two different targets chosen by the name and by nothing else.
 const NamedBlockCtx = struct { name: []const u8, exit: Mir.Block };
+/// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
+/// its locals are keyed under, and the declarations that say which names those
+/// are.
+const HeldFrame = struct { prefix: []const u8, vars: []const Ast.VarDecl };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 /// `wrote` is §5.6.1.3's retention FLAG beside the value: 0.0 in the entry
 /// block, 1.0 after every `<+` on this (access, branch), back to 0.0 when the
@@ -980,6 +998,7 @@ pub fn deinit(self: *Lower) void {
     self.held_vars.deinit(gpa);
     self.limit_slots.deinit(gpa);
     self.held_names.deinit(gpa);
+    self.held_frames.deinit(gpa);
     self.events.deinit(gpa);
 }
 
@@ -3684,8 +3703,9 @@ fn checkOneItemPerScope(self: *Lower, vars: []const Ast.VarDecl) Oom!void {
     }
 }
 
-/// Where a `declareVarDecl` sits. Only a MODULE-level variable can take a
-/// persistent §5.10 slot — see `holdSlot`.
+/// Where a `declareVarDecl` sits. §5.3.2 gives a persistent §5.10 slot to a
+/// module variable and to a NAMED block's local; an unnamed `begin`'s
+/// declaration is neither, and `block_path` is "" for it.
 const VarScope = enum { module, local };
 
 /// §3.2 declare and initialize. Verilog-AMS variables start at zero, so a read
@@ -3694,11 +3714,23 @@ const VarScope = enum { module, local };
 fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!void {
     const name = self.file.str(decl.name);
     const ty = astTy(decl.ty);
+    // §5.3.2: "All named block variables are static — that is, an unique
+    // location exists for all variables and leaving or entering the block do
+    // not affect the values stored in them." The location is (scope, name), so
+    // the key `markHeldVars` recorded carries the block path; the empty prefix
+    // is module scope, and an UNNAMED block gets no slot because the clause
+    // grants one to named blocks only.
+    const prefix = if (scope == .module) "" else self.block_path;
+    const held_key = if (prefix.len == 0)
+        name
+    else
+        try std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
     // §5.10. `.string` is deliberately excluded: a string never reaches the
     // residual (§3.3 strings only feed §9.4 tasks, which re-run every
     // evaluation anyway), so a persistent slot for one would be storage
     // nothing can observe.
-    const hold = scope == .module and ty != .string and self.held_names.contains(name);
+    const hold = (scope == .module or prefix.len != 0) and ty != .string and
+        self.held_names.contains(held_key);
 
     if (decl.dims.len != 0) {
         const dims = try self.dimsBounds(decl.dims, decl.main_tok, name) orelse return;
@@ -3725,7 +3757,7 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
             else
                 zeroOf(ty);
             try self.builder.writeVariable(slot.place, self.cur, if (hold)
-                try self.holdSlot(en, ty, init_val, slot.place)
+                try self.holdSlot(try self.qualifyHeld(prefix, en), ty, init_val, slot.place)
             else
                 init_val);
         }
@@ -3738,9 +3770,17 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
     else
         try self.coerceTo(decl.init, ty, try self.lowerExpr(decl.init));
     try self.builder.writeVariable(slot.place, self.cur, if (hold)
-        try self.holdSlot(name, ty, init_val, slot.place)
+        try self.holdSlot(held_key, ty, init_val, slot.place)
     else
         init_val);
+}
+
+/// The `Instance` field name of a held slot carries the block path too, because
+/// codegen derives one struct field per `held_vars` entry from it and two
+/// blocks may spell a local the same way (§5.3.2's whole point).
+fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u8 {
+    if (prefix.len == 0) return name;
+    return std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
 }
 
 /// §5.10. Give one event-assigned variable its persistent `Instance` slot and
@@ -3764,9 +3804,19 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
     // is that diamond's join. Either way it dominates every statement of the
     // module, which is all the seed has to do.
     const idx: i64 = @intCast(self.held_vars.items.len);
+    // Codegen makes one `Instance` field per entry out of `name`, so the name
+    // has to be unique. It is — until a §6.6.1 unrolled `for` lowers the SAME
+    // named block twice, which is two executions of one source declaration and
+    // so, by §5.3.2, two locations that happen to share a path.
+    var field = name;
+    for (self.held_vars.items) |h| {
+        if (!std.mem.eql(u8, h.name, name)) continue;
+        field = try std.fmt.allocPrint(self.arena, "{s}.{d}", .{ name, idx });
+        break;
+    }
     const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.mir.addIntConst(self.arena, idx)});
     try self.held_vars.append(self.arena, .{
-        .name = name,
+        .name = field,
         .ty = ty,
         .init = init_val,
         .seed = seed,
@@ -3775,17 +3825,29 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
     return seed;
 }
 
-/// §5.10. Collect the names assigned inside an `@(<event>)` body, before any of
-/// them is declared.
-///
-// ponytail: MODULE-level variables only. A variable declared in a §5.3.2 named
-// block inside the analog block still resets — its declaration is lowered once
-// per execution of the block, so a slot keyed on the source name would collide
-// with itself under a §6.6.1 unrolled `for`. Upgrade path: key the slot on the
-// SSA place and give each re-declaration a group-local ordinal, the same way
-// `naming.assignDisambig` does for same-target units.
+/// §5.10. Collect the variables assigned inside an `@(<event>)` body, before
+/// any of them is declared.
 fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.analog) |blk| try self.scanHeld(blk.body, false);
+    self.held_frames.clearRetainingCapacity();
+}
+
+/// §5.3.2: "The block names give a means of uniquely identifying all variables
+/// at any simulation time." Which location an assignment target names is
+/// decided by the NEAREST declaration of it, so the walk looks outward from the
+/// innermost named block and falls back to the bare (module-scope) name — a
+/// module variable assigned from inside a block is still the module's.
+fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
+    var i = self.held_frames.items.len;
+    while (i > 0) {
+        i -= 1;
+        const f = self.held_frames.items[i];
+        for (f.vars) |v| {
+            if (!self.file.strings.eql(v.name, name)) continue;
+            return std.fmt.allocPrint(self.arena, "{s}{s}", .{ f.prefix, name });
+        }
+    }
+    return name;
 }
 
 /// One walk, two modes: outside an event body we are only looking for the
@@ -3794,14 +3856,27 @@ fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
     if (id == .none) return;
     switch (self.file.stmt(id)) {
-        .block => |b| for (b.body) |s| try self.scanHeld(s, in_event),
+        .block => |b| {
+            // §5.3.2 only a NAMED block's locals are static, so only a label
+            // opens a frame; an unnamed `begin`'s declarations are ordinary.
+            const named = b.name != .none;
+            if (named) {
+                const outer = if (self.held_frames.getLastOrNull()) |f| f.prefix else "";
+                try self.held_frames.append(self.arena, .{
+                    .prefix = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer, self.file.str(b.name) }),
+                    .vars = b.vars,
+                });
+            }
+            for (b.body) |s| try self.scanHeld(s, in_event);
+            if (named) _ = self.held_frames.pop();
+        },
         .assign => |a| {
             if (!in_event) return;
             const ex = &self.file.exprs;
             // §3.2.2 `x[i] = …` holds the ARRAY; `declareVarDecl` scalarizes it.
             const t = if (ex.tag(a.target) == .index) ex.lhs(a.target) else a.target;
             if (ex.tag(t) != .ident) return;
-            try self.held_names.put(self.arena, self.file.str(ex.strOf(t)), {});
+            try self.held_names.put(self.arena, try self.heldKey(self.file.str(ex.strOf(t))), {});
         },
         .if_stmt => |s| {
             try self.scanHeld(s.then_s, in_event);
@@ -3924,6 +3999,11 @@ fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
 fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     const mark = self.scope_log.items.len;
     defer self.closeScope(mark);
+    // §5.3.2's key for a local's static location, in step with `scanHeld`'s.
+    const outer_path = self.block_path;
+    defer self.block_path = outer_path;
+    if (b.name != .none)
+        self.block_path = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer_path, self.file.str(b.name) });
     for (b.params) |*p| try self.lowerParamDecl(p); // §5.3.2 local parameters
     try self.checkOneItemPerScope(b.vars);
     for (b.vars) |*v| try self.declareVarDecl(v, .local);
