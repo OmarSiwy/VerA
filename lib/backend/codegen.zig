@@ -5548,7 +5548,7 @@ pub const Gen = struct {
         // §9.4/§9.7.3 — only when the caller asked for a printing artifact. In a
         // device they fall through to `void_tasks` below.
         if (self.display == .emit and Lower.isDisplayTask(name))
-            return cg_display.emitDisplayTask(self, name, args);
+            return cg_display.emitDisplayTask(self, name, args, @intFromEnum(inst));
         // §9.7.1/§9.7.2 — same gate: in the printing artifact the run ends at
         // the call's position among the prints; in a device the call is dead
         // (`Lower.isSimCtlTask` calls join the display chain and nothing else,

@@ -175,7 +175,7 @@ fn renderPrintArgs(g: *Gen, ops: []const PrintArg) Error!void {
 ///
 /// Output goes to stderr, which is where `std.debug.print` writes and where a
 /// simulator's transcript belongs — stdout is for a host that pipes data.
-pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
     // §9.7.3: the severity is the message's whole reason for existing, and a
@@ -204,9 +204,18 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value) Error
     // same block as the print.
     try g.b("zd: {{ ", .{});
     try emitScratch(g, ops.items);
-    try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
-    try renderPrintArgs(g, ops.items);
-    try g.b("}}); ", .{});
+    if (isMonitor(name)) {
+        // §9.4.1's mechanism: format into this site's scratch row, then report
+        // only when the RECORD differs from the one this site last produced.
+        // An overrun formats to the empty string, `emitStringFormat`'s rule.
+        try g.b("if (zMonitor({d}, std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, site, std.zig.fmtString(fmt.items) });
+        try renderPrintArgs(g, ops.items);
+        try g.b("}}) catch \"\")) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
+    } else {
+        try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
+        try renderPrintArgs(g, ops.items);
+        try g.b("}}); ", .{});
+    }
     // §9.7.3: `$fatal` "terminates the simulation with an errorcode" and makes
     // "an implicit call to $finish" — it is the one member of the family whose
     // print is followed by the END OF THE RUN, "without checking whether the
@@ -450,11 +459,29 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
     // states no truncation rule, same as §9.5.3.
     try g.b("zf: {{ ", .{});
     try emitScratch(g, ops.items);
-    try g.b("break :zf zFPut(", .{});
-    try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
-    try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
+    // §9.5.2 makes `$fmonitor` "just like" `$monitor` with a descriptor in
+    // front, so §9.4.1's change condition travels with it: the record is
+    // composed either way, and `zMonitor` decides whether it is written.
+    const mon = isMonitor(name);
+    if (mon) try g.b("const zt = ", .{}) else try g.b("break :zf zFPut(", .{});
+    if (!mon) {
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.b(", ", .{});
+    }
+    try g.b("std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
     try renderPrintArgs(g, ops.items);
-    try g.b("}}) catch \"\"); }}", .{});
+    try g.b("}}) catch \"\"", .{});
+    if (mon) {
+        try g.b("; break :zf if (zMonitor({d}, zt)) |zm| zFPut(", .{site});
+        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+        try g.b(", zm) else 0; }}", .{});
+    } else try g.b("); }}", .{});
+}
+
+/// §9.4.1 `$monitor` and its §9.5.2 file twin — the two members of the family
+/// that report only on a CHANGE. Every other member prints unconditionally.
+fn isMonitor(name: []const u8) bool {
+    return std.mem.eql(u8, name, "$monitor") or std.mem.eql(u8, name, "$fmonitor");
 }
 
 /// §9.7.3 severity tasks. Null for the §9.4.1 display family.
@@ -941,6 +968,36 @@ test "§9.4.3/C11 7.21.6.1: zCReal is the conversion the device runs" {
     // C11 7.21.6.1p13 rounds the VALUE, not its shortest decimal: 0.1 is not
     // 0.1, and past 17 digits that is visible.
     try std.testing.expectEqualStrings("0.10000000000000000555", k.zCReal(&b, 0.1, 'f', 0, 0, 20));
+}
+
+test "§9.4.1 $monitor reports a step only when the record changed" {
+    var arena_state: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+
+    // `$strobe` prints unconditionally; `$monitor` goes through §9.4.1's
+    // mechanism, which is the whole difference between the two tasks. The
+    // needles are CALL-shaped: the kernel's own text is in both artifacts.
+    const s = try emitBody(a, "$strobe(\"v=%d\", 1);");
+    try std.testing.expect(has(s, "zd: { std.debug.print("));
+    const m = try emitBody(a, "$monitor(\"v=%d\", 1);");
+    try std.testing.expect(has(m, "zd: { if (zMonitor("));
+    try std.testing.expect(has(m, ") |zt| std.debug.print(\"{s}\", .{zt});"));
+    // §9.5.2 "$fmonitor ... works just like its counterpart": the record is
+    // composed, then written only if it changed.
+    const f = try emitBody(a, "$fmonitor(1, \"v=%d\", 1);");
+    try std.testing.expect(has(f, "break :zf if (zMonitor("));
+    try std.testing.expect(has(f, ") |zm| zFPut("));
+
+    // The latch itself, at the boundary the emitted code uses it at.
+    const k = @import("kernels").str_kernels;
+    try std.testing.expectEqualStrings("a\n", k.zMonitor(9001, "a\n").?); // first step: no predecessor
+    try std.testing.expect(k.zMonitor(9001, "a\n") == null); // unchanged
+    try std.testing.expectEqualStrings("b\n", k.zMonitor(9001, "b\n").?);
+    try std.testing.expect(k.zMonitor(9001, "b\n") == null);
+    // A DISTINCT site is a distinct latch — two monitors must not mask each
+    // other, exactly as two `$sformat` sites must not share a row.
+    try std.testing.expectEqualStrings("b\n", k.zMonitor(9002, "b\n").?);
 }
 
 test "§9.5.4.2 a scan consumes per DIRECTIVE, and says how much" {
