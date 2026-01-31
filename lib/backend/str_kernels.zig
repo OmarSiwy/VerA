@@ -34,7 +34,15 @@ const zstd = @import("std");
 /// and the other three fields carry the value of the ONE item the caller asked
 /// for, in all three types, because the destination's type is the caller's
 /// business and a `%d` may legally land in a `real` variable (§4.2.1.1).
-pub const ZScan = struct { n: i64 = 0, i: i64 = 0, r: f64 = 0.0, s: []const u8 = "" };
+/// `used` is how many BYTES of `src` the scan consumed, which §9.5.4.2 fixes
+/// per directive and not per line: "if conversion terminates on a conflicting
+/// input character, the offending input character is left unread in the input
+/// stream", and "trailing white space (including newline characters) is left
+/// unread unless matched by a directive". `$sscanf` has no position to move,
+/// so nothing reads it there; `$fscanf` advances the descriptor by exactly
+/// this, which is what makes §9.5.5's `$ftell` answer the clause's number and
+/// what lets a failed match be retried against the same bytes.
+pub const ZScan = struct { n: i64 = 0, i: i64 = 0, r: f64 = 0.0, s: []const u8 = "", used: usize = 0 };
 
 /// §9.5.4.2 `$sscanf`. `want` is the index of the assigned item whose value is
 /// reported; -1 asks for the count alone.
@@ -46,7 +54,16 @@ pub const ZScan = struct { n: i64 = 0, i: i64 = 0, r: f64 = 0.0, s: []const u8 =
 /// field is ignored".
 pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
     var out: ZScan = .{};
+    zScanRun(src, fmt, want, &out);
+    return out;
+}
+
+/// The walk itself, split out only so `out.used` is written on EVERY exit —
+/// there are seven, one per matching failure the clause names, and each has to
+/// report the position the offending character was left at.
+fn zScanRun(src: []const u8, fmt: []const u8, want: i64, out: *ZScan) void {
     var si: usize = 0;
+    defer out.used = si;
     var fi: usize = 0;
     var tried = false; // has any conversion started with input still available?
     while (fi < fmt.len) {
@@ -59,15 +76,15 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
             continue;
         }
         if (fc != '%') { // ordinary character: it must be there
-            if (si >= src.len or src[si] != fc) return out;
+            if (si >= src.len or src[si] != fc) return;
             si += 1;
             fi += 1;
             continue;
         }
         fi += 1;
-        if (fi >= fmt.len) return out;
+        if (fi >= fmt.len) return;
         if (fmt[fi] == '%') { // a literal percent, matched not converted
-            if (si >= src.len or src[si] != '%') return out;
+            if (si >= src.len or src[si] != '%') return;
             si += 1;
             fi += 1;
             continue;
@@ -77,9 +94,28 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
         var width: usize = 0;
         while (fi < fmt.len and fmt[fi] >= '0' and fmt[fi] <= '9') : (fi += 1)
             width = width * 10 + (fmt[fi] - '0');
-        if (fi >= fmt.len) return out;
+        if (fi >= fmt.len) return;
         const conv = fmt[fi];
         fi += 1;
+        // §9.5.4.2 "%m Returns the current hierarchical path as a string. Does
+        // not read data from the input file or str argument." Handled BEFORE
+        // the white-space skip and before the EOF test, because both of those
+        // are properties of reading input and this directive does not: a `%m`
+        // with nothing left to scan is still an assignment, and the `%d` after
+        // it still sees the whole field.
+        if (conv == 'm') {
+            if (suppress) continue;
+            // ponytail: the path answers empty. §9.4.3's display-side `%m` is
+            // substituted by the EMITTER (`cg_display` writes `g.mir.name`
+            // into the format), and a scan control string is a RUNTIME value,
+            // so the kernel has no name to reach for. Nothing in §9.5.4.2
+            // fixes the spelling of "the current hierarchical path" either.
+            // The upgrade is threading the module name into the scan call the
+            // way the display path already has it.
+            if (out.n == want) out.s = "";
+            out.n += 1;
+            continue;
+        }
         if (conv != 'c') {
             while (si < src.len and zstd.ascii.isWhitespace(src[si])) si += 1;
         }
@@ -89,7 +125,7 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
             // anything was tried is that case; one that ran out after an
             // assignment just reports the assignments.
             if (!tried and out.n == 0) out.n = -1;
-            return out;
+            return;
         }
         tried = true;
         const lim = if (width == 0) src.len else @min(src.len, si + width);
@@ -118,7 +154,10 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
             // sign, digits, fraction, exponent. Parsed with the standard
             // library on the matched slice so the rounding is the one every
             // other real literal in the device gets.
-            'f', 'e', 'g' => {
+            // "%r Matches a 'real' number in engineering notation, using the
+            // scale factors defined in 2.6.2" is the same number followed by
+            // one Table 2-1 symbol, so it rides the same arm.
+            'f', 'e', 'g', 'r' => {
                 var digits: usize = 0;
                 if (end < lim and (src[end] == '+' or src[end] == '-')) end += 1;
                 while (end < lim and zDigit(src[end], 10) != null) : (end += 1) digits += 1;
@@ -126,7 +165,7 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
                     end += 1;
                     while (end < lim and zDigit(src[end], 10) != null) : (end += 1) digits += 1;
                 }
-                if (digits == 0) return out; // a sign or a dot alone is a matching failure
+                if (digits == 0) return; // a sign or a dot alone is a matching failure
                 if (end < lim and (src[end] == 'e' or src[end] == 'E')) {
                     var k = end + 1;
                     if (k < lim and (src[k] == '+' or src[k] == '-')) k += 1;
@@ -135,8 +174,18 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
                         end = k;
                     }
                 }
+                item.r = zstd.fmt.parseFloat(f64, src[si..end]) catch return;
+                // §2.6.2: "No space is permitted between the number and the
+                // symbol", so the scale factor is the very next character —
+                // and it is OPTIONAL, because a real with an implied factor of
+                // 1 is still a real in engineering notation.
+                if (conv == 'r' and end < lim) {
+                    if (zScaleOf(src[end])) |f| {
+                        item.r *= f;
+                        end += 1;
+                    }
+                }
                 item.s = src[si..end];
-                item.r = zstd.fmt.parseFloat(f64, item.s) catch return out;
                 // Saturating (`lossyCast`), like every other real→int cast the
                 // device performs: this text ships in ReleaseFast artifacts,
                 // where an unguarded `@intFromFloat` of "1e300" is UB. The
@@ -169,7 +218,7 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
                     acc = acc *% radix +% d;
                     digits += 1;
                 }
-                if (digits == 0) return out; // matching failure, e.g. "%d" on "hello"
+                if (digits == 0) return; // matching failure, e.g. "%d" on "hello"
                 item.i = if (neg) -acc else acc;
                 item.r = @floatFromInt(item.i);
                 item.s = src[si..end];
@@ -181,9 +230,9 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
             // dependent"; the choice here is to stop the scan, which reports
             // the items assigned so far rather than counting one that was
             // never converted.
-            else => return out,
+            else => return,
         }
-        if (end == si) return out; // nothing matched
+        if (end == si) return; // nothing matched
         si = end;
         if (suppress) continue; // "matched and assigned": consumed, not counted
         // ponytail: count is the next assigned index; EOF is set only on return.
@@ -194,7 +243,7 @@ pub fn zScan(src: []const u8, fmt: []const u8, want: i64) ZScan {
         }
         out.n += 1;
     }
-    return out;
+    return;
 }
 
 /// §9.5.4.2's return value on its own.
@@ -647,6 +696,25 @@ pub fn zSBuf(comptime site: usize) []u8 {
         var b: [4096]u8 = undefined;
     };
     return &Buf.b;
+}
+
+/// §2.6.2 Table 2-1's scale factor for one symbol, or null when the character
+/// is not one. The 1e3 row is spelled "K, k", so a SCANNER takes both — which
+/// is why no fixture may pin which of the two an output prints.
+fn zScaleOf(c: u8) ?f64 {
+    return switch (c) {
+        'T' => 1e12,
+        'G' => 1e9,
+        'M' => 1e6,
+        'K', 'k' => 1e3,
+        'm' => 1e-3,
+        'u' => 1e-6,
+        'n' => 1e-9,
+        'p' => 1e-12,
+        'f' => 1e-15,
+        'a' => 1e-18,
+        else => null,
+    };
 }
 
 /// The value of `c` as a digit in `radix`, or null when it is not one.
