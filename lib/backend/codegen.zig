@@ -5705,15 +5705,27 @@ pub const Gen = struct {
         // which a flat elaborated device has no view of: "" is the honest answer
         // there, an invented path is not.
         if (eq(u8, name, "$simparam$str")) {
-            const nm = self.strArg(args, 0) orelse "";
+            // §9.15: "The argument param_name is a string value, either a string
+            // literal, a string parameter, or a STRING VARIABLE." A variable's
+            // value is only known while the block runs, so the table is
+            // consulted at RUN TIME and not folded here. The name folds to a
+            // literal in the common case and `zig` collapses the chain back to
+            // one branch; `strArg orelse ""` used to answer every unfoldable
+            // name with the empty string, which is a constant folder wearing
+            // §9.15's signature.
+            //
             // §4.6.1's analysis names ARE the `AnalysisKind` tag spellings, so
             // the enum is the table — no second list to drift out of step.
-            if (eq(u8, nm, "analysis_type")) {
-                self.uses_inst = true;
-                return self.b("@tagName(inst.analysis_kind)", .{});
-            }
-            if (eq(u8, nm, "module")) return self.b("\"{f}\"", .{std.zig.fmtString(self.mir.name)});
-            return self.b("\"\"", .{});
+            // Table 9-28's hierarchy rows are answered by `Lower` (they are
+            // elaboration facts, and this function has one flattened module):
+            // "module" survives here only for the callers that build a `Gen`
+            // with no elaborated unit table.
+            self.uses_inst = true;
+            try self.b("(if (std.mem.eql(u8, ", .{});
+            try self.renderValueRef(self.an.rv(args[0]));
+            try self.b(", \"analysis_type\")) @tagName(inst.analysis_kind) else if (std.mem.eql(u8, ", .{});
+            try self.renderValueRef(self.an.rv(args[0]));
+            return self.b(", \"module\")) \"{f}\" else \"\")", .{std.zig.fmtString(self.mir.name)});
         }
         // §9.19 $param_given / $port_connected.
         if (eq(u8, name, "$param_given")) {
@@ -7976,6 +7988,9 @@ pub fn callArgIsValue(name: []const u8, i: usize, display: Display) bool {
     if (std.mem.startsWith(u8, name, "$rng$")) return !eq(u8, name, "$rng$auto");
     if (array_index_types.has(name)) return i > 0; // index and selectable cells
     if (eq(u8, name, "$limit$uf")) return i < 2;
+    // §9.15's param_name may be "a string variable", so `emitSysCall` renders
+    // it and the unit has to compute it.
+    if (eq(u8, name, "$simparam$str")) return i == 0;
     if (eq(u8, name, "ddx")) return i == 0;
     if (eq(u8, name, "limexp")) return i == 0;
     if (name.len == 0 or name[0] != '$') return false; // events, noise, analysis

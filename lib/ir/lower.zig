@@ -318,6 +318,10 @@ arena: std.mem.Allocator,
 mir: *Mir,
 /// §6.7 path → flat name, from elaboration. Read only by `flatName`.
 hier_names: std.StringHashMapUnmanaged([]const u8) = .empty,
+/// §9.15/§9.16, indexed by `Ast.AnalogBlock.unit`: the module a block was
+/// WRITTEN in and the instance path it was inlined at. See `Design.units` —
+/// flattening erases both, so elaboration publishes them.
+unit_paths: []const Elaborate.UnitPath = &.{},
 /// MUTABLE, and only for one reason: `Elaborate.elaborate` APPENDS to the
 /// stores (§6.7 flat names, cloned expression rows, cloned statements) when it
 /// flattens an instance tree. It runs as the first statement of `lowerFile`,
@@ -1299,6 +1303,7 @@ pub fn lowerFile(self: *Lower) Error!void {
         .bag = self.bag,
     });
     self.hier_names = design.names;
+    self.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
     // built on a mistyped instance terminal fails at the mistype instead of at
@@ -8817,6 +8822,32 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // a string variable", and a name that is not known until the solve cannot be
     // judged here — the fallback rule is the user's cover for that case.
     if (std.mem.eql(u8, name, "$simprobe")) return self.lowerSimprobe(e);
+    // §9.15 Table 9-28's two HIERARCHY rows are elaboration facts, so they are
+    // answered here and never reach codegen: "module" is "the name of the module
+    // from which $simparam$str is called" and "instance" is "the hierarchical
+    // name of the instance from which $simparam$str is called". Codegen sees
+    // one flattened module and answered them with the TOP's name and "" — right
+    // only for a call that happens to sit in the top module. `cur_unit` is the
+    // instance that wrote this block, which is exactly what the clause asks for.
+    if (std.mem.eql(u8, name, "$simparam$str") and self.cur_unit < self.unit_paths.len) {
+        const a = ex.args(e);
+        if (a.len >= 1) if (self.constStrArg(a[0])) |nm| {
+            const u = self.unit_paths[self.cur_unit];
+            if (std.mem.eql(u8, nm, "module"))
+                return .{ .v = try self.mir.addStrConst(self.arena, u.module), .ty = .string };
+            // §9.15's worked example produces "testbench.dut1": a top-level
+            // module's instance name is its module name, and the path is joined
+            // to it by §6.7's period. `path` already carries the separator.
+            if (std.mem.eql(u8, nm, "instance")) {
+                const top = if (self.unit_paths.len != 0) self.unit_paths[0].module else u.module;
+                const full = if (u.path.len == 0)
+                    top
+                else
+                    try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ top, Elaborate.sep, u.path[0 .. u.path.len - 1] });
+                return .{ .v = try self.mir.addStrConst(self.arena, full), .ty = .string };
+            }
+        };
+    }
     if (std.mem.eql(u8, name, "$simparam")) {
         const args = ex.args(e);
         if (args.len == 1) {
@@ -9696,6 +9727,19 @@ fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
 /// and with no fallback it is the error the clause asks for. A host with a real
 /// instance table would resolve more names than this does — that is the piece
 /// Ruling E deliberately gave up, and it is recorded here rather than hidden.
+/// §9.16 "the parent of the current instance": the caller's own instance path
+/// with its last segment dropped, separator included, "" at the top. Joined to
+/// an `inst_name` it gives the flat name of a SIBLING.
+fn callerParentPath(self: *const Lower) []const u8 {
+    if (self.cur_unit >= self.unit_paths.len) return "";
+    const p = self.unit_paths[self.cur_unit].path;
+    if (p.len == 0) return p;
+    // `path` ends with the separator, so the caller's own segment is the text
+    // between the previous separator and the last one.
+    const cut = std.mem.lastIndexOfScalar(u8, p[0 .. p.len - 1], Elaborate.sep) orelse return "";
+    return p[0 .. cut + 1];
+}
+
 fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -9708,9 +9752,32 @@ fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const inst = self.constStrArg(args[0]);
     const param = self.constStrArg(args[1]);
     if (inst != null and param != null) {
-        const path = try std.mem.concat(self.arena, u8, &.{ inst.?, &[_]u8{Elaborate.sep}, param.? });
+        // §9.16: "the simulator will look for an instance called inst_name IN
+        // THE PARENT OF THE CURRENT INSTANCE i.e. a sibling of the instance
+        // containing the $simprobe() expression." The name is therefore
+        // RELATIVE, and the flat key is the caller's parent path joined to it —
+        // not the bare `inst_name`, which only worked for a caller that
+        // happened to sit at the root, and which also resolved a path FROM the
+        // root, the one reading the sibling rule excludes.
+        const path = try std.mem.concat(self.arena, u8, &.{
+            self.callerParentPath(), inst.?, &[_]u8{Elaborate.sep}, param.?,
+        });
         if (self.param_index.get(path)) |pi|
             return .{ .v = self.param_values.items[pi], .ty = astTy(self.params.items[pi].ty) };
+        // §9.16's own first sentence: "$simprobe() queries the simulator for AN
+        // OUTPUT VARIABLE named param_name in a sibling instance", and the
+        // clause's example probes `id` of a mosfet — an operating-point
+        // quantity, not a parameter. "The intended use of this function is to
+        // allow dynamic monitoring of instance quantities", which a probe that
+        // can only read the netlist's own numbers does not do. A flattened
+        // child's variable is an ordinary variable under its path name, so the
+        // read is the ordinary one.
+        //
+        // The sibling's block was lowered before this one (elaboration appends
+        // instances in tree order), so the value read here is the one that
+        // instance computed for this evaluation.
+        if (self.vars.get(path)) |slot|
+            return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
     }
     // Unresolved. §9.16's own two outcomes, in the clause's order.
     if (args.len >= 3 and args[2] != .none) return self.lowerExpr(args[2]);

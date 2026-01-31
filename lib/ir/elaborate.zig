@@ -143,6 +143,23 @@ pub const Design = struct {
     /// decides whether the port arrives driven or floating, and it is positional
     /// text (`Lower.applyUnconnectedDrive`).
     unconnected_inputs: []const NameSite = &.{},
+    /// §9.15 Table 9-28's two hierarchy rows, indexed by `Ast.AnalogBlock.unit`:
+    /// "module" is "the name of the module from which $simparam$str is called"
+    /// and "instance" is "the hierarchical name of the instance". Flattening
+    /// erases both — every block ends up in the top's namespace — but the walk
+    /// HAS them, so it publishes them rather than letting §9.15 answer with the
+    /// top's name and an empty string. §9.16's sibling scope reads `path` for
+    /// the same reason: "look for an instance called inst_name IN THE PARENT OF
+    /// THE CURRENT INSTANCE".
+    units: []const UnitPath = &.{},
+};
+
+/// One entry of `Design.units`. `path` is the instance prefix, separator
+/// included and empty at the top, so `path ++ local` is the flat name — the
+/// same join `Flatten.join` makes.
+pub const UnitPath = struct {
+    module: []const u8,
+    path: []const u8,
 };
 
 /// A name the flatten wants a later stage to judge, and the token it was
@@ -270,6 +287,8 @@ const Flatten = struct {
     /// Last `Ast.AnalogBlock.unit` handed out. 0 is the top, so the first
     /// inlined instance is 1. See that field for what it is for.
     last_unit: u32 = 0,
+    /// §9.15/§9.16 one entry per unit id, in issue order (so index == unit id).
+    unit_paths: std.ArrayList(UnitPath) = .empty,
 
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
@@ -411,6 +430,13 @@ const Flatten = struct {
         try self.functions.appendSlice(self.ctx.arena, top.functions);
         try self.attrs.appendSlice(self.ctx.arena, top.attrs);
 
+        // Unit 0 is the top itself, and §9.15's example makes a top-level
+        // module's instance name its module name ("testbench").
+        try self.unit_paths.append(self.ctx.arena, .{
+            .module = self.ctx.file.str(top.name),
+            .path = "",
+        });
+
         var stack: std.ArrayList(Ast.StrId) = .empty;
         try stack.append(self.ctx.arena, top.name);
         try self.walkInstances(top, "", &stack, 0);
@@ -470,6 +496,7 @@ const Flatten = struct {
             .names = self.names,
             .implicit_nets = self.implicit_nets.items,
             .unconnected_inputs = self.unconnected_inputs.items,
+            .units = self.unit_paths.items,
         };
     }
 
@@ -742,6 +769,11 @@ const Flatten = struct {
         // are two devices, and §5.6.1.3 must not let one discard the other's.
         self.last_unit += 1;
         const unit_id = self.last_unit;
+        // Appended in issue order, so `Design.units[unit_id]` is this instance.
+        try self.unit_paths.append(self.ctx.arena, .{
+            .module = self.ctx.file.str(child.name),
+            .path = path,
+        });
         for (child.analog) |blk| try self.analog.append(self.ctx.arena, .{
             .is_initial = blk.is_initial,
             .body = try self.cloneStmt(blk.body),
