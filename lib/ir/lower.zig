@@ -7050,10 +7050,15 @@ fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
         if (i >= fmt.len) break;
         const conv = fmt[i];
         i += 1;
-        if (std.mem.indexOfScalar(u8, "dohxbcfegs", conv) != null) continue;
+        // §9.5.4.2's code table has SIX rows, and `r` and `m` are two of them:
+        // "r Matches a 'real' number in engineering notation, using the scale
+        // factors defined in 2.6.2" and "m Returns the current hierarchical
+        // path as a string. Does not read data from the input file or str
+        // argument". Leaving them out of this set refused a conforming model.
+        if (std.mem.indexOfScalar(u8, "dohxbcfegsrm", conv) != null) continue;
         var b = self.errWith(tok, .E0813);
         b.msg("$sscanf does not support the conversion `%{c}`", .{conv});
-        b.note("§9.5.4.2's codes are %d %o %h %x %b %c %f %e %g %s", .{});
+        b.note("§9.5.4.2's codes are %d %o %h %x %b %c %f %e %g %s %r %m", .{});
         try b.emit();
         return true;
     }

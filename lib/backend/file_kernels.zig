@@ -56,7 +56,12 @@ const ZFSlot = struct {
     /// into the count plus one reader per destination, exactly as `lowerScan`
     /// splits `$sscanf`. The readers are pure over this latch, so the read
     /// happens once however many destinations there are.
-    line: [512]u8 = undefined,
+    /// 4096 and not 512, for the reason `str_kernels.zSBuf`'s row is: §9.5.4.1
+    /// puts no length limit on a line ("until a newline character is read and
+    /// transferred to str, or an EOF condition is encountered") and §3.3's
+    /// `string` is not a fixed-width type, so a short row does not truncate a
+    /// record — it silently splits it across two reads.
+    line: [4096]u8 = undefined,
     line_len: usize = 0,
 };
 
@@ -285,23 +290,67 @@ pub fn zFLine(n: i64, d: i64) []const u8 {
     return zf_slots[k].line[0..zf_slots[k].line_len];
 }
 
-/// §9.5.4.2's INPUT: one line of the file, for `str_kernels.zScan` to convert.
-/// The scanner itself is not duplicated here — `$fscanf` "reads from the file
-/// specified by fd" what `$sscanf` reads from a string, so it is the same
-/// formatter and codegen composes the two kernels rather than this file
-/// importing one into the other's embedded text.
+/// §9.5.4.2's INPUT: the unread remainder of the file, up to one buffer, read
+/// WITHOUT moving the position. The scanner itself is not duplicated here —
+/// `$fscanf` "reads from the file specified by fd" what `$sscanf` reads from a
+/// string, so it is the same formatter and codegen composes the two kernels
+/// rather than this file importing one into the other's embedded text: it
+/// scans this window, then hands what matched to `zFTake`.
+///
+/// A WINDOW AND NOT A LINE. §9.5.4.2 never mentions lines. Its control-string
+/// white space "causes input to be read up to the next nonwhite space
+/// character" — newlines included — so one `$fscanf` may satisfy directives
+/// from two lines, and two `$fscanf`s may take successive fields off one line
+/// ("the offending input character is left unread in the input stream ...
+/// trailing white space (including newline characters) is left unread unless
+/// matched by a directive"). A reader that consumed a line per call could
+/// express neither, and silently dropped every field after the first.
 ///
 /// The empty slice is §9.5.4.2's EOF case by construction: `zScan` on no input
 /// returns -1 when nothing was tried, which is "if the input ends before the
 /// first matching failure or conversion, EOF is returned".
 //
-// ponytail: a LINE is consumed, where C's `fscanf` consumes only what the format
-// matched. §9.5.4.2 fixes the return and the assignments and says nothing about
-// the file position afterwards, and the difference is only observable through a
-// `$ftell` between two scans. Matching C means pushing the tail back, which is
-// `$ungetc`'s job — and §9.2 Table 9-2 marks that one analog-context "No".
-pub fn zFRead(d: i64) []const u8 {
-    return zFLine(zFGets(d), d);
+// ponytail: the window is one buffer, so a single directive cannot match
+// across more than `ZFSlot.line` bytes of leading white space. A streaming
+// window is the upgrade, the day a model scans a file with megabytes of it.
+pub fn zFWindow(d: i64) []const u8 {
+    const k = zfSlot(d) orelse {
+        zf_last_err = 9;
+        return "";
+    };
+    const s = &zf_slots[k];
+    if (!s.can_read) {
+        s.err = 9;
+        zf_last_err = 9;
+        return "";
+    }
+    s.line_len = s.f.readPositionalAll(zfIo(), &s.line, s.pos) catch |e| {
+        s.err = zfErrno(e);
+        zf_last_err = s.err;
+        s.line_len = 0;
+        return "";
+    };
+    s.err = 0;
+    zf_last_err = 0;
+    return s.line[0..s.line_len];
+}
+
+/// §9.5.4.2's CONSUMPTION: advance the descriptor by exactly the bytes the
+/// scan matched, and by nothing else. `used` is `ZScan.used`; `n` is the
+/// scan's own return, passed through so the emitter can compose the two calls
+/// into one expression.
+///
+/// §9.5.8's flag is set HERE and not in `zFWindow`, because "EOF has
+/// previously been detected reading fd" is a property of the scan: a short
+/// window means only that the file ends somewhere ahead, while a scan that
+/// answers EOF is the detection itself. A scan that stopped on a newline, or
+/// on a conflicting character, has reached the end of nothing.
+pub fn zFTake(d: i64, n: i64, used: i64) i64 {
+    const k = zfSlot(d) orelse return n;
+    const s = &zf_slots[k];
+    if (used > 0) s.pos += @intCast(used);
+    if (n < 0) s.eof = true;
+    return n;
 }
 
 /// §9.5.5 `pos = $ftell( fd )` — "the offset from the beginning of the file of
