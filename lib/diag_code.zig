@@ -2625,12 +2625,13 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0402 => .{
-            .title = "`disable` is not implemented",
+            .title = "`disable` does not name a block",
             .lrm = "A.6.5",
             .explain =
-            \\The event form of `disable` parses but has no lowering: aborting
-            \\a named block mid-solve would leave the contributions it had
-            \\already made in the system of equations.
+            \\A.6.5 gives disable_statement two operands, a
+            \\hierarchical_task_identifier and a hierarchical_block_identifier,
+            \\and Verilog-AMS gives an analog block no task — so the only legal
+            \\operand here is the label of an enclosing named block.
             ,
         },
         .E0403 => .{

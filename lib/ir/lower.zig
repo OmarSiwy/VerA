@@ -318,6 +318,10 @@ arena: std.mem.Allocator,
 mir: *Mir,
 /// §6.7 path → flat name, from elaboration. Read only by `flatName`.
 hier_names: std.StringHashMapUnmanaged([]const u8) = .empty,
+/// §9.15/§9.16, indexed by `Ast.AnalogBlock.unit`: the module a block was
+/// WRITTEN in and the instance path it was inlined at. See `Design.units` —
+/// flattening erases both, so elaboration publishes them.
+unit_paths: []const Elaborate.UnitPath = &.{},
 /// MUTABLE, and only for one reason: `Elaborate.elaborate` APPENDS to the
 /// stores (§6.7 flat names, cloned expression rows, cloned statements) when it
 /// flattens an instance tree. It runs as the first statement of `lowerFile`,
@@ -517,6 +521,13 @@ noise_tab: std.AutoHashMapUnmanaged(u32, []const Mir.Value) = .empty,
 noise_val: std.AutoHashMapUnmanaged(u32, Mir.Value) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
+/// A.6.5 `disable` targets — the enclosing named blocks, innermost last.
+named_blocks: std.ArrayList(NamedBlockCtx) = .empty,
+/// §5.3.2 "All identifiers declared within a named sequential block can be
+/// accessed outside the scope in which they are declared." The qualified
+/// `<label>.<local>` spellings `publishBlockLocals` bound, which is what tells
+/// them apart from §6.7.1's forbidden cross-instance variable read (E0910).
+block_locals: std.StringHashMapUnmanaged(void) = .empty,
 /// §4.7.1 the function currently being inlined (return slot + exit block).
 ret: ?RetCtx = null,
 /// §4.7.2/§6.8 the local `parameter` declarations of the function currently
@@ -665,9 +676,23 @@ active_genvars: std.ArrayList([]const u8) = .empty,
 /// declaration at the top of every evaluation. Each entry gets a persistent
 /// `Instance` slot instead; codegen reads it directly.
 held_vars: std.ArrayList(HeldVar) = .empty,
-/// Source names `markHeldVars` found under an `@(...)`, collected BEFORE the
-/// module's variables are declared. Empty for a module with no event control.
+/// Variables `markHeldVars` found assigned under an `@(...)`, collected BEFORE
+/// the module's variables are declared. Empty for a module with no event
+/// control.
+///
+/// Keyed on §5.3.2's "unique location", i.e. the pair (scope, name) spelled as
+/// a dotted path: a module variable is its bare name, a named block's local is
+/// `<label>.<name>` (`<outer>.<inner>.<name>` when nested). A bare name would
+/// make `lo.n`, `hi.n` and the module's own `n` one slot.
 held_names: std.StringHashMapUnmanaged(void) = .empty,
+/// The enclosing NAMED blocks during `scanHeld`, so a target resolves to the
+/// nearest declaration of it — a module variable assigned from inside a block
+/// still keys bare, because the block does not declare it.
+held_frames: std.ArrayList(HeldFrame) = .empty,
+/// §5.3.2 the dotted prefix of the named block being lowered ("" at module
+/// scope, "lo." inside `begin : lo`). The lowering-side half of `held_names`'
+/// key; see `declareVarDecl`.
+block_path: []const u8 = "",
 /// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
 /// Collected by `scanCallSites` before the analog block is lowered.
 limit_slots: std.ArrayList(LimitSlot) = .empty,
@@ -811,6 +836,15 @@ const ArrayInfo = struct {
     ty: Ty,
 };
 const LoopCtx = struct { brk: Mir.Block, cont: Mir.Block };
+/// A.6.5 `disable hierarchical_block_identifier` target: §5.3's "the control
+/// shall pass out of the block", i.e. that block's own exit. One entry per
+/// ENCLOSING named block, so an inner and an outer block of the same nesting
+/// are two different targets chosen by the name and by nothing else.
+const NamedBlockCtx = struct { name: []const u8, exit: Mir.Block };
+/// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
+/// its locals are keyed under, and the declarations that say which names those
+/// are.
+const HeldFrame = struct { prefix: []const u8, vars: []const Ast.VarDecl };
 const RetCtx = struct { slot: VarSlot, exit: Mir.Block };
 /// `wrote` is §5.6.1.3's retention FLAG beside the value: 0.0 in the entry
 /// block, 1.0 after every `<+` on this (access, branch), back to 0.0 when the
@@ -959,6 +993,8 @@ pub fn deinit(self: *Lower) void {
     self.param_index.deinit(gpa);
     self.arrays.deinit(gpa);
     self.loops.deinit(gpa);
+    self.named_blocks.deinit(gpa);
+    self.block_locals.deinit(gpa);
     self.inlining.deinit(gpa);
     self.displays.deinit(gpa);
     self.deferred_displays.deinit(gpa);
@@ -966,6 +1002,7 @@ pub fn deinit(self: *Lower) void {
     self.held_vars.deinit(gpa);
     self.limit_slots.deinit(gpa);
     self.held_names.deinit(gpa);
+    self.held_frames.deinit(gpa);
     self.events.deinit(gpa);
 }
 
@@ -1266,6 +1303,7 @@ pub fn lowerFile(self: *Lower) Error!void {
         .bag = self.bag,
     });
     self.hier_names = design.names;
+    self.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
     // built on a mistyped instance terminal fails at the mistype instead of at
@@ -3670,8 +3708,9 @@ fn checkOneItemPerScope(self: *Lower, vars: []const Ast.VarDecl) Oom!void {
     }
 }
 
-/// Where a `declareVarDecl` sits. Only a MODULE-level variable can take a
-/// persistent §5.10 slot — see `holdSlot`.
+/// Where a `declareVarDecl` sits. §5.3.2 gives a persistent §5.10 slot to a
+/// module variable and to a NAMED block's local; an unnamed `begin`'s
+/// declaration is neither, and `block_path` is "" for it.
 const VarScope = enum { module, local };
 
 /// §3.2 declare and initialize. Verilog-AMS variables start at zero, so a read
@@ -3680,11 +3719,23 @@ const VarScope = enum { module, local };
 fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!void {
     const name = self.file.str(decl.name);
     const ty = astTy(decl.ty);
+    // §5.3.2: "All named block variables are static — that is, an unique
+    // location exists for all variables and leaving or entering the block do
+    // not affect the values stored in them." The location is (scope, name), so
+    // the key `markHeldVars` recorded carries the block path; the empty prefix
+    // is module scope, and an UNNAMED block gets no slot because the clause
+    // grants one to named blocks only.
+    const prefix = if (scope == .module) "" else self.block_path;
+    const held_key = if (prefix.len == 0)
+        name
+    else
+        try std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
     // §5.10. `.string` is deliberately excluded: a string never reaches the
     // residual (§3.3 strings only feed §9.4 tasks, which re-run every
     // evaluation anyway), so a persistent slot for one would be storage
     // nothing can observe.
-    const hold = scope == .module and ty != .string and self.held_names.contains(name);
+    const hold = (scope == .module or prefix.len != 0) and ty != .string and
+        self.held_names.contains(held_key);
 
     if (decl.dims.len != 0) {
         const dims = try self.dimsBounds(decl.dims, decl.main_tok, name) orelse return;
@@ -3711,7 +3762,7 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
             else
                 zeroOf(ty);
             try self.builder.writeVariable(slot.place, self.cur, if (hold)
-                try self.holdSlot(en, ty, init_val, slot.place)
+                try self.holdSlot(try self.qualifyHeld(prefix, en), ty, init_val, slot.place)
             else
                 init_val);
         }
@@ -3724,9 +3775,17 @@ fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) Oom!v
     else
         try self.coerceTo(decl.init, ty, try self.lowerExpr(decl.init));
     try self.builder.writeVariable(slot.place, self.cur, if (hold)
-        try self.holdSlot(name, ty, init_val, slot.place)
+        try self.holdSlot(held_key, ty, init_val, slot.place)
     else
         init_val);
+}
+
+/// The `Instance` field name of a held slot carries the block path too, because
+/// codegen derives one struct field per `held_vars` entry from it and two
+/// blocks may spell a local the same way (§5.3.2's whole point).
+fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]const u8 {
+    if (prefix.len == 0) return name;
+    return std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
 }
 
 /// §5.10. Give one event-assigned variable its persistent `Instance` slot and
@@ -3750,9 +3809,19 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
     // is that diamond's join. Either way it dominates every statement of the
     // module, which is all the seed has to do.
     const idx: i64 = @intCast(self.held_vars.items.len);
+    // Codegen makes one `Instance` field per entry out of `name`, so the name
+    // has to be unique. It is — until a §6.6.1 unrolled `for` lowers the SAME
+    // named block twice, which is two executions of one source declaration and
+    // so, by §5.3.2, two locations that happen to share a path.
+    var field = name;
+    for (self.held_vars.items) |h| {
+        if (!std.mem.eql(u8, h.name, name)) continue;
+        field = try std.fmt.allocPrint(self.arena, "{s}.{d}", .{ name, idx });
+        break;
+    }
     const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.mir.addIntConst(self.arena, idx)});
     try self.held_vars.append(self.arena, .{
-        .name = name,
+        .name = field,
         .ty = ty,
         .init = init_val,
         .seed = seed,
@@ -3761,17 +3830,29 @@ fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, place: 
     return seed;
 }
 
-/// §5.10. Collect the names assigned inside an `@(<event>)` body, before any of
-/// them is declared.
-///
-// ponytail: MODULE-level variables only. A variable declared in a §5.3.2 named
-// block inside the analog block still resets — its declaration is lowered once
-// per execution of the block, so a slot keyed on the source name would collide
-// with itself under a §6.6.1 unrolled `for`. Upgrade path: key the slot on the
-// SSA place and give each re-declaration a group-local ordinal, the same way
-// `naming.assignDisambig` does for same-target units.
+/// §5.10. Collect the variables assigned inside an `@(<event>)` body, before
+/// any of them is declared.
 fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.analog) |blk| try self.scanHeld(blk.body, false);
+    self.held_frames.clearRetainingCapacity();
+}
+
+/// §5.3.2: "The block names give a means of uniquely identifying all variables
+/// at any simulation time." Which location an assignment target names is
+/// decided by the NEAREST declaration of it, so the walk looks outward from the
+/// innermost named block and falls back to the bare (module-scope) name — a
+/// module variable assigned from inside a block is still the module's.
+fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
+    var i = self.held_frames.items.len;
+    while (i > 0) {
+        i -= 1;
+        const f = self.held_frames.items[i];
+        for (f.vars) |v| {
+            if (!self.file.strings.eql(v.name, name)) continue;
+            return std.fmt.allocPrint(self.arena, "{s}{s}", .{ f.prefix, name });
+        }
+    }
+    return name;
 }
 
 /// One walk, two modes: outside an event body we are only looking for the
@@ -3780,14 +3861,27 @@ fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
     if (id == .none) return;
     switch (self.file.stmt(id)) {
-        .block => |b| for (b.body) |s| try self.scanHeld(s, in_event),
+        .block => |b| {
+            // §5.3.2 only a NAMED block's locals are static, so only a label
+            // opens a frame; an unnamed `begin`'s declarations are ordinary.
+            const named = b.name != .none;
+            if (named) {
+                const outer = if (self.held_frames.getLastOrNull()) |f| f.prefix else "";
+                try self.held_frames.append(self.arena, .{
+                    .prefix = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer, self.file.str(b.name) }),
+                    .vars = b.vars,
+                });
+            }
+            for (b.body) |s| try self.scanHeld(s, in_event);
+            if (named) _ = self.held_frames.pop();
+        },
         .assign => |a| {
             if (!in_event) return;
             const ex = &self.file.exprs;
             // §3.2.2 `x[i] = …` holds the ARRAY; `declareVarDecl` scalarizes it.
             const t = if (ex.tag(a.target) == .index) ex.lhs(a.target) else a.target;
             if (ex.tag(t) != .ident) return;
-            try self.held_names.put(self.arena, self.file.str(ex.strOf(t)), {});
+            try self.held_names.put(self.arena, try self.heldKey(self.file.str(ex.strOf(t))), {});
         },
         .if_stmt => |s| {
             try self.scanHeld(s.then_s, in_event);
@@ -3848,7 +3942,7 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
         .repeat_stmt => |s| try self.lowerRepeat(s.count, s.body), // §5.9
         .event_control => |s| try self.lowerEventControl(s.event, s.body), // §5.10
         .event_trigger => |s| try self.lowerEventTrigger(tok, self.file.str(s.name)), // §5.10.4
-        .disable => try self.lowerDisable(tok),
+        .disable => |s| try self.lowerDisable(tok, self.file.str(s.name)),
         .sys_task => |s| try self.lowerSysTask(tok, self.file.str(s.name), s.args),
         .jump => |j| try self.lowerJump(tok, j.kind, j.value),
     }
@@ -3875,24 +3969,101 @@ fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
 /// an analog block can legally contain. There is no clause-5 section for
 /// `disable` (5.11 is `jump_statement`: return/break/continue), so annex A is
 /// the citation.
-fn lowerDisable(self: *Lower, tok: u32) Oom!void {
+fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
     if (!self.in_event_stmt) {
         var b = self.errWith(tok, .E0401);
         b.help("only `@(<event>) disable <block>;` is legal", .{});
         return b.emit();
     }
-    return self.err(tok, .E0402, "", .{});
+    // A.6.5's operand is a block (or task) identifier and nothing else, so a
+    // name that reaches no enclosing block label has no derivation. Searched
+    // INNERMOST-first: §6.7 makes a block label a scope name, and the nearest
+    // one is the one in scope.
+    var i = self.named_blocks.items.len;
+    while (i > 0) {
+        i -= 1;
+        const nb = self.named_blocks.items[i];
+        if (!std.mem.eql(u8, nb.name, name)) continue;
+        // §5.3: "the control shall pass out of the block after the last
+        // statement is executed" — a disable passes out of it EARLY, which is
+        // the same destination, so the statements AFTER the block still run.
+        try self.gotoBlock(nb.exit);
+        return self.startUnreachable();
+    }
+    // ponytail: hierarchical spellings (`disable top.dut.seg`) are not resolved
+    // — elaboration flattens a label into the instance path, so an enclosing
+    // block's flat name is what `name` already is. Walk the instance tree here
+    // when a fixture disables a block it does not lexically enclose.
+    var b = self.errWith(tok, .E0402);
+    b.msg("`{s}` names no named block in scope", .{name});
+    b.help("`disable` takes the label of an enclosing named block", .{});
+    return b.emit();
 }
 
 /// §5.3.2 named sequential block: its declarations shadow for the block only.
 fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     const mark = self.scope_log.items.len;
     defer self.closeScope(mark);
+    // §5.3.2's key for a local's static location, in step with `scanHeld`'s.
+    const outer_path = self.block_path;
+    defer self.block_path = outer_path;
+    if (b.name != .none)
+        self.block_path = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer_path, self.file.str(b.name) });
     for (b.params) |*p| try self.lowerParamDecl(p); // §5.3.2 local parameters
     try self.checkOneItemPerScope(b.vars);
     for (b.vars) |*v| try self.declareVarDecl(v, .local);
+    if (b.name != .none) try self.publishBlockLocals(self.file.str(b.name), b);
+    // §6.7 a labelled block is a scope, and A.6.5 lets `disable` name it. The
+    // exit block is where control lands both ways — falling off the end and
+    // being disabled — so the join is the same one either way.
+    const exit: ?Mir.Block = if (b.name == .none) null else blk: {
+        const e = try self.mir.addBlock(self.arena);
+        try self.named_blocks.append(self.arena, .{ .name = self.file.str(b.name), .exit = e });
+        break :blk e;
+    };
     // ponytail: the only statement-list caller keeps its source-order loop here.
     for (b.body) |s| try self.lowerStmt(s);
+    if (exit) |e| {
+        _ = self.named_blocks.pop();
+        try self.gotoBlock(e);
+        try self.builder.sealBlock(e);
+        self.cur = e;
+    }
+}
+
+/// §5.3.2: "All identifiers declared within a named sequential block can be
+/// accessed outside the scope in which they are declared." The block's scope is
+/// popped by `closeScope`, so the outside spelling needs a SECOND binding that
+/// is not shadow-logged — under `<label>.<local>`, which is the path
+/// `flatName` already builds for `myscope.localVar`.
+///
+/// The assign direction stays closed: "Named block variables cannot be assigned
+/// outside the scope of the block in which they are declared", which `lowerAssign`
+/// refuses as E0316 because a `.hier_ident` is never an lvalue.
+///
+/// ponytail: last declaration wins when the same label runs twice (a §6.6.1
+/// unrolled `for` body). Nothing can name one iteration's copy apart from
+/// another, so there is nothing for an ordinal to disambiguate yet.
+fn publishBlockLocals(self: *Lower, label: []const u8, b: Ast.SeqBlock) Oom!void {
+    for (b.vars) |v| {
+        const local = self.file.str(v.name);
+        // Arrays are scalarized into `name[i]` entries, which have no scalar
+        // slot under the bare name; §5.3.2's example is a scalar and no fixture
+        // names an element hierarchically.
+        const slot = self.vars.get(local) orelse continue;
+        const q = try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ label, Elaborate.sep, local });
+        try self.vars.put(self.arena, q, slot);
+        try self.block_locals.put(self.arena, q, {});
+    }
+    // "Parameters declared within a named block have local scope" — local to
+    // ASSIGNMENT, which §6.3 override already cannot reach; the read is the
+    // same "all identifiers" sentence. They live in `consts`, so E0910 (a
+    // variable read) never sees them.
+    for (b.params) |p| {
+        const c = self.consts.get(self.file.str(p.name)) orelse continue;
+        const q = try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ label, Elaborate.sep, self.file.str(p.name) });
+        try self.consts.put(self.arena, q, c);
+    }
 }
 
 /// §5.7 procedural assignment. The target is an lvalue expression so array
@@ -7137,15 +7308,20 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // because the resolution succeeds — a flattened child's variable is
             // an ordinary variable of the flat design under its path name, so
             // nothing else would stop the read.
-            if (self.vars.contains(name)) {
+            // …EXCEPT a §5.3.2 named-block local, which the LRM spells out the
+            // other way: "All identifiers declared within a named sequential
+            // block can be accessed outside the scope in which they are
+            // declared." §6.7.1 is about reaching into another INSTANCE;
+            // `publishBlockLocals` bound only labels of this analog block.
+            if (self.vars.contains(name) and !self.block_locals.contains(name)) {
                 var vb = self.errWith(self.file.exprs.mainTok(e), .E0910);
                 vb.msg("`{s}`", .{name});
                 vb.note("§6.7.1 permits a hierarchical parameter, branch probe or analog function; a variable is the one entry on that list it forbids", .{});
                 try vb.emit();
                 return poison;
             }
-            if (self.param_index.contains(name) or
-                self.consts.contains(name) or self.node_voltages.contains(name))
+            if (self.param_index.contains(name) or self.consts.contains(name) or
+                self.node_voltages.contains(name) or self.block_locals.contains(name))
                 return self.lookupName(e, name);
             var b = self.errWith(self.file.exprs.mainTok(e), .E0901);
             b.msg("`{s}` names nothing in the elaborated design", .{name});
@@ -8646,6 +8822,32 @@ fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // a string variable", and a name that is not known until the solve cannot be
     // judged here — the fallback rule is the user's cover for that case.
     if (std.mem.eql(u8, name, "$simprobe")) return self.lowerSimprobe(e);
+    // §9.15 Table 9-28's two HIERARCHY rows are elaboration facts, so they are
+    // answered here and never reach codegen: "module" is "the name of the module
+    // from which $simparam$str is called" and "instance" is "the hierarchical
+    // name of the instance from which $simparam$str is called". Codegen sees
+    // one flattened module and answered them with the TOP's name and "" — right
+    // only for a call that happens to sit in the top module. `cur_unit` is the
+    // instance that wrote this block, which is exactly what the clause asks for.
+    if (std.mem.eql(u8, name, "$simparam$str") and self.cur_unit < self.unit_paths.len) {
+        const a = ex.args(e);
+        if (a.len >= 1) if (self.constStrArg(a[0])) |nm| {
+            const u = self.unit_paths[self.cur_unit];
+            if (std.mem.eql(u8, nm, "module"))
+                return .{ .v = try self.mir.addStrConst(self.arena, u.module), .ty = .string };
+            // §9.15's worked example produces "testbench.dut1": a top-level
+            // module's instance name is its module name, and the path is joined
+            // to it by §6.7's period. `path` already carries the separator.
+            if (std.mem.eql(u8, nm, "instance")) {
+                const top = if (self.unit_paths.len != 0) self.unit_paths[0].module else u.module;
+                const full = if (u.path.len == 0)
+                    top
+                else
+                    try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ top, Elaborate.sep, u.path[0 .. u.path.len - 1] });
+                return .{ .v = try self.mir.addStrConst(self.arena, full), .ty = .string };
+            }
+        };
+    }
     if (std.mem.eql(u8, name, "$simparam")) {
         const args = ex.args(e);
         if (args.len == 1) {
@@ -9525,6 +9727,19 @@ fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
 /// and with no fallback it is the error the clause asks for. A host with a real
 /// instance table would resolve more names than this does — that is the piece
 /// Ruling E deliberately gave up, and it is recorded here rather than hidden.
+/// §9.16 "the parent of the current instance": the caller's own instance path
+/// with its last segment dropped, separator included, "" at the top. Joined to
+/// an `inst_name` it gives the flat name of a SIBLING.
+fn callerParentPath(self: *const Lower) []const u8 {
+    if (self.cur_unit >= self.unit_paths.len) return "";
+    const p = self.unit_paths[self.cur_unit].path;
+    if (p.len == 0) return p;
+    // `path` ends with the separator, so the caller's own segment is the text
+    // between the previous separator and the last one.
+    const cut = std.mem.lastIndexOfScalar(u8, p[0 .. p.len - 1], Elaborate.sep) orelse return "";
+    return p[0 .. cut + 1];
+}
+
 fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -9537,9 +9752,32 @@ fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const inst = self.constStrArg(args[0]);
     const param = self.constStrArg(args[1]);
     if (inst != null and param != null) {
-        const path = try std.mem.concat(self.arena, u8, &.{ inst.?, &[_]u8{Elaborate.sep}, param.? });
+        // §9.16: "the simulator will look for an instance called inst_name IN
+        // THE PARENT OF THE CURRENT INSTANCE i.e. a sibling of the instance
+        // containing the $simprobe() expression." The name is therefore
+        // RELATIVE, and the flat key is the caller's parent path joined to it —
+        // not the bare `inst_name`, which only worked for a caller that
+        // happened to sit at the root, and which also resolved a path FROM the
+        // root, the one reading the sibling rule excludes.
+        const path = try std.mem.concat(self.arena, u8, &.{
+            self.callerParentPath(), inst.?, &[_]u8{Elaborate.sep}, param.?,
+        });
         if (self.param_index.get(path)) |pi|
             return .{ .v = self.param_values.items[pi], .ty = astTy(self.params.items[pi].ty) };
+        // §9.16's own first sentence: "$simprobe() queries the simulator for AN
+        // OUTPUT VARIABLE named param_name in a sibling instance", and the
+        // clause's example probes `id` of a mosfet — an operating-point
+        // quantity, not a parameter. "The intended use of this function is to
+        // allow dynamic monitoring of instance quantities", which a probe that
+        // can only read the netlist's own numbers does not do. A flattened
+        // child's variable is an ordinary variable under its path name, so the
+        // read is the ordinary one.
+        //
+        // The sibling's block was lowered before this one (elaboration appends
+        // instances in tree order), so the value read here is the one that
+        // instance computed for this evaluation.
+        if (self.vars.get(path)) |slot|
+            return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
     }
     // Unresolved. §9.16's own two outcomes, in the clause's order.
     if (args.len >= 3 and args[2] != .none) return self.lowerExpr(args[2]);
