@@ -103,6 +103,11 @@ const Instruction = union(enum(u4)) {
     // STATIC, so it is resolved to slots once at compile time; a resumption is
     // then the same `.any` waiter an explicit `@(a or b)` installs.
     wait_slots: []const u32,
+    // A.6.5 `wait_statement`, which is LEVEL sensitive: the condition is tested
+    // on arrival and again on every resumption, and only a true reading falls
+    // through. `slots` is the same operand list `@*` uses, here only to decide
+    // when it is worth re-testing.
+    wait_level: struct { cond: Ast.ExprId, slots: []const u32 },
     // §8.5.3.3 the two halves of A.6.2's intra-assignment timing control.
     // `sample` evaluates the right-hand side with the values current when the
     // statement is REACHED and parks it in `cell`, then applies the timing;
@@ -1232,13 +1237,26 @@ const Run = struct {
                     self.code.items[at].wait_slots = watched.items;
                     return;
                 }
-                if (!s.is_delay) {
-                    try self.checkEvent(s.event);
-                    _ = try self.append(.{ .wait_event = s.event });
-                    return self.compileStmt(s.body, depth + 1);
+                switch (s.kind) {
+                    .event => {
+                        try self.checkEvent(s.event);
+                        _ = try self.append(.{ .wait_event = s.event });
+                    },
+                    .delay => {
+                        try self.checkDelay(s.event, tok);
+                        _ = try self.append(.{ .statement = id });
+                    },
+                    // A.6.5 `wait_statement`. The condition's operands ARE the
+                    // wake-up list, but unlike `@` they only bring the process
+                    // back to the same pc to re-test the level.
+                    .level => {
+                        try self.checkExpr(s.event);
+                        var watched: std.ArrayList(u32) = .empty;
+                        try self.sensitivity(s.event, &watched);
+                        if (watched.items.len == 0) return self.fail(tok, "a `wait` on a constant expression would never be reconsidered", .{});
+                        _ = try self.append(.{ .wait_level = .{ .cond = s.event, .slots = watched.items } });
+                    },
                 }
-                try self.checkDelay(s.event, tok);
-                _ = try self.append(.{ .statement = id });
                 try self.compileStmt(s.body, depth + 1);
             },
             .sys_task => |s| {
@@ -2006,6 +2024,17 @@ const Run = struct {
                 // §9.7.5 the implicit list is a plain `or` of value changes.
                 .wait_slots => |slots| {
                     for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1 });
+                    return;
+                },
+                // A.6.5 a `wait` that is already satisfied does not suspend at
+                // all; one that is not comes back to THIS pc, not the next, so
+                // the level is re-tested rather than the edge trusted.
+                .wait_level => |s| {
+                    if ((try self.eval(scratch, s.cond, 0)).truth() == .one) {
+                        pc += 1;
+                        continue;
+                    }
+                    for (s.slots) |at| try self.waiters.append(self.arena, .{ .slot = at, .edge = .any, .pc = pc });
                     return;
                 },
                 // §8.5.3.3 "computes the right-hand side value using the

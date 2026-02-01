@@ -2456,7 +2456,17 @@ pub const Parser = struct {
                 break :blk value;
             } else try self.parsePrimary();
             const body = try self.parseStmt();
-            return self.file.addStmt(self.arena, .{ .event_control = .{ .event = delay, .body = body, .is_delay = true } }, tok);
+            return self.file.addStmt(self.arena, .{ .event_control = .{ .event = delay, .body = body, .kind = .delay } }, tok);
+        }
+        // A.6.5 `wait_statement ::= wait ( expression ) statement_or_null` —
+        // digital only, like `#`: A.6.4 has no analog alternative for it.
+        if (self.digital and self.peek() == .kw_wait) {
+            self.pos += 1;
+            _ = try self.expect(.lparen);
+            const cond = try self.parseExpr();
+            _ = try self.expect(.rparen);
+            const body = try self.parseStmt();
+            return self.file.addStmt(self.arena, .{ .event_control = .{ .event = cond, .body = body, .kind = .level } }, tok);
         }
         switch (self.peek()) {
             .semicolon => {

@@ -1006,6 +1006,20 @@ pub const ConnectResolution = struct {
 // Statements — LRM ch5, A.6
 // ---------------------------------------------------------------------------
 
+/// Which of A.6.5's three procedural timing controls a prefixed statement
+/// carries. All three suspend the process and then run the same body, so they
+/// share `Stmt.event_control`; only what they wait FOR differs.
+pub const Timing = enum {
+    /// `@(event)` — an edge, a named event, or `@*` (§5.10, §9.7.5).
+    event,
+    /// `#delay` — `delay_control`, so the statement's `event` is the delay.
+    delay,
+    /// `wait (expression)` — LEVEL sensitive: if the expression is already true
+    /// the body runs without suspending at all, and a resumption re-tests it
+    /// instead of firing on whichever change woke the process.
+    level,
+};
+
 /// Statement node. LRM §5. Kept as a tagged union in a flat pool (closed set →
 /// enum+union, not vtable). Statements are walked once by lowering, never in a
 /// hot loop, so the union's width (driven by `.block`) is not a cache concern.
@@ -1078,7 +1092,7 @@ pub const Stmt = union(enum) {
     /// because the list is derived from the body, not written by the source.
     /// A.6.5 offers it to `event_control` only — `analog_event_control` has no
     /// such alternative, so an analog block rejects it.
-    event_control: struct { event: ExprId, body: StmtId, is_delay: bool = false },
+    event_control: struct { event: ExprId, body: StmtId, kind: Timing = .event },
     /// §5.10.4 `-> event;` (A.6.5 `event_trigger`). `name` is a
     /// `hierarchical_event_identifier`, so only its last (and, in a flat
     /// elaboration, only) component is kept.
