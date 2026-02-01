@@ -2756,9 +2756,16 @@ pub const Parser = struct {
         const tok = self.pos;
         const lhs = if (self.digital) try self.parsePostfix() else try self.parseExpr();
         if (self.digital and self.eat(.lt_eq)) {
+            const timing = try self.parseIntraTiming();
             const value = try self.parseExpr();
             _ = try self.expect(.semicolon);
-            return self.file.addStmt(self.arena, .{ .assign = .{ .target = lhs, .value = value, .nonblocking = true } }, tok);
+            return self.file.addStmt(self.arena, .{ .assign = .{
+                .target = lhs,
+                .value = value,
+                .nonblocking = true,
+                .timing = timing.expr,
+                .timing_is_delay = timing.is_delay,
+            } }, tok);
         }
         switch (self.peek()) {
             .contribute => { // §5.6 / A.6.10
@@ -2769,9 +2776,15 @@ pub const Parser = struct {
             },
             .assign_eq => { // §5.7 / A.6.2
                 self.pos += 1;
+                const timing = try self.parseIntraTiming();
                 const value = try self.parseExpr();
                 _ = try self.expect(.semicolon);
-                return self.file.addStmt(self.arena, .{ .assign = .{ .target = lhs, .value = value } }, tok);
+                return self.file.addStmt(self.arena, .{ .assign = .{
+                    .target = lhs,
+                    .value = value,
+                    .timing = timing.expr,
+                    .timing_is_delay = timing.is_delay,
+                } }, tok);
             },
             .colon => { // §5.6.7 / A.6.10 indirect contribution
                 self.pos += 1;
@@ -2786,6 +2799,42 @@ pub const Parser = struct {
                 );
             },
             else => return self.failAt(self.pos, .E0214, "found {s}", .{self.found(self.pos)}),
+        }
+    }
+
+    /// A.6.2's optional `delay_or_event_control` after the assignment operator
+    /// — A.6.5 `delay_control | event_control | repeat ( expression )
+    /// event_control`. Analog has no such production, so it is recognized only
+    /// in a digital source; elsewhere `#`/`@` fall through and the expression
+    /// parser reports them.
+    ///
+    /// ponytail: no `repeat ( n ) @(e)`. A.6.5's third alternative needs a
+    /// countdown around the waiter and nothing asks for it yet; add it beside
+    /// the `.at` arm when something does.
+    fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool } {
+        if (!self.digital) return .{ .expr = .none, .is_delay = false };
+        switch (self.peek()) {
+            .hash => {
+                self.pos += 1;
+                if (self.eat(.lparen)) {
+                    const value = try self.parseExpr();
+                    _ = try self.expect(.rparen);
+                    return .{ .expr = value, .is_delay = true };
+                }
+                return .{ .expr = try self.parsePrimary(), .is_delay = true };
+            },
+            .at => {
+                self.pos += 1;
+                if (self.eat(.lparen)) {
+                    const e = try self.parseEventExpr();
+                    _ = try self.expect(.rparen);
+                    return .{ .expr = e, .is_delay = false };
+                }
+                const id_tok = self.pos;
+                const name = try self.expectIdent();
+                return .{ .expr = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = id_tok, .str = name }), .is_delay = false };
+            },
+            else => return .{ .expr = .none, .is_delay = false },
         }
     }
 
