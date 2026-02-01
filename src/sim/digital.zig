@@ -99,6 +99,10 @@ const Instruction = union(enum(u4)) {
     repeat_next: struct { counter: u32, body: u32 },
     // §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
+    // A.6.5 `-> named_event`. §5.10: events "have no time duration" and "do not
+    // hold any data", so this publishes NOTHING — it only resumes whoever is
+    // waiting on the slot right now. A trigger nobody is waiting for is gone.
+    trigger: u32,
     // §9.9.2 an `always` body returning to its own start.
     restart: struct { target: u32, tok: u32 },
     stop,
@@ -536,6 +540,10 @@ const Run = struct {
     drivers: []Driver = &.{},
     /// Keyed by the base slot of an unpacked array (§3.9).
     arrays: std.AutoHashMapUnmanaged(u32, Array) = .empty,
+    /// The slots that are §5.10.4 named events. They occupy a slot only so that
+    /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
+    /// there, because §5.10's events "do not hold any data".
+    events: std.AutoHashMapUnmanaged(u32, void) = .empty,
     // Natural types, indexed by AST ExprId; width zero marks an unvisited row.
     types: []Type = &.{},
     replications: std.AutoHashMapUnmanaged(Ast.ExprId, u32) = .empty,
@@ -649,7 +657,11 @@ const Run = struct {
         const ex = &self.file.exprs;
         return switch (ex.tag(e)) {
             .ident => blk: {
-                const v = self.values[try self.scalarSlot(e)];
+                const at = try self.scalarSlot(e);
+                // §5.10: events "do not hold any data", so a named event has no
+                // value an expression could read.
+                if (self.events.contains(at)) return self.exprFail(e, "§5.10: a named event holds no data; it can only be triggered and waited on");
+                const v = self.values[at];
                 break :blk .{ .width = v.width, .signed = v.signed };
             },
             .int_literal => blk: {
@@ -1151,6 +1163,14 @@ const Run = struct {
                 try self.checkExpr(s.value);
                 _ = try self.append(.{ .statement = id });
             },
+            // A.6.5 `event_trigger`. The slot is resolved here, not at run
+            // time, so a trigger cannot fail in the middle of a dispatch.
+            .event_trigger => |s| {
+                const at = self.names.get(.{ .scope = self.scope, .str = s.name }) orelse
+                    return self.fail(tok, "undeclared named event", .{});
+                if (!self.events.contains(at)) return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
+                _ = try self.append(.{ .trigger = at });
+            },
             .event_control => |s| {
                 if (!s.is_delay) {
                     try self.checkEvent(s.event);
@@ -1561,8 +1581,14 @@ const Run = struct {
             self.monitor_pending = true;
             try self.enqueueMonitor(.monitor_tick);
         }
-        if (!changed or self.waiters.items.len == 0) return;
-        const after = dest.bit(0);
+        if (!changed) return;
+        return self.wake(target, before, dest.bit(0));
+    }
+    /// Resume every process suspended on `target` whose edge matches. Split out
+    /// of `store` because §5.10.4's `-> e` resumes without publishing anything:
+    /// a named event has no value for a change to be detected in.
+    fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
+        if (self.waiters.items.len == 0) return;
         // ponytail: linear scan. The list holds only currently-suspended
         // processes, so it is bounded by the source's process count; index it
         // by slot if a design ever suspends in bulk.
@@ -1846,6 +1872,14 @@ const Run = struct {
                     continue;
                 },
                 .wait_event => |e| return self.suspendOn(e, pc + 1),
+                // §5.10 an event has "no time duration": the resumed processes
+                // are scheduled in the active region of this same timestep, and
+                // execution of the triggering process continues meanwhile.
+                .trigger => |at| {
+                    try self.wake(at, .x, .x);
+                    pc += 1;
+                    continue;
+                },
                 // §6.1: drive this assignment's own value, resolve the net from
                 // every driver of it, then suspend on the operands. The
                 // resumption point is this same pc, so a change re-drives.
@@ -2079,10 +2113,19 @@ fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
 fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, depth: u16) Error!void {
     const arena = r.arena;
     if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
-    if (m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.events.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
-        return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, instances and processes", .{});
+    if (m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
+        return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     r.scope = scope;
     try e.insts.append(arena, .{ .module = m, .scope = scope });
+    // §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
+    // point on the waiter list; the stored value is never read or written.
+    for (m.events) |name| {
+        if (e.values.items.len == std.math.maxInt(u32)) return r.fail(m.main_tok, "too many digital storage slots", .{});
+        const at: u32 = @intCast(e.values.items.len);
+        try r.bind(name, at, m.main_tok);
+        try e.values.append(arena, try filled(arena, 1, false, .x));
+        try r.events.put(arena, at, {});
+    }
     for (m.vars) |v| {
         if (v.ty != .integer or v.init != .none or v.storage == .time) return r.fail(v.main_tok, "only uninitialized scalar/packed reg and integer declarations are implemented", .{});
         // ponytail: one unpacked dimension. §3.9 admits any number; the second
@@ -2819,6 +2862,10 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"%b\",'hx); endmodule", "unsized four-state");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
     try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");
+    // §5.10 "events do not hold any data", so neither direction of the
+    // event/variable confusion compiles.
+    try expectRejected("module m; event e; initial $display(\"%b\", e); endmodule", "holds no data");
+    try expectRejected("module m; reg c; initial -> c; endmodule", "triggers a named event");
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; reg [3:0] a; initial a[0]=1; endmodule", "whole-variable");
     try expectRejected("module m; initial $finish(2); endmodule", "only $finish");
