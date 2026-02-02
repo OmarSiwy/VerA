@@ -7756,10 +7756,10 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // the statement's own entry already exists by the time its rhs
             // lowers (`contribIndex` runs first), and the accumulator it would
             // find is exactly the stale self-reference §5.6.6 rules out.
-            // ponytail: the unknown this mints has no defining row — no
-            // fixture `//! solve`s an implicit flow (the harness sweeps it);
-            // the day one does, codegen owes `x[u] − Σ contributions = 0`, the
-            // same shape `portFlowRead` documents for `I(<p>)`.
+            // The unknown this mints is defined by codegen's `FreeFlow` row,
+            // `x[u] − Σ contributions = 0` — the same shape `portFlowRead`
+            // documents for `I(<p>)`. Without it the self-reference answered
+            // its seed of 0 and the model was silently linearised.
             if (self.contrib_target) |ct| {
                 if (ct.access == .flow and t.access == .flow and
                     ct.hi == t.hi and ct.lo == t.lo and ct.br == t.br)
