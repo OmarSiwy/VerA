@@ -3974,18 +3974,39 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
 /// ponytail: N masked writes per assignment; replace scalarization with explicit
 /// array storage if large mutable arrays make this compile-time expansion costly.
 fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
+    // Asked BEFORE the rhs is lowered: a `false` here falls through to the
+    // scalar path, which lowers `value` itself, and lowering it twice would
+    // run its side effects twice.
+    if (!try self.isRuntimeElem(target)) return false;
+    return self.writeRuntimeIndex(target, value, try self.lowerExpr(value));
+}
+
+/// Is `target` an element of a declared array whose subscript only has a value
+/// at run time? The precondition `assignRuntimeIndex` and §4.7.2.3's
+/// output-argument writeback share.
+fn isRuntimeElem(self: *Lower, target: Ast.ExprId) Oom!bool {
     var subs: [max_stack_dims]Ast.ExprId = undefined;
     const chain = (try self.indexChain(target, &subs)) orelse return false;
-    var dynamic = false;
-    for (chain.subs) |s| dynamic = dynamic or self.foldExpr(s, false) == null;
-    if (!dynamic) return false;
+    for (chain.subs) |s| {
+        if (self.foldExpr(s, false) != null) continue;
+        return self.arrays.contains(self.file.str(chain.name));
+    }
+    return false;
+}
+
+/// The masked-write half, with the value already lowered — §4.7.2.3's
+/// `output`/`inout` writeback has a `Mir.Value` and no expression to lower.
+/// `at` is only the diagnostic site for §3.3's string conversion.
+fn writeRuntimeIndex(self: *Lower, target: Ast.ExprId, at_e: Ast.ExprId, tv: TypedValue) Oom!bool {
+    if (!try self.isRuntimeElem(target)) return false;
+    var subs: [max_stack_dims]Ast.ExprId = undefined;
+    const chain = (try self.indexChain(target, &subs)).?;
     const name = self.file.str(chain.name);
-    const info = self.arrays.get(name) orelse return false;
+    const info = self.arrays.get(name).?;
     if (!try self.checkSubscriptCount(target, name, info, chain.subs.len)) return true;
 
     const iv = try self.runtimeArrayIndex(chain.subs, info.dims);
-    const tv = try self.lowerExpr(value);
-    const new = try self.coerceTo(value, info.ty, tv);
+    const new = try self.coerceTo(at_e, info.ty, tv);
     var key_buf: [elem_key_len]u8 = undefined;
     var sub: [max_stack_dims]i64 = undefined;
     const at = try self.subscriptBuf(&sub, info.dims.len);
@@ -10140,6 +10161,13 @@ pub fn inlineUserFuncPre(
             try self.funcArrayOut(actual, vals);
             continue;
         }
+        // §3.2 a runtime subscript names no single storage slot, so the
+        // writeback is the same masked one `a[i] = …` takes. §4.7.2.3 says
+        // only that "the last value assigned to the output argument is then
+        // assigned to the corresponding analog variable reference" — it puts
+        // no constant-expression condition on the reference, and `resolveLvalue`
+        // was refusing one with E0311.
+        if (try self.writeRuntimeIndex(actual, actual, .{ .v = vals[0], .ty = astTy(formal.ty) })) continue;
         const slot = try self.resolveLvalue(actual) orelse continue;
         try self.builder.writeVariable(slot.place, self.cur, vals[0]);
     }
