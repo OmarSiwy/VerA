@@ -7023,9 +7023,10 @@ fn isDigitalOnlySysFunc(name: []const u8) bool {
         // additionally deprecates $realtime in the analog context.
                   "$time",             "$stime",
         "$realtime",
-        // Table 9-8 (§9.11) — the extension is $bitstoreal and $realtobits and
-        // nothing else.
-                "$itor",             "$rtoi",
+        // Table 9-8 (§9.11) — the extension is FOUR names, not two:
+        // "$bitstoreal and $realtobits,$rtoi and $itor can be used in the
+        // analog context". Table 9-8's analog column agrees — only $signed and
+        // $unsigned read No, and both presuppose a sized vector.
         "$signed",           "$unsigned",
     };
     for (digital_only) |d| if (std.mem.eql(u8, name, d)) return true;
