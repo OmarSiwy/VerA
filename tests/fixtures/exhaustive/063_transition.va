@@ -14,24 +14,44 @@
 // a lag was the wrong function and an average of the two times was the wrong
 // pair of parameters. What is pinned below is the ramp.
 //
-// THE GRID. `//! wave V(in) = 0, 1` on this `//! time` line is a level of 0 at
-// the DC point and 1 from t = 1n on (a short wave list holds its last value).
-// The excursion is armed at the DC point — the one instant where §4.5.8 fixes
-// the output exactly, "in DC analysis, transition() passes the value of the
-// expr directly to its output" — so the ramp counts from t0 = 0 and traverses
-// the unit excursion over rise_time = 2.2n:
+// THE GRID, AND THE ONE-SAMPLE AMBIGUITY IN IT. `//! wave V(in) = 0, 1` on
+// this `//! time` line is a level of 0 at the DC point and 1 from t = 1n on (a
+// short wave list holds its last value).
 //
-//   out(t) = min(t / 2.2n, 1.0)      i.e. 0, 1/2.2, 2/2.2, 1, 1
+// THIS FIXTURE USED TO ASSERT `min($abstime/2.2n, 1.0)` AT TOLERANCE 0.0, on
+// the argument that "the excursion is armed at the DC point ... so the ramp
+// counts from t0 = 0". That argument confuses the level the ramp leaves with
+// the TIME it leaves. §4.5.8 fixes the time: "A TRANSITION IS CREATED WHEN THE
+// INPUT EXPRESSION CHANGES", and the input does not change at the DC point —
+// it is 0 there, and the output is 0 with it. The change is first visible at
+// t = 1n, and §4.5.8's "the transition function causes the simulator to place
+// time points at both corners of a transition" puts the leading corner there.
+// So t0 = 0 is the reading of an implementation that arms the ramp at the
+// PREVIOUS accepted timepoint, which is exactly the defect
+// ch04_expressions/a04_01_transition_transport_delay.va names, and pinning it
+// at tolerance 0.0 made this file a test FOR that defect.
 //
-// The clamp is §4.5.8's "forces all positive transitions of expr to occur OVER
-// rise_time": the output arrives and stops there.
-//
-// The one-sample ambiguity about when a step is detected, which
+// The one-sample ambiguity is therefore real here, exactly as it is in
 // ch10_directives/38_default_transition_ramp.va and
-// annex_g_change_history/23_transition_fall_time_binding.va have to bracket,
-// does not arise here: the level at the DC point IS the level the ramp leaves,
-// so t0 is fixed by the clause and not by a sampling convention. That is why
-// this one can carry an exact relational want.
+// annex_g_change_history/23_transition_fall_time_binding.va, and it is written
+// the same way those two write it. With te in [0, 1n] and a unit excursion
+// over rise_time = 2.2n,
+//
+//     (t - 1n)/2.2n  <=  out(t)  <=  t/2.2n
+//
+// clamped into [0, 1] at both ends. What the bracket still discriminates,
+// derived rather than guessed: a rise time LONGER than 2.2n is rejected at
+// t = 3n from either edge placement (4.4n reads 0.682 or 0.455 against a lower
+// bound of 0.909), and the first-order lag this file used to pin is rejected at
+// t = 1n from the earlier placement and at t = 4n from either (1 - 0.5^k
+// against a lower bound of 1.0). What it does NOT separate is a rise time
+// shorter than the grid can resolve — a 1.1n ramp detected a full sample late
+// sits on the upper bound at t = 2n and inside it afterwards. That is the
+// sampling grid's limit, not slack in the rule; 38 and 23 carry the same one.
+//
+// The 1e-12 epsilon on each bound is the same allowance 38 documents: a
+// conforming ramp sits bit-for-bit ON a bound and an inequality decided by the
+// last ulp is deciding something the LRM does not fix.
 //
 //! bias V(n) = 0
 //! wave V(in) = 0, 1
@@ -43,14 +63,16 @@ module ex063_transition(in, n);
   inout in, n;
   electrical in, n;
   analog begin
-    // RELATIONAL: the want is a different number at each of the five time
-    // points, and one point would not exercise a stateful operator at all.
-    // min($abstime/2.2n, 1.0) is the closed form in the header, so the shared
-    // machinery is `min` and `$abstime` and nothing else. Tolerance 0.0: the
-    // ramp IS that division, so both sides are the same operation on the same
-    // doubles and anything else is a bug.
-    `CHECKEQ("transition step response", transition(V(in, n), 0, 2.2n, 2.2n),
-             min($abstime / 2.2n, 1.0), 0.0);
+    // RELATIONAL: the bound is a different number at each of the five time
+    // points, and one point would not exercise a stateful operator at all. The
+    // shared machinery on each side is `min`/`max` and `$abstime` and nothing
+    // else. The pair brackets the ramp to within the one sample the LRM leaves
+    // open about when a step between two samples is detected.
+    `CHECKI("the ramp is no faster than 1/2.2n",
+            transition(V(in, n), 0, 2.2n, 2.2n) <= min($abstime / 2.2n, 1.0) + 1e-12, 1);
+    `CHECKI("the ramp is no slower than 1/2.2n",
+            transition(V(in, n), 0, 2.2n, 2.2n)
+              >= min(max(($abstime - 1n) / 2.2n, 0.0), 1.0) - 1e-12, 1);
     // The endpoints the LRM DOES fix: it starts at the old value and ends at
     // the new one, and never overshoots either.
     `CHECKI("never exceeds the target", transition(V(in, n), 0, 2.2n, 2.2n) <= 1.0, 1);
