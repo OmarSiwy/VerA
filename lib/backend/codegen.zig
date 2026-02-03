@@ -7922,17 +7922,19 @@ fn isAnalysisName(s: []const u8) bool {
 }
 
 /// Length of the §4.5.7 absdelay history ring.
-// ponytail: fixed 512 samples with linear interpolation. The floor is set by
+// ponytail: a fixed 1024 samples with linear interpolation. The floor is set by
 // SPICE canon, not by the model: maxstep = min(tstep, span/50), so a fixture
 // like `T TD=2n` under `.tran 20p` legitimately runs td/dt = 100 accepted
-// steps per delay — at 32 the whole lookback fell off the ring and the line
-// transported with ZERO delay (devices/tline read its far port half an edge
-// early for the entire run). Edge-resolving LTE shrinkage pushes the worst
-// case a few times higher, hence 512. A query older than the ring clamps to
-// the OLDEST sample (see zHistAt) — bounded staleness, never a time machine.
-// Upgrade path if a fixture still underruns: host-owned growable history
-// (the engine's dormant HistoryBuffer channel), which is what ngspice does.
-const hist_len: usize = 512;
+// steps per delay, and edge-resolving LTE shrinkage pushes the worst case a
+// few times higher; 1024 also covers a delay of 515 steps on a uniform grid
+// (ch04_expressions/a04_05), which 512 did not. THE CEILING IS NOW LOUD: a
+// query older than the whole ring @panics out of `zHistAt` instead of clamping
+// to the oldest retained sample and reporting a shorter delay as this one.
+// §4.5.7 bounds no lookback, so a silent clamp is a different operator, not an
+// implementation-defined limit.
+// Upgrade path: host-owned growable history (the engine's dormant
+// HistoryBuffer channel), which is what ngspice does.
+const hist_len: usize = 1024;
 
 fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
     if (react) return "§5.6.1.2 reactive part (charge/flux; q() differentiates it)";
@@ -8519,6 +8521,11 @@ const hist_txt =
     \\/// runtime-negative td, which lowering rejects where it can fold.
     \\fn zAbsdelay(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u32, now: f64, dt: f64, td: f64) S {
     \\    if (dt <= 0.0) return vin;
+    \\    // §4.5.15 "no state history prior to time t == 0": nothing has been
+    \\    // accepted yet, so the input IS the output. The ring used to be SEEDED
+    \\    // full on the first push, which made this unreachable; `head` is a
+    \\    // count now, so the empty ring has to answer for itself.
+    \\    if (head == 0) return vin;
     \\    const t = now - td;
     \\    const newest = (head + ts.len - 1) % ts.len;
     \\    if (t > ts[newest]) {
@@ -8530,14 +8537,33 @@ const hist_txt =
     \\    return S.con(zHistAt(ts, vs, head, t));
     \\}
     \\/// §4.5.7 absdelay history: a fixed ring of (t, v) samples, linearly
-    \\/// interpolated.
+    \\/// interpolated. `head` is the TOTAL number of accepted samples pushed, not
+    \\/// a wrapped index — the ring slot is `head % n`. That one extra fact is
+    \\/// what separates the two queries that used to answer the same way: a
+    \\/// query before recorded history began, which §4.5.15 settles ("all analog
+    \\/// operators are considered to have no state history prior to time t == 0")
+    \\/// and `Output(t) = Input(max(t − td, 0))` answers with Input(0); and a
+    \\/// query the ring has FORGOTTEN, which the clause settles not at all.
     \\fn zHistAt(ts: []const f64, vs: []const f64, head: u32, t: f64) f64 {
-    \\    const n = ts.len;
-    \\    // O(1) clamp for a query at/before the oldest sample (ts[head] once the
-    \\    // ring is full, which the seeding first push below guarantees) — the
-    \\    // scan would walk all n entries to reach the same answer.
-    \\    if (t <= ts[head]) return vs[head];
-    \\    var i: usize = 0;
+    \\    const n: u32 = @intCast(ts.len);
+    \\    const wrapped = head > n;
+    \\    const oldest: usize = if (wrapped) head % n else 0;
+    \\    // O(1) for a query at or before the oldest sample — the scan would walk
+    \\    // all n entries to reach the same answer.
+    \\    if (t <= ts[oldest]) {
+    \\        // Before the first sample the operator HAS no history, and Input(0)
+    \\        // is the value the formula's max(t − td, 0) floor asks for.
+    \\        if (!wrapped) return vs[oldest];
+    \\        // Older than the whole ring. There is no honest answer here: the
+    \\        // clause bounds no lookback, so shortening the delay to whatever the
+    \\        // ring still holds is not an implementation-defined limit, it is a
+    \\        // different transport delay reported as this one. This used to
+    \\        // `return vs[head]` and say nothing.
+    \\        @panic("VerA: absdelay history underrun — td spans more accepted timepoints than " ++
+    \\            "the per-site history ring holds (codegen.hist_len); the host must take " ++
+    \\            "fewer, larger steps across the delay");
+    \\    }
+    \\    var i: u32 = 0;
     \\    var newer: usize = (head + n - 1) % n;
     \\    while (i < n) : (i += 1) {
     \\        const older = (newer + n - 1) % n;
@@ -8549,30 +8575,19 @@ const hist_txt =
     \\        }
     \\        newer = older;
     \\    }
-    \\    // Query older than the whole ring: clamp to the OLDEST sample.
-    \\    // Returning the newest here (as this once did) collapses the delay
-    \\    // to zero — the output tracks the input live, which is maximally
-    \\    // wrong for a transport operator. Oldest is bounded staleness.
-    \\    return vs[head];
+    \\    // Unreachable for a monotone ring: the clamp above covers t ≤ oldest and
+    \\    // `zAbsdelay` covers t > newest, so every remaining t is bracketed.
+    \\    return vs[(head + n - 1) % n];
     \\}
     \\fn zHistPush(ts: []f64, vs: []f64, head: *u32, t: f64, v: f64) void {
-    \\    // First push seeds the WHOLE ring: before it, every slot is an
-    \\    // unwritten 0, so a query older than recorded history (any t < td
-    \\    // early in a transient) read 0 V instead of the operating point —
-    \\    // the line launched a false transient off a value nothing ever wrote.
-    \\    // Full-from-first-push also makes `head` the oldest sample always,
-    \\    // which zHistAt's clamps rely on.
-    \\    if (head.* == 0 and ts[ts.len - 1] == 0) {
-    \\        @memset(ts, t);
-    \\        @memset(vs, v);
-    \\        head.* = 1;
-    \\        return;
-    \\    }
-    \\    ts[head.*] = t;
-    \\    vs[head.*] = v;
-    \\    head.* = (head.* + 1) % @as(u32, @intCast(ts.len));
+    \\    const n: u32 = @intCast(ts.len);
+    \\    ts[head.* % n] = t;
+    \\    vs[head.* % n] = v;
+    \\    // Saturating, not wrapping: `head` is a COUNT and zHistAt reads
+    \\    // `head > n` as "the ring has overwritten its oldest sample". Letting it
+    \\    // wrap at 2^32 accepted steps would read as an empty history.
+    \\    if (head.* != ~@as(u32, 0)) head.* += 1;
     \\}
-    \\
 ;
 
 // ---- the `u/<key>.zig` file-scope prologue (see `Output.prelude`) ----------
