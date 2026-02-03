@@ -8414,10 +8414,35 @@ const ops_txt =
     \\    // the output stays on its old trajectory until then, so it leaves from
     \\    // where that trajectory will be at t + td, not from where it is now.
     \\    const te = t + td;
-    \\    const vi = from.* + (to.* - from.*) * zTransFrac(to.*, from.*, t0.*, te, rise, fall);
-    \\    // §4.5.8 says nothing about an input that REVERSES mid-ramp; this
-    \\    // reading keeps the output continuous and traverses the new excursion
-    \\    // in the full rise/fall time of its own direction.
+    \\    const f = zTransFrac(to.*, from.*, t0.*, te, rise, fall);
+    \\    const vi = from.* + (to.* - from.*) * f;
+    \\    // §4.5.8's four interruption paragraphs (Figures 4-7 … 4-12): an input
+    \\    // that changes inside the active region is "not ... a new transition,
+    \\    // but rather a readjustment", whose slope uses "either the original
+    \\    // transition's origin or destination as the new origin". One rule, four
+    \\    // figures — the reference is the DESTINATION when the new direction
+    \\    // opposes the original and the ORIGIN when it agrees:
+    \\    //   rising,  v3 < vi -> opposes -> (v3-v2)/tf3    rising,  v3 > vi -> (v3-v1)/tr3
+    \\    //   falling, v3 > vi -> opposes -> (v3-v2)/tr3    falling, v3 < vi -> (v3-v1)/tf3
+    \\    // "applied from the point of interruption (ti,vi)", spelled here as the
+    \\    // shifted origin (t4,v4) those paragraphs also name: v4 is the reference
+    \\    // level, t4 where the slope line through (te,vi) reaches it. The arrival
+    \\    // t3 = ti + (v3-vi)/slope then falls out of zTransFrac.
+    \\    //
+    \\    // NOT active is a new transition from where the output is — the branch
+    \\    // this took unconditionally, which is the reading the four paragraphs
+    \\    // exist to rule out.
+    \\    if (f < 1.0 and in != vi) {
+    \\        const tt3 = if (in > vi) rise else fall;
+    \\        const vref = if ((in > vi) != (to.* > from.*)) to.* else from.*;
+    \\        const slope = if (tt3 > 0.0) (in - vref) / tt3 else 0.0;
+    \\        if (slope != 0.0) {
+    \\            from.* = vref;
+    \\            to.* = in;
+    \\            t0.* = te + (vref - vi) / slope;
+    \\            return;
+    \\        }
+    \\    }
     \\    from.* = vi;
     \\    to.* = in;
     \\    t0.* = te;
