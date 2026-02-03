@@ -2206,8 +2206,9 @@ pub const Gen = struct {
                 // with its input, so a ramp spanning several timesteps keeps
                 // counting from where it actually started.
                 .transition => try self.w(
-                    "    {s}__from: f64 = 0.0, // §4.5.8 ramp origin (value, time)\n    {s}__t0: f64 = 0.0,\n",
-                    .{ n, n },
+                    "    {s}__from: f64 = 0.0, // §4.5.8 ramp origin (value), destination, start time\n" ++
+                        "    {s}__to: f64 = 0.0,\n    {s}__t0: f64 = 0.0,\n",
+                    .{ n, n, n },
                 ),
                 .idt, .idtmod => try self.w("    {s}__acc: f64 = 0.0, // §4.5.4\n", .{n}),
                 .absdelay => try self.w(
@@ -6060,9 +6061,11 @@ pub const Gen = struct {
             // approximation of it.
             .transition => {
                 const t = try self.transitionTimes(args);
-                try self.b("zTransition(S, {s}, inst.{s}__from, inst.{s}__t0, inst.abstime, inst.dt, {s}, {s})", .{
-                    in, n, n, t[0], t[1],
-                });
+                try self.b(
+                    "zTransition(S, {0s}, inst.{1s}__from, inst.{1s}__to, inst.{1s}__t0, " ++
+                        "inst.abstime, inst.dt, {2s}, {3s})",
+                    .{ in, n, t[0], t[1] },
+                );
             },
             .slew => {
                 const r = try self.slewRates(args);
@@ -7276,8 +7279,9 @@ pub const Gen = struct {
                 .transition => {
                     const t = try self.transitionTimes(args);
                     try self.w(
-                        "        zTransStep(in, &inst.{s}__from, &inst.{s}__t0, inst.abstime, dt, {s}, {s});\n",
-                        .{ n, n, t[0], t[1] },
+                        "        zTransStep(in, &inst.{0s}__from, &inst.{0s}__to, &inst.{0s}__t0, " ++
+                            "inst.abstime, dt, {1s}, {2s}, {3s});\n",
+                        .{ n, try self.argF64(args, 1, "0.0"), t[0], t[1] },
                     );
                 },
                 .slew => {
@@ -8375,47 +8379,48 @@ const ops_txt =
     \\    if (!(tt > 0.0)) return 1.0;
     \\    return @min(@max((t - t0) / tt, 0.0), 1.0);
     \\}
-    \\fn zTransition(comptime S: type, v: S, from: f64, t0: f64, t: f64, dt: f64, rise: f64, fall: f64) S { // §4.5.8
+    \\fn zTransition(comptime S: type, v: S, from: f64, to: f64, t0: f64, t: f64, dt: f64, rise: f64, fall: f64) S { // §4.5.8
     \\    // "In DC analysis, transition() passes the value of the expr directly
     \\    // to its output." There is no elapsed time to ramp over.
     \\    if (dt <= 0.0) return v;
-    \\    // LINEAR in the current input, so the Jacobian the solver gets is the
-    \\    // slope of the ramp itself.
-    \\    const f = zTransFrac(v.val(), from, t0, t, rise, fall);
-    \\    return v.addC(-from).scale(f).addC(from);
+    \\    // In a transient the output is a function of the input's PAST alone:
+    \\    // the excursion in flight was armed by the accepted step that SAW the
+    \\    // input change, "after an initial delay of td". Taking the CURRENT
+    \\    // input as the ramp's target — which this did — armed every ramp at the
+    \\    // previous accepted timepoint, so the output was already part-way up it
+    \\    // at the corner itself and no td could have shifted that.
+    \\    return S.con(from + (to - from) * zTransFrac(to, from, t0, t, rise, fall));
     \\}
-    \\/// §4.5.8 accepted-step bookkeeping: move the ramp's origin, or leave it.
+    \\/// §4.5.8 accepted-step bookkeeping. "A transition is created when the
+    \\/// input expression changes, and at this point it uses the value of td,
+    \\/// rise_time, fall_time and time_tol to determine the new pending
+    \\/// transition operator." `to` is the armed destination and so also the last
+    \\/// ACCEPTED input, which makes `in != to` that sentence's test.
     \\///
-    \\/// LEAVE IT is the important half. While the output is still climbing
-    \\/// towards its input the excursion is the one that started at `from`, and
+    \\/// LEAVING THE EXCURSION ALONE is the important half: while the input has
+    \\/// not changed the excursion is the one that started at `from`, and
     \\/// re-arming the origin every step would shrink the remaining distance by
     \\/// the same factor each time — an exponential decay wearing a ramp's
     \\/// coefficients, which is the bug this operator used to have.
-    \\fn zTransStep(in: f64, from: *f64, t0: *f64, t: f64, dt: f64, rise: f64, fall: f64) void {
-    \\    if (dt <= 0.0) { // the DC point: the output IS the input, so arm here
+    \\fn zTransStep(in: f64, from: *f64, to: *f64, t0: *f64, t: f64, dt: f64, td: f64, rise: f64, fall: f64) void {
+    \\    if (dt <= 0.0) { // the DC point: the output IS the input, so sit on it
     \\        from.* = in;
+    \\        to.* = in;
     \\        t0.* = t;
     \\        return;
     \\    }
-    \\    const f = zTransFrac(in, from.*, t0.*, t, rise, fall);
-    \\    const y = from.* + (in - from.*) * f;
-    \\    // Settled — the output has caught up — so the NEXT excursion starts
-    \\    // from here, and its rise/fall time is counted from this instant.
-    \\    if (f >= 1.0 or y == in) {
-    \\        from.* = in;
-    \\        t0.* = t;
-    \\        return;
-    \\    }
-    \\    // §4.5.8 says nothing about an input that REVERSES mid-ramp. The
-    \\    // reading taken here is the one that keeps the output continuous: the
-    \\    // new excursion starts where the output actually is (`y`), and is
-    \\    // traversed in the full rise/fall time of its own direction. Detected
-    \\    // as the output sitting on the opposite side of the origin from the
-    \\    // target, which cannot happen while a single excursion is in progress.
-    \\    if ((in - from.*) * (y - from.*) < 0.0) {
-    \\        from.* = y;
-    \\        t0.* = t;
-    \\    }
+    \\    if (in == to.*) return;
+    \\    // "td models transport delay": the ramp begins td after the change and
+    \\    // the output stays on its old trajectory until then, so it leaves from
+    \\    // where that trajectory will be at t + td, not from where it is now.
+    \\    const te = t + td;
+    \\    const vi = from.* + (to.* - from.*) * zTransFrac(to.*, from.*, t0.*, te, rise, fall);
+    \\    // §4.5.8 says nothing about an input that REVERSES mid-ramp; this
+    \\    // reading keeps the output continuous and traverses the new excursion
+    \\    // in the full rise/fall time of its own direction.
+    \\    from.* = vi;
+    \\    to.* = in;
+    \\    t0.* = te;
     \\}
     \\
 ;
