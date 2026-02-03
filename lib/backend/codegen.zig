@@ -481,6 +481,9 @@ pub const Gen = struct {
     /// branch current per §5.6 potential contribution that lowering did not
     /// already give a `flow(a,b)` slot. Values are node_order-space indices.
     branch_u: []u32 = &.{},
+    /// §5.4.2.1/§5.6.6 — the branch-flow unknowns NO branch row defines, in
+    /// slot order. See `FreeFlow` and `emitStamps`.
+    free_flows: []const FreeFlow = &.{},
     /// The §5.6.5 switch branches `collapse` aliases away (`collapsePairs`).
     /// Cached because `emitSwitchRow` needs the membership test and the list
     /// is built once, before any residual is emitted.
@@ -640,6 +643,9 @@ pub const Gen = struct {
         self.plan = try UnitPlan.init(self.arena, self.mir, self.an, self.display);
         try self.buildUnits();
         try self.buildNames();
+        // After `buildNames`, which fills `branch_u` — the claim `freeFlows`
+        // subtracts.
+        self.free_flows = try self.freeFlows();
         // Before `buildJobs`: §4.5.15 the algorithm arguments of every honoured
         // `$limit` become core live-outs, and `buildJobs` is what queues them.
         try cg_limit.collect(self);
@@ -1438,6 +1444,7 @@ pub const Gen = struct {
         try self.buildPrelude(stateful, hist, filt, timer, strs, tbl, rng, files);
         try self.out.appendSlice(self.gpa, header_txt);
         try self.out.appendSlice(self.gpa, math_txt);
+        try self.out.appendSlice(self.gpa, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
         try self.out.appendSlice(self.gpa, ops_txt);
         if (timer) try self.out.appendSlice(self.gpa, timer_txt);
         if (hist) try self.out.appendSlice(self.gpa, hist_txt);
@@ -1578,6 +1585,7 @@ pub const Gen = struct {
         var hz: std.ArrayList(u8) = .empty;
         try hz.appendSlice(self.arena, helpers_head_txt);
         try publish(self.arena, &hz, math_txt);
+        try publish(self.arena, &hz, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
         try publish(self.arena, &hz, ops_txt);
         if (timer) try publish(self.arena, &hz, timer_txt);
         if (hist) try publish(self.arena, &hz, hist_txt);
@@ -6571,6 +6579,15 @@ pub const Gen = struct {
                     // §1.3.1.2: the value flows INTO hi and OUT OF lo.
                     try self.stamp(2, c.hi, "add", "c", self.an.unknownDeps(val));
                     try self.stamp(2, c.lo, "sub", "c", self.an.unknownDeps(val));
+                    // §5.6.6: the model also READS `I(hi,lo)`, so there is an
+                    // unknown for this current and it needs the row that says
+                    // what it IS — `x[u] − Σ contributions`. Accumulated here
+                    // (several contributions to one branch are one sum, §5.6.1)
+                    // and closed with the `+ x[u]` term after the loop.
+                    if (self.freeFlowOf(c.hi, c.lo)) |f| {
+                        assert(f.sourced);
+                        try self.stamp(2, @intCast(f.u), "sub", "c", self.an.unknownDeps(val));
+                    }
                 },
                 .potential => {
                     // §5.6 branch relation: the branch current is its own
@@ -6603,6 +6620,37 @@ pub const Gen = struct {
             try self.ind(1);
             try self.b("}}\n", .{});
         }
+
+        // §5.4.2 the branch-flow unknowns no branch row defines — see
+        // `FreeFlow` for the two shapes and the clauses. Both rows are purely
+        // RESISTIVE: a §5.6.6 implicit sum's reactive half is already on this
+        // row as `−Σ q` (the `sub` above ran for both halves), and a §5.4.2.1
+        // probe is a short, which stores no charge.
+        if (!react) for (self.free_flows) |f| {
+            self.uses_x = true;
+            stamps += 1;
+            if (f.sourced) {
+                // Closes `res[u] = x[u] − Σ contributions`, whose `−Σ` half the
+                // contribution loop accumulated.
+                try self.ind(1);
+                self.patRow(@intCast(f.u), uBit(f.u));
+                try self.b("res[@intFromEnum(U.{0s})] = res[@intFromEnum(U.{0s})].add(x[@intFromEnum(U.{0s})]);\n", .{self.u_names[f.u]});
+            } else {
+                // §5.4.2.1 "The branch potential of a flow probe is zero (0)" —
+                // the ammeter of Figure 5-1. Its current is a real branch
+                // current and enters KCL at both ends, which is the half that
+                // makes it a SHORT rather than an observation.
+                try self.stamp(1, f.hi, "add", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.u_names[f.u]}), uBit(f.u));
+                try self.stamp(1, f.lo, "sub", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.u_names[f.u]}), uBit(f.u));
+                try self.ind(1);
+                self.patRow(@intCast(f.u), nodeBit(f.hi) | nodeBit(f.lo));
+                try self.b("res[@intFromEnum(U.{s})] = ", .{self.u_names[f.u]});
+                try self.nodeVoltage(f.hi);
+                try self.b(".sub(", .{});
+                try self.nodeVoltage(f.lo);
+                try self.b(");\n", .{});
+            }
+        };
 
         // §5.4.3 `I(<p>)` = "the flow into a port of a module". By KCL that is
         // exactly what this module has just stamped at p, so the row reuses the
@@ -7588,6 +7636,70 @@ pub const Gen = struct {
     /// `flow_u` onto unknown `target`. Indices are node_order/U-enum space.
     const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: Mir.Value };
 
+    /// A §5.4.2 branch-flow unknown that no branch row defines.
+    ///
+    /// Lowering mints one whenever the model READS `I(a,b)`, and only a §5.6
+    /// POTENTIAL (or §5.6.7 indirect) contribution on the same pair gives it a
+    /// defining row — `branch_u` is that claim. What is left is the two shapes
+    /// the LRM states outright, and both used to sit at their seed of 0 with no
+    /// row and no Jacobian column at all:
+    ///
+    ///   `sourced` — §5.6.6 IMPLICIT contribution. `I(b) <+ f(..., I(b))` reads
+    ///   the unknown on its own right-hand side, and "the underlying
+    ///   implementation of the simulator will find the value of I(diode) that
+    ///   equals the sum of the contributions made to it". That is the row
+    ///   `x[u] − Σ contributions = 0`; without it the self-reference evaluates
+    ///   to 0 and the model is silently LINEARISED.
+    ///
+    ///   not `sourced` — §5.4.2.1 flow PROBE. "If the flow of the branch appears
+    ///   in an expression anywhere in the module, the branch is a flow probe …
+    ///   The branch potential of a flow probe is zero (0)." Figure 5-1 draws the
+    ///   ammeter: the probe is a SHORT, so its row is `V(hi) − V(lo) = 0` and
+    ///   its current enters KCL at both ends. Without them the probe was an
+    ///   open circuit reading 0.
+    const FreeFlow = struct { u: u32, hi: u16, lo: u16, sourced: bool };
+
+    /// `free_flows`, in unknown-slot order — `flow_unknowns` is a hash map and
+    /// its iteration order is not the emitted order.
+    fn freeFlows(self: *Gen) Error![]const FreeFlow {
+        var out: std.ArrayList(FreeFlow) = .empty;
+        var it = self.lower.flow_unknowns.iterator();
+        while (it.next()) |e| {
+            const u: u32 = e.value_ptr.*;
+            // A potential/indirect source already pins this current.
+            if (std.mem.indexOfScalar(u32, self.branch_u, u) != null) continue;
+            var sourced = false;
+            var signal_flow = false;
+            for (self.lower.contributions.items) |c| {
+                if (c.kind != .direct or c.access != .flow) continue;
+                if (c.hi != e.key_ptr.hi or c.lo != e.key_ptr.lo) continue;
+                sourced = true;
+                // §1.3.4.2 a flow-only signal-flow net's one unknown IS its
+                // flow and the contribution already writes that row.
+                if (self.flowOnlySignalFlowNet(c) != null) signal_flow = true;
+            }
+            if (signal_flow) continue;
+            try out.append(self.arena, .{
+                .u = u,
+                .hi = e.key_ptr.hi,
+                .lo = e.key_ptr.lo,
+                .sourced = sourced,
+            });
+        }
+        std.mem.sort(FreeFlow, out.items, {}, struct {
+            fn lt(_: void, x: FreeFlow, y: FreeFlow) bool {
+                return x.u < y.u;
+            }
+        }.lt);
+        return out.items;
+    }
+
+    /// The `FreeFlow` for the pair `(hi, lo)`, if that branch has one.
+    fn freeFlowOf(self: *const Gen, hi: u16, lo: u16) ?FreeFlow {
+        for (self.free_flows) |f| if (f.hi == hi and f.lo == lo) return f;
+        return null;
+    }
+
     /// Is `v` a constant of the whole simulation — a function of Model and
     /// Instance-at-build and nothing else? Stricter than `Analysis.dFree`,
     /// which admits x-steered selects between constants (its ternary/phi
@@ -8267,18 +8379,26 @@ const math_txt =
     \\    return r;
     \\}
     \\fn zAsin(comptime S: type, a: S) S { // §4.3.2 asin = atan(x/sqrt(1-x^2))
+    \\    const v = a.val();
+    \\    zDomain("asin", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
     \\    return a.div(a.mul(a).neg().addC(1.0).sqrt()).atan();
     \\}
     \\fn zAcos(comptime S: type, a: S) S { // §4.3.2
+    \\    const v = a.val();
+    \\    zDomain("acos", "-1 <= x <= 1", v, v >= -1.0 and v <= 1.0);
     \\    return S.con(1.5707963267948966).sub(zAsin(S, a));
     \\}
     \\fn zAsinh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2+1))
     \\    return a.add(a.mul(a).addC(1.0).sqrt()).log();
     \\}
     \\fn zAcosh(comptime S: type, a: S) S { // §4.3.2 ln(x + sqrt(x^2-1))
+    \\    const v = a.val();
+    \\    zDomain("acosh", "x >= 1", v, v >= 1.0);
     \\    return a.add(a.mul(a).addC(-1.0).sqrt()).log();
     \\}
     \\fn zAtanh(comptime S: type, a: S) S { // §4.3.2 0.5*ln((1+x)/(1-x))
+    \\    const v = a.val();
+    \\    zDomain("atanh", "-1 < x < 1", v, v > -1.0 and v < 1.0);
     \\    return a.addC(1.0).div(a.neg().addC(1.0)).log().scale(0.5);
     \\}
     \\fn zAtan2(comptime S: type, y: S, x: S) S { // §4.3.2
@@ -8400,6 +8520,42 @@ const math_txt =
     \\    const lim = 80.0;
     \\    if (a.val() > lim) return a.addC(1.0 - lim).scale(zDevExp(lim));
     \\    return a.exp();
+    \\}
+    \\
+    \\
+;
+
+/// §4.3.2's last sentence of prose: "Input values outside of the valid range
+/// for the operator shall report an error." `proof.checkDomain` answers only
+/// the half it can PROVE from the source (E0605/E0606/E0607) and deliberately
+/// accepts an undecidable range; `math_txt`'s four restricted-domain functions
+/// call `zDomain` for the rest.
+///
+/// TWO VARIANTS, for the reason §9.4's display family has two: a DEVICE has no
+/// transcript and may not contain one — `zDev*` exists because a device also
+/// compiles for NVPTX, and a print is what a `$fatal` is already dropped for.
+/// So the report is the EXECUTABLE's, and the device keeps the empty guard: it
+/// costs nothing, and having the call site in one place means the two artifacts
+/// cannot disagree about WHICH values are out of range.
+const domain_quiet_txt =
+    \\fn zDomain(comptime _: []const u8, comptime _: []const u8, _: f64, _: bool) void {}
+    \\
+    \\
+;
+
+/// The reporting half. Fatal, on the §9.21.2 `E` precedent: the clause names no
+/// in-range value to return, and libm's quiet NaN reaches the residual as a
+/// converged-looking wrong answer. A NaN argument reports too — it is inside no
+/// range of Table 4-15. `tan` is unguarded: its poles are irrational, so no f64
+/// is ever at one, which is why E0608 was retired.
+const domain_report_txt =
+    \\fn zDomain(comptime name: []const u8, comptime rule: []const u8, x: f64, in_range: bool) void {
+    \\    if (in_range) return;
+    \\    std.debug.print(
+    \\        "error: LRM 4.3.2: " ++ name ++ "() input value is outside the valid range " ++ rule ++ ": {d}\n",
+    \\        .{x},
+    \\    );
+    \\    std.process.exit(1);
     \\}
     \\
     \\

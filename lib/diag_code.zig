@@ -3819,9 +3819,11 @@ fn infoOf(c: Code) Info {
             \\  AMS HDL "does not extend" the PLA modeling tasks, and "does not
             \\  extend" the stochastic analysis tasks.
             \\
-            \\  Table 9-8 — $itor, $rtoi, $signed and $unsigned. §4.2.1.3
-            \\  already promotes a mixed expression's integer operand, and
-            \\  signedness reinterpretation presupposes a sized vector.
+            \\  Table 9-8 — $signed and $unsigned, and only those two: §9.11
+            \\  names $bitstoreal, $realtobits, $rtoi and $itor as the four
+            \\  conversions that DO cross into the analog context. Signedness
+            \\  reinterpretation presupposes a sized vector, which is the one
+            \\  thing a real-valued analog expression never has.
             ,
         },
         .E0807 => .{
