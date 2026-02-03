@@ -2244,8 +2244,14 @@ pub const Gen = struct {
                         n, p.ns * p.deg, if (opKind(u.target) == .zi) "12" else "11",
                     });
                     try self.w("    {s}__y: [{d}]f64 = @splat(0.0),\n", .{ n, p.ns * p.deg });
+                    // §4.5.12 the filter's own clock as a COUNT of samples
+                    // taken, not as the next sample TIME. A time re-armed by
+                    // `next += zn*T` drifts off the k·T grid by an ulp or two
+                    // (1e-9 + 1e-9 + 1e-9 is strictly greater than the double
+                    // nearest 3e-9), and the first timepoint that lands under
+                    // the drifted clock loses a sample for the whole run.
                     if (opKind(u.target) == .zi) try self.w(
-                        "    {s}__next: f64 = 0.0, // §4.5.12 next sample time\n    {s}__out: f64 = 0.0,\n",
+                        "    {s}__nk: f64 = 0.0, // §4.5.12 samples taken\n    {s}__out: f64 = 0.0,\n",
                         .{ n, n },
                     );
                 },
@@ -6004,18 +6010,25 @@ pub const Gen = struct {
                 });
             },
             // §4.5.12 "acts like a simple sample-and-hold which samples every T
-            // seconds": between samples the output does not depend on the
-            // current unknowns, so it enters the residual as a constant — the
-            // same companion model `absdelay` uses.
+            // seconds and EXHIBITS NO DELAY": between samples the output does
+            // not depend on the current unknowns and enters the residual as a
+            // constant — the same companion model `absdelay` uses — but AT a
+            // sample instant it is the output of THAT sample. `zZiEval` decides
+            // which, off the same `__next` clock `updateState` advances; it
+            // used to be handed `inst.__out` alone, which `updateState` writes
+            // after the timepoint is evaluated, so every zi_* ran one whole
+            // sample period late.
             .zi => {
                 const p = try cg_filters.filterPlan(self, inst, args);
                 if (p.err) |m| return self.abort("{s}", .{m});
                 // Same reason `.laplace` above forces it: `__sec` takes a
                 // `*const Model` whatever its coefficients read.
                 self.uses_model = true;
-                try self.b("zZiHold(S, {d}, {d}, {s}, {s}__sec(model), inst.dt, inst.{s}__out)", .{
-                    p.ns, p.deg, in, n, n,
-                });
+                try self.b(
+                    "zZiEval(S, {0d}, {1d}, {2s}, {3s}__sec(model), inst.dt, inst.{3s}__out, " ++
+                        "inst.abstime, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
+                    .{ p.ns, p.deg, in, n, p.period orelse "0.0" },
+                );
             },
             .ddt => try self.b("zDdt(S, {s}, inst.{s}__prev, inst.dt)", .{ in, n }),
             // §4.5.4 `idt(expr, ic, assert)`: "idt() returns the initial
@@ -7350,31 +7363,24 @@ pub const Gen = struct {
                     const p = try cg_filters.filterPlan(self, inst, args);
                     if (p.err == null) try self.w(
                         \\        const period = {1s};
-                        \\        if (period > 0.0 and inst.abstime >= inst.{0s}__next) {{
-                        \\            // §4.5.12: "T specifies the sampling period of the filter".
-                        \\            // The recurrence runs once per T of SIMULATED TIME, so a step
-                        \\            // that crosses k sample instants runs it k times. Stepping it
-                        \\            // ONCE per evaluation — which is what this did — makes the
-                        \\            // output a function of how densely the host happened to place
-                        \\            // its timepoints, and the same filter at the same T returned
-                        \\            // bit-identical values for 20 us and 200 us of elapsed time.
-                        \\            var zn = @floor((inst.abstime - inst.{0s}__next) / period) + 1.0;
-                        \\            // ponytail: a ceiling, and `bound_step` below is the reason it
-                        \\            // is almost never reached — the filter ASKS the host to keep
-                        \\            // the step at or under T, so the honouring host always has
-                        \\            // zn == 1. A host that ignores it far enough to need more than
-                        \\            // this has already aliased the filter beyond what replaying
-                        \\            // the held input could recover.
-                        \\            if (zn > 4096.0) zn = 4096.0;
-                        \\            var zi_k: u32 = @intFromFloat(zn);
+                        \\        // §4.5.12: "T specifies the sampling period of the filter".
+                        \\        // The recurrence runs once per T of SIMULATED TIME, so a step that
+                        \\        // crosses k sample instants runs it k times. Stepping it ONCE per
+                        \\        // evaluation — which is what this did — makes the output a function
+                        \\        // of how densely the host happened to place its timepoints, and the
+                        \\        // same filter at the same T returned bit-identical values for 20 us
+                        \\        // and 200 us of elapsed time.
+                        \\        //
+                        \\        // `zZiDue` counts off the k*T GRID, and `eval` calls the identical
+                        \\        // function: the two halves of the operator cannot disagree about
+                        \\        // which timepoint is a sample instant. A `__next` time re-armed by
+                        \\        // `+= zn*T` could and did — three additions of 1e-9 overshoot the
+                        \\        // double nearest 3e-9, and the sample at t = 3T was lost for good.
+                        \\        var zi_k = zZiDue(inst.abstime, inst.{0s}__nk, period);
+                        \\        if (zi_k > 0) {{
+                        \\            inst.{0s}__nk += @as(f64, @floatFromInt(zi_k));
                         \\            while (zi_k > 0) : (zi_k -= 1)
                         \\                inst.{0s}__out = zZiStep({2d}, {3d}, in, {0s}__sec(model), &inst.{0s}__u, &inst.{0s}__y);
-                        \\            // Re-armed on the sample GRID, not from the accepted time.
-                        \\            // `abstime + period` lost the phase: it made every sample land
-                        \\            // wherever the host last stopped, so the instants drifted with
-                        \\            // the timestep. Advancing by zn*T cannot leave the clock
-                        \\            // behind either, since zn is chosen to pass abstime.
-                        \\            inst.{0s}__next += zn * period;
                         \\            inst.discontinuity_order = 0; // §9.17.1 the held output steps
                         \\        }}
                         \\        inst.bound_step = @min(inst.bound_step, period);
@@ -8485,44 +8491,7 @@ const limit_txt = "// ---- §4.5.15 SPICE limiting kernels (lib/backend/limit_ke
 /// so the numerics codegen's tests exercise are byte-for-byte the numerics the
 /// device runs. Only devices that actually use a filter carry them.
 const filt_txt = "// ---- §4.5.11/§4.5.12 filter kernels (src/filter_kernels.zig) ----\n\n" ++
-    @embedFile("filter_kernels.zig") ++ "\n" ++ zi_hold_txt;
-
-/// §4.5.12 the residual side of a Z-filter, the counterpart of `zZiStep`'s
-/// sampling side. It lives here rather than in `filter_kernels.zig` only
-/// because it is the piece `emitOperator` calls; the numerics are the same
-/// sections `__sec` builds.
-const zi_hold_txt =
-    \\/// §4.5.12 the Z-filter as the residual sees it. Between samples it "acts
-    \\/// like a simple sample-and-hold", so the output is the held constant and
-    \\/// carries no derivative. `dt <= 0` is a static analysis: there is no
-    \\/// history and no clock, a constant input makes every sample equal, so
-    \\/// z = 1 and the filter IS its DC gain H(1) = ∏ Σ_k num[i][k] / Σ_k den[i][k]
-    \\/// — the exact value of the transfer function at z = 1, applied to the
-    \\/// input so the operating point gets the right Jacobian too. This mirrors
-    \\/// `zLaplace`'s H(0) branch; without it every zi_* answered a DC operating
-    \\/// point with the 0.0 its `__out` field initialises to.
-    \\pub fn zZiHold(
-    \\    comptime S: type,
-    \\    comptime NS: usize,
-    \\    comptime D: usize,
-    \\    uin: S,
-    \\    sec: [NS][2][D + 1]f64,
-    \\    dt: f64,
-    \\    out: f64,
-    \\) S {
-    \\    if (dt > 0.0) return S.con(out);
-    \\    var y = uin;
-    \\    for (0..NS) |i| {
-    \\        var num: f64 = 0.0;
-    \\        var den: f64 = 0.0;
-    \\        for (sec[i][0]) |c| num += c;
-    \\        for (sec[i][1]) |c| den += c;
-    \\        y = y.scale(num / den);
-    \\    }
-    \\    return y;
-    \\}
-    \\
-;
+    @embedFile("filter_kernels.zig");
 
 const hist_txt =
     \\/// §4.5.7 the delayed value, as the residual sees it: Output(t) = Input(t − td).

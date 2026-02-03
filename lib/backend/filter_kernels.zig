@@ -138,6 +138,92 @@ pub fn zZiStep(
     return u;
 }
 
+/// §4.5.12 how many samples a filter of period `period` owes at time `t` when
+/// `nk` of them have already been taken. "T specifies the sampling period of
+/// the filter", so the instants are k·T and the k-th is owed once t reaches it.
+///
+/// ponytail: the 1e-9 is a RELATIVE tolerance on the sample instant, and it is
+/// load-bearing rather than defensive — the residual and the accepted-step
+/// sampler reach k·T by two different float routes, and a filter whose two
+/// halves disagree about which timepoint IS a sample instant drops that sample
+/// for the rest of the run. 1e-9 of a period is some seven orders below any
+/// timestep a host takes and seven above f64's own noise at these magnitudes.
+/// The upgrade path, if a host ever needs it, is a host-supplied time
+/// tolerance the way §4.5.8's `time_tol` is spelled.
+pub fn zZiDue(t: f64, nk: f64, period: f64) u32 {
+    if (!(period > 0.0)) return 0;
+    const n = @floor(t / period + 1e-9) + 1.0 - nk;
+    if (!(n >= 1.0)) return 0;
+    // ponytail: a step that jumped 4096 sample instants has already aliased
+    // the filter beyond what replaying the held input could recover; the
+    // ceiling only keeps the replay loop bounded.
+    return if (n > 4096.0) 4096 else @intFromFloat(n);
+}
+
+/// §4.5.12 the Z-filter as the RESIDUAL sees it, the counterpart of
+/// `zZiStep`'s accepted-step side.
+///
+/// `dt <= 0` is a static analysis: there is no history and no clock, a constant
+/// input makes every sample equal, so z = 1 and the filter IS its DC gain
+/// H(1) = ∏ Σ_k num[i][k] / Σ_k den[i][k] — the exact value of the transfer
+/// function at z = 1, applied to the input so the operating point gets the
+/// right Jacobian too. This mirrors `zLaplace`'s H(0) branch.
+///
+/// THE SAMPLE INSTANT. §4.5.12: "a filter with unity transfer function acts
+/// like a simple sample-and-hold which samples every T seconds and EXHIBITS NO
+/// DELAY", and with τ = 0 "the output is abruptly discontinuous". So at
+/// t = k·T the output is the output OF the k-th sample, not the (k−1)-th. This
+/// used to answer `inst.__out`, which `updateState` writes AFTER the timepoint
+/// has been evaluated — the whole filter ran one sample period late. The
+/// recurrence is therefore evaluated HERE, on a COPY of the history, and
+/// `updateState` re-runs the identical `zZiStep` on the accepted solution; the
+/// two see the same input and the same sections, so they cannot disagree.
+/// Between samples the output is the held constant and carries no derivative.
+pub fn zZiEval(
+    comptime S: type,
+    comptime NS: usize,
+    comptime D: usize,
+    uin: S,
+    sec: [NS][2][D + 1]f64,
+    dt: f64,
+    out: f64,
+    t: f64,
+    nk: f64,
+    period: f64,
+    uh: []const f64,
+    yh: []const f64,
+) S {
+    if (!(dt > 0.0)) {
+        var y = uin;
+        for (0..NS) |i| {
+            var num: f64 = 0.0;
+            var den: f64 = 0.0;
+            for (sec[i][0]) |c| num += c;
+            for (sec[i][1]) |c| den += c;
+            y = y.scale(num / den);
+        }
+        return y;
+    }
+    // The SAME count `updateState`'s sampler takes, so a timepoint is a sample
+    // instant for both halves of the operator or for neither.
+    var k = zZiDue(t, nk, period);
+    if (k == 0) return S.con(out);
+    // Replaying the samples a wide step jumped over needs a mutable history,
+    // and the residual may not move the accepted state — so it works on a
+    // comptime-sized stack copy. Nothing here allocates.
+    var ub: [NS * D]f64 = undefined;
+    var yb: [NS * D]f64 = undefined;
+    @memcpy(&ub, uh);
+    @memcpy(&yb, yh);
+    while (k > 1) : (k -= 1) _ = zZiStep(NS, D, uin.val(), sec, &ub, &yb);
+    // The LAST sample is the one the solver differentiates through: each
+    // section is linear in its input with gain b[0]/a[0], and reads its own
+    // history un-pushed, exactly as `zZiStep` does.
+    var y = uin;
+    for (0..NS) |i| y = zSec(S, D, y, sec[i][0], sec[i][1], ub[i * D ..][0..D], yb[i * D ..][0..D]);
+    return y;
+}
+
 // ===========================================================================
 // Tests. They live HERE, beside the kernels, for the reason the header gives:
 // this file is the one source, so what the tests check is what the device
