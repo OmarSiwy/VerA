@@ -75,9 +75,21 @@ module a04_absdelay_maxdelay(d, n);
                  - max($abstime * 1e9 - min(V(d, n), 3.0), 0.0), 0.0, 1e-12);
         // Literal and row-invariant: at t = 4ns the clamped delay is 3ns, so
         // the output is Input(1ns) = 1. Honouring the unclamped td = 4ns gives
-        // 0 here; freezing td at 2ns gives 2.
+        // 0 here; freezing td at 2ns gives 2. Either is a whole unit away, so
+        // the 1e-12 band costs this check nothing.
+        //
+        // WHY IT IS A BAND AND NOT `== 1.0`, WHICH IS WHAT THIS FIRST ASKED
+        // FOR. §4.5.7's formula is Output(t) = Input(max(t - td, 0)) and that
+        // subtraction is done in f64: 4e-9 - 3e-9 is 1.0000000000000003e-9,
+        // not 1e-9, so the query lands 2e-16 of a nanosecond past the recorded
+        // sample and the ring interpolates to 1.0000000000000002. No
+        // conforming implementation that evaluates the clause's own expression
+        // reaches exactly 1.0, and the clause fixes the value and not its last
+        // ulp — the CHECK above already concedes as much with its own 1e-12.
+        // This is the same allowance ch10_directives/38 documents.
         `CHECKI("at t = 4ns the clamp makes the output Input(1ns) = 1",
-                absdelay($abstime * 1e9, V(d, n) * 1n, 3n) == 1.0 || $abstime != 4n, 1);
+                abs(absdelay($abstime * 1e9, V(d, n) * 1n, 3n) - 1.0) <= 1e-12
+                  || $abstime != 4n, 1);
 
         I(d, n) <+ 0.0;
     end

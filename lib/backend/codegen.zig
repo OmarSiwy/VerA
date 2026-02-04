@@ -5397,7 +5397,20 @@ pub const Gen = struct {
     fn absdelayTd(self: *Gen, n: []const u8, args: []const Mir.Value, step: bool) Error![]const u8 {
         if (try self.absdelayFreezes(args))
             return std.fmt.allocPrint(self.arena, "inst.{s}__td", .{n});
-        return if (step) self.ctrlStep(args, 1, "0.0") else self.argF64(args, 1, "0.0");
+        const td = if (step)
+            try self.ctrlStep(args, 1, "0.0")
+        else
+            try self.ctrlEval(args, 1, "0.0");
+        if (args.len < 3) return td;
+        // §4.5.7 "If the optional maxdelay is specified, THEN td CAN VARY. If
+        // td becomes greater than maxdelay, MAXDELAY WILL BE USED AS A
+        // SUBSTITUTE FOR td." Argument 2 was read by nothing at all — the
+        // three-argument form behaved as the two-argument one, with no clamp
+        // and no varying td. Table 4-20 makes maxdelay the constant argument,
+        // so it renders over Model where td renders over the core.
+        return std.fmt.allocPrint(self.arena, "@min({s}, {s})", .{
+            td, try self.argF64(args, 2, "0.0"),
+        });
     }
 
     /// §4.5.7 "If maxdelay is not specified, the value of td when the
