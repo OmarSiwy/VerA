@@ -8111,10 +8111,59 @@ fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     return .{ .v = try self.builder.readVariable(place, join), .ty = ty };
 }
 
+/// §4.5.15 "It is important to ensure that ALL analog operators are evaluated
+/// EVERY ITERATION of a simulation to ensure that the internal state is
+/// maintained." Does this subtree hold one of the operators that rule protects?
+/// `ddx` and `limexp` are the clause's own exceptions (see `isHistoryless`).
+///
+/// ponytail: syntactic, and it does not look inside a §4.7 analog function
+/// body. An operator there is already E0422 territory, and the upgrade path if
+/// one ever is legal is a per-function flag computed when the function lowers.
+fn hasStatefulOp(self: *const Lower, e: Ast.ExprId) bool {
+    if (e == .none) return false;
+    const ex = &self.file.exprs;
+    const tag = ex.tag(e);
+    if (tag == .filter_call and !isHistoryless(self.file.str(ex.strOf(e)))) return true;
+    return switch (tag) {
+        .unary, .index, .range, .multi_concat, .binary, .event_or => self.hasStatefulOp(ex.lhs(e)) or
+            self.hasStatefulOp(ex.rhs(e)),
+        .ternary => self.hasStatefulOp(ex.lhs(e)) or
+            self.hasStatefulOp(ex.rhs(e)) or
+            self.hasStatefulOp(ex.ternaryElse(e)),
+        .call, .builtin_call, .sys_call, .filter_call, .noise_call, .concat, .assign_pattern => blk: {
+            for (ex.args(e)) |a| if (self.hasStatefulOp(a)) break :blk true;
+            break :blk false;
+        },
+        else => false,
+    };
+}
+
 /// §4.2.7 `&&` / `||` with LRM short-circuit evaluation. The rhs gets its own
 /// block, so a guard like `(x != 0) && (1/x > k)` never divides by zero.
 fn lowerShortCircuit(self: *Lower, e: Ast.ExprId, op: Ast.BinaryOp) Oom!TypedValue {
     const ex = &self.file.exprs;
+    // §4.5.15's evaluate-every-iteration rule wins over §4.2.7's skip when the
+    // rhs holds an analog operator: the skipped step feeds that operator site
+    // the branch-local zero instead of its real input, so its history is
+    // stranded and it diverges from an identical site outside the `||` — "the
+    // internal state ... corrupted or become out-of-date" the clause's closing
+    // sentence names. §4.2.3's "any side effects ... shall not occur" is about
+    // side effects and runtime errors; advancing an operator VerA is required
+    // to advance every iteration is neither.
+    //
+    // §4.5.15's restriction paragraph names `if`, `case` and `?:` and nothing
+    // else, so it does not make this spelling illegal and nothing here
+    // diagnoses it — it makes the two sites agree, which is what it asks for.
+    if (self.hasStatefulOp(ex.rhs(e))) {
+        const l = try self.toBool(try self.lowerExpr(ex.lhs(e)));
+        const r = try self.toBool(try self.lowerExpr(ex.rhs(e)));
+        // `toBool` normalises both to 0/1, so max IS `||` and min IS `&&` —
+        // no opcode and no block.
+        return .{
+            .v = try self.emit(if (op == .logical_and) .imin else .imax, &.{ l, r }),
+            .ty = .integer,
+        };
+    }
     const a = try self.toBool(try self.lowerExpr(ex.lhs(e)));
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, a);
