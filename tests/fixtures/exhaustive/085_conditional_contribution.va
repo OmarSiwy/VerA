@@ -14,8 +14,8 @@ module ex085_conditional(p, n);
   parameter real g_on = 1m;
   parameter real g_off = 1n;
   analog begin
-    // The verdict is an operand, not a branch: see check.vh for why a `$strobe`
-    // under an `if` is dropped with W0851.
+    // The verdict is an operand, not a branch: see check.vh for why an
+    // assertion that only prints on one arm is not an assertion.
     //
     // The comparison is asked at FIXED voltages, not at the swept bias: that
     // keeps the want a number at every sweep point, and it pins `vth` into

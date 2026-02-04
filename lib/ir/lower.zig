@@ -658,6 +658,15 @@ displays: std.ArrayList(Display) = .empty,
 /// when the model prints nothing. codegen turns it into ONE unit function whose
 /// body is the prints, in source order.
 display_root: Mir.Value = .f_zero,
+/// §9.4.6 the same carrier for the CONDITIONAL prints, which cannot be
+/// `fadd`-chained directly: a call inside an `if` arm does not dominate the
+/// chain root at the end of the block. An SSA place does — seeded `.f_zero` in
+/// `.entry`, `fadd`-ed at each guarded call site, read once at the end — so the
+/// arm's phi carries the call into the live slice on the path that ran and
+/// carries a zero on the path that did not. Null = no conditional print.
+/// The print itself stays where lowering put it: codegen emits the block's
+/// instructions inside the emitted `if`, so it runs exactly when the arm does.
+display_cond_place: ?Ssa.Place = null,
 /// §9.4.1 display statements whose CALL is created at the end of the analog
 /// block (`finishDisplays`), in source order — see `queueDisplay` for the
 /// clause reading. Parallel-ish to `displays`: each entry names the
@@ -794,11 +803,12 @@ pub const Display = struct {
     /// needs it for the newline rule (§9.4.1: `$write` does not append one) and
     /// for the §9.7.3 severity prefix.
     name: []const u8,
-    /// The call token, for W0850/W0851.
+    /// The call token, for W0850.
     tok: u32,
-    /// The call sits under an `if` or a loop. §9.4.6 makes emission a runtime
-    /// property of the solve, which a hoisted unit root cannot express, and the
-    /// value would not dominate the chain root either — so it is NOT emitted.
+    /// The call sits under an `if` or a loop, so it reaches the display root
+    /// through `display_cond_place` rather than by direct `fadd` (the value
+    /// does not dominate the root). Emitted either way; kept because codegen
+    /// and the driver's W0850 still want to know which prints are guarded.
     conditional: bool,
 };
 
@@ -1774,10 +1784,22 @@ fn finishKernelCtl(self: *Lower) Oom!void {
 /// operands are what matters, the sum is discarded, and rendering the sum walks
 /// the operands in MIR order — which is source order.
 ///
-/// Only `cond_depth == 0` calls join. They lie on the straight-line spine of the
-/// analog block, so each one dominates `self.cur` here; a call inside an `if`
-/// arm does not, and chaining it would be invalid SSA as well as the wrong
-/// semantics (§9.4.6). Those are reported by the driver as W0851.
+/// Only `cond_depth == 0` calls join DIRECTLY. They lie on the straight-line
+/// spine of the analog block, so each one dominates `self.cur` here; a call
+/// inside an `if` arm does not, and chaining it would be invalid SSA. Those
+/// reach the root through `display_cond_place` instead — one read of a place
+/// the arms wrote, which is an ordinary phi and dominates like any other value.
+/// §9.4.6 is satisfied by WHERE the call sits, not by whether it is chained:
+/// the call stays in the arm's block and codegen emits the arm as an `if`.
+///
+/// ponytail: PRINT ORDER is MIR order, and the two rules pull opposite ways —
+/// a guarded call must stay in its arm, an unconditional one is minted here
+/// (`queueDisplay`) — so a module that prints both shows the guarded lines
+/// first, whatever the source order. Nothing that printed before this existed
+/// moved: the unconditional group keeps its position and its order, and the
+/// guarded lines are new output. Upgrade path, if a fixture ever needs the two
+/// interleaved: give `Display` a source-order index and have codegen emit the
+/// display unit's calls by it rather than by block walk.
 fn finishDisplays(self: *Lower) Oom!void {
     try self.lowerDeferredDisplays();
     var root: Mir.Value = .f_zero;
@@ -1790,7 +1812,25 @@ fn finishDisplays(self: *Lower) Oom!void {
         root = if (first) d.val else try self.emit(.fadd, &.{ root, d.val });
         first = false;
     }
+    if (self.display_cond_place) |p| {
+        const v = try self.builder.readVariable(p, self.cur);
+        root = if (first) v else try self.emit(.fadd, &.{ root, v });
+    }
     self.display_root = root;
+}
+
+/// Carry one guarded §9.4/§9.5/§9.7 call into the display slice. The value is
+/// discarded at the root like every other print result; what the `fadd` buys is
+/// a USE, without which codegen's slice drops the call and the print with it.
+fn chainCondDisplay(self: *Lower, v: Mir.Value) Oom!void {
+    const p = self.display_cond_place orelse blk: {
+        const np = self.builder.newPlace();
+        try self.builder.writeVariable(np, .entry, .f_zero);
+        self.display_cond_place = np;
+        break :blk np;
+    };
+    const prev = try self.builder.readVariable(p, self.cur);
+    try self.builder.writeVariable(p, self.cur, try self.emit(.fadd, &.{ prev, v }));
 }
 
 /// Fetch (creating on first use) a kernel-control place, seeded to +inf in the
@@ -6351,9 +6391,10 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
     // §9.4.1 the display/severity/control family on the unconditional spine:
     // its call is minted at the end of the block, and an operand that reads a
     // branch flow is EVALUATED there — see `queueDisplay`. The conditional and
-    // restricted cases stay on the path below, whose entries the chain drops
-    // (W0851) or whose context owns the diagnostic (E0421 fires at the
-    // statement, where `restrict` is still set).
+    // restricted cases stay on the path below, which mints the call WHERE THE
+    // STATEMENT IS: a guarded call has to stay in its arm to be guarded, and a
+    // restricted context owns the diagnostic (E0421 fires at the statement,
+    // where `restrict` is still set).
     if ((isDisplayTask(name) or isSimCtlTask(name)) and
         self.cond_depth == 0 and self.restrict == null)
         return self.queueDisplay(tok, name, args);
@@ -6392,13 +6433,15 @@ fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         // printing artifact the call terminates the run at its position among
         // the prints (cg_display.emitSimCtl); in a device it is dropped like a
         // print, with the same W0850, because eval has no channel to stop a
-        // host's solve. A conditional call is dropped under W0851 exactly as a
-        // conditional $strobe is — §9.4.6's argument applies verbatim.
+        // host's solve. A conditional call travels `display_cond_place` exactly
+        // as a conditional $strobe does — §9.4.6's argument applies verbatim.
+        const cond = self.cond_depth != 0;
+        if (cond) try self.chainCondDisplay(v);
         try self.displays.append(self.arena, .{
             .val = v,
             .name = name,
             .tok = tok,
-            .conditional = self.cond_depth != 0,
+            .conditional = cond,
         });
     }
 }
@@ -6562,11 +6605,14 @@ pub fn isSimCtlTask(name: []const u8) bool {
 /// synthetic name for a conversion that already has one.
 fn sequenceFileCall(self: *Lower, tok: u32, name: []const u8, v: Mir.Value) Oom!void {
     self.uses_file_tasks = true;
+    const carrier = try self.call("$itor", &.{v});
+    const cond = self.cond_depth != 0;
+    if (cond) try self.chainCondDisplay(carrier);
     try self.displays.append(self.arena, .{
-        .val = try self.call("$itor", &.{v}),
+        .val = carrier,
         .name = name,
         .tok = tok,
-        .conditional = self.cond_depth != 0,
+        .conditional = cond,
     });
 }
 

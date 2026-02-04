@@ -486,8 +486,6 @@ pub const Code = enum(u16) {
     E0819,
     /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
-    /// §9.4 display task under a conditional — not emitted even into an exe.
-    W0851,
     /// §2.8.3/§12.32 an UNREGISTERED system function: a `$name` the language
     /// defines nowhere, whose meaning §12.32 hands to a VPI host the emitted
     /// artifact has none of. Reads 0.0, out loud.
@@ -4219,31 +4217,6 @@ fn infoOf(c: Code) Info {
             \\
             \\Silence it for a model you know prints only under a debug flag
             \\with `--allow=W0850`.
-            ,
-        },
-        .W0851 => .{
-            .title = "display task under a conditional is not emitted",
-            .lrm = "9.4.6",
-            .explain =
-            \\`--display=emit` hoists a module's display tasks into one unit
-            \\that runs top to bottom, and a task inside an `if`, a `case` or a
-            \\loop has no place in it: its operands are only defined on the arm
-            \\that ran, so emitting it would print on a path the source did not
-            \\take.
-            \\
-            \\LRM 9.4.6 makes emission a property of the SOLVE — text appears
-            \\on accepted iterations — and a compiled device has no accepted
-            \\iteration to consult. Rather than print unconditionally and be
-            \\wrong, VerA drops the task and says so.
-            \\
-            \\Rewrite the condition as a value instead of a branch:
-            \\
-            \\    if (v > 0.0) $strobe("ok");        // dropped
-            \\    $strobe("ok=%d", v > 0.0);         // printed: "ok=1"
-            \\
-            \\A comparison is an integer in Verilog-A (LRM 4.2.5), so the guard
-            \\becomes part of the output instead of gating it — which is also
-            \\what makes the line diffable against an expected transcript.
             ,
         },
         .W0852 => .{

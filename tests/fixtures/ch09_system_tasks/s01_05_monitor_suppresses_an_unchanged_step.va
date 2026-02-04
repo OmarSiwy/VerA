@@ -79,13 +79,14 @@
 // for the other. (1) `Lower.isDisplayTask` (lib/ir/lower.zig:6146) lists
 // `$monitor` beside `$display` and `cg_display.emitDisplayTask` gives it the
 // same unconditional inline print — the §9.4.1 mechanism is not implemented
-// anywhere in src/. (2) VerA drops display and file tasks that sit under an
-// event guard (W0851, "display task under a conditional is not emitted"), so
-// the guarded `$fopen`/`$fmonitor` above are not emitted at all and `fd` is
-// never assigned. §5.10.2 makes `@(initial_step)` a legal place for both, so
-// (2) is itself a deviation, and it has to be lifted before (1) can be observed
-// by any fixture at all: the clause's obligation is cross-step, and the only
-// way to register a monitor exactly once is to guard the registration.
+// anywhere in src/. (2) The guarded `$fopen` above runs — W0851, which used to
+// drop a task under an event guard, was lifted on 2026-09-20 — but its RESULT
+// cannot leave the display unit: `codegen.emitFileCallDropped` renders every
+// §9.5 call as the literal `0` in any other unit, so the shared core computes
+// `fd = 0`, `updateState` stores that 0, and `$ftell(fd)` is `$ftell(0)` = −1.
+// (2) has to be lifted before (1) can be observed by any fixture at all: the
+// clause's obligation is cross-step, and the only way to register a monitor
+// exactly once is to guard the registration.
 //
 //! lrm 9.4.1
 //! lrm 9.5.2

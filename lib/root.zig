@@ -452,8 +452,6 @@ fn compileInArena(
                 try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
             else
                 try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});
-        } else if (d.conditional) {
-            try bag.add(.lower, .W0851, span, "`{s}`", .{d.name});
         }
     }
 

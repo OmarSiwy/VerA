@@ -91,14 +91,17 @@ bullet is **done**, contrary to the row text); the §9.5.1 mcd/fd bit encodings;
    list changes value compared with the last accepted step" — is not implemented
    anywhere in `src/`. There is a **second, separate** defect stacked on it, and
    fixtures 05 and 06 name both so neither is mistaken for the other: a display
-   or file task under an event guard is dropped, `W0851` *"display task under a
-   conditional is not emitted"* (captured from `--run`; under `--check`, where
-   there is no host file table at all, the same two calls are dropped under
-   `W0850` instead). §5.10.2 makes `@(initial_step)` a legal place for `$fopen`
-   and `$fmonitor`, and registering the monitor **exactly once** is the only way
-   to measure a cross-step obligation, so W0851 has to be lifted before the
-   §9.4.1 mechanism can be observed by any fixture at all. Today both fixtures
-   read `$ftell` on an unassigned `fd`, which returns −1.
+   or file task under an event guard was dropped, `W0851` *"display task under a
+   conditional is not emitted"*. **W0851 was lifted on 2026-09-20** — a guarded
+   display is now emitted inside its arm, and the `$fopen`/`$fmonitor` pair here
+   does run. The measurement did not move, because lifting it exposed a THIRD
+   defect underneath: a §9.5 call is rendered with real kernels only in the
+   display unit, and `codegen.emitFileCallDropped` renders it as the literal
+   `@as(i64, 0)` everywhere else. So the shared core computes `fd = 0`,
+   `updateState` writes that into the held slot, and `$ftell(fd)` is `$ftell(0)`
+   = −1 exactly as before. A descriptor assigned in the analog block and read as
+   a VALUE needs a file call's result to be able to leave the display unit;
+   until then the §9.4.1 mechanism still cannot be observed by any fixture.
 6. `$fscanf` **consumes a whole line per call**. `file_kernels.zFRead` is
    literally `zFLine(zFGets(d), d)`, and its own comment names the shortcut: "a
    LINE is consumed, where C's `fscanf` consumes only what the format matched".
@@ -131,7 +134,7 @@ Ordered; "today" is the observed verdict of the run command at the bottom.
 | `02_real_flags_sign_before_zero_fill.va` | §9.4.3 + C11 7.21.6.1p6 flag characters `+`, ` `, `0`, `-`. | `%+08.1f` 2.5 → `+00002.5` (sign first, then four pad zeros); `% .2f` 1.0 → `" 1.00"`; `%09.2f` -3.5 → `-00003.50`; `%-9.2f\|` -3.5 → `-3.50    \|` (control). | **fail** on the first three; the control passes |
 | `03_real_conversion_rounds_half_to_even.va` | §9.4.3 + C11 7.21.6.1p13 "correctly rounded", i.e. IEEE 754 roundTiesToEven. | Five exact ties: `%.0f` of 2.5→`2`, 3.5→`4`, 0.5→`0`, 1.5→`2`; `%.1f` of 0.25→`0.2`. 2.5 and 3.5 are written as a pair because round-half-away gets 3.5 right and 2.5 wrong. | **fail** on 2.5, 0.5 and 0.25; 3.5 and 1.5 pass by coincidence, which is the point of the pair |
 | `04_real_engineering_notation.va` | Table 9-23 `%r`/`%R` "engineering notation, using the scale factors defined in 2.6.2" + Table 2-1. | Mantissa in [1,1000) and exponent a multiple of three, so each magnitude has one answer: 0.0015 → mantissa 1.5, symbol `m` (109); 1.5e6 → 1.5, `M` (77); 2e-13 → 200, `f` (102) — *not* 0.2p. The text is scanned back with `%f%c` rather than string-compared, because the mantissa's digit count is not fixed by any clause. 1e3 is avoided as an operand: Table 2-1 spells that row "K, k" and the LRM never says which an output prints. | **fail**, all nine claims |
-| `05_monitor_suppresses_an_unchanged_step.va` | §9.4.1 "for each accepted step, IF the variable or an expression in the argument list changes value compared with the last accepted step … the entire argument list is displayed **at the end of the time step**". | Measured **across** steps, not inline — see "Corrected after review". `$fopen`/`$fmonitor` run once under §5.10.2's `@(initial_step)`; `$ftell` at the *top* of step k is what the monitor wrote at the ends of steps 0..k−1. `//! wave V(p) = 0.5` held over four times, monitored `4*V(p,n)` = 2 at every step, record `"2\n"` = 2 bytes, so `$ftell` reads 0, 2, 2, 2 and `bytes - 2*($abstime > 0) == 0` on all four rows. An unconditional printer leaves 0,2,4,6 → 0,0,2,4; a printer that never reports leaves 0,0,0,0 → 0,−2,−2,−2. One file, both directions. | **fail**, all four rows (measured −1, −3, −3, −3: `W0851` drops the guarded `$fopen`, so `$ftell(fd)` is `$ftell(0)` = −1) |
+| `05_monitor_suppresses_an_unchanged_step.va` | §9.4.1 "for each accepted step, IF the variable or an expression in the argument list changes value compared with the last accepted step … the entire argument list is displayed **at the end of the time step**". | Measured **across** steps, not inline — see "Corrected after review". `$fopen`/`$fmonitor` run once under §5.10.2's `@(initial_step)`; `$ftell` at the *top* of step k is what the monitor wrote at the ends of steps 0..k−1. `//! wave V(p) = 0.5` held over four times, monitored `4*V(p,n)` = 2 at every step, record `"2\n"` = 2 bytes, so `$ftell` reads 0, 2, 2, 2 and `bytes - 2*($abstime > 0) == 0` on all four rows. An unconditional printer leaves 0,2,4,6 → 0,0,2,4; a printer that never reports leaves 0,0,0,0 → 0,−2,−2,−2. One file, both directions. | **fail**, all four rows (measured −1, −3, −3, −3: the guarded `$fopen` runs, but a §9.5 call renders as the literal `0` in every unit but the display one, so the core's `fd` is 0 and `$ftell(fd)` is `$ftell(0)` = −1) |
 | `06_monitor_reports_every_change.va` | The other half of the same sentence — "for each accepted step" is a per-step obligation — plus the record's **content**. | Same cross-step measurement as 05. `//! wave V(p) = 0.25, 2.5, 25.0, 250.0` (all dyadic-exact, as are their products with 4), monitored `4*V(p,n)` = 1, 10, 100, 1000 — four records of **deliberately different lengths** 2, 3, 4, 5 bytes, so the running total is a function of the values and not merely a count of records. `$ftell` reads 0, 2, 5, 9 = (t²+3t)/2, written as `2*bytes - ($abstime² + 3*$abstime) == 0`. Never reports → 0,−4,−10,−18; reports once then stops → 0,0,−6,−14; reports every step with a fixed 2-byte record → 0,0,−2,−6; per-iteration → positive at every t>0. | **fail**, all four rows (measured −2, −6, −12, −20). It passed before the review and should not have — see "Corrected after review" |
 | `07_strobe_writes_once_per_accepted_solution.va` | §9.4.6 "All display tasks, except `$debug`, shall not display output unless an iteration has been accepted" and §9.5.9's file form. | `//! solve` on an exponential junction driven by 1 mA. At V=0, f(0) = −1e−3 A and f′(0) = Is/Vt + Gmin = 3.861e−13 + 1e−12 = 1.386e−12 S, so the first Newton correction is −f/f′ = **+7.22e8 V** — upward, nine orders of magnitude past a root near 0.656 V. No conforming solver lands in one iteration. `$fstrobe(fd,"s")` must still leave exactly 2 bytes. **Counterfactual:** one record per Newton iteration reads 2N with N ≥ 2, in practice tens of bytes; no record at all reads 0. | **pass** — kept as the regression pin for the one thing in this row VerA already gets right, and as the positive control for the `$debug` row below |
 | `08_fscanf_successive_scans_on_one_line.va` | §9.5.4.2 field definition, "trailing white space (including newline characters) is left unread", the EOF case; §9.5.5 `$ftell`; §9.5.8 `$feof`. | File `"12 34\n56\n"` (9 bytes). Four `%d` scans: (1,12,pos 2), (1,34,pos 5), (1,56,pos 8, `$feof`=0), (EOF, pos 9, `$feof` nonzero). EOF is asserted as "negative" because §9.5.5/§9.5.4.2 delegate its value to IEEE 1364; every position is fixed by the byte layout. | **fail** — reads 12 then *56*, positions 6/9/9 |
@@ -185,7 +188,8 @@ touched to make any of them go away.
    `0.25, 2.5, 25.0, 250.0` so the four records have four *different* lengths —
    the byte total now pins the record's content, which is what the read-back was
    there for. Both fixtures now fail at HEAD, for two separately-named reasons
-   (no §9.4.1 change detection, and W0851 dropping the event-guarded calls).
+   (no §9.4.1 change detection, and — since W0851 was lifted — the descriptor a
+   file call returns being zero outside the display unit; see 5 above).
 3. **Two of 13 fixtures were already green.** After (2), **one** is:
    `07_strobe_…`. It is kept deliberately, not by oversight — §9.4.6 is the one
    thing in this row VerA implements correctly and nothing else here would catch

@@ -10393,6 +10393,43 @@ test "codegen: §9.4 display tasks are void by default and print on request" {
     try std.testing.expect(std.mem.indexOf(u8, exe, "ERROR: bad") != null);
 }
 
+test "codegen: §9.4.6 a display task under an `if` prints inside its arm" {
+    // THE BUG THIS PINS (was W0851). A guarded display call does not dominate
+    // the end-of-block chain root, so `finishDisplays` could not `fadd` it in —
+    // and an unchained call is dead code the unit slice drops, taking the print
+    // with it. The fix carries it through an SSA place written in the arm, so
+    // the call keeps its position in the CFG and the phi makes it live.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module c(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog begin
+        \\    if (V(p, n) > 0.5) $strobe("hi");
+        \\    else $strobe("lo");
+        \\    $strobe("always");
+        \\    I(p, n) <+ V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+
+    const exe = try h.genDisplay(std.testing.allocator);
+    const at = std.mem.indexOf(u8, exe, "fn c__display__tasks(").?;
+    const body = exe[at..std.mem.indexOfPos(u8, exe, at, "\n}\n").?];
+    // All three reach the output...
+    for ([_][]const u8{ "\"hi\\n\"", "\"lo\\n\"", "\"always\\n\"" }) |lit|
+        try std.testing.expect(std.mem.indexOf(u8, body, lit) != null);
+    // ...and the two guarded ones are still GUARDED: each sits after an `if`
+    // and before the unconditional one, which is emitted at the block's end.
+    const hi = std.mem.indexOf(u8, body, "\"hi\\n\"").?;
+    try std.testing.expect(std.mem.lastIndexOf(u8, body[0..hi], "if (") != null);
+    try std.testing.expect(hi < std.mem.indexOf(u8, body, "\"always\\n\"").?);
+    // A DEVICE still prints nothing at all (W0850 covers the whole family).
+    const dev = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, dev, "std.debug.print") == null);
+}
+
 test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the executable" {
     // THE BUG THIS PINS. `emitSysCall`'s §9.5 branch used to be gated on
     // `display == .emit`, so in a device the eight descriptor-RETURNING names

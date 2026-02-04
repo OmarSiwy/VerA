@@ -5,8 +5,9 @@
 // The bias sits at 1.0 rad, inside that branch, where
 // tan(1) = 1.55740772465490223050..., nearest double 1.5574077246549023. The
 // second check is tan = sin/cos, the definition Table 4-15 inherits from C.
-// Both checks are OUTSIDE the guard: §9.4.6 display tasks must be
-// unconditional or VerA drops them with W0851.
+// Both checks are OUTSIDE the guard, so each announces itself whichever way
+// the comparison goes — an assertion that only prints when it passes cannot be
+// told from one that never ran.
 //
 //! lrm 4.3.2
 //! bias V(p) = 1.0

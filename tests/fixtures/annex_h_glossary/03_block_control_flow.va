@@ -28,7 +28,7 @@ module glossary_block_control_flow(p, n);
   analog begin : constitutive_block
     if (V(p,n) > 0.0) result = V(p,n);
     else result = -V(p,n);
-    // The verdict is an operand, never a branch: check.vh explains W0851.
+    // The verdict is an operand, never a branch: check.vh explains why.
     `CHECKI("guard is false at negative bias", V(p,n) > 0.0, 0);
     `CHECKX("the else arm's value survives the block", result, 0.4);
     I(p,n) <+ result;

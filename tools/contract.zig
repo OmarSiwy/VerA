@@ -1103,7 +1103,7 @@ pub fn validate(comptime D: type) void {
     // exists. A host that must survive its devices' §9.7 calls (an interactive
     // kernel with a real `$stop`) upgrades this to a control-code return; no
     // such host exists today, and a device built `--display=drop` contains no
-    // display phase and no exit (the calls are dropped under W0850/W0851).
+    // display phase and no exit (the calls are dropped under W0850).
     if (@hasDecl(D, "display")) {
         if (genericFnError(D, "display", "void")) |m| @compileError(m);
     }
