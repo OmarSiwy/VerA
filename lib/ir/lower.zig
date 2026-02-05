@@ -1369,7 +1369,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             try self.vectors.put(self.arena, name, r);
             continue;
         }
-        const idx = try self.internNode(self.file.str(p.name), self.strOrEmpty(p.discipline));
+        const idx = try self.internNode(try self.netKey(self.file.str(p.name), p.main_tok), self.strOrEmpty(p.discipline));
         // §6.5.2.2. Recorded here and nowhere else: only a port can be
         // directional, and this loop is the only place the direction is known.
         self.node_dir.items[idx] = p.direction;
@@ -1382,7 +1382,10 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §3.6.3 internal nets, then §3.6.4 ground.
     for (module.nets) |n| {
-        const name = self.file.str(n.name);
+        // §2.8.1 vs §3.6.3 — see `netKey`. A RANGED declaration is a vector and
+        // its own name never reaches the node table, so the key is the scalar
+        // path's and the `vectors` entry below keeps the declared spelling.
+        const name = try self.netKey(self.file.str(n.name), n.main_tok);
         // §3.6.3 a vector net is N independent nets, scalarised here.
         //
         // ponytail: `n.init` is dropped on this path. §3.6.3.2's bus form is a
@@ -2605,7 +2608,7 @@ fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 /// written onto each scalarised element, since the base name is not a node.
 fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     const r = self.vectors.get(name) orelse
-        return self.applyDefaultDiscipline(name, main_tok);
+        return self.applyDefaultDiscipline(try self.netKey(name, main_tok), main_tok);
     var key_buf: [elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
         try self.applyDefaultDiscipline(try self.elemKey(&key_buf, name, &.{r.at(@intCast(k))}), main_tok);
@@ -2826,7 +2829,10 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .ident => {
-            const name = self.file.str(ex.strOf(e));
+            // §2.8.1 — see `netKey`. The reference to `\bus[0] ` is an `.ident`
+            // and the reference to element 0 of `bus` is an `.index`, so the two
+            // never share a path here; only the KEY had to be kept apart.
+            const name = try self.netKey(self.file.str(ex.strOf(e)), ex.mainTok(e));
             if (self.vectors.get(name)) |r| {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
                 return ground;
@@ -2905,6 +2911,41 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
 /// body, and formatting the name afresh on every reference would just
 /// rediscover the slot the first one interned. `getKey` hands back the arena copy
 /// already in the map, so `internNode` does its whole job unchanged.
+/// The node-table key for a net named by the SOURCE identifier at `tok`.
+///
+/// §2.8.1: "Escaped identifiers shall start with the backslash character (\) and
+/// end with white space ... Neither the leading backslash character nor the
+/// terminating white space is considered to be part of the identifier." So
+/// `electrical \bus[0] ;` declares a SCALAR net whose name is the five
+/// characters `bus[0]` — byte-for-byte what `internNodeElem` prints for element
+/// 0 of `electrical [0:1] bus`. That spelling is a GENERATED name (§3.13.3), not
+/// a declaration in the module's namespace, so the two are different objects and
+/// the shared key merged them: the escaped scalar was refused as a second
+/// discipline declaration of the vector's element (E0902), and without that
+/// refusal the two would have shared one solver unknown and one wrong voltage.
+///
+/// Discriminated at the TOKEN, which is the only place the information still
+/// exists — the parser strips the `\` from the name (`Parser.tokenText`), and no
+/// property of the resulting string can tell `bus[0]` from `bus[0]`. The `\` is
+/// put back, which is unspellable by any generated name and is the §2.8.1
+/// spelling a reader already expects in a diagnostic.
+///
+/// Only a name ENDING in `]` is touched: nothing else can collide with an
+/// element spelling, and an escaped net that cannot collide keeps the key it has
+/// always had. That matters for the Annex E path, which declares a SPICE card
+/// named for a keyword as an escaped identifier (`spice_cards`).
+///
+/// ponytail: a fresh arena copy per reference, not per net. The name is rare
+/// enough that the `elemKey` stack-buffer trick would cost more comment than it
+/// saves; `internNode`'s `getOrPut` drops the copy on every hit after the first.
+fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
+    if (name.len == 0 or name[name.len - 1] != ']') return name;
+    if (tok >= self.tok_starts.len) return name;
+    const at = self.tok_starts[tok];
+    if (at >= self.src.len or self.src[at] != '\\') return name;
+    return std.fmt.allocPrint(self.arena, "\\{s}", .{name});
+}
+
 fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
     var buf: [elem_key_len]u8 = undefined;
     const key = try self.elemKey(&buf, base, &.{i});
