@@ -1,10 +1,31 @@
 # D04 — Procedural execution
 
-Pending fixtures for row D04 of
-`ARPice/docs/verilog-ams-conformance-plan.md`. Fourteen positive `.v` programs
-for the `vera --run` digital source-execution path, each with a golden
-transcript, plus one `.va` refusal. Nothing here is wired into `zig build`
-yet — every one of them fails today, which is the point.
+Row D04 of `ARPice/docs/verilog-ams-conformance-plan.md`. Fourteen positive `.v`
+programs for the `vera --run` digital source-execution path, each with a golden
+transcript, plus one `.va` refusal.
+
+## Status, 2026-09-20
+
+`zig build test-devices` runs the fourteen `.v` files and diffs their
+transcripts; `zig build benchmark -- --strict` measures the `.va` one. Nine of
+the fifteen pass:
+
+| fixtures | state |
+| --- | --- |
+| 01–08 | pass — implicit sensitivity, named events, the two intra-assignment controls, and level-sensitive `wait` all landed |
+| 14 | pass — `disable` of a named block, `src/sim/digital.zig`'s `disableRange` |
+| 09, 10 | FAIL — `task`/`endtask` are not TOKENS (`lib/frontend/token.zig`'s reserved-but-unimplemented table), so no AST, so nothing for `digital.zig` to execute |
+| 11, 12 | FAIL — `function` is parsed only after `analog` (`parser.zig`'s `parseAnalog` -> `parseFuncDecl`); a bare `function` module item is `E0205`, and there is no digital function-call expression |
+| 13 | FAIL — `fork`/`join` are not tokens either |
+| 15 | FAIL — `lib/ir/lower.zig`'s `lowerEventTrigger` still accepts `-> ev;` on the analog spine; its own comment says the `!in_event_stmt` gate is missing only because no fixture pinned it, and this is that fixture |
+
+So the five open `.v` rows are blocked in the FRONTEND, not in the executor.
+The call stack that 09–12 need cannot be written or tested until `task`,
+`endtask`, `automatic`, `fork` and `join` have tags and a digital
+`function_declaration`/`task_declaration`/`task_enable`/`function_call` reach
+the AST. Whoever takes them needs `lib/frontend/token.zig`,
+`lib/frontend/parser.zig` and `lib/frontend/ast.zig` as well as
+`src/sim/digital.zig`.
 
 ## Ground truth established before writing
 
@@ -202,35 +223,24 @@ Refusal (1, against 14 positives):
 
 ## How to run these
 
-Today, one at a time, to see them fail:
+Both suites walk this directory now; neither needs a per-fixture build-step
+edit, which is what the `tests/pending/D04` staging area this file used to
+describe was for.
 
-```
+```sh
 cd /home/omare/Documents/Projects/Zig/VerA
+zig build test-devices           # the fourteen .v, transcript-diffed
+zig build benchmark -- --strict  # the .va refusal, with every other fixture
+```
+
+One at a time, to read a diagnostic rather than a verdict:
+
+```sh
 zig build
-for f in tests/pending/D04/*.v; do zig-out/bin/vera --run "$f"; done
-zig-out/bin/vera --lint tests/pending/D04/15_bare_event_trigger_in_analog_rejected.va
+zig-out/bin/vera --run  tests/fixtures/digital/d04_09_task_argument_passing.v
+zig-out/bin/vera --lint tests/fixtures/digital/d04_15_bare_event_trigger_in_analog_rejected.va
 ```
 
-Once the feature lands, the `.v` files move to `tests/digital/` and get the same
-three lines each that `tests/digital/scheduling.v` has in `build.zig` (around
-line 141):
-
-```zig
-const d04 = b.addRunArtifact(exe);
-d04.addArg("--run");
-d04.addFileArg(b.path("tests/digital/01_implicit_sensitivity_star.v"));
-d04.expectStdOutEqual(@embedFile("tests/digital/01_implicit_sensitivity_star.expected.txt"));
-digital_step.dependOn(&d04.step);
-```
-
-then `zig build test-digital` (a dependency of `zig build test`).
-
-The `.va` refusal moves to `tests/fixtures/annex_a_syntax/` beside
-`18_disable_statement.va` and is picked up by:
-
-```
-zig build torture -- --strict
-```
-
-Nothing in this directory is scanned by either gate while it lives here, so the
-current 1323/1323 stays green.
+`test-devices` is deliberately NOT a dependency of `zig build test`: most of
+what it measures is approved behaviour this compiler does not have yet, and
+`build.zig` says so where the step is declared.
