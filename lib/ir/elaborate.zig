@@ -248,7 +248,18 @@ fn pickTop(ctx: Ctx) Error!*const Ast.ModuleDecl {
                 // root and a file whose paramset comes first elaborates the wrong
                 // one — which is the whole of `pickTop`'s job.
                 for (ctx.file.paramsets) |ps| {
-                    if (ps.name == inst.module and ps.target == m.name) instantiated = true;
+                    if (ps.name != inst.module) continue;
+                    // §6.4 "A chain of paramsets may be defined, but the last
+                    // paramset in the chain shall reference a module": follow
+                    // the second identifier while it keeps naming a paramset.
+                    // Bounded by the paramset count, so a cycle terminates.
+                    var target = ps.target;
+                    for (0..ctx.file.paramsets.len) |_| {
+                        target = for (ctx.file.paramsets) |p2| {
+                            if (p2.name == target) break p2.target;
+                        } else break;
+                    }
+                    if (target == m.name) instantiated = true;
                 }
             }
         }
@@ -572,12 +583,7 @@ const Flatten = struct {
             var ps: ?*const Ast.ParamsetDecl = null;
             const child = self.findModule(inst.module) orelse blk: {
                 ps = try self.selectParamset(&inst) orelse continue;
-                break :blk self.findModule(ps.?.target) orelse {
-                    try self.err(ps.?.main_tok, .E0904, "`{s}`, the module this paramset specializes", .{
-                        self.ctx.file.str(ps.?.target),
-                    });
-                    continue;
-                };
+                break :blk try self.chainEnd(ps.?) orelse continue;
             };
             // §7.6/§7.7: a connect module is placed by the connect module
             // INSERTION PHASE, selected by a `connect` specification statement —
@@ -1224,10 +1230,20 @@ const Flatten = struct {
     /// (E0361), so nothing is lost, only deferred.
     fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) bool {
         if (ranges.len == 0) return true;
+        // §3.4.2: "Valid values of string parameters are indicated differently.
+        // The `from` keyword may be used with a list of valid string values, or
+        // the `exclude` keyword may be used with a list of invalid string
+        // values." A.2.5's `value_range_type '{ string {, string} }`, which the
+        // parser parks in `ValueRange.strings`. Without this arm a binned
+        // paramset set keyed on a string — §3.4.6's own `ebersmoll` mapping —
+        // has every bin admit, and §6.4.2's rule 2 never narrows it.
+        if (value != .none and self.ctx.file.exprs.tag(value) == .str_literal)
+            return self.strInRanges(self.ctx.file.str(self.ctx.file.exprs.strOf(value)), ranges);
         const v = self.constReal(value) orelse return true;
         var has_from = false;
         var in_from = false;
         for (ranges) |r| {
+            if (r.strings != null) continue;
             const lo = self.constReal(r.lo) orelse return true;
             const hi = if (r.hi == .none) lo else self.constReal(r.hi) orelse return true;
             const above = if (r.lo_inclusive) v >= lo else v > lo;
@@ -1238,6 +1254,30 @@ const Flatten = struct {
                     if (above and below) in_from = true;
                 },
                 .exclude => if (above and below) return false,
+            }
+        }
+        return !has_from or in_from;
+    }
+
+    /// The string half of `inRanges`. Same shape as `lower.checkParamRange`'s
+    /// `.str` arm — membership in a `'{ ... }` set, union over the `from`
+    /// clauses, any `exclude` hit is fatal — but it returns a verdict instead
+    /// of a diagnostic, because here a non-member only means "this bin is not
+    /// the one".
+    fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bool {
+        var has_from = false;
+        var in_from = false;
+        for (ranges) |r| {
+            const off = r.strings orelse continue;
+            const contains = for (self.ctx.file.exprs.list(off)) |id| {
+                if (std.mem.eql(u8, s, self.ctx.file.str(@enumFromInt(id)))) break true;
+            } else false;
+            switch (r.kind) {
+                .from => {
+                    has_from = true;
+                    in_from = in_from or contains;
+                },
+                .exclude => if (contains) return false,
             }
         }
         return !has_from or in_from;
@@ -1305,6 +1345,11 @@ const Flatten = struct {
     ) Error!void {
         const ps_path = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}{c}", .{ path, self.ctx.file.str(ps.name), sep });
 
+        // §6.4's chain, near to far. `chainEnd` already walked it to find
+        // `child`, so this cannot fail here.
+        var chain: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
+        _ = try self.paramsetChain(ps, &chain);
+
         // ---- level 1: the paramset's own parameters, overridden by the instance
         var ps_unit: Unit = .{ .mfactor = parent.mfactor };
         var ps_over: std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId) = .empty;
@@ -1332,9 +1377,26 @@ const Flatten = struct {
         self.in_paramset = true;
         try self.cloneParams(ps.params, ps.aliasparams, &ps_over);
 
-        // ---- level 2: the module's parameters, from the paramset's statements
-        for (ps.overrides) |o| {
-            switch (o.kind) {
+        // ---- level 2: the module's parameters, from the paramsets' statements
+        //
+        // §6.4's chain, applied FAR link first so a nearer link's assignment to
+        // the same module parameter wins. §6.4 states only that a chain may
+        // exist and that its last link references a module; it supplies no
+        // precedence rule, and nearest-wins is chosen because a near link is
+        // the more specific specialization — the same direction §6.3 gives an
+        // instance override over a declared default.
+        //
+        // ponytail: a farther link's own PARAMETERS are not brought into scope;
+        // its statements are evaluated in the near link's. Only the near link is
+        // named by an instance, so only its parameters can take a §6.3 override,
+        // and no fixture writes a far link that reads one. The upgrade path is a
+        // per-link `Unit` + `cloneParams` under `path ++ link.name ++ sep`,
+        // built in the same loop.
+        var mfactor = ps_unit.mfactor;
+        var i = chain.items.len;
+        while (i > 0) {
+            i -= 1;
+            for (chain.items[i].overrides) |o| switch (o.kind) {
                 .module_param => {
                     const decl = for (child.params) |*p| {
                         if (p.name == o.name) break p;
@@ -1362,21 +1424,21 @@ const Flatten = struct {
                         continue;
                     }
                     const v = try self.cloneExpr(o.value);
-                    ps_unit.mfactor = if (ps_unit.mfactor == .none) v else try self.ctx.file.exprs.add(self.ctx.arena, .{
+                    mfactor = if (mfactor == .none) v else try self.ctx.file.exprs.add(self.ctx.arena, .{
                         .tag = .binary,
                         .main_tok = o.main_tok,
-                        .lhs = ps_unit.mfactor,
+                        .lhs = mfactor,
                         .rhs = v,
                         .extra = @intFromEnum(Ast.BinaryOp.mul),
                     });
                 },
                 .output_var => {}, // §6.4.3, dropped in the parser — see there
-            }
+            };
         }
         self.in_paramset = false;
         self.unit = saved;
 
-        unit.mfactor = ps_unit.mfactor;
+        unit.mfactor = mfactor;
         // §9.19 as for a module instance: decided here, once, per parameter.
         for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
         for (child.aliasparams) |al| if (over.contains(al.target))
@@ -1803,6 +1865,55 @@ const Flatten = struct {
             if (std.ascii.eqlIgnoreCase(self.ctx.file.str(m.name), want)) return m;
         }
         return null;
+    }
+
+    /// §6.4: "The second identifier is usually the name of a module with which
+    /// the paramset is associated. The second identifier may instead be the name
+    /// of a second paramset. A chain of paramsets may be defined, but the last
+    /// paramset in the chain shall reference a module."
+    ///
+    /// The links, near (the one the instance named) to far. `.none` only when a
+    /// link's second identifier names neither — E0904, reported here.
+    ///
+    /// The chain is walked by NAME and the first declaration of that name wins.
+    /// §6.4.2's selection rules are written for "every instance that references
+    /// that name", and a chain link is not an instance, so an overloaded inner
+    /// link has no instance context to select against.
+    fn paramsetChain(
+        self: *Flatten,
+        near: *const Ast.ParamsetDecl,
+        out: *std.ArrayList(*const Ast.ParamsetDecl),
+    ) Error!bool {
+        var link = near;
+        while (true) {
+            try out.append(self.ctx.arena, link);
+            if (self.findModule(link.target) != null) return true;
+            const next = for (self.ctx.file.paramsets) |*p| {
+                if (p.name == link.target) break p;
+            } else {
+                try self.err(link.main_tok, .E0904, "`{s}`, the module this paramset specializes", .{
+                    self.ctx.file.str(link.target),
+                });
+                return false;
+            };
+            // A chain that closes on itself never reaches a module, so §6.4's
+            // "the last paramset in the chain shall reference a module" is
+            // violated by the cycle itself.
+            for (out.items) |seen| if (seen == next) {
+                try self.err(next.main_tok, .E0904, "`{s}`: the paramset chain is a cycle and never reaches a module", .{
+                    self.ctx.file.str(next.name),
+                });
+                return false;
+            };
+            link = next;
+        }
+    }
+
+    /// The module at the end of `ps`'s chain, or `null` after an E0904.
+    fn chainEnd(self: *Flatten, ps: *const Ast.ParamsetDecl) Error!?*const Ast.ModuleDecl {
+        var chain: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
+        if (!try self.paramsetChain(ps, &chain)) return null;
+        return self.findModule(chain.items[chain.items.len - 1].target).?;
     }
 
     /// Annex E — is `m` one of the shipped Table E.1 primitives? Identity, not
