@@ -775,17 +775,38 @@ const KV = struct { []const u8, Tag };
 /// and the annex C.16 "not used by Verilog-A" list. All lex to `.kw_reserved`.
 /// Keeping them in the map is what makes them unusable as identifiers (annex B).
 const reserved_keywords = [_][]const u8{
-    // annex C.16 — not used by Verilog-A
-    // `net_resolution` appears in no production at all, and `wreal` (§3.7)
-    // declares a discrete
+    // annex C.16 — not used by Verilog-A. `wreal` (§3.7) declares a discrete
     // real net there is no digital kernel to drive.
-    "net_resolution", "wreal",
+    //
+    // TWO SPELLINGS LEFT THIS LIST BECAUSE THE 2023 TABLE B.1 DOES NOT HAVE
+    // THEM, and §2.8.2 ("Annex B lists all defined Verilog-AMS HDL keywords")
+    // plus Annex B's own "Verilog-AMS reserves the keywords listed in Table
+    // B.1" make that table the whole reservation:
+    //
+    //   `net_resolution` — Annex G Table G.7 item 5027, verbatim "Removed
+    //   unused keyword net_resolution | B.1, C.16". C.16's list is nine words
+    //   in 2023 (connect, connectmodule, connectrules, driver_update,
+    //   endconnectrules, merged, resolveto, split, wreal) and this is not one
+    //   of them. It WAS reserved under "VAMS-2.3" and `isReserved` can no
+    //   longer say so — the five sets are modelled as a nesting chain with an
+    //   introduction date per spelling, which cannot express a word that
+    //   leaves. A word removed by a later edition needs a retirement date
+    //   beside the introduction one; nothing in the suite asks for one.
+    //
+    //   `assert` — never in the 2023 table at all; the run reads `asinh`,
+    //   `assign`, with nothing between. It was carried here from the 2.4
+    //   printing, which reserved the spelling and spent it on nothing: no
+    //   statement, no system function, no production in annex A. §10.6's own
+    //   closing example makes the same point about a word of the same
+    //   pedigree — "Note that the word "logic" is not a keyword in
+    //   Verilog-AMS 2023, whereas it is a keyword in the IEEE Std 1800
+    //   SystemVerilog." A keyword set assembled by unioning every list a
+    //   standard has ever printed is not the set the standard defines.
+    //
+    // ch10_directives/d10_11 and d10_12 pin both as ordinary identifiers.
+    "wreal",
     // digital behavior / structural §IEEE1364
     //
-    // `assert` earns its place the way `net_resolution` above it does: Table
-    // B.1 reserves the spelling and Verilog-AMS 2.4 then spends it on nothing
-    // — no statement, no system function, no production in annex A. Being
-    // unavailable as an identifier is the whole of what the word does.
     // `assign` left this list when A.6.1 got a tag (`kw_assign`) — §10.6
     // membership is keyed by spelling, so it is still reserved everywhere it
     // was, and `keyword_intro` still finds it through `kw_1364_1995`.
@@ -793,7 +814,6 @@ const reserved_keywords = [_][]const u8{
     // tags (`kw_and` … `kw_notif1`) now that §7.8.5's tables are implemented.
     // Reserved-word membership is keyed by spelling, so `keyword_intro` still
     // finds every one of them through `kw_1364_1995`.
-    "assert",
     "automatic",
     "cmos",               "deassign",      "edge",
     "endprimitive",       "endspecify",    "endtable",     "endtask",
@@ -941,6 +961,13 @@ test "keyword_map: spelling round-trips through lexeme" {
     // Not keywords: system function names (§2.8.3) and ordinary identifiers.
     try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("temperature"));
     try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("V"));
+    // Nor these two, and the reason is the map's own definition: §2.8.2 makes
+    // Annex B the list of all keywords and the 2023 Table B.1 carries neither.
+    // Annex G item 5027 took `net_resolution` off it on purpose; `assert` was
+    // never on it (the run is `asinh`, `assign`). Pinned here because both are
+    // easy to re-add from an older printing. ch10_directives/d10_11, d10_12.
+    try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("assert"));
+    try std.testing.expectEqual(@as(?Tag, null), keyword_map.get("net_resolution"));
 }
 
 test "lookupKeyword: differential against keyword_map, which stays the reference" {
