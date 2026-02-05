@@ -2209,6 +2209,42 @@ const Flatten = struct {
         return self.cloneExpr(e);
     }
 
+    /// §6.4.1: "The right-hand side can be composed of numbers, parameters, and
+    /// hierarchical out-of-module references to local parameters of a different
+    /// module. Hierarchical out-of-module references to non-local parameters are
+    /// disallowed."
+    ///
+    /// The clause's own example reads `semicoCMOS.tox` from a process-constant
+    /// module that NOTHING instantiates, so the reference has no path in the
+    /// instance tree and §6.7's ordinary flat-name lookup (E0901) can never
+    /// resolve it. It names the DECLARATION, and its value is the declared
+    /// default — substituted here, in the one context §6.4.1 licenses it.
+    ///
+    /// ponytail: the default is cloned under an empty rename map, so a library
+    /// localparam whose own default reads a SIBLING localparam leaves that name
+    /// unresolved (E0901 at lowering) rather than silently capturing a
+    /// same-named paramset parameter. §6.4.1's worked example does not nest.
+    /// The upgrade path is a recursive substitution keyed on the owning module.
+    fn paramsetOomr(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+        if (!self.in_paramset) return null;
+        const parts = self.ctx.file.exprs.nameParts(e);
+        if (parts.len != 2) return null;
+        const m = self.findModule(parts[0]) orelse return null;
+        const p = for (m.params) |*q| {
+            if (q.name == parts[1]) break q;
+        } else return null;
+        if (!p.is_local) {
+            try self.err(self.ctx.file.exprs.mainTok(e), .E0907, "`{s}.{s}` is a parameter, and §6.4.1 allows a paramset to reach out of module only to a LOCAL parameter", .{
+                self.ctx.file.str(parts[0]), self.ctx.file.str(parts[1]),
+            });
+            return null;
+        }
+        const saved = self.unit;
+        self.unit = .{ .mfactor = saved.mfactor };
+        defer self.unit = saved;
+        return try self.cloneExpr(p.default);
+    }
+
     fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
         if (e == .none) return .none;
         const x = &self.ctx.file.exprs;
@@ -2220,6 +2256,7 @@ const Flatten = struct {
             .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => {},
             .ident => n.str = self.flat(n.str),
             .hier_ident => {
+                if (try self.paramsetOomr(e)) |sub| return sub;
                 // §6.7 a dotted name. Only the FIRST part can be a local of this
                 // unit — an instance of it, usually — and the rest are inside
                 // whatever that names, so renaming part 0 is what turns `u.gain`
