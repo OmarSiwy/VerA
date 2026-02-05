@@ -57,23 +57,24 @@
 // not a tolerance. `assert` is an ordinary net name and the assertion is that
 // reading it as one gave the ordinary answer.
 //
-// STATUS. VerA reserves the spelling under its VAMS-2023 set and refuses the
-// port before it ever sees the analog block:
+// STATUS. Green:
+//
+//   `assert` names an ordinary net under the VAMS-2023 keyword set got=1 want=1 ok=1
+//
+// It was not. VerA reserved the spelling under its AMS keyword sets and refused
+// the port before it ever saw the analog block:
 //
 //   error[E0208]: expected an identifier: found assert
 //     = note: LRM 2.8
 //
-// which is the compiler contradicting the clause it cites: §2.8.2 is the
+// which was the compiler contradicting the clause it cited: §2.8.2 is the
 // sentence that makes Annex B the whole list, and Annex B does not have this
-// word. The reservation is specific to the AMS sets and not to the name's
-// syntax — the identical module under `begin_keywords "1364-2005"` compiles
-// today — so the defect is one table entry, not a parsing problem.
-//
-// The harness's own label for this file today is `did not compile: NoModule`
-// rather than `CompileFailed`, and that is the location of the check rather than
-// a second problem: the reservation is enforced in the PARSER, so the port list
-// never becomes a module declaration and elaboration has nothing to select. The
-// E0208 above is the diagnostic; `NoModule` is only the phase that gave up.
+// word. The reservation was one entry in `lib/frontend/token.zig`'s
+// `reserved_keywords`, carried over from the 2.4 printing and never spent on a
+// production, and deleting it is the whole fix — the refusal was never about
+// the name's syntax, which is why the identical module under
+// `begin_keywords "1364-2005"` compiled even then. `token.zig`'s `keyword_map`
+// test now pins the spelling's absence so an older printing cannot put it back.
 
 //! lrm 10.6
 //! lrm 2.8.2
