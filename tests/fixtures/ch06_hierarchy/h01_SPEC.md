@@ -1,13 +1,14 @@
 # H01 — Parameters, paramsets and elaborated identity
 
-Twelve pending fixtures: **eleven positive** (each asserts a hand-derived value)
-and **one rejection**. Seven of the positives and the rejection FAIL against
-VerA today; four positives pass and are here because the row claimed them with
-no fixture behind the claim — each of those four still discriminates, see *The
-four fixtures that pass today* below.
+Twelve fixtures: **eleven positive** (each asserts a hand-derived value) and
+**one rejection**. Ten of the positives pass against VerA today. The two open
+rows are fixture 10 (E1004 — a string comparison in a host-derived parameter,
+which `lib/backend/codegen.zig` cannot render) and fixture 12, the rejection,
+which is carried as an `//! xfail`.
 
-Nothing here is under `tests/fixtures/`, so `zig build torture -- --strict`
-(1323/1323) is untouched.
+Four of the ten passed from the start and are here because the row claimed them
+with no fixture behind the claim — each still discriminates, see *The fixtures
+that pass today* below.
 
 ## LRM clauses covered
 
@@ -36,23 +37,24 @@ Nothing here is under `tests/fixtures/`, so `zig build torture -- --strict`
 
 | # | File | Pins | Expected value and derivation | Today |
 |---|---|---|---|---|
-| 01 | `01_paramset_string_range_selection.va` | §6.4.2 selection rule 2 applied to a §3.4.2 **string** range | `sign = −1.0`, current `−0.5 A`. Two paramsets named `h01_type_ps`; the instance overrides `t` with `"PMOS"`, which only the second one's `from '{"PMOS"}'` admits, and that one writes `.sign = −1.0`; at `V=0.5` the contribution is `−1.0 × 0.5`. | **FAILS** — E0914 (2 applicable). `inRanges` folds reals only and ignores `ValueRange.strings`, so both bins admit and the tie-breaks cannot separate them. |
-| 02 | `02_paramset_chain.va` | §6.4 chained paramsets | `j = 2.0` from the far link (the one whose own second identifier is the module), so `j·V = 1.0 A` at 0.5 V; the module default is 0.0. The instance names the near link, which is not a module, so no path that skips the chain produces 2.0. The near link now carries only a paramset-variable declaration and assignment (Syntax 6-4's minimum body) — see *Withdrawn* below. | **FAILS** — E0904 at line 68; `ps.target` is resolved with `findModule` only. |
-| 03 | `03_paramset_oomr_localparam.va` | §6.4.1's permitted out-of-module read of a localparam | `k = h01_lib.tox × w = 3.0 × 2.0 = 6.0`, current `3.0 A`. The clause's own `semicoCMOS` example, with the `$rdist_` draws removed. | **FAILS** — E0901; a path is resolved through the instance tree, and the library module is never instantiated. |
+| 01 | `01_paramset_string_range_selection.va` | §6.4.2 selection rule 2 applied to a §3.4.2 **string** range | `sign = −1.0`, current `−0.5 A`. Two paramsets named `h01_type_ps`; the instance overrides `t` with `"PMOS"`, which only the second one's `from '{"PMOS"}'` admits, and that one writes `.sign = −1.0`; at `V=0.5` the contribution is `−1.0 × 0.5`. | passes, 2/2. Was E0914 (2 applicable): `inRanges` folded reals only and ignored `ValueRange.strings`, so both bins admitted and the tie-breaks could not separate them. It now has the string arm. |
+| 02 | `02_paramset_chain.va` | §6.4 chained paramsets | `j = 2.0` from the far link (the one whose own second identifier is the module), so `j·V = 1.0 A` at 0.5 V; the module default is 0.0. The instance names the near link, which is not a module, so no path that skips the chain produces 2.0. The near link now carries only a paramset-variable declaration and assignment (Syntax 6-4's minimum body) — see *Withdrawn* below. | passes, 2/2. Was E0904 at line 68: `ps.target` was resolved with `findModule` only. `Flatten.paramsetChain` walks the chain; the links' statements are applied far-first, a precedence §6.4 does not state and nothing here asserts. |
+| 03 | `03_paramset_oomr_localparam.va` | §6.4.1's permitted out-of-module read of a localparam | `k = h01_lib.tox × w = 3.0 × 2.0 = 6.0`, current `3.0 A`. The clause's own `semicoCMOS` example, with the `$rdist_` draws removed. | passes, 2/2. Was E0901: a path was resolved through the instance tree and the library module is never instantiated. `Flatten.paramsetOomr` substitutes the declared default inside a paramset expression, and §6.4.1's next sentence is now refused with E0907. |
 | 04 | `04_paramset_overload_lrm_table.va` | §6.4.2's printed table, rows m3 and m4 | m3 `#(.l(1u),.w(10u))` → default bin: `u0=650`, `nfs=0.8e12`, `ad = w·0.5u = 5.0e−12`. m4 `#(.l(3u),.w(5u),.ad(1.2p),.as(1.3p))` → long-channel bin: `u0=640`, `nfs=0.7e12`, `ad=1.2e−12`. Mismatch bin excluded (default `mm=0` outside `(0:1]`), short-channel excluded by `l`, default beats long-channel on tie-break 1 (0 vs 2 un-overridden). One predicate keyed on `l`, verdict 1. | passes |
 | 05 | `05_paramset_under_parameter_sweep.va` | §8.2 re-elaboration + §6.9.2 + §6.4.1 under a host `psweep` | `g = 3·w = 3·(2k) = 6k`, so `g/(6k) = 1.0` at every sub-task (k = 1 → g = 6; k = 3 → g = 18). Backstop: `k>2 ⇒ g>17`. | passes |
 | 06 | `06_paramset_unoverridden_defaults.va` | §6.4 + §3.4.1 + §9.19: final values when nothing overrides | `k = 3.0 × w = 6.0` from the paramset's **un-overridden** default `w=2.0`; `untouched = 7.5` (module default, named by nobody — the "unused model default" that must not be rejected); current `3.0 A`. §9.19 on a second instance, `h01_given_probe #(.tdevice(27.0))`: `$param_given(tdevice)=1` where the override **equals** the declared default (§9.19's own `tdevice`/27 example) against `$param_given(untouched)=0` in the paramset instance. The pair rejects a constant-0, a constant-1 and a compare-value-to-default implementation. | passes, 6/6 |
-| 07 | `07_escaped_name_vs_vector_element.va` | §2.8.1 vs §3.6.3: `\bus[0]` is a scalar net, `bus[0]` is a select on the vector | `V(bus[0]) = 3·(1/2) = 1.5 V`, `V(\bus[0]) = 3·(2/3) = 2.0 V`. Merged onto one node the four resistors parallel to `3·(2/3.5) = 1.714… V` and both checks miss. | **FAILS** — E0902, the escaped scalar is read as a second discipline declaration of the vector element. Renaming it `\other[0]` compiles and prints exactly 1.5 / 2.0. |
-| 08 | `08_mixed_sign_comparison_context.va` | context signedness across a compound expression | `a=−1`: `(a<1)=1`, `(a<32'd1)=0`, `((a+0)<32'd1)=0`, `(a==32'hFFFFFFFF)=1`, `(a>>1)=2147483647`. Rows 1 and 5 are controls for the rules that already hold. | **FAILS** — rows 2, 3, 4 answer 1, 1, 0: the i64 carrier is compared signed. E0364 refuses only the shift-versus-unsigned-comparison shape, which none of these is. |
-| 09 | `09_integer_parameter_host_override_rounding.va` | §4.2.1.1 on the **host override** path | `−1.5 → −2`, `35.5 → 36`, `35.2 → 35` (the clause's own examples), sum `69`. | **FAILS** — the override is written verbatim into the model card, so `zig build-exe` dies on "fractional component prevents float value '-1.5' from coercion to type 'i64'". The conversion happens nowhere on this path. |
-| 10 | `10_string_derived_parameter.va` | §6.3.4 dependence with a §3.4.6 string operand | `mk = (mode=="fast") ? 2.0 : 3.0` with `.mode("slow")` → `3.0`, current `1.5 A`; frozen at the default it reads 2.0. | **FAILS** — E1004. Conditionals, short-circuit logic, `%`, `**`, shifts and the real math builtins all derive correctly (each checked while writing this); the string comparison is the single missing operand type. |
+| 07 | `07_escaped_name_vs_vector_element.va` | §2.8.1 vs §3.6.3: `\bus[0]` is a scalar net, `bus[0]` is a select on the vector | `V(bus[0]) = 3·(1/2) = 1.5 V`, `V(\bus[0]) = 3·(2/3) = 2.0 V`. Merged onto one node the four resistors parallel to `3·(2/3.5) = 1.714… V` and both checks miss. | passes, 2/2, with two separate unknowns in the solve. Was E0902: the escaped scalar was read as a second discipline declaration of the vector element, the node table being keyed on the printed form. `Lower.netKey` discriminates at the token and restores the `\` for a net name ending in `]`. |
+| 08 | `08_mixed_sign_comparison_context.va` | context signedness across a compound expression | `a=−1`: `(a<1)=1`, `(a<32'd1)=0`, `((a+0)<32'd1)=0`, `(a==32'hFFFFFFFF)=1`, `(a>>1)=2147483647`. Rows 1 and 5 are controls for the rules that already hold. | passes, 5/5. Rows 2, 3, 4 used to answer 1, 1, 0 — the i64 carrier was compared signed, and E0364 refuses only the shift-versus-unsigned-comparison shape, which none of these is. `Lower.unsignedCompareMask` masks both operands to the wider width first. |
+| 09 | `09_integer_parameter_host_override_rounding.va` | §4.2.1.1 on the **host override** path | `−1.5 → −2`, `35.5 → 36`, `35.2 → 35` (the clause's own examples), sum `69`. | passes, 4/4. The override used to be written verbatim into the model card, so `zig build-exe` died on "fractional component prevents float value '-1.5' from coercion to type 'i64'". `tb.cardValue` is §4.2.1.1's conversion, at both card-write sites. |
+| 10 | `10_string_derived_parameter.va` | §6.3.4 dependence with a §3.4.6 string operand | `mk = (mode=="fast") ? 2.0 : 3.0` with `.mode("slow")` → `3.0`, current `1.5 A`; frozen at the default it reads 2.0. | **FAILS** — E1004, and the remaining open row of the twelve. Conditionals, short-circuit logic, `%`, `**`, shifts and the real math builtins all derive correctly (each checked while writing this); the string comparison is the single missing operand type. It is `lib/backend/codegen.zig`'s `f64Const`/`hostConditionalExpr` that cannot render one — `Lower`'s own folder was separately wrong about string comparison and has been fixed (`foldStrBinary`), but that path is shadowed by this refusal. |
 | 11 | `11_dependent_range_and_array_override.va` | §3.4.2 instance-final range bound + §3.4.4 dependent array size | `hi→40`, `x→20` ⇒ `x/hi = 0.5` (the declared ceiling 10 would have refused it); `nn→3`, `c→'{2,4,8}` ⇒ `c[nn−1] = 8.0` and `c[0]+3c[1]+5c[2] = 54.0`, a weighting no permutation of {2,4,8} repeats. | passes |
 | 12 | `12_nonfinite_real_to_integer_rejected.va` | §4.2.1.1 + §3.2: an infinity has no nearest integer and no §3.2-range answer | must be **refused**. The expectation is `//! reject LRM 4.2.1.1` — the clause the diagnostic must cite — because no code exists for this yet and naming one would pin an implementation choice. | **FAILS** — accepted, and the parameter comes out `9223372036854775807`, outside §3.2's range for the type, so a host cannot tell it from a real value. |
 
-## The four fixtures that pass today, and what each would catch
+## The fixtures that pass today, and what each would catch
 
 Passing at HEAD is not the same as having no teeth; a fixture is worthless only
-if its asserted value is reachable without the rule. For each of the four:
+if its asserted value is reachable without the rule. For each of the four that
+already passed when this file was written:
 
 - **04** — `u0`/`nfs`/`ad` differ between the candidate bins (650/0.8e12/5.0e-12
   vs 640/0.7e12/1.2e-12). Selecting the wrong paramset, or applying the tie-breaks
@@ -84,7 +86,9 @@ they are not counted as covered in the clause table above.
   of the **associated** module" argues the near link may only refine the far link,
   under which reading the old file was ill-formed. Comes back when §6.4/§6.4.1 (or
   an erratum) names the target, and settles precedence when both links assign the
-  same parameter. VerA cannot express either reading today (E0904).
+  same parameter. VerA now walks the chain and applies the links far-first, so
+  the NEARER link wins — a precedence chosen for the implementation, recorded at
+  `paramsetOverrides`, and asserted by no fixture.
 - **`$param_given` = 1 for a value supplied by a paramset statement** (was fixture
   06). §9.19's normative sentence lists `defparam` and module instance parameter
   value assignment; a paramset statement is neither, while the clause's descriptive
@@ -180,8 +184,9 @@ defect). What changed:
    paramset. The near link keeps the smallest body Syntax 6-4 admits (one `real`
    declaration, one assignment to it), which is legal under both readings of
    §6.4.1. The withdrawal, both readings, and what would bring the claim back are
-   in the file header and in *Withdrawn after review* above. Re-checked: E0904 at
-   line 68, the same diagnostic the previous version produced.
+   in the file header and in *Withdrawn after review* above. (At the time of the
+   repair this still stopped at E0904, line 68; the chain has since been
+   implemented and the fixture is green, 2/2.)
 2. **Fixture 06 no longer asserts `$param_given(k) == 1` for a paramset
    statement.** §9.19 was opened: the normative sentence names `defparam` and
    module instance parameter value assignment only. The `0` half is kept (nothing
@@ -192,7 +197,7 @@ defect). What changed:
    keeps the check from being satisfiable by a constant or by comparing the final
    value with the declaration default. Re-checked: 6/6 `ok=1`.
 3. **The four passing fixtures now carry their discrimination argument** in *The
-   four fixtures that pass today* rather than a bare disclosure that they pass.
+   fixtures that pass today* rather than a bare disclosure that they pass.
    None was found vacuous, so none was deleted; 04, 05 and 11 are unchanged.
 
 Not changed, and why: fixture 12's `//! reject LRM 4.2.1.1` is deliberately a

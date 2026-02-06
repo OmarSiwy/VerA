@@ -1369,7 +1369,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             try self.vectors.put(self.arena, name, r);
             continue;
         }
-        const idx = try self.internNode(self.file.str(p.name), self.strOrEmpty(p.discipline));
+        const idx = try self.internNode(try self.netKey(self.file.str(p.name), p.main_tok), self.strOrEmpty(p.discipline));
         // §6.5.2.2. Recorded here and nowhere else: only a port can be
         // directional, and this loop is the only place the direction is known.
         self.node_dir.items[idx] = p.direction;
@@ -1382,7 +1382,10 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 
     // §3.6.3 internal nets, then §3.6.4 ground.
     for (module.nets) |n| {
-        const name = self.file.str(n.name);
+        // §2.8.1 vs §3.6.3 — see `netKey`. A RANGED declaration is a vector and
+        // its own name never reaches the node table, so the key is the scalar
+        // path's and the `vectors` entry below keeps the declared spelling.
+        const name = try self.netKey(self.file.str(n.name), n.main_tok);
         // §3.6.3 a vector net is N independent nets, scalarised here.
         //
         // ponytail: `n.init` is dropped on this path. §3.6.3.2's bus form is a
@@ -2605,7 +2608,7 @@ fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
 /// written onto each scalarised element, since the base name is not a node.
 fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     const r = self.vectors.get(name) orelse
-        return self.applyDefaultDiscipline(name, main_tok);
+        return self.applyDefaultDiscipline(try self.netKey(name, main_tok), main_tok);
     var key_buf: [elem_key_len]u8 = undefined;
     for (0..r.size()) |k|
         try self.applyDefaultDiscipline(try self.elemKey(&key_buf, name, &.{r.at(@intCast(k))}), main_tok);
@@ -2826,7 +2829,10 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .ident => {
-            const name = self.file.str(ex.strOf(e));
+            // §2.8.1 — see `netKey`. The reference to `\bus[0] ` is an `.ident`
+            // and the reference to element 0 of `bus` is an `.index`, so the two
+            // never share a path here; only the KEY had to be kept apart.
+            const name = try self.netKey(self.file.str(ex.strOf(e)), ex.mainTok(e));
             if (self.vectors.get(name)) |r| {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
                 return ground;
@@ -2905,6 +2911,41 @@ fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
 /// body, and formatting the name afresh on every reference would just
 /// rediscover the slot the first one interned. `getKey` hands back the arena copy
 /// already in the map, so `internNode` does its whole job unchanged.
+/// The node-table key for a net named by the SOURCE identifier at `tok`.
+///
+/// §2.8.1: "Escaped identifiers shall start with the backslash character (\) and
+/// end with white space ... Neither the leading backslash character nor the
+/// terminating white space is considered to be part of the identifier." So
+/// `electrical \bus[0] ;` declares a SCALAR net whose name is the five
+/// characters `bus[0]` — byte-for-byte what `internNodeElem` prints for element
+/// 0 of `electrical [0:1] bus`. That spelling is a GENERATED name (§3.13.3), not
+/// a declaration in the module's namespace, so the two are different objects and
+/// the shared key merged them: the escaped scalar was refused as a second
+/// discipline declaration of the vector's element (E0902), and without that
+/// refusal the two would have shared one solver unknown and one wrong voltage.
+///
+/// Discriminated at the TOKEN, which is the only place the information still
+/// exists — the parser strips the `\` from the name (`Parser.tokenText`), and no
+/// property of the resulting string can tell `bus[0]` from `bus[0]`. The `\` is
+/// put back, which is unspellable by any generated name and is the §2.8.1
+/// spelling a reader already expects in a diagnostic.
+///
+/// Only a name ENDING in `]` is touched: nothing else can collide with an
+/// element spelling, and an escaped net that cannot collide keeps the key it has
+/// always had. That matters for the Annex E path, which declares a SPICE card
+/// named for a keyword as an escaped identifier (`spice_cards`).
+///
+/// ponytail: a fresh arena copy per reference, not per net. The name is rare
+/// enough that the `elemKey` stack-buffer trick would cost more comment than it
+/// saves; `internNode`'s `getOrPut` drops the copy on every hit after the first.
+fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
+    if (name.len == 0 or name[name.len - 1] != ']') return name;
+    if (tok >= self.tok_starts.len) return name;
+    const at = self.tok_starts[tok];
+    if (at >= self.src.len or self.src[at] != '\\') return name;
+    return std.fmt.allocPrint(self.arena, "\\{s}", .{name});
+}
+
 fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
     var buf: [elem_key_len]u8 = undefined;
     const key = try self.elemKey(&buf, base, &.{i});
@@ -7993,7 +8034,17 @@ fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             .v = try self.emit(.pow, &.{ try self.toReal(a), try self.toReal(b) }),
             .ty = .real,
         },
-        .eq, .neq, .lt, .le, .gt, .ge => return .{ .v = try self.cmp(op, a, b), .ty = .integer },
+        .eq, .neq, .lt, .le, .gt, .ge => {
+            // §4.2.9's unsigned context, applied to the pair rather than to
+            // either operand. See `unsignedCompareMask`.
+            if (a.ty == .integer and b.ty == .integer) if (self.unsignedCompareMask(e)) |m| {
+                const k = try self.mir.addIntConst(self.arena, m);
+                const az: TypedValue = .{ .v = try self.emit(.bitand, &.{ a.v, k }), .ty = .integer };
+                const bz: TypedValue = .{ .v = try self.emit(.bitand, &.{ b.v, k }), .ty = .integer };
+                return .{ .v = try self.cmp(op, az, bz), .ty = .integer };
+            };
+            return .{ .v = try self.cmp(op, a, b), .ty = .integer };
+        },
         .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr => {
             if (a.ty != .integer or b.ty != .integer) {
                 try self.err(self.file.exprs.mainTok(e), .E0322, "got {s} and {s}", .{ @tagName(a.ty), @tagName(b.ty) });
@@ -10866,12 +10917,44 @@ fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     }
 }
 
+/// Table 3-3's string operators, folded. "Equality. Checks whether the two
+/// strings are equal. Result is 1 if they are equal and 0 if they are not" and
+/// "Relational operators return 1 if the corresponding condition is true using
+/// the lexicographical ordering of the two strings".
+///
+/// A MIXED pair declines to fold. §2.7 does make a string operand "unsigned
+/// integer constants" for an arithmetic context, but the conversion is
+/// `lowerBinary`'s (`strNum`) and duplicating it here to answer a constant
+/// expression is not worth a second copy of the rule; declining leaves the
+/// runtime path — which is correct — to answer, at the cost of a "not a
+/// constant expression" on a shape nothing in the suite writes.
+fn foldStrBinary(op: Ast.BinaryOp, a: Const, b: Const) ?Const {
+    if (a != .str or b != .str) return null;
+    const c = std.mem.order(u8, a.str, b.str);
+    return .{ .int = @intFromBool(switch (op) {
+        .eq => c == .eq,
+        .neq => c != .eq,
+        .lt => c == .lt,
+        .le => c != .gt,
+        .gt => c == .gt,
+        .ge => c != .lt,
+        else => return null,
+    }) };
+}
+
 fn foldBinary(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     const ex = &self.file.exprs;
     if (self.mixedShiftComparison(e)) return null;
     const a = self.foldExpr(ex.lhs(e), params) orelse return null;
     const b = self.foldExpr(ex.rhs(e), params) orelse return null;
     const op = ex.binOp(e);
+    // Table 3-3, before anything numeric touches a string. `Const.asReal` is 0
+    // for EVERY string, so `"slow" == "fast"` folded as `0 == 0` and came out
+    // TRUE — silently, and only in the folder: `lowerBinary` compares strings
+    // properly at runtime, so the same expression answered differently
+    // depending on whether it was a constant expression. A `for` bound over
+    // `(mode == "fast") ? 3 : 1` ran three times with `mode` at "slow".
+    if (a == .str or b == .str) return foldStrBinary(op, a, b);
     // §4.2.1 integer arithmetic only when BOTH operands are integer.
     const int = a == .int and b == .int;
     const x = a.asReal();
@@ -10962,6 +11045,49 @@ fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
         .index => self.integerSourceSigned(ex.lhs(e), depth + 1),
         else => null,
     };
+}
+
+/// §4.2.9, the rule that makes signedness a property of the COMPARISON and not
+/// of either operand: "When one or both operands are unsigned, the expression
+/// shall be interpreted as a comparison between unsigned values. If the operands
+/// are of unequal bit lengths, the smaller operand shall be zero-extended to the
+/// size of the larger operand."
+///
+/// The mask that zero-extension is, or `null` when both operands are signed (or
+/// nothing proves either one unsigned) and the ordinary signed compare stands.
+/// Masking BOTH sides to the wider width is the whole of the rule: the results
+/// are then non-negative, so the signed i64 opcodes `cmp` emits compare them as
+/// the unsigned values §4.2.9 asks for. `a < 32'd1` with `a` at -1 is
+/// 4294967295 < 1, not -1 < 1.
+///
+/// §3.2 supplies the width of everything that is not a sized literal: "variables
+/// can hold values ranging from -2**31 to 2**31-1", so 32 bits.
+///
+/// ponytail: a 64-bit-or-wider sized literal declines the mask rather than
+/// widening the carrier. `Lower`'s integer carrier is i64 and the top bit is its
+/// sign, so a 64-bit unsigned comparison has nowhere to be performed; the
+/// upgrade path is a u64 compare opcode pair in `cmp`.
+fn unsignedCompareMask(self: *const Lower, e: Ast.ExprId) ?i64 {
+    const ex = &self.file.exprs;
+    const l = ex.lhs(e);
+    const r = ex.rhs(e);
+    const sl = self.integerSourceSigned(l, 0);
+    const sr = self.integerSourceSigned(r, 0);
+    const unsigned = (sl != null and !sl.?) or (sr != null and !sr.?);
+    if (!unsigned) return null;
+    const w = @max(self.operandWidth(l), self.operandWidth(r));
+    if (w >= 64) return null;
+    return (@as(i64, 1) << @intCast(w)) - 1;
+}
+
+/// §3.2's 32 bits, or a §2.6.1 sized literal's own declared size.
+fn operandWidth(self: *const Lower, e: Ast.ExprId) u32 {
+    const ex = &self.file.exprs;
+    if (e != .none and ex.tag(e) == .int_literal) {
+        const w = ex.intLiteral(e).width;
+        if (w != 0) return w;
+    }
+    return 32;
 }
 
 fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {

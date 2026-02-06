@@ -27,10 +27,12 @@
 // fixture for that would be a rejection, which this row keeps to a minimum. It is
 // listed in SPEC.md as not covered.
 //
-// GROUND TRUTH TODAY: refused with E0901, "`h01_lib.tox` names nothing in the
-// elaborated design". `Flatten` resolves a dotted name through the INSTANCE tree
-// (`flatName`), and an uninstantiated library module has no path in it, so the
-// one form §6.4.1 explicitly permits is the one form that cannot resolve.
+// GROUND TRUTH TODAY: green, both checks. It was refused with E0901,
+// "`h01_lib.tox` names nothing in the elaborated design": `Flatten` resolved a
+// dotted name through the INSTANCE tree (`flatName`) and an uninstantiated
+// library module has no path in it, so the one form §6.4.1 explicitly permits
+// was the one form that could not resolve. `paramsetOomr` substitutes the
+// declared default instead, in the `in_paramset` context only.
 //
 //! lrm 6.4.1
 //! bias V(p) = 0.5
