@@ -1,0 +1,62 @@
+// A.5.1, A.5.2 and A.5.3 in one declaration:
+//
+//     udp_declaration ::=                                                  // A.5.1
+//             { attribute_instance } primitive udp_identifier ( udp_port_list ) ;
+//                 udp_port_declaration { udp_port_declaration }
+//                 udp_body
+//             endprimitive
+//     udp_port_declaration ::=                                             // A.5.2
+//             udp_output_declaration ; | udp_input_declaration ; | udp_reg_declaration ;
+//     udp_output_declaration ::= { attribute_instance } output port_identifier
+//     udp_input_declaration ::= { attribute_instance } input list_of_port_identifiers
+//     udp_body ::= combinational_body | sequential_body                    // A.5.3
+//     combinational_body ::= table combinational_entry { combinational_entry } endtable
+//     combinational_entry ::= level_input_list : output_symbol ;
+//
+// This is the FIRST arm of `udp_declaration` — a bare `udp_port_list` in the
+// header, with the ports declared separately inside the body — and it is the
+// only place in the annex where a `table` appears. The `0 : 1;` entries are
+// `combinational_entry`s: a `level_input_list` of one symbol, an output symbol,
+// and the `;` the production ends with.
+//
+// AN INVERTER, deliberately the smallest table that is still a table. A
+// zero-entry `table endtable` would parse the same way and say less; two entries
+// make the `{ combinational_entry }` repetition do work. The sequential form
+// (`udp_initial_statement`, `edge_indicator`, `current_state : next_state`) is
+// the other arm of `udp_body` and is NOT spelled here — a UDP stops at its first
+// bad row and the header records the arm rather than pretending the one file
+// covers both.
+//
+// §1.1 makes the complete IEEE Std 1364 Verilog part of Verilog-AMS HDL, and a
+// user-defined primitive is 1364's primitive-composition mechanism — the thing a
+// digital cell is written in when a gate is not enough. VerA refuses the keyword
+// at the top-level dispatch: E0201 "construct is not in the supported subset:
+// `primitive`", which is a subset refusal rather than a parse error. Hence an
+// xfail and not a `//! reject`.
+//
+//! lrm A.5.1
+//! lrm A.5.2
+//! lrm A.5.3
+//! lrm 1.1
+//! xfail VerA has no UDP declaration — a top-level `primitive` reports E0201 "construct is not in the supported subset: `primitive`"
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+primitive annex_a_udp_pulse (o, a);
+    output o;
+    input a;
+    table
+        0 : 1;
+        1 : 0;
+    endtable
+endprimitive
+
+module annex_a_udp_host(p, n);
+    inout p, n;
+    electrical p, n;
+
+    analog begin
+        `CHECKX("the file carrying the A.5.1 UDP declaration compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

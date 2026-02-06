@@ -1,0 +1,54 @@
+// A.3.2 Primitive strengths:
+//
+//     pulldown_strength ::=
+//             ( strength0 , strength1 )
+//             | ( strength1 , strength0 )
+//             | ( strength0 )
+//     pullup_strength ::=
+//             ( strength0 , strength1 )
+//             | ( strength1 , strength0 )
+//             | ( strength1 )
+//
+// These two brackets are what A.3.1's last two `gate_instantiation` arms take —
+// `pulldown [pulldown_strength] pull_gate_instance` and `pullup
+// [pullup_strength] pull_gate_instance` — and they are a DIFFERENT set from
+// A.2.2.2's `drive_strength`, which is why they have a clause of their own: the
+// single-strength arm `( strength0 )` exists here and does not there, and
+// `highz0`/`highz1` exist there and do not here. 54_drive_strength_unsupported.va
+// is A.2.2.2's; this file is A.3.2's, and the `(strong0)` below is the arm that
+// only this clause has.
+//
+// THE BRACKET IS THE WHOLE CLAUSE, and the gate is only its carrier: a pull gate
+// is a one-terminal source, so the strength is the only thing the source has to
+// say. A compiler that accepts `pulldown` and drops the bracket has lost the
+// clause and kept the noise, which is what makes this file worth having next to
+// 56's `and` — the two refusals share a code and a keyword class, and only this
+// one measures whether the strength list was read.
+//
+// WHY NOT A `//! reject`. §1.1 makes the complete IEEE Std 1364 Verilog part of
+// Verilog-AMS HDL, so a full-AMS compiler must accept the line; the marker says
+// VerA does not, and the assertion below makes the day it does visible.
+//
+// VerA refuses it one token earlier: E0205 "unsupported module item: found
+// pulldown", the same refusal 56 records for `and`. On the day the primitive
+// family arrives, THIS is the file that tells the bracket apart from the gate.
+//
+//! lrm A.3.2
+//! lrm A.3.1
+//! lrm 1.1
+//! xfail VerA refuses the pull-gate primitives outright — `pulldown (strong0) pd (o);` reports E0205 "unsupported module item: found pulldown"
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module annex_a_pull(p, n);
+    inout p, n;
+    electrical p, n;
+
+    wire o;
+    pulldown (strong0) pd (o);
+
+    analog begin
+        `CHECKX("the file carrying the pull-gate strength compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule

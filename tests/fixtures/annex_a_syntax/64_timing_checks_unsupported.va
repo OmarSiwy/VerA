@@ -1,0 +1,82 @@
+// A.7.5.1 with its two argument clauses, A.7.5.2 and A.7.5.3:
+//
+//     system_timing_check ::=                                     // A.7.5.1
+//             $setup_timing_check | $hold_timing_check | $setuphold_timing_check
+//             | $recovery_timing_check | $removal_timing_check | $recrem_timing_check
+//             | $skew_timing_check | $timeskew_timing_check | $fullskew_timing_check
+//             | $period_timing_check | $width_timing_check | $nochange_timing_check
+//     $setup_timing_check ::=
+//             $setup ( data_event , reference_event , timing_check_limit
+//                 [ , [ notifier ] ] ) ;
+//     $width_timing_check ::=
+//             $width ( controlled_reference_event , timing_check_limit
+//                 [ , threshold [ , notifier ] ] ) ;
+//     timing_check_limit ::= expression                           // A.7.5.2
+//     notifier ::= variable_identifier
+//     timing_check_event ::=                                      // A.7.5.3
+//             [ timing_check_event_control ] specify_terminal_descriptor
+//                 [ &&& timing_check_condition ]
+//     controlled_timing_check_event ::=
+//             timing_check_event_control specify_terminal_descriptor
+//                 [ &&& timing_check_condition ]
+//     timing_check_event_control ::= posedge | negedge | edge_control_specifier
+//
+// FOUR OF THE TWELVE COMMANDS, chosen so that every optional bracket of the
+// three clauses is taken at least once and each by a different argument
+// position:
+//
+//     $setup(d, posedge clk, 1.5, notifier_flag);
+//         the `data_event` is a bare descriptor (the `[ timing_check_event_control ]`
+//         bracket OMITTED) against a `posedge` `reference_event`, and the
+//         `[ , [ notifier ] ]` bracket names a module variable — A.7.5.2's
+//         `notifier`, which is a variable_identifier and not an expression.
+//     $hold(posedge clk, d &&& (q == 1'b0), 1.5);
+//         the same two productions with the arguments swapped, and the
+//         `[ &&& timing_check_condition ]` bracket taken: `q == 1'b0` is a
+//         `scalar_timing_check_condition` of the `expression == scalar_constant` arm.
+//     $width(posedge clk, 2.0);
+//         `controlled_reference_event`, where the event control is MANDATORY —
+//         the same `posedge clk` that was one alternative in `$setup`'s data
+//         event is the only legal spelling here.
+//     $period(posedge clk, 4.0);
+//         the shortest of the twelve, and the one that shows `timing_check_limit`
+//         (A.7.5.2's `expression` — a real constant, not a time literal) as the
+//         argument they all share.
+//
+// ONE REFUSAL AGAIN. A system timing check is a `specify_item` (A.7.1) and can
+// be written nowhere else, so VerA's E0205 at the `specify` keyword is the same
+// diagnostic 63_specify_block_unsupported.va gets, and the whole A.7 family
+// moves together. The header says so rather than pretending four clauses were
+// measured independently of the block that contains them.
+//
+// §1.1's "complete IEEE Std 1364 Verilog" is the reason a full-AMS compiler must
+// accept this; §8's scheduling model is what would give it meaning, and
+// ch08_scheduling owns that side.
+//
+//! lrm A.7.5.1
+//! lrm A.7.5.2
+//! lrm A.7.5.3
+//! lrm 1.1
+//! xfail VerA refuses a `specify` block at the module-item dispatch (E0205 "unsupported module item: found specify"), so no system timing check is ever read
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+module annex_a_timing_check(p, n, clk, d, q);
+    inout p, n;
+    electrical p, n;
+    input clk, d;
+    output q;
+    reg notifier_flag;
+
+    specify
+        $setup(d, posedge clk, 1.5, notifier_flag);
+        $hold(posedge clk, d &&& (q == 1'b0), 1.5);
+        $width(posedge clk, 2.0);
+        $period(posedge clk, 4.0);
+    endspecify
+
+    analog begin
+        `CHECKX("the file carrying the A.7.5.1 timing checks compiles and runs",
+                V(p, n), 0.5);
+        I(p, n) <+ V(p, n);
+    end
+endmodule
