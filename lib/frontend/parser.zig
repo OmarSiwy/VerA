@@ -937,7 +937,7 @@ pub const Parser = struct {
             .kw_ground => {
                 self.pos += 1;
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, .wire, true, .medium);
+                try self.parseNetNames(b, disc, .wire, true, .{});
             },
             // §6.5.2 non-ANSI port declarations
             .kw_input, .kw_output, .kw_inout => try self.parsePortDecl(b),
@@ -960,9 +960,35 @@ pub const Parser = struct {
                 // A.2.1.3: `charge_strength` sits right after the net type, and
                 // only `trireg`'s alternatives have one. §3.8's default for a
                 // `trireg` that names none is `medium`.
-                const charge: Ast.Strength = if (self.peek() == .lparen) try self.parseChargeStrength(kind) else .medium;
+                //
+                // …and so does `drive_strength`, on the `list_of_net_decl_assignments`
+                // arms of the SAME production — four of A.2.1.3's twelve
+                // `net_declaration` alternatives carry one:
+                //
+                //     net_type [ discipline_identifier ] [ drive_strength ] [ signed ]
+                //         [ delay3 ] list_of_net_decl_assignments ;
+                //
+                // One token tells the two brackets apart without a backtrack.
+                // A.2.2.2's six `drive_strength` alternatives are all PAIRS, so
+                // a comma after the first strength word is the discriminator;
+                // A.2.2.1's `charge_strength ::= ( small ) | ( medium ) |
+                // ( large )` is always the single word. Anything else stays
+                // with `parseChargeStrength`, whose two diagnostics ("not a
+                // charge strength", "only legal on a trireg") are the ones
+                // that say what went wrong.
+                // The default pair is IEEE 1364-2005 §7.10's: "the strengths
+                // default to strong1 and strong0", so a declaration with no
+                // bracket is indistinguishable from `(strong1, strong0)` and
+                // needs no flag to say the bracket was absent.
+                var st: Ast.NetStrength = .{};
+                if (self.peek() == .lparen) {
+                    if (self.strengthWord(self.pos + 1) != null and self.peekAt(2) == .comma)
+                        try self.parseDriveStrength(&st.strength0, &st.strength1)
+                    else
+                        st.charge = try self.parseChargeStrength(kind);
+                }
                 const disc = try self.optDiscipline();
-                try self.parseNetNames(b, disc, kind, false, charge);
+                try self.parseNetNames(b, disc, kind, false, st);
             },
             // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
             // list_of_net_assignments ;`. Only the digital executor has nets
@@ -1001,8 +1027,23 @@ pub const Parser = struct {
                 while (true) {
                     const name_tok = self.pos;
                     const name = try self.expectIdent();
-                    const dims = if (self.digital) try self.parseDims() else &.{};
-                    const value = if (self.digital and self.eat(.assign_eq)) try self.parseExpr() else Ast.ExprId.none;
+                    // A.2.1.3 `reg_declaration ::= reg [ discipline_identifier ]
+                    // [ signed ] [ range ] list_of_variable_identifiers ;` and
+                    // A.2.3 `list_of_variable_identifiers ::= variable_type
+                    // { , variable_type }`, so both of these belong to A.2.2.1's
+                    //
+                    //     variable_type ::=
+                    //         variable_identifier { dimension } [ = constant_assignment_pattern ]
+                    //         | variable_identifier = constant_expression
+                    //
+                    // which is the same production `integer`/`time` reach
+                    // through `parseVarDecl`, where neither is gated. Gating
+                    // them on `digital` here made `reg [7:0] rbus = 8'h5a;` an
+                    // E0207 in a `.va` while `integer iv = 7;` beside it was
+                    // fine — one production, two answers, and the annex draws
+                    // no such line.
+                    const dims = try self.parseDims();
+                    const value = if (self.eat(.assign_eq)) try self.parseExpr() else Ast.ExprId.none;
                     try b.vars.append(self.arena, .{
                         .name = name,
                         .ty = .integer,
@@ -1074,7 +1115,7 @@ pub const Parser = struct {
                 }
                 const disc = try self.internTok(self.pos);
                 self.pos += 1;
-                try self.parseNetNames(b, disc, .wire, false, .medium);
+                try self.parseNetNames(b, disc, .wire, false, .{});
             },
             else => return self.unsupportedItem(),
         }
@@ -1639,6 +1680,40 @@ pub const Parser = struct {
         const dir = portDirection(self.peek());
         self.pos += 1;
         const disc = try self.optDiscipline();
+        // A.2.1.2's two VARIABLE arms, which only `output` has:
+        //
+        //     output_declaration ::=
+        //         output [ discipline_identifier ] [ net_type | wreal ] [ signed ]
+        //             [ range ] list_of_port_identifiers
+        //       | output [ discipline_identifier ] reg [ signed ] [ range ]
+        //             list_of_variable_port_identifiers
+        //       | output output_variable_type list_of_variable_port_identifiers
+        //     output_variable_type ::= integer | time
+        //
+        // `optDiscipline` above has already eaten the `[ net_type ]` of the
+        // first arm and the `[ signed ]` all three share, so the only thing
+        // left to tell the arms apart is this keyword. The port is then a
+        // VARIABLE and not a net — §6.5.2 calls it a port type declaration —
+        // which is why the name list gets a `VarDecl` below as well as the
+        // direction, and why the `[ = constant_expression ]` of
+        // `list_of_variable_port_identifiers` (A.2.3) is read here and nowhere
+        // else in this function.
+        const var_storage: ?@FieldType(Ast.VarDecl, "storage") = switch (self.peek()) {
+            .kw_integer => .variable, // A.2.2.1 output_variable_type
+            .kw_time => .time, // …its other alternative
+            .kw_reg => .reg, // A.2.1.2's second arm
+            else => null,
+        };
+        if (var_storage != null) {
+            if (dir != .output) return self.failAt(
+                self.pos,
+                .E0207,
+                "found {s}: A.2.1.2 gives a variable type to `output` only",
+                .{self.found(self.pos)},
+            );
+            self.pos += 1;
+            _ = self.eat(.kw_signed);
+        }
         // A.2.1.2 `inout [ range ] list_of_port_identifiers ;` — §6.5.2.2's
         // "port direction declaration", the half of the clause that carries
         // the direction. Its range is compared against the port TYPE
@@ -1647,6 +1722,24 @@ pub const Parser = struct {
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
+            if (var_storage) |storage| {
+                // A.2.3 `list_of_variable_port_identifiers ::= port_identifier
+                // [ = constant_expression ] { , … }` — the initializer slot the
+                // net arms do not have.
+                const init_expr: Ast.ExprId = if (self.eat(.assign_eq)) try self.parseExpr() else .none;
+                try b.vars.append(self.arena, .{
+                    .name = name,
+                    // Both arms are integral: A.2.2.1's `output_variable_type`
+                    // is `integer | time`, and §3.4.1 folds `time` to the same
+                    // representation VerA gives an `integer`; Table 7-1 does
+                    // the same for a `reg`'s bits.
+                    .ty = .integer,
+                    .init = init_expr,
+                    .storage = storage,
+                    .packed_range = range,
+                    .main_tok = tok,
+                });
+            }
             if (findPort(b, name)) |p| {
                 // §6.2 "Ports declared in the list of port declarations shall
                 // not be redeclared within the body of the module." A direction
@@ -1901,13 +1994,23 @@ pub const Parser = struct {
         return self.parseExpr();
     }
 
-    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, charge: Ast.Strength) Error!void {
+    fn parseNetNames(self: *Parser, b: *Body, disc: Ast.StrId, kind: Ast.NetKind, is_ground: bool, st: Ast.NetStrength) Error!void {
         const range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
         // A.2.1.3 puts `[ delay3 ]` between the range and the name list, and it
         // belongs to the NET, not to the declaration's optional assignment:
         // `wire #3 y = ~a;` delays y's own transition.
+        //
+        // NOT gated on `digital`. The bracket used to be an E0207 ("a net delay
+        // has no meaning outside a digital design element") outside a `.v`
+        // source, which is a verdict on the SEMANTICS written as a refusal of
+        // the SYNTAX: §1.1 makes "the complete IEEE Std 1364 Verilog
+        // specification" part of Verilog-AMS HDL, and A.2.1.3 grants the
+        // bracket to every one of its twelve alternatives. A delay VerA has no
+        // discrete kernel to honour is a delay it drops, the way it drops the
+        // strength brackets above — silently dropping a timing annotation is
+        // what every analog-only tool does with one, and it is not the same
+        // claim as "this text is not derivable from the annex".
         const delay: Ast.Delay3 = if (self.peek() == .hash) try self.parseDelay3() else .{};
-        if (delay.any() and !self.digital) return self.failAt(self.pos, .E0207, "a net delay has no meaning outside a digital design element", .{});
         while (true) {
             const tok = self.pos;
             // Annex F.2.1 step 3 / §3.10 order 1: an OUT-OF-CONTEXT declaration,
@@ -1967,7 +2070,9 @@ pub const Parser = struct {
                     .discipline = disc,
                     .is_ground = is_ground,
                     .range = range,
-                    .charge = charge,
+                    .charge = st.charge,
+                    .strength0 = st.strength0,
+                    .strength1 = st.strength1,
                     .delay = delay,
                     .init = nodeset,
                     .main_tok = tok,
@@ -2040,6 +2145,33 @@ pub const Parser = struct {
             else => .unspecified, // §3.4.1 — inferred from the default by lowering
         };
         if (ty != .unspecified) self.pos += 1;
+        // A.2.1.1's FIRST arm, the `[ range ]` slot between `[ signed ]` and the
+        // assignment list:
+        //
+        //     parameter_declaration ::=
+        //         parameter [ signed ] [ range ] list_of_param_assignments
+        //         | parameter parameter_type list_of_param_assignments
+        //
+        // A.2.5's `range ::= [ msb_constant_expression :
+        // lsb_constant_expression ]` — a WIDTH, which is why it cannot go in
+        // `dims` (§3.4.4 array parameters, which lowering scalarizes) and gets
+        // the same `packed_range` slot `VarDecl` gives a `reg`'s. The two arms
+        // are exclusive in the production, so a range is only read when no
+        // `parameter_type` was written.
+        //
+        // The TYPE is not forced by the bracket: §3.4.1 — "If the type of a
+        // parameter is not specified, it is derived from the type of the final
+        // value assigned to the parameter, after any value overrides have been
+        // applied" — so `.unspecified` stays and lowering infers `integer`
+        // from `4'h5` exactly as it would without the bracket.
+        //
+        // ponytail: the width is CARRIED, not enforced. `parameter [3:0] p =
+        // 8'hff;` reads 255 here and 15 in a tool that truncates to the
+        // declared width. Enforcing it is a fold of two constant expressions
+        // and a mask in `ir/lower.zig`, where the parameter's default is
+        // already folded; nothing in the suite asks for it yet.
+        const packed_range: ?Ast.Dim =
+            if (ty == .unspecified and self.peek() == .lbracket) try self.parseDim() else null;
 
         while (true) {
             const tok = self.pos;
@@ -2058,6 +2190,7 @@ pub const Parser = struct {
                 .default = default,
                 .is_local = is_local,
                 .dims = dims,
+                .packed_range = packed_range,
                 .ranges = ranges.items,
                 .main_tok = tok,
             });
