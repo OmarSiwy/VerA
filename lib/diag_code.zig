@@ -178,6 +178,11 @@ pub const Code = enum(u16) {
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
     W0250,
+    /// A.7.1 `specify_block` — read in full and modelled by nothing. The same
+    /// shape as W0250 and for the same reason: the block is legal source (§1.1
+    /// makes 1364's specify section part of the language) whose entire content
+    /// is §8 scheduling, which a compiled analog device has no clock to run.
+    W0251,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
@@ -1628,6 +1633,42 @@ fn infoOf(c: Code) Info {
             \\an `and` gate or a `pullup` COMPUTES a value, so accepting one and
             \\modelling nothing would be a wrong answer rather than an absent
             \\connection.
+            ,
+        },
+        .W0251 => .{
+            .title = "specify block read, and nothing in it is modelled",
+            .lrm = "A.7.1",
+            .explain =
+            \\A.7.1 `specify_block ::= specify { specify_item } endspecify`, and
+            \\1.1 — "Verilog-AMS HDL consists of the complete IEEE Std 1364
+            \\Verilog specification" — makes it legal source. Annex C.16 does not
+            \\exempt it either: `specify` is not among the keywords that clause
+            \\lists as unused by Verilog-A.
+            \\
+            \\So the block is PARSED, not skipped: every `specify_item` arm is
+            \\read against its own production, which is why a malformed path or
+            \\a timing check of the wrong arity is still an error inside one.
+            \\
+            \\What the block does NOT do is reach the device. Its whole content
+            \\is timing — A.7.2 path delays, A.7.5 system timing checks — and 8
+            \\puts all of it in the discrete simulation cycle. A compiled analog
+            \\device has no event queue for a path delay to schedule on and no
+            \\clock for a $setup to measure against, so there is nothing to
+            \\stamp; inventing one would freeze a convention of VerA's into a
+            \\model as if the standard had asked for it.
+            \\
+            \\Same shape as W0250, and for the same reason: dropping it in
+            \\silence gives you a cell whose timing the compiler discarded with
+            \\nothing in the output saying so.
+            \\
+            \\  --deny=W0251    refuse the module instead, for a design whose
+            \\                  answer depends on the timing being honoured
+            \\  --allow=W0251   silence it, for a cell whose specify section only
+            \\                  matters to the digital half a host simulator runs
+            \\
+            \\A `specparam` written as a MODULE item (A.2.1.1, and Syntax 6-1's
+            \\`non_port_module_item`) is not this warning: it is a constant
+            \\declaration with a default, and it elaborates as one.
             ,
         },
 

@@ -1117,8 +1117,348 @@ pub const Parser = struct {
                 self.pos += 1;
                 try self.parseNetNames(b, disc, .wire, false, .{});
             },
+            // Annex B reserves a family of 1364 spellings that this compiler
+            // has no tag for — `specify`, `specparam`, `primitive`, `pulldown`
+            // and the rest all lex to one `.kw_reserved`, which is what keeps
+            // them unusable as identifiers. The spelling is therefore the
+            // dispatch, and the two below are the ones with a production here.
+            .kw_reserved => {
+                const w = self.tokenText(self.pos);
+                if (std.mem.eql(u8, w, "specify")) return self.parseSpecifyBlock();
+                // A.2.1.1 `specparam_declaration ::= specparam [ range ]
+                // list_of_specparam_assignments ;`, reached BOTH as a module
+                // item (Syntax 6-1's `non_port_module_item`) and as an A.7.1
+                // `specify_item`. This is the module-item half.
+                if (std.mem.eql(u8, w, "specparam")) return self.parseSpecparamDecl(&b.params);
+                return self.unsupportedItem();
+            },
             else => return self.unsupportedItem(),
         }
+    }
+
+    /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
+    /// keywords share one tag, so every grammar that needs one of them by name
+    /// asks here.
+    fn reservedIs(self: *const Parser, i: u32, w: []const u8) bool {
+        return self.tags[i] == .kw_reserved and std.mem.eql(u8, self.tokenText(i), w);
+    }
+
+    /// `=>`, `*>` and `&&&` — A.7's three operators, which the lexer already
+    /// recognises as single tokens and tags `.invalid`, because outside a
+    /// specify block none of them is an operator at all (`lexer.zig` spells
+    /// exactly that at each of the three). So the spelling is the test, and
+    /// the tag is what keeps them from meaning anything anywhere else.
+    fn eatSymbol(self: *Parser, w: []const u8) bool {
+        if (self.peek() != .invalid or !std.mem.eql(u8, self.tokenText(self.pos), w)) return false;
+        self.pos += 1;
+        return true;
+    }
+
+    // -----------------------------------------------------------------------
+    // A.7 specify blocks — LRM §1.1 (1364 is part of the language), §8
+    // -----------------------------------------------------------------------
+
+    /// A.7.1 `specify_block ::= specify { specify_item } endspecify`.
+    ///
+    /// READ IN FULL AND MODELLED BY NOTHING (W0251) — W0250's shape, and the
+    /// reasoning is that entry's. The block is legal source under §1.1, and
+    /// annex C.16 does not exempt it (`specify` is not one of the spellings
+    /// that clause lists as unused by Verilog-A), so refusing it was refusing
+    /// text the standard requires a full-AMS compiler to take. Its content is
+    /// entirely §8 scheduling — A.7.2 path delays, A.7.5 system timing checks —
+    /// and a compiled analog device has no event queue to schedule a path delay
+    /// on, so there is nothing to record and nothing that could read it.
+    ///
+    /// PARSED, not skipped to `endspecify`. A token skip would accept any text
+    /// at all between the keywords, which is a strictly weaker claim than the
+    /// annex makes and would let a typo in a path declaration ship silently.
+    // ponytail: nothing is recorded, because nothing consumes it — same call as
+    // `parsePassSwitch`. The upgrade path is a discrete half in `Flatten`, and
+    // until that exists an AST field for a path delay is dead weight.
+    fn parseSpecifyBlock(self: *Parser) Error!void {
+        const open = self.pos;
+        self.pos += 1; // `specify`
+        while (!self.reservedIs(self.pos, "endspecify")) {
+            if (self.peek() == .eof or self.peek() == .kw_endmodule)
+                return self.failAt(self.pos, .E0207, "found {s}: no `endspecify` closes the specify block", .{self.found(self.pos)});
+            try self.parseSpecifyItem();
+        }
+        self.pos += 1; // `endspecify`
+        try self.bag.add(
+            .parse,
+            .W0251,
+            lexer.tokenSpan(self.src, self.starts, open),
+            "",
+            .{},
+        );
+    }
+
+    /// A.7.1 `specify_item`, all five arms:
+    ///
+    ///     specify_item ::=
+    ///             specparam_declaration
+    ///             | pulsestyle_declaration
+    ///             | showcancelled_declaration
+    ///             | path_declaration
+    ///             | system_timing_check
+    fn parseSpecifyItem(self: *Parser) Error!void {
+        switch (self.peek()) {
+            .kw_reserved => {
+                const w = self.tokenText(self.pos);
+                // A.2.1.1's declaration, here as a specify_item. The list is
+                // DISCARDED rather than appended to the module's parameters:
+                // a specparam declared inside the block is scoped to it, and
+                // the block is not elaborated.
+                if (std.mem.eql(u8, w, "specparam")) return self.parseSpecparamDecl(null);
+                // A.7.1 `pulsestyle_declaration` / `showcancelled_declaration`,
+                // four keywords over one `list_of_path_outputs ;`.
+                if (std.mem.eql(u8, w, "pulsestyle_onevent") or
+                    std.mem.eql(u8, w, "pulsestyle_ondetect") or
+                    std.mem.eql(u8, w, "showcancelled") or
+                    std.mem.eql(u8, w, "noshowcancelled"))
+                {
+                    self.pos += 1;
+                    // A.7.2's `list_of_path_outputs` has no parentheses of its
+                    // own; §14.2.6's examples write them, so one pair is taken
+                    // if it is there.
+                    const paren = self.eat(.lparen);
+                    try self.parseSpecifyTerminalList();
+                    if (paren) _ = try self.expect(.rparen);
+                    _ = try self.expect(.semicolon);
+                    return;
+                }
+                // A.7.2 `state_dependent_path_declaration ::= … | ifnone
+                // simple_path_declaration`.
+                if (std.mem.eql(u8, w, "ifnone")) {
+                    self.pos += 1;
+                    return self.parsePathDeclaration();
+                }
+                return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)});
+            },
+            // A.7.2 `state_dependent_path_declaration ::= if ( module_path_expression )`
+            // followed by a simple or edge-sensitive path.
+            .kw_if => {
+                self.pos += 1;
+                _ = try self.expect(.lparen);
+                _ = try self.parseExpr();
+                _ = try self.expect(.rparen);
+                return self.parsePathDeclaration();
+            },
+            .lparen => return self.parsePathDeclaration(),
+            .system_identifier => return self.parseTimingCheck(),
+            else => return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)}),
+        }
+    }
+
+    /// A.7.3 `specify_input_terminal_descriptor ::= input_identifier
+    /// [ [ constant_range_expression ] ]` and its output twin, which differ
+    /// only in which port directions the identifier may name — a rule about
+    /// the NAME, judged where the ports are known, not here.
+    fn parseSpecifyTerminal(self: *Parser) Error!void {
+        _ = try self.expectIdent();
+        if (!self.eat(.lbracket)) return;
+        _ = try self.parseExpr();
+        if (self.eat(.colon)) _ = try self.parseExpr();
+        _ = try self.expect(.rbracket);
+    }
+
+    /// A.7.2 `list_of_path_inputs` / `list_of_path_outputs` — the same
+    /// comma-separated run of A.7.3 descriptors under two names.
+    fn parseSpecifyTerminalList(self: *Parser) Error!void {
+        while (true) {
+            try self.parseSpecifyTerminal();
+            if (!self.eat(.comma)) return;
+        }
+    }
+
+    /// A.7.2 `path_declaration`, all three arms and both descriptions:
+    ///
+    ///     parallel_path_description ::=
+    ///             ( specify_input_terminal_descriptor [ polarity_operator ]
+    ///               => specify_output_terminal_descriptor )
+    ///     full_path_description ::=
+    ///             ( list_of_path_inputs [ polarity_operator ] *> list_of_path_outputs )
+    ///     parallel_edge_sensitive_path_description ::=
+    ///             ( [ edge_identifier ] specify_input_terminal_descriptor =>
+    ///               ( specify_output_terminal_descriptor [ polarity_operator ]
+    ///                 : data_source_expression ) )
+    ///
+    /// One routine for all of them, because the four descriptions differ only
+    /// in which optional pieces are present and the grammar disambiguates each
+    /// one by a token the cursor is already on: `=>` versus `*>` chooses
+    /// parallel from full, and a `(` after the arrow chooses edge-sensitive
+    /// from simple. The caller has consumed any `if (…)` or `ifnone` prefix.
+    fn parsePathDeclaration(self: *Parser) Error!void {
+        _ = try self.expect(.lparen);
+        // A.7.4 `edge_identifier ::= posedge | negedge`, present only on the
+        // two edge-sensitive descriptions.
+        _ = self.eat(.kw_posedge) or self.eat(.kw_negedge);
+        try self.parseSpecifyTerminalList();
+        // A.7.4 `polarity_operator ::= + | -`.
+        _ = self.eat(.plus) or self.eat(.minus);
+        const parallel = self.eatSymbol("=>");
+        if (!parallel and !self.eatSymbol("*>")) return self.failAt(
+            self.pos,
+            .E0207,
+            "found {s}: a path description connects its terminals with `=>` or `*>`",
+            .{self.found(self.pos)},
+        );
+        if (self.eat(.lparen)) {
+            // The edge-sensitive arms: the outputs, a polarity and the
+            // `data_source_expression` the path's value comes from.
+            try self.parseSpecifyTerminalList();
+            _ = self.eat(.plus) or self.eat(.minus);
+            _ = try self.expect(.colon);
+            _ = try self.parseExpr();
+            _ = try self.expect(.rparen);
+        } else try self.parseSpecifyTerminalList();
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.assign_eq);
+        // A.7.4 `path_delay_value ::= list_of_path_delay_expressions
+        // | ( list_of_path_delay_expressions )`. The parenthesis is read HERE
+        // and not by `parseExpr`, because `( tplh , tphl )` is a list of two
+        // and a parenthesized expression is one.
+        const bracketed = self.eat(.lparen);
+        while (true) {
+            _ = try self.parseExpr();
+            if (!self.eat(.comma)) break;
+        }
+        if (bracketed) _ = try self.expect(.rparen);
+        _ = try self.expect(.semicolon);
+    }
+
+    /// A.7.5.1's twelve `system_timing_check` commands, as the argument counts
+    /// their productions give them. The whole content of the clause that a
+    /// parser can check is the NAME and the ARITY: every command is
+    /// `$name ( arg { , arg } ) ;`, and the arms differ only in how many
+    /// arguments are mandatory and how many optional brackets follow.
+    ///
+    /// The pairs are `{ mandatory, mandatory + optional }`, counted straight
+    /// off A.7.5.1 — e.g. `$setup ( data_event , reference_event ,
+    /// timing_check_limit [ , [ notifier ] ] ) ;` is 3 and 4.
+    const timing_checks = std.StaticStringMap(struct { u8, u8 }).initComptime(.{
+        .{ "$setup", .{ 3, 4 } },
+        .{ "$hold", .{ 3, 4 } },
+        .{ "$setuphold", .{ 4, 9 } },
+        .{ "$recovery", .{ 3, 4 } },
+        .{ "$removal", .{ 3, 4 } },
+        .{ "$recrem", .{ 4, 9 } },
+        .{ "$skew", .{ 3, 4 } },
+        .{ "$timeskew", .{ 3, 6 } },
+        .{ "$fullskew", .{ 4, 7 } },
+        .{ "$period", .{ 2, 3 } },
+        .{ "$width", .{ 2, 4 } },
+        .{ "$nochange", .{ 4, 5 } },
+    });
+
+    /// A.7.5.1 `system_timing_check`. A `$name` inside a specify block is one
+    /// of exactly twelve commands — A.7.1 admits no other system task there —
+    /// so a name the table does not hold is an error rather than a call.
+    fn parseTimingCheck(self: *Parser) Error!void {
+        const tok = self.pos;
+        const arity = timing_checks.get(self.tokenText(tok)) orelse return self.failAt(
+            tok,
+            .E0207,
+            "found {s}: A.7.1 admits only A.7.5.1's twelve timing checks inside a specify block",
+            .{self.found(tok)},
+        );
+        self.pos += 1;
+        _ = try self.expect(.lparen);
+        var n: u8 = 0;
+        if (self.peek() != .rparen) while (true) {
+            // A.7.5.1 writes the optional arguments `[ , [ notifier ] ]` — the
+            // comma outside the inner bracket, so the slot may be present and
+            // EMPTY. That is why an argument is counted before it is read.
+            n +|= 1;
+            if (self.peek() != .comma and self.peek() != .rparen) try self.parseTimingCheckArg();
+            if (!self.eat(.comma)) break;
+        };
+        _ = try self.expect(.rparen);
+        _ = try self.expect(.semicolon);
+        if (n < arity[0] or n > arity[1]) return self.failAt(
+            tok,
+            .E0207,
+            "`{s}` takes {d} to {d} arguments, not {d}",
+            .{ self.tokenText(tok), arity[0], arity[1], n },
+        );
+    }
+
+    /// One argument of A.7.5.1's commands. The clause's argument productions
+    /// (A.7.5.2) are `expression` under a dozen names — `timing_check_limit`,
+    /// `threshold`, `notifier`, the two offsets — except for the two event
+    /// slots, which A.7.5.3 gives a prefix and a suffix:
+    ///
+    ///     timing_check_event ::= [ timing_check_event_control ]
+    ///             specify_terminal_descriptor [ &&& timing_check_condition ]
+    ///     timing_check_event_control ::= posedge | negedge | edge_control_specifier
+    ///
+    /// One routine takes the union, which over-accepts: `$width`'s first
+    /// argument is a `controlled_reference_event` whose event control is
+    /// MANDATORY, and that is not checked here. What the union does buy is
+    /// that every optional piece of A.7.5.3 is read rather than skipped.
+    fn parseTimingCheckArg(self: *Parser) Error!void {
+        if (!self.eat(.kw_posedge) and !self.eat(.kw_negedge) and self.reservedIs(self.pos, "edge")) {
+            // A.7.5.3 `edge_control_specifier ::= edge [ edge_descriptor
+            // { , edge_descriptor } ]`. The descriptors are two-character
+            // symbols (`01`, `z1`, `0x`) that reach here as numbers or
+            // identifiers depending on which characters they hold, so the
+            // bracket is read as a balanced run rather than as a list of
+            // values nothing would consume.
+            // ponytail: an unchecked descriptor set. A table of the ten
+            // spellings A.7.5.3 admits is the upgrade; no fixture asks.
+            self.pos += 1;
+            if (self.eat(.lbracket)) while (!self.eat(.rbracket)) {
+                if (self.peek() == .eof) return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)});
+                self.pos += 1;
+            };
+        }
+        _ = try self.parseExpr();
+        // A.7.5.3's `&&&`, which is three tokens' worth of `&` in a stream that
+        // has no tag for it.
+        if (self.eatSymbol("&&&")) _ = try self.parseExpr();
+    }
+
+    /// A.2.1.1 `specparam_declaration ::= specparam [ range ]
+    /// list_of_specparam_assignments ;`, and A.2.4:
+    ///
+    ///     specparam_assignment ::=
+    ///             specparam_identifier = constant_mintypmax_expression
+    ///             | pulse_control_specparam
+    ///
+    /// `out` is the module's parameter list for the Syntax 6-1 module-item
+    /// form and `null` for an A.7.1 `specify_item`, whose specparams are scoped
+    /// to a block this compiler does not elaborate.
+    ///
+    /// A LOCALPARAM is what the module-item form becomes: a specparam is a
+    /// constant with a mandatory default and no `parameter_value_assignment`
+    /// can name it, which is exactly `localparam`'s shape in §3.4.5.
+    // ponytail: that is an approximation with a known edge. 1364's specparams
+    // are the values an SDF back-annotation overrides, and a `localparam`
+    // cannot be overridden by anything. VerA reads no SDF, so the two are
+    // indistinguishable here; the day it does, this needs its own storage.
+    //
+    // `pulse_control_specparam` — A.2.4's `PATHPULSE$ = ( … )` arm — is not
+    // read. Its identifier holds a `$`, which §2.8 does not admit in an
+    // identifier at all, so it is not a token this lexer can produce.
+    fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Error!void {
+        self.pos += 1; // `specparam`
+        const packed_range: ?Ast.Dim = if (self.peek() == .lbracket) try self.parseDim() else null;
+        while (true) {
+            const tok = self.pos;
+            const name = try self.expectIdent();
+            _ = try self.expect(.assign_eq);
+            const default = try self.parseExpr();
+            if (out) |o| try o.append(self.arena, .{
+                .name = name,
+                .ty = .unspecified, // §3.4.1 — derived from the default, as for `parameter`
+                .default = default,
+                .is_local = true,
+                .packed_range = packed_range,
+                .main_tok = tok,
+            });
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
     }
 
     /// A.4.1 module_instantiation — LRM §6.2.2 (instances), §6.3 (overrides).
