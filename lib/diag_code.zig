@@ -1653,7 +1653,7 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0233 => .{
-            .title = "UDP table symbol is outside the alphabet its column admits",
+            .title = "a UDP table symbol is outside the alphabet its column admits",
             .lrm = "A.5.3",
             .explain =
             \\A.5.3 enumerates the UDP alphabets exhaustively, and they are not
@@ -1676,7 +1676,7 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0234 => .{
-            .title = "UDP table entries do not all derive from one udp_body",
+            .title = "a UDP table does not derive from one udp_body",
             .lrm = "A.5.3",
             .explain =
             \\A.5.3 splits the two bodies at the top and never lets them mix:
