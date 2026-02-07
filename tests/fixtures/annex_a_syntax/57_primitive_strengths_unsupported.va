@@ -26,17 +26,37 @@
 // one measures whether the strength list was read.
 //
 // WHY NOT A `//! reject`. §1.1 makes the complete IEEE Std 1364 Verilog part of
-// Verilog-AMS HDL, so a full-AMS compiler must accept the line; the marker says
-// VerA does not, and the assertion below makes the day it does visible.
+// Verilog-AMS HDL, so a full-AMS compiler must accept the line; the marker said
+// VerA did not, and the assertion below was what made the day it does visible.
+// VerA refused it one token earlier than the bracket — E0205 "unsupported module
+// item: found pulldown", the same refusal 56 recorded for `and` — so the clause
+// this file is named for was never reached at all.
 //
-// VerA refuses it one token earlier: E0205 "unsupported module item: found
-// pulldown", the same refusal 56 records for `and`. On the day the primitive
-// family arrives, THIS is the file that tells the bracket apart from the gate.
+// THAT DAY CAME, and this is indeed the file that tells the bracket apart from
+// the gate. A.3.2 is read as A.3.2 and not as A.2.2.2, with both of the two
+// differences enforced rather than waved through:
+//
+//   - the single-strength arm exists here and not there, and it names the SIDE
+//     the gate pulls toward. `pulldown (strong0)` below is derivable;
+//     `pulldown (strong1)` is derivable from neither of A.3.2's two productions
+//     and is an error naming the arm, which is the measurement this row makes
+//     that no other file can.
+//   - `highz0`/`highz1` are A.2.2.2's and are not in A.3.2's `strength0`/
+//     `strength1` at all.
+//
+// The two-strength arms are A.2.2.2's own pairs and share its parser, which the
+// grammar licenses: `( strength0 , strength1 )` and `( strength1 , strength0 )`
+// are spelled identically in both clauses.
+//
+// AND THE GATE STILL COMPUTES NOTHING (W0252). A pull gate is a constant source
+// into the discrete domain, which a compiled analog device has no queue to
+// schedule; `o` below keeps whatever the continuous solver leaves it, and is
+// connected to nothing else here so that this file's want is about the bracket
+// and not about the value. 56's header states the §8.5.3.5 reasoning in full.
 //
 //! lrm A.3.2
 //! lrm A.3.1
 //! lrm 1.1
-//! xfail VerA refuses the pull-gate primitives outright — `pulldown (strong0) pd (o);` reports E0205 "unsupported module item: found pulldown"
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_pull(p, n);

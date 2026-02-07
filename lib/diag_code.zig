@@ -174,10 +174,35 @@ pub const Code = enum(u16) {
     /// spells the index into the interned path text (`u[0].g`), the same string
     /// elaboration keys its flat names by.
     E0231,
+    /// A.1.1 library map text — a `library_declaration` or an `include_statement`
+    /// — in a file being compiled as A.1.2 `source_text`. Not a subset refusal
+    /// (E0201): the two productions are reachable only from `library_text`, and
+    /// the annex names that as the starting symbol of a different kind of file.
+    E0232,
+    /// A.5.3 a UDP table symbol outside the alphabet its column admits.
+    E0233,
+    /// A.5.3 a UDP table whose entries do not all derive from ONE `udp_body`
+    /// alternative — an edge indicator in a combinational body, or a mix of
+    /// combinational and sequential entries.
+    E0234,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
     W0250,
+    /// A.7.1 `specify_block` — read in full and modelled by nothing. The same
+    /// shape as W0250 and for the same reason: the block is legal source (§1.1
+    /// makes 1364's specify section part of the language) whose entire content
+    /// is §8 scheduling, which a compiled analog device has no clock to run.
+    W0251,
+    /// A.3.1 a gate or pull primitive in a design element being compiled to an
+    /// ANALOG device, where §8.5.3 leaves it nothing to stamp. W0250's third
+    /// sibling; under `--run`, where the discrete engine executes the gate, it
+    /// is not reported at all.
+    W0252,
+    /// A.1.5 a `config_declaration` read, with no library map behind it for the
+    /// design statement to bind through — so the configuration selects nothing
+    /// and every instance resolves by name, as it did before.
+    W0253,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
@@ -1597,6 +1622,86 @@ fn infoOf(c: Code) Info {
             \\set, and nothing else the grammar admits here is constant at all.
             ,
         },
+        .E0232 => .{
+            .title = "library map text in a source file",
+            .lrm = "A.1.1",
+            .explain =
+            \\Annex A's preamble names two starting symbols and says which file
+            \\each one is for: "The syntax of Verilog-AMS HDL source is derived
+            \\from the starting symbol source_text. The syntax of a library map
+            \\file is derived from the starting symbol library_text."
+            \\
+            \\`library_declaration` and `include_statement` are reachable only
+            \\from `library_text` (A.1.1). A `.va` is compiled as `source_text`,
+            \\whose A.1.2 `description` list is module_declaration,
+            \\udp_declaration, config_declaration, paramset_declaration,
+            \\nature_declaration, discipline_declaration and
+            \\connectrules_declaration — and neither of those two is in it.
+            \\
+            \\So this is not a subset refusal (E0201) and the text is not
+            \\malformed. It is the right production in the wrong file, which is
+            \\why it has a code of its own: no version of VerA that grows the
+            \\analog subset will ever make it legal here.
+            \\
+            \\A `config_declaration` IS in A.1.2's list and is accepted (W0253
+            \\says what it binds, which is nothing). The preprocessor's
+            \\`` `include `` of 10.3 is a different construct from A.1.1's bare
+            \\`include` and is unaffected.
+            \\
+            \\VerA reads no library map files at all, so there is nowhere else
+            \\to put this text today.
+            ,
+        },
+        .E0233 => .{
+            .title = "a UDP table symbol is outside the alphabet its column admits",
+            .lrm = "A.5.3",
+            .explain =
+            \\A.5.3 enumerates the UDP alphabets exhaustively, and they are not
+            \\the same on both sides of the colon:
+            \\
+            \\  output_symbol ::= 0 | 1 | x | X
+            \\  level_symbol  ::= 0 | 1 | x | X | ? | b | B
+            \\  edge_symbol   ::= r | R | f | F | p | P | n | N | *
+            \\  next_state    ::= output_symbol | -
+            \\
+            \\`z` is in none of them, and that is by design rather than by
+            \\omission: a UDP models a logic function, not a connection, so the
+            \\whole value set is three-valued. High impedance is what the switch
+            \\primitives produce.
+            \\
+            \\The symbols are CHARACTERS, not identifiers — `(01)` is four of
+            \\them and `0 0` is two — so this check runs over the characters of
+            \\an entry rather than over its tokens, which in this one region of
+            \\the grammar carry no meaning of their own.
+            ,
+        },
+        .E0234 => .{
+            .title = "a UDP table does not derive from one udp_body",
+            .lrm = "A.5.3",
+            .explain =
+            \\A.5.3 splits the two bodies at the top and never lets them mix:
+            \\
+            \\  udp_body ::= combinational_body | sequential_body
+            \\  combinational_entry ::= level_input_list : output_symbol ;
+            \\  sequential_entry ::= seq_input_list : current_state : next_state ;
+            \\
+            \\So an entry has one colon or two, and every entry of one table has
+            \\the same count: a `current_state` column exists in a sequential
+            \\body and nowhere else.
+            \\
+            \\An edge indicator is the other half of the split. `edge_indicator`
+            \\and `edge_symbol` appear only under `edge_input_list`, which only a
+            \\`sequential_entry` can reach, and `level_symbol` has no edge
+            \\alternative. The grammar is stating a semantic impossibility: an
+            \\edge is a claim about an input's PREVIOUS value, and a
+            \\combinational UDP has no state for a previous value to live in.
+            \\
+            \\A compiler that accepts an edge in a combinational table has
+            \\either promoted the primitive to sequential — inventing state the
+            \\source never declared — or is matching `(01)` as a level, which
+            \\changes the function.
+            ,
+        },
         .W0250 => .{
             .title = "switch primitive accepted, and it stamps nothing",
             .lrm = "A.4.1",
@@ -1624,10 +1729,115 @@ fn infoOf(c: Code) Info {
             \\  --allow=W0250   silence it, for a switch that only matters to the
             \\                  digital half a host simulator runs
             \\
-            \\The rest of A.4.1's gate types are still E0205, and deliberately:
-            \\an `and` gate or a `pullup` COMPUTES a value, so accepting one and
-            \\modelling nothing would be a wrong answer rather than an absent
-            \\connection.
+            \\The rest of A.3.1's gate types are W0252, which says the same
+            \\thing about a primitive that COMPUTES a value rather than one that
+            \\merely connects. They used to be E0205 on the ground that the two
+            \\cases differ in kind; they do not, and both are now accepted out
+            \\loud. See that entry.
+            ,
+        },
+        .W0252 => .{
+            .title = "gate primitive accepted, and it computes nothing",
+            .lrm = "A.3.1",
+            .explain =
+            \\A.3.1's `gate_instantiation`, in a design element being compiled
+            \\to an analog device. The source is legal — A.1.4 makes a gate
+            \\instantiation a module_or_generate_item, and 1.1 makes "the
+            \\complete IEEE Std 1364 Verilog specification" part of Verilog-AMS
+            \\HDL — so the module around it compiles and its analog block runs.
+            \\
+            \\What the instance does NOT do is reach the device. 8.5.3.5 puts
+            \\gate-level modeling in the event-driven half of the language: "The
+            \\event-driven simulation algorithm described in 11 of IEEE Std 1364
+            \\Verilog depends on unidirectional signal flow and can process each
+            \\event independently. The inputs are read, the result is computed,
+            \\and the update is scheduled. The IEEE Std 1364 Verilog provides
+            \\switch-level modeling in addition to behavioral and gate-level
+            \\modeling." A compiled analog device has no event queue to schedule
+            \\that update on, so the gate's output net keeps whatever the
+            \\continuous solver gives it and the gate contributes nothing.
+            \\
+            \\NOT REPORTED under `--run`, where the discrete engine executes the
+            \\gate for real. This is a fact about the artifact being built, not
+            \\about the source.
+            \\
+            \\Same shape as W0250 and the same reasoning: silence is worse. A
+            \\dropped gate leaves a design whose output net is simply undriven,
+            \\with nothing in the output saying the driver was discarded.
+            \\
+            \\  --deny=W0252    refuse the module instead, for a model whose
+            \\                  answer depends on the gate driving its output
+            \\  --allow=W0252   silence it, for a cell whose gates only matter to
+            \\                  the digital half a host simulator runs
+            \\
+            \\A.5.4's `udp_instantiation` is reported here too. A UDP is a
+            \\primitive whose function is a table (A.5.3) rather than a keyword,
+            \\and the table is a logic function for the same event queue.
+            ,
+        },
+        .W0253 => .{
+            .title = "configuration read, and nothing binds through it",
+            .lrm = "A.1.5",
+            .explain =
+            \\A.1.2 puts `config_declaration` in its `description` list, so a
+            \\configuration in a source file is derivable from `source_text` and
+            \\is not library map text (which is E0232 — a different starting
+            \\symbol and a different kind of file).
+            \\
+            \\What a configuration does is bind an instance to a CELL of a
+            \\LIBRARY, at elaboration, through the map its `liblist` and `use`
+            \\clauses name. VerA reads no library maps: an instance resolves to
+            \\a module declared in the source it was given, by name, and that
+            \\is the only binding it has. So the `design` statement selects
+            \\nothing, every `config_rule_statement` below it applies to
+            \\nothing, and the elaborated design is exactly what it would have
+            \\been with the configuration deleted.
+            \\
+            \\Same call as W0250 and W0251: silence would be worse, because a
+            \\configuration exists precisely to make one instance resolve
+            \\differently from the default, and a discarded one leaves the
+            \\default in place with nothing in the output saying so.
+            \\
+            \\  --deny=W0253    refuse the file instead, for a design whose
+            \\                  answer depends on the configuration selecting
+            \\  --allow=W0253   silence it, for a configuration carried in the
+            \\                  source for a downstream tool to read
+            ,
+        },
+        .W0251 => .{
+            .title = "specify block read, and nothing in it is modelled",
+            .lrm = "A.7.1",
+            .explain =
+            \\A.7.1 `specify_block ::= specify { specify_item } endspecify`, and
+            \\1.1 — "Verilog-AMS HDL consists of the complete IEEE Std 1364
+            \\Verilog specification" — makes it legal source. Annex C.16 does not
+            \\exempt it either: `specify` is not among the keywords that clause
+            \\lists as unused by Verilog-A.
+            \\
+            \\So the block is PARSED, not skipped: every `specify_item` arm is
+            \\read against its own production, which is why a malformed path or
+            \\a timing check of the wrong arity is still an error inside one.
+            \\
+            \\What the block does NOT do is reach the device. Its whole content
+            \\is timing — A.7.2 path delays, A.7.5 system timing checks — and 8
+            \\puts all of it in the discrete simulation cycle. A compiled analog
+            \\device has no event queue for a path delay to schedule on and no
+            \\clock for a $setup to measure against, so there is nothing to
+            \\stamp; inventing one would freeze a convention of VerA's into a
+            \\model as if the standard had asked for it.
+            \\
+            \\Same shape as W0250, and for the same reason: dropping it in
+            \\silence gives you a cell whose timing the compiler discarded with
+            \\nothing in the output saying so.
+            \\
+            \\  --deny=W0251    refuse the module instead, for a design whose
+            \\                  answer depends on the timing being honoured
+            \\  --allow=W0251   silence it, for a cell whose specify section only
+            \\                  matters to the digital half a host simulator runs
+            \\
+            \\A `specparam` written as a MODULE item (A.2.1.1, and Syntax 6-1's
+            \\`non_port_module_item`) is not this warning: it is a constant
+            \\declaration with a default, and it elaborates as one.
             ,
         },
 

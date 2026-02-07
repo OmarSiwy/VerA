@@ -23,20 +23,31 @@
 //
 // WHAT A WRONG IMPLEMENTATION DOES. It reads `parameter` and then expects a
 // `parameter_type` keyword or an identifier, so the `[` is a syntax error
-// instead of a range: VerA reports E0208 "expected an identifier: found `[`" on
-// this line. The SHAPE of the diagnostic is the evidence that the gap is real
-// and not a semantic refusal — a compiler that had the arm and disliked the
-// value would name the range, and this one cannot name what it never parsed.
+// instead of a range. That was VerA until the arm was implemented — E0208
+// "expected an identifier: found `[`" on this line — and the SHAPE of that
+// diagnostic was the evidence the gap was in the grammar and not in a semantic
+// refusal: a compiler that had the arm and disliked the value would have named
+// the range, and one that never parsed it cannot name what it never saw.
+//
+// WHAT IT DOES NOW, and where the implementation stops. The bracket is parsed
+// into `Ast.ParamDecl.packed_range` — its own slot, not `dims`, because A.2.5's
+// `range` is a width and its `dimension` is an array bound, and §3.4.4's array
+// parameters are the ones lowering scalarizes. The TYPE is still §3.4.1's
+// inference, quoted above and unchanged by the bracket: "If the type of a
+// parameter is not specified, it is derived from the type of the final value
+// assigned to the parameter", which for `4'h5` is an integer, which is why
+// `nib` reads back 5. The width is carried and NOT enforced — a declaration
+// whose default overflows its own bracket keeps the wider value here — so this
+// file's 5 is the same 5 under either reading and a truncation fixture would be
+// a different file.
 //
 // §1.1 makes the complete IEEE Std 1364 Verilog part of Verilog-AMS HDL, and a
-// sized parameter is 1364's. So the file is an xfail and not a `//! reject`: the
-// fixture states the clause's requirement, and the marker records that VerA
-// does not meet it.
+// sized parameter is 1364's, which is why this was an xfail and not a
+// `//! reject` for as long as the arm was missing.
 //
 //! lrm A.2.1.1
 //! lrm A.2.5
 //! lrm 3.4.1
-//! xfail VerA has no `[ range ]` slot after `parameter` — the bracket is a syntax error (E0208 "expected an identifier: found `[`")
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_ranged_parameter(p, n);
