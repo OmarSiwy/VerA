@@ -1063,10 +1063,7 @@ pub const Parser = struct {
             .kw_tran, .kw_rtran => try self.parsePassSwitch(),
             // A.3.1 `gate_instantiation` — the twelve A.3.4 gate types that
             // compute a logic value.
-            .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => {
-                if (!self.digital) return self.unsupportedItem();
-                try self.parseGates(b);
-            },
+            .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => try self.parseGates(b),
             // A.6.2 `initial_construct` / `always_construct` — §7.2.2's discrete
             // context.
             .kw_initial, .kw_always => try self.parseDiscrete(b),
@@ -1130,6 +1127,10 @@ pub const Parser = struct {
                 // item (Syntax 6-1's `non_port_module_item`) and as an A.7.1
                 // `specify_item`. This is the module-item half.
                 if (std.mem.eql(u8, w, "specparam")) return self.parseSpecparamDecl(&b.params);
+                // A.3.1's last two arms. They have no tags of their own because
+                // A.3.2 gives them a strength set no other gate takes.
+                if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))
+                    return self.parsePullGate();
                 return self.unsupportedItem();
             },
             else => return self.unsupportedItem(),
@@ -1636,7 +1637,11 @@ pub const Parser = struct {
     /// `parseDelay3` already returns `.none` for an omitted one, so the three
     /// arms need no separate delay parser — an n-input gate never turns off, so
     /// a third value would be rejected by §7.14 rather than by the grammar.
+    ///
+    /// OUTSIDE A DIGITAL RUN the instance is accepted and modelled by nothing,
+    /// out loud (W0252) — see `gateNotModelled`.
     fn parseGates(self: *Parser, b: *Body) Error!void {
+        try self.gateNotModelled();
         const kind: Ast.GateKind = switch (self.peek()) {
             .kw_and => .g_and,
             .kw_nand => .g_nand,
@@ -1700,6 +1705,94 @@ pub const Parser = struct {
                     try b.gates.append(self.arena, .{ .kind = kind, .out = terms.items[0], .ins = terms.items[1..], .strength0 = s0, .strength1 = s1, .delay = delay, .main_tok = tok });
                 },
             }
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.semicolon);
+    }
+
+    /// W0252 for the primitive at the cursor, when the artifact being built is
+    /// an analog device. §8.5.3.5's first paragraph is the clause: "The
+    /// event-driven simulation algorithm described in 11 of IEEE Std 1364
+    /// Verilog depends on unidirectional signal flow … The IEEE Std 1364
+    /// Verilog provides switch-level modeling in addition to behavioral and
+    /// GATE-LEVEL modeling." A gate's update is an event, and a compiled analog
+    /// device has no queue to schedule one on, so the instance reaches nothing.
+    ///
+    /// Silent was the wrong answer and E0205 was the other wrong answer: the
+    /// source is derivable from A.3.1 and §1.1 makes it VerA's to accept, so
+    /// refusing it said "not derivable" about text that is. `--deny=W0252` is
+    /// the refusal, for a model that cannot afford the omission.
+    ///
+    /// Not reported under `--run`: the discrete engine executes the gate there,
+    /// so there is nothing missing to warn about.
+    fn gateNotModelled(self: *Parser) Error!void {
+        if (self.digital) return;
+        try self.bag.add(
+            .parse,
+            .W0252,
+            lexer.tokenSpan(self.src, self.starts, self.pos),
+            "{s} primitive",
+            .{self.found(self.pos)},
+        );
+    }
+
+    /// A.3.1's last two `gate_instantiation` arms, which are the only ones with
+    /// a one-terminal instance and a strength set of their own:
+    ///
+    ///     | pulldown [pulldown_strength] pull_gate_instance { , … } ;
+    ///     | pullup   [pullup_strength]   pull_gate_instance { , … } ;
+    ///     pull_gate_instance ::= [ name_of_gate_instance ] ( output_terminal )
+    ///
+    /// A.3.2's brackets are NOT A.2.2.2's, which is why they have a clause to
+    /// themselves and this routine does not call `parseDriveStrength`:
+    ///
+    ///     pulldown_strength ::= ( strength0 , strength1 ) | ( strength1 , strength0 )
+    ///             | ( strength0 )
+    ///     pullup_strength   ::= ( strength0 , strength1 ) | ( strength1 , strength0 )
+    ///             | ( strength1 )
+    ///
+    /// Two differences, both checked below: the single-strength arm exists here
+    /// and does not in A.2.2.2, and it is the SIDE the gate pulls toward —
+    /// `strength0` for a `pulldown`, `strength1` for a `pullup` — so
+    /// `pulldown (strong1)` is derivable from neither of the two productions.
+    /// `highz0`/`highz1` are the other difference: A.2.2.2 admits them and
+    /// A.3.2 does not, which `strengthWord`'s `.side == 2` test is.
+    ///
+    /// A `pull_gate_instance` takes ONE terminal and drives it to a constant,
+    /// so like every other A.3.1 arm outside a digital run it is accepted and
+    /// modelled by nothing (W0252).
+    fn parsePullGate(self: *Parser) Error!void {
+        try self.gateNotModelled();
+        // A.3.2's `strength0`/`strength1` name the side the gate pulls toward:
+        // 0 for `pulldown`, 1 for `pullup`, which is also `StrengthWord.side`.
+        const side: u8 = if (self.reservedIs(self.pos, "pulldown")) 0 else 1;
+        self.pos += 1;
+        if (self.peek() == .lparen and self.strengthWord(self.pos + 1) != null) {
+            const tok = self.pos + 1;
+            if (self.peekAt(2) == .comma) {
+                var s0: Ast.Strength = .strong;
+                var s1: Ast.Strength = .strong;
+                try self.parseDriveStrength(&s0, &s1);
+            } else {
+                self.pos += 1;
+                const w = self.strengthWord(self.pos).?;
+                self.pos += 1;
+                _ = try self.expect(.rparen);
+                if (w.side != side) return self.failAt(
+                    tok,
+                    .E0207,
+                    "a single-strength bracket on this gate is A.3.2's `( strength{d} )`",
+                    .{side},
+                );
+            }
+        }
+        while (true) {
+            // A.3.1 makes `name_of_gate_instance` optional here too; `(` after
+            // the name tells the two apart, as in `parseGates`.
+            if (self.identLike(self.pos)) self.pos += 1;
+            _ = try self.expect(.lparen);
+            _ = try self.parseNetRef(); // A.3.3 output_terminal ::= net_lvalue
+            _ = try self.expect(.rparen);
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.semicolon);

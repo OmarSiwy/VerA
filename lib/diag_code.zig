@@ -183,6 +183,11 @@ pub const Code = enum(u16) {
     /// makes 1364's specify section part of the language) whose entire content
     /// is §8 scheduling, which a compiled analog device has no clock to run.
     W0251,
+    /// A.3.1 a gate or pull primitive in a design element being compiled to an
+    /// ANALOG device, where §8.5.3 leaves it nothing to stamp. W0250's third
+    /// sibling; under `--run`, where the discrete engine executes the gate, it
+    /// is not reported at all.
+    W0252,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
@@ -1629,10 +1634,46 @@ fn infoOf(c: Code) Info {
             \\  --allow=W0250   silence it, for a switch that only matters to the
             \\                  digital half a host simulator runs
             \\
-            \\The rest of A.4.1's gate types are still E0205, and deliberately:
-            \\an `and` gate or a `pullup` COMPUTES a value, so accepting one and
-            \\modelling nothing would be a wrong answer rather than an absent
-            \\connection.
+            \\The rest of A.3.1's gate types are W0252, which says the same
+            \\thing about a primitive that COMPUTES a value rather than one that
+            \\merely connects. They used to be E0205 on the ground that the two
+            \\cases differ in kind; they do not, and both are now accepted out
+            \\loud. See that entry.
+            ,
+        },
+        .W0252 => .{
+            .title = "gate primitive accepted, and it computes nothing",
+            .lrm = "A.3.1",
+            .explain =
+            \\A.3.1's `gate_instantiation`, in a design element being compiled
+            \\to an analog device. The source is legal — A.1.4 makes a gate
+            \\instantiation a module_or_generate_item, and 1.1 makes "the
+            \\complete IEEE Std 1364 Verilog specification" part of Verilog-AMS
+            \\HDL — so the module around it compiles and its analog block runs.
+            \\
+            \\What the instance does NOT do is reach the device. 8.5.3.5 puts
+            \\gate-level modeling in the event-driven half of the language: "The
+            \\event-driven simulation algorithm described in 11 of IEEE Std 1364
+            \\Verilog depends on unidirectional signal flow and can process each
+            \\event independently. The inputs are read, the result is computed,
+            \\and the update is scheduled. The IEEE Std 1364 Verilog provides
+            \\switch-level modeling in addition to behavioral and gate-level
+            \\modeling." A compiled analog device has no event queue to schedule
+            \\that update on, so the gate's output net keeps whatever the
+            \\continuous solver gives it and the gate contributes nothing.
+            \\
+            \\NOT REPORTED under `--run`, where the discrete engine executes the
+            \\gate for real. This is a fact about the artifact being built, not
+            \\about the source.
+            \\
+            \\Same shape as W0250 and the same reasoning: silence is worse. A
+            \\dropped gate leaves a design whose output net is simply undriven,
+            \\with nothing in the output saying the driver was discarded.
+            \\
+            \\  --deny=W0252    refuse the module instead, for a model whose
+            \\                  answer depends on the gate driving its output
+            \\  --allow=W0252   silence it, for a cell whose gates only matter to
+            \\                  the digital half a host simulator runs
             ,
         },
         .W0251 => .{
