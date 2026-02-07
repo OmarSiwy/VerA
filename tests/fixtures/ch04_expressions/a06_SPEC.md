@@ -28,7 +28,7 @@ could be observed; that is stated wherever such a number appears.
 | §4.6.4.1/.2 PSD values | **exported and correct** (`noisePsd` → `{.white = m.f1.v}`, `{.flicker = m.f2.v, .ef = 1.25}`), and **nothing asserts them**: the `//! noise` directive carries kind/branch/source id only | `a06_psd_white_flicker_export.va`, `a06_psd_bias_dependent.va` |
 | §4.6.4.1 `name` argument | **parsed and discarded.** `Lower.NoiseSrc` has kind/id/pwr/exp/table; `contract.NoiseGen` has row/col/kind/source/table. No name field anywhere, so no contribution summary is possible | `a06_noise_source_name.va` |
 | §4.6.4.6 correlation amplitude | **identity yes, amplitude no.** `V(a,b) <+ 2*n; V(c,d) <+ 3*n;` exports two rows sharing `#0` and *both* read `white = 1e-18`; `contract.zig`'s own comment: "Still not expressible: the per-use scaling coefficient" | `a06_noise_correlated_scale.va` |
-| §4.6.4.3 file input | **refused**, E0519 "a file name is not supported" | `a06_noise_table_file_input.va` |
+| §4.6.4.3 file input | **works** (fixed 2026-09-20). The name "shall be constant", so `Lower.readNoiseTableFile` reads the pairs at compile time — sharing §9.21.1's `readTableFile`, whose text format is the same rule — and the comptime `noise_tables` export is indistinguishable from the vector form's | `a06_noise_table_file_input.va` |
 | §4.6.4.3 array-parameter input | **refused**, E0519 "the table must be constant" | `a06_noise_table_array_parameter.va` |
 | §4.6.4.2 one-argument `flicker_noise` | **accepted**, exponent silently defaulted to 1, against Syntax 4-4 | `a06_flicker_noise_missing_exponent_rejected.va` |
 | §4.6.3 non-literal analysis name | **accepted, then the generated device does not compile** ("unused function parameter") — a model error reported as an engine bug | `a06_ac_stim_name_not_literal_rejected.va` |
@@ -179,7 +179,7 @@ Positive unless marked.
     reports 14 points, not 7. The powers do **not** all double per decade —
     see "Corrected after review" — so nothing checks the doubling. The one
     `CHECK` is §4.5.6's, `ddx(V(p,n)/R + nt, V(p))` = **1e-3 S**.
-    *Fails: E0519, "a file name is not supported".*
+    *Passes since 2026-09-20.*
 11. **`a06_noise_table_array_parameter.va`** — §4.6.4.3's first-named spelling,
     `parameter real tbl[0:5] = '{1.0,1e-18,1e3,1e-21,1e6,1e-24}`. Export must be
     three knots, `interp = linear`; the powers fall one decade per decade so a

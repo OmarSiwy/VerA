@@ -8950,9 +8950,29 @@ fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // same vector spelling §4.5.11's filter coefficients arrive in, which is
     // why this needs no reader of its own.
     var tab: ?struct { usize, usize } = null;
-    for (ex.args(e)) |a| {
+    // A.8.2's `noise_table_input_arg` is argument 0 of `noise_table`/
+    // `noise_table_log` and nothing else — the trailing `string` of every other
+    // form is §4.6.4's optional LABEL, which must not be read as a file name.
+    const table_input = std.mem.eql(u8, name, "noise_table") or
+        std.mem.eql(u8, name, "noise_table_log");
+    for (ex.args(e), 0..) |a, ai| {
         if (a == .none) continue;
         const at = vals.items.len;
+        // §4.6.4.3's FILE form of the input: "When the input is a file name,
+        // the indicated file will contain the frequency / power pairs. The
+        // file name argument shall be constant and will be either a string
+        // literal or a string parameter." Constant means the pairs are
+        // compile-time data, so they land in the SAME slot the vector form
+        // fills and everything downstream — the sort, the uniqueness rule, the
+        // comptime `noise_tables` export — is unchanged.
+        if (table_input and ai == 0) if (self.constEval(a)) |c| if (c == .str) {
+            if (try self.readNoiseTableFile(e, c.str)) |pairs| {
+                try vals.append(self.arena, try self.mir.addIntConst(self.arena, @intCast(pairs.len)));
+                for (pairs) |x| try vals.append(self.arena, try self.mir.addFloatConst(self.arena, x));
+                if (tab == null) tab = .{ at + 1, vals.items.len };
+            }
+            continue;
+        };
         if (try self.appendVectorArg(&vals, a)) {
             // Indices, not a slice: `vals` keeps growing and may reallocate.
             if (tab == null) tab = .{ at + 1, vals.items.len };
@@ -9427,7 +9447,11 @@ fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
         ctl = strs[1];
-        const nums = (try self.readTableFile(e, strs[0], nd)) orelse return poison;
+        const nums = (try self.readTableFile(e, strs[0], "$table_model", .E0815)) orelse return poison;
+        if (nums.cols <= nd) {
+            try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ strs[0], nd, nd, nums.cols });
+            return poison;
+        }
         ncol = nums.cols;
         np = nums.vals.len / ncol;
         const flat = try self.arena.alloc(Mir.Value, nums.vals.len);
@@ -9520,15 +9544,52 @@ const TableFile = struct { vals: []const f64, cols: usize };
 /// a device that re-sorts its block per evaluation can afford anyway.
 const max_table_bytes: usize = 16 << 20;
 
+/// §4.6.4.3's file input, flattened to `f0, p0, f1, p1, …` — the same layout the
+/// vector form produces, so the caller's two spellings converge here.
+///
+/// TWO COLUMNS, exactly: "the indicated file will contain the frequency / power
+/// PAIRS … Each frequency / power pair shall be separated by a newline and the
+/// numbers in the pair shall be separated by one or more spaces or tabs." A
+/// third column is not a wider pair, it is a file the clause does not describe,
+/// and reading it as pairs would silently re-pair the whole table.
+///
+/// Everything else the clause asks of the input — ascending order, unique
+/// frequencies, non-negative power — is checked in codegen's `planNoiseTable`,
+/// where the vector form's identical values are checked; this reads the bytes
+/// and nothing more.
+fn readNoiseTableFile(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!?[]const f64 {
+    const f = (try self.readTableFile(e, name, "noise_table", .E0519)) orelse return null;
+    if (f.cols != 2) {
+        try self.err(self.file.exprs.mainTok(e), .E0519, "\"{s}\": LRM 4.6.4.3's input file is frequency / power PAIRS, one pair per line; found {d} numbers on a line", .{ name, f.cols });
+        return null;
+    }
+    return f.vals;
+}
+
 /// §9.21.1's text format: "Each sample point is separated by a newline and each
 /// column is separated by one or more spaces or tabs. Comments begin with # and
 /// continue to the end of that line. They may appear anywhere in the file. Blank
 /// lines are ignored. The numbers shall be real or integer."
 ///
+/// SHARED WITH §4.6.4.3's `noise_table` file input, whose own text format is the
+/// same rule in different words — "Each frequency / power pair shall be
+/// separated by a newline and the numbers in the pair shall be separated by one
+/// or more spaces or tabs … Comments begin with '#' and end with a newline …
+/// the numbers shall be real or integer". `who` and `code` are the caller's
+/// vocabulary, because a §4.6.4 diagnostic that says `$table_model` names the
+/// wrong clause. The COLUMN COUNT is the caller's too: §9.21 wants one column
+/// per dimension plus a dependent and §4.6.4.3 wants exactly two.
+///
 /// Resolved against the `include_dirs` the caller passed, which is where the
 /// source file's own directory is: §9.21 says nothing about the search path, and
 /// a data file sits beside the model that names it exactly as an `include does.
-fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?TableFile {
+fn readTableFile(
+    self: *Lower,
+    e: Ast.ExprId,
+    name: []const u8,
+    who: []const u8,
+    code: diag.Code,
+) Oom!?TableFile {
     const io = std.Io.Threaded.global_single_threaded.io();
     const dir: std.Io.Dir = .cwd();
     const text = blk: {
@@ -9542,7 +9603,7 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
         }
         const r = dir.readFileAlloc(io, name, self.arena, .limited(max_table_bytes)) catch |e2| {
             if (e2 == error.OutOfMemory) return error.OutOfMemory;
-            try self.err(self.file.exprs.mainTok(e), .E0815, "cannot read the `$table_model` data source \"{s}\"", .{name});
+            try self.err(self.file.exprs.mainTok(e), code, "cannot read the `{s}` data source \"{s}\"", .{ who, name });
             return null;
         };
         break :blk r;
@@ -9557,7 +9618,7 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
         var it = std.mem.tokenizeAny(u8, line, " \t\r");
         while (it.next()) |tok| {
             const x = std.fmt.parseFloat(f64, tok) catch {
-                try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": `{s}` is not a real or integer number", .{ name, tok });
+                try self.err(self.file.exprs.mainTok(e), code, "\"{s}\": `{s}` is not a real or integer number", .{ name, tok });
                 return null;
             };
             try vals.append(self.arena, x);
@@ -9566,13 +9627,9 @@ fn readTableFile(self: *Lower, e: Ast.ExprId, name: []const u8, nd: usize) Oom!?
         if (n == 0) continue; // blank line, or a line that was only a comment
         if (cols == 0) cols = n;
         if (n != cols) {
-            try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": every sample point is one row of {d} columns; found a row of {d}", .{ name, cols, n });
+            try self.err(self.file.exprs.mainTok(e), code, "\"{s}\": every row is the same width; found a row of {d} after a row of {d}", .{ name, n, cols });
             return null;
         }
-    }
-    if (cols <= nd) {
-        try self.err(self.file.exprs.mainTok(e), .E0815, "\"{s}\": {d} lookup input(s) need {d} independent columns plus a dependent one, found {d}", .{ name, nd, nd, cols });
-        return null;
     }
     return .{ .vals = vals.items, .cols = cols };
 }

@@ -2809,17 +2809,20 @@ pub const Gen = struct {
     /// §4.6.4.3/.4 one `noise_table`/`noise_table_log` argument, folded into a
     /// comptime `(frequency, power)` table and appended to `tabs`.
     ///
-    /// CONSTANTS ONLY, and that is a real restriction: §4.6.4.3 also allows "an
-    /// array parameter" and a file name, and neither can become the comptime
-    /// `noise_tables` this exports. Folding an array parameter through its
-    /// DECLARED DEFAULT would be worse than refusing — the model card's
-    /// override would be silently ignored, which is exactly the trap E0515
-    /// names — so `resolve_params` is false and a parameter table is E0519.
+    /// CONSTANTS ONLY, and that is still a real restriction on ONE of A.8.2's
+    /// four `noise_table_input_arg` spellings. The assignment pattern and the
+    /// file name are both compile-time data by the time they arrive — a file
+    /// name "shall be constant", so `Lower.readNoiseTableFile` has already
+    /// turned it into the same flat pairs — and the `[msb:lsb]` slice of a
+    /// parameter is the parameter. What does not fold is an ARRAY PARAMETER,
+    /// and folding it through its DECLARED DEFAULT would be worse than
+    /// refusing: the model card's override would be silently ignored, which is
+    /// exactly the trap E0515 names. So `resolve_params` is false and a
+    /// parameter table is E0519.
     ///
     /// ponytail: the ceiling is "the table is comptime data". The upgrade path
-    /// for both spellings is the same one: build the points into `Model` in
-    /// `derive` and export an accessor instead of an array, at which point a
-    /// parameter table and a file read at elaboration both fit.
+    /// for the parameter spelling is to build the points into `Model` in
+    /// `derive` and export an accessor instead of an array.
     ///
     /// Sorting is done HERE, not by the host: §4.6.4.3 says "the simulator
     /// shall internally sort the pairs into ascending frequency if required",
@@ -2831,7 +2834,7 @@ pub const Gen = struct {
         const vals = s.table;
         if (vals.len == 0) {
             try self.refuseNoise(.E0519, s.tok, "the argument is not a vector of " ++
-                "(frequency, power) pairs; a file name is not supported", .{});
+                "(frequency, power) pairs", .{});
             return null;
         }
         if (vals.len % 2 != 0) {
@@ -10126,13 +10129,12 @@ test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
         \\  analog I(p, n) <+ noise_table('{1.0, 1e-18, 10.0});
         \\endmodule
         ,
-        // §4.6.4.3's file form, which a comptime table cannot hold (E0519).
-        \\module nfile(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  analog I(p, n) <+ noise_table("table.tbl");
-        \\endmodule
-        ,
+        // NOT here: §4.6.4.3's FILE form. Its name "shall be constant", so
+        // `Lower.readNoiseTableFile` reads the pairs at compile time and the
+        // table it produces is indistinguishable from the vector form's. A
+        // file that cannot be read is a lowering error on the .va, which never
+        // reaches codegen at all.
+        //
         // An array PARAMETER: legal per §4.6.4.3, and refused rather than
         // frozen at its default, which a model card may override.
         \\module nparam(p, n);
