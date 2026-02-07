@@ -19,6 +19,10 @@
 //! will run, so the constant it folds and the value it emits agree.
 
 pub const Mir = @import("mir.zig");
+/// §4.5 / §5.10.3 / §9.17 operator facts, one row per operator. A leaf: it
+/// imports nothing but `std`, and everything that used to carry a switch over
+/// the operator set reads a column of it.
+pub const op = @import("op.zig");
 pub const Analysis = @import("analysis.zig");
 pub const Ssa = @import("ssa.zig");
 pub const Elaborate = @import("elaborate.zig");
@@ -28,6 +32,7 @@ pub const proof = @import("proof.zig");
 
 test {
     _ = Mir;
+    _ = op;
     _ = Analysis;
     _ = Ssa;
     _ = Elaborate;

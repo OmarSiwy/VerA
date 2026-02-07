@@ -37,6 +37,9 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
+/// §4.5 / §5.10.3 / §9.17 operator facts. Spelled `opdb` and not `op` because
+/// eleven locals in this file are already called `op` (a `Mir.Opcode`).
+const opdb = @import("ir").op;
 const Analysis = @import("ir").Analysis;
 const UnitPlan = @import("unit_plan.zig");
 const cg_display = @import("cg_display.zig");
@@ -1256,6 +1259,9 @@ pub const Gen = struct {
             error.OutOfMemory => return error.OutOfMemory,
             error.NoSpaceLeft => return error.NameTooLong,
         };
+        // The contract `unitMode` below depends on, checked once where all
+        // three tables are in hand for the only time.
+        naming.assertCanonicalOrder(self.units, self.lower, self.verdict.unit_modes.len);
         self.unit_names = try a.alloc([]const u8, self.units.len);
         var buf: [naming.max_name_len]u8 = undefined;
         for (self.units, 0..) |u, i| {
@@ -2211,21 +2217,19 @@ pub const Gen = struct {
         for (self.units, 0..) |u, i| {
             if (u.role != .analog_op) continue;
             const n = self.unit_names[i];
+            // The nine operators whose Instance shape is FIXED are a table
+            // read — the per-operator prose that used to live in these arms is
+            // now beside the row it explains, in ir/op.zig.
+            for (opdb.get(opKind(u.target)).slots) |s| {
+                if (s.note.len == 0) {
+                    try self.w("    {s}__{s}: f64 = {s},\n", .{ n, s.suffix, s.default });
+                } else {
+                    try self.w("    {s}__{s}: f64 = {s}, // {s}\n", .{ n, s.suffix, s.default, s.note });
+                }
+            }
+            // The three whose field COUNT depends on the call (`shape =
+            // .from_args`) stay here, because it does.
             switch (opKind(u.target)) {
-                .ddt, .slew => try self.w("    {s}__prev: f64 = 0.0, // §4.5\n", .{n}),
-                // §4.5.8 the ORIGIN of the ramp in progress: the level the
-                // output left, and the time it left it. Not "the previous
-                // output" — that is the whole difference between a piecewise
-                // LINEAR traversal of the excursion and an exponential one.
-                // Re-armed by `zTransStep` only once the output has caught up
-                // with its input, so a ramp spanning several timesteps keeps
-                // counting from where it actually started.
-                .transition => try self.w(
-                    "    {s}__from: f64 = 0.0, // §4.5.8 ramp origin (value), destination, start time\n" ++
-                        "    {s}__to: f64 = 0.0,\n    {s}__t0: f64 = 0.0,\n",
-                    .{ n, n, n },
-                ),
-                .idt, .idtmod => try self.w("    {s}__acc: f64 = 0.0, // §4.5.4\n", .{n}),
                 .absdelay => {
                     try self.w(
                         "    {s}__t: [{d}]f64 = @splat(0.0), // §4.5.7 delay ring\n" ++
@@ -2242,22 +2246,6 @@ pub const Gen = struct {
                         .{n},
                     );
                 },
-                .last_crossing => try self.w("    {s}__prev: f64 = 0.0, // §4.5.10\n    {s}__t_last: f64 = -1.0,\n", .{ n, n }),
-                // §5.10.3 the history the event test compares against, and
-                // nothing else: there is no `__hit` flag any more, because a
-                // flag written on the accepted step is a flag read one timepoint
-                // after the event (see `emitOperator`).
-                .cross => try self.w("    {s}__prev: f64 = 0.0, // §5.10.3\n", .{n}),
-                // §5.10.3.2 the same history, and the 0.0 initialiser is not a
-                // placeholder — it IS the clause's initialisation rule. "If the
-                // expression is positive at the conclusion of the initial
-                // condition analysis that precedes a transient analysis, the
-                // above() function shall generate an event": with `__prev` at
-                // zero the ordinary "was ≤ 0, is now > 0" test fires on exactly
-                // that first positive evaluation, so the special case needs no
-                // code of its own.
-                .above => try self.w("    {s}__prev: f64 = 0.0, // §5.10.3.2\n", .{n}),
-                .timer => try self.w("    {s}__next: f64 = 0.0, // §5.10.3\n", .{n}),
                 // §4.5.11/§4.5.12 direct-form-I history of the cascade: `deg`
                 // past inputs and past outputs per section, newest first. The
                 // SHAPE is structural (it comes from the flattened call), which
@@ -2281,9 +2269,10 @@ pub const Gen = struct {
                         .{ n, n },
                     );
                 },
-                // §9.17 writes the two unconditional fields above, not a
-                // per-unit one.
-                .none, .bound_step, .discontinuity => {},
+                // Every `.static` and `.none` row: already handled above, or
+                // (§9.17) writing the two unconditional fields and no per-unit
+                // one at all.
+                else => {},
             }
         }
         // §5.6.1.2 path-integrated reactive latches (ngspice NIintegrate
@@ -7412,10 +7401,7 @@ pub const Gen = struct {
         for (self.units, 0..) |u, i| {
             if (u.role != .analog_op) continue;
             const k = opKind(u.target);
-            uses_dt = uses_dt or switch (k) {
-                .idt, .idtmod, .transition, .slew, .last_crossing, .laplace => true,
-                else => false,
-            };
+            uses_dt = uses_dt or opdb.get(k).needs_dt;
             if (!opHasState(k)) continue;
             uses_core = uses_core or self.opInputIdx(@intCast(i)) != none_u32;
         }
@@ -8333,86 +8319,26 @@ fn devSafe(op: Mir.Opcode) bool {
     };
 }
 
-/// with `naming.isStatefulAnalogOp`: that predicate decides which calls get a
-/// unit, and this one decides which get Instance state — they are the same set.
-pub const OpKind = enum {
-    none,
-    ddt, // §4.5.3
-    idt, // §4.5.4
-    idtmod, // §4.5.5
-    absdelay, // §4.5.7
-    transition, // §4.5.8
-    slew, // §4.5.9
-    last_crossing, // §4.5.10
-    laplace, // §4.5.11
-    zi, // §4.5.12
-    cross, // §5.10.3
-    above, // §5.10.3
-    timer, // §5.10.3
-    bound_step, // §9.17.2
-    discontinuity, // §9.17.1
-};
+// The operator set, and every fact about it, now lives in ONE place:
+// `lib/ir/op.zig`. These five declarations used to be the set's definition and
+// four independent switches over it; they are now a name each file already
+// spells, forwarding to a column. See that file's header for why.
+//
+// MUST agree with `naming.isStatefulAnalogOp`: that predicate decides which
+// calls get a unit, and `opHasState` decides which get Instance state — they
+// are the same set.
 
-pub fn opKind(name: []const u8) OpKind {
-    const map = std.StaticStringMap(OpKind).initComptime(.{
-        .{ "ddt", .ddt },
-        .{ "idt", .idt },
-        .{ "idtmod", .idtmod },
-        .{ "absdelay", .absdelay },
-        .{ "transition", .transition },
-        .{ "slew", .slew },
-        .{ "last_crossing", .last_crossing },
-        .{ "laplace_zd", .laplace },
-        .{ "laplace_zp", .laplace },
-        .{ "laplace_nd", .laplace },
-        .{ "laplace_np", .laplace },
-        .{ "zi_zd", .zi },
-        .{ "zi_zp", .zi },
-        .{ "zi_nd", .zi },
-        .{ "zi_np", .zi },
-        .{ "cross", .cross },
-        .{ "above", .above },
-        .{ "timer", .timer },
-        // §9.17 — both spellings: the MIR callee keeps the `$`, the unit target
-        // naming.zig builds does not (see `enumerateUnits`).
-        .{ "$bound_step", .bound_step },
-        .{ "bound_step", .bound_step },
-        .{ "$discontinuity", .discontinuity },
-        .{ "discontinuity", .discontinuity },
-    });
-    return map.get(name) orelse .none;
-}
-
-/// Does this operator need `updateState` to advance anything?
-///
-/// `above` joined the set when §5.10.3.2's event became edge-triggered: it now
-/// owns a `__prev` like `cross` does, and a history nobody advances is a
-/// one-shot event.
-fn opHasState(k: OpKind) bool {
-    return switch (k) {
-        .none => false,
-        else => true,
-    };
-}
+pub const OpKind = opdb.OpKind;
+pub const opKind = opdb.byName;
+const opHasState = opdb.hasState;
 
 /// Does this operator's kernel read the CURRENT input? The pure-history ones
 /// answer from `Instance` alone, and rendering an input they never emit would
 /// leave the unit claiming a parameter (or a cache) nothing references.
 /// `emitOperator` renders `in` exactly for these; `planSlots` has to agree,
-/// which is why the set lives here and not in either of them.
+/// which is why the set lives in the table and not in either of them.
 pub fn opNeedsInput(k: OpKind) bool {
-    return switch (k) {
-        // `cross` and `timer` joined this set when the §5.10.3 event moved into
-        // `eval`: the hit test compares the CURRENT input against `__prev`
-        // (`timer`'s "input" being its `start_time`), so the operand has to be
-        // rendered there and not only in `updateState`. `zi` joined it for the
-        // §4.5.12 static branch, which is a gain on the input, not a held value.
-        // `absdelay` joined for `zAbsdelay`'s two input-valued edges: the §4.5.7
-        // DC pass-through, and a delay shorter than the accepted step, whose
-        // only covering data is the in-flight value.
-        .ddt, .idt, .idtmod, .transition, .slew, .above, .laplace, .cross, .timer, .zi, .absdelay => true,
-        else => false,
-    };
+    return opdb.get(k).needs_input;
 }
 
 /// §5.10.3.1/.2/.3 where each event operator carries its `enable` — the one
@@ -8420,11 +8346,9 @@ pub fn opNeedsInput(k: OpKind) bool {
 /// has to keep it live (see `callArgIsValue`) while every other control
 /// argument is folded at codegen time.
 pub fn enableArgIdx(name: []const u8) ?usize {
-    return switch (opKind(name)) {
-        .cross => 4, // cross(expr, dir, time_tol, expr_tol, enable)
-        .above, .timer => 3, // above(expr, time_tol, expr_tol, enable) / timer(start, period, time_tol, enable)
-        else => null,
-    };
+    // The table stores it as `?u8` — an argument index, and the narrowest type
+    // the range allows. Widened here, at the one boundary that indexes with it.
+    return opdb.get(opKind(name)).enable_arg orelse return null;
 }
 
 // ===========================================================================
