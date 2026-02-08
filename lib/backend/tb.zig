@@ -1176,8 +1176,10 @@ fn emitAcTopology(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Erro
 }
 
 /// §4.6.3 `mag` and `phase`, read out of `acStim` at the operating point this
-/// is emitted into. `model` is the caller's card name, which `//! psweep`
-/// renames — the same contract `emitNoisePsd` has.
+/// is emitted into — `x` is that point, because A.8.2's magnitude and phase are
+/// `analog_expression`s and a swept-amplitude source has a phasor that depends
+/// on the bias. `model` is the caller's card name, which `//! psweep` renames —
+/// the same contract `emitNoisePsd` has.
 fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []const u8) Error!void {
     var any = false;
     for (d.acstim) |w| {
@@ -1186,7 +1188,7 @@ fn emitAcStim(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl: []c
     if (!any) return;
     try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"acStim\")) {\n");
     try out.appendSlice(arena, noise_close);
-    try print(out, arena, "            const stim = D.acStim(&{s}, &inst);\n", .{mdl});
+    try print(out, arena, "            const stim = D.acStim(x, &{s}, &inst);\n", .{mdl});
     for (d.acstim, 0..) |w, k| {
         if (!w.needsPoint()) continue;
         try print(out, arena, "            if (comptime D.ac_gens.len > {d}) {{\n", .{k});
