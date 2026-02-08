@@ -29,7 +29,7 @@ could be observed; that is stated wherever such a number appears.
 | §4.6.4.1 `name` argument | **parsed and discarded.** `Lower.NoiseSrc` has kind/id/pwr/exp/table; `contract.NoiseGen` has row/col/kind/source/table. No name field anywhere, so no contribution summary is possible | `a06_noise_source_name.va` |
 | §4.6.4.6 correlation amplitude | **identity yes, amplitude no.** `V(a,b) <+ 2*n; V(c,d) <+ 3*n;` exports two rows sharing `#0` and *both* read `white = 1e-18`; `contract.zig`'s own comment: "Still not expressible: the per-use scaling coefficient" | `a06_noise_correlated_scale.va` |
 | §4.6.4.3 file input | **works** (fixed 2026-09-20). The name "shall be constant", so `Lower.readNoiseTableFile` reads the pairs at compile time — sharing §9.21.1's `readTableFile`, whose text format is the same rule — and the comptime `noise_tables` export is indistinguishable from the vector form's | `a06_noise_table_file_input.va` |
-| §4.6.4.3 array-parameter input | **refused**, E0519 "the table must be constant" | `a06_noise_table_array_parameter.va` |
+| §4.6.4.3 array-parameter input | **works** (fixed 2026-09-20). `noise_tables` keeps the parameter's DECLARED DEFAULTS, which is all a comptime array can hold, and a new `noiseTablePoints(model)` carries the card's own knots (flat, `noise_tables` order, re-sorted at run time because a card may reorder the pairs). `contract.validateHost` makes a host that links such a device declare `noise_table_points = true`, so reading the defaults and stopping is a build error rather than a silently wrong spectrum. **The override itself is still untested**: `//! param` binds scalars only | `a06_noise_table_array_parameter.va` |
 | §4.6.4.2 one-argument `flicker_noise` | **accepted**, exponent silently defaulted to 1, against Syntax 4-4 | `a06_flicker_noise_missing_exponent_rejected.va` |
 | §4.6.3 non-literal analysis name | **accepted, then the generated device does not compile** ("unused function parameter") — a model error reported as an engine bug | `a06_ac_stim_name_not_literal_rejected.va` |
 | derivative transfer | **exact.** `ddx` reads the AD dual (`tb.zig:879 ddxAt → a.d[i]`); the junction conductance matches `(id + is)/$vt` as an identity, measured `4.6458183712465816e-3 S` on both sides, and `ac_stim` adds nothing to it at any phase | `a06_small_signal_linearization.va`, `a06_ac_stim_quadrature.va` |
@@ -184,7 +184,7 @@ Positive unless marked.
     `parameter real tbl[0:5] = '{1.0,1e-18,1e3,1e-21,1e6,1e-24}`. Export must be
     three knots, `interp = linear`; the powers fall one decade per decade so a
     §4.6.4.4 mix-up shows as a different mode rather than as agreeing numbers.
-    *Fails: E0519.*
+    *Passes since 2026-09-20.*
 12. **`a06_ac_stim_name_not_literal_rejected.va`** (refusal) — A.8.2 puts the
     quotation marks inside the production: `ac_stim ( [ " analysis_identifier "
     …)`. A string *parameter* is the near-miss, because §4.6.4.3 explicitly

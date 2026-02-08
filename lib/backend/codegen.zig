@@ -374,6 +374,12 @@ pub const Gen = struct {
     /// §4.6.4.3/.4 `noise_tables`, one entry per tabulated generator, folded
     /// and sorted by `planNoise`. Position k is `noise_rows[j].table == k`.
     noise_tabs: []const []const [2]f64 = &.{},
+    /// The same knots as `noise_tabs`, in the same order, still as MIR values —
+    /// and only for a table A.8.2's `parameter_identifier` spelling made
+    /// MODEL-DEPENDENT, so `noise_tabs` holds its declared defaults and only
+    /// this can state the card's. An empty slice is a table of literals, which
+    /// needs nothing beyond the comptime export. See `emitNoiseTablePoints`.
+    noise_tab_vals: []const []const [2]Mir.Value = &.{},
     /// §4.6.3 `ac_gens` and `acStim`, one row each. Same walk as `noise_rows`
     /// and separated from it by `kind`: a stimulus is not a generator and must
     /// never reach `noise_gens`, but it reaches codegen through the same
@@ -2735,6 +2741,7 @@ pub const Gen = struct {
         var ac: std.ArrayList(NoiseRow) = .empty;
         var ids: std.ArrayList(u32) = .empty;
         var tabs: std.ArrayList([]const [2]f64) = .empty;
+        var tab_vals: std.ArrayList([]const [2]Mir.Value) = .empty;
         for (self.lower.contributions.items) |c| {
             if (c.noise_srcs.len == 0) continue;
             // §1.3.1.1 ground is not an unknown: a to-ground generator is
@@ -2781,8 +2788,8 @@ pub const Gen = struct {
                         for (rows.items) |r| {
                             if (r.source == i and r.table != null) break :rows_table r.table;
                         }
-                        break :rows_table (try self.planNoiseTable(&tabs, s)) orelse continue;
-                    } else (try self.planNoiseTable(&tabs, s)) orelse continue,
+                        break :rows_table (try self.planNoiseTable(&tabs, &tab_vals, s)) orelse continue;
+                    } else (try self.planNoiseTable(&tabs, &tab_vals, s)) orelse continue,
                 };
                 const sid = seen orelse blk: {
                     try ids.append(self.arena, s.id);
@@ -2803,26 +2810,28 @@ pub const Gen = struct {
         }
         self.noise_rows = rows.items;
         self.noise_tabs = tabs.items;
+        self.noise_tab_vals = tab_vals.items;
         self.ac_rows = ac.items;
     }
 
     /// §4.6.4.3/.4 one `noise_table`/`noise_table_log` argument, folded into a
-    /// comptime `(frequency, power)` table and appended to `tabs`.
+    /// `(frequency, power)` table and appended to `tabs`.
     ///
-    /// CONSTANTS ONLY, and that is still a real restriction on ONE of A.8.2's
-    /// four `noise_table_input_arg` spellings. The assignment pattern and the
-    /// file name are both compile-time data by the time they arrive — a file
-    /// name "shall be constant", so `Lower.readNoiseTableFile` has already
-    /// turned it into the same flat pairs — and the `[msb:lsb]` slice of a
-    /// parameter is the parameter. What does not fold is an ARRAY PARAMETER,
-    /// and folding it through its DECLARED DEFAULT would be worse than
-    /// refusing: the model card's override would be silently ignored, which is
-    /// exactly the trap E0515 names. So `resolve_params` is false and a
-    /// parameter table is E0519.
+    /// ALL FOUR of A.8.2's `noise_table_input_arg` spellings land here. Three
+    /// of them are literals by the time they arrive: the assignment pattern is
+    /// one, a file name "shall be constant" so `Lower.readNoiseTableFile` has
+    /// already turned it into the same flat pairs, and a `[msb:lsb]` slice of
+    /// a parameter is the parameter.
     ///
-    /// ponytail: the ceiling is "the table is comptime data". The upgrade path
-    /// for the parameter spelling is to build the points into `Model` in
-    /// `derive` and export an accessor instead of an array.
+    /// The fourth, an ARRAY PARAMETER, is a table the MODEL CARD owns, and
+    /// this is where the two halves of that are separated. `tabs` gets the
+    /// DECLARED DEFAULTS (`resolve_params = true`), which is what a comptime
+    /// `noise_tables` can hold and all a compiler knows; `tab_vals` gets the
+    /// knots as MIR values, and `emitNoiseTablePoints` renders them over
+    /// `Model` so a card that overrides the parameter moves them. Folding the
+    /// default and stopping there is the trap E0515 names — the override would
+    /// be silently ignored — and refusing the spelling outright, which VerA
+    /// used to do, refuses a form the clause names FIRST.
     ///
     /// Sorting is done HERE, not by the host: §4.6.4.3 says "the simulator
     /// shall internally sort the pairs into ascending frequency if required",
@@ -2830,7 +2839,18 @@ pub const Gen = struct {
     /// gets an invariant instead of a chore. Uniqueness is the clause's own
     /// requirement ("Each frequency value must be unique") and cannot be
     /// repaired by sorting, so it is the one ordering fact that is an error.
-    fn planNoiseTable(self: *Gen, tabs: *std.ArrayList([]const [2]f64), s: Lower.NoiseSrc) Error!?u16 {
+    ///
+    /// A card can defeat BOTH at run time, because both are statements about
+    /// values this compiler never sees. The sort survives — the generated
+    /// accessor re-sorts — and uniqueness does not: it is checked on the
+    /// defaults here and is the host's precondition afterwards, which is what
+    /// `contract.NoiseTable` says.
+    fn planNoiseTable(
+        self: *Gen,
+        tabs: *std.ArrayList([]const [2]f64),
+        tab_vals: *std.ArrayList([]const [2]Mir.Value),
+        s: Lower.NoiseSrc,
+    ) Error!?u16 {
         const vals = s.table;
         if (vals.len == 0) {
             try self.refuseNoise(.E0519, s.tok, "the argument is not a vector of " ++
@@ -2842,23 +2862,41 @@ pub const Gen = struct {
                 "a whole number of (frequency, power) pairs", .{vals.len});
             return null;
         }
-        const pts = try self.arena.alloc([2]f64, vals.len / 2);
-        for (pts, 0..) |*p, i| {
-            const f = self.an.foldConst(vals[2 * i], 0, false);
-            const pwr = self.an.foldConst(vals[2 * i + 1], 0, false);
+        // One array of both halves, so the sort below permutes the values and
+        // the defaults together and position k of each keeps meaning the same
+        // knot. `noise_tables[k]` and `noiseTablePoints`'s k-th pair have to
+        // BE the same pair; two sorts of two arrays is one comparator away
+        // from not being.
+        const Knot = struct { f: f64, p: f64, fv: Mir.Value, pv: Mir.Value };
+        const knots = try self.arena.alloc(Knot, vals.len / 2);
+        var parametric = false;
+        for (knots, 0..) |*k, i| {
+            const fv = vals[2 * i];
+            const pv = vals[2 * i + 1];
+            // `resolve_params = false` first, so "is this knot a literal?" is
+            // answered before "what is it by default?" — a table with no
+            // parameter in it must not gain an accessor, because that would
+            // oblige every host of every existing device to read one.
+            const lit = self.an.foldConst(fv, 0, false) != null and
+                self.an.foldConst(pv, 0, false) != null;
+            const f = self.an.foldConst(fv, 0, true);
+            const pwr = self.an.foldConst(pv, 0, true);
             if (f == null or pwr == null) {
-                try self.refuseNoise(.E0519, s.tok, "the table must be constant: it is " ++
-                    "exported as comptime data, so an array parameter or a solve-time " ++
-                    "value has no value to export", .{});
+                try self.refuseNoise(.E0519, s.tok, "the table has no value at compile " ++
+                    "time: a knot is computed during the solve, and 4.6.4.3's input is " ++
+                    "a vector, a file or a parameter", .{});
                 return null;
             }
-            p.* = .{ f.?.f, pwr.?.f };
+            if (!lit) parametric = true;
+            k.* = .{ .f = f.?.f, .p = pwr.?.f, .fv = fv, .pv = pv };
         }
-        std.mem.sort([2]f64, pts, {}, struct {
-            fn lt(_: void, x: [2]f64, y: [2]f64) bool {
-                return x[0] < y[0];
+        std.mem.sort(Knot, knots, {}, struct {
+            fn lt(_: void, x: Knot, y: Knot) bool {
+                return x.f < y.f;
             }
         }.lt);
+        const pts = try self.arena.alloc([2]f64, knots.len);
+        for (knots, pts) |k, *p| p.* = .{ k.f, k.p };
         for (pts, 0..) |p, i| {
             if (!(p[0] > 0) or !std.math.isFinite(p[0])) {
                 try self.refuseNoise(.E0519, s.tok, "frequency {d} is not a positive " ++
@@ -2884,6 +2922,14 @@ pub const Gen = struct {
             }
         }
         try tabs.append(self.arena, pts);
+        if (parametric) {
+            const mvs = try self.arena.alloc([2]Mir.Value, knots.len);
+            for (knots, mvs) |k, *m| m.* = .{ k.fv, k.pv };
+            // Positional against `tabs`, so a constant table ahead of this one
+            // still occupies its index.
+            while (tab_vals.items.len + 1 < tabs.items.len) try tab_vals.append(self.arena, &.{});
+            try tab_vals.append(self.arena, mvs);
+        }
         return @intCast(tabs.items.len - 1);
     }
 
@@ -7232,6 +7278,7 @@ pub const Gen = struct {
                 try self.w(" }} }},\n", .{});
             }
             try self.w("}};\n\n", .{});
+            try self.emitNoiseTablePoints();
         }
         try self.w("/// §4.6.4 noise sources declared by the model.\npub const noise_gens = [_]contract.NoiseGen(Self){{\n", .{});
         for (self.noise_rows) |nr| {
@@ -7294,6 +7341,76 @@ pub const Gen = struct {
             }
         }
         try self.w("    }};\n}}\n\n", .{});
+    }
+
+    /// §4.6.4.3's ARRAY-PARAMETER input, which `noise_tables` alone cannot
+    /// state: "The vector can either be specified as an array parameter or an
+    /// array assignment pattern", and §3.4 makes a parameter something
+    /// "modified at compilation time to have values which are different from
+    /// those specified in the declaration assignment". So the knots are a
+    /// property of the model CARD, and a comptime array can only hold the
+    /// declared defaults — which is what `noise_tables` holds, unchanged, and
+    /// which is the right shape for the three spellings that ARE literal.
+    ///
+    /// This is the card's answer, one flat array over every table in
+    /// `noise_tables` order. FLAT and not indexed by a comptime `k`, because a
+    /// per-table return type is a generic function and `contract.expectFn`
+    /// cannot check one: the segment for table k starts at the sum of the
+    /// earlier `noise_tables[i].points.len`, which a host computes at comptime
+    /// from a decl it already reads.
+    ///
+    /// Emitted ONLY when some knot is a parameter. A device of literal tables
+    /// keeps exactly the text it had, and a host is never obliged to read a
+    /// hook that would tell it what `noise_tables` already did.
+    ///
+    /// RE-SORTED at run time. §4.6.4.3's "the simulator shall internally sort
+    /// the pairs into ascending frequency" is discharged at compile time for
+    /// the defaults, and a card that reorders the parameter re-opens it; the
+    /// host's `noiseTableAt` needs ascending knots, so the sort is here rather
+    /// than in a precondition nobody can check.
+    fn emitNoiseTablePoints(self: *Gen) Error!void {
+        var any = false;
+        for (self.noise_tab_vals) |mvs| any = any or mvs.len != 0;
+        if (!any) return;
+        var total: usize = 0;
+        for (self.noise_tabs) |pts| total += pts.len;
+        try self.w(
+            \\/// §4.6.4.3 every tabulated knot AT THIS CARD, in `noise_tables`
+            \\/// order and ascending in frequency within each table. Table k is
+            \\/// the segment starting at the sum of `noise_tables[i].points.len`
+            \\/// for i < k; `noise_tables` itself carries the array parameter's
+            \\/// DECLARED DEFAULTS, which is all a comptime table can hold.
+            \\pub fn noiseTablePoints(
+        , .{});
+        const at_model = self.out.items.len;
+        try self.w("model: *const Model) [{d}][2]f64 {{\n", .{total});
+        const saved_model = self.uses_model;
+        self.uses_model = false;
+        var body: std.ArrayList(u8) = .empty;
+        var at: usize = 0;
+        for (self.noise_tabs, 0..) |pts, k| {
+            const mvs = if (k < self.noise_tab_vals.len) self.noise_tab_vals[k] else &.{};
+            for (pts, 0..) |p, i| {
+                const pair: [2][]const u8 = if (i < mvs.len) .{
+                    (try self.f64Const(mvs[i][0], 0, false)) orelse try self.fmtF64(p[0]),
+                    (try self.f64Const(mvs[i][1], 0, false)) orelse try self.fmtF64(p[1]),
+                } else .{ try self.fmtF64(p[0]), try self.fmtF64(p[1]) };
+                try body.print(self.arena, "        .{{ {s}, {s} }},\n", .{ pair[0], pair[1] });
+            }
+            at += pts.len;
+        }
+        const reads_model = self.uses_model;
+        self.uses_model = saved_model or reads_model;
+        if (!reads_model) self.patchParam(at_model, "model".len);
+        try self.w("    var pts: [{d}][2]f64 = .{{\n", .{total});
+        try self.w("{s}", .{body.items});
+        try self.w("    }};\n", .{});
+        at = 0;
+        for (self.noise_tabs) |pts| {
+            try self.w("    contract.sortNoiseTable(pts[{d}..{d}]);\n", .{ at, at + pts.len });
+            at += pts.len;
+        }
+        try self.w("    return pts;\n}}\n\n", .{});
     }
 
     /// §4.6.3 the AC stimulus topology AND each stimulus' phasor.
@@ -10060,6 +10177,54 @@ test "codegen: §4.6.4.3/.4 a noise table is exported sorted, with its own inter
     );
 }
 
+test "codegen: §4.6.4.3 an array-parameter table exports the card's knots, a literal one does not" {
+    // A.8.2's `noise_table_input_arg` names `parameter_identifier` FIRST, and
+    // §3.4 makes a parameter's value the model card's. So the comptime
+    // `noise_tables` can only be the DECLARED DEFAULT and the card's answer is
+    // the extra hook — which must not appear on a device that has no
+    // parameter in any table, or every host of every such device would be
+    // obliged to read something `noise_tables` already told it.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module nparam(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter real tbl[0:3] = '{1e6, 1e-24, 1.0, 1e-18};
+        \\  analog I(p, n) <+ noise_table(tbl);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    // Sorted at compile time on the DEFAULTS, so `noise_tables` keeps the
+    // invariant `contract.validate` enforces...
+    try std.testing.expect(std.mem.indexOf(u8, src,
+        ".points = &.{ .{ 1.0, 0.000000000000000001 }, .{ 1000000.0, 0.000000000000000000000001 } }") != null);
+    // ...and the hook returns the same two knots in the same order, reading
+    // the card, with the run-time sort a reordering card would need.
+    const at = std.mem.indexOf(u8, src, "pub fn noiseTablePoints(model: *const Model) [2][2]f64 {").?;
+    const end = std.mem.indexOfPos(u8, src, at, "\n}\n").?;
+    const body = src[at..end];
+    try std.testing.expect(std.mem.indexOf(u8, body, ".{ model.tblZ5b2Z5d, model.tblZ5b3Z5d }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, ".{ model.tblZ5b0Z5d, model.tblZ5b1Z5d }") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "contract.sortNoiseTable(pts[0..2]);") != null);
+    // The default's order is the EXPORT's order: `noise_tables[k]` and the
+    // hook's k-th pair are the same knot, so the sort permuted both.
+    try std.testing.expect(std.mem.indexOf(u8, body, ".{ model.tblZ5b2Z5d, model.tblZ5b3Z5d }").? <
+        std.mem.indexOf(u8, body, ".{ model.tblZ5b0Z5d, model.tblZ5b1Z5d }").?);
+
+    var h2: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module nlit(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ noise_table('{1.0, 1e-18, 1e6, 1e-24});
+        \\endmodule
+    , &h2);
+    defer h2.deinit();
+    const lit = try h2.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, lit, "noiseTablePoints") == null);
+}
+
 test "codegen: §4.6.4.6 each use of a shared generator exports its own coefficient" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -10214,15 +10379,11 @@ test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
         // file that cannot be read is a lowering error on the .va, which never
         // reaches codegen at all.
         //
-        // An array PARAMETER: legal per §4.6.4.3, and refused rather than
-        // frozen at its default, which a model card may override.
-        \\module nparam(p, n);
-        \\  inout p, n;
-        \\  electrical p, n;
-        \\  parameter real tbl[0:3] = '{1.0, 1e-18, 1e6, 1e-24};
-        \\  analog I(p, n) <+ noise_table(tbl);
-        \\endmodule
-        ,
+        // NOT here either: an array PARAMETER. It used to be refused rather
+        // than frozen at its declared default, which a model card may
+        // override; now `noise_tables` carries the defaults and
+        // `noiseTablePoints` carries the card, so neither is frozen and
+        // nothing is refused. The test below this one pins both halves.
         // §4.6.4.4 interpolates log(power), and log(0) is not on the line.
         \\module nlog0(p, n);
         \\  inout p, n;

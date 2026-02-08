@@ -13,11 +13,12 @@
 //         | string
 //         | constant_assignment_pattern
 //
-// Three of those four spellings are refused by VerA today (E0519 covers the
-// parameter and the file; only the assignment pattern compiles), and the
-// parameter form is the one the clause names FIRST. It is also the form a
-// process design kit uses, because a table that lives in a parameter is a table
-// a model card can replace per corner without recompiling the model.
+// Three of those four spellings were refused by VerA when this file was
+// written (E0519 covered the parameter and the file; only the assignment
+// pattern compiled), and the parameter form is the one the clause names FIRST.
+// It is also the form a process design kit uses, because a table that lives in
+// a parameter is a table a model card can replace per corner without
+// recompiling the model.
 //
 // THE EXPORT. The declared default is
 //
@@ -33,10 +34,18 @@
 // The MODEL-CARD OVERRIDE is deliberately not exercised: the harness's `//!
 // param` line binds scalars only, so this fixture pins the declared default
 // reaching the export. That is already the whole gap — E0519's own explain text
-// says the parameter form is refused "rather than frozen at its default, which
-// a model card may override", so a compiler that closes this fixture by folding
-// the default has only moved the problem to the override, which a later fixture
-// (and a vector-valued `//! param`) has to catch.
+// used to say the parameter form was refused "rather than frozen at its
+// default, which a model card may override", so a compiler that closed this
+// fixture by folding the default would only have moved the problem to the
+// override, which a later fixture (and a vector-valued `//! param`) has to
+// catch.
+//
+// FIXED 2026-09-20, and NOT by folding. `noise_tables` carries the declared
+// defaults this file pins — that is what a comptime array can hold — and a
+// `noiseTablePoints(model)` hook beside it carries the card's own knots, which
+// `contract.validateHost` makes a linking host declare it reads. So the
+// override is REPRESENTABLE; it is still untested here, for the `//! param`
+// reason above, and the later fixture is still owed.
 //
 // The second half of the module is a plain resistor so the branch has a dc
 // current to check; the tabulated generator sits on the same branch.

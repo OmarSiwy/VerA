@@ -1038,21 +1038,40 @@ fn emitNoiseComptime(arena: Allocator, out: *std.ArrayList(u8), d: Directives) E
                 .{ k, ip, ip },
             );
             if (w.points) |pts| {
+                // §4.6.4.3's array-parameter input: `noise_tables` then holds
+                // the parameter's DECLARED DEFAULTS, and the card's own knots
+                // are `noiseTablePoints` — one flat array whose segment for
+                // table `ti` starts after every earlier table's points. A
+                // device of literal tables does not declare the hook and this
+                // reads `tbl.points`, which is the same thing.
+                try out.appendSlice(arena,
+                    \\                const card = if (comptime @hasDecl(D, "noiseTablePoints"))
+                    \\                    D.noiseTablePoints(&model)
+                    \\                else
+                    \\                    [_][2]f64{};
+                    \\                var off: usize = 0;
+                    \\                for (D.noise_tables[0..ti]) |t0| off += t0.points.len;
+                    \\                const got_pts: []const [2]f64 = if (comptime @hasDecl(D, "noiseTablePoints"))
+                    \\                    card[off..][0..tbl.points.len]
+                    \\                else
+                    \\                    tbl.points;
+                    \\
+                );
                 try out.appendSlice(arena, "                const want_pts = [_][2]f64{");
                 for (pts, 0..) |p, i| try print(out, arena, "{s}.{{ {f}, {f} }}", .{
                     if (i == 0) " " else ", ", fmtF64(p[0]), fmtF64(p[1]),
                 });
                 try print(out, arena,
                     \\ }};
-                    \\                var pts_ok = tbl.points.len == want_pts.len;
-                    \\                if (pts_ok) for (tbl.points, want_pts) |g, wp| {{
+                    \\                var pts_ok = got_pts.len == want_pts.len;
+                    \\                if (pts_ok) for (got_pts, want_pts) |g, wp| {{
                     \\                    if (!nclose(g[0], wp[0], {f}) or !nclose(g[1], wp[1], {f})) {{
                     \\                        pts_ok = false;
                     \\                        break;
                     \\                    }}
                     \\                }};
                     \\                std.debug.print("noise[{d}].points got={{any}} want={{any}} ok={{d}}\n", .{{
-                    \\                    tbl.points, want_pts, @intFromBool(pts_ok),
+                    \\                    got_pts, want_pts, @intFromBool(pts_ok),
                     \\                }});
                     \\
                 , .{ fmtF64(w.rtol), fmtF64(w.rtol), k });
@@ -1311,6 +1330,10 @@ const runner_body =
     \\/// torture suite compiles.
     \\pub const iteration_hooks = true;
     \\pub const mutable_eval = true;
+    \\/// 4.6.4.3 an array-parameter noise table: this host reads the card's own
+    \\/// knots out of `noiseTablePoints`, not the declared defaults that reach
+    \\/// `noise_tables`. See `emitNoiseTopology`'s `points=` comparison.
+    \\pub const noise_table_points = true;
     \\pub fn systf(_: *const D.Model) ?*const contract.SystfHost {
     \\    return &no_vpi_app;
     \\}
