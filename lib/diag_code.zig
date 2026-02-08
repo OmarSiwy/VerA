@@ -3595,19 +3595,25 @@ fn infoOf(c: Code) Info {
             \\every power strictly positive as well; log(0) is not a point on a
             \\log-log line.
             \\
-            \\The table is exported as `noise_tables` — comptime data beside
-            \\`noise_gens` — so every value in it has to be a compile-time
-            \\constant. Two legal spellings are refused for that reason:
+            \\All four of A.8.2's `noise_table_input_arg` spellings are
+            \\accepted, so the rules above are the whole of what this reports.
             \\
-            \\  - the file form, `noise_table("noise.tbl")`. Reading the file at
-            \\    compile time is the upgrade path; nothing does it today.
-            \\  - an array PARAMETER, whose values a model card may override
-            \\    after this compiler has gone. Folding through the declared
-            \\    default would silently ignore the override, which is the same
-            \\    trap E0515 describes; refusing is the honest answer until a
-            \\    per-model table can be built.
+            \\The file form, `noise_table("noise.tbl")`, is read at COMPILE
+            \\time: 4.6.4.3 says "the file name argument shall be constant", so
+            \\the pairs behind it are compile-time data too, and the name is
+            \\resolved against the include path exactly as 9.21's $table_model
+            \\data source is. The errors above can therefore also come from the
+            \\file's own contents.
             \\
-            \\Write the pairs as an assignment pattern of literals:
+            \\An array PARAMETER is a table the model CARD owns. `noise_tables`
+            \\carries its declared defaults, which is all comptime data can
+            \\hold, and a `noiseTablePoints(model)` hook beside it carries the
+            \\card's own knots; the rules above are checked on the defaults, so
+            \\a frequency a card duplicates is the host's problem and not this
+            \\diagnostic's.
+            \\
+            \\The shortest spelling that satisfies every rule above is an
+            \\assignment pattern of literals:
             \\
             \\    I(p, n) <+ noise_table('{1.0, 1e-18, 1e6, 1e-24});
             ,

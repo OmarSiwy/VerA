@@ -730,6 +730,19 @@ pub const NoiseTable = struct {
     points: []const [2]f64,
 };
 
+/// §4.6.4.3 "the simulator shall internally sort the pairs into ascending
+/// frequency if required". VerA sorts the DEFAULTS at compile time, so a
+/// device's `noise_tables` already arrives ascending; this is for the knots a
+/// model card moved, which `noiseTablePoints` returns and which no compiler
+/// saw. In place, because that is where the generated accessor has them.
+pub fn sortNoiseTable(pts: [][2]f64) void {
+    std.mem.sort([2]f64, pts, {}, struct {
+        fn lt(_: void, a: [2]f64, b: [2]f64) bool {
+            return a[0] < b[0];
+        }
+    }.lt);
+}
+
 /// §4.6.4.3/.4 the tabulated PSD at `f`. Lives here rather than in each host
 /// because the two clauses state one formula each and both are easy to get
 /// subtly wrong — §4.6.4.4 is `pow(10, log(p1) + (log(p2)-log(p1)) *
@@ -941,7 +954,12 @@ pub fn AcGen(comptime D: type) type {
 }
 
 /// §4.6.3 one AC stimulus' phasor, `mag·e^(j·phase)`, returned by the optional
-/// `acStim` hook (position k = `ac_gens[k]`).
+/// `acStim(x, model, inst)` hook (position k = `ac_gens[k]`).
+///
+/// EVALUATED AT A STATE VECTOR, like `noisePsd` and for the same reason: A.8.2
+/// gives `ac_stim`'s magnitude and phase as `analog_expression`, so a
+/// swept-amplitude source — `ac_stim("ac", k*V(ctrl))` — has a phasor that is
+/// a function of the operating point and not of the card alone.
 ///
 /// Polar and not `Complex`, because polar is what the clause states and what
 /// the model wrote: converting here would round `cos(π/2)` to 6.1e-17 and hand
@@ -1326,6 +1344,16 @@ pub fn validate(comptime D: type) void {
                     @compileError(name ++ ".noise_tables: frequencies must be sorted and unique");
             }
         }
+        // §4.6.4.3's array-parameter input: `noise_tables` then holds the
+        // parameter's DECLARED DEFAULTS and this is the card's own knots, one
+        // flat array over every table in `noise_tables` order. Optional — a
+        // device of literal tables does not declare it, and a host that reads
+        // `noise_tables` alone is right about such a device.
+        if (@hasDecl(D, "noiseTablePoints")) {
+            var total: usize = 0;
+            for (tables) |t| total += t.points.len;
+            expectFn(D, "noiseTablePoints", fn (*const D.Model) [total][2]f64);
+        }
     }
 
     // §4.6.3 the AC stimulus sources. Same twin shape as noise_gens/noisePsd:
@@ -1334,7 +1362,7 @@ pub fn validate(comptime D: type) void {
     expectArray(D, "ac_gens", AcGen(D));
     requireWith(D, "acStim", "ac_gens");
     if (@hasDecl(D, "acStim"))
-        expectFn(D, "acStim", fn (*const D.Model, *const D.Instance) [D.ac_gens.len]AcPhasor);
+        expectFn(D, "acStim", fn ([n]f64, *const D.Model, *const D.Instance) [D.ac_gens.len]AcPhasor);
 
     // Small-signal stamp: the complex contribution `G + jwC` cannot carry.
     // Sparse — `ac_stamps` is the comptime pattern, `acStamp` the values at a
@@ -1445,6 +1473,19 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
             "updateState alone cannot execute this device. See CONSUMING.md.");
         if (!H.iteration_hooks) @compileError("this device requires Newton iteration hooks");
     }
+    // §4.6.4.3 an array-parameter noise table. `noise_tables` holds only the
+    // parameter's DECLARED DEFAULTS, so a host that reads it and stops has
+    // silently ignored the model card — the exact trap that made VerA refuse
+    // the spelling outright for so long. Opting in is how a host says it reads
+    // `noiseTablePoints`; there is no way to check that it does, and a silent
+    // wrong spectrum is worse than a build that will not start.
+    if (@hasDecl(D, "noiseTablePoints")) {
+        if (!@hasDecl(H, "noise_table_points") or !H.noise_table_points)
+            @compileError(@typeName(H) ++ " must read `noiseTablePoints`: " ++ @typeName(D) ++
+                " has a 4.6.4.3 noise table whose knots are model parameters, and " ++
+                "`noise_tables` carries only their declared defaults. Declare " ++
+                "noise_table_points = true once the host reads the hook.");
+    }
     if (!@hasDecl(D, "systf_calls") or D.systf_calls.len == 0) return;
     const d = @typeName(D);
     const h = @typeName(H);
@@ -1507,6 +1548,10 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // core reads it back.
     .{ "core_reads_simstate", {} },
     .{ "mutable_eval", {} },
+    // §4.6.4.3's array-parameter table at this card. Optional; see `validate`
+    // and `validateHost` — a device that declares it has knots `noise_tables`
+    // states only the declared defaults of.
+    .{ "noiseTablePoints", {} },
     // Runtime analysis kind exported by generated devices for the analysis()
     // builtin; the host engine sets Instance.analysis_kind per pass. Its
     // ordinals are checked against `AnalysisKind` by `validateSimState`.
@@ -1963,6 +2008,12 @@ const MockAll = struct {
     pub const noise_tables = [_]NoiseTable{
         .{ .interp = .log, .points = &.{ .{ 1, 1e-18 }, .{ 1e6, 1e-24 } } },
     };
+    // §4.6.4.3's array-parameter input, where `noise_tables` above is the
+    // DECLARED DEFAULT and this is the card's: one flat array over every
+    // table, so its length is the sum of their `points.len`.
+    pub fn noiseTablePoints(m: *const Model) [2][2]f64 {
+        return .{ .{ 1, 1e-18 * @as(f64, m.g) }, .{ 1e6, 1e-24 } };
+    }
     pub const ac_stamps = [_]AcStamp{ .{ .row = 0, .col = 1 }, .{ .row = 1 } };
     // §4.6.3: one stimulus on the (0,1) branch, so the `ac_gens`/`acStim`
     // pairing and `AcPhasor`'s polar shape are both somewhere `validate` sees.
@@ -2041,7 +2092,7 @@ const MockAll = struct {
     pub fn acStamp(_: [n_u]f64, _: *const Model, _: *const Instance, _: f64) [ac_stamps.len]Complex {
         return .{ .{}, .{} };
     }
-    pub fn acStim(_: *const Model, _: *const Instance) [ac_gens.len]AcPhasor {
+    pub fn acStim(_: [n_u]f64, _: *const Model, _: *const Instance) [ac_gens.len]AcPhasor {
         return .{.{ .mag = 1, .phase = 0 }};
     }
     pub fn derive(_: *Model) void {}
@@ -2151,6 +2202,10 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
     // MockAll calls `$sampnhold`, so a host linking it must answer for it.
     const Sim = struct {
         pub const iteration_hooks = true;
+        // MockAll also carries a §4.6.4.3 card-valued noise table, so a host
+        // linking it must say it reads `noiseTablePoints` rather than the
+        // declared defaults in `noise_tables`.
+        pub const noise_table_points = true;
         var app: SystfHost = .{ .ctx = undefined, .call = zero };
         fn zero(_: *anyopaque, _: usize, _: []const f64, partials: []f64) f64 {
             @memset(partials, 0);
