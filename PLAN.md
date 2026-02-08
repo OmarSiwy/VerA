@@ -131,9 +131,58 @@ the JSON. That is `tests/harness.zig` work, not a CLI flag.
 
 ## 3. Wave B — the mixed-signal coordinator, one agent, sequential
 
-46 rows, the largest block in the suite, and it does not decompose. Each step
-gates the next, in the order `tests/fixtures/ch07_mixed_signal`'s own SPEC
-derives:
+### Measured 2026-09-21, before any of it was carved up
+
+§2's lesson applied to this wave BEFORE starting it: `vera --lint -I
+tests/fixtures` on all 46 rows, first diagnostic each. Three corrections to
+what the rest of this section assumed.
+
+**The 46 are not 46.** All thirteen `m03_*` rows are XFAIL, not FAIL — every
+one marked `known: VerA performs no §7.8 connect-module insertion`. They are a
+separate program (§7.8 insertion plus §7.8.5 generated names as defparam
+targets) and they do not gate, and are not gated by, anything below. Wave B's
+FAIL set is 33: m01 (13), m02 (13), m04 (7).
+
+**All 33 share ONE gate, and it is three tokens.**
+
+```
+E0205  unsupported module item: found `always`     12 rows
+E0205  unsupported module item: found `assign`      8 rows
+E0209  expected an expression: found `#`           13 rows
+```
+
+Nothing below step 1 has ever been reached by a fixture, because nothing below
+step 1 has ever been reached by the PARSER. The step order stands; what changes
+is that steps 3-7 have no evidence behind their estimates at all, and should
+not be treated as if they do.
+
+**`always` is already parsed.** `parseDiscrete` (parser.zig:2229) builds the
+`Ast.DiscreteBlock` and appends it; the E0205 beside it is `reportItem`, the
+NON-FATAL spelling, gated on `!self.in_connect_module and !self.digital`. So
+step 1 for `always` is one condition, not a production. `#` delay and `assign`
+as a module item are genuine missing productions.
+
+**But do not just open the gate.** Accepting `always` in an analog-context
+module without an executor turns "refused" into "compiled, and the block
+silently did nothing" — a wrong number with no diagnostic, which is strictly
+worse than E0205. The pattern to copy is the one `xfail-annexa` established for
+gates and UDPs in `f4f76fd`: parse the construct in full, then refuse it by
+CLAUSE (W0252 is "no event queue") rather than at a token. That keeps the
+refusal honest while the AST becomes available to the rules that need it.
+
+**Two rows are reachable now, without any runner.** `m01_90` and `m01_91` are
+REJECTION fixtures — they want `LRM 7.3.7` and `LRM 7.3` in a diagnostic and
+currently get E0205 on `function` and `always`. `Lower.checkDiscreteContext`
+already implements four §7.2.2/§4.5.15/§4.7.3/§5.2.1 rules and E0430's own doc
+comment already says "§7.3.7 states the mixed-signal half". Open the gate,
+make E0430 cite the clause, add the §7.3 analog-net-written-from-a-digital-
+process rule, and both flip. That is the cheapest real progress in this wave
+and it needs no scheduler, no coordinator and no new runner.
+
+### The step order
+
+Each step gates the next, in the order `tests/fixtures/ch07_mixed_signal`'s own
+SPEC derives:
 
 1. the parser accepts `always`, `#` delay and `assign` in an analog-context module
 2. `digital.zig` accepts a module with PORTS and an analog block
