@@ -1,25 +1,31 @@
 # The route to zero failures
 
-Written 2026-09-20, after the parallel-agent run that took FAIL 137 → 63. This
-is a work plan, not a status report — `TODO.md` is the status report and
-`tests/fixtures/MANIFEST.md` is the per-row register.
+Written 2026-09-20 after the run that took FAIL 137 → 63; revised 2026-09-21
+after Wave A took it 55 → 41 and §2 turned out to be wrong about two of its own
+agents. This is a work plan, not a status report — `TODO.md` is the status
+report and `tests/fixtures/MANIFEST.md` is the per-row register.
 
 It is deliberately blunt about two things: which work can be done in parallel
 and which cannot, and why "0 FAIL" is not the same claim as "100% conformant".
 
 ---
 
-## 0. Where this starts
+## 0. Where this stands, after Wave A
 
 ```sh
-zig build test                  # 111/111
-zig build test-devices          # 46/66
-zig build benchmark -- --strict # 1453 pass / 63 FAIL / 41 XFAIL of 1557 .va
+zig build test                  # 113/113
+zig build test-devices          # 47/66
+zig build benchmark -- --strict # 1489 pass / 41 FAIL / 28 XFAIL of 1558 .va
 ```
 
-Session start was 104/104, 5/66, and 1368 pass / 137 FAIL / 11 XFAIL. The XFAIL
-count went UP on purpose: a marker is what an honest gap looks like, and
-several rows that used to fail silently now say what they are waiting for.
+Wave A ran on 2026-09-20/21: five agents, all five merged. **31 rows left the
+FAIL/XFAIL list and NOTHING entered it** — 13 annex-A markers, 6 ch06, 5 ch10,
+4 ch04 §4.5 (a stranded branch, see below), 3 ch04 §4.6, 1 d04. No XPASS, so no
+marker was deleted without its gap being closed.
+
+Written as 1453/63/41 above the wave; the 63 was measured before four §4.5
+commits that were sitting unmerged in a dead agent worktree were found and
+landed. PLAN §6's warning about that hazard earned its place twice over.
 
 ---
 
@@ -28,42 +34,84 @@ several rows that used to fail silently now say what they are waiting for.
 | Bucket | Rows | Parallelisable |
 |---|---|---|
 | ch07 mixed-signal | 33 FAIL + 13 XFAIL = **46** | **No** — one sequential program |
-| digital `.v` (d04 tasks, d08 UDPs/switches, m04 `wreal`, d10_11) | 20 | Yes, 2 agents, but they share one file |
-| ch04 §4.5 operators + §4.6 noise inputs | 12 | Yes |
-| ch06 hierarchy (paramset, escaped names, sign context) | 7 | Yes |
-| ch10 directives (file-boundary state, reserved-word identifiers) | 5 | Yes |
-| XFAIL outside ch07 (annex A 12, ch09 4, ch04 3, ch08 2, ch05 2, ch06 1, annex E 1) | 28 | Yes, 2 agents |
-| stragglers in ch03/ch05/ch09/digital | 6 | Folds into the above |
+| digital `.v` (d08 UDPs/switches, m04 `wreal`, d10_11) | 19 | Yes, one agent — `digital-prims` |
+| XFAIL outside ch07 (ch09 4, ch04 3, ch08 2, ch05 2, ch06 1, annex A 1, annex E 1) | 14 | Yes |
+| stragglers in ch03/ch04/ch05/ch06/ch09/digital | 8 | Yes, one agent |
 | `.c` VPI fixtures + `.sp` decks | 33 | **Unmeasured** — needs runners before it needs fixes |
+
+The eight stragglers, each with its diagnosis already recorded:
+
+  ch03 a08_nodeset_02_nodeset_bus_null_element
+  ch04 a01_03_parameterized_dimension_override   §3.2 array dims elaborated from the DECLARED default while the index reads `model.N`
+  ch05 a02_10_node_alias_reevaluated_when_a_parameter_changes
+  ch06 h01_10_string_derived_parameter           `hostConditionalExpr` cannot render a string compare; cheaper route is the `!p.is_local` guard at codegen.zig:1982
+  ch09 a05_08_file_loaded_on_first_executed_call `readTableFile` is eager at lowering
+  ch09 s01_05 / s01_06                           see below — TWO blockers, not one
+  digital d04_15_bare_event_trigger_in_analog_rejected  `lowerEventTrigger` wants the `in_event_stmt` gate `lowerDisable` already has, plus a diagnostic code
+
+`s01_05`/`s01_06` are the instructive pair. They were blamed on W0851 for a
+whole session; W0851 was lifted and they did not move. The real causes are (1)
+§9.4.1 change detection, implemented nowhere — `Lower.isDisplayTask` lists
+`$monitor` beside `$display` and gives it an unconditional inline print — and
+(2) a §9.5 call rendering as the literal `0` in every unit but the display one
+(`codegen.emitFileCallDropped`), so `fd` is 0 in the core and `$ftell(fd)` is
+`$ftell(0)`. Fixing (2) alone flips neither row. They want to land together.
 
 The 7 "asserts nothing" and 4 "want is an expression, not a literal" rows are
 all ch07, so they are part of the mixed-signal work rather than fixture chores.
 
 ---
 
-## 2. Wave A — seven independent agents
+## 2. Wave A — DONE, and where this section was wrong
 
-Every row here is independent of every other. File ownership is the merge
-contract: an agent that stays inside its column merges clean.
+Five agents ran, all five merged, 31 rows out and none in. The scope table
+below is kept because the file-ownership idea worked: every branch merged
+clean except the one collision that was predicted, and that one was a
+fixture add/add, not a code conflict.
+
+| Agent | Result |
+|---|---|
+| `hierarchy` | 6 ch06 rows. Also found, while diagnosing a seventh: `foldBinary` reached `Const.asReal`, which is 0 for every string, so `"slow" == "fast"` folded **true** and a genvar loop over it unrolled 3× instead of 1×. New ch03 fixture pins it. |
+| `directives` | 5 ch10 rows — see below, only two were compiler work. |
+| `noise2` | 3 ch04 §4.6 rows. The two defects underneath them are worth more: `ctrlEval` did not pin lanes, so `.val()`'s lane-0 collapse gave every lane the FIRST lane's operating point for any x-dependent control argument (`absdelay`'s dynamic `td` included) while the device still claimed `lane_clean`. |
+| `digital-tasks` | 1 `.v` row (`disable` of a named block) — see below, the rest was not its work at all. |
+| `xfail-annexa` | 13 annex-A markers. Gates, UDPs and `specify` now PARSE in full and are refused by CLAUSE (W0251/W0252/W0253) instead of dying at a token. |
+
+**Two scope calls in the original table were wrong, and both cost real time.**
+
+`digital-tasks` was budgeted here as "the largest single item in the wave …
+expect it to take longer than the other six together", on the theory that tasks
+and functions need a call stack inside a pc-based interpreter. **There is no
+call stack to write.** `task`, `fork`, `join` and `automatic` sit in
+`lib/frontend/token.zig`'s reserved-but-unimplemented table with no tags at
+all, and `function` parses only as a continuation of `analog`. Five of the six
+d04 rows die at `E0205` in the PARSER. The work is `xfail-annexa`'s column, not
+`src/sim/`'s, and the agent that owned the file could only report that.
+
+`directives` was given three rows described as file-boundary preprocessor
+state. **They were not a compiler bug.** A past migration filed two `.vh`
+headers under `tests/fixtures/digital/`; include search is `{fixture dir,
+fixtures root}`, so all three died at `E0126: cannot find include file`. A
+`git mv` fixed them — zero compiler lines. VerA's file-spanning directive state
+was correct all along, and `TODO.md` §2.1's note that they "are fine" is what
+masked the misfiling for a session.
+
+The lesson is not "brief harder". It is that a row's SHAPE — which diagnostic,
+from which phase — is cheap to measure and was not measured before the work was
+carved up. Ten minutes of `vera --lint` on the failing rows would have moved
+both of these to different agents.
+
+### Still to run
 
 | Agent | Scope | Owns |
 |---|---|---|
-| `hierarchy` | paramset chain, string-range selection, OOMR localparam, escaped name vs vector element, mixed-sign comparison context (§4.2.9), integer parameter override rounding, string-derived parameter | `lib/ir/elaborate.zig`, `lib/ir/lower.zig` |
-| `directives` | default discipline crossing a file boundary, `` `begin_keywords ``/`` `end_keywords `` surviving the include that opened the region, `assert` and `net_resolution` as ordinary identifiers | `lib/frontend/preprocessor.zig`, `lib/frontend/lexer.zig` |
-| `noise2` | §4.6.4.3's array-parameter and file-name `noise_table` inputs; `ac_stim` with a dynamic magnitude (widening `f64Expr`'s reach, which a previous agent scoped out on purpose) | `lib/ir/lower.zig`, `lib/backend/codegen.zig` |
-| `digital-tasks` | d04 tasks and functions, fork/join, `disable` of a named block | `src/sim/digital.zig` |
-| `digital-prims` | d08 UDPs, MOS/CMOS switches, bidirectional, strength reduction; m04 `wreal` | `src/sim/digital.zig` |
-| `xfail-annexa` | the 12 `annex_a_syntax` XFAILs, one coherent syntax block | `lib/frontend/parser.zig`, `lib/frontend/ast.zig` |
+| `digital-prims` | d08 UDPs, MOS/CMOS switches, bidirectional, strength reduction; m04 `wreal`; d10_11 | `src/sim/digital.zig` |
+| `stragglers` | the eight singles in §1, each with its diagnosis already written down | scattered — one agent, sequentially |
 | `runners` | wire the 26 `.c` VPI fixtures and the 7 `.sp` decks into build steps | `build.zig`, `tests/harness.zig` |
 
-**`digital-tasks` and `digital-prims` share `src/sim/digital.zig`.** Run tasks
-first, alone, and prims after it. Two agents rewriting a 2000-line file in
-parallel is a merge nobody should have to do.
-
-`digital-tasks` is the largest single item in the wave: tasks and functions
-need a CALL STACK and statement execution inside `eval`, and the engine is a
-pc-based suspendable interpreter that is not shaped for either. Expect it to
-take longer than the other six together.
+`digital-prims` was blocked until 2026-09-21 and nobody had noticed: a UDP
+declaration was `E0201` and a gate instantiation `E0205`, so there was nothing
+for the ENGINE to execute. `xfail-annexa` cleared that. It is unblocked now.
 
 ### What the `runners` agent is actually for
 
