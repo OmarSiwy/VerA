@@ -399,6 +399,9 @@ pub const Code = enum(u16) {
     /// of a constant expression to a module variable — the one shape a compiler
     /// with no event queue can lower.
     E0433,
+    /// A.6.4 an `-> ev;` event trigger written on the analog spine, outside any
+    /// `@(<event>)`.
+    E0434,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -3280,6 +3283,24 @@ fn infoOf(c: Code) Info {
             \\If the value is genuinely fixed, write it as a constant — or as a
             \\parameter (LRM 3.4), which is the language's own name for a value
             \\determined before the analysis starts.
+            ,
+        },
+        .E0434 => .{
+            .title = "`->` is not an analog statement",
+            .lrm = "A.6.4",
+            .explain =
+            \\A.6.4 derives `analog_statement` without an `event_trigger`
+            \\alternative — `event_trigger` is listed one production over, under
+            \\`analog_event_statement`, next to `disable_statement` (E0401). So
+            \\the only form an analog block admits is the event statement
+            \\
+            \\    @(<event>) -> ev;
+            \\
+            \\which is the spelling LRM 5.10.4's own example uses.
+            \\
+            \\A bare trigger would have to mean "this event is active at every
+            \\timepoint", which hands the event's rate to the solver's step
+            \\control rather than to the model.
             ,
         },
 

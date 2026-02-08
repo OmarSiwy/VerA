@@ -4045,12 +4045,16 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// Sets the event's flag for this timepoint; `@(ev)` reads it.
 ///
 /// A.6.4 lists `event_trigger` under `analog_event_statement` and not under
-/// `analog_statement`, so a trigger on the analog spine has no derivation. That
-/// is NOT gated here: unlike `disable` (E0401), no fixture pins it, and the
-/// accepted form is harmless — an unconditional trigger means "this event is
-/// active every timepoint", which is what the source says. Add the
-/// `!in_event_stmt` gate beside `lowerDisable`'s when a fixture asks.
+/// `analog_statement`, so a trigger on the analog spine has no derivation —
+/// gated here exactly as `disable` (E0401) is, two alternatives over in the
+/// same list. A bare trigger would mean "active at every timepoint", which sets
+/// the event's rate from the solver's step control rather than from the model.
 fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
+    if (!self.in_event_stmt) {
+        var b = self.errWith(tok, .E0434);
+        b.help("only `@(<event>) -> ev;` is legal", .{});
+        return b.emit();
+    }
     const place = self.events.get(name) orelse
         return self.err(tok, .E0705, "`{s}`", .{name});
     try self.builder.writeVariable(place, self.cur, .one);
