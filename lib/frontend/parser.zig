@@ -1459,6 +1459,15 @@ pub const Parser = struct {
             .kw_initial, .kw_always => try self.parseDiscrete(b),
             // §5.2 analog construct / §4.7.1 analog function
             .kw_analog => try self.parseAnalog(b),
+            // §4.7, opening paragraph: "Each function can be an analog
+            // user-defined function or a DIGITAL function (as defined in IEEE
+            // Std 1364 Verilog)." So a bare `function` is a legal module item
+            // in any module, and refusing the DECLARATION was refusing §4.7.
+            // What §7.3.7 forbids is the CALL from the analog context, which
+            // `lowerUserCall` now judges (E0436) — a module that merely HAS a
+            // digital function is legal and several ch07 fixtures are exactly
+            // that shape.
+            .kw_function => try self.parseFuncDecl(b, self.pos, false),
             // A.4.2 generate_region — transparent, per §6.6's "there is no
             // semantic difference": the items inside are plain module items and
             // the region introduces no scope. What it is NOT is re-enterable:
@@ -3185,7 +3194,7 @@ pub const Parser = struct {
     fn parseAnalog(self: *Parser, b: *Body) Error!void {
         const main_tok = self.pos;
         self.pos += 1; // 'analog'
-        if (self.peek() == .kw_function) return self.parseFuncDecl(b, main_tok);
+        if (self.peek() == .kw_function) return self.parseFuncDecl(b, main_tok, true);
         // §5.2.1 `analog initial analog_function_statement`
         const is_initial = self.eat(.kw_initial);
         const body = try self.parseStmtNoNull(); // A.6.2 takes one analog_statement
@@ -3199,7 +3208,7 @@ pub const Parser = struct {
     /// LRM §4.7.1: `analog function [type] name ; items stmt endfunction`.
     /// Argument types come either from the declaration itself (`input real x;`)
     /// or from a matching variable declaration (`input x; real x;`, A.2.6).
-    fn parseFuncDecl(self: *Parser, b: *Body, main_tok: u32) Error!void {
+    fn parseFuncDecl(self: *Parser, b: *Body, main_tok: u32, is_analog: bool) Error!void {
         self.pos += 1; // 'function'
         const ret_ty: Ast.Type = switch (self.peek()) {
             .kw_integer => .integer,
@@ -3211,9 +3220,51 @@ pub const Parser = struct {
             self.pos += 1;
         }
         const name = try self.expectIdent();
-        _ = try self.expect(.semicolon);
 
         var args: std.ArrayList(Ast.FuncArg) = .empty;
+        // A.2.6's ANSI spelling, `function_identifier ( tf_port_list ) ;`,
+        // alongside the non-ANSI one where the ports are `function_item_
+        // declaration`s in the body. §4.7.1's own examples are all non-ANSI,
+        // which is why only that arm existed; 1364's `function real f(input
+        // real x);` is the same declaration with the list moved, and a digital
+        // function is written that way far more often than not.
+        //
+        // The two are not mixable — a paren list means the body declares no
+        // more ports — but nothing here enforces that, because the body loop
+        // below reads a stray `input` as one more argument and the LRM gives
+        // no diagnostic for the combination.
+        if (self.eat(.lparen)) {
+            while (self.peek() != .rparen and self.peek() != .eof) {
+                const dir = switch (self.peek()) {
+                    .kw_input, .kw_output, .kw_inout => blk: {
+                        const d = portDirection(self.peek());
+                        self.pos += 1;
+                        break :blk d;
+                    },
+                    else => Ast.Direction.input, // A.2.7 defaults to `input`
+                };
+                const ty: Ast.Type = switch (self.peek()) {
+                    .kw_integer, .kw_time => .integer,
+                    .kw_real, .kw_realtime => .real,
+                    .kw_string => .string,
+                    else => .unspecified,
+                };
+                if (ty != .unspecified) self.pos += 1 else _ = try self.optDiscipline();
+                const dims = try self.parseDims();
+                const at = self.pos;
+                try args.append(self.arena, .{
+                    .name = try self.expectIdent(),
+                    .ty = ty,
+                    .direction = dir,
+                    .dims = dims,
+                    .main_tok = at,
+                });
+                if (!self.eat(.comma)) break;
+            }
+            _ = try self.expect(.rparen);
+        }
+        _ = try self.expect(.semicolon);
+
         var params: std.ArrayList(Ast.ParamDecl) = .empty;
         var vars: std.ArrayList(Ast.VarDecl) = .empty;
         var body: std.ArrayList(Ast.StmtId) = .empty;
@@ -3224,7 +3275,7 @@ pub const Parser = struct {
         // not nest — A.2.6 has no analog_function_declaration inside a function
         // body — so a plain save/restore is the whole scope discipline.
         const saved_in_fn = self.in_analog_fn;
-        self.in_analog_fn = true;
+        self.in_analog_fn = is_analog;
         defer self.in_analog_fn = saved_in_fn;
 
         while (true) {
@@ -3329,6 +3380,7 @@ pub const Parser = struct {
             try self.file.addStmt(self.arena, .{ .block = .{ .body = body.items } }, main_tok);
 
         try b.functions.append(self.arena, .{
+            .is_analog = is_analog,
             .name = name,
             .ret_ty = ret_ty,
             .args = args.items,

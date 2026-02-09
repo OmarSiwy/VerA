@@ -1917,7 +1917,13 @@ fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     if (module.discrete.len == 0) return;
 
     var ctx: DiscreteCtx = .{};
-    for (module.functions) |f| try ctx.funcs.put(self.arena, self.file.str(f.name), {});
+    // ANALOG functions only. §4.7.3/§7.3.7's rule is that an *analog* function
+    // may not be called from the discrete context; a DIGITAL function called
+    // from a digital process is the ordinary case and must not be refused.
+    for (module.functions) |f| {
+        if (!f.is_analog) continue;
+        try ctx.funcs.put(self.arena, self.file.str(f.name), {});
+    }
 
     for (module.discrete) |blk| {
         ctx.where = if (blk.is_always) "an always block" else "an initial block";
@@ -2092,11 +2098,33 @@ fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: i
             try self.scanContext(s.body, discrete, context, ctx);
         },
         .sys_task => |s| for (s.args) |a| try self.scanContextExpr(a, discrete, is_initial, ctx),
-        // A contribution or an indirect contribution in a discrete block is
-        // §5.6's own "the analog context" rule, not one of the four above, and
-        // the block has already been refused. Nothing to add.
-        .contribute => |s| if (!discrete) try self.scanContextExpr(s.rhs, discrete, is_initial, ctx),
-        .indirect => |s| if (!discrete) try self.scanContextExpr(s.eqn, discrete, is_initial, ctx),
+        // §7.3, the write half: "Read operations of nets and variables in both
+        // domains are allowed from both contexts. WRITE operations of nets and
+        // variables are only allowed from the context of their domain." A `<+`
+        // here writes a CONTINUOUS net from the discrete context, so it is
+        // refused whether or not the enclosing block is executable.
+        //
+        // This used to read "the block has already been refused, nothing to
+        // add", and that was the masking: the block's own E0205 says the
+        // construct is unsupported, which is a statement about VerA, while
+        // §7.3 is a statement about the SOURCE and holds in a compiler that
+        // supports `always` perfectly. The two answers are not
+        // interchangeable, and the clause's rule had no coverage at all while
+        // the weaker one stood in for it.
+        //
+        // NOT E0432 (§7.2.2, "assigned in both contexts"): that rule is about
+        // a variable with two writers and fires only when both exist. Here
+        // there is one writer, in the wrong domain.
+        .contribute => |s| if (discrete) {
+            var b = self.errWith(self.file.exprs.mainTok(s.lhs), .E0435);
+            b.msg("contributed from {s}", .{ctx.where});
+            try b.emit();
+        } else try self.scanContextExpr(s.rhs, discrete, is_initial, ctx),
+        .indirect => |s| if (discrete) {
+            var b = self.errWith(self.file.exprs.mainTok(s.lhs), .E0435);
+            b.msg("indirectly contributed from {s}", .{ctx.where});
+            try b.emit();
+        } else try self.scanContextExpr(s.eqn, discrete, is_initial, ctx),
         .empty, .event_trigger, .disable, .jump => {},
     }
 }
@@ -10646,6 +10674,18 @@ fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const m = self.module orelse return poison;
     for (m.functions) |*fd| {
         if (!std.mem.eql(u8, self.file.str(fd.name), name)) continue;
+        // §7.3.7's first sentence, the mirror of E0430's second: "Digital
+        // functions cannot be called from within the analog context." The
+        // declaration is legal (§4.7 admits both kinds); it is the CALL that
+        // crosses, so the diagnostic lands here and not on the keyword.
+        // Lowered anyway afterwards, so one refused call does not turn every
+        // use of its result into a second, derived complaint.
+        if (!fd.is_analog) {
+            var b = self.errWith(ex.mainTok(e), .E0436);
+            b.msg("`{s}`", .{name});
+            b.label(self.tokenSpan(fd.main_tok), "`{s}` is declared here, without `analog`", .{name});
+            try b.emit();
+        }
         return self.inlineUserFuncPre(fd, &.{}, ex.args(e), e);
     }
     // vpi_* and every other unresolved name lands here.

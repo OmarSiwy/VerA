@@ -688,6 +688,13 @@ pub const FuncDecl = struct {
     /// §4.7.1 the single `analog_function_statement` (usually a `.block`).
     body: StmtId,
     main_tok: u32 = 0,
+    /// §4.7's opening paragraph: "Each function can be an analog user-defined
+    /// function or a digital function (as defined in IEEE Std 1364 Verilog)."
+    /// False for the bare `function` spelling. The DECLARATION is legal either
+    /// way — §7.3.7 forbids the CALL across contexts, not the declaration, and
+    /// a module may perfectly well hold a digital function it only calls from
+    /// a digital process.
+    is_analog: bool = true,
 };
 
 /// One `analog` construct. LRM §5.2 (A.6.2 analog_construct).
