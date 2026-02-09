@@ -4965,7 +4965,9 @@ pub const Gen = struct {
         const ext = self.strArg(args, 4) orelse "";
         const site = self.intArg(args, 5) orelse 0;
         const head = 7 + nd;
-        if (nd == 0 or np * ncol == 0 or args.len != head + np * ncol)
+        // `np == 0` is legal here and only here: §9.21.1's absent data source,
+        // whose error `zTable` raises at the call (`ztMissingSource`).
+        if (nd == 0 or ncol == 0 or args.len != head + np * ncol)
             return self.abort("malformed `$table_model` call reached codegen", .{});
         if (site != 0) {
             self.uses_inst = true;
