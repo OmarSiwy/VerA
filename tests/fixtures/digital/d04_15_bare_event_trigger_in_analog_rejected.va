@@ -39,11 +39,9 @@
 // every analog timepoint, i.e. a rate set by the solver's step control rather
 // than by the model.
 //
-// EXPECTED CODE. The natural home is a new class-4 diagnostic beside E0401
-// ("`disable` is not an analog statement", lrm A.6.4) with the same shape —
-// title "`->` is not an analog statement", help "only `@(<event>) -> ev;` is
-// legal". Until that code is allocated the phase label is the expectation, the
-// same choice ch01_intro/19_potential_contribution_to_flow_only.va makes.
+// EXPECTED CODE. E0434, allocated beside E0401 ("`disable` is not an analog
+// statement", lrm A.6.4) with the same shape — title "`->` is not an analog
+// statement", help "only `@(<event>) -> ev;` is legal".
 //
 // The module is otherwise a well-formed one-ohm resistor, so the trigger on the
 // spine is the sole defect.
@@ -51,7 +49,7 @@
 //! lrm A.6.4
 //! lrm A.6.5
 //! lrm 5.10.4
-//! reject DiagnosticsReported
+//! reject E0434
 module d04_bare_event_trigger_in_analog(p, n);
     inout p, n;
     electrical p, n;
