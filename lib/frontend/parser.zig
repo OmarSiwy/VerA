@@ -4050,7 +4050,18 @@ pub const Parser = struct {
                 self.pos += 1;
                 var items: std.ArrayList(Ast.ExprId) = .empty;
                 if (self.peek() != .rbrace) {
-                    const first = try self.parseExpr();
+                    // §3.6.3.2's bus nodeset, which prints its own hole:
+                    // `electrical [0:4] bus = '{2.3,4.5,,6.0};` — "a null value
+                    // in the constant array indicates that no nodeset value is
+                    // being specified for this element of the bus". A.8.1 has
+                    // no such alternative (A.8.3's
+                    // `constant_expression_or_null` is the shape a corrected
+                    // A.8.1 would use and nothing references it), so the clause
+                    // and its example are the authority. `.none` is what the
+                    // element list already carries for a cell the pattern does
+                    // not reach — `Lower.fillPattern` — so a hole needs no new
+                    // representation, only a spelling.
+                    const first = if (self.peek() == .comma) Ast.ExprId.none else try self.parseExpr();
                     // A.8.1's second alternative:
                     //
                     //   assignment_pattern ::= '{ expression { , expression } }
@@ -4064,7 +4075,7 @@ pub const Parser = struct {
                     // side, so nothing but `}` may follow the inner group. The
                     // inner braces are plain `{`; a `'{` there is a ROW of a
                     // multi-dimensional pattern (§3.4.8) and stays one element.
-                    if (self.peek() == .lbrace) {
+                    if (first != .none and self.peek() == .lbrace) {
                         var inner: std.ArrayList(Ast.ExprId) = .empty;
                         try self.braceGroup(&inner);
                         const n = self.replCount(first) orelse
@@ -4072,8 +4083,10 @@ pub const Parser = struct {
                         for (0..n) |_| try items.appendSlice(self.arena, inner.items);
                     } else {
                         try items.append(self.arena, first);
-                        while (self.eat(.comma))
-                            try items.append(self.arena, try self.parseExpr());
+                        while (self.eat(.comma)) try items.append(
+                            self.arena,
+                            if (self.peek() == .comma or self.peek() == .rbrace) .none else try self.parseExpr(),
+                        );
                     }
                 }
                 _ = try self.expect(.rbrace);
@@ -5573,18 +5586,10 @@ test "annex C rejections keep their pinned wording" {
         // the production `# ( parameter_declaration { , parameter_declaration } )`
         // with no such elision, so a bare type ends the list at the `(`.
         .{ .src = "module m #(real a = 1) (p); endmodule", .code = .E0207, .point = "expected `)`" },
-        // A.2.4 net_decl_assignment. §3.6.3 vector nets USED to be this row, then
-        // the scalar nodeset spelling was; both parse now (`electrical [3:0] p;`
-        // is four nodes, and `electrical p = 5.0;` takes the §3.6.3.2 initializer
-        // and drops it). What is left unimplemented in the same production is the
-        // clause's BUS form, `electrical [0:4] bus = '{2.3,4.5,,6.0}` — whose
-        // "null value in the constant array indicates that no nodeset value is
-        // being specified for this element" has no operand for A.8.3 to parse.
-        .{
-            .src = "module m(p); inout p; electrical [0:4] p = '{2.3,4.5,,6.0}; endmodule",
-            .code = .E0209,
-            .point = "",
-        },
+        // A.2.4 net_decl_assignment used to have three rows here — vector nets,
+        // the scalar nodeset spelling, and the clause's BUS form with its null
+        // element. All three parse now; `electrical [0:4] p = '{2.3,4.5,,6.0}`
+        // reaches lowering with a `.none` in the pattern where the hole was.
     };
     for (cases) |c| {
         const res = try parseForTest(arena, c.src);
