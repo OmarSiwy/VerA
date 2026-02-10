@@ -1,0 +1,62 @@
+# Every tag is a release, and every release carries the measured conformance
+# number. The number is NOT typed into the release body here — it is re-measured
+# on this runner and diffed against what CHANGELOG.md claims, so a tag cannot
+# ship a stale percentage.
+name: publish
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      # Fails the release if CHANGELOG.md's entry for this tag disagrees with
+      # what the tree measures. This is the whole gate: ROADMAP.md §1 defines
+      # v1.0.0 as four measures, and a release that misreports one of them is
+      # worse than no release.
+      - name: Verify CHANGELOG matches the tree
+        run: tools/conformance.sh --check "${GITHUB_REF_NAME}"
+
+      # Zig cross-compiles, so this is a loop on one runner and not a job matrix
+      # — five runners would re-run `--check` five times to produce one release.
+      #
+      # x86_64-windows is NOT here and is not an oversight: `src/main.zig`'s
+      # argument loop calls `init.minimal.args.iterate()`, which Zig 0.16 refuses
+      # on Windows ("use initAllocator instead"), so the target does not compile.
+      # Verified 2026-09-21. Add the triple here the moment that is fixed.
+      - name: Build and package every target
+        run: |
+          set -euo pipefail
+          for t in x86_64-linux-gnu aarch64-linux-gnu x86_64-macos aarch64-macos; do
+            echo "::group::$t"
+            zig build -Dtarget="$t" -Doptimize=ReleaseFast install --prefix "out/$t"
+            tar czf "vera-${GITHUB_REF_NAME}-${t}.tar.gz" -C "out/$t/bin" vera
+            echo "::endgroup::"
+          done
+          sha256sum vera-*.tar.gz | tee SHA256SUMS
+
+      # The release body is the CHANGELOG section for this tag, verbatim — the
+      # same table --check just confirmed.
+      - name: Extract the CHANGELOG section
+        run: |
+          sed -n "/^## ${GITHUB_REF_NAME//./\\.} /,/^## v.*—/p" CHANGELOG.md \
+            | sed '$ { /^## v/d }' > BODY.md
+          cat BODY.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          body_path: BODY.md
+          files: |
+            vera-*.tar.gz
+            SHA256SUMS

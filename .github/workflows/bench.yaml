@@ -1,0 +1,108 @@
+# Every suite, every run, all of it into the job summary.
+#
+# This job REPORTS; it does not gate on the conformance number. Until v1.0.0
+# that number is a progress meter, and PLAN.md §6's rule is the reason:
+# "agents must diff FAIL NAME LISTS, not counts" — a count can stay still while
+# the membership changes. So the FAIL/XFAIL name list is uploaded as an
+# artifact, and a reviewer diffs it against the previous run.
+#
+# What DOES gate: `zig build test`. That one is green today and breaking it is a
+# failed change, not a tradeoff (TODO.md §4 rule 1).
+name: bench
+
+on:
+  push:
+    branches: [main, ddt-capform]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  suites:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: 0.16.0
+
+      - name: Build
+        run: zig build -Doptimize=ReleaseFast install
+
+      # THE GATE. Gate on $?, not on reading the tail of a log — `zig build test
+      # 2>&1 | tail` swallows the exit code and this has produced a green report
+      # over a failing build before (TODO.md §2.1).
+      - name: Unit tests (gate)
+        run: |
+          zig build test --summary all 2>&1 | tee /tmp/unit.txt
+          exit "${PIPESTATUS[0]}"
+
+      # Verdict prose (`FAIL <path>: why`) goes to stderr and the TSV tables go
+      # to stdout, so both streams are merged into one log — conformance.sh
+      # parses the TSV and the name list below comes from the prose.
+      - name: Torture suite — every fixture, strict
+        continue-on-error: true
+        run: |
+          zig build benchmark -- --strict 2>&1 | tee /tmp/strict.txt
+          echo "strict exit: ${PIPESTATUS[0]}" >> /tmp/strict.txt
+          tail -1 /tmp/strict.txt
+
+      - name: Clause coverage — two-way evidence
+        continue-on-error: true
+        run: zig build benchmark -- --coverage 2>&1 | tee /tmp/coverage.txt
+
+      - name: Digital transcripts
+        continue-on-error: true
+        run: zig build test-devices 2>&1 | tee /tmp/devices.txt
+
+      # --sweep is the footprint and speed scaling table: generated-device byte
+      # counts and MIR footprint against fixture size. It compiles nothing from
+      # tests/fixtures, so it is fast and it is the size-regression signal.
+      - name: Benchmark sweep — footprint and speed
+        continue-on-error: true
+        run: zig build benchmark -- --sweep 2>&1 | tee /tmp/sweep.txt
+
+      # The artifact PLAN.md §6 actually asks for: names, not counts. The
+      # absolute path and the reason are stripped — both are noise in a diff,
+      # and the reason changes whenever the diagnostic text is reworded.
+      - name: Extract the FAIL / XFAIL name lists
+        if: always()
+        run: |
+          grep -E '^(FAIL|XFAIL) ' /tmp/strict.txt \
+            | sed 's|^\(X\?FAIL\) .*/tests/fixtures/|\1 |; s|:.*||' \
+            | sort > failing-names.txt || true
+          wc -l < failing-names.txt
+
+      - name: Job summary
+        if: always()
+        env:
+          STRICT_LOG: /tmp/strict.txt
+          COVERAGE_LOG: /tmp/coverage.txt
+        run: |
+          {
+            echo '## Conformance'
+            echo
+            tools/conformance.sh || echo '(conformance.sh could not parse this run)'
+            echo
+            echo '## Torture suite — verdicts'
+            echo '```'; tail -40 /tmp/strict.txt; echo '```'
+            echo '## Clause coverage'
+            echo '```'; tail -6 /tmp/coverage.txt; echo '```'
+            echo '## Digital transcripts'
+            echo '```'; tail -20 /tmp/devices.txt; echo '```'
+            echo '## Footprint and speed sweep'
+            echo '```'; cat /tmp/sweep.txt; echo '```'
+            echo '## Unit tests'
+            echo '```'; tail -20 /tmp/unit.txt; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: suite-logs
+          path: |
+            failing-names.txt
+            /tmp/strict.txt
+            /tmp/coverage.txt
+            /tmp/devices.txt
+            /tmp/sweep.txt
