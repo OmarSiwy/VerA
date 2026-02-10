@@ -201,11 +201,14 @@ pub const Tag = enum(u8) {
     // A.3.4 `n_input_gatetype ::= and | nand | or | nor | xor | xnor`,
     // `n_output_gatetype ::= buf | not`, `enable_gatetype ::= bufif0 | bufif1 |
     // notif0 | notif1`. These compute a logic value, so they get tags now that
-    // the digital executor has §7.8.5's tables to compute it WITH; the rest of
-    // A.4.1's gate types (the MOS and CMOS switches, `pullup`/`pulldown`) are
-    // still `.kw_reserved` and still E0205, because accepting one and modelling
-    // nothing would be a wrong answer. `or` is `kw_or` already — §5.10.1 spends
-    // the same spelling on the event `or`.
+    // the digital executor has §7.8.5's tables to compute it WITH. `or` is
+    // `kw_or` already — §5.10.1 spends the same spelling on the event `or`.
+    //
+    // A.3.1's OTHER arms — `pullup`/`pulldown` and A.3.4's eight remaining
+    // `*_switchtype` spellings — stay `.kw_reserved` and are dispatched by
+    // SPELLING (`Parser.reservedIs`, `Parser.switch_arms`). They are not E0205
+    // any more; a tag would buy nothing, because neither `Ast.GateKind` nor
+    // anything else in the AST has a slot to put them in.
     kw_and,
     kw_nand,
     kw_nor,

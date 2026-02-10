@@ -1448,9 +1448,11 @@ pub const Parser = struct {
                 }
                 _ = try self.expect(.semicolon);
             },
-            // A.4.1 `gate_instantiation ::= … | pass_switchtype
-            // pass_switch_instance { , pass_switch_instance } ;`
-            .kw_tran, .kw_rtran => try self.parsePassSwitch(),
+            // A.3.1 `gate_instantiation ::= … | pass_switchtype
+            // pass_switch_instance { , pass_switch_instance } ;` — the two
+            // A.3.4 switch spellings with tags of their own. The other eight
+            // reach `parseSwitch` through the `.kw_reserved` arm below.
+            .kw_tran, .kw_rtran => try self.parseSwitch(),
             // A.3.1 `gate_instantiation` — the twelve A.3.4 gate types that
             // compute a logic value.
             .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => try self.parseGates(b),
@@ -1536,6 +1538,12 @@ pub const Parser = struct {
                 // A.3.2 gives them a strength set no other gate takes.
                 if (std.mem.eql(u8, w, "pulldown") or std.mem.eql(u8, w, "pullup"))
                     return self.parsePullGate();
+                // A.3.1's cmos/mos/pass-enable switch arms — A.3.4's eight
+                // remaining `*_switchtype` spellings, none of which has a tag
+                // because `Ast.GateKind` has nothing to put them in. See
+                // `parseSwitch` for what refuses them and why it is no longer
+                // E0205.
+                if (switch_arms.has(w)) return self.parseSwitch();
                 return self.unsupportedItem();
             },
             else => return self.unsupportedItem(),
@@ -2203,9 +2211,82 @@ pub const Parser = struct {
         _ = try self.expect(.semicolon);
     }
 
-    fn parsePassSwitch(self: *Parser) Error!void {
-        if (self.digital) return self.failAt(self.pos, .E1100, "switch primitives are not implemented by digital execution", .{});
+    /// The shape of one A.3.1 switch arm, which is all four of them differ by:
+    /// how many terminals an instance takes, how many of those are A.3.3
+    /// `net_lvalue`s (everything after them is an `expression`), and whether a
+    /// delay bracket precedes the instance list.
+    const SwitchArm = struct { terminals: u8, lvalues: u8, delay: bool };
+
+    /// A.3.4's ten switch spellings, keyed the way annex B reserves them — by
+    /// SPELLING. Eight of the ten share `.kw_reserved` (`tran` and `rtran` are
+    /// the two with tags, because A.4.1 needed them before this did), so a tag
+    /// dispatch would have to be two dispatches; this is one.
+    const switch_arms = std.StaticStringMap(SwitchArm).initComptime(.{
+        // `cmos_switchtype [delay3] ( output , input , ncontrol , pcontrol )`
+        .{ "cmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true } },
+        .{ "rcmos", SwitchArm{ .terminals = 4, .lvalues = 1, .delay = true } },
+        // `mos_switchtype [delay3] ( output , input , enable )`
+        .{ "nmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        .{ "pmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        .{ "rnmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        .{ "rpmos", SwitchArm{ .terminals = 3, .lvalues = 1, .delay = true } },
+        // `pass_switchtype ( inout , inout )` — the one arm with no delay
+        // bracket at all, which is why A.4.1 prints it on its own.
+        .{ "tran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false } },
+        .{ "rtran", SwitchArm{ .terminals = 2, .lvalues = 2, .delay = false } },
+        // `pass_en_switchtype [delay2] ( inout , inout , enable )`. `delay2` is
+        // a `delay3` that stops at two values, which `parseDelay3` already
+        // returns for a two-value list.
+        .{ "tranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+        .{ "tranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+        .{ "rtranif0", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+        .{ "rtranif1", SwitchArm{ .terminals = 3, .lvalues = 2, .delay = true } },
+    });
+
+    /// A.3.1's four switch arms — the primitives whose output is a CONDUCTION
+    /// PATH rather than a computed value:
+    ///
+    ///     | cmos_switchtype    [delay3] cmos_switch_instance         { , … } ;
+    ///     | mos_switchtype     [delay3] mos_switch_instance          { , … } ;
+    ///     | pass_en_switchtype [delay2] pass_enable_switch_instance  { , … } ;
+    ///     | pass_switchtype            pass_switch_instance          { , … } ;
+    ///
+    ///     cmos_switch_instance ::= [ name_of_gate_instance ] ( output_terminal ,
+    ///             input_terminal , ncontrol_terminal , pcontrol_terminal )
+    ///     mos_switch_instance ::= [ name_of_gate_instance ]
+    ///             ( output_terminal , input_terminal , enable_terminal )
+    ///     pass_switch_instance ::= [ name_of_gate_instance ]
+    ///             ( inout_terminal , inout_terminal )
+    ///     pass_enable_switch_instance ::= [ name_of_gate_instance ]
+    ///             ( inout_terminal , inout_terminal , enable_terminal )
+    ///
+    /// Only `tran`/`rtran` reached a production before this; the other eight
+    /// A.3.4 spellings were `E0205: unsupported module item`, which says "this
+    /// text is not derivable" about text the annex above derives — the same
+    /// wrong answer `gateNotModelled`'s docstring retired for A.3.1's computing
+    /// arms. §1.1 ("Verilog-AMS HDL consists of the complete IEEE Std 1364
+    /// Verilog specification") is what makes the grammar VerA's to read.
+    ///
+    /// WHAT IT IS REFUSED BY INSTEAD, unchanged from `tran`'s two verdicts:
+    ///
+    ///   - outside a digital run, W0250 — §8.5.3.5 puts switch processing in
+    ///     the discrete simulation cycle, so a switch propagates LOGIC values
+    ///     and strengths between its terminals and there is no equation for a
+    ///     compiled analog device to stamp. `--deny=W0250` is the refusal.
+    ///   - under `--run`, E1100 — the discrete engine has no switch, and
+    ///     `Ast.GateKind` is not the place to put one: §7.10's strength
+    ///     REDUCTION (a `r`-prefixed switch drops its input one level) and
+    ///     §7.9's bidirectional conduction are neither of them a function of
+    ///     the input bits, which is what `digital.gateBit` is.
+    // ponytail: nothing is recorded, for `parseUdpDecl`'s reason — `Body` has
+    // no switch list because nothing would read one, and `Ast.GateKind` is
+    // closed by an exhaustive switch in `src/sim/digital.zig`, another agent's
+    // column. The upgrade is that file's conduction model and a `Body.switches`
+    // beside it, landed together.
+    fn parseSwitch(self: *Parser) Error!void {
         const main_tok = self.pos;
+        const arm = switch_arms.get(self.tokenText(main_tok)).?; // the caller dispatched on exactly these
+        if (self.digital) return self.failAt(main_tok, .E1100, "switch primitives are not implemented by digital execution", .{});
         self.pos += 1;
         try self.bag.add(
             .parse,
@@ -2214,14 +2295,25 @@ pub const Parser = struct {
             "{s} switch primitive",
             .{self.found(main_tok)},
         );
+        if (arm.delay and self.peek() == .hash) _ = try self.parseDelay3();
         while (true) {
-            // A.4.1 makes the instance name optional, and the fixture's `tran
-            // (a, b);` uses that arm. `(` after the name tells the two apart.
-            if (self.identLike(self.pos)) self.pos += 1;
+            // A.3.1 makes `name_of_gate_instance ::= gate_instance_identifier
+            // [ range ]` optional, and the fixture's `tran (a, b);` uses that
+            // arm. `(` after the name tells the two apart, as in `parseGates`.
+            if (self.identLike(self.pos)) {
+                self.pos += 1;
+                if (self.peek() == .lbracket) _ = try self.parseDim();
+            }
             _ = try self.expect(.lparen);
-            _ = try self.parseNetRef();
-            _ = try self.expect(.comma);
-            _ = try self.parseNetRef();
+            for (0..arm.terminals) |i| {
+                if (i != 0) _ = try self.expect(.comma);
+                // A.3.3: `output_terminal` and `inout_terminal` are
+                // `net_lvalue`s and lead; `input_terminal`, `enable_terminal`,
+                // `ncontrol_terminal` and `pcontrol_terminal` are all
+                // `expression`, so `cmos (o, d, ~g, g)` is derivable and
+                // `cmos (~o, d, ng, g)` is not.
+                _ = if (i < arm.lvalues) try self.parseNetRef() else try self.parseExpr();
+            }
             _ = try self.expect(.rparen);
             if (!self.eat(.comma)) break;
         }
