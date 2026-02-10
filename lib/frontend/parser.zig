@@ -2889,6 +2889,13 @@ pub const Parser = struct {
                 // the direction declaration's range rather than over it — see
                 // Ast.Port.type_range.
                 port.?.type_range = range;
+                // …and the net TYPE with it. A.2.1.3 gives every one of its
+                // twelve alternatives a `net_type`, and §7.9's resolution is a
+                // function of it, so dropping it here made `tri0 p;` on a port
+                // resolve as a plain `wire`. `.wire` is what a discipline-only
+                // declaration passes in, which is also A.2.1.3's default, so the
+                // assignment is a no-op for every net that never named a type.
+                port.?.kind = kind;
                 // `electrical p = 5.0;` on a header port lands here, and the
                 // discipline is all this branch can carry: a Port has no
                 // initializer slot. The nodeset gets a net entry of its own
