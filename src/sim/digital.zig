@@ -2588,7 +2588,14 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             try r.bind(p.name, outer.slot, p.main_tok);
             continue;
         }
-        const at = try mintNet(r, e, .wire, width, p.name, p.main_tok);
+        // `p.kind`, NOT `.wire`. A body declaration naming a header port is
+        // folded into the `Port` by the parser, so `inout t; tri0 t;` arrives
+        // here as one `Port` — and until `Ast.Port` carried a net type that
+        // fold DROPPED it, minting every port net `.wire`. The visible effect
+        // was that an internal `tri0` read 0 while the identical declaration
+        // on a port read z: §7.9's resolution and `netPull`'s undriven value
+        // are both functions of the net type, and the port's was a lie.
+        const at = try mintNet(r, e, p.kind, width, p.name, p.main_tok);
         switch (bind) {
             // IEEE 1364 §19.10: an unconnected INPUT port declared in an
             // `unconnected_drive` region is pulled to a logic level THROUGH A
