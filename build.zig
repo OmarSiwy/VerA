@@ -123,6 +123,11 @@ pub fn build(b: *std.Build) void {
     o.addOption([]const u8, "docs_root", b.pathFromRoot("docs"));
     o.addOption([]const u8, "work_root", b.pathFromRoot(".zig-cache/vera-suite"));
     o.addOption([]const u8, "contract", b.pathFromRoot("tools/contract.zig"));
+    // The `.c` fixtures are compiled against the SHIPPED header, not a copy, so
+    // the directory is named here for the same reason `fixture_root` is: a
+    // runner that could disagree about which `vpi_user.h` it means would be
+    // grading a different ABI.
+    o.addOption([]const u8, "vpi_include", b.pathFromRoot("src/vpi"));
     o.addOption([]const u8, "zig_exe", b.graph.zig_exe);
 
     const suite_mod = b.createModule(.{
@@ -173,6 +178,33 @@ pub fn build(b: *std.Build) void {
     dev.addArg("devices");
     b.step("test-devices", "Run `vera --run` over the digital fixtures and diff their transcripts")
         .dependOn(&dev.step);
+
+    // The 26 `.c` fixtures. `harness.zig:collect` walks `.va` and `.v`; these
+    // are neither, and are not VerA source at all — a VPI fixture is a C
+    // translation unit, and the question it asks is whether the ABI exists with
+    // the shape Clause 11 and Clause 12 describe. A C compiler is what asks it,
+    // for the same reason `vpi_app.c` below is C and not a Zig test.
+    //
+    // It COMPILES them and reports a census; it does not link or run them.
+    // Running needs a simulator host per design — `p02_design.v` through the
+    // digital path, five `.va` designs through the analog one — and the
+    // routines themselves. That is P02 and P03, `ROADMAP.md` v0.9.0.
+    //
+    // NOT on `test`, for the reason `test-devices` gives above: 13 of the 26 do
+    // not compile today, because `src/vpi/vpi_user.h` declares the eleven P01
+    // object-model routines and nothing of §12.16's value access, §12.20's
+    // callbacks, the systf registration or the mcd family. A red `zig build
+    // test` that is red on purpose is a gate nobody reads.
+    //
+    // No `expectExitCode` here either, and for the same cacheability reason:
+    // every real input — the `.c` sources, the two shared headers,
+    // `src/vpi/vpi_user.h` — is read at RUN time by a spawned compiler and is
+    // invisible to the build graph.
+    const vpi_fx = b.addRunArtifact(suite_exe);
+    vpi_fx.addArtifactArg(exe);
+    vpi_fx.addArg("vpi");
+    b.step("test-vpi-fixtures", "Compile the 26 .c VPI fixtures against src/vpi/vpi_user.h")
+        .dependOn(&vpi_fx.step);
 
     // The VPI acceptance test, and the reason `test-vpi` is not just the module
     // loop's `addTest`: a VPI implementation is only tested FROM C. The loop
