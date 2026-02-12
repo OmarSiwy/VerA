@@ -109,6 +109,20 @@ const external = @import("external.zig");
 const options = @import("suite_options");
 
 const Io = std.Io;
+
+// Zig collects `test` blocks from a test artifact's ROOT source file and from
+// whatever those tests reference. An ordinary `@import` used only by non-test
+// code is not enough. Without this line `zig build test` ran four tests, all of
+// them this file's, and the sibling runners' never executed at all — including
+// the assertion lint and the verdict algebra, which build.zig's own comment
+// beside `test_step.dependOn` calls "what stops a fixture from asserting
+// nothing while looking like it does". They compiled on every run and checked
+// nothing. `torture` and `external` are referenced for the same reason.
+test {
+    _ = harness;
+    _ = torture;
+    _ = external;
+}
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
 
