@@ -85,13 +85,29 @@ tests/limiter_host.zig         tests/table_snapshot_host.zig
 tools/source_guards.zig
 ```
 
-Nothing was re-homed — `git show --diff-filter=A 2cc1c08` returns the PDF alone.
-Two build steps this document cited as evidence, **`zig build test-rng-reference`
-and `zig build test-literal-output`, no longer exist**. That is the whole of the
-differential C oracle for §17.9.3 and the whole of the byte-level NUL/octal check
-for §17.1.1.1. The five fixtures deleted alongside them were a different case and
-were deleted *correctly* — `08_new_receiver_count.va`, `061_rtoi_analog_rejected.va`
-and `062_itor_analog_rejected.va` were authored from a 2.4-contaminated HTML
+That commit re-homed nothing — `git show --diff-filter=A 2cc1c08` returns the
+PDF alone. **Three of the fifteen have since been restored**, by `6f2e1c5`
+(2026-09-20, before `v0.0.1`), whose subject names the cause exactly: *"tests:
+restore the VPI acceptance test a docs commit deleted, and renumber to 2023"*.
+`tests/vpi_app.c`, `tests/vpi_design.va` and `tests/vpi_host.zig` are back and
+`build.zig:206` links them again.
+
+**Twelve are still gone:** the six RNG files, the three `literal_nul` files,
+`limiter_host.zig`, `table_snapshot_host.zig` and `tools/source_guards.zig`.
+With them went two build steps this document cited as evidence —
+**`zig build test-rng-reference` and `zig build test-literal-output` no longer
+exist** — and that is the whole of the differential C oracle for §17.9.3 and the
+whole of the byte-level NUL/octal check for §17.1.1.1.
+
+That one of the fifteen was noticed and the other twelve were not is the point,
+not a mitigation. The VPI three were noticed because `build.zig` still referenced
+them and the build broke; the twelve took their build steps down with them, so
+nothing broke and nothing complained. **A deleted test that removes its own gate
+is silent by construction.**
+
+The five *fixtures* deleted alongside them were a different case and were deleted
+*correctly* — `08_new_receiver_count.va`, `061_rtoi_analog_rejected.va` and
+`062_itor_analog_rejected.va` were authored from a 2.4-contaminated HTML
 transcription, which is exactly what the commit set out to remove.
 
 This is the failure mode `AGENTS.md §8` already warns about — *"a docs commit
@@ -977,7 +993,7 @@ re-derivation.
 | 7 | **E0323, the stale analog-subset exemption inside the compiler** (§6.2) | **open, now named in measure A.** `lib/ir/lower.zig:8120`. It is XFAIL `annex_a_syntax/66_case_equality_in_analog.va` — "§7.3.2 lists both case operators as supported there". D-track work; recording it is this document's job and it is recorded |
 | 8 | **Add IEEE 1364-2005 to `docs/`** or confirm §§17–18 numbering another way | **open.** `2cc1c08` swapped the AMS LRM 2.4 PDF for the 2023 one; the *inherited* standard is still absent, so §4's subclause numbers remain structural rather than citable |
 | 9 | **Teach `--coverage` about the inherited clauses** | **open, and it is the reason measure B has no command.** Until it is done, §7.1 is hand-read and this document is the only artifact that can move B |
-| **10** | **Restore the tests `2cc1c08` deleted** | **NEW, and owned by no release.** Fourteen test files and `tools/source_guards.zig`, deleted by a docs commit, re-homed nowhere. It cost six closed rows in §7.1. `zig build test-rng-reference` and `zig build test-literal-output` no longer exist. **Not v0.0.2 work** — v0.0.2 changes no code — and there is no row for it on the ladder |
+| **10** | **Restore the twelve tests `2cc1c08` deleted that are still gone** | **NEW, and owned by no release.** Fourteen test files and `tools/source_guards.zig` went in one docs commit. `6f2e1c5` restored the VPI three — because `build.zig` still referenced them and the build broke. The other **twelve took their own build steps down with them**, so nothing broke: the six RNG files, the three `literal_nul` files, `limiter_host.zig`, `table_snapshot_host.zig`, `source_guards.zig`. `zig build test-rng-reference` and `zig build test-literal-output` no longer exist. It cost six closed rows in §7.1. **Not v0.0.2 work** — v0.0.2 changes no code — and there is no row for it on the ladder |
 | **11** | **Three documents still assert the pre-re-derivation reading of §18** | **NEW.** `ROADMAP.md:447` says 18.1-01/18.1-06 are unblocked file handling (they are blocked on digital-side file I/O — §4.4); `MANIFEST.md:59` says `grep -rn 'dumpvars\|dumpfile' tests/` returns 0 hits (it returns 7). Both are cheap corrections |
 | **13** | **492 lines of new accept-surface landed with zero two-way evidence** | **NEW.** Between tag `v0.0.1` and `a99a37f`, `lib/frontend/parser.zig` (+401), `ast.zig`, `token.zig`, `diag_code.zig` and `src/sim/digital.zig` changed — "A.3.1's other three switch arms, which were E0205 for a grammar that has them", "A.5.3's table was validated and then thrown away", §3.7 `wreal`. **Measure C did not move**: 612 clauses split 196/257/76/83 at both endpoints, both measured. Source VerA newly accepts is by `AGENTS.md`'s own rule a **minor**, and the grammar arms it opened are pinned by no fixture. Chasing them is measure-C work and belongs at v0.2.1 or later (`ROADMAP.md §5`); recording it is this document's job. See also `fixture_fixes.md`, added in `a99a37f` |
 | **12** | **Four in-tree claims the §4 re-derivation found false** | **NEW.** `lib/ir/lower.zig:7597-7600` still calls `$receiver_count` "Non-normative" and cites a fixture deleted in `2cc1c08` (AMS-05); `ch09_system_tasks/COVERAGE.md:96-98` still says §9.21's splines and `E` extrapolation are refused at E0815 (AMS-09 — they are implemented); `COVERAGE.md:78` still says `$rtoi`/`$itor` are unimplemented (17.8-01 — both are, at `lib/backend/codegen.zig:6043`/`:6049`); `COVERAGE.md:50` still cites the deleted `zig build test-literal-output` (17.1-03) |
