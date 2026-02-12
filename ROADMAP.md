@@ -41,9 +41,11 @@ Five clauses, all true at one commit. Each is reproducible by a reader.
 
 **A. The fixture suite is green over an honest denominator.**
 `zig build benchmark -- --strict` reports **0 FAIL, 0 unasserted and 0 XFAIL**
-over every fixture the tree contains — including the 26 `.c` and 7 `.sp`
-fixtures that no build step walks today. `zig build test` and
-`zig build test-devices` exit 0.
+over every fixture the tree contains. `zig build test` and
+`zig build test-devices` exit 0, and so do the two steps v0.0.3 created —
+**`test-vpi-fixtures` at 26/26 and `test-spice` at 7/7**, the latter still
+proving only that the decks pair and compile, because executing one needs
+ARPice (§6) and no release here can.
 
 Zero XFAIL is a real obligation. The harness FAILs on XPASS precisely so a
 marker cannot be deleted without its gap closing. A marker whose fixture turns
@@ -51,10 +53,15 @@ out to be one a *conforming* implementation fails is removed by correcting the
 **fixture**, with the derivation recorded — never by loosening the compiler.
 
 **B. Every inherited IEEE 1364 §§17–18 obligation is closed or classified.**
-`CLAUSE-AUDIT.md §7.1`'s 119 rows reach 0 missing, 0 partial, 0
+`CLAUSE-AUDIT.md §7.1`'s **127** rows reach 0 missing, 0 partial, 0
 implemented-without-evidence. Each closed row carries a positive behavioural
 test, an invalid-input test, and a recorded result. "It compiles" closes
 nothing.
+
+**127 and not 119**, since v0.0.2 re-derived the section at HEAD. The old 119
+was not reproducible from the document's own table, which gave three different
+totals; §7.1 now states the denominator, shows the per-section arithmetic, and
+`tools/measure-b.sh` fails if it stops summing.
 
 **C. Every LRM clause carries two-way evidence.**
 All 612 clauses `zig build benchmark -- --coverage` finds in `docs/` are either
@@ -75,9 +82,11 @@ Phases 2–8 each ship as their own branch and PR with byte-identical goldens.
 - every **implementation-defined** choice has *a document and a test* — §5.3
   lists six and notes there is no single published list of them;
 - every **resource limit** is *stated and fails loudly*. The RNG row is the
-  template: a named diagnostic, never silent truncation. §5.4 marks four rows
-  untested — the 30-channel mcd limit, the 512-byte scan line, the 512-byte
-  formatted-string scratch buffer, and descriptor-table scope;
+  template: a named diagnostic, never silent truncation. §5.4, re-derived
+  2026-09-21, marks **three** rows untested — the 30-channel mcd limit,
+  descriptor-table scope, and a newly-enumerated 4096-byte scan white-space
+  window. The two buffer rows moved 512 → **4096** and `s01_13` now pins a long
+  record through both, though not the bound itself;
 - every **unspecified** behaviour has *no test asserting one outcome* — §5.5's
   four rows, including digital race outcomes and `$ferror`'s errno.
 
@@ -105,7 +114,7 @@ and D are hand-read from documents and carry their own dates.
 | | Measure | At v0.0.1 | Remaining | Source |
 |---|---|---|---|---|
 | **A** | Fixtures behaving as stated | **1495 / 1558 — 96.0%** (35 FAIL, 0 unasserted, 28 XFAIL) | 63 rows | `benchmark -- --strict`, 2026-09-21 |
-| **B** | Inherited IEEE 1364 obligations closed | **36 / 119** (83 open: 63 missing, 11 partial, 9 without evidence; only 30 `verified`) | 83 rows | `CLAUSE-AUDIT.md §7.1`, 2026-09-16 |
+| **B** | Inherited IEEE 1364 obligations closed | ~~36 / 119~~ → **30 / 127** (97 open: 65 missing, 20 partial, 10 without evidence, 2 untested resource limits; 27 `verified`) | 97 rows | `CLAUSE-AUDIT.md §7.1`, **re-derived 2026-09-21** |
 | **C** | Clauses with two-way evidence | **196 / 612 — 32.0%** (257 accepted-only, 76 refused-only, 83 uncited) | 416 clauses | `benchmark -- --coverage`, 2026-09-21 |
 | **D** | `ARCHITECTURE.md §6` phases landed | **2 / 9** (phases 0–1) | 7 phases | `ARCHITECTURE.md §8`, 2026-09-20 |
 
@@ -117,6 +126,8 @@ Supporting counters:
 | `zig build test-devices` | **FAIL** | 2026-09-21 |
 | Fixtures citing an LRM clause | 1488 of 1558 | 2026-09-21 |
 | Fixture census `.va` / `.v` / `.c` / `.sp` / `.vh` | 1558 / 81 / 26 / 7 / 4 | 2026-09-21 |
+| Measure A denominator after v0.0.3 widened the walk | **1570** (1558 `.va` + 12 `.v`) | 2026-09-21 |
+| `test-vpi-fixtures` · `test-spice` | **13/26** · **7/7** | 2026-09-21 |
 | Tree size `lib/` / `src/` | 66 995 / 6 693 lines | 2026-09-21 |
 | Commits on this branch, none tagged | 323, since 2026-07-04 | 2026-09-21 |
 | ARPice circuit suite | 518/616, **not a gate** | `TODO.md §1`, 2026-09-20 |
@@ -178,7 +189,7 @@ with the tree. See `AGENTS.md §3`.
 | **v0.8.1** | §18 VCD — the 22 missing rows | A | `CLAUSE-AUDIT.md §4.4` | B | `zig build test-devices` | v0.8.0 |
 | **v0.8.2** | §6 phase 6 — `ir/lower/` split, `Lowered` as an output type | D | phase 6. **Zero conformance rows** | D: 8/9 | goldens `diff -r` clean | v0.7.0 |
 | **v0.8.3** | §6 phase 7 — the boilerplate | D | phase 7. **Zero conformance rows** | D: 9/9 | goldens `diff -r` clean | v0.8.2 |
-| **v0.9.0** | VPI: P02 then P03 | A | `MANIFEST.md` P02/P03 | A: the 26 `.c` fixtures; B | `test-vpi`, then the `test-vpi-p03` step this release creates | v0.0.3 · ∥ axis D |
+| **v0.9.0** | VPI: P02 then P03 | A | `MANIFEST.md` P02/P03 | A: the 26 `.c` fixtures; B | `test-vpi`, `test-vpi-fixtures` at 26/26, then a step that RUNS them | v0.0.3 · ∥ axis D |
 | **v0.9.1** | **Measure C, the tail**: the 83 uncited clauses | A | 83 of 416 | C: 416 → 0 | `--coverage` | v0.6.2 · ∥ axis D |
 | **v0.9.2** | The published implementation-defined list; the stated resource limits | A | `CLAUSE-AUDIT.md §5.3`, `§5.4` | B, and §1 clause E | `test` + `--strict` | v0.0.2 · ∥ axis D |
 | **v1.0.0** | The conformance statement | — | nothing new — it *asserts* | A/B/C/D | every `build.zig` step green + the statement published | all of the above |
@@ -230,6 +241,36 @@ read at all.
 **Does not do.** Does not fix any of them. This makes them *visible*; whether
 they pass is a later release's problem.
 **Exit.** Both steps run and measure A reports over an honest denominator.
+
+**Landed 2026-09-21.** Three steps, not two, and the shape differs from the plan
+above in ways worth recording:
+
+| | Result | Step |
+|---|---|---|
+| `.v` | **12 of 81** joined measure A — denominator **1558 → 1570**, 2 pass, 10 FAIL. 66 stay `test-devices`' (they have an `.expected.txt`); 3 are VPI support material with no directive | `benchmark -- --strict` |
+| `.c` | **13 of 26 compile** against the shipped `src/vpi/vpi_user.h`. Split exactly by group: all 13 p03 compile against their own header, all 13 p02 fail because the shipped header has the eleven P01 object-model routines and none of §12.16's value access or §12.20's callbacks | **`test-vpi-fixtures`** (new) |
+| `.sp` | **7 of 7** are paired with an oracle and name models that compile. **Not executed** — a deck needs a circuit simulator to link the device and turn the Newton loop, and that is ARPice (§6), so no release *here* can run one | **`test-spice`** (new) |
+
+Three findings the wiring produced, all recorded in `CLAUSE-AUDIT.md §7.3`:
+
+- **`harness.zig`'s seven unit tests had never run.** Zig collects `test` blocks
+  from a test artifact's root and from what those tests reference; a plain
+  `@import` is not enough. `zig build test` ran 4, all `bench.zig`'s. The dead
+  ones include the assertion lint `build.zig` calls "what stops a fixture from
+  asserting nothing while looking like it does". Now 16, all green.
+- **Eight of the ten new `.v` FAILs are a directive-vocabulary gap, not a
+  conformance verdict** — six cite the *inherited* standard, which `validSection`
+  has no spelling for, and two use `//! expect vcd`, which nothing interprets.
+  That gap is why nobody noticed the files were unread (item 14).
+- **Every `.sp` deck's `.hdl` reference is dangling**: the `.assets/`
+  subdirectories were flattened into slug filenames and the decks were not
+  updated (item 15). `test-spice` resolves it with a fallback rather than
+  renaming six fixtures on a guess.
+
+**Deferred, deliberately.** Linking or running the `.c` fixtures needs a
+simulator host per design and the routines themselves — P02 and P03, v0.9.0.
+Extending the directive language to say "inherited clause" is a change to that
+language and is not a runner.
 
 ### v0.1.0 — The axis-A singletons
 **Scope.** `PLAN.md §1`'s stragglers plus the 14 XFAILs outside ch07 (ch09 4,
@@ -640,9 +681,13 @@ and this class of conflict should not recur.**
    counter after phase 1 landed; **113/113** and **104/104** are the test count
    one day apart. This roadmap means the test count whenever it says
    `zig build test`.
-5. **`test-devices` is 47/66 and 5/66.** `PLAN.md §0` wins; `TODO.md §1`'s 5/66
-   predates the §6.2.2 elaboration work. Note the runner's selection is narrower
-   than the 81 `.v` files present. **As measured 2026-09-21 this step FAILs.**
+5. **`test-devices` is 47/66 and 5/66 in the older documents; it measures 48/66
+   at HEAD, 2026-09-21.** `PLAN.md §0`'s 47/66 predates the port-net-type fix;
+   `TODO.md §1`'s 5/66 predates the §6.2.2 elaboration work. The runner's
+   selection is narrower than the 81 `.v` files present, and deliberately: it
+   takes a `.v` only when a `<stem>.expected.txt` sits beside it. Since v0.0.3
+   the other 15 are accounted for — 12 joined measure A, 3 are VPI support
+   material. **As measured 2026-09-21 this step FAILs.**
 6. **Tree size.** `ARCHITECTURE.md §0` says 71k (64.5k + 6.4k); the tree measures
    67.0k + 6.7k. The doc predates HEAD. Neither figure is used for sizing here,
    and `ARCHITECTURE.md §8` warns that both of its own line-count estimates were

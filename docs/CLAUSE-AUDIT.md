@@ -196,14 +196,26 @@ tree; §6 was not re-derived.** The share fell from 34.7% because the 257 fixtur
 added since are mostly positive.
 
 **b′. There is a second fixture population this document kept missing.**
-`tests/harness.zig:849` walks `*.va` **only**, so the 81 `.v` digital fixtures,
-26 `.c` VPI fixtures and 7 `.sp` decks are outside measure A's 1558 entirely.
-`zig build test-devices` runs 66 of the 81 `.v` files — a `.v` becomes a case only
-if a sibling `.expected.txt` exists (`tests/bench.zig:1121-1141`) — and **reports
-47/66, i.e. it FAILs**. Several §4 rows below are carried by `tests/fixtures/digital/d09_*.v`
-evidence, which is executable and byte-exact against committed transcripts but is
-*not* in measure A. Where that is so, the row says which harness proves it.
-Widening the walk is release v0.0.3.
+On 2026-09-21 `collect` walked `*.va` **only**, so the 81 `.v` digital fixtures,
+26 `.c` VPI fixtures and 7 `.sp` decks were outside measure A entirely.
+**Release v0.0.3 changed that and the numbers here move with it:**
+
+| Population | Then | Now |
+|---|---|---|
+| `.va` | 1558, measure A | 1558 |
+| `.v` | 81, none in measure A | **12 joined measure A** (denominator **1570**); 66 remain `test-devices`'; 3 are VPI support material |
+| `.c` | 26, read by nothing | **`zig build test-vpi-fixtures`** — 13/26 compile |
+| `.sp` | 7, read by nothing | **`zig build test-spice`** — 7/7 paired and compiling |
+
+A `.v` joins measure A when it carries a directive and has no `.expected.txt`;
+it stays `test-devices`' when it has one (`tests/bench.zig`'s `digitalCases`).
+`test-devices` **reports 48/66 and still FAILs** — `ROADMAP.md` Appendix A item 5
+records 47/66, which was measured before the port-net-type fix landed.
+
+Several §4 rows below are carried by `tests/fixtures/digital/d09_*.v` evidence
+that is executable and byte-exact against committed transcripts but sits in the
+`test-devices` register rather than measure A. Where that is so, the row says
+which harness proves it.
 
 **c. The coverage tool is structurally blind to the inherited clauses.** It
 walks `docs/ch*.html` and `docs/annex-*.html`, which are the AMS LRM. IEEE 1364
@@ -571,15 +583,29 @@ system task '$dumpfile' is not implemented` (`src/sim/digital.zig:1407`,
 `lib/diag_code.zig:4988`) — but that is an executor-subset code, not a VCD one,
 and no catalogue code exists for §18.
 
-**Three `.v` fixtures now exist and none of them runs.** They carry full hand
-derivations and `//! expect vcd` / `//! reject called more than once` directives.
-No harness reads any of it: `zig build test-devices` takes a `.v` as a case only
-if `<stem>.expected.txt` sits beside it (`tests/bench.zig:1121-1141`) and none
-has one, and the torture suite walks `.va` only (`tests/harness.zig:849`). The
-string `expect vcd` is interpreted by no `.zig` file in the tree. The two goldens
-also live in a *different* directory from their producers, under names the
-directives do not spell. Per §2, **none of this moves a row**: an `.expected.vcd`
-nothing generates is not evidence, and a `.v` no step executes is not a test.
+**Three `.v` fixtures exist, and since v0.0.3 all three are read — and all three
+FAIL.** They carry full hand derivations and `//! expect vcd` /
+`//! reject called more than once` directives. None has an `.expected.txt`, so
+`test-devices` still skips them (`tests/bench.zig`'s `digitalCases`); the
+widened `collect` now takes them instead, and the suite reports:
+
+```
+FAIL digital/d09_11_vcd_dumpvars.v:          `//!` directive: BadLrmSection
+FAIL digital/d09_12_vcd_dumpoff_on.v:        `//!` directive: BadLrmSection
+FAIL digital/d09_90_dumpfile_twice_rejected.v: `//!` directive: UnknownDirective
+```
+
+Neither failure is about VCD. `BadLrmSection` is `validSection` refusing
+`//! lrm inherited IEEE 1364-2005 18.1` — and **the fixtures are right**: an
+inherited clause must not enter `--coverage`'s AMS denominator (§1.1 c), and the
+directive language has no word for that citation. `UnknownDirective` is
+`//! expect vcd`, which is interpreted by no `.zig` file in the tree. The two
+goldens also sit in a *different* directory from their producers, under names
+the directives do not spell.
+
+Per §2, **none of this moves a row**: an `.expected.vcd` nothing generates is not
+evidence, and a fixture that fails on its own header asserts nothing about §18.
+What changed at v0.0.3 is that the failure is now *reported* instead of silent.
 
 | # | Obligation | Verdict |
 |---|---|---|
@@ -996,6 +1022,8 @@ re-derivation.
 | **10** | **Restore the twelve tests `2cc1c08` deleted that are still gone** | **NEW, and owned by no release.** Fourteen test files and `tools/source_guards.zig` went in one docs commit. `6f2e1c5` restored the VPI three — because `build.zig` still referenced them and the build broke. The other **twelve took their own build steps down with them**, so nothing broke: the six RNG files, the three `literal_nul` files, `limiter_host.zig`, `table_snapshot_host.zig`, `source_guards.zig`. `zig build test-rng-reference` and `zig build test-literal-output` no longer exist. It cost six closed rows in §7.1. **Not v0.0.2 work** — v0.0.2 changes no code — and there is no row for it on the ladder |
 | **11** | **Three documents still assert the pre-re-derivation reading of §18** | **NEW.** `ROADMAP.md:447` says 18.1-01/18.1-06 are unblocked file handling (they are blocked on digital-side file I/O — §4.4); `MANIFEST.md:59` says `grep -rn 'dumpvars\|dumpfile' tests/` returns 0 hits (it returns 7). Both are cheap corrections |
 | **13** | **492 lines of new accept-surface landed with zero two-way evidence** | **NEW.** Between tag `v0.0.1` and `a99a37f`, `lib/frontend/parser.zig` (+401), `ast.zig`, `token.zig`, `diag_code.zig` and `src/sim/digital.zig` changed — "A.3.1's other three switch arms, which were E0205 for a grammar that has them", "A.5.3's table was validated and then thrown away", §3.7 `wreal`. **Measure C did not move**: 612 clauses split 196/257/76/83 at both endpoints, both measured. Source VerA newly accepts is by `AGENTS.md`'s own rule a **minor**, and the grammar arms it opened are pinned by no fixture. Chasing them is measure-C work and belongs at v0.2.1 or later (`ROADMAP.md §5`); recording it is this document's job. See also `fixture_fixes.md`, added in `a99a37f` |
+| **14** | **The directive language has no word for an inherited-clause citation** | **NEW, from v0.0.3.** Six of the twelve `.v` fixtures the widened walk now reads FAIL on `BadLrmSection`, because they cite `//! lrm inherited IEEE 1364-2005 18.1` and `validSection` (`lib/backend/tb.zig:390`) accepts only an AMS clause number. **The fixtures are right**: an inherited clause must not enter `--coverage`'s AMS denominator (§1.1 c), so they cannot use the AMS spelling. This is the same hole as item 9 seen from the fixture side — measure B has no machine vocabulary. An `lrm inherited <text>` form, recorded but kept out of the clause list, would close both. Two more FAIL on `//! expect vcd`, which is VCD checking and belongs to v0.8.1 |
+| **15** | **Every `.sp` deck's `.hdl` reference is dangling** | **NEW, from v0.0.3.** All 7 decks name models through an `.assets/` subdirectory that does not exist — `a10_host.assets/a10_vsine.va` is filed as `a10_host.assets_a10_vsine.va`, `/` turned into `_`. That is `collect`'s slug rule applied to the *tree*, so a nested layout was flattened and the decks were not updated with it. `test-spice` resolves it with a documented fallback rather than renaming six fixtures on a guess about the old layout; un-flattening the tree makes the fallback dead code, which is the tell that it should be un-flattened |
 | **12** | **Four in-tree claims the §4 re-derivation found false** | **NEW.** `lib/ir/lower.zig:7597-7600` still calls `$receiver_count` "Non-normative" and cites a fixture deleted in `2cc1c08` (AMS-05); `ch09_system_tasks/COVERAGE.md:96-98` still says §9.21's splines and `E` extrapolation are refused at E0815 (AMS-09 — they are implemented); `COVERAGE.md:78` still says `$rtoi`/`$itor` are unimplemented (17.8-01 — both are, at `lib/backend/codegen.zig:6043`/`:6049`); `COVERAGE.md:50` still cites the deleted `zig build test-literal-output` (17.1-03) |
 
 ### 7.4 What this audit did not do
@@ -1006,10 +1034,14 @@ re-derivation.
 - **§3 and §6 were not re-derived at HEAD.** Both carry a banner saying so. §3's
   counts are against 1301 fixtures and 3694 lines of `COVERAGE.md`; §6's
   population is 452 rejection fixtures of 1301, now 477 of 1558.
-- **The `.v`, `.c` and `.sp` fixture populations are still outside measure A.**
-  `tests/harness.zig:849` walks `.va` alone. Several §4 rows are carried by
-  `tests/fixtures/digital/d09_*.v` evidence that is executable and byte-exact but
-  invisible to the 1558-fixture count. Widening the walk is release v0.0.3.
+- **The `.v`, `.c` and `.sp` populations were outside measure A when §4 was
+  re-derived, and release v0.0.3 changed that.** See §1.1 b′ for the new shape.
+  Twelve `.v` joined measure A (1558 → 1570); the 26 `.c` and 7 `.sp` got their
+  own steps. **No §4 verdict below was re-read against the widened suite**, and
+  two rows are known to be affected: §4.4's three VCD fixtures now FAIL visibly
+  on their own directive headers, and 17.2-21's `d09_91` is still scored by
+  nothing (§7.5 item 3). Neither changes a verdict — a fixture that fails on its
+  header asserts nothing — but a re-read is owed.
 - **ARPice host numbers were not re-measured.** They are not measurable from this
   worktree, and `docs/CONFORMANCE-GAPS.md` — which held them — is deleted. Its
   disposition is settled in §7.6 below.
@@ -1038,13 +1070,16 @@ Recorded rather than guessed. Each would change a §7.1 row.
    §17.9 and §17.11 are — each of which has an explicit separate digital row
    (17.9-14, 17.11-24) — then §17.10 needs a `17.10-03 digital` row, those two go
    back to `verified`, and the total becomes 128.
-3. **`tests/fixtures/digital/d09_91_readmem_overflow_rejected.v` is scored by
-   nothing.** It is not a `.va`, so it is outside the 1558; it has no
-   `.expected.txt`, so `tests/bench.zig:1121` skips it; and its data file sits in
-   `ch09_system_tasks/` while `readSideFile` looks beside the `.v`. Whether the
-   fixture or the harness is wrong is a v0.0.3 question. Separately, whether
-   §17.2.9 *requires* an error on excess data cannot be settled without IEEE
-   1364-2005 (item 8) — 17.2-21 is scored `partial` on the row's own wording.
+3. **`tests/fixtures/digital/d09_91_readmem_overflow_rejected.v` is now scored,
+   and fails for a reason that is not §17.2.9.** v0.0.3's widened `collect`
+   takes it — it carries `//! reject` and has no `.expected.txt` — and it FAILs
+   on `UnknownDirective`, not on excess data. Its data file also still sits in
+   `ch09_system_tasks/` while `readSideFile` looks beside the `.v`, so even a
+   fixture whose header parsed could not load it. **17.2-21's `partial` is
+   unchanged**: the row rests on `d09_08`/`d09_09`, which pass under
+   `test-devices`, and on excess data being silently dropped, which no fixture
+   pins either way. Whether §17.2.9 *requires* an error on excess data still
+   cannot be settled without IEEE 1364-2005 (item 8).
 4. **AMS-06 `driver_update`: `missing` vs `partial` is a judgement, not a
    measurement.** It parses, survives elaboration's cloner, and is E0701 only in
    value position. `missing` was chosen because §9.22.5's whole obligation is that
