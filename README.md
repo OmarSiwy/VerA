@@ -105,20 +105,12 @@ domains. A model that would hand your solver a NaN fails at compile time instead
 
 Measured 2026-09-21. Reproduce with `zig build benchmark -- --strict`.
 
-```mermaid
-xychart-beta
-    title "Suite pass rate"
-    x-axis ["va fixtures", "spice decks", "vpi fixtures", "lrm clauses"]
-    y-axis "Percent" 0 --> 100
-    bar [95.4, 100, 50, 32.2]
-```
-
-| Suite | Passing | Step |
-|---|---|---|
-| va fixtures | 1497 / 1570 | `benchmark -- --strict` |
-| spice decks | 7 / 7 | `test-spice` |
-| vpi .c fixtures | 13 / 26 | `test-vpi-fixtures` |
-| lrm clauses | 197 / 612 | `benchmark -- --coverage` |
+| Suite | Passing | | Step |
+|---|---|---|---|
+| va fixtures | 1497 / 1570 | 95.4% | `benchmark -- --strict` |
+| spice decks | 7 / 7 | 100% | `test-spice` |
+| vpi .c fixtures | 13 / 26 | 50% | `test-vpi-fixtures` |
+| lrm clauses | 197 / 612 | 32.2% | `benchmark -- --coverage` |
 
 Plain Verilog-A device models are the well-tested path. The 73 fixtures that do
 not pass are concentrated in mixed-signal, not in analog modelling.
