@@ -6,7 +6,7 @@
 // the first half of §3.5 — 50_genvar_assigned_outside_loop.va is that half. What
 // it is not is static: `V(p, n)` is a solution-dependent probe, so the trip
 // count is not known at elaboration and the loop cannot be unrolled, which is
-// the whole reason §3.5 exists (§5.7.3 analog_loop_generate_statement).
+// the whole reason §3.5 exists (§5.9.3 analog_for).
 //
 // Replacing `V(p, n)` with `1`, or with a parameter, makes the file legal.
 //

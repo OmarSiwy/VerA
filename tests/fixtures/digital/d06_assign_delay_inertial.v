@@ -7,11 +7,11 @@
 //
 // A continuous assignment has ONE driver of its net (annex A.6.1:
 // "net_assignment ::= net_lvalue = expression", one per driver). A driver
-// carries one value, so the update events of a single delayed continuous
-// assignment cannot overtake or coexist with one another: a newly queued
-// update SUPERSEDES any update of the same driver that is still outstanding.
-// That is the INERTIAL delay of 6.1.3 of IEEE Std 1364 Verilog — a pulse
-// narrower than the delay never reaches the net at all.
+// carries one value. IEEE 1364-2005 §6.1.3(b) cancels pending propagation
+// when the new RHS differs from the pending value; an unchanged pending RHS
+// retains its deadline (audit_assignment_pending_same_value.v). Step(c)
+// schedules nothing when the new RHS equals the current LHS. Together these
+// suppress the narrow pulse exercised here.
 //
 //! lrm 8.5.3.1
 //! lrm annex A.6.1
@@ -22,11 +22,9 @@
 //   t=9   settled                                               -> y = 0
 //   NARROW PULSE, width 2 < 5:
 //   t=10  a := 1 -> update y=1 queued for t=15
-//   t=12  a := 0 -> update y=0 queued for t=17; the driver's outstanding
-//                   y=1@15 is cancelled, because one driver holds one value
-//                   and the later event is the one in force.
+//   t=12  a := 0 -> cancel y=1@15; current y is already0, so schedule nothing.
 //   t=14 -> y = 0    t=15 -> y = 0 (NO glitch)    t=17 -> y = 0
-//         The y=0@17 event is a no-op: the net is already 0.
+//         No y=0@17 event is required by the source.
 //   WIDE PULSE, width 10 > 5:
 //   t=20  a := 1 -> update y=1 queued for t=25; nothing outstanding
 //         t=24 -> y = 0    t=25 -> y = 1

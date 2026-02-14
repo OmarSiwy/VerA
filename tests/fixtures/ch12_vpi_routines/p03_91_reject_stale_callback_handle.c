@@ -97,7 +97,7 @@ static void p03_91_startup(void)
   null_ret = vpi_remove_cb(NULL);
   errs += p03_saw_error("vpi_remove_cb(NULL)");
 
-  mod = vpi_handle_by_name((const PLI_BYTE8 *)"p03_dc_divider.r1", NULL);
+  mod = vpi_handle_by_name((PLI_BYTE8 *)"p03_dc_divider.r1", NULL);
   P03_CHECK(mod != NULL, "no instance p03_dc_divider.r1");
   wrongtype_ret = vpi_remove_cb(mod);
   errs += p03_saw_error("vpi_remove_cb on a module handle");

@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.23 if-else and case. §4.2.5 makes a relational operator yield the
 // INTEGER 0 when false, so a negative branch potential drives both the else arm
 // and the case default. At V(p)=0.25, V(n)=1.5 the potential is -1.25 V:
@@ -15,7 +18,6 @@
 // falls through to `default` and lands on -0.75 instead of 1.25.
 // result2 starts at result (0.25) and the grouped item adds 1.0 -> 1.25.
 //
-//! lrm 11.6.23
 //! lrm 5.8.3
 //! bias V(p) = 0.25, V(n) = 1.5
 `include "check.vh"

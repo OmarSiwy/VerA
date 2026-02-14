@@ -26,10 +26,9 @@
  * §11.6.1 `vpiInternalScope` descent over a three-deep design; the §11.6.4/
  * §11.6.8/§11.6.9/§11.6.12 iterations at every level; §11.2.2 instance
  * uniqueness; §12.21's two name forms and §6.7's upward search; §12.3 identity;
- * §12.4/§12.35 iterator lifetime; and the whole failure surface — invalid
- * handles, unsupported properties, unsupported relationships, unsupported
- * indices — each of which must return its documented failure value AND set
- * §12.2's error status, without crashing.
+ * §12.4/§12.35 iterator lifetime; invalid requests and implementation-specific
+ * handle robustness; and separately labelled required-positive XFAIL probes.
+ * Unsupported required capabilities are not successful negative tests.
  *
  * Failure is `exit(1)` with a message naming the check; success prints one
  * census line, which is what proves the startup routine ran at all.
@@ -386,25 +385,15 @@ static void check_failures(vpiHandle top)
   expect_error("vpi_get(vpiLocalParam) on a net");
   CHECK(vpi_get_str(vpiDefName, net) == NULL, "a net answered vpiDefName");
   expect_error("vpi_get_str(vpiDefName) on a net");
-  /* A property VerA answers for nobody: §11.6.1's location (`vpiLineNo`). */
-  CHECK(vpi_get(6, top) == vpiUndefined, "an unmodelled property returned a value");
-  expect_error("vpi_get on an unmodelled property");
 
   /* Unsupported RELATIONSHIPS. §12.23 returns NULL for an empty set too, so the
    * error status is the only thing that tells the two apart — which is why it
    * is checked rather than the return value alone. */
-  CHECK(vpi_iterate(vpiPort, net) == NULL, "a net was the reference of a port iteration");
-  expect_error("vpi_iterate(vpiPort) from a net");
   CHECK(vpi_iterate(vpiNet, NULL) == NULL, "vpiNet was iterable from a NULL reference");
   expect_error("vpi_iterate(vpiNet) from NULL");
   CHECK(vpi_handle(vpiPort, net) == NULL, "vpiPort was a one-to-one relationship from a net");
   expect_error("vpi_handle(vpiPort) from a net");
 
-  /* §12.20: no indexed object class is modelled yet, and the routine says so
-   * rather than guessing. */
-  CHECK(vpi_handle_by_index(vpi_handle_by_name("vpi_top.bus", NULL), 0) == NULL,
-        "vpi_handle_by_index returned a bit object");
-  expect_error("vpi_handle_by_index on a vector net");
 
   /* §12.4: an iterator abandoned before it was exhausted. The `break` below is
    * the case the clause is written for — "which can happen if the code breaks
@@ -428,6 +417,61 @@ static void check_failures(vpiHandle top)
   CHECK(vpi_get(vpiType, top) == vpiModule, "an object died when its handle was released");
 }
 
+/* Required-positive capabilities. An implementation improvement must fail as
+ * XPASS until its marker is removed and the positive check becomes ordinary.
+ * Each still-missing branch retains the previous failure-value/error guards,
+ * but those are implementation regression checks, NOT normative rejection
+ * requirements. Other wrong results fail rather than being accepted as XFAIL.
+ *
+ * Numeric constants missing from VerA's partial header are local test names;
+ * IEEE 1364-2005 Annex G gives vpiLineNo=6. Do not add a production constant
+ * while its required property remains unimplemented.
+ */
+static void required_xpass(const char *name)
+{
+  fprintf(stderr, "XPASS %s: remove XFAIL and retain the positive oracle\n", name);
+  exit(1);
+}
+
+static void check_required_positive_xfails(void)
+{
+  enum { lrm_vpiLineNo = 6 };
+  vpiHandle u1 = vpi_handle_by_name("vpi_top.u1", NULL);
+  PLI_INT32 line = vpi_get(lrm_vpiLineNo, u1);
+  PLI_INT32 error = vpi_chk_error(NULL);
+  vpiHandle bit, itr;
+
+  /* AMS §§11.6.1,12.5; IEEE Annex G: location is where the object
+   * is USED, not its definition. vpi_design.va:38 instantiates u1;
+   * the vpi_mid definition is line48. No `line directive changes either. */
+  if (line == 38 && error == 0) required_xpass("VPI-LINE-INSTANCE");
+  CHECK(u1 != NULL && line == vpiUndefined,
+        "VPI-LINE-INSTANCE: expected source line38, observed %d", (int)line);
+  expect_error("XFAIL VPI-LINE-INSTANCE missing location property");
+  fprintf(stderr, "XFAIL VPI-LINE-INSTANCE: required vpiLineNo=38 unavailable\n");
+
+  /* AMS §11.6.8 NOTE1 requires vector bits even without expansion;
+   * §12.20 returns the indexed child. bus is [0:3], so zero is IN range.
+   * The bounded oracle here is handle availability, not all bit properties. */
+  bit = vpi_handle_by_index(vpi_handle_by_name("vpi_top.bus", NULL), 0);
+  error = vpi_chk_error(NULL);
+  if (bit != NULL && error == 0) required_xpass("VPI-INDEX-VALID-BIT");
+  CHECK(bit == NULL, "VPI-INDEX-VALID-BIT returned a handle with an error");
+  expect_error("XFAIL VPI-INDEX-VALID-BIT missing indexed object");
+  fprintf(stderr, "XFAIL VPI-INDEX-VALID-BIT: required bus[0] handle unavailable\n");
+
+  /* §11.6.8 includes vpiPort (low connection), distinct from vpiPortInst
+   * (high connection). mid is internal to vpi_top, not one of its ports;
+   * child connections do not make it a low connection of a parent port.
+   * §12.23 therefore requires an EMPTY successful iteration, not an error. */
+  itr = vpi_iterate(vpiPort, vpi_handle_by_name("vpi_top.mid", NULL));
+  error = vpi_chk_error(NULL);
+  if (itr == NULL && error == 0) required_xpass("VPI-PORT-EMPTY-RELATION");
+  CHECK(itr == NULL, "VPI-PORT-EMPTY-RELATION returned a spurious port iterator");
+  expect_error("XFAIL VPI-PORT-EMPTY-RELATION missing valid relationship");
+  fprintf(stderr, "XFAIL VPI-PORT-EMPTY-RELATION: valid empty relation rejected\n");
+}
+
 /* ------------------------------------------------------------------------- */
 
 static void vpi_app_main(void)
@@ -445,6 +489,7 @@ static void vpi_app_main(void)
   check_names(top);
   check_properties();
   check_failures(top);
+  check_required_positive_xfails();
 
   printf("vpi: scopes=%d ports=%d nets=%d regs=%d params=%d checks=%d\n",
          c.scopes, c.ports, c.nets, c.regs, c.params, checks);

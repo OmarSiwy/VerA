@@ -15,7 +15,7 @@
 //
 //! lrm 3.4.1
 //! lrm 3.4.6
-//! reject DiagnosticsReported
+//! reject E0346
 module ch3_string_parameter_untyped(p, n);
     inout p, n;
     electrical p, n;

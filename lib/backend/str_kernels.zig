@@ -252,7 +252,8 @@ pub fn zScanN(src: []const u8, fmt: []const u8) i64 {
 }
 
 /// Item `k`, in the destination variable's declared type (§3.2). An item the
-/// scan never reached reads as zero — see the ceiling note in `codegen.emitSysCall`.
+/// scan never reached returns a zero payload. Lowering guards the actual
+/// destination write with the assignment count, so its prior value survives.
 pub fn zScanI(src: []const u8, fmt: []const u8, k: i64) i64 {
     return zScan(src, fmt, k).i;
 }

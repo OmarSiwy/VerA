@@ -7,18 +7,13 @@
 // `outp` is legal and is there to show the rule is about direction, not about
 // the discipline.
 //
-// The expectation is the phase label. It WAS `//! reject E0423`, a code that
-// does not exist — lib/diag_code.zig allocates class 4 up to E0422 (line 181) —
-// so no diagnostic VerA can emit would ever match it and the XPASS could never
-// fire. It must equally NOT be pinned as `GeneratedCompileError`: codegen used to
-// refuse every single-nature directional contribution for its own generic reason,
-// which would have passed this fixture for the wrong reason — and it no longer
-// refuses them at all (11_potential_signal_flow.va now runs), so that expectation
-// would be wrong in both eras. `DiagnosticsReported` requires a FRONT-END
-// diagnostic, which is what this rule needs, and is satisfied by E0425.
+// Pin the rule-specific diagnostic: contribution to an `input` signal-flow port.
+// An unrelated parser or code-generation failure cannot satisfy this fixture.
+// Earlier DiagnosticsReported matching and obsolete unallocated-code arguments
+// are superseded by the Chapter 1 source review (2026-09-23).
 //
 //! lrm 1.3.4.1
-//! reject DiagnosticsReported
+//! reject contribution to an `input` signal-flow port
 module ch01_sf_potential_contribution_to_input(inp, outp);
     input inp;
     output outp;

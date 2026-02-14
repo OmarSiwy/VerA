@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.3 io decl objects: a taskfunc reaches its arguments one-to-many, and the
 // NOTE there says a function contains an object with the function's own name.
 // The Verilog-A rules behind that are §4.7.1 — inputs are copied by value in
@@ -6,7 +9,6 @@
 // V(p) = 0.875, V(n) = 0.125 are both exact in binary, so x = 0.75 and
 // gain = 2.0 give affine = 2.0*0.75 + 1.0 = 2.5. Drop the `+ 1.0` and it is 1.5.
 //
-//! lrm 11.6.3
 //! lrm 4.7.1
 //! bias V(p) = 0.875, V(n) = 0.125
 `include "check.vh"

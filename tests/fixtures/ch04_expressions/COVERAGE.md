@@ -1,5 +1,26 @@
 # Chapter 4 coverage
 
+Audit checkpoint, 2026-09-23: the historical counts and coverage claims below
+are not a rule-level completeness certificate. Current measurements are generated
+in `docs/conformance-measurement.md`; source review and evidence limits for
+§§4.1–4.2.3 are in `docs/conformance-expressions.md`. The full-table precedence
+claim below covers representative cases, not every operator combination.
+`audit_short_circuit_dynamic.va` adds input-derived logical/conditional
+evaluation counters with an exact observation count; a temporary eager-operator
+mutation fails its skipped-call assertion while preserving the numeric result.
+The zero-modulus rejection now has isolated integer and real fixtures
+(`111_modulus_by_zero_rejected.va`, `audit_real_modulus_zero_rejected.va`),
+so one diagnostic cannot stand in for both paths. The new
+`audit_modulus_sign_combinations.va` supplies independently derived sign cases
+and legal nonzero neighbors; dynamic-divisor semantics remain unclosed.
+Reduction negatives now isolate each spelling (EXPR-014 in the expression
+ledger). The xor fixture's erroneous C.5 citation is withdrawn; its rule is
+§4.2.10. This is stronger invalid-input evidence, not digital positive coverage.
+Replication follow-up adds `audit_replication_zero_width.va` (a discriminating
+middle-bit width observation) and `audit_replication_zero_effect.va`
+(REPL-EVAL-001: XFAIL because the operand's side effect is erased). These
+separate a passing value/width case from the unmet exactly-once obligation.
+
 Source: `docs/ch4-expressions.html`, read in full through Section 4.7.3.
 219 `.va` fixtures, of which 61 are `//! reject`, 158 run and assert, and NONE is
 `//! xfail` (grep-measured over the directory; the "31 xfail, 19 of them also rejects"
@@ -47,7 +68,7 @@ the prose, never silently promoted.
 | 4.2.11 Shift operators | positive: `60_shift_left.va`, `61_shift_right.va`. Negative, both halves of the arithmetic-shift ban: `05_bitwise_shift.va` (`>>>`, E0324 — the filename is stale, it is a reject) and `117_arithmetic_shift_left_rejected.va` (`<<<`, E0324) |
 | 4.2.12 Conditional operator | `08_conditional_operator.va` (nesting, right association). `125_short_circuit_ternary.va`, as under 4.2.3 — "expression3 is evaluated and used as the result" names one arm, and only that arm is evaluated |
 | 4.2.13 Concatenations | `30_concatenation.va` (the joining form); `116_concatenation_unsized_rejected.va` (E0216, unsized constant); `31_replication.va` — three of the clause's four replication rules, `{4{2'b10}}`, the nested `{b, {3{a, b}}}` and the zero count, all unrolled in the parser where the operand widths still exist; `137_replication_lhs_rejected.va` (E0317, "expressions containing replications shall not appear on the left-hand side") |
-| 4.2.14 Assignment patterns | `09_assignment_pattern.va` (parameter initialization), `32_array_assignment.va` (post-declaration), `144_assignment_pattern_replication.va` (the clause's own `'{5{0.0}}` — A.8.1's second alternative, unrolled into five elements) |
+| 4.2.14 Assignment patterns | `09_assignment_pattern.va` (parameter initialization), `32_array_assignment.va` (post-declaration), `144_assignment_pattern_replication.va` (samples single-element repeats); `audit_assignment_pattern_group.va` checks every element of repeated two-element groups in constant and signal-valued assignments. Other contexts/restrictions remain open as EXPR-019 in `docs/conformance-expressions.md`. |
 | 4.3 Built-in mathematical functions | — no fixture cites the parent. Its one rule is that both syntax styles are supported; `10_standard_math_traditional.va` and `11_standard_math_system.va` are the two styles and both cite 4.3.1 |
 | 4.3.1 Standard mathematical functions | `10_standard_math_traditional.va`, `11_standard_math_system.va` (`$sqrt`/`$ln`/`$exp`/`$pow`); atomics `65_sqrt.va` `66_exp.va` `67_ln.va` `68_log10.va` `69_floor.va` `70_ceil.va` `82_min.va` `83_max.va` `84_abs.va` `85_pow.va`; `114_standard_math_domain_rejected.va` (E0602, E0604). `33_ln1p_expm1.va` — green; codegen no longer emits the cancelling forms (it used to compute `zLn1p` as `a.addC(1.0).log()` and `zExpm1` as `a.exp().addC(-1.0)`), so `ln1p(1e-12)` carries the 8.9e-5 relative error Table 4-14's C `log1p`/`expm1` exist to avoid; `ir/proof.zig` already folds the constants correctly, only the emitted device is wrong |
 | 4.3.2 Transcendental functions | `12_transcendental_math.va`; atomics `71_sin.va` `72_cos.va` `73_tan.va` `74_asin.va` `75_acos.va` `76_atan.va` `77_sinh.va` `78_cosh.va` `79_tanh.va` `80_hypot.va` `81_atan2.va`; `113_transcendental_domain_rejected.va` (E0605/E0606/E0607), `114_standard_math_domain_rejected.va` |
@@ -75,7 +96,7 @@ the prose, never silently promoted.
 | 4.5.12.3 zi_np | — as 4.5.12.1 |
 | 4.5.12.4 zi_nd | — as 4.5.12.1 |
 | 4.5.13 Limited exponential | `25_limexp.va` |
-| 4.5.14 Constant versus dynamic arguments | — **no fixture.** Table 4-20 splits every operator's arguments into constant and dynamic; nothing in this directory asserts that a dynamic expression in a constant slot is refused, or that a constant one is held fixed for the analysis |
+| 4.5.14 Constant versus dynamic arguments | `audit_absdelay_dynamic_maxdelay_sampled` requires analysis-start sampling and later freezing of a dynamic maxdelay expression. The source explicitly permits this; blanket dynamic-slot rejection is a defect, not the negative oracle previously suggested here. Other argument slots and analysis restarts remain open. |
 | 4.5.15 Restrictions on analog operators | the legal side: `119_operator_under_constant_condition.va` (a `parameter`-selected filter under `if`/`case`/`?:`, plus an `analysis("dc")` guard — the only fixture that can catch over-rejection) and `92_operator_in_genvar_for.va` (the analog_for that must keep compiling). Rejects that reject: `36_operator_in_conditional.va`, `88_operator_in_event.va`, `89_operator_in_repeat.va`, `90_operator_in_while.va`, `91_operator_in_runtime_for.va` (all E0514), `121_operator_in_ternary_rejected.va` (E0514 — the arms of a `?:` raise the same two conditional counters an `if` body does, so the clause's third named form is checked by the same test as the first two), `92_operator_in_function.va` (E0422), `94_operator_null_argument.va` (E0502), `93_operator_in_initial.va` and `122_operator_in_always_rejected.va` (both E0422 — the clause names `initial` and `always` explicitly, and both now reach it: the block is still refused as an item VerA cannot execute, but its body is parsed and judged, so 4.5.15 fires at the operator). Nothing in this row is xfail |
 | 4.6 Analysis dependent functions | `27_noise_sources.va` cites the parent alongside 4.6.4 |
 | 4.6.1 Analysis | `26_analysis.va` (multi-argument call as an OR; `"static"` is not a synonym for `"ic"`), `143_analysis_transient.va` (the three names that disagree between dc and tran, plus an unsupported name returning 0) |

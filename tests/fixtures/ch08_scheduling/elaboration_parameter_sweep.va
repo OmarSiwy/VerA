@@ -36,6 +36,8 @@
 //! lrm 8.2
 //! lrm 6.3.4
 //! psweep w = 1.0, 2.0, 4.0
+// Two assertions at each of the three sweep points; omitting a point must fail.
+//! checks 6
 //! analysis dc
 //! print none
 `include "check.vh"

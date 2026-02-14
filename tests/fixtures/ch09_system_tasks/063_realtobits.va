@@ -7,26 +7,22 @@
 //   0.5 = +1.0 x 2^-1  biased exponent 1022 = 0x3FE
 //                      -> 0x3FE0000000000000 = 4602678819172646912
 //
-// KNOWN LIMITATION OF THIS FIXTURE. Both wants need the full 64 bits, and both
-// are written as unsized decimal literals because torture.zig requires a `want`
-// to be a plain numeric literal — `64'h3FF0000000000000` is not one. §2.5.1 says
-// only that "the number of bits that make up an unsized number ... shall be at
-// least 32", so a conforming compiler that picks exactly 32 truncates both wants
-// to zero and fails this file for a reason that has nothing to do with
-// $realtobits. That is an over-specification here, written down rather than
-// argued away: the fixture assumes an unsized literal at least 64 bits wide.
-// 064_bitstoreal.va, where the pattern is an ARGUMENT rather than a want, uses
-// the sized form and has no such assumption.
+// The pattern comparisons use explicitly sized 64-bit literals and assert the
+// resulting Boolean as numeric 1. This preserves all pattern bits without
+// assuming any implementation-specific width for unsized decimal literals.
+// It also avoids converting the pattern to a real-valued tolerance expression.
+// IEEE1364-2005 §17.8 printed310–311 supplies the inherited conversion rule.
 //
 //! lrm 9.2
 //! lrm 9.11
 //! bias V(p) = 1.0
+//! checks 2
 `include "check.vh"
 module ch09_atomic_realtobits(p, n);
   inout p, n; electrical p, n;
   analog begin
-    `CHECKI("pattern of 1.0 is 0x3FF0000000000000", $realtobits(V(p,n)), 4607182418800017408);
-    `CHECKI("pattern of 0.5 is 0x3FE0000000000000", $realtobits(0.5), 4602678819172646912);
+    `CHECKI("pattern of 1.0 is 0x3FF0000000000000", $realtobits(V(p,n)) == 64'h3FF0000000000000, 1);
+    `CHECKI("pattern of 0.5 is 0x3FE0000000000000", $realtobits(0.5) == 64'h3FE0000000000000, 1);
     I(p,n) <+ $realtobits(V(p,n)) + V(p,n);
   end
 endmodule

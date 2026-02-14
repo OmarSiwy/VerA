@@ -13,7 +13,7 @@
 // 53_real_parameter_from_string.va is the other half.
 //
 //! lrm 3.4.1
-//! reject DiagnosticsReported
+//! reject E0345
 module ch3_string_parameter_from_numeric(p, n);
     inout p, n;
     electrical p, n;

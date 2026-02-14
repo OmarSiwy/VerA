@@ -30,7 +30,7 @@ nav a:hover { text-decoration: underline; }
 
 <p>The formal syntax of Verilog-AMS HDL is described using Backus-Naur Form (BNF). The syntax of Verilog-AMS HDL source is derived from the starting symbol source_text. The syntax of a library map file is derived from the starting symbol library_text. The following grammar is designed as a presentation grammar and should not be interpreted as an unambiguous production grammar. The compiler developer will be required to implement the various semantic restrictions outlined throughout this reference manual to remove any ambiguities.</p>
 
-<div class="note">Transcription note: in the printed LRM, literal terminals (keywords and literal punctuation) are set in bold red type; they are rendered here in <b>bold</b>. Plain <code>[ ]</code>, <code>{ }</code>, and <code>|</code> are BNF meta-symbols (optional, repetition, alternative).</div>
+<div class="note">Transcription note: in the printed LRM, literal terminals (keywords and literal punctuation) are set in bold red type; they are rendered here in <b>bold</b>. Plain <code>[ ]</code>, <code>{ }</code>, and <code>|</code> are generally BNF meta-symbols (optional, repetition, alternative). The character ranges in A.9.3 are lexical character classes, not optional whole identifiers; see the restrictions in A.10. Source typography anomalies are noted separately below.</div>
 
 <h2 id="a-1">A.1 Source text</h2>
 
@@ -1327,10 +1327,10 @@ unsigned_number<sup>2</sup> ::= decimal_digit { <b>_</b> | decimal_digit }
 binary_value<sup>2</sup> ::= binary_digit { <b>_</b> | binary_digit }
 octal_value<sup>2</sup> ::= octal_digit { <b>_</b> | octal_digit }
 hex_value<sup>2</sup> ::= hex_digit { <b>_</b> | hex_digit }
-decimal_base<sup>2</sup> ::= <b>'[s|S]d</b> | <b>'[s|S]D</b>
-binary_base<sup>2</sup> ::= <b>'[s|S]b</b> | <b>'[s|S]B</b>
-octal_base<sup>2</sup> ::= <b>'[s|S]o</b> | <b>'[s|S]O</b>
-hex_base<sup>2</sup> ::= <b>'[s|S]h</b> | <b>'[s|S]H</b>
+decimal_base<sup>2</sup> ::= <b>'</b>[<b>s</b>|<b>S</b>]<b>d</b> | <b>'</b>[<b>s</b>|<b>S</b>]<b>D</b>
+binary_base<sup>2</sup> ::= <b>'</b>[<b>s</b>|<b>S</b>]<b>b</b> | <b>'</b>[<b>s</b>|<b>S</b>]<b>B</b>
+octal_base<sup>2</sup> ::= <b>'</b>[<b>s</b>|<b>S</b>]<b>o</b> | <b>'</b>[<b>s</b>|<b>S</b>]<b>O</b>
+hex_base<sup>2</sup> ::= <b>'</b>[<b>s</b>|<b>S</b>]<b>h</b> | <b>'</b>[<b>s</b>|<b>S</b>]<b>H</b>
 non_zero_decimal_digit ::= <b>1</b> | <b>2</b> | <b>3</b> | <b>4</b> | <b>5</b> | <b>6</b> | <b>7</b> | <b>8</b> | <b>9</b>
 decimal_digit ::= <b>0</b> | <b>1</b> | <b>2</b> | <b>3</b> | <b>4</b> | <b>5</b> | <b>6</b> | <b>7</b> | <b>8</b> | <b>9</b>
 binary_digit ::= x_digit | z_digit | <b>0</b> | <b>1</b>
@@ -1340,6 +1340,8 @@ hex_digit ::=
         | <b>a</b> | <b>b</b> | <b>c</b> | <b>d</b> | <b>e</b> | <b>f</b> | <b>A</b> | <b>B</b> | <b>C</b> | <b>D</b> | <b>E</b> | <b>F</b>
 x_digit ::= <b>x</b> | <b>X</b>
 z_digit ::= <b>z</b> | <b>Z</b> | <b>?</b></div>
+
+<div class="note">Editorial source note (printed p. 382): the brackets and alternative bar in each base's <code>[s|S]</code> are meta-symbols, not characters in a numeric token. The underscore in <code>non_zero_unsigned_number</code> is printed in ordinary type, unlike the underscores in the neighboring value productions; that source typography is preserved. Apply the lexical rules of Chapter 2 as well as this presentation grammar.</div>
 
 <h3 id="a-8-8">A.8.8 Strings</h3>
 <div class="syntax">string_literal ::= <b>"</b> { Any_ASCII_Characters } <b>"</b></div>
@@ -1471,6 +1473,8 @@ variable_identifier ::= identifier</div>
 
 <h3 id="a-9-4">A.9.4 White space</h3>
 <div class="syntax">white_space ::= space | tab | newline | eof<sup>5</sup></div>
+
+<div class="note">Editorial source note: this is a presentation grammar, not a stand-alone executable specification. In A.8.5 (printed p. 381), the source spells <code>array_ variable_identifier</code> with an internal space and terminates <code>array_analog_variable_assignment</code> with a semicolon; A.6.2 also appends a semicolon to that production. The source uses <code>scalar_analog_variable_lvalue</code>, <code>array_analog_variable_lvalue</code>, and <code>string_declaration</code> without defining those productions here. These source anomalies are preserved, not silently repaired. Resolve legal programs using the applicable chapter rules; do not derive a rejection test solely from these anomalies.</div>
 
 <h2 id="a-10">A.10 Details</h2>
 <ol>

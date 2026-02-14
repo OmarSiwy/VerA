@@ -1,0 +1,2129 @@
+{
+  "schema_version": 1,
+  "denominator": "uncertified",
+  "completeness_review": "pending",
+  "scope": "IEEE1364-2005 17.2.9 candidate decomposition; inherited dependencies not exhaustively enumerated",
+  "rules": [
+    {
+      "id": "IEEE-READMEM-SYNTAX-B",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "Syntax17-7, first arm"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "$readmemb accepts filename and memory, with optional start and then finish.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "binary task arities2,3,4",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Loads binary words into selected memory",
+          "derivation": "Two optional suffixes give these three arities.",
+          "wrong_implementation": "Reject every two/three-argument call",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-SYNTAX-H",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "Syntax17-7, second arm"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "$readmemh accepts filename and memory, with optional start and then finish.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "hex task arities2,3,4",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Loads hexadecimal words into selected memory",
+          "derivation": "Same suffix structure applies to hexadecimal arm.",
+          "wrong_implementation": "Only implement binary form",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-TIME",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph after Syntax17-7, sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Either load task may execute at any simulation time.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "time0 then nonzero time reload",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Second load updates memory at invocation, not elaboration",
+          "derivation": "Any-time permission includes delayed execution.",
+          "wrong_implementation": "Perform loads only during initialization",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-SPACE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "file-content list, whitespace entry"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Space separates file numbers.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "leading/interior/trailing spaces",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Same data words and no extra word",
+          "derivation": "Whitespace is not data.",
+          "wrong_implementation": "Treat space as a zero word",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-NEWLINE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "file-content list, whitespace entry"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Newline separates file numbers.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "multiple lines",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Same successive values as same-line input",
+          "derivation": "Newline is listed whitespace.",
+          "wrong_implementation": "Stop at first newline",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-TAB",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "file-content list, whitespace entry"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Tab separates file numbers.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "literal tab between words",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Both words loaded separately",
+          "derivation": "Tab is listed whitespace.",
+          "wrong_implementation": "Require ASCII space only",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-FORMFEED",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "file-content list, whitespace entry"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Formfeed separates file numbers.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "leading/interior/trailing byte0c",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Both radix fixtures load expected values",
+          "derivation": "Formfeed is explicitly listed whitespace.",
+          "wrong_implementation": "Reject byte0c",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_start_formfeed.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_start_formfeed.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-start-formfeed-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-LINECOMMENT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "file-content list, comments entry"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Line comments are allowed in memory input.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "comment contains apparent @address and digits",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Comment contents never change values or count",
+          "derivation": "Both source comment forms are allowed.",
+          "wrong_implementation": "Count comment numbers as data",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-BLOCKCOMMENT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "file-content list, comments entry"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Block comments are allowed in memory input.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "multiline comment between words",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Words surrounding comment remain separate",
+          "derivation": "Both source comment forms are allowed.",
+          "wrong_implementation": "Parse digits or @ inside comments",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-ONLYCONTENT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph introducing file-content list"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Input content is limited to listed tokens and specified address directives.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending. IEEE1.2(a), printed2/physical32: mandatory input constraints require an error; see conformance-readmem-diagnostic-refinement.md.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "IEEE17.2.9 mandatory file constraints plus IEEE1.2(a) require an error for violations. Exact diagnostic text/code and whole-simulation termination are not prescribed. Legal neighbors are required."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "illegal punctuation isolated from legal neighbor",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Invalid token diagnosed, not silently loaded as zero",
+          "derivation": "IEEE17.2.9 permits only listed content; IEEE1.2(a) requires an error when mandatory input requirements are violated. No specific message/exit/termination is prescribed.",
+          "wrong_implementation": "Ignore every unfamiliar character",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Error authority is resolved by IEEE1.2(a), but exact diagnostic wording and CLI exit are implementation-specific. Width conversion, runtime expressions and outside-declaration bounds still need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-NOWIDTH",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "File data numbers have no explicit length prefix.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending. IEEE1.2(a), printed2/physical32: mandatory input constraints require an error; see conformance-readmem-diagnostic-refinement.md.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "IEEE17.2.9 mandatory file constraints plus IEEE1.2(a) require an error for violations. Exact diagnostic text/code and whole-simulation termination are not prescribed. Legal neighbors are required."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "8'h11 versus legal11 for hex",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Length-qualified source literal is invalid file data",
+          "derivation": "The file format forbids a length specification. IEEE1.2(a) requires an error, without prescribing message, exit status or simulation termination.",
+          "wrong_implementation": "Reuse HDL literal parser accepting width prefixes",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Error authority is resolved by IEEE1.2(a), but exact diagnostic wording and CLI exit are implementation-specific. Width conversion, runtime expressions and outside-declaration bounds still need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-NOBASE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "File data numbers have no base format prefix.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending. IEEE1.2(a), printed2/physical32: mandatory input constraints require an error; see conformance-readmem-diagnostic-refinement.md.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "IEEE17.2.9 mandatory file constraints plus IEEE1.2(a) require an error for violations. Exact diagnostic text/code and whole-simulation termination are not prescribed. Legal neighbors are required."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "'h11 versus legal11",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Base-qualified source literal is invalid file data",
+          "derivation": "Radix comes from the selected task. IEEE1.2(a) requires an error, without prescribing message, exit status or simulation termination.",
+          "wrong_implementation": "Accept HDL base prefixes",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Error authority is resolved by IEEE1.2(a), but exact diagnostic wording and CLI exit are implementation-specific. Width conversion, runtime expressions and outside-declaration bounds still need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-BINARY",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Readmemb data uses binary radix.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending. IEEE1.2(a), printed2/physical32: mandatory input constraints require an error; see conformance-readmem-diagnostic-refinement.md.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "IEEE17.2.9 mandatory file constraints plus IEEE1.2(a) require an error for violations. Exact diagnostic text/code and whole-simulation termination are not prescribed. Legal neighbors are required."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Legal binary10",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "10 loads decimal2",
+          "derivation": "Positional binary radix yields2.",
+          "wrong_implementation": "Parse binary file as hexadecimal",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        },
+        {
+          "id": "invalid-radix-digit",
+          "kind": "diagnostic",
+          "boundary": "Digit2 in binary data",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Reach one memory load containing the isolated invalid digit",
+          "expected": "An error is reported; no specific process termination or wording is required by the standard",
+          "derivation": "IEEE17.2.9 restricts data radix; IEEE1.2(a) requires error for mandatory input violation",
+          "wrong_implementation": "Accept arbitrary characters or digits outside the task radix",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Error authority is resolved by IEEE1.2(a), but exact diagnostic wording and CLI exit are implementation-specific. Width conversion, runtime expressions and outside-declaration bounds still need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-HEX",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Readmemh data uses hexadecimal radix.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending. IEEE1.2(a), printed2/physical32: mandatory input constraints require an error; see conformance-readmem-diagnostic-refinement.md.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "IEEE17.2.9 mandatory file constraints plus IEEE1.2(a) require an error for violations. Exact diagnostic text/code and whole-simulation termination are not prescribed. Legal neighbors are required."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "10,af,AF",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "10 loads16; af and AF load175",
+          "derivation": "Hexadecimal positional weights and case-insensitive digits.",
+          "wrong_implementation": "Parse hexadecimal input as decimal",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        },
+        {
+          "id": "invalid-radix-digit",
+          "kind": "diagnostic",
+          "boundary": "Letterg in hexadecimal data",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Reach one memory load containing the isolated invalid digit",
+          "expected": "An error is reported; no specific process termination or wording is required by the standard",
+          "derivation": "IEEE17.2.9 restricts data radix; IEEE1.2(a) requires error for mandatory input violation",
+          "wrong_implementation": "Accept arbitrary characters or digits outside the task radix",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Error authority is resolved by IEEE1.2(a), but exact diagnostic wording and CLI exit are implementation-specific. Width conversion, runtime expressions and outside-declaration bounds still need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-XLOWER",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence4"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Lowercase x is allowed as unknown data.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "binary and hexadecimal x",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Corresponding bits are unknown",
+          "derivation": "Source-number x representation applies.",
+          "wrong_implementation": "Convert x to zero",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-XUPPER",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence4"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Uppercase X is allowed as unknown data.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "binary and hexadecimal X",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Same unknown bits as lowercase x",
+          "derivation": "Both spellings are explicitly permitted.",
+          "wrong_implementation": "Accept lowercase only",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-ZLOWER",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence4"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Lowercase z is allowed as high-impedance data.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "both radices",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Corresponding bits preserve z",
+          "derivation": "Source-number z representation applies.",
+          "wrong_implementation": "Collapse z into x",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-ZUPPER",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence4"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Uppercase Z is allowed as high-impedance data.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "both radices",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Same high-impedance bits as lowercase z",
+          "derivation": "Both spellings are explicitly permitted.",
+          "wrong_implementation": "Accept lowercase only",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-UNDERSCORE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, sentence4"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Underscores are allowed as in source numbers.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "interior underscores, both radices",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Separators do not contribute digits",
+          "derivation": "Source-number separator semantics apply; edge forms need lexical cross-review.",
+          "wrong_implementation": "Terminate a word at underscore",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-SEPARATE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning The numbers, final sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Whitespace and/or comments separate numbers.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "adjacent words separated solely by a comment",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Two words loaded, not concatenated",
+          "derivation": "A comment is explicitly sufficient separation.",
+          "wrong_implementation": "Delete comments then join adjacent words",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-SUCCESSIVE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph beginning As the file is read"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Each encountered number assigns a successive memory word.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "nonzero memory base and distinct words",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Ordered values appear at successive selected indices",
+          "derivation": "The rule assigns words, not bytes or packed-bit offsets.",
+          "wrong_implementation": "Use address as packed-bit offset",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-ATHEX",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "address-format paragraph and @hh...h; following paragraph sentence1 explicitly permits uppercase and lowercase digits"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "A file address is @ followed by a hexadecimal number.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Paired @a and @A in separate otherwise-identical binary data files, plus hexadecimal-file controls.",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "For BOTH @a and @A, the next binary data word loads at index10; untouched sentinel indices distinguish relocation.",
+          "derivation": "Address radix is hexadecimal regardless of the data task, and the following source sentence explicitly permits both address-digit cases.",
+          "wrong_implementation": "Accept lowercase a but reject uppercase A, or parse addresses using the binary task radix.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-ATSPACE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph after @hh...h, sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "No whitespace may intervene between @ and its number.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "Isolated invalid form plus legal neighbor required; malformed-file diagnostic details remain source-review pending."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "@ 2 versus @2",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Separated address form rejected with relevant diagnostic",
+          "derivation": "The syntax explicitly forbids intervening whitespace.",
+          "wrong_implementation": "Skip arbitrary whitespace after @",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-ATREPEAT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "paragraph after @hh...h, final two sentences"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Any number of file addresses may restart subsequent loading.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "multiple addresses including after filled range",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Each next word goes to latest specified address",
+          "derivation": "Each directive selects the next memory address.",
+          "wrong_implementation": "Stop processing file after initial range fills",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_address_restart.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_address_restart.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-warning-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-DEFAULTLOW",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "last paragraph, sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "With no task or file addresses, loading begins at lowest memory index.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "[7:4] versus [4:7]",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Both map11,22,33,44 to indices4,5,6,7",
+          "derivation": "Numeric minimum is4 for both declaration directions.",
+          "wrong_implementation": "Start at declaration left bound",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_lowest_descending.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_lowest_descending.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-warning-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-DEFAULTEND",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "last paragraph, sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Default loading stops at highest address or EOF.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "short/exact/excess files",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Available in-range words load; unfilled memory remains unchanged",
+          "derivation": "No nonexistent file word assigns remaining locations; bounds stop assignments.",
+          "wrong_implementation": "Zero-fill unloaded words",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-STARTONLY",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "last paragraph, sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Start-only invocation begins there and advances toward highest memory address.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "start2, highest3, both declaration directions",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Only indices2 then3 change",
+          "derivation": "Omitted finish means highest address, not right bound.",
+          "wrong_implementation": "Infer descending direction from declaration",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_start_formfeed.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_start_formfeed.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-start-formfeed-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-UPAFTERAT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 296,
+        "pdf_page": 326,
+        "passage": "last paragraph, final sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Default and start-only directions stay upward after file addresses.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "@3 then @2 with start2, highest3",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "After @2 next data goes to3",
+          "derivation": "Address relocation does not change upward direction.",
+          "wrong_implementation": "Choose direction from consecutive address directives",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_start_formfeed.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_start_formfeed.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-start-formfeed-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-BOTHASC",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "first paragraph, first sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Explicit increasing bounds load from start toward finish.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "start1 finish3",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Loads indices1,2,3",
+          "derivation": "Sign of finish-start selects ascending order.",
+          "wrong_implementation": "Always use declaration direction",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-BOTHDESC",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "first paragraph, second sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Start greater than finish decrements between words.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "start3 finish0",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Loads indices3,2,1,0",
+          "derivation": "Explicit bound comparison selects decrement.",
+          "wrong_implementation": "Always increment",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-BOTHONE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "first paragraph, first sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Equal explicit bounds select one word.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "start2 finish2",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Only index2 loads; count expectation1",
+          "derivation": "Inclusive start-through-finish range contains one element.",
+          "wrong_implementation": "Treat equal bounds as empty",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-DIRAFTERAT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "first paragraph, final sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Explicit-bound direction persists after file relocation.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "descending3..0 with later @2",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Subsequent words replace2 then1",
+          "derivation": "Original task bounds determine direction throughout.",
+          "wrong_implementation": "Restart upward after every @",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_address_restart.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_address_restart.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-warning-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-ATRANGE",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "second paragraph"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "When task and file both supply addresses, file addresses must stay in requested range.",
+      "class": "prohibition",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "Isolated invalid form plus legal neighbor required; malformed-file diagnostic details remain source-review pending."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "inside declaration but below/above task interval",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Relevant error and load termination; legal in-range neighbor succeeds",
+          "derivation": "Constraint is task interval, not merely declared memory bounds.",
+          "wrong_implementation": "Check declaration bounds only",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_address_range_rejected.v",
+              "assertion": "distinctive digital-reject directive",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-warning-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-WARNSHORT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "third paragraph"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Address-free files shorter than implied load range require a warning.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "empty/comment-only and partially filled files",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Warning plus loaded-prefix values retained",
+          "derivation": "Data count smaller than inclusive range differs.",
+          "wrong_implementation": "Silently accept short input",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_count_warning.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_count_warning.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-warning-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-WARNEXCESS",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "third paragraph"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Address-free files longer than implied load range require a warning.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "one extra word",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "Warning, not mandatory load refusal; in-range values preserved",
+          "derivation": "Count differs even when selected range was filled.",
+          "wrong_implementation": "Turn excess sequential data into fatal address error",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_readmem_count_warning.v",
+              "assertion": "tests/fixtures/digital/audit_readmem_count_warning.expected.txt and warning directives where present",
+              "runner": "root digital gate; exact command and checkpoint details in provenance report",
+              "revision": "dirty root integration checkpoint2026-09-23; implementation baseline/handoff hashes recorded in report, full fixture/runner snapshot not archived",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-readmem-warning-fix.md",
+              "limits": "Historical report only, not rerun by ledger tooling. No durable complete source/fixture/runner/artifact hash bundle; no verified status allowed."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-COUNTMATCH",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "third paragraph"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Count-mismatch warning condition does not apply when word count matches.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "exact file, comments contain numbers",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "No count-mismatch warning",
+          "derivation": "Actual data-word count equals inclusive range size.",
+          "wrong_implementation": "Count comments as data",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    },
+    {
+      "id": "IEEE-READMEM-WITHAT",
+      "source": {
+        "document": "IEEE1364",
+        "edition": "2005",
+        "sha256": "3bebc696d5a338dbfa6925c9ffdeccc6de745e703abae8af84dd8f5551fe0a9e",
+        "clause": "17.2.9",
+        "printed_page": 297,
+        "pdf_page": 327,
+        "passage": "third paragraph"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "AMS9.1 inherits IEEE system tasks; AMS9.2 Table9-2 explicitly supports $readmemb/$readmemh in digital context.",
+          "source": "AMS2023 9.1 printed218/pdf231; 9.2 Table9-2 printed219/pdf232; IEEE1364-2005 17.2.9"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "AMS9.2 Table9-2 marks $readmemb/$readmemh unsupported in analog context. AnnexC.11 includes analog-applicable system tasks, and C.7 excludes digital behavior from Verilog-A. This excludes the execution obligation, not an independently established mandatory rejection diagnostic.",
+          "source": "AMS2023 9.2 Table9-2 printed219/pdf232; C.7 printed390/pdf403; C.11 printed391/pdf404; docs/conformance-readmem-ledger-review.md"
+        }
+      },
+      "obligation": "Count-mismatch warning condition is limited to files without address specifications.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Valid memory declaration and reachable task call unless isolated invalid case says otherwise.",
+      "cross_references": "IEEE memory declarations and source-number representation; Syntax17-7; AMS9.1. Dependency boundary review pending.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "This is a legal behavior. Independent syntax/range prohibitions have separate rows; do not invent rejection."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "@ after initial range has filled",
+          "analysis": "digital event-driven simulation",
+          "state_transition": "Read file at reachable task invocation, observe memory and relevant diagnostics.",
+          "expected": "No warning attributed to address-free count rule",
+          "derivation": "Presence of address directive makes this condition false.",
+          "wrong_implementation": "Issue warning before scanning later @",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; named cases are not exhaustive cross-products. Width conversion, malformed-token diagnostic authority, runtime expressions and outside-declaration bounds need dependency review.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.1",
+        "relation": "inherited-reference",
+        "limits": "AMS9.1 incorporates IEEE system tasks; this anchor does not transcribe IEEE17.2.9 behavior. AMS9.2 Table9-2 at s9.2 separately records context applicability."
+      }
+    }
+  ]
+}

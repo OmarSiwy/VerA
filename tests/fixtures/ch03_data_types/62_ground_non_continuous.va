@@ -11,17 +11,13 @@
 //
 // 13_ground_declaration.va grounds an electrical net, i.e. the legal case.
 //
-// The pinned substring is only the phase label: VerA has no diagnostic for this
-// rule, so a code would pin the wrong one. Note that a second rule reaches the
-// same source: annex C.4 makes "the domain binding type discrete ... an error in
-// Verilog-A", and `ch3_ground_discrete ref_net;` is such a binding
-// (annex_c_analog_subset/07_discrete_domain_binding_rejected.va pins it). The
-// two cannot be told apart by a phase label, and they cannot be separated in a
-// `.va` at all, because §3.6.4's "continuous" requirement has no other way to be
-// violated: every discipline that is not discrete is continuous.
+// Pin E0344 at the ground declaration, independently of the Annex C.4
+// analog-profile restriction on discrete domains. A generic phase failure
+// cannot distinguish those rules. Domainless disciplines also exist; do not
+// infer that every discipline without an explicit discrete domain is continuous.
 //
 //! lrm 3.6.4
-//! reject DiagnosticsReported
+//! reject E0344
 discipline ch3_ground_discrete;
     domain discrete;
 enddiscipline

@@ -24,12 +24,12 @@
 // pass one of §3.11.1's nature rules, the third of them spanned through the
 // flow half for exactly this reason.
 //
-// The pinned substring is only the phase label: VerA has no compatibility
-// diagnostic, so a code would pin the wrong rule.
+// Pin E0355, verified at the cross-discipline access with the Potential
+// Incompatibility Rule diagnostic, rather than any failed compilation phase.
 //
 //! lrm 3.11
 //! lrm 3.11.1
-//! reject DiagnosticsReported
+//! reject E0355
 discipline ch3_rot_i;
     potential Angle;
     flow Current;

@@ -697,10 +697,19 @@ pub const Parser = struct {
         // `level_input_list` in a combinational body, `seq_input_list` — which
         // adds `edge_input_list` — in a sequential one.
         const inputs = cols[0].text[0..cols[0].len];
+        var edge_count: usize = 0;
         for (inputs) |c| {
             if (std.mem.indexOfScalar(u8, "01xX?bB", c) != null) continue;
             if (std.mem.indexOfScalar(u8, "rRfFpPnN*()", c) != null) {
-                if (is_seq) continue;
+                if (is_seq) {
+                    // IEEE 1364-2005 8.1.4/8.4: at most one input
+                    // transition per row. A parenthesized pair counts once,
+                    // at its opening; its two level symbols are not edges.
+                    if (c != ')') edge_count += 1;
+                    if (edge_count > 1)
+                        return self.failAt(cols[0].tok, .E0234, "a sequential UDP table entry permits at most one input transition descriptor", .{});
+                    continue;
+                }
                 return self.failAt(cols[0].tok, .E0234, "an edge indicator `{c}` in a combinational UDP table entry: A.5.3 reaches `edge_input_list` only from a sequential_entry", .{c});
             }
             return self.failAt(cols[0].tok, .E0233, "`{c}` is not a UDP input symbol", .{c});
@@ -4377,8 +4386,9 @@ pub const Parser = struct {
                 return self.file.exprs.add(self.arena, .{ .tag = .assign_pattern, .main_tok = tok, .extra = off });
             },
             .identifier, .escaped_identifier => {
-                const text = self.tokenText(tok);
-                const name = try self.file.intern(self.arena, text);
+                // References and declaration names must use the same escaped
+                // period normalization; raw text aliases hierarchy separators.
+                const name = try self.internTok(tok);
                 self.pos += 1;
                 // §2.9: an attribute_instance "can appear as a suffix to an
                 // operator or a Verilog-AMS function name in an expression"
@@ -4461,7 +4471,7 @@ pub const Parser = struct {
                 if (self.peek() == .lparen) {
                     // §4.4 branch probe vs §4.7 user function: only a declared
                     // nature access name (§3.6.1.4) probes a branch.
-                    if (self.access_names.contains(text)) {
+                    if (self.access_names.contains(self.file.str(name))) {
                         return self.parseAccess(name, tok);
                     }
                     const args = try self.parseCallArgs();
@@ -5447,6 +5457,70 @@ fn parseForTest(arena: std.mem.Allocator, src: []const u8) !TestResult {
     return .{ .file = file, .bag = bag };
 }
 
+test "escaped identifier expressions share declaration normalization" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const names = [_][]const u8{
+        "a.b", "a..b", ".", "a/b", "a\\b", "a`b", "abc", "module",
+        "!\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~",
+    };
+    for (names) |name| {
+        const src = try std.fmt.allocPrint(arena,
+            "module m; integer \\{s} ; initial begin \\{s} = 9; $display(\"%0d\", \\{s} ); end endmodule",
+            .{ name, name, name },
+        );
+        const res = try parseForTest(arena, src);
+        try std.testing.expectEqual(@as(usize, 0), res.count());
+        const declared = res.file.modules[0].vars[0].name;
+        var references: usize = 0;
+        for (res.file.exprs.nodes.items(.tag), res.file.exprs.nodes.items(.str)) |tag, str| {
+            if (tag == .ident) {
+                try std.testing.expectEqual(declared, str);
+                references += 1;
+            }
+        }
+        try std.testing.expectEqual(@as(usize, 2), references);
+    }
+}
+
+test "escaped nature access shares expression normalization" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const res = try parseForTest(arena,
+        "nature n; access = \\a.b ; endnature module m(p); inout p; electrical p; analog \\a.b (p) <+ 0; endmodule",
+    );
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+    const body = res.file.stmt(res.file.modules[0].analog[0].body);
+    const lhs = switch (body) {
+        .contribute => |c| c.lhs,
+        else => return error.WrongTag,
+    };
+    try std.testing.expectEqual(Ast.ExprTag.branch_access, res.file.exprs.tag(lhs));
+}
+
+test "escaped hierarchy head shares instance normalization" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    const res = try parseForTest(arena,
+        "module m; child \\a.b (); integer z; initial z = \\a.b .c; endmodule",
+    );
+    try std.testing.expectEqual(@as(usize, 0), res.count());
+    const declared = res.file.modules[0].instances[0].name;
+    var references: usize = 0;
+    for (res.file.exprs.nodes.items(.tag), 0..) |tag, i| {
+        if (tag == .hier_ident) {
+            const parts = res.file.exprs.nameParts(@enumFromInt(i));
+            try std.testing.expectEqual(@as(usize, 2), parts.len);
+            try std.testing.expectEqual(declared, parts[0]);
+            references += 1;
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 1), references);
+}
+
 test "§10.6 begin_keywords picks which annex B words are reserved" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -5800,6 +5874,29 @@ test "§3.7 wreal: a net type in a `.v`, not a word in a `.va`" {
     try std.testing.expectEqual(Ast.NetKind.wreal, m.nets[0].kind);
     try std.testing.expect(m.nets[0].range != null);
     try std.testing.expect(m.nets[1].init != .none);
+}
+
+test "UDP single transition descriptor per sequential row" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    // One pair is one edge, not two. All shorthand edge symbols are
+    // independently legal with a level input; level-only rows remain legal.
+    for ([_][]const u8{ "(01) 0", "0 (10)", "(0?) 1", "? (??)", "r 0", "R 0", "f 0", "F 0", "p 0", "P 0", "n 0", "N 0", "* 0", "0 1", "x 0" }) |inputs| {
+        const src = try std.fmt.allocPrint(arena, "primitive u(q,a,b); output q; reg q; input a,b; table {s} : ? : 1; endtable endprimitive", .{inputs});
+        const res = try parseForTest(arena, src);
+        try std.testing.expectEqual(@as(usize, 0), res.count());
+        try std.testing.expectEqual(@as(usize, 1), res.file.udps[0].rows.len);
+    }
+    // Pair/pair, pair/symbol in either order and symbol/symbol all exceed
+    // the same source restriction, even when their transitions differ.
+    for ([_][]const u8{ "(01) (10)", "(01) r", "f (10)", "r f", "P N", "* (??)", "(0?) *", "R F" }) |inputs| {
+        const src = try std.fmt.allocPrint(arena, "primitive u(q,a,b); output q; reg q; input a,b; table {s} : ? : 1; endtable endprimitive", .{inputs});
+        const res = try parseForTest(arena, src);
+        try std.testing.expect(res.count() > 0);
+        try std.testing.expectEqual(diag.Code.E0234, res.code(0));
+        try std.testing.expectEqualStrings("a sequential UDP table entry permits at most one input transition descriptor", res.bag.at(0).message);
+    }
 }
 
 test "A.5.1 a udp_declaration survives the parse, both header arms" {

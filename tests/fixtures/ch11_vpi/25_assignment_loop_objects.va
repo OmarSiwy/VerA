@@ -1,10 +1,12 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.22 assignment and §5.9.2 for: the loop tests `k < 3` before each pass,
 // so the body runs for k = 0, 1, 2 — three passes — and leaves k at the first
 // value that failed the test, 3. Each pass adds the branch potential to the
 // accumulator, so at V(p)=1.5, V(n)=0.25 (1.25 V) the total is 3 * 1.25 = 3.75
 // exactly. An off-by-one would give 2.5 or 5.0.
 //
-//! lrm 11.6.22
 //! lrm 5.9.2
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"

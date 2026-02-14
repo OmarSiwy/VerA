@@ -1,11 +1,28 @@
 # Annex H coverage
 
+## Source-review correction (2026-09-23)
+
+Complete source and visual review covers printed pages 426–429 / physical
+pages 439–442. See [the source review](../../../docs/conformance-informative-review.md).
+No glossary definition is missing from the HTML. The former ledger invented
+“nesting level”, “node declaration” and “run time binding”: none is a term in
+this edition. The actual N heading lists net declaration, node and NR method;
+R lists reference direction and reference node. Their historical claimed gaps
+are withdrawn, not counted as covered. Current normative rules still require
+their own evidence. Historical green/closure assertions below are not a fresh
+suite result, and neither glossary terminology nor parser acceptance certifies
+solver behavior. Fixture09's numerical $vt window is a separate oracle review
+item (INFO-H-VT-001), not validated by this source-fidelity audit.
+
+## Historical behavioral witnesses
+
+
 Source: `docs/annex-h-glossary.html`, read term by term.
 
 HTML section-ID audit: `glossary-a` `glossary-b` `glossary-c` `glossary-f`
 `glossary-i` `glossary-k` `glossary-l` `glossary-m` `glossary-n` `glossary-p`
 `glossary-r` `glossary-s` `glossary-t` `glossary-v`. Fourteen letter sections
-holding 38 terms, and **Annex H is informative**. That is the first thing to say
+holding 33 terms (counted by `rg -c '^<dt>' docs/annex-h-glossary.html` on 2026-09-23), and **Annex H is informative**. That is the first thing to say
 about it: a glossary defines vocabulary, it does not state conformance rules, so
 a fixture here can only pin the *normative* clause a term points at. Every
 fixture in this folder does exactly that — nine files, each carrying `//! lrm H`
@@ -32,9 +49,9 @@ ledger below.
 | `glossary-k` | Kirchhoff's Laws | **No fixture asserts a conservation law.** `06_node_port_terminal.va` is the closest: its bias is a genuine solution of the module — the value source demands `V(internal_node,terminal_n)` = 0.1875, so the branch residual is zero rather than merely arithmetically consistent. That is one satisfied constitutive relation, not KCL and not KVL |
 | `glossary-l` | level | `03_block_control_flow.va` (§5.3) — the `begin`-`end` half. The definition says "a pair of matching keywords **such as** `begin`-`end` **or** `discipline`-`enddiscipline`"; `discipline` occurs in no code line in this folder |
 | `glossary-m` | model, module | "module": all nine files, each one definition of an interface plus behavior. "model" as the LRM means it — a named instance with its own parameter group, i.e. a netlist model card — **has no fixture**. `02_behavioral_model.va` is named for the *behavioral model* of `glossary-b` and is a compile-time override, not a model card |
-| `glossary-n` | nesting level, node, node declaration, NR method | "node": `06_node_port_terminal.va` (§3.6, §4.4) — `internal_node` is in no port list yet is a solver unknown `V()` can read, at 0.1875 rather than either terminal's value, so a compiler that aliased it onto a port is caught. "node declaration": the same file's local `electrical internal_node;`, and `08_reference_node.va`'s `ground g1; ground g2;`. "NR method": `09_nonlinear_nr_relationship.va` (§9.15, §4.5.13, D.2) pins the *nonlinear relationship* — `$vt` at 300 K and the diode law at 100 mV, both `CHECKR` — while `limexp` stays in the contribution where §4.5.13 wants it. **The method itself is not observable from source and has no fixture.** **nesting level: no fixture** — `03` has exactly one `begin`-`end`, nothing nested inside it |
+| `glossary-n` | net declaration, node, NR method | "node": `06_node_port_terminal.va` (§3.6, §4.4) — `internal_node` is in no port list yet is a solver unknown `V()` can read, at 0.1875 rather than either terminal's value, so a compiler that aliased it onto a port is caught. "net declaration": the same file's local `electrical internal_node;`, and `08_reference_node.va`'s `ground g1; ground g2;`. "NR method": `09_nonlinear_nr_relationship.va` (§9.15, §4.5.13, D.2) pins the *nonlinear relationship* — `$vt` at 300 K and the diode law at 100 mV, both `CHECKR` — while `limexp` stays in the contribution where §4.5.13 wants it. **The method itself is not observable from source and has no fixture.** |
 | `glossary-p` | parameter, parameter declaration, port, potential, primitive, probe | "parameter" / "parameter declaration": `05_module_parameter.va` (§3.4) and `02_behavioral_model.va`, both asserting the overridden value replaces the declared default. "port": `06_node_port_terminal.va`. "potential": `01`, `04`, `06`, `07`, `08` — every `V()` assertion in the folder. "probe": `07_probe.va` (§1.3.1, §5.4.2.1) — the **potential half only**, and the header argues why: §5.4.2.1 makes using both quantities of one probe branch illegal, so one fixture pins one half. **primitive: no fixture** |
-| `glossary-r` | reference direction, reference node, run time binding | "reference direction": `04_branch_flow_potential.va` (§4.4, §5.4.1) — the **value half**, `V(n,p)` = -0.5 against `V(p,n)` = 0.5. The definition also covers the flow through a branch; that half lives in `ch01_intro/23_flow_antisymmetry.va` and is green — see the ledger below. "reference node": `08_reference_node.va` (§3.6.4) — two `ground` declarations with both nets biased *off* zero, so `V(g1,g2)` = 0 and both `V(p,g*)` = 0.5 only if the compiler binds them to the one global node, and the one-argument `V(p)` is checked to agree. **run time binding: no fixture** |
+| `glossary-r` | reference direction, reference node | "reference direction": `04_branch_flow_potential.va` (§4.4, §5.4.1) — the **value half**, `V(n,p)` = -0.5 against `V(p,n)` = 0.5. The definition also covers the flow through a branch; that half lives in `ch01_intro/23_flow_antisymmetry.va` and is green — see the ledger below. "reference node": `08_reference_node.va` (§3.6.4) — two `ground` declarations with both nets biased *off* zero, so `V(g1,g2)` = 0 and both `V(p,g*)` = 0.5 only if the compiler binds them to the one global node, and the one-argument `V(p)` is checked to agree. |
 | `glossary-s` | scope, structural definitions | "scope": `03_block_control_flow.va` — one named block, with `result` surviving the rejoin of the `if`/`else` arms at 0.4. **structural definitions: no fixture**, same cause as `glossary-i` |
 | `glossary-t` | terminal | `06_node_port_terminal.va` — a cross-reference to *port*, and the fixture names its ports `terminal_p`/`terminal_n` for it |
 | `glossary-v` | Verilog-A, Verilog-AMS | — language-scope definitions naming the standard itself. Nothing a source file can assert |
@@ -54,13 +71,12 @@ all; the other three are real gaps and are itemised below.
 
 Zero fixtures in this folder are `//! xfail`, and the two glossary sentences VerA
 did not meet were never pinned here either — both live in `ch01_intro/`, cited by
-name from the headers here. **Both are green now**, so this annex has no debt of
-any kind, direct or borrowed:
+name from the headers here. **Both are green now**, but that historical result does not close all associated normative obligations:
 
 | Glossary term | Fixture that carried it | Disposition |
 |---|---|---|
 | `glossary-r` reference direction, the *flow through a branch* half | `ch01_intro/23_flow_antisymmetry.va` | Green: the reversed terminal order negates the one branch-flow unknown instead of minting a second, so `I(n,p) == -I(p,n)`. `04_branch_flow_potential.va` still asserts only the potential half, and its header's reason for that no longer holds — the flow half is now assertable here and is a fixture gap, not a compiler one |
-| `glossary-p` probe, the *"potential **or** flow"* disjunction | `ch01_intro/20_probe_branch_both_quantities.va` (`//! reject DiagnosticsReported`) | Green, E0423: the two accesses of one uncontributed node pair are correlated, so reading both quantities of a probe branch is diagnosed. `07_probe.va` still pins the potential half only |
+| `glossary-p` probe, the *"potential **or** flow"* disjunction | `ch01_intro/20_probe_branch_both_quantities.va` (rule-specific rejection after the Chapter 1 review) | Green, E0423: the two accesses of one uncontributed node pair are correlated, so reading both quantities of a probe branch is diagnosed. `07_probe.va` still pins the potential half only |
 
 The flow half of *probe* is `ch01_intro/10_flow_probe.va` and always ran green.
 
@@ -90,25 +106,18 @@ An empty cell above is a real gap, and these are the gaps:
   `analog_genvar_loop.va` carry the other half, and `03_block_control_flow.va`
   names them. No `for`, `while` or `repeat` appears in any code line in this
   folder.
-- **`glossary-l` level and `glossary-n` nesting level, the
-  `discipline`-`enddiscipline` half.** Both terms define a level as a pair of
-  matching keywords "such as `begin`-`end` **or** `discipline`-`enddiscipline`".
-  Neither `discipline` nor `nature` occurs in any code line here; that form is
-  §3.6/§7 and lives in `ch03_data_types/`.
-- **`glossary-n` nesting level, as actual nesting.** `03_block_control_flow.va`
-  has one `begin`-`end`. Nothing here nests a block inside a block, so the
-  distinction between *level* and *nesting level* — the only thing separating
-  two otherwise word-for-word identical definitions — is not observable.
+- **`glossary-l` level, the `discipline`-`enddiscipline` example.**
+  The term names matching keywords; declarations are tested under Chapter 3.
+  There is no separate “nesting level” entry in the 2023 glossary.
 - **`glossary-n` NR method.** Newton-Raphson is a solver strategy, not source
   syntax. `09_nonlinear_nr_relationship.va` pins the nonlinear relationship it
   operates on and is careful not to claim more: its header explains at length
   why no pointwise want is written on `limexp` at all, since §4.5.13 makes the
   `limexp` = `exp` identity a property of the *converged* point while the runner
   evaluates the residual once, cold.
-- **`glossary-p` primitive** and **`glossary-r` run time binding.** Both are
-  simulator-implementation notions. "The conditional introduction and removal of
-  value and flow sources during a simulation" is what §5.6.4 switch branches do;
-  nothing in this folder switches a branch between the value and flow forms.
+- **`glossary-p` primitive.** This definition is not an independent mandate
+  for a simulator implementation technique. The former “run time binding”
+  gap is withdrawn because that term is absent from Annex H.
 
 ## Shape of the folder
 

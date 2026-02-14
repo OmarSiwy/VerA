@@ -1,5 +1,12 @@
 # Chapter 7 coverage
 
+Audit checkpoint, 2026-09-23: `docs/conformance-mixed-signal.md` supersedes
+the historical oracle claims below where explicitly identified. MIX-LOCAL-001
+corrects `lrm_7_4_4_3.va` to preserve the electrical child's own V/I accesses;
+its former passing expectation required the wrong discipline. The corrected
+positive and separate invalid Va/Ia reads expose implementation failures and
+are XFAIL, not behavioral coverage. MIX-TOL-001 and MIX-MODE-001 remain open.
+
 Full-AMS status: a boundary rejection below documents a limitation, not support
 for a legal mixed-signal feature. Execution, synchronization and insertion rows
 remain open until behavioral host tests establish them.

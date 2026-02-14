@@ -1,0 +1,15 @@
+// Unresolved source interpretation, not a conformance rejection fixture.
+// AMS3.4.5 prohibits direct modification of localparams, while6.3.3 says
+// an empty named association assigns nothing. Neither paragraph plainly
+// forbids mentioning a declared localparam without supplying a value.
+// Current VerA rejects E0907; that implementation behavior is not a normative
+// oracle. Retained here as a diagnostic control pending clarification.
+module audit_hierarchy_empty_localparam_rejected(p);
+  inout p; electrical p;
+  audit_empty_local_leaf #(.locked()) u(p);
+endmodule
+module audit_empty_local_leaf(p);
+  inout p; electrical p;
+  localparam real locked=3.0;
+  analog I(p)<+locked*V(p);
+endmodule

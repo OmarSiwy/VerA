@@ -261,7 +261,10 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
         }
         return .{ .refused = .{ .error_name = @errorName(err), .diags = diags } };
     };
-    if (std.mem.indexOf(u8, generated, "@compileError") != null) {
+    if (diags.failed()) {
+        return .{ .refused = .{ .error_name = "DiagnosticsReported", .diags = diags } };
+    }
+    if (result.device_has_compile_error or std.mem.indexOf(u8, generated, "@compileError") != null) {
         // Transfer the GPA-owned text before dropping the compilation.
         result.device.text = "";
         return .{ .refused = .{
@@ -394,7 +397,7 @@ fn runAndCheck(
         return .unmet;
     };
     if (result.device_has_compile_error) {
-        try w.print("FAIL {s}: codegen refused a construct (@compileError in the device)\n", .{f.path});
+        try w.print("FAIL {s}: codegen refused a construct (generated output is not usable)\n", .{f.path});
         return .unmet;
     }
 
@@ -440,7 +443,7 @@ fn runAndCheck(
         .ok => |p| p,
     };
 
-    const got = capture(gpa, io, bin, work, d.expected_exit) catch |err| {
+    const got = capture(gpa, io, bin, work, d.expected_exit, d.plusargs) catch |err| {
         try w.print("FAIL {s}: running the testbench: {t}\n", .{ f.path, err });
         return .unmet;
     };
@@ -448,6 +451,14 @@ fn runAndCheck(
 
     // THE ASSERTION, and the only one there is.
     const tally = countVerdicts(got);
+    if (d.expected_checks) |expected| {
+        if (tally.total != expected) {
+            try w.print("FAIL {s}: observed {d} assertion(s), expected exactly {d}\n", .{
+                f.path, tally.total, expected,
+            });
+            return .unmet;
+        }
+    }
     if (tally.failed != 0) {
         try w.print("FAIL {s}: {d} of {d} assertion(s) reported ok=0:\n", .{
             f.path, tally.failed, tally.total,
@@ -486,7 +497,9 @@ fn countVerdicts(text: []const u8) Tally {
     while (std.mem.indexOf(u8, rest, "ok=")) |at| {
         rest = rest[at + "ok=".len ..];
         t.total += 1;
-        if (!std.mem.startsWith(u8, rest, "1")) t.failed += 1;
+        const is_one = rest.len != 0 and rest[0] == '1' and
+            (rest.len == 1 or std.ascii.isWhitespace(rest[1]));
+        if (!is_one) t.failed += 1;
     }
     return t;
 }
@@ -505,11 +518,15 @@ fn countVerdicts(text: []const u8) Tally {
 /// claims hold by construction rather than by everyone remembering to.
 ///
 /// `bin` is `<work>/<name>`, so from inside `work` it is `./<name>`.
-fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, expected_exit: u8) ![]const u8 {
+fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, expected_exit: u8, plusargs: []const []const u8) ![]const u8 {
     var argv0_buf: [std.fs.max_path_bytes]u8 = undefined;
     const argv0 = try std.fmt.bufPrint(&argv0_buf, "./{s}", .{std.fs.path.basename(bin)});
+    const argv = try gpa.alloc([]const u8, 1 + plusargs.len);
+    defer gpa.free(argv);
+    argv[0] = argv0;
+    @memcpy(argv[1..], plusargs);
     var child = try std.process.spawn(io, .{
-        .argv = &.{argv0},
+        .argv = argv,
         .cwd = .{ .path = work },
         .stdin = .ignore,
         .stdout = .ignore,
@@ -534,11 +551,69 @@ fn capture(gpa: std.mem.Allocator, io: Io, bin: []const u8, work: []const u8, ex
     return text.toOwnedSlice(gpa);
 }
 
+test "capture forwards runtime argv without expansion and preserves order" {
+    if (@import("builtin").os.tag == .windows) return error.SkipZigTest;
+    // Independent POSIX argv probe, not a generated model: the model's current
+    // plusarg stub cannot distinguish missing runner plumbing from its own bug.
+    // Only this fixed script is interpreted; fixture bytes stay positional
+    // arguments, quoted by the probe and never inserted into its source.
+    const got = try capture(std.testing.allocator, std.testing.io, "/bin/sh", "/bin", 0, &.{
+        "-c",      "for arg do printf '%s\\n' \"$arg\" >&2; done", "argv-probe",
+        "+gain=7", "+gain=8",                                      "+gain=7",
+        "+empty=", "+literal=$HOME;*",                             "+literal=$(printf_EXPANDED)",
+    });
+    defer std.testing.allocator.free(got);
+    try std.testing.expectEqualStrings(
+        "+gain=7\n+gain=8\n+gain=7\n+empty=\n+literal=$HOME;*\n+literal=$(printf_EXPANDED)\n",
+        got,
+    );
+    const absent = try capture(std.testing.allocator, std.testing.io, "/bin/sh", "/bin", 0, &.{});
+    defer std.testing.allocator.free(absent);
+    try std.testing.expectEqualStrings("", absent);
+}
+
 test "verdicts are counted, and a malformed one is not a pass" {
     try std.testing.expectEqual(Tally{ .total = 0, .failed = 0 }, countVerdicts("no verdicts here"));
     try std.testing.expectEqual(Tally{ .total = 2, .failed = 0 }, countVerdicts("a ok=1\nb ok=1\n"));
     try std.testing.expectEqual(Tally{ .total = 2, .failed = 1 }, countVerdicts("a ok=1\nb ok=0\n"));
     try std.testing.expectEqual(Tally{ .total = 1, .failed = 1 }, countVerdicts("a ok=\n"));
+    try std.testing.expectEqual(Tally{ .total = 1, .failed = 0 }, countVerdicts("a ok=1"));
+    for ([_][]const u8{ "ok=10", "ok=1garbage", "ok=1.0", "ok=-1", "ok=" }) |bad| {
+        try std.testing.expectEqual(Tally{ .total = 1, .failed = 1 }, countVerdicts(bad));
+    }
+}
+
+test "declared check count rejects missing and duplicated observations" {
+    const gpa = std.testing.allocator;
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var report: Io.Writer.Allocating = .init(gpa);
+    defer report.deinit();
+    const source =
+        \\module check_count_oracle(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog $strobe("single observation ok=1");
+        \\endmodule
+    ;
+    const fixture: Fixture = .{
+        .path = "check_count_oracle.va",
+        .stem = "check_count_oracle",
+        .dir = suite.fixture_root,
+        .root = suite.fixture_root,
+        .slug = "harness_check_count_selftest",
+    };
+    const missing = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{ .expected_checks = 2 }, &report.writer);
+    try std.testing.expect(missing == .unmet);
+    try std.testing.expect(std.mem.indexOf(u8, report.written(), "observed 1 assertion(s), expected exactly 2") != null);
+    const complete = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{ .expected_checks = 1 }, &report.writer);
+    try std.testing.expect(complete == .met);
+    const duplicated = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{
+        .expected_checks = 1,
+        .times = &.{ 0.0, 1e-9 },
+    }, &report.writer);
+    try std.testing.expect(duplicated == .unmet);
+    try std.testing.expect(std.mem.indexOf(u8, report.written(), "observed 2 assertion(s), expected exactly 1") != null);
 }
 
 test "a fatal exit after a passing assertion must be explicitly expected" {

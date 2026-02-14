@@ -578,6 +578,8 @@ pub const Code = enum(u16) {
     E1004,
     /// Shared-frontend digital execution boundary.
     E1100,
+    /// IEEE memory-file sequential word count differs from the load range.
+    W1150,
     /// §3.4 a parameter whose default has no compile-time value and no
     /// `derive()` line either, so the model card field ships as 0.
     W1050,
@@ -5003,6 +5005,11 @@ fn infoOf(c: Code) Info {
             .title = "digital source execution failed",
             .lrm = "8.5",
             .explain = "The digital executor supports a documented subset of source processes. Unsupported forms are diagnosed before simulation; timing and capacity failures stop execution explicitly. This does not make legal unsupported Verilog-AMS forms illegal.",
+        },
+        .W1150 => .{
+            .title = "memory file word count mismatch",
+            .lrm = "IEEE 1364-2005 17.2.9",
+            .explain = "Without address specifications in the memory file, a data-word count different from the requested load range requires a warning. Available words are loaded within the range; missing words leave existing memory contents unchanged. This warning does not refuse the load.",
         },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",

@@ -1,5 +1,15 @@
 # Chapter 9 coverage
 
+Audit checkpoint, 2026-09-23: `docs/conformance-ch9-review.md` supersedes
+blanket conversion and binding claims below. New source-level named, ordered
+and defparam overrides (including equal-to-default values), and nested
+omitted/connected ports, have direct behavioral checks. Invalid variable/net
+argument kinds are wrongly accepted and recorded as BIND-ARG-001/002 XFAILs.
+Runtime signed conversion passes the new observations; legal constant defaults
+fail as CONV-CONST-001. The 063 bit-pattern oracle now compares explicitly
+sized patterns and checks Boolean results, avoiding unsized-width assumptions.
+These bounded tests do not close every rule of §9.11 or §9.19.
+
 Source: `docs/ch9-system.html`, read section by section.
 
 HTML section-ID audit: `s9.1` `s9.2` `s9.3` `s9.4` `s9.4.1` `s9.4.2` `s9.4.3` `s9.4.4` `s9.4.5` `s9.4.6` `s9.4.7` `s9.5` `s9.5.1` `s9.5.1.1` `s9.5.1.2` `s9.5.2` `s9.5.3` `s9.5.4` `s9.5.4.1` `s9.5.4.2` `s9.5.5` `s9.5.6` `s9.5.7` `s9.5.8` `s9.5.9` `s9.6` `s9.7` `s9.7.1` `s9.7.2` `s9.7.3` `s9.8` `s9.9` `s9.10` `s9.11` `s9.12` `s9.13` `s9.13.1` `s9.13.2` `s9.13.3` `s9.14` `s9.15` `s9.16` `s9.17` `s9.17.1` `s9.17.2` `s9.17.3` `s9.18` `s9.19` `s9.20` `s9.21` `s9.21.1` `s9.21.2` `s9.21.3` `s9.21.4` `fn9.21.4-1` `s9.21.5` `s9.22` `s9.22.1` `s9.22.2` `s9.22.3` `s9.22.4` `s9.22.5` `s9.22.6` `s9.22.7` `s9.23` `s9.23.1` `s9.23.2` `s9.23.3` `s9.23.4`.
@@ -46,7 +56,7 @@ digital-context tasks and the distribution limits below still need work.
 | `s9.2` | Tables 9-1…9-20, the analog-context Yes/No column | Yes rows: `05_display_debug.va`, `059_warning.va`, `060_info.va`, `063_realtobits.va`, `064_bitstoreal.va`, `065_test_plusargs.va`, `066_value_plusargs.va`. No rows: `134`, `135`, `148`, `149`, `153` — all green, each pinning the substring `analog context`. The check exists now; it was the cheapest wall in the chapter and it is down. Two rows left this inventory when the chapter HTML was corrected against the 2023 PDF — `061`/`062` pinned analog "No" cells for `$rtoi`/`$itor` that Table 9-8 does not have. See `s9.11` below |
 | `s9.3` | how a task behaves across accepted vs. rejected solver iterations | — no fixture, and neither paragraph leaves one to write. The iteration half is a property of the KERNEL: the rule is that a rejected iteration must leave no side effect, and a generated device cannot see a rejection to assert about (the same ceiling `s9.4.6` and `s9.5.9` sit under). The multiple-analyses half needs two analyses in one process, and this harness runs one per file — `Directives.analysis` is a single enum, so a second `//! analysis` line is silently overwritten rather than refused, which makes a fixture that tried it WORSE than no fixture |
 | `s9.4` | display task family | — parent; carried by 9.4.1–9.4.3 below |
-| `s9.4.1` | `$strobe` `$display` `$write` `$monitor` `$debug` in the analog context | `01_display_strobe.va`, `02_display_display.va`, `03_display_write.va`, `04_display_monitor.va`, `05_display_debug.va` (each pins the argument *value*, since the transcript is not observable from inside the model); `06_display_formats.va` — green; Table 9-22's `%c` compiles (it used to be mapped to Zig verb `c` with `want=.int`, handing `std.fmt` an i64 where `{c}` takes a u8, which killed the generated testbench); `152_display_radix_variants_analog_rejected.va` (`$displayb/h/o`, `$strobeb`, `$writeh`, `$monitorb`, `$monitoron/off`) — green, `analog context`; `161_display_argument_pairing_rejected.va` — green, `format specifier`: the `%` count in a format string is checked against the argument list; `170_display_argument_runs.va` — green, the argument-list model itself at digit level: every string argument is its own format run, a leading expression displays in order, output concatenates with no inserted separators (each pinned by `$sformat` + a string comparison, so the transcript IS the `ok=` value) |
+| `s9.4.1` | `$strobe` `$display` `$write` `$monitor` `$debug` in the analog context | `01_display_strobe.va`, `02_display_display.va`, `03_display_write.va`, `04_display_monitor.va`, `05_display_debug.va` (each pins the argument *value*, since the transcript is not observable from inside the model); `06_display_formats.va` — green; Table 9-22's `%c` compiles (it used to be mapped to Zig verb `c` with `want=.int`, handing `std.fmt` an i64 where `{c}` takes a u8, which killed the generated testbench); `152_display_radix_variants_analog_rejected.va` (`$displayb/h/o`, `$strobeb`, `$writeh`, `$monitorb`, `$monitoron/off`) — green, `analog context`; `161_display_argument_pairing_rejected.va` — green, `format specifier`: the `%` count in a format string is checked against the argument list; `170_display_argument_runs.va` — green, the argument-list model itself at digit level: every string argument is its own format run, literal-only runs preserve subsequent formats, and explicit %0d conversions concatenate without inserted separators; bare-operand/default-width claims moved to `audit_integer_default_fields.va` (FMT-WIDTH-001) (each pinned by `$sformat` + a string comparison, so the transcript IS the `ok=` value) |
 | `s9.4.2` | Table 9-21 display escapes | `test-literal-output` checks exact generated-host bytes, including NUL, octal escapes and included macros. `188` verifies literal file bytes through numeric character reads. Direct output preserves NUL; string storage removes it. Other escape/format combinations still need systematic qualification. |
 | `s9.4.3` | Table 9-22/9-23 format specifications and `width.precision` | `06_display_formats.va`, `09_string_formatting.va` pass; `161_…_rejected.va` rejects at E0810. `06`'s `%h`/`%o` round trips through `$sformat`+`$sscanf` are the only digit-level assertions on a base in the chapter, and they are now real: the formatter writes into `zSBuf(<site>)` and `zScan` reads the digits back (`lib/backend/str_kernels.zig`). `168_display_library_binding.va` uses that same round trip to pin the third member of the no-argument set, `%l`: an operand eaten for it shifts every later conversion left by one, which the two integers either side of it now catch. `171_display_c_format_flags.va` pins Table 9-23's "full formatting capabilities available in the C language" with string comparisons against hand-derived C output: `%e`'s default `1.500000e+00` (precision 6, signed two-digit exponent), `%10.4e`, `%05d`/`%+05d` zero-fill AFTER the sign, `%+d`/`% d` sign flags, and `%h` of a negative as the operand's 64-bit two's-complement pattern |
 | `s9.4.4` | `%m` prints the hierarchical name and takes no argument | `192_m_format_hierarchical_name.va` — **green**, and it pins the EXPANSION rather than a transcript: `$sformat` (§9.5.3) puts it in a `string` and the `ok=` is a comparison against the literal, the trick `170` and `168` use. Three assertions, one per half of the clause: `%m` alone is the invoking module's own name; `%m%d` with `7` gives the name followed by `7`, so `%m` ate no operand; and `%d%m` gives `7` followed by the name, which is the direction that separates "takes no argument" from "swallows the argument after it" — the failure mode `168` catches for `%l`. `06_display_formats.va`'s second `$display` carries a `%m` too and is still unasserted (a transcript is not a value) |
@@ -283,3 +293,20 @@ oracle and both runtime error paths run under `zig build test-rng-reference`.
 skipped branches, short-circuit operands, loops and source-ordered errors.
 Fractional real counts, large-mean Poisson precision, and reference nonfinite
 results remain limits; see [RNG-REFERENCE-LIMITS](../../../docs/RNG-REFERENCE-LIMITS.md).
+
+### Source audit follow-up, 2026-09-23
+
+`audit_real_format_fields.va` compares e/f output strings directly, including
+leading spaces, fixed fractional digits, exponent width and negative-sign
+placement. Its targeted strict run passes. It strengthens the older numeric
+round-trip evidence, which cannot detect formatting-preserving numeric changes
+such as omitted padding. The complete format/type/flag matrix remains open.
+See [the display-format worklist](../../../docs/conformance-display.md) for
+FMT-G-001 and FMT-WIDTH-001. The latter is now a positive XFAIL in
+`audit_integer_default_fields.va`; `170` uses explicit minimal-width formats
+and no longer requires the deviation. The new fixture retains its former
+bare-operand claims with independently derived default-field expectations.
+
+Digital monitor failures are separately recorded in
+[the monitor worklist](../../../docs/conformance-monitor.md); analog accepted-
+step comparisons must not substitute for inherited digital event semantics.

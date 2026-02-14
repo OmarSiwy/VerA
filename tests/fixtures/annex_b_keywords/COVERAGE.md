@@ -1,5 +1,12 @@
 # Annex B coverage
 
+The source-based audit in [`docs/conformance-keywords.md`](../../../docs/conformance-keywords.md)
+supplements and supersedes the historical inventory below. In particular,
+`audit_all_escaped_keywords.va` and `audit_all_case_keywords.va` now exercise the
+complete corrected table as escaped variables and two non-lowercase variable
+spellings. Other identifier contexts and diagnostic independence remain open.
+The historical file/arm counts below predate these additions.
+
 Source: `docs/annex-b-keywords.html`, read in full — both printed halves of
 Table B.1.
 

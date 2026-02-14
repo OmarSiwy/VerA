@@ -1,0 +1,2723 @@
+{
+  "schema_version": 1,
+  "denominator": "uncertified",
+  "completeness_review": "pending",
+  "scope": "Bounded candidate AMS2023 §§2.2–2.4 and2.8–2.8.2; dependencies on2.7, AnnexA/B/C, scopes and preprocessing not fully decomposed. No entire Chapter2 or denominator certification.",
+  "rules": [
+    {
+      "id": "AMS-LEX-TOKEN-STREAM",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.2",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "paragraph1 sentences1–2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Source consists of nonempty lexical tokens.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "acceptance",
+          "boundary": "Structural source inventory, not an internal token representation requirement",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Source-accounting review only; no runtime observation established.",
+          "expected": "Source-level categories and grammar are accounted for; no requirement to retain comment tokens or omit internal EOF sentinels.",
+          "derivation": "Source consists of nonempty lexical tokens.",
+          "wrong_implementation": "No behavioral discriminator established for this structural row; detailed source mis-tokenization cases belong to dependent rules.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed. LEX-REVIEW-004: internal zero-width EOF markers and discarded comment tokens are not violations by themselves.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-TOKEN-KINDS",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.2",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "token-category list"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Recognize whitespace, comment, operator, number, string, identifier and keyword categories.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "acceptance",
+          "boundary": "Structural source inventory, not an internal token representation requirement",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Source-accounting review only; no runtime observation established.",
+          "expected": "Source-level categories and grammar are accounted for; no requirement to retain comment tokens or omit internal EOF sentinels.",
+          "derivation": "Recognize whitespace, comment, operator, number, string, identifier and keyword categories.",
+          "wrong_implementation": "No behavioral discriminator established for this structural row; detailed source mis-tokenization cases belong to dependent rules.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Category inventory is one structural row; each category's detailed obligations belong to its own subsections. Not a claim of seven-category behavioral closure. LEX-REVIEW-004: internal zero-width EOF markers and discarded comment tokens are not violations by themselves.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-FREE-SPACE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.2",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "paragraph1 sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Outside escaped identifiers, space placement affects token separation but not source layout semantics.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified. Whitespace is between complete tokens, outside strings, comments and escaped identifiers, preserving required token boundaries; directive-line dependencies are not covered.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "same token sequence with varied space placement",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Same program observation",
+          "derivation": "Outside escaped identifiers, space placement affects token separation but not source layout semantics.",
+          "wrong_implementation": "Make indentation or source line position change semantics",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-FREE-NEWLINE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.2",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "paragraph1 sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Outside escaped identifiers, newline placement affects token separation but not source layout semantics.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified. Whitespace is between complete tokens, outside strings, comments and escaped identifiers, preserving required token boundaries; directive-line dependencies are not covered.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "same token sequence with varied newline placement",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Same program observation",
+          "derivation": "Outside escaped identifiers, newline placement affects token separation but not source layout semantics.",
+          "wrong_implementation": "Make indentation or source line position change semantics",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-WS-SPACE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.3",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence1–2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "space is ignored except for token separation.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified. Whitespace is between complete tokens, outside strings, comments and escaped identifiers, preserving required token boundaries; directive-line dependencies are not covered.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "leading/interior/trailing space",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Unchanged arithmetic and separate tokens",
+          "derivation": "space is ignored except for token separation.",
+          "wrong_implementation": "Reject or merge around space",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-3",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-WS-TAB",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.3",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence1–2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "tab is ignored except for token separation.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified. Whitespace is between complete tokens, outside strings, comments and escaped identifiers, preserving required token boundaries; directive-line dependencies are not covered.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "leading/interior/trailing tab",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Unchanged arithmetic and separate tokens",
+          "derivation": "tab is ignored except for token separation.",
+          "wrong_implementation": "Reject or merge around tab",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-3",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-WS-NEWLINE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.3",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence1–2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "newline is ignored except for token separation.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified. Whitespace is between complete tokens, outside strings, comments and escaped identifiers, preserving required token boundaries; directive-line dependencies are not covered.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "leading/interior/trailing newline",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Unchanged arithmetic and separate tokens",
+          "derivation": "newline is ignored except for token separation.",
+          "wrong_implementation": "Reject or merge around newline",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-3",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-WS-FORMFEED",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.3",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence1–2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "formfeed is ignored except for token separation.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified. Whitespace is between complete tokens, outside strings, comments and escaped identifiers, preserving required token boundaries; directive-line dependencies are not covered.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "leading/interior/trailing formfeed",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Unchanged arithmetic and separate tokens",
+          "derivation": "formfeed is ignored except for token separation.",
+          "wrong_implementation": "Reject or merge around formfeed",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/27_form_feed_whitespace.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-3",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-STRING-SPACE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.3",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "spaces remain significant inside strings.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS2.7 packed string character encoding; literal whitespace versus escape processing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "literal spaces at beginning/interior/end",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Packed character values retain every character",
+          "derivation": "spaces remain significant inside strings.",
+          "wrong_implementation": "Strip whitespace inside string",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/68_string_whitespace_significant.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-3",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-STRING-TAB",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.3",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.3; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "tabs remain significant inside strings.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS2.7 packed string character encoding; literal whitespace versus escape processing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Historical inspected fixture: leading literal tab plus escaped trailing tab; not the full literal-position matrix",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Packed character values retain every character",
+          "derivation": "tabs remain significant inside strings.",
+          "wrong_implementation": "Strip whitespace inside string",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/68_string_whitespace_significant.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        },
+        {
+          "id": "legal-observation",
+          "kind": "behavior",
+          "boundary": "Actual byte09 at leading/interior/trailing positions",
+          "analysis": "Generated analog testbench at declared point0",
+          "state_transition": "Execute analog block and observe exact value checks",
+          "expected": "606530,4262210,4276745; each CHECKI ok=1",
+          "derivation": "AMS2.3 preserves tabs;2.7 packed ASCII weights give9*65536+65*256+66,65*65536+9*256+66,65*65536+66*256+9",
+          "wrong_implementation": "Strip or collapse tabs inside quoted text",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/audit_string_literal_tab_positions.va",
+              "assertion": "606530,4262210,4276745; each CHECKI ok=1",
+              "runner": "root cached vera --emit-exe --contract tools/contract.zig, then execute returned path",
+              "revision": "2026-09-23 dirty root CLI SHA256ea2c724c744b0d0c810128ed1a1013cfa18d07b78fccf9f3ab5483c2acaef3e8",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-lexical-legal-neighbors.md",
+              "limits": "Bounded analog prescribed-point execution; no complete durable dependency/artifact bundle or executed mutation. Other cases remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed. LEX-REVIEW-008: referenced fixture has literal leading tab and escaped trailing tab, not a literal beginning/interior/end matrix; missing literal positions remain unexecuted. Subsequent root legal-observation case now supplies the previously missing bounded neighbor/tab matrix. Earlier limitation describes historical evidence, not a current absence of that fixture. Complete contexts and independent decomposition approval remain pending. Cross-source conflict:2.3 significant literal tabs versus2.7 escape-only introduction remains unresolved (conformance-strings-ledger-independent-review.md). Recorded execution is factual, not source-conflict resolution.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-3",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-LINE-START",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.4",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence2 first half; Syntax2-1 one_line_comment"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Adjacent slashes introduce a one-line comment.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "directive-looking text after //",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Comment content has no program effect",
+          "derivation": "Adjacent slashes introduce a one-line comment.",
+          "wrong_implementation": "Execute directive inside comment",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-4",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-LINE-END",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.4",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence2 final half; Syntax2-1 one_line_comment"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "A newline ends a one-line comment.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "executable statement on next line",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Next statement executes",
+          "derivation": "A newline ends a one-line comment.",
+          "wrong_implementation": "Continue comment into next line",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "EOF without newline boundary not settled by this candidate; carriage-return normalization requires source/environment review.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-4",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-BLOCK-START",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.4",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence3 first half; Syntax2-1 block_comment"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Slash-star introduces a block comment.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "directive-looking content after opener",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Content ignored",
+          "derivation": "Slash-star introduces a block comment.",
+          "wrong_implementation": "Process directive in block comment",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-4",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-BLOCK-END",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.4",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence3 final half; Syntax2-1 block_comment"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Star-slash terminates the block comment.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "statement after closer on same line",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Following statement executes",
+          "derivation": "Star-slash terminates the block comment.",
+          "wrong_implementation": "Ignore all remaining line",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-4",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-BLOCK-NONNEST",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.4",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence4"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Block comments do not nest.",
+      "class": "prohibition",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Illegal program boundary needs separate grammar/diagnostic authority review; no particular diagnostic code inferred from current implementation."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "second opener followed by first closer and trailing malformed source",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "First closer ends comment; trailing tokens are parsed",
+          "derivation": "Block comments do not nest.",
+          "wrong_implementation": "Maintain nesting depth",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/13_nested_comment_rejected.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        },
+        {
+          "id": "legal-observation",
+          "kind": "behavior",
+          "boundary": "A second opener inside a block followed by its first closer and no stray later closer",
+          "analysis": "Generated analog testbench at declared point0",
+          "state_transition": "Execute analog block and observe exact value checks",
+          "expected": "First closer exposes assignment; readback5",
+          "derivation": "AMS2.4 nonnesting leaves the assignment after the first closer executable",
+          "wrong_implementation": "Reject every embedded opener, or swallow assignment by maintaining nesting depth",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/audit_comment_nonnest_legal_neighbor.va",
+              "assertion": "First closer exposes assignment; readback5",
+              "runner": "root cached vera --emit-exe --contract tools/contract.zig, then execute returned path",
+              "revision": "2026-09-23 dirty root CLI SHA256ea2c724c744b0d0c810128ed1a1013cfa18d07b78fccf9f3ab5483c2acaef3e8",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-lexical-legal-neighbors.md",
+              "limits": "Bounded analog prescribed-point execution; no complete durable dependency/artifact bundle or executed mutation. Other cases remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Existing negative isolates malformed trailing source, not mandatory rejection of a slash-star sequence inside comment. Add legal neighbor with no stray closer before closure. Subsequent root legal-observation case now supplies the previously missing bounded neighbor/tab matrix. Earlier limitation describes historical evidence, not a current absence of that fixture. Complete contexts and independent decomposition approval remain pending.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-4",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-BLOCK-SLASHES",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.4",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "sentence5"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Double slash has no special meaning inside block comments.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "block containing // then same-line closer",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "2+3 evaluates5",
+          "derivation": "Double slash has no special meaning inside block comments.",
+          "wrong_implementation": "Treat // as suppressing block closer",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/01_whitespace_comments.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-4",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-COMMENT-ASCII",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.4",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "Syntax2-1 comment_text production"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.4; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Comment content admits ASCII characters subject to terminating delimiters.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "control and printable ASCII within valid comment",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "No content executes; terminators still terminate",
+          "derivation": "Comment content admits ASCII characters subject to terminating delimiters.",
+          "wrong_implementation": "Reject punctuation inside comments",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Any_ASCII_character grammar must be reconciled with delimiter semantics; exhaustive byte values and preprocessor contexts not tested.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-4",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-COMMENT-SEPARATOR",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.2",
+        "printed_page": 11,
+        "pdf_page": 24,
+        "passage": "token stream paragraph and comment category;2.4 syntax"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.2; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "A comment between tokens must not merge them into one token.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.8.3 expression grammar provides the isolated invalidity; Chapter10 preprocessing must preserve token boundaries.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Illegal program boundary needs separate grammar/diagnostic authority review; no particular diagnostic code inferred from current implementation."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "1/*c*/2 in expression",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Invalid adjacent expressions, not literal12",
+          "derivation": "A comment between tokens must not merge them into one token.",
+          "wrong_implementation": "Delete comment without token separation",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/39_block_comment_separates_tokens.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        },
+        {
+          "id": "legal-observation",
+          "kind": "behavior",
+          "boundary": "Comment between real keyword and declared variable name",
+          "analysis": "Generated analog testbench at declared point0",
+          "state_transition": "Execute analog block and observe exact value checks",
+          "expected": "Assigned real value reads back7",
+          "derivation": "Comment separates lexical tokens; removing it cannot weld keyword and name",
+          "wrong_implementation": "Delete comment and concatenate neighboring tokens",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/audit_comment_separator_legal_neighbor.va",
+              "assertion": "Assigned real value reads back7",
+              "runner": "root cached vera --emit-exe --contract tools/contract.zig, then execute returned path",
+              "revision": "2026-09-23 dirty root CLI SHA256ea2c724c744b0d0c810128ed1a1013cfa18d07b78fccf9f3ab5483c2acaef3e8",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-lexical-legal-neighbors.md",
+              "limits": "Bounded analog prescribed-point execution; no complete durable dependency/artifact bundle or executed mutation. Other cases remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed. Subsequent root legal-observation case now supplies the previously missing bounded neighbor/tab matrix. Earlier limitation describes historical evidence, not a current absence of that fixture. Complete contexts and independent decomposition approval remain pending.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-NAMING",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentences1–2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Objects are referenced by identifiers, simple or escaped.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "declare and read same object",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Reference resolves intended object",
+          "derivation": "Objects are referenced by identifiers, simple or escaped.",
+          "wrong_implementation": "Use raw token spelling as unrelated object key",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/03_escaped_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-BODY-LETTER",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Simple identifier bodies permit letters.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "noninitial letters",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Declared variable can be written and read",
+          "derivation": "Simple identifier bodies permit letters.",
+          "wrong_implementation": "Reject letters in identifier body",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/02_simple_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-BODY-DIGIT",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Simple identifier bodies permit digits.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "noninitial digits",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Declared variable can be written and read",
+          "derivation": "Simple identifier bodies permit digits.",
+          "wrong_implementation": "Reject digits in identifier body",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/02_simple_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-BODY-DOLLAR",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Simple identifier bodies permit dollar signs.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "noninitial dollar signs",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Declared variable can be written and read",
+          "derivation": "Simple identifier bodies permit dollar signs.",
+          "wrong_implementation": "Reject dollar signs in identifier body",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/02_simple_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-BODY-UNDERSCORE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence3"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Simple identifier bodies permit underscores.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "noninitial underscores",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Declared variable can be written and read",
+          "derivation": "Simple identifier bodies permit underscores.",
+          "wrong_implementation": "Reject underscores in identifier body",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/02_simple_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-START-LETTER",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph2 sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "A letter may begin a simple identifier.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "first-position letter",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Distinct value observed",
+          "derivation": "A letter may begin a simple identifier.",
+          "wrong_implementation": "Reject legal first character",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/02_simple_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-START-UNDERSCORE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph2 sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "A underscore may begin a simple identifier.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "first-position underscore",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Distinct value observed",
+          "derivation": "A underscore may begin a simple identifier.",
+          "wrong_implementation": "Reject legal first character",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/02_simple_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-START-NO-DIGIT",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph2 sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "A digit cannot begin a simple identifier.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Illegal program boundary needs separate grammar/diagnostic authority review; no particular diagnostic code inferred from current implementation."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "real declaration with forbidden leading character",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Source cannot derive a legal simple-identifier declaration",
+          "derivation": "A digit cannot begin a simple identifier.",
+          "wrong_implementation": "Accept forbidden leading character",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/17_identifier_digit_rejected.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-START-NO-DOLLAR",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph2 sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "A dollar sign cannot begin a simple identifier.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Illegal program boundary needs separate grammar/diagnostic authority review; no particular diagnostic code inferred from current implementation."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "real declaration with forbidden leading character",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Source cannot derive a legal simple-identifier declaration",
+          "derivation": "A dollar sign cannot begin a simple identifier.",
+          "wrong_implementation": "Accept forbidden leading character",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/47_identifier_dollar_first_rejected.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-CASE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph2 sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Identifier comparison is case sensitive.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "two names differing only in case",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Separate storage preserves distinct values",
+          "derivation": "Identifier comparison is case sensitive.",
+          "wrong_implementation": "Fold identifier case",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/02_simple_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-LIMIT-CHOICE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "final paragraph sentence1 permission"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Implementation may select a maximum identifier length.",
+      "class": "optional",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "acceptance",
+          "boundary": "documented limit or absence of finite limit",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Do not demand rejection at1025 without a declared limit",
+          "derivation": "Implementation may select a maximum identifier length.",
+          "wrong_implementation": "Treat minimum1024 as mandatory maximum",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Actual implementation-specified bound and resource policy not located; no unsupported fixed bound invented.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-LIMIT-MIN",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "final paragraph sentence1 bound"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "An identifier length limit must permit at least1024 characters.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "two1024-character names sharing first1023 characters",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "3 7",
+          "derivation": "An identifier length limit must permit at least1024 characters.",
+          "wrong_implementation": "Truncate all identifiers to shared prefix",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_long_distinct.v",
+              "assertion": "audit_ams_lexical_long_distinct.expected.txt:3 7",
+              "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
+              "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        },
+        {
+          "id": "escaped-length-final-character",
+          "kind": "behavior",
+          "boundary": "Two escaped identifiers with 1024 content characters differing only at final character; delimiter bytes excluded",
+          "analysis": "digital initial-process execution",
+          "state_transition": "Assign distinct objects 3 and 7 then read both",
+          "expected": "3 7",
+          "derivation": "AMS2.8 minimum is1024;2.8.1 excludes the escape and terminator from identity",
+          "wrong_implementation": "Truncate names before final character or count escape delimiters against minimum length",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_length_identity.v",
+              "assertion": "audit_ams_lexical_escaped_length_identity.expected.txt exact stdout; empty stderr; exit0",
+              "runner": "root build-produced vera --run",
+              "revision": "2026-09-23 dirty root CLI SHA2566b6e9b28b46620533350a062c8a454330b5ff0ff4ab6fc14a01775c9df45e4ce",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-lexical-identity-followup.md",
+              "limits": "Bounded digital observations only; no durable complete source/runner/artifact bundle or executed mutations; not complete analog/context evidence."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed. LEX-REVIEW-007: escaped identifiers with 1024 content characters and differing final characters remain a distinct boundary; delimiter bytes must not reduce the minimum. Follow-up conformance-lexical-identity-followup.md supplies the new bounded collision/escaped-length case; earlier pending statements describe the pre-integration checkpoint. Other positions/substitutions and complete profile execution remain open.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ID-LIMIT-ERROR",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "final paragraph sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "An identifier beyond an implementation-specified limit requires an error.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Implementation has actually specified a finite identifier limit L; L is not inferred from a current failure.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "Illegal program boundary needs separate grammar/diagnostic authority review; no particular diagnostic code inferred from current implementation."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "declared L and identifier of lengthL+1",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Error reported; not silent truncation",
+          "derivation": "An identifier beyond an implementation-specified limit requires an error.",
+          "wrong_implementation": "Silently truncate over-limit identifier",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "No finite declared limit found; condition applicability remains enabled but precondition uninstantiated. Error code/severity beyond error not invented.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ESC-START",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.1",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence1 first half"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Backslash introduces an escaped identifier.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "escaped punctuation name",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Punctuation stays within one name",
+          "derivation": "Backslash introduces an escaped identifier.",
+          "wrong_implementation": "Parse punctuation as ordinary expression",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/03_escaped_identifiers.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-1",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ESC-END-SPACE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.1",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence1 parenthesized list"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "space terminates an escaped identifier.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "declaration/reference terminated by space",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Transcript field 1 equals 1; other fields belong to separate terminator cases.",
+          "derivation": "space terminates an escaped identifier.",
+          "wrong_implementation": "Does not terminate at space, or retains that terminator in the identifier key.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 1 = 1",
+              "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
+              "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-1",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ESC-END-TAB",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.1",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence1 parenthesized list"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "tab terminates an escaped identifier.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "declaration/reference terminated by tab",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Transcript field 2 equals 2; other fields belong to separate terminator cases.",
+          "derivation": "tab terminates an escaped identifier.",
+          "wrong_implementation": "Does not terminate at tab, or retains that terminator in the identifier key.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 2 = 2",
+              "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
+              "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-1",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ESC-END-NEWLINE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.1",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence1 parenthesized list"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "newline terminates an escaped identifier.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "declaration/reference terminated by newline",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Transcript field 3 equals 3; other fields belong to separate terminator cases.",
+          "derivation": "newline terminates an escaped identifier.",
+          "wrong_implementation": "Does not terminate at newline, or retains that terminator in the identifier key.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 3 = 3",
+              "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
+              "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-1",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ESC-END-FORMFEED",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.1",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence1 parenthesized list"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "formfeed terminates an escaped identifier.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "declaration/reference terminated by formfeed",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Transcript field 4 equals 4; other fields belong to separate terminator cases.",
+          "derivation": "formfeed terminates an escaped identifier.",
+          "wrong_implementation": "Does not terminate at formfeed, or retains that terminator in the identifier key.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 4 = 4",
+              "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
+              "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-1",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ESC-ASCII",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.1",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Printable ASCII33 through126 may appear in an escaped identifier.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "one name containing every permitted byte",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "9",
+          "derivation": "Printable ASCII33 through126 may appear in an escaped identifier.",
+          "wrong_implementation": "Interpret embedded punctuation as hierarchy/preprocessor syntax",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_ascii.v",
+              "assertion": "expected9; actualexit1 E1100 undeclared digital variable",
+              "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
+              "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
+              "result": "fail",
+              "level": "production-execution",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        },
+        {
+          "id": "punctuation-collisions",
+          "kind": "behavior",
+          "boundary": "Distinct plain ab and escaped punctuation at middle/first/last positions; leading digit/dollar/backslash; comment-like sequences",
+          "analysis": "digital initial-process execution",
+          "state_transition": "Assign each object independently before reading all values",
+          "expected": "Ordered transcript 1 through 16",
+          "derivation": "All spellings denote distinct names; escaping permits punctuation without deleting its identity",
+          "wrong_implementation": "Consistently strip punctuation from declarations and references, merging distinct storage",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_punctuation_identity.v",
+              "assertion": "audit_ams_lexical_punctuation_identity.expected.txt exact stdout; empty stderr; exit0",
+              "runner": "root build-produced vera --run",
+              "revision": "2026-09-23 dirty root CLI SHA2566b6e9b28b46620533350a062c8a454330b5ff0ff4ab6fc14a01775c9df45e4ce",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-lexical-identity-followup.md",
+              "limits": "Bounded digital observations only; no durable complete source/runner/artifact bundle or executed mutations; not complete analog/context evidence."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed. LEX-REVIEW-002: single-name write/read cannot detect consistent punctuation stripping; independently valued collision controls and first/last-position cases remain required. Historical failure predates the repair recorded in conformance-escaped-name-fix.md. Follow-up conformance-lexical-identity-followup.md supplies the new bounded collision/escaped-length case; earlier pending statements describe the pre-integration checkpoint. Other positions/substitutions and complete profile execution remain open.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-1",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-ESC-IDENTITY",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.1",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Leading backslash and terminating whitespace are excluded from identifier identity.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMS A.9 lexical grammar, Clause6 naming/scope; expression/runtime observations have independent semantic dependencies.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "escaped/simple spellings of same legal simple name",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Same stored value through either spelling",
+          "derivation": "Leading backslash and terminating whitespace are excluded from identifier identity.",
+          "wrong_implementation": "Keep delimiter bytes in symbol key",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "assertion": "audit_ams_lexical_escaped_terminators.expected.txt:1 2 3 4",
+              "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
+              "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        },
+        {
+          "id": "escaped-length-final-character",
+          "kind": "behavior",
+          "boundary": "Two escaped identifiers with 1024 content characters differing only at final character; delimiter bytes excluded",
+          "analysis": "digital initial-process execution",
+          "state_transition": "Assign distinct objects 3 and 7 then read both",
+          "expected": "3 7",
+          "derivation": "AMS2.8 minimum is1024;2.8.1 excludes the escape and terminator from identity",
+          "wrong_implementation": "Truncate names before final character or count escape delimiters against minimum length",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_length_identity.v",
+              "assertion": "audit_ams_lexical_escaped_length_identity.expected.txt exact stdout; empty stderr; exit0",
+              "runner": "root build-produced vera --run",
+              "revision": "2026-09-23 dirty root CLI SHA2566b6e9b28b46620533350a062c8a454330b5ff0ff4ab6fc14a01775c9df45e4ce",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-lexical-identity-followup.md",
+              "limits": "Bounded digital observations only; no durable complete source/runner/artifact bundle or executed mutations; not complete analog/context evidence."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed. LEX-REVIEW-007: escaped identifiers with 1024 content characters and differing final characters remain a distinct boundary; delimiter bytes must not reduce the minimum. Follow-up conformance-lexical-identity-followup.md supplies the new bounded collision/escaped-length case; earlier pending statements describe the pre-integration checkpoint. Other positions/substitutions and complete profile execution remain open.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-1",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-KEYWORD-ESCAPE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.2",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Escaped keywords are identifiers rather than language keywords.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMSAnnexB keyword inventory; AnnexC.3 reservation includes keywords not usable as constructs in Verilog-A.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "escaped analog variable",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Stored arithmetic value observed",
+          "derivation": "Escaped keywords are identifiers rather than language keywords.",
+          "wrong_implementation": "Reserve escaped keyword too",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/26_escaped_keyword.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-KEYWORD-CASE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.2",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph2 sentence1"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "Keywords are lowercase only.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMSAnnexB exact reserved set; AnnexC.3 reserved-versus-usable distinction.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "REAL MODULE BEGIN as ordinary names",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Values1 2 4 and sum7",
+          "derivation": "Keywords are lowercase only.",
+          "wrong_implementation": "Case-insensitive keyword lookup",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/59_uppercase_keyword_is_identifier.va",
+              "assertion": "Source-inspected fixture assertions; not executed in this ledger pass",
+              "runner": "not run in this ledger pass",
+              "revision": "current root source inspection2026-09-23; no execution snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ams-lexical-core-review.md",
+              "limits": "No complete durable fixture/runner/artifact bundle or executed mutation test; analog execution not established by digital run."
+            }
+          ]
+        }
+      ],
+      "residuals": "Candidate atomic decomposition only; independent completeness/atomicity review pending. ASCII/context cross-products, preprocessing and both-profile execution are not closed.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    },
+    {
+      "id": "AMS-LEX-KEYWORD-INVENTORY",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.8.2",
+        "printed_page": 17,
+        "pdf_page": 30,
+        "passage": "paragraph1 sentence1;paragraph2 sentence2"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "General lexical rule applies independently of execution domain; AnnexC.3 preserves Clause2, with numerical/mixed-signal and keyword-use exceptions not excluding this spelling rule.",
+          "source": "AMS2.8; AnnexC.3 printed389–390"
+        }
+      },
+      "obligation": "AnnexB supplies the predefined simple identifiers used as keywords.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal source and valid declaration/reference context; no macro substitution unless separately specified.",
+      "cross_references": "AMSAnnexB; source-verified inventory tooling in existing AnnexB audit; this ledger does not duplicate per-keyword enumeration.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Positive lexical behavior has no invented rejection companion; distinct prohibitions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "acceptance",
+          "boundary": "every AnnexB spelling and legal escaped counterpart",
+          "analysis": "lexical processing; digital or analog execution of otherwise legal enclosing program",
+          "state_transition": "Tokenize declaration and reference; execute independently derived observation, or diagnose isolated malformed source as specified.",
+          "expected": "Exact edition keyword set without extra reservations",
+          "derivation": "AnnexB supplies the predefined simple identifiers used as keywords.",
+          "wrong_implementation": "Use SystemVerilog keyword set",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Per-keyword applicability, diagnostic context and execution evidence require separate AnnexB ledger; list pointer is not full keyword closure.",
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-8-2",
+        "relation": "direct-text",
+        "limits": "Relevant source prose compared to PDF; Syntax2-1 literal delimiters were visually checked and marked up at root (LEX-REVIEW-003); this is a bounded typography repair. Dependency grammar/profile references are not complete HTML traversal. Source fidelity does not establish execution."
+      }
+    }
+  ]
+}

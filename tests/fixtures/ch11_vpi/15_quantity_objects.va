@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.7 quantity objects: a branch carries BOTH a potential quantity and a
 // flow quantity, each reachable from the branch and each with a value.
 //
@@ -25,7 +28,6 @@
 // reaches the probe through the sweep, so it keeps an absolute tolerance of
 // 1e-18, about 2 ulp at 2e-3.
 //
-//! lrm 11.6.7
 //! lrm 5.4.1
 //! lrm 5.4.2.2
 //! bias V(p) = 0.875, V(n) = 0.125

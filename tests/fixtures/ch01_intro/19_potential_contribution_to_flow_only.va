@@ -12,13 +12,13 @@
 // The conservative contribution on (p, n) is there only so the module is a
 // well-formed device; the sole defect is the potential contribution to `ionly`.
 //
-// Same expectation as its mirror, and for the reason spelled out there: the
-// phase label, not E0501. E0501 is the access-function NAME MISMATCH of §3.6.1.4;
-// here the discipline binds no potential nature at all, and checkAccessMatch
-// returns before E0501 on exactly that case.
+// Pin the rule-specific diagnostic: binds no potential nature.
+// An unrelated parser or code-generation failure cannot satisfy this fixture.
+// Earlier DiagnosticsReported matching and obsolete unallocated-code arguments
+// are superseded by the Chapter 1 source review (2026-09-23).
 //
 //! lrm 1.3.4
-//! reject DiagnosticsReported
+//! reject binds no potential nature
 module ch01_potential_contribution_to_flow_only(p, n);
     inout p, n;
     electrical p, n;

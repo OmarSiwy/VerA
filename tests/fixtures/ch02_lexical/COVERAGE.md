@@ -1,5 +1,17 @@
 # Chapter 2 coverage
 
+**Historical fixture inventory, not exhaustive rule coverage.** The source-based
+audit and current gaps are recorded in
+[`docs/conformance-lexical.md`](../../../docs/conformance-lexical.md).
+That audit supersedes closure claims below: fixture 22 does not observe the
+minimum unsized width; 20/29 do not observe attribute metadata; fixture 52 tests
+only `op="maybe"`, not the other standard attribute domains. Fixtures 69–72
+now isolate those other invalid values. Fixtures 67/68 extend octal-escape and
+string-whitespace evidence. The historical counts below predate these additions.
+Digital sized four-state observations and the failing unsized-context-fill
+case live in `../digital/lexical_*.v`; an empty local XFAIL list is not closure
+of full-AMS lexical obligations.
+
 Source: `docs/ch2-lexical.html`, read section by section including every
 syntax box and both tables.
 
@@ -108,7 +120,8 @@ What these fixtures prove is limited to three arms:
 **One invalid form per file.** A `//! reject` fixture stops at its first diagnostic,
 so 2.6.2's six invalid dotted forms cannot share a module. `14`/`15`/`16`/`43`/`44`/`45`
 are that list, one file each, in the LRM's own order. The same constraint is why
-`52`'s three sibling domain violations sit in a comment rather than in the source.
+`52`'s sibling domain violations now have independent fixtures 69–72; the
+comments in `52` themselves never provided coverage.
 
 **Reject is not always debt.** `05`, `24` and `42` refuse x, z and `?`, and `48`
 refuses `\$vt`. The legal four-state literals in `05`/`24` are unsupported-feature

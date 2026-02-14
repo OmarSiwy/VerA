@@ -9,13 +9,15 @@
 //
 // `bump` adds 1 to the inout counter it is handed and returns 1, so each
 // counter's final value IS the number of times its arm was evaluated. With a
-// constant-false and a constant-true condition, exactly one arm of each pair
+// constant-false condition, exactly one arm of the pair
 // runs: `taken` ends at 1 and `skipped` at 0. A compiler that evaluates both
 // arms and then selects leaves both at 1.
 //
 // This is 123_short_circuit_side_effects.va's missing third operator, split out
 // only so that VerA failing it does not take the ten `&&`/`||`/`&`
 // assertions there down with it.
+// Dynamic false/true conditions are tested separately by
+// audit_short_circuit_dynamic.va; this fixture only covers constant false.
 //
 //! lrm 4.2.3
 //! lrm 4.2.12

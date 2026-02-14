@@ -1,0 +1,1435 @@
+{
+  "schema_version": 1,
+  "denominator": "uncertified",
+  "completeness_review": "pending",
+  "scope": "Candidate AMS2.7 string-literal rules and Table2-2 only. Explicit dependency edges to3.3/3.4.6 do not enumerate or close typed-string/parameter semantics; independent completeness review pending.",
+  "rules": [
+    {
+      "id": "AMS-STRING-QUOTES",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence1"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "String literals are enclosed by double quotes.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Source restriction needs isolated diagnostic and legal neighbor; no diagnostic code or unspecified severity is inferred from compiler behavior."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "One-character and multicharacter literals with both delimiters; missing final delimiter isolated.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "A quoted AB literal can be assigned/evaluated; unclosed quote does not form a legal string literal.",
+          "derivation": "Double quotes delimit the sequence; identifier AB is not the same source token.",
+          "wrong_implementation": "Treat unquoted text as a string or ignore a missing closing quote.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-SINGLE-LINE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence1"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Resolve the single-line restriction in2.7 against AnnexA.8.8's Any_ASCII_character production and AnnexG change2535.",
+      "class": "ambiguous",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing. AMSA.8.8 printed383/physical396; informativeG.5 change2535 printed419/physical432;G.7 change7891 is a nonterminal rename, not normative precedence.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Source restriction needs isolated diagnostic and legal neighbor; no diagnostic code or unspecified severity is inferred from compiler behavior."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "Actual newline inside quotes versus source backslash-n escape.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Source conflict unresolved:2.7 requires one source line, whereas AnnexA.8.8/history may permit multiline content. No unconditional rejection/acceptance oracle is certified.",
+          "derivation": "Physical layout constraint and encoded character value are different rules.",
+          "wrong_implementation": "No raw-newline acceptance/rejection mutant is certified until normative source conflict is reconciled.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/19_multiline_string_rejected.va",
+              "assertion": "Existing rejection pins E0138 and line-span phrase; no rerun",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            },
+            {
+              "fixture": "tests/fixtures/ch02_lexical/08_string_escapes.va",
+              "assertion": "CHECKI backslash-n is10 as legal neighbor",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed. Independent review flagged AnnexA.8.8 and AnnexG2535/7891 conflict; exact grammar and precedence review pending. Existing19_multiline_string_rejected.va is a2.7-based implementation regression, not closure of reconciled AMS syntax."
+    },
+    {
+      "id": "AMS-STRING-INTEGER-EXPRESSION",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence2"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "A literal in an ordinary integer expression acts as an unsigned integer constant, not automatically a typed string.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Literal-only arithmetic and equality including a nonleading NUL byte.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "AB+1 gives16707; literal A followed by NUL is not equal to literal A.",
+          "derivation": "A65,B66 pack as0x4142;0x4100 differs from0x0041. Typed string conversion is a separate3.3 context.",
+          "wrong_implementation": "Send every quoted literal through NUL-removing typed-string comparison.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch03_data_types/audit_string_literal_equality.va",
+              "assertion": "Both equality/inequality CHECKI assertions; XFAIL historical behavior retained",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Historical conformance-types.md reports incorrect equality; not rerun or asserted current here. Full operator/width matrix and typed-context3.3 cases remain dependencies."
+    },
+    {
+      "id": "AMS-STRING-INTEGER-ASSIGNMENT",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence2"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Literal assigned in an integral context uses the encoded integer bytes.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Assign AB to an explicitly sufficiently wide integral destination.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Value16706 is retained before arithmetic comparison.",
+          "derivation": "Two encoded bytes are0x41,0x42; no typed-string NUL removal or pointer value participates.",
+          "wrong_implementation": "Store a text pointer or automatically select typed-string representation.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch03_data_types/73_string_literal_to_integral.va",
+              "assertion": "Literal-to-integral examples; width-specific truncation is a3.3 dependency, not closed by2.7",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Proposed width-safe AB control not run. Existing fixture's integer-width assumption is explicitly questioned in type review. Truncation/padding belong to3.3/inherited sizing."
+    },
+    {
+      "id": "AMS-STRING-BYTE-WIDTH",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence2, one8-bit ASCII value per character"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Each decoded character contributes one8-bit value.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "AB versus A; two equal bytes versus distinct bytes.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "AB has byte sequence0x41,0x42 and packed value16706, not sum131.",
+          "derivation": "Each character occupies its own8-bit position, with ordering corroborated by3.3 packed literal examples.",
+          "wrong_implementation": "Sum character codes or retain source escape spelling bytes.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/08_string_escapes.va",
+              "assertion": "AB and A-octal101 exact integer checks",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-BYTE-ORDER",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence2 with3.3 packed-array dependency"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "The character sequence is preserved in the packed integer interpretation.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Asymmetric leading/interior/trailing literal-tab sequences.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "TAB-A-B=606530, A-TAB-B=4262210, A-B-TAB=4276745.",
+          "derivation": "TAB9,A65,B66 occupy successive bytes; the expected values distinguish reversal and stripping.",
+          "wrong_implementation": "Reverse bytes, collapse significant characters or remove a tab.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/audit_string_literal_tab_positions.va",
+              "assertion": "Three named leading/interior/trailing CHECKI observations in header-derived order",
+              "runner": "Cached root CLI --emit-exe followed by actual returned generated executable",
+              "revision": "CLI SHA2566b6e9b28b46620533350a062c8a454330b5ff0ff4ab6fc14a01775c9df45e4ce;2026-09-23",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-lexical-legal-neighbors.md",
+              "limits": "Previously executed exact3 observations; not rerun by ledger. Fixture/executable hashes in report; no complete durable transcript package or all-width/profile proof."
+            }
+          ]
+        }
+      ],
+      "residuals": "Bounded imported production evidence only. Byte ordering relies on3.3/inherited packed interpretation;2.7 alone states sequence, not an independently enumerated bit-index formula. STR-REVIEW-02: raw-tab legality has unresolved tension between2.3 significant tabs and2.7 escape-only introduction. Historical execution remains factual but does not settle source interpretation; ordinary AB versus BA byte-order control remains needed."
+    },
+    {
+      "id": "AMS-STRING-UNSIGNED",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence2, unsigned integer constants"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Literal numeric representation is unsigned.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Octal377 single byte and integer comparison against zero.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Octal377 literal gives255 and is not negative.",
+          "derivation": "The8-bit pattern11111111 represents unsigned255, not signed minus1.",
+          "wrong_implementation": "Sign-extend high-bit character as a signed8-bit value.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/67_octal_escape_boundaries.va",
+              "assertion": "CHECKI maximum mandatory octal byte255",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "This catches signed-byte decoding, not every mixed signed/unsigned expression rule. Wider comparison/coercion matrix remains inherited dependency."
+    },
+    {
+      "id": "AMS-STRING-NUL-INTEGER",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence2, each character represented"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Numeric literal bytes must not undergo typed-string NUL removal.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Trailing/interior NUL and a leading-NUL control.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "A-NUL=0x4100;A-NUL-B=0x410042;leading NUL-A has numeric value65 but must not alone prove preservation.",
+          "derivation": "NUL is an octal-encoded byte0. It changes position/width even if a leading zero leaves numeric value unchanged.",
+          "wrong_implementation": "Apply3.3 string conversion to every literal before choosing expression context.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch03_data_types/audit_string_literal_equality.va",
+              "assertion": "Trailing-NUL versus A equality/inequality",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            },
+            {
+              "fixture": "tests/fixtures/ch02_lexical/67_octal_escape_boundaries.va",
+              "assertion": "Leading zero byte followed by A only; nondiscriminating for removal by itself",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-ESC-NEWLINE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 row \\n"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "\\n decodes to one newline character.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Standalone escape; escape embedded between distinct characters; repeated escape.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Standalone numeric value10; each escape contributes one decoded byte.",
+          "derivation": "Table2-2 maps \\n to newline; ASCII code is10.",
+          "wrong_implementation": "Keep source characters backslash and n rather than decode",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/08_string_escapes.va",
+              "assertion": "CHECKI escape \\n value10",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Standalone fixture source inspected only. Embedded/repeated and escape-followed-by-ordinary-character discriminators remain unexecuted; no second escape interpretation should be assumed."
+    },
+    {
+      "id": "AMS-STRING-ESC-TAB",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 row \\t"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "\\t decodes to one tab character.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Standalone escape; escape embedded between distinct characters; repeated escape.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Standalone numeric value9; each escape contributes one decoded byte.",
+          "derivation": "Table2-2 maps \\t to tab; ASCII code is9.",
+          "wrong_implementation": "Treat escaped t as literal t or strip the decoded tab",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/08_string_escapes.va",
+              "assertion": "CHECKI escape \\t value9",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Standalone fixture source inspected only. Embedded/repeated and escape-followed-by-ordinary-character discriminators remain unexecuted; no second escape interpretation should be assumed."
+    },
+    {
+      "id": "AMS-STRING-ESC-BACKSLASH",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 row \\\\"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "\\\\ decodes to one backslash character.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Standalone escape; escape embedded between distinct characters; repeated escape.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Standalone numeric value92; each escape contributes one decoded byte.",
+          "derivation": "Table2-2 maps \\\\ to backslash; ASCII code is92.",
+          "wrong_implementation": "Recursively reinterpret the decoded backslash as another escape",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/08_string_escapes.va",
+              "assertion": "CHECKI escape \\\\ value92",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Standalone fixture source inspected only. Embedded/repeated and escape-followed-by-ordinary-character discriminators remain unexecuted; no second escape interpretation should be assumed."
+    },
+    {
+      "id": "AMS-STRING-ESC-QUOTE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 row \\\""
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "\\\" decodes to one double quote character.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Standalone escape; escape embedded between distinct characters; repeated escape.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Standalone numeric value34; each escape contributes one decoded byte.",
+          "derivation": "Table2-2 maps \\\" to double quote; ASCII code is34.",
+          "wrong_implementation": "End the literal at an escaped quote",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/08_string_escapes.va",
+              "assertion": "CHECKI escape \\\" value34",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Standalone fixture source inspected only. Embedded/repeated and escape-followed-by-ordinary-character discriminators remain unexecuted; no second escape interpretation should be assumed."
+    },
+    {
+      "id": "AMS-STRING-OCTAL-1-DIGIT",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 final row,1–3 octal digits and0<=d<=7"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "An octal escape of1 digit represents one character.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "\\7A; lowercase/non-octal terminator and closing-quote boundary.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "\\7A packs to1857.",
+          "derivation": "Octal 7 is7; multiply by256 then add A65.",
+          "wrong_implementation": "Consume exactly3 digits regardless of source token boundary.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/67_octal_escape_boundaries.va",
+              "assertion": "CHECKI 1 octal digits followed by A",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-OCTAL-2-DIGIT",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 final row,1–3 octal digits and0<=d<=7"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "An octal escape of2 digits represents one character.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "\\77A; lowercase/non-octal terminator and closing-quote boundary.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "\\77A packs to16193.",
+          "derivation": "Octal 77 is63; multiply by256 then add A65.",
+          "wrong_implementation": "Consume exactly3 digits regardless of source token boundary.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/67_octal_escape_boundaries.va",
+              "assertion": "CHECKI 2 octal digits followed by A",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-OCTAL-3-DIGIT",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 final row,1–3 octal digits and0<=d<=7"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "An octal escape of3 digits represents one character.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "\\101A; lowercase/non-octal terminator and closing-quote boundary.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "\\101A packs to16705.",
+          "derivation": "Octal 101 is65; multiply by256 then add A65.",
+          "wrong_implementation": "Consume exactly1 digits regardless of source token boundary.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/08_string_escapes.va",
+              "assertion": "A followed by octal101=16705 is a related three-digit example, not the proposed reversed sequence.",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-OCTAL-SHORT-STOP",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 final row, following character for fewer than three digits"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "One/two-digit octal forms end only when the following character is nonoctal.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Backslash7A and backslash77A versus backslash17 and backslash177; all mandatory controls stay within octal377.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "A is retained as a character after short forms; additional octal digit extends the escape up to three digits.",
+          "derivation": "The explicit following-character condition disallows arbitrarily stopping after one digit when another octal digit follows.",
+          "wrong_implementation": "Always consume one octal digit, treating the next as an ordinary character.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/67_octal_escape_boundaries.va",
+              "assertion": "One/two-digit A-terminated observations",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-OCTAL-THIRD-STOP",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 final row, maximum3 digits"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "An octal escape consumes no more than three octal digits.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Backslash1012 with a fourth octal digit.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Decoded A followed by character2 packs to16690.",
+          "derivation": "Three-digit octal101=65; fourth source digit2 remains ASCII50, so65*256+50=16690.",
+          "wrong_implementation": "Greedily consume all following octal digits.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/67_octal_escape_boundaries.va",
+              "assertion": "CHECKI three octal digits followed by ordinary digit16690",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-OCTAL-RANGE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 final row,0<=d<=7 and error permission above377"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Octal values through377 are valid encoded bytes, including0 and255.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "000,001,177,200,377; high-bit bytes in expression context.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Represented values are0,1,127,128,255 respectively;377 cannot be rejected using the above377 permission.",
+          "derivation": "Octal377 equals255; optional error condition is strictly greater.",
+          "wrong_implementation": "Reject377 at an off-by-one bound or restrict to7-bit ASCII only.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch02_lexical/67_octal_escape_boundaries.va",
+              "assertion": "377=255 and000A=65; intermediate boundaries not executed",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent atomicity/completeness review pending; inherited integer width and all lexical/context/analysis combinations not closed."
+    },
+    {
+      "id": "AMS-STRING-OCTAL-OVERFLOW-PERMISSION",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "Table2-2 final sentence"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Implementation may issue an error for an escaped character greater than octal377.",
+      "class": "optional",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Source permits an error above octal377 but does not mandate that error; no required-rejection oracle."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "400 and777 beside required legal377.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "An error is permitted, not required; accepting these forms does not by itself violate this permission.",
+          "derivation": "The source says may issue an error, not shall. It does not define a unique accepted overflow numeric value here.",
+          "wrong_implementation": "Require every implementation to reject400 or universally prescribe modulo256 as its result.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Actual implementation choice and accepted-overflow value authority remain unreviewed. No negative fixture should require E-code for this optional behavior."
+    },
+    {
+      "id": "AMS-STRING-STRING-CONTEXT-EDGE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 sentence3, reference to3.3"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "A string-typed destination/context uses the3.3 literal-to-string rules, not unconditional integral semantics.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Same A-NUL literal in pure-literal comparison versus a string-typed comparison.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "Literal-only A-NUL differs from A; after conversion to string, NUL is removed and typed A compares equal.",
+          "derivation": "2.7 directs string storage to3.3;3.3 says literals convert when assigned to or used with string types.",
+          "wrong_implementation": "Use one global NUL-removing path, or never remove NUL in typed conversion.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch03_data_types/audit_string_comparison_context.va",
+              "assertion": "Typed comparison legal neighbor",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            },
+            {
+              "fixture": "tests/fixtures/ch03_data_types/audit_string_literal_equality.va",
+              "assertion": "Independent literal-only context",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Dependency-edge demonstration only, not full3.3 decomposition or closure. Dynamic length, operators/arrays, string-to-integral prohibition and repeated assignment states remain separate."
+    },
+    {
+      "id": "AMS-STRING-STRING-PARAMETER-EDGE",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph1 final sentence, reference to3.4.6"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "direct-text",
+        "limits": "Section text and all Table2-2 cells visually compared against source PDF29; this is not full3.3/3.4.6 dependency or runtime closure."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "String parameters have separately specified semantics in3.4.6.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal representation/conversion behavior; distinct lexical restrictions are separate rows and do not require invented negatives."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "acceptance",
+          "boundary": "Parameter string versus untyped/integral parameter from same quoted token.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Route interpretation by declared context; no claim of execution from this dependency link.",
+          "expected": "Apply3.4.6 and Table3-3 where parameter type is string; do not infer integer literal behavior universally.",
+          "derivation": "2.7 explicitly distinguishes parameters of type string and points to3.4.6.",
+          "wrong_implementation": "Erase declared string parameter type because its initializer is a literal.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch03_data_types/17_string_parameter_range.va",
+              "assertion": "Related string-parameter fixture; ranges/overrides are not2.7 rules",
+              "runner": "not run in this ledger task",
+              "revision": "Current root source inspection2026-09-23; no new runtime snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-types.md",
+              "limits": "Fixture source inspected; header citations and expected values are not runtime evidence. Dependencies and arbitrary-width/context matrices remain open."
+            }
+          ]
+        }
+      ],
+      "residuals": "Source dependency pointer, not an atomic behavioral closure row.3.4.6 and parameter context/range/override inventory are outside this candidate. Dependency inventory node, not an atomic closure unit;3.4.6 requires separate decomposition."
+    },
+    {
+      "id": "AMS-STRING-UNLISTED-ESCAPES",
+      "source": {
+        "document": "VAMS",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "2.7",
+        "printed_page": 16,
+        "pdf_page": 29,
+        "passage": "paragraph2 and Table2-2, interpretation boundary"
+      },
+      "html_trace": {
+        "path": "docs/ch2-lexical.html",
+        "anchor": "s2-7",
+        "relation": "unresolved",
+        "limits": "Section/table located, but the unresolved interpretation is not settled by its presence."
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "General literal syntax/representation is part of the full language.",
+          "source": "AMS2.7"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.3 preserves Clause2 for analog subset; numerical mixed-signal and keyword-use exceptions do not exclude string-literal spelling. Typed-context dependencies must still be respected.",
+          "source": "AMS AnnexC.3;2.7;3.3"
+        }
+      },
+      "obligation": "Unlisted escapes and source-byte ambiguities need explicit dependency resolution.",
+      "class": "ambiguous",
+      "status": "open",
+      "preconditions": "Otherwise legal enclosing source; integer/literal-only context unless the case explicitly selects typed string; distinguish physical source newline from escaped newline character.",
+      "cross_references": "AMS2.3 significant literal spaces/tabs;3.3 typed-string versus literal/integral behavior and Table3-3;3.4.6 string parameters;AnnexA lexical grammar;inherited integer sizing.",
+      "invalid_input": {
+        "disposition": "unresolved",
+        "reason": "Unknown escapes, terminal backslash, raw controls and non-ASCII bytes require separate source interpretation; none is presumed legal or obligatorily rejected."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Backslashq,backslash8,terminal backslash,raw control bytes and non-ASCII source.",
+          "analysis": "lexical processing with analog expression observations; digital equivalent remains separate execution evidence",
+          "state_transition": "Decode literal then evaluate in specified context; observations precede conversions that could mask literal bytes.",
+          "expected": "No invented mandatory diagnostic or decoded value is asserted for unlisted forms in this candidate.",
+          "derivation": "Table2-2 defines its listed forms; full inherited/grammar rules must settle forms not defined there.",
+          "wrong_implementation": "Convert lack of a listed mapping into an unsupported-feature rejection requirement.",
+          "mutation_status": "not-run; proposed discriminator only",
+          "evidence": []
+        }
+      ],
+      "residuals": "Unresolved inherited/AnnexA authority; do not add a mandatory rejection or arbitrary drop-backslash behavior from current implementation."
+    }
+  ]
+}

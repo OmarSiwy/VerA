@@ -1,5 +1,13 @@
 # Chapter 6 coverage
 
+Inherited-parameter audit, 2026-09-23: IEEE 1364-2005 §4.10.1 makes body
+parameters local when the module has parameter assignments in its header.
+`audit_header_body_parameter_override_rejected.va` exposes accepted illegal
+HDL binding as PARAM-HEADER-001 (XFAIL), while
+`audit_header_body_parameter_dependency.va` independently exercises a legal
+header override and dependent body value. Header-default acceptance alone does
+not cover this rule. See `docs/conformance-parameters.md` for the evidence limits.
+
 Source: `docs/ch6-hierarchy.html`, read section by section.
 
 HTML section-ID audit: `s6.1` `s6.2` `s6.2.1` `s6.2.2` `s6.3` `s6.3.1` `s6.3.2` `s6.3.3` `s6.3.4` `s6.3.5` `s6.3.6` `s6.4` `s6.4.1` `s6.4.2` `s6.4.3` `s6.5` `s6.5.1` `s6.5.2` `s6.5.2.1` `s6.5.2.2` `s6.5.3` `s6.5.4` `s6.5.5` `s6.5.6` `s6.5.7` `s6.5.7.1` `s6.5.7.2` `s6.5.8` `s6.6` `s6.6.1` `s6.6.2` `s6.6.2.1` `s6.6.3` `s6.7` `s6.7.1` `s6.8` `s6.9` `s6.9.1` `s6.9.2` `s6.9.3` `s6.9.4`.

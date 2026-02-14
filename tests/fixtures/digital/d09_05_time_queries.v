@@ -33,13 +33,11 @@
 //   after #4: 3+4 = 7 units = 70ns = 70 scheduler ticks
 //               $time 7, $stime 7, $realtime 7      (NOT 70)
 //
-//   `cap = $time;` stores into a 64-bit reg: the value is 7, so the binary
-//   rendering of the whole declared width is 61 zeros followed by 111. That
-//   line pins the RETURN WIDTH — the plan's 17.7 row names "return width"
-//   explicitly — because a 32-bit return assigned to a 64-bit reg would have
-//   to be zero-extended to the same 64 characters, whereas a runner that
-//   returns a narrower value and then sign-extends, or that returns a real,
-//   produces a different bit string.
+//   `cap = $time;` stores 7 into a 64-bit reg, rendered as 61 zeros and 111.
+//   This observes storage/formatting, NOT the function's return width: a
+//   32-bit result zero-extends to exactly the same value. The withdrawn width
+//   claim moves to TIME-IEEE-001 in conformance-ieee-tasks-review.md and
+//   audit_time_stime_wrap.v, which observes bit32 of the actual time result.
 //
 //   `ahead = $time + 1;` is 8: the function's result is an ordinary integral
 //   operand and participates in arithmetic. `%0d` of 8 is "8".

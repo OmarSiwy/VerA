@@ -247,29 +247,31 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 ///
 /// The zero-count shift identity adds 130 bytes to the shared emitted helper;
 /// these shapes have unchanged MIR and runtime signatures.
+/// The source-defined min/max selection helpers add 418 shared bytes. All
+/// fifteen sizes below were remeasured after that repair; MIR counts agree.
 /// MEASURED on this tree, not predicted: the numbers came out of this bench.
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 22910, .defs = 8, .insts = 5 },
-        .{ .device = 23268, .defs = 35, .insts = 26 },
-        .{ .device = 26011, .defs = 258, .insts = 194 },
-        .{ .device = 48376, .defs = 2050, .insts = 1538 },
-        .{ .device = 230673, .defs = 16386, .insts = 12290 },
+        .{ .device = 23328, .defs = 8, .insts = 5 },
+        .{ .device = 23686, .defs = 35, .insts = 26 },
+        .{ .device = 26429, .defs = 258, .insts = 194 },
+        .{ .device = 48794, .defs = 2050, .insts = 1538 },
+        .{ .device = 231091, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 22910, .defs = 8, .insts = 5 },
-        .{ .device = 23092, .defs = 24, .insts = 19 },
-        .{ .device = 24548, .defs = 136, .insts = 131 },
-        .{ .device = 36196, .defs = 1032, .insts = 1027 },
-        .{ .device = 129380, .defs = 8200, .insts = 8195 },
+        .{ .device = 23328, .defs = 8, .insts = 5 },
+        .{ .device = 23510, .defs = 24, .insts = 19 },
+        .{ .device = 24966, .defs = 136, .insts = 131 },
+        .{ .device = 36614, .defs = 1032, .insts = 1027 },
+        .{ .device = 129798, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 22910, .defs = 8, .insts = 5 },
-        .{ .device = 24114, .defs = 50, .insts = 40 },
-        .{ .device = 33962, .defs = 386, .insts = 320 },
-        .{ .device = 114458, .defs = 3074, .insts = 2560 },
-        .{ .device = 771962, .defs = 24578, .insts = 20480 },
+        .{ .device = 23328, .defs = 8, .insts = 5 },
+        .{ .device = 24532, .defs = 50, .insts = 40 },
+        .{ .device = 34380, .defs = 386, .insts = 320 },
+        .{ .device = 114876, .defs = 3074, .insts = 2560 },
+        .{ .device = 772380, .defs = 24578, .insts = 20480 },
     },
 });
 
@@ -1048,7 +1050,10 @@ fn sweepReport(gpa: Allocator, io: Io, arena: Allocator, w: *Io.Writer) !u8 {
 /// table would be a second register of the same directory, and the one that
 /// rots is always the table.
 ///
-/// A `.v` with no `.expected.txt` beside it is not a case. That is how a design
+/// A `.v` needs either `.expected.txt` or `// digital-runner: reject`.
+/// Unmarked legacy negatives retain their analog route and are NOT digital
+/// diagnostic evidence. A support design with neither is not a case.
+/// That is how a design
 /// a fixture INSTANTIATES (D08's UDP libraries, M04's driver designs) sits in
 /// the same directory without being run on its own.
 const digital_dir = "digital";
@@ -1113,10 +1118,12 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
 //   zig build test-vpi-fixtures -- p03    # the ones whose name contains p03
 // ---------------------------------------------------------------------------
 
-/// The two directories holding `.c` fixtures, each with its own shared header
+/// Directories holding `.c` fixtures; legacy groups have their own shared header
 /// beside it (`p02_check.h`, `p03_vpi_analog.h`) which is why the fixture's own
 /// directory goes on the include path as well as `src/vpi`.
-const vpi_dirs = [_][]const u8{ "ch11_vpi", "ch12_vpi_routines" };
+/// ieee_pli clients use the production header directly. Their paired HDL and
+/// runtime markers are NOT executed by this compile-only runner.
+const vpi_dirs = [_][]const u8{ "ch11_vpi", "ch12_vpi_routines", "ieee_pli" };
 
 fn vpiFixtures(init: std.process.Init, args: *Args) !u8 {
     const gpa = init.gpa;
@@ -1488,8 +1495,8 @@ fn diff(w: *Io.Writer, what: []const u8, want: []const u8, got: []const u8) !boo
     return false;
 }
 
-/// Every `<name>.v` under `fixture_root/digital/` that has a `<name>.expected.
-/// txt` beside it, sorted, so two runs report in the same order.
+/// Digital transcript cases and explicitly opted-in diagnostic cases, sorted
+/// so two runs report in the same order. Support files are not cases.
 fn digitalCases(gpa: Allocator, io: Io) ![]const []const u8 {
     const root = try std.fs.path.join(gpa, &.{ options.fixture_root, digital_dir });
     defer gpa.free(root);
@@ -1508,7 +1515,10 @@ fn digitalCases(gpa: Allocator, io: Io) ![]const []const u8 {
         if (!std.mem.eql(u8, std.fs.path.extension(entry.name), ".v")) continue;
         const golden = try std.fmt.allocPrint(gpa, "{s}.expected.txt", .{stem});
         defer gpa.free(golden);
-        dir.access(io, golden, .{}) catch continue;
+        const has_golden = if (dir.access(io, golden, .{})) |_| true else |_| false;
+        const source = try dir.readFileAlloc(io, entry.name, gpa, .limited(1 << 20));
+        defer gpa.free(source);
+        if (!harness.digitalCaseSelected(has_golden, source)) continue;
         try list.append(gpa, try gpa.dupe(u8, stem));
     }
     std.mem.sort([]const u8, list.items, {}, struct {
@@ -1521,6 +1531,20 @@ fn digitalCases(gpa: Allocator, io: Io) ![]const []const u8 {
 
 fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !bool {
     const src = try std.fmt.allocPrint(arena, "{s}/{s}/{s}.v", .{ options.fixture_root, digital_dir, case });
+    const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
+    if (harness.digitalNegative(source)) {
+        const golden = try std.fmt.allocPrint(arena, "{s}/{s}/{s}.expected.txt", .{ options.fixture_root, digital_dir, case });
+        if (Io.Dir.cwd().access(io, golden, .{})) |_| {
+            try w.print("FAIL {s}: digital reject also has a positive transcript\n", .{case});
+            return false;
+        } else |_| {}
+        const r = try capture(arena, io, &.{ vera_exe, "--run", src });
+        if (!harness.digitalRejectionMatches(source, r.exit, r.stderr)) {
+            try w.print("FAIL {s}: digital rejection mismatch (exit {d})\n{s}\n", .{ case, r.exit, r.stderr });
+            return false;
+        }
+        return true;
+    }
     const want = try Io.Dir.cwd().readFileAlloc(
         io,
         try std.fmt.allocPrint(arena, "{s}/{s}/{s}.expected.txt", .{ options.fixture_root, digital_dir, case }),
@@ -1532,9 +1556,12 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
         try w.print("FAIL {s}: vera --run exited {d}\n{s}\n", .{ case, r.exit, r.stderr });
         return false;
     }
+    if (!harness.digitalWarningsMatch(source, r.stderr)) {
+        try w.print("FAIL {s}: successful digital run has missing warning evidence or error diagnostics\n{s}\n", .{ case, r.stderr });
+        return false;
+    }
     return diff(w, case, want, r.stdout);
 }
-
 
 // ---------------------------------------------------------------------------
 

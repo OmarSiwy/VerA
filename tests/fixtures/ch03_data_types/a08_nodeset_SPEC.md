@@ -1,5 +1,35 @@
 # A08-nodeset — §3.6.3.2 net discipline initial (nodeset) values
 
+## Audit correction, 2026-09-23 (supersedes historical claims below)
+
+The following investigation is historical, not a current implementation-status
+report. The two a08 fixtures now live in `tests/fixtures/ch03_data_types` and
+are discovered by the suite. Claims below about absent hierarchy support,
+unconsumed tables and present-day failure require fresh execution/inspection;
+they must not be used as current evidence merely because they say "today".
+
+The withdrawal of the independent non-clamping test was not justified by its
+inability to prove nodeset consumption. Those are separate obligations. A test
+may legitimately pass an implementation missing one rule while detecting a
+different violation. `audit_nodeset_unclamped_solution.va` now isolates solved
+non-clamping with a unique-solution resistor divider. `21_net_nodeset.va` uses
+a prescribed internal bias and therefore does not establish free-node solving.
+
+The cubic-root expectations below additionally depend on this harness's Newton
+and cold-start policy, not solely on the LRM. The standard does not prescribe
+a unique final root or all solver iteration/continuation choices. A high root
+is not globally reachable only from the chosen nodeset, and filling a null
+element with zero cannot be distinguished from a zero cold start by these
+observations. Retain these as implementation-specific solver regressions, not
+portable proof of nodeset consumption or null preservation. The nodeset ledger
+records the unclosed source-level obligations independently.
+
+The claimed A.8.3 symbol `constant_expression_or_null` below was not found in
+the supplied 2023 PDF extraction or HTML. A.8.1 instead defines
+`constant_assignment_pattern_or_null`, which allows an absent entire pattern;
+it does not spell out null entries within a pattern. Treat the older symbol
+attribution as withdrawn, not as supporting grammar evidence.
+
 ## LRM clauses covered
 
 **Accellera Verilog-AMS LRM §3.6.3.2 "Net Discipline Initial (Nodeset)

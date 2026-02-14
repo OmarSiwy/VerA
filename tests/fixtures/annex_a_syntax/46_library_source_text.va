@@ -1,3 +1,11 @@
+// AUDIT BOUNDARY: legacy implementation-regression row, NOT a normative positive.
+// The combined library declaration and module derive from neither Annex A start
+// symbol. Existing XFAIL/executable checks remain for regression continuity only.
+// Required map-reader evidence moved to docs/conformance-annex-a-review.md
+// A-EVID-001: separate library_text input, design source, real host invocation
+// and observable binding remain OPEN. Measure A includes regression behavior;
+// its denominator is not a count of valid normative conformance obligations.
+// The historical rationale below is retained, not endorsed by this audit.
 // A.1.1 Library source text:
 //
 //     library_text ::= { library_description }
@@ -65,9 +73,6 @@
 // compiler that can compile a library map file, not one that will take one
 // anywhere.
 //
-//! lrm A.1.1
-//! lrm A.1.2
-//! lrm 1.1
 //! xfail VerA reads no library map files — a `library_declaration` is reachable only from A.1.1's `library_text`, and a `.va` is `source_text`, so the declaration is parsed and then refused with E0232 "library map text in a source file"
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

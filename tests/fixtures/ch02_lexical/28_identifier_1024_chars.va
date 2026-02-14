@@ -1,8 +1,10 @@
 // LRM 2.8: "Implementations may set a limit on the maximum length of
 // identifiers, but the limit shall be at least 1024 characters." The real
 // variable below is EXACTLY 1024 characters and is written and then read back
-// through its full spelling, so a lexer that truncated or hashed only a prefix
-// would fail to resolve it, not merely rename it.
+// through its full spelling. This checks single-name acceptance and readback,
+// not prefix truncation: consistently truncated names could still pass.
+// That distinctness obligation is tested by digital/audit_ams_lexical_long_distinct.v,
+// whose two names differ only at character 1024.
 // The MODULE name is deliberately short: the testbench generator writes one
 // file per module named "<module>.device.zig", and a 1024-character module
 // name overruns the 255-byte filesystem name limit (NameTooLong).

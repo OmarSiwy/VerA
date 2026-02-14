@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.4 Tables 11-1/11-4 name `vpi_get` as a C VPI routine of the simulator
 // host interface. Nothing makes it a Verilog-A function: it has no declaration
 // in this source and no §9 system-function spelling (no leading `$`), so §4.7
@@ -5,7 +8,6 @@
 // The rule that travels to any compiler is §4.7; E0512 is VerA's code for it.
 //
 //! lrm 4.7
-//! lrm 11.4
 //! reject E0512
 //! reject `vpi_get`
 module ch11_c_vpi_get_not_va(p, n);

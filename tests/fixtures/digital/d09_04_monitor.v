@@ -1,13 +1,11 @@
-// §9.4.1, last paragraph: "When a $monitor task is invoked with one or more
-// arguments, the simulator sets up a mechanism whereby for each accepted step,
-// if the variable or an expression in the argument list changes value compared
-// with the last accepted step [...] the entire argument list is displayed at
-// the end of the time step as if reported by the $strobe task. If two or more
-// arguments change value at the same time, only one display is produced that
-// shows the new values."
+// IEEE 1364-2005 17.1.3: "each time a variable or an expression in the
+// argument list changes value" triggers an end-of-time-step monitor display,
+// with the stated time-function exceptions and coalescing of same-time changes.
+// AMS 9.4.1 separately defines ANALOG monitoring by accepted-step comparison;
+// that wording must not replace the inherited digital trigger rule here.
 //
 // Table 9-1 additionally gives $monitoron and $monitoroff "Supported in
-// digital context: Yes" with no analog column at all, which is precisely why
+// digital context: Yes" and "Supported in analog context: No", which is why
 // this row is D09's and not reachable through the analog backend. Their
 // inherited IEEE 1364-2005 §17.1 semantics are: $monitoroff disables the
 // monitoring mechanism, $monitoron re-enables it AND immediately produces a
@@ -23,8 +21,8 @@
 //  t=1  a <- 1.  One argument changed.             -> "mon a=1 b=0"
 //  t=2  a <- 2 and b <- 2 in the SAME step. The quoted sentence forces ONE
 //       line, not two.                             -> "mon a=2 b=2"
-//  t=3  a is assigned 2 again. The comparison is "changes value compared with
-//       the last accepted step", and 2 == 2, so this step produces NO line.
+//  t=3  a is assigned 2 again. Its value does not change, so this step produces
+//       NO line.
 //       This is the suppression half of the rule and is the reason the value
 //       is re-assigned rather than left alone: a mechanism that fires on
 //       ASSIGNMENT instead of on VALUE CHANGE prints a fourth line here.
@@ -52,7 +50,7 @@
 //
 //! lrm 9.4.1
 //! inherited IEEE 1364-2005 17.1 ($monitoron/$monitoroff, single active monitor)
-//! expect stdout 04_monitor.expected.txt
+//! expect stdout d09_04_monitor.expected.txt
 `timescale 1ns/1ns
 module d09_monitor;
   reg [3:0] a, b;

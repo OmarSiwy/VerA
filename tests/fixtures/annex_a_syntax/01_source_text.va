@@ -27,8 +27,10 @@
 // their difference is: the nearest doubles to 0.6 and 0.1 subtract to exactly
 // 0.5 (verified, not assumed), so this is `CHECKX` and not a tolerance.
 //
-// `module annex_a_first();` is the A.1.3 `list_of_port_declarations ::= ( )`
-// empty form — a module with no ports at all. It is legal, it is here for that
+// `module annex_a_first();` uses A.1.3's non-ANSI `list_of_ports`, whose
+// single `port` can be empty through `[ port_expression ]`. Unlike IEEE2005,
+// AMS2023 has no empty ANSI list_of_port_declarations alternative.
+// This is a module with no ports at all. It is legal, it is here for that
 // production alone, and it contributes no assertion; it must PARSE, nothing
 // more. It is written second on purpose: a device is elaborated from the FIRST
 // module in the file, and a portless one has no port to bias or probe, so this

@@ -1,0 +1,11 @@
+// Legal control for 18_sf_flow_contribution_to_input.va; compile acceptance only.
+module ch01_sf_flow_contribution_to_input(inp, outp);
+    input inp;
+    output outp;
+    current inp, outp;
+
+    analog begin
+        I(outp) <+ I(inp);
+        I(outp) <+ 2.0e-3;
+    end
+endmodule

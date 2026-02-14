@@ -1,10 +1,12 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.12 parameter: a parameter is an object with a VALUE, and §3.4 fixes that
 // value to the declared default when the instance overrides nothing. So `gain`
 // is 2.0 here, not zero and not the range bound 0 from `from [0:inf)`.
 // At V(p)=1.5, V(n)=0.25 the branch potential is 1.25 V and the transconductance
 // current is 2.0 * 1.25 = 2.5 exactly.
 //
-//! lrm 11.6.12
 //! lrm 3.4
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"

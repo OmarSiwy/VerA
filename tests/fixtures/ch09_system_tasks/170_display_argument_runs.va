@@ -16,19 +16,22 @@
 // integer (§4.2.14/§4.2.5) — so each expected transcript is a literal the ok=
 // column can hold. Derived by hand:
 //
-//   ("a=%d", 1, "b=%d", 2) -> "a=1" ++ "b=2"      = "a=1b=2"
+//   ("a=%0d", 1, "b=%0d", 2) -> "a=1" ++ "b=2"   = "a=1b=2"
 //     the second string is a FORMAT, not the first run's operand — the old
 //     first-string-is-THE-format model printed "a=1 b=%d 2"
-//   (7, " then %d", 3)     -> "7" ++ " then 3"    = "7 then 3"
-//     an expression BEFORE the first string prints (the old model dropped it)
-//   ("v:", 42)             -> "v:" ++ "42"        = "v:42"
-//     no inserted space before an unconsumed operand
-//   ("%s;", "x", "end=%d", 9) -> "x;" ++ "end=9"  = "x;end=9"
+//   ("start", " then %0d", 3) -> "start then 3"
+//     a literal-only run does not consume the following format run
+//   ("v:%0d", 42)          -> "v:" ++ "42"        = "v:42"
+//     an explicit minimum-width conversion does not add separators
+//   ("%s;", "x", "end=%0d", 9) -> "x;" ++ "end=9" = "x;end=9"
 //     a string consumed BY a conversion is an operand, not a format
 //
-// The integer default is minimal-width decimal — a documented deviation from
-// 1364-2005 §17.1.1.2's auto-sized field (20 columns for VerA's 64-bit
-// integers); see lib/backend/cg_display.zig `buildArgs`.
+// The former expectations silently accepted VerA's minimal default integer
+// fields. IEEE 1364-2005 17.1.1.3 requires automatic field sizing unless %0
+// overrides it. This fixture now isolates argument runs with explicit %0d;
+// the leading/unconsumed bare-operand claims moved to
+// audit_integer_default_fields.va (FMT-WIDTH-001), with sized literals and
+// source-derived padding expectations. They were not discarded as coverage.
 //
 //! print none
 //! lrm 9.4.1
@@ -39,13 +42,13 @@ module ch09_display_argument_runs(p, n);
   inout p, n; electrical p, n;
   string t;
   analog begin
-    $sformat(t, "a=%d", 1, "b=%d", 2);
+    $sformat(t, "a=%0d", 1, "b=%0d", 2);
     `CHECKI("every string argument is its own format run, concatenated", t == "a=1b=2", 1);
-    $sformat(t, 7, " then %d", 3);
-    `CHECKI("an expression before the first string still displays, in order", t == "7 then 3", 1);
-    $sformat(t, "v:", 42);
-    `CHECKI("no separator is inserted before an unconsumed operand", t == "v:42", 1);
-    $sformat(t, "%s;", "x", "end=%d", 9);
+    $sformat(t, "start", " then %0d", 3);
+    `CHECKI("literal-only run preserves the following format", t == "start then 3", 1);
+    $sformat(t, "v:%0d", 42);
+    `CHECKI("explicit minimal field inserts no separator", t == "v:42", 1);
+    $sformat(t, "%s;", "x", "end=%0d", 9);
     `CHECKI("a string eaten by %s is an operand; the next string is a new run", t == "x;end=9", 1);
     I(p,n) <+ V(p,n);
   end

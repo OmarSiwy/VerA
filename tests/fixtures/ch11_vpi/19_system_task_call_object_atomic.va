@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.16 task and function call: a SYSTEM TASK call is a tf-call object on
 // the statement side. §9.4.1 gives $strobe no return value, so unlike the
 // function call of 18 it yields nothing to its enclosing block — it is a
@@ -16,7 +19,6 @@
 // which §9.4.1 defines, so it holds even for a compiler that refuses
 // unregistered names.
 //
-//! lrm 11.6.16
 //! lrm 9.4.1
 //! bias V(p) = 1.5, V(n) = 0.25
 `include "check.vh"

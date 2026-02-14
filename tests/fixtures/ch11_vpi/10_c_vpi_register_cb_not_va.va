@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.2.1 registers a callback from C with `vpi_register_cb`. There is no
 // Verilog-A spelling for it: the name has no declaration in this source and no
 // §9 system-function spelling (no leading `$`), so §4.7 leaves it an ordinary
@@ -6,7 +9,6 @@
 // grammatical per §2.8.3 and must NOT be rejected.)
 //
 //! lrm 4.7
-//! lrm 11.2.1
 //! reject E0512
 //! reject `vpi_register_cb`
 module ch11_c_vpi_register_cb_not_va(p, n);

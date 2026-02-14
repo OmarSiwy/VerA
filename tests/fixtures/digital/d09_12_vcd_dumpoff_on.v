@@ -1,3 +1,7 @@
+// VCD-ORACLE-001: this retained golden is an implementation snapshot.
+// Compare semantic checkpoints/values, not arbitrary IDs, layout or ordering;
+// retain metadata independently. See docs/conformance-vcd-review.md.
+//
 // The checkpoint half of the inherited §18.1 VCD task family: $dumpoff,
 // $dumpon and $dumpall. 11_vcd_dumpvars.v pins the file format; this file pins
 // the three tasks that SUSPEND and RESUME dumping, and it uses a single scalar
@@ -23,7 +27,8 @@
 //        section. a is actually 1 at this instant; the record says x anyway.
 //          #2 / $dumpoff / x! / $end
 //   t=3  a <- 0. Dumping is off, so NOTHING is written — there is no #3
-//        record at all, not an empty one. This is the whole point of the
+//        value-change record. An empty #3 timestamp is not a changed value.
+//        The absence of an ordinary update is the point of the
 //        fixture: an implementation that writes the checkpoint but keeps
 //        dumping produces a #3 with `0!` here.
 //   t=4  $dumpon. Checkpoint with current values. a is 0, the value written
@@ -37,8 +42,8 @@
 //        $dumpall writes state unconditionally, so it appears even though
 //        nothing changed in step 6.
 //          #6 / $dumpall / 1! / $end
-//        $finish(0) runs in the same step; as in 11_vcd_dumpvars.v the step's
-//        record must already be flushed, so the file ends here.
+//        The snapshot ends here. Exact final-line formatting and an implied
+//        $finish flush rule are not derived from the $dumpflush clause.
 //
 //   The value sequence in the file is therefore 0, 1, x, (gap), 0, 1, 1 while
 //   the variable's actual sequence is 0, 1, 1, 0, 0, 1, 1. Those two differ at

@@ -5,11 +5,11 @@
 // physical p.234) says the same row by row — `$bitstoreal Yes Yes`,
 // `$realtobits Yes Yes`, `$rtoi Yes Yes`, `$itor Yes Yes`. The only analog "No"
 // cells in the family are `$signed` and `$unsigned`, pinned as rejects in
-// 134/135 and not exercised here. ($rtoi and $itor are legal here and
-// unimplemented by VerA — a gap in the compiler, pinned by the M04 row
-// (tests/fixtures/ch07_mixed_signal/m04_SPEC.md), not a rule this folder can
-// assert. 061/062 used to claim the opposite and were removed; see COVERAGE.md
-// §s9.11.)
+// 134/135 and not exercised here. The current audit observes runtime $rtoi and
+// $itor behavior in audit_conversion_truncation_signed.va; their parameter-
+// default path remains broken in audit_conversion_constant_expressions.va.
+// The former blanket "unimplemented" claim is superseded by those distinct
+// observations, not by compile acceptance alone.
 //
 // $realtobits yields the 64-bit IEEE-754 PATTERN of the real and $bitstoreal
 // maps that pattern back, so the pair is the identity on any real: bit-exact,

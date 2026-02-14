@@ -1,4 +1,4 @@
-// §4.1 the assignment pattern '{...} fills a whole array in one statement, in
+// §4.2.14 the assignment pattern '{...} fills a whole array in one statement, in
 // declaration order — and unlike a §4.2.13 concatenation its elements keep
 // their own identity and may be run-time expressions.
 //

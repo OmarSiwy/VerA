@@ -1,5 +1,21 @@
 # Annex G coverage
 
+## Source-review correction (2026-09-23)
+
+Full source review: printed pages 413–425 / physical pages 426–438, all
+tables and Figure G-1 visually checked. See
+[the source review](../../../docs/conformance-informative-review.md).
+The historical pass/count ledger below was not remeasured in this review and
+must not be read as current closure. Generic diagnostic matching is not proof
+of the intended error. The current root fixtures 02/03/22 already cite G.1,
+not nonexistent section G.7; table identifiers are not section identifiers.
+Existing fixture06 lacked a current normative cite; A.6.4 now anchors its
+obsolete analog statement rejection. Retired syntax has no positive behavioral
+obligation: do not invent execution tests for Figure G-1's historical semantics.
+
+## Historical fixture ledger
+
+
 Source: `docs/annex-g-changes.html`, read section by section.
 
 HTML section-ID audit: `sG-1` `sG-2` `sG-2-1` `sG-2-2` `sG-2-3` `sG-2-4`. Six sections,
@@ -15,17 +31,16 @@ wave that removed it, and `08` itself has since been deleted outright — that i
 withdrawal of the claim it carried, not a discharge of it, and the `G.7` 7793 row below
 records why. The aggregate re-census owns the rest.
 
-What makes an informative annex testable at all is one sentence in §G.1's own preamble:
-*"The syntax and semantics of this document supersede any syntax, semantics, or
-interpretations of previous revisions."* That is what turns a history row into a
-requirement — not that v1.0 spelled it `delay()`, but that a 2023 front end must not
-still accept `delay()`. Every reject fixture here is that sentence applied to one row,
-and every one of them also cites the live clause that owns the current spelling, because
-the row alone is not normative.
+The supersession sentence in §G.1 does not make this informative history a
+normative requirement register. A history row motivates a regression case;
+current normative syntax/semantics must independently derive its expectation.
+In particular, digital `forever` and module-level generate remain current
+language. Rejected fixtures here concern obsolete analog forms or independently
+invalid current syntax, not every occurrence of a keyword.
 
 | HTML id | Rule | Fixtures |
 |---|---|---|
-| `G` (the annex title itself) | none — "This annex lists the changes made to the document for each revision." | none, and none is owed, for the reason this whole folder runs on: the annex is **informative**, so its own scope sentence cannot carry a requirement, and what it lists is history. `tests/harness.zig` reads the bare letter out of `Annex G (informative) Change history` as a clause, which is why it shows in `--coverage`; no fixture cites bare `G`. The one sentence that does turn a history row into a requirement is §G.1's supersession line, and it is quoted at the top of this file and cited by fifteen fixtures |
+| `G` (the annex title itself) | none — "This annex lists the changes made to the document for each revision." | none, and none is owed, for the reason this whole folder runs on: the annex is **informative**, so its own scope sentence cannot carry a requirement, and what it lists is history. `tests/harness.zig` reads the bare letter out of `Annex G (informative) Change history` as a clause, which is why it shows in `--coverage`; no fixture cites bare `G`. §G.1's supersession line explains historical precedence; it does not convert this informative table into normative obligations |
 | `sG-1` | §G.1, seven revision tables, 238 data rows (G.1: 29, G.2: 33, G.3: 27, G.4: 42, G.5: 20, G.6: 53, G.7: 34). Informative history plus the supersession sentence above | 15 fixtures, covering 20 of the 238 rows. Broken out row by row in the next table. Tables G.3, G.5 and G.6 have no fixture at all |
 | `sG-2` | "The following statements are not supported in the current version of Verilog-AMS HDL; they are only noted for backward compatibility." | No fixture cites `G.2` bare, and none should — this is a one-sentence frame with no construct of its own, and a bare `G.2` cite would be indistinguishable from a cite of Table G.2. Its four subclauses carry all the content and all four have fixtures |
 | `sG-2-1` | Forever: "This statement is no longer supported." Still a reserved word (B.1), so it is not reachable as an identifier either | `04_obsolete_forever.va` (`G.2.1`, `5.9`) — `//! reject E0209` "expected an expression", plus the fragment `forever`. Green. The header records that VerA also emits E0205 on the stray `end` during resynchronisation and deliberately does not pin it |

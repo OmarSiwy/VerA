@@ -1,4 +1,4 @@
-// LRM 3.4.3 / A.8.1 constant_assignment_pattern: `'{...}` initialises a
+// LRM 4.2.14 / A.8.1 constant_assignment_pattern: `'{...}` initialises a
 // parameter array element-by-element, in declaration order, over the declared
 // range [0:4]. So data[0] is the FIRST literal and data[4] the LAST.
 //

@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.25 callback: the class relates a callback to the `stmt` it fires, and
 // §11.2.1 says "VPI callbacks shall be registered ... with vpi_register_cb()"
 // — from C. There is no Verilog-A spelling that registers one, so the closest
@@ -24,7 +27,6 @@
 // in binary, so exact equality is the right strength, and the callback-driven
 // value 2.0 and the probe 0.5 are two different numbers.
 //
-//! lrm 11.6.25
 //! lrm 5.10.2
 //! lrm 5.3.1
 //! bias V(p) = 0.75, V(n) = 0.25

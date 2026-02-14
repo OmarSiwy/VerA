@@ -1,10 +1,33 @@
 # Annex A coverage
 
+## Source/evidence correction (2026-09-23)
+
+See [the Annex A review](../../../docs/conformance-annex-a-review.md) for the
+complete worker source/visual inventory, source anomalies and remaining rule
+coverage. Historical counts and green/closed claims below are not current
+measurements. A.10 states mandatory restrictions; this annex is not purely
+syntax without semantics. Its presentation grammar also requires the applicable
+chapter restrictions.
+
+Fixture46 combines two incompatible source kinds and is not a valid required
+positive. Its executable checks/XFAIL remain as legacy regression behavior, but
+its normative tags are withdrawn. The missing map-reader obligation moves to
+A-EVID-001: separate map and design inputs with actual binding evidence. The
+new isolated design-input negative checks E0232; accepting the combined file
+would not close the map-reader gap. Measure A includes legacy regression rows,
+not a denominator of valid atomic normative requirements.
+
+New `$width`/`$period` negative fixtures expose missing mandatory event controls.
+Their XFAILs pin intended future rule-specific diagnostics, not existing output.
+Acceptance of a discarded specify block does not prove timing behavior.
+
+## Historical fixture inventory, superseded where corrected above
+
 Source: `docs/annex-a-syntax.html`, read as the normative grammar, production by
-production. Annex A states no semantics: every row below is a claim that some fixture's
+production. Each historical row below was intended as a claim that some fixture's
 source text is *derivable from* the named production, not that the construct means
-anything in particular. Meaning lives in the numbered clauses, and the fixtures cite
-those too.
+anything in particular. A.10 and the numbered clauses also impose restrictions;
+derivability alone is insufficient, and the former fixture46 claim was invalid.
 
 HTML section-ID audit: `a-1` `a-1-1` `a-1-2` `a-1-3` `a-1-4` `a-1-5` `a-1-6` `a-1-7`
 `a-1-8` `a-1-9` `a-2` `a-2-1` `a-2-1-1` `a-2-1-2` `a-2-1-3` `a-2-2` `a-2-2-1` `a-2-2-2`
@@ -57,11 +80,11 @@ says so. Where a cite claims a section the source does not reach, the row says t
 | HTML id | Production area | Fixtures |
 |---|---|---|
 | `a-1` | heading | parent of A.1.1–A.1.9 |
-| `a-1-1` | `library_text`, `library_declaration`, `include_statement`, `config` binding | `46_library_source_text.va` — a library map file, `library annex_a_lib "." ;`, derived from `library_text` (the annex preamble names that as the starting symbol for a library map), with a carrier module that asserts its own port voltage. `//! xfail`, and the only one of the three arms that is still red: the declaration is READ in full and then refused with E0232 "library map text in a source file", because A.1.2's `description` list has no `library_description` in it and the annex preamble gives a library map file its own starting symbol. What is missing is a map reader, not a production. The header records which of the three `library_description` arms are NOT spelled (`include_statement` needs a file that would have to exist; `config_declaration` is `47`'s), and why §1.1 is what makes this a fixture rather than a curiosity. The `library`/`include` *keywords* are otherwise only in `annex_b_keywords/05`, which censuses them as reserved |
-| `a-1-2` | `source_text ::= { description }`; `description` seven ways; `module_keyword ::= module \| macromodule` | `01_source_text.va` — four descriptions in one file (two `nature`, one `discipline`, two `module`), which is the only place the `{ description }` repetition is proved at all; the trailing `module annex_a_first(); endmodule` is a second, port-free module declaration. `43_macromodule.va` takes the second arm of `module_keyword`, and takes it as a RUN fixture: §6.2's "an implementation may choose to treat module definitions beginning with the macromodule keyword differently" is a licence to optimize, not to refuse, so the two spellings arrive at one arm of the top-level dispatch and nothing downstream can tell them apart |
+| `a-1-1` | `library_text`, `library_declaration`, `include_statement`, `config` binding | A-EVID-001: fixture46's mixed map/design input is not derivable from either start symbol; its former positive claim is withdrawn. The legacy XFAIL remains only as regression history. `audit_library_declaration_in_design_rejected.va` independently pins E0232 in design context. Positive map parsing, includes, binding and host invocation require separate valid map/design files and observable selection; these remain open. |
+| `a-1-2` | `source_text ::= { description }`; `description` seven ways; `module_keyword ::= module \| macromodule` | `01_source_text.va` — five descriptions in one file (two `nature`, one `discipline`, two `module`), a selected witness of `{ description }` repetition, not exhaustive alternative or repetition coverage; the trailing `module annex_a_first(); endmodule` is a second, port-free module declaration. `43_macromodule.va` takes the second arm of `module_keyword`, and takes it as a RUN fixture: §6.2's "an implementation may choose to treat module definitions beginning with the macromodule keyword differently" is a licence to optimize, not to refuse, so the two spellings arrive at one arm of the top-level dispatch and nothing downstream can tell them apart |
 | `a-1-3` | `list_of_ports`, `list_of_port_declarations`, `port`, `port_expression`, `port_reference`, `module_parameter_port_list` | Non-ANSI `list_of_ports` plus separate `inout`: `01`, `03`, and most of the directory. ANSI `list_of_port_declarations` with all three directions and a discipline on each: `02_module_ports.va` (`input electrical sense, output electrical drive, inout electrical common`) — the only file in the directory that takes that arm. All three of the remaining arms are green: `13_parameter_port_list.va` (`module_parameter_port_list`, with one header parameter overridden and one left at its default), `41_named_port.va` (`port ::= . port_identifier ( [ port_expression ] )` — the body probes the INTERNAL name), `42_concatenated_port.va` (`port_expression ::= { port_reference { , port_reference } }`, two nets keeping their own identities). A concatenated port becomes N terminals rather than one N-bit terminal, which is the same scalarisation §6.5.2 vector ports get and which only an instantiation could tell apart |
 | `a-1-4` | `module_item`, `module_or_generate_item`, `non_port_module_item`, `parameter_override` | The reachable arms are spread across the directory: `analog_construct` and the declaration arms everywhere, `aliasparam_declaration` in `03_declarations.va`, `loop_generate_construct`/`conditional_generate_construct` in `09`/`14`/`15`, `module_instantiation` in `11`/`12`, the `{ attribute_instance }` prefix in `08_attributes_comments_identifiers.va`. `parameter_override ::= defparam list_of_defparam_assignments ;` is `12_defparam.va` alone, and cites A.1.4 for it — green: `defparam` is a `kw_defparam` token and a module-item arm, and elaboration applies the override to the flattened child |
-| `a-1-5` | `config_declaration`, `design_statement`, `cell_clause`, `liblist_clause` | `47_configuration_source_text.va` — a whole `config … endconfig`: `design work.annex_a_cfg_top;`, `default liblist annex_a_lib;`, an `instance` clause with `use`, and a `cell` clause with `liblist`, plus the carrier module. GREEN. A.1.2 lists `config_declaration` as a `description`, so this is derivable from the starting symbol a `.va` is compiled against, and all five `config_rule_statement` arms parse. W0253 says what it binds: nothing, because VerA has no library map, so the `design` statement selects nothing and the elaborated design is what it would be with the configuration deleted. The header keeps the E0201-vs-E1001 argument as the record of why the old diagnostic was the wrong rule twice over |
+| `a-1-5` | `config_declaration`, `design_statement`, `cell_clause`, `liblist_clause` | A-EVID-002: fixture47 spells default/liblist, instance/use and cell/liblist, not all five rule arms. Instance/liblist and cell/use are separate missing variants. Its carrier voltage does not depend on configuration binding; W0253 reports ignored configuration. Accepted syntax is bounded evidence, not configured-design execution. |
 | `a-1-6` | `nature_declaration`, `nature_item`, `nature_attribute`, `nature_attribute_identifier` | `45_nature_declaration.va` — the cite-by-number fixture, and the only place `nature_identifier : parent_nature` (the derived form) is written: two parents, two declaring children, an alias that declares nothing, and a discipline binding the derived natures. It asserts §3.6's inheritance both ways — the child's `abstol` override (0.001) and the alias's inherited one (1e-12) — so a parser that dropped the `: parent` clause reads the wrong tolerance. `01_source_text.va` also declares two full natures (`annex_a_voltage`, `annex_a_current`), each with `units`, `access` and `abstol`, and the module's nets bind to them rather than to the built-in `electrical` — so a parse-and-discard would fail the `CHECKX`. The file cites A.1.2/A.1.3 and 3.6.2.1/3.13.2, not A.1.6; the construct is unambiguously here |
 | `a-1-7` | `discipline_declaration`, `discipline_item`, `nature_binding`, `domain_binding` | `01_source_text.va` — `domain continuous;` plus both `potential` and `flow` bindings. Its header records why the flow binding is load-bearing rather than decorative: with a single nature the discipline is signal-flow and `I(p, n)` names an access function it does not define |
 | `a-1-8` | `connectrules_declaration`, `connect_insertion`, `connect_resolution` | `60_connectrules_declaration.va` — **green**. The directory's only `connectrules` block, and both `connect_insertion` arms are spelled in it: `connect annex_a_a2d merged;` (module, `connect_mode`) and `connect annex_a_ra, annex_a_rb resolveto annex_a_rc;` (`connect_resolution`). The three disciplines are declared with `domain discrete` and no natures, so the block is derivable without dragging in §7.4's resolution algorithm, and the host module asserts its own node. §7.7.2 and §3.11.1 are cited alongside — this is the one row in the table where the syntactic claim and an observable value are in the same file |

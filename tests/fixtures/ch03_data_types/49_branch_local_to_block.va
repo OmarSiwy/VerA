@@ -11,12 +11,12 @@
 // `branch_declaration`), so a compiler can plausibly place one correctly and
 // not the other.
 //
-// The pinned substring is only the phase label, for the reason given in
-// 48_net_local_to_block.va: VerA's E0209 here is the expression-statement
-// recovery path, not a scope rule.
+// E0209 is the current parser rejection at the forbidden branch keyword, not
+// a dedicated scope diagnostic. A future scope-specific replacement needs
+// review, rather than silently accepting an arbitrary failed phase.
 //
 //! lrm 3.13.4
-//! reject DiagnosticsReported
+//! reject E0209
 module ch3_branch_local_to_block(p, n);
     inout p, n;
     electrical p, n;

@@ -1,5 +1,31 @@
 # Chapter 1 coverage
 
+## Source-review correction (2026-09-23)
+
+This correction supersedes the historical counts, blanket green claims and
+`DiagnosticsReported` rationale below. Source: complete AMS Chapter 1,
+printed pages 1–10 / physical PDF pages 14–23; see
+[the review register](../../../docs/conformance-introduction-review.md).
+
+- `lrm_1_2.va` now exists: a narrow initial-to-analog value-transfer assertion,
+  not evidence for every mixed-context access and contribution rule.
+- `lrm_1_3.va` now exists and instantiates a child. It checks one all-analog
+  port connection; mixed-signal and arbitrary interspersed hierarchy remain open.
+- `20_probe_branch_both_quantities.va` belongs to §5.4.2.1, not a quotation
+  from §1.3.1. Its withdrawn claim is retained as INTRO-PROBE-001.
+  The source-branch simultaneous-source restriction is §5.4.2.2; that clause
+  permits switching source kind, so merely containing both contributions is
+  not sufficient to derive an invalid fixture.
+- Rejection rows 14, 17, 18, 19, 20 and 22 now match the observed rule-specific
+  diagnostic text. Direct checks reject each for its intended rule; corresponding
+  one-change legal controls compile. This is diagnostic-isolation evidence, not
+  positive runtime closure.
+- The absence of a node-level KFL oracle in the historical fixture `04`
+  remains important. Contribution accumulation is not node conservation.
+- Figure and syntax-color repairs improve source fidelity, not measured A/C.
+
+## Historical ledger (not a current suite measurement)
+
 Source: `docs/ch1-intro.html`, read section by section against the 25 `.va` files
 actually in this directory.
 
@@ -68,19 +94,10 @@ it; all nine are closed and the grouping is kept as the record of which line eac
 | ~~the testbench forces every node unknown to its bias rather than solving~~ CLOSED | `11`, `13` | `tb.zig` runs a real Newton-Raphson; `//! solve` says which unknowns are the device's to determine. A POTENTIAL read is the node difference (§5.4.1) and has no retained value to substitute, which is why this one needed the solver and the flow-source read did not |
 | ~~a port flow is not expressible as a precondition~~ CLOSED | `12` | `tb.zig unknownName` maps `I(a)` to `flow(a,gnd)`, `I(a,b)` to `flow(a,b)` and `I(<a>)` to `flow(<a>)` — §5.4.2/§5.4.3's own unknowns — instead of stripping to the node's potential |
 
-Eight fixtures here are `//! reject DiagnosticsReported` (`14`–`20`, `22`). None pins a
-numeric code and none has been tightened to one, deliberately: the codes an earlier revision
-wrote here — E0337, E0423, E0424 — were unallocated at the time, so a diagnostic VerA could
-emit would never have matched and the XPASS could never have fired. The phase label matched
-whatever code each rule eventually got, and that is exactly what happened: E0501 for the
-three `checkAccessMatch` rows, E0425 for the two direction rows, E0423 for `20`. This
-paragraph used to argue E0501 was the *wrong* code for the `checkAccessMatch` group, on the
-grounds that it is §3.6.1.4's access-function name *mismatch* and these disciplines bind no
-nature to mismatch against. The arm that landed answers that: it is a separate arm with its
-own message and note ("binds no flow nature, so `p` has no flow to access"), reached before
-the name comparison, and it shares only the code. Keeping the phase label rather than
-tightening it to E0501 is still the right call — the argument against the code is on the
-record and a conforming compiler may allocate its own.
+The previous defense of generic `DiagnosticsReported` matching has been
+withdrawn. Codes and rule-specific messages now exist and were reproduced.
+Rows 15/16 already use E0360; six other rejection fixtures are tightened by the
+2026-09-23 review. An unrelated rejection must not count as evidence.
 
 ## Structural notes
 

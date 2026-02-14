@@ -2,8 +2,10 @@
 // may omit its `= constant_expression` (value then defaults to 1), and several
 // attr_specs may be comma-separated in one instance. The default-1 rule lives
 // in the tool's attribute database and is not visible to HDL, so what is
-// assertable here is INERTNESS: prefixing the module with three attr_specs —
-// one valueless, one =1, one =0 — must leave the module's behaviour untouched.
+// observed here is only computation with decorated syntax, not metadata or
+// universal attribute inertness. Default-value evidence remains AMS-ATTR-DEFAULT
+// in docs/rules/ams-attributes.json. There is one instance containing three
+// specs, not multiple adjacent attribute instances.
 // V(p) is held at 0.375 (exact in binary), so V(p)*8 is exactly 3.
 //! lrm 2.9
 `include "check.vh"

@@ -25,14 +25,12 @@
 // the Verilog-A subset, and 34_implicit_nets.va already carries an instance for
 // the same reason.
 //
-// The pinned substring is a message fragment rather than a code: VerA has no
-// diagnostic for this rule, so there is no code to pin, and `DiagnosticsReported`
-// would match today's unrelated E0204 and report a pass that proved nothing.
-// Any diagnostic naming the alias satisfies it.
+// Pin E0908, which diagnoses duplicate parameter/alias overrides, rather than
+// accepting any unrelated diagnostic that happens to mention an alias.
 //
 //! lrm 3.4.7
 //! lrm C.8
-//! reject alias
+//! reject E0908
 module ch3_alias_override_target(d, s);
     inout d, s;
     electrical d, s;

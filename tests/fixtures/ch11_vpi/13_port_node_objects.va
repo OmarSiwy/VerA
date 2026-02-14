@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.4/11.6.5 port and node objects: a port has a direction, and each port
 // reaches one node. §6.5.2.2 is the clause that declares that direction (an
 // earlier revision cited §3.5, which is Genvars), and the direction does not
@@ -8,8 +11,6 @@
 // 0.625. So V(sense,n) = 0.5 while V(p,n) = 0.75. Two distinct numbers, so
 // binding `sense` to the wrong node fails one of them.
 //
-//! lrm 11.6.4
-//! lrm 11.6.5
 //! lrm 6.5.2.2
 //! bias V(p) = 0.875, V(n) = 0.125, V(sense) = 0.625
 `include "check.vh"

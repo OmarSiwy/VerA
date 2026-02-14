@@ -10,12 +10,13 @@
 // Note what the grammar allows and does not: a function takes INPUTS only (no
 // tf_output_declaration in function_port_list, unlike A.2.7's task_port_item),
 // and returns through its own identifier. `automatic` gives each invocation its
-// own copy of the arguments and locals, which is the precondition for a function
-// to call itself — with the default static storage the recursive call would
-// overwrite the caller's `n` and the recursion would not terminate correctly.
+// own copy of the arguments and locals, making concurrent calls reentrant.
+// Recursion is not itself prohibited for static functions; shared state and
+// expression evaluation details determine whether a particular example works.
 //
-// This is the mirror of fixture 10: same keyword, opposite setting, and the
-// observable is the one that only per-call storage can produce.
+// This complements fixture 10, but is only a legal automatic-recursion oracle,
+// not a complete discriminator for per-call storage (TF-016 in
+// docs/conformance-ieee-task-functions-review.md).
 //
 // HAND DERIVATION — 5! by the textbook recursion, all arithmetic 16 bits wide.
 //   fact(5) = 5 * fact(4)
@@ -28,8 +29,9 @@
 //   -> "fact 0000000001111000"
 //
 // 120 also fits in 7 bits, so no wrap is involved and the width chosen cannot
-// mask a wrong product. Static storage that clobbers `n` on the inner call
-// yields 1 * 1 * ... = 0000000000000001 or a hang, neither of which matches.
+// mask a wrong product. A static implementation that evaluates and captures
+// the left operand n before descending recursively can also produce120; this
+// row must not be claimed to rule out every incorrect static implementation.
 //
 //! lrm A.2.6
 //! lrm 1.1

@@ -1,3 +1,5 @@
+// Source-review evidence boundary: retained HDL test does not execute the VPI
+// contract. Chapter12 behavioral obligations are tracked in COVERAGE.md.
 // VAMS-12.32.3  (ch12-vpi-routines.html) — the LRM's own sampnhold example,
 // verbatim except for the port directions Annex A.2.1.2 requires and the
 // assertion below.
@@ -48,7 +50,6 @@
 // thing to report is the absent host. `--deny=W0852` turns it back into a
 // refusal for a build that must have one.
 //
-//! lrm 12.32.3
 `include "check.vh"
 module ch12_analog_systf_sampler_call(out, in);
   inout out, in; electrical out, in;

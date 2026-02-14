@@ -10,9 +10,11 @@
 // by VALUE — inputs and inouts are copied IN when the task is entered, outputs
 // and inouts are copied OUT when it returns.
 //
-// One task, all three directions, so a compiler that implements only `input`
-// (the direction an analog function already supports here) fails on the same
-// line as one that implements copy-out by reference.
+// One task, all three directions, tests the copied input values and final
+// output/inout values. It does not distinguish value passing from reference
+// passing or establish when outputs become visible; those obligations are
+// TF-EVID-001 in docs/conformance-ieee-task-functions-review.md and the
+// independent audit_task_copy_timing.v fixture.
 //
 // HAND DERIVATION — decimal literals, four bits wide.
 //   caller sets   p = 4'd3  = 0011
@@ -27,7 +29,8 @@
 //   p is an input actual and is never written: it stays 0011.
 //   -> "task 0011 0100 1101"
 //
-// Inputs passed by reference would let `o = i + 1` reach back into p.
+// The input formal i is never assigned, so this row cannot detect writes
+// through a reference-passed input. Writing o does not write i or actual p.
 // A missing copy-out leaves q at xxxx and r at 1010.
 // An inout copied in but not out leaves r at 1010 as well, which is why the
 // value chosen for r (1010) differs from its result (1101) in more than one bit.

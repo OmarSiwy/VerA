@@ -1,0 +1,14 @@
+// AMS 3.4.4: changing the size through a parameter override requires a new-size
+// replacement array from the same overriding module. Here size changes from
+// two to three, but no replacement is supplied. Padding the default is not legal.
+//! lrm 3.4.4
+//! reject array
+//! xfail PARAM-ARRAY-SIZE-003: resizing without a replacement array is accepted
+module resize_array_target;
+  parameter integer count = 2;
+  parameter real coefficients[0:count-1] = '{1.0, 2.0};
+  analog begin end
+endmodule
+module audit_parameter_array_resize_without_value_rejected;
+  resize_array_target #(.count(3)) child();
+endmodule

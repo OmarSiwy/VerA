@@ -49,9 +49,10 @@
 // The three trireg columns are identical on every line; the fourth differs on
 // three of the six.
 //
-// TRANSCRIPT PROVENANCE: captured, not typed. `trireg (large)`/`trireg (small)`
-// do not parse today (E0208 "expected an identifier: found `(`"), so the run
-// was made with the two charge strengths deleted and nothing else changed:
+// HISTORICAL TRANSCRIPT PROVENANCE: the initial capture used a build where
+// `trireg (large)`/`trireg (small)` did not parse, with the two charge strengths
+// deleted and nothing else changed. This is not a current limitation claim:
+// the primitive audit records a matching run of this unmodified fixture.
 //
 //   $ vera --run /tmp/d03_09_strip.v
 //   start x x x x
@@ -61,8 +62,8 @@
 //   redriven 0 0 0 0
 //   stored_zero 0 0 0 z
 //
-// i.e. retention and the wire contrast are today's behaviour exactly; only the
-// declaration syntax is new.
+// The hand derivation above, not the historical capture alone, supplies the
+// expected retention and wire contrast. Charge-strength competition is untested.
 
 `timescale 1ns/1ns
 module d03_trireg_capacitive_hold;

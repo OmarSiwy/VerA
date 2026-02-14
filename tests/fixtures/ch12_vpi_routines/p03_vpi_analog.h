@@ -294,7 +294,8 @@ static P03_UNUSED void p03_no_error(const char *what)
 static P03_UNUSED vpiHandle p03_quantity(const char *inst, PLI_INT32 tag)
 {
   vpiHandle m, itr, br, q;
-  m = vpi_handle_by_name((const PLI_BYTE8 *)inst, NULL);
+  /* Annex G's signature is mutable; the lookup does not modify this name. */
+  m = vpi_handle_by_name((PLI_BYTE8 *)inst, NULL);
   P03_CHECK(m != NULL, "no instance named `%s`", inst);
   itr = vpi_iterate(vpiBranchObj, m);
   P03_CHECK(itr != NULL, "§11.6.6: `%s` has no branches", inst);

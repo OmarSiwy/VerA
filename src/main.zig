@@ -429,12 +429,12 @@ pub fn main(init: std.process.Init) !u8 {
         return 1;
     };
 
-    // A generated `@compileError` is a refusal by codegen. Writing the file
+    // A fatal generation error is a refusal by codegen. Writing the file
     // anyway defers the real message to whoever compiles it, by which point it
     // no longer names the .va that caused it.
     if (result.device_has_compile_error) {
         try err.print(
-            "error: {s}: codegen refused a construct; the generated device contains @compileError\n",
+            "error: {s}: codegen refused a construct; generated output is not usable\n",
             .{in_path},
         );
         return 1;

@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.1/11.6.4/11.6.5 module, port and node objects. VPI itself is a C API,
 // so what a Verilog-A fixture can pin is the language-level fact the object
 // model describes: each port in the header names its OWN node, and a branch
@@ -6,9 +9,6 @@
 // V(p) = 0.75 and V(n) = 0.25 are both exact in binary, so V(p,n) = 0.5 to the
 // last bit. Swap the two port bindings and the number becomes -0.5.
 //
-//! lrm 11.6.1
-//! lrm 11.6.4
-//! lrm 11.6.5
 //! lrm 5.4.1
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"

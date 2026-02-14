@@ -21,6 +21,7 @@ tr:nth-child(even) { background: #f3f4f6; }
 .note { background: #eff6ff; border-left: 4px solid #2563eb; padding: 0.75rem 1rem; margin: 1rem 0; }
 figure { margin: 1.5rem 0; padding: 1rem; background: #fff; border: 1px solid #e5e7eb; border-radius: 6px; }
 figure svg { display: block; max-width: 100%; height: auto; margin: 0 auto; }
+figure img { display: block; max-width: 100%; height: auto; margin: 0 auto; }
 figure svg text { font-family: 'Segoe UI', system-ui, sans-serif; }
 figcaption { font-size: 0.9rem; color: #4b5563; margin-top: 0.75rem; }
 figcaption strong { color: #1a1a1a; }
@@ -39,7 +40,7 @@ nav a:hover { text-decoration: underline; }
 <nav><a href="index.html">Index</a> <a href="ch7-mixed-signal.html">&larr; Prev</a> <a href="ch9-system.html">Next &rarr;</a> </nav>
 <h1>8. Scheduling semantics</h1>
 
-<div class="note">Checked against <a href="VAMS-LRM-2023.pdf#page=213">VAMS-LRM-2023.pdf, physical pages 213&ndash;230</a> (printed pages 200&ndash;217). Section numbers, equations, event-region ordering, tables, pseudocode, and examples follow the 2023 source. Diagrams and waveforms are redrawn as inline SVG (Figure 8-1 as a structured phase list) from the 2023 source, and each figure also links to the exact source page.</div>
+<div class="note"><strong>Source and editorial status:</strong> Based on <a href="VAMS-LRM-2023.pdf#page=213">VAMS-LRM-2023.pdf, physical pages 213&ndash;230</a> (printed pages 200&ndash;217). Figures 8-1 through 8-7 are direct PDF reproductions, visually checked against their source pages. Prose, equations, scheduling-order conflicts and test evidence are tracked separately in the <a href="conformance-scheduling.md">scheduling audit</a>; this note is not a blanket fidelity or implementation certification.</div>
 
 <h2 id="s8-1">8.1 Overview</h2>
 
@@ -57,34 +58,9 @@ nav a:hover { text-decoration: underline; }
 
 <p>At this point, the system is initialized and the simulation cycle will proceed as detailed in 8.3.</p>
 
-<figure>
-<div class="phaseflow">
-  <div class="phase">
-    <div class="phase-title">Compilation</div>
-    <div class="phase-body">
-      <div class="phase-item">Compilation of design data</div>
-    </div>
-  </div>
-  <div class="flow-arrow" aria-hidden="true">&#9660;</div>
-  <div class="phase">
-    <div class="phase-title">Elaboration</div>
-    <div class="phase-body">
-      <div class="phase-item">Hierarchical instantiation of design</div>
-      <div class="phase-item">Evaluation of parameter declaration assignments</div>
-      <div class="phase-item">Execution of generate constructs</div>
-    </div>
-  </div>
-  <div class="flow-arrow" aria-hidden="true">&#9660;</div>
-  <div class="phase">
-    <div class="phase-title">Pre-simulation</div>
-    <div class="phase-body">
-      <div class="phase-item">Variable declaration assignments</div>
-      <div class="phase-item">Execution of analog initial blocks</div>
-      <div class="phase-item">Analog net declaration assignments and simulator nodeset evaluation</div>
-    </div>
-  </div>
-</div>
-<figcaption><strong>Figure 8-1&mdash;System initialization flow.</strong> Redrawn from the <a href="VAMS-LRM-2023.pdf#page=214">source figure on physical PDF page 214 (printed page 201)</a>.</figcaption>
+<figure id="figure-8-1">
+<img src="figures/lrm-figure-8-1.png" alt="Source Figure 8-1: compilation, elaboration and pre-simulation; parameter evaluation and generate expansion are nested within hierarchical instantiation.">
+<figcaption><strong>Figure 8-1—System initialization flow.</strong> Direct reproduction from <a href="VAMS-LRM-2023.pdf#page=214">physical PDF page 214 (printed page 201)</a>.</figcaption>
 </figure>
 
 <p>It is important to note that for parametric sweep type analyses like dc sweep, the tool shall re-evaluate the Elaboration and Pre-simulation steps as outlined in Figure 8-1 for each sweep point to ensure that all parameter value changes are captured.</p>
@@ -117,74 +93,9 @@ nav a:hover { text-decoration: underline; }
 
 <p>The simulator replaces the time derivative operator (<em>dq/dt</em>) with a discrete-time finite difference approximation. The simulation time interval is discretized and solved at individual time points along the interval. The simulator controls the interval between the time points to ensure the accuracy of the finite difference approximation. At each time point, a system of nonlinear algebraic equations is solved iteratively. Most circuit simulators use the Newton-Raphson (NR) method to solve this system.</p>
 
-<figure>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="155 74 302 508" width="400" height="673" font-size="8.2" role="img" aria-label="Flowchart of the analog transient analysis loop. System initialization is followed by Start Analysis and $Display. The done test branches Yes to End and No to Update time, then Update values, then Evaluate equations. If not converged the loop returns to Update values; if converged the time step is either accepted, returning to $Display, or rejected, returning to Update time.">
-<defs><marker id="ar82" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="5.5" markerHeight="5.5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs>
-<g fill="#ffffff" stroke="#1a1a1a" stroke-width="1">
-  <rect x="161" y="81.5" width="290" height="493"/>
-  <rect x="246.1" y="100.8" width="90.0" height="35.4"/>
-  <rect x="246.1" y="157.1" width="90.0" height="30.0"/>
-  <rect x="247.5" y="207.0" width="90.0" height="27.0"/>
-  <rect x="247.5" y="252.0" width="90.0" height="27.0"/>
-  <rect x="244.7" y="297.7" width="90.0" height="33.0"/>
-  <rect x="271.8" y="352.0" width="79.2" height="31.2"/>
-  <rect x="237.4" y="413.1" width="103.2" height="33.6"/>
-  <rect x="243.2" y="474.7" width="90.0" height="40.8"/>
-  <rect x="242.4" y="537.1" width="90.2" height="30.9"/>
-</g>
-<g fill="#ffffff" stroke="#1a1a1a" stroke-width="1">
-  <rect x="161" y="81.5" width="290" height="493"/>
-  <rect x="246.1" y="100.8" width="90.0" height="35.4"/>
-  <rect x="246.1" y="157.1" width="90.0" height="30.0"/>
-  <rect x="247.5" y="207.0" width="90.0" height="27.0"/>
-  <rect x="247.5" y="252.0" width="90.0" height="27.0"/>
-  <rect x="244.7" y="297.7" width="90.0" height="33.0"/>
-  <rect x="271.8" y="352.0" width="79.2" height="31.2"/>
-  <rect x="237.4" y="413.1" width="103.2" height="33.6"/>
-  <rect x="243.2" y="474.7" width="90.0" height="40.8"/>
-  <rect x="242.4" y="537.1" width="90.2" height="30.9"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="1.1" marker-end="url(#ar82)">
-  <path d="M289.5,136.2 V155.6"/>
-  <path d="M289.5,187.1 V208.5"/>
-  <path d="M289.5,234 V253.2"/>
-  <path d="M337.5,267 H359.7"/>
-  <path d="M289.5,279 V295.2"/>
-  <path d="M260.3,330.7 V411.5"/>
-  <path d="M286.7,383.2 V410.7"/>
-  <path d="M287.8,446.7 V471.2"/>
-  <path d="M382.4,493.9 V372.4 H356.8"/>
-  <path d="M287.8,515.2 V534.7"/>
-  <path d="M242.4,549 H211.8 V219 H245.7"/>
-  <path d="M332.6,552.9 H406.8 V311.8 H336.3"/>
-</g>
-<g fill="#1a1a1a">
-  <text x="291.1" y="112.5" text-anchor="middle">System initialization</text>
-  <text x="291.1" y="124.5" text-anchor="middle">(see 8.2)</text>
-  <text x="291.1" y="174.5" text-anchor="middle">Start Analysis</text>
-  <text x="292.5" y="221.5" text-anchor="middle" font-weight="bold">$Display</text>
-  <text x="292.5" y="266.5" text-anchor="middle">Done? (T = t)</text>
-  <text x="289.7" y="309.8" text-anchor="middle">Update time</text>
-  <text x="289.7" y="321.9" text-anchor="middle" font-style="italic">t &lt;- t + &#916;t</text>
-  <text x="311.4" y="363.1" text-anchor="middle">Update values</text>
-  <text x="311.4" y="375.1" text-anchor="middle" font-style="italic">v &lt;- v + &#916;v</text>
-  <text x="289.0" y="425.0" text-anchor="middle">Evaluate equations</text>
-  <text x="289.0" y="437.0" text-anchor="middle" font-style="italic">f(v,t) = residue</text>
-  <text x="288.2" y="484.6" text-anchor="middle">Converged?</text>
-  <text x="288.2" y="496.4" text-anchor="middle" font-style="italic">residue &lt; e</text>
-  <text x="288.2" y="508.4" text-anchor="middle" font-style="italic">&#916;v &lt; &#916;</text>
-  <text x="287.5" y="549.2" text-anchor="middle">Accept the</text>
-  <text x="287.5" y="560.2" text-anchor="middle">time step?</text>
-  <text x="343.5" y="263.2" text-anchor="start">Yes</text>
-  <text x="367.5" y="275.2" text-anchor="start">End</text>
-  <text x="295.5" y="293.2" text-anchor="start">No</text>
-  <text x="339.5" y="492.3" text-anchor="start">No</text>
-  <text x="263.4" y="528.4" text-anchor="start">Yes</text>
-  <text x="217.5" y="545.2" text-anchor="start">Yes</text>
-  <text x="339.8" y="551.4" text-anchor="start">No</text>
-</g>
-</svg>
-<figcaption><strong>Figure 8-2&mdash;Simulation flowchart (transient analysis).</strong> Redrawn from the <a href="VAMS-LRM-2023.pdf#page=216">source figure on physical PDF page 216 (printed page 203)</a>.</figcaption>
+<figure id="figure-8-2">
+<img src="figures/lrm-figure-8-2.png" alt="Source Figure 8-2: transient loop with separate convergence and time-step acceptance decisions; nonconvergence returns to updating values, rejection returns to updating time, and acceptance returns to display.">
+<figcaption><strong>Figure 8-2—Simulation flowchart (transient analysis).</strong> Direct reproduction from <a href="VAMS-LRM-2023.pdf#page=216">physical PDF page 216 (printed page 203)</a>.</figcaption>
 </figure>
 
 <h3 id="s8-3-3">8.3.3 Convergence</h3>
@@ -286,67 +197,9 @@ endmodule</code></pre>
 
 <p>Consequently an A2D event that results in a D2A event being scheduled with zero (<code>0</code>) delay, shall have its effect propagated back to the analog kernel with zero (<code>0</code>) delay.</p>
 
-<figure>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 660 240" width="660" height="240" font-size="10" role="img" aria-label="Schematic: a digital gate drives node A, which passes through a connection module into a zero delay inverter (always @(A) B = !A), whose output node B passes through a second connection module into another digital gate.">
-<defs><marker id="ar83" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs>
-<rect x="5" y="5" width="650" height="228" fill="none" stroke="#1a1a1a" stroke-width="1.2"/>
-<g stroke="#1a1a1a" fill="none" stroke-width="1.4">
-  <g transform="translate(30,-5)">
-<line x1="0" y1="120" x2="40" y2="120"/>
-<line x1="40" y1="88" x2="40" y2="152"/>
-<circle cx="46" cy="96" r="3.4"/>
-<line x1="51" y1="86" x2="51" y2="106"/>
-<line x1="59" y1="82" x2="59" y2="110" stroke-width="3.6"/>
-<line x1="51" y1="134" x2="51" y2="154"/>
-<line x1="59" y1="130" x2="59" y2="158" stroke-width="3.6"/>
-<polyline points="59,82 59,64 84,64"/>
-<line x1="84" y1="54" x2="84" y2="74" stroke-width="3.6"/>
-<polyline points="59,158 59,184"/>
-<path d="M53,184 L65,184 L59,194 z" fill="#1a1a1a" stroke="none"/>
-<polyline points="59,110 75,110 75,130 59,130"/>
-<line x1="75" y1="120" x2="100" y2="120"/></g>
-  <line x1="130" y1="115" x2="160" y2="115"/>
-  <rect x="160" y="105" width="20" height="20"/>
-  <line x1="160" y1="105" x2="180" y2="125"/>
-  <line x1="160" y1="125" x2="180" y2="105"/>
-  <line x1="180" y1="115" x2="220" y2="115"/>
-  <polygon points="220,95 220,135 260,115"/>
-  <circle cx="265" cy="115" r="5"/>
-  <line x1="270" y1="115" x2="300" y2="115"/>
-  <rect x="300" y="105" width="20" height="20"/>
-  <line x1="300" y1="105" x2="320" y2="125"/>
-  <line x1="300" y1="125" x2="320" y2="105"/>
-  <line x1="320" y1="115" x2="350" y2="115"/>
-  <g transform="translate(350,-5)">
-<line x1="0" y1="120" x2="40" y2="120"/>
-<line x1="40" y1="88" x2="40" y2="152"/>
-<circle cx="46" cy="96" r="3.4"/>
-<line x1="51" y1="86" x2="51" y2="106"/>
-<line x1="59" y1="82" x2="59" y2="110" stroke-width="3.6"/>
-<line x1="51" y1="134" x2="51" y2="154"/>
-<line x1="59" y1="130" x2="59" y2="158" stroke-width="3.6"/>
-<polyline points="59,82 59,64 84,64"/>
-<line x1="84" y1="54" x2="84" y2="74" stroke-width="3.6"/>
-<polyline points="59,158 59,184"/>
-<path d="M53,184 L65,184 L59,194 z" fill="#1a1a1a" stroke="none"/>
-<polyline points="59,110 75,110 75,130 59,130"/>
-<line x1="75" y1="120" x2="100" y2="120"/></g>
-  <line x1="450" y1="115" x2="490" y2="115"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="1.1">
-  <line x1="400" y1="56" x2="252" y2="102" marker-end="url(#ar83)"/>
-  <line x1="330" y1="200" x2="186" y2="130" marker-end="url(#ar83)"/>
-  <line x1="298" y1="200" x2="303" y2="130" marker-end="url(#ar83)"/>
-</g>
-<g fill="#1a1a1a">
-  <text x="408" y="46">Zero delay inverter:</text>
-  <text x="536" y="46">always @(A) B&lt;= !A;</text>
-  <text x="330" y="216" text-anchor="middle">Connection modules</text>
-  <text x="170" y="98" text-anchor="middle">A</text>
-  <text x="310" y="98" text-anchor="middle">B</text>
-</g>
-</svg>
-<figcaption><strong>Figure 8-3&mdash;A zero delay inverter.</strong> Redrawn from the <a href="VAMS-LRM-2023.pdf#page=220">source figure on physical PDF page 220 (printed page 207)</a>.</figcaption>
+<figure id="figure-8-3">
+<img src="figures/lrm-figure-8-3.png" alt="Source Figure 8-3: Analog CMOS inverter connected through A and B connection modules and a digital inverter using nonblocking assignment B &lt;= !A.">
+<figcaption><strong>Figure 8-3.</strong> Analog-to-digital-to-analog example (editorial description). Direct reproduction, including the original caption, from <a href="VAMS-LRM-2023.pdf#page=220">physical PDF page 220 (printed page 207)</a>.</figcaption>
 </figure>
 
 <p>If the circuit shown in Figure 8-3 is being simulated with a digital time resolution of <code>1e-9</code> (one (<code>1</code>) nanosecond) then all digital events shall be reported by the digital kernel as having occurred at an integer multiple of <code>1e-9</code>. The A2D and D2A modules inserted are a simple level detector and a voltage ramp generator:</p>
@@ -392,102 +245,16 @@ endmodule</code></pre>
 
 <p>If <code>A</code> detects a positive crossing as a result of a transient solution at time 5.2e-9, the digital kernel shall report a rising edge at <code>A</code> at time 5.0e-9 and falling edge at <code>B</code> at time 5.0e-9, but the analog kernel shall see the transition at <code>B</code> begin at time 5.2e-9, as shown in Figure 8-4. D2As fed with zero delay events cannot be preemptive, so the crossover on the return is delayed from the digital event; zero-delay inverters are not physically realizable devices.</p>
 
-<figure>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="88 238 478 272" width="620" height="353" font-size="9.5" role="img" aria-label="Timing waveforms for the zero delay inverter. Signal A: the analog trace ramps up from about 4.9 ns to 5.4 ns, the digital reported trace steps high at 5 ns and the digital real-time trace steps high at 5.2 ns. Signal B: the analog trace falls away from 5.2 ns, the digital reported trace steps low at 5 ns and the digital real-time trace steps low at 5.2 ns. Opposed arrows mark the analog gate delay between 5.2 ns and 5.4 ns.">
-<g stroke="#1a1a1a" fill="none" stroke-width="0.9">
-  <line x1="140.9" y1="247.0" x2="140.9" y2="497.3"/>
-  <line x1="92.4" y1="351.3" x2="557.1" y2="351.3"/>
-  <path d="M348.7,253.9 V506.6" stroke-dasharray="4 3"/>
-  <path d="M392.1,371.4 V503.2" stroke-dasharray="4 3"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="3.4">
-  <polyline points="140.9,262 303.9,262 388.9,245 554.9,245"/>
-  <polyline points="140.9,293 319.9,293 319.9,275 553.9,275"/>
-  <polyline points="140.4,324.8 347.9,324.8 347.9,301.5 553.7,301.5"/>
-  <polyline points="139.4,378.3 348.7,378.3 441.4,397.4 551.4,397.4"/>
-  <polyline points="139.4,414.3 318,414.3 318,432.3 551.4,432.3"/>
-  <polyline points="138.7,453.2 349.6,453.2 349.6,475.7 552.1,475.7"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="0.9">
-  <line x1="317.4" y1="344.3" x2="317.4" y2="363.3"/>
-  <line x1="497.4" y1="344.3" x2="497.4" y2="362.3"/>
-  <path d="M321.2,494.8 H346.9"/>
-  <path d="M422.9,494.8 H394.7"/>
-</g>
-<g fill="#1a1a1a">
-  <text x="94.9" y="275.2" text-anchor="start">signal</text>
-  <text x="103.9" y="295.6" text-anchor="start">A</text>
-  <text x="152.9" y="258.2" text-anchor="start">analog</text>
-  <text x="152.9" y="288.2" text-anchor="start">digital reported</text>
-  <text x="152.1" y="320.3" text-anchor="start">digital real-time</text>
-  <text x="94.4" y="379.5" text-anchor="start">signal</text>
-  <text x="102.4" y="399.9" text-anchor="start">B</text>
-  <text x="150.4" y="392.5" text-anchor="start">analog</text>
-  <text x="150.4" y="431.5" text-anchor="start">digital reported</text>
-  <text x="151.2" y="470.3" text-anchor="start">digital real-time</text>
-  <text x="130.4" y="374.5" text-anchor="start">4 ns</text>
-  <text x="312.4" y="376.5" text-anchor="start">5 ns</text>
-  <text x="491.4" y="376.5" text-anchor="start">6 ns</text>
-  <text x="430.4" y="502.0" text-anchor="start">Analog gate delay</text>
-</g>
-</svg>
-<figcaption><strong>Figure 8-4&mdash;Zero delay transient solution times.</strong> Redrawn from the <a href="VAMS-LRM-2023.pdf#page=221">source figure on physical PDF page 221 (printed page 208)</a>.</figcaption>
+<figure id="figure-8-4">
+<img src="figures/lrm-figure-8-4.png" alt="Source Figure 8-4: Analog and digital timing for a zero-delay inverter; physical event time 5.2 is retained across synchronization despite reported digital time 5.0.">
+<figcaption><strong>Figure 8-4.</strong> Zero-delay digital inverter timing (editorial description). Direct reproduction, including the original caption, from <a href="VAMS-LRM-2023.pdf#page=221">physical PDF page 221 (printed page 208)</a>.</figcaption>
 </figure>
 
 <p>If the inverter equation is changed to use a one unit delay (<code>always @(A) B&lt;= #1 !A</code>), then the timing is as in Figure 8-5.</p>
 
-<figure>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="88 90 478 280" width="620" height="363" font-size="9.5" role="img" aria-label="Timing waveforms for the unit delay inverter. Signal A: the analog trace ramps up from 4.8 ns to 5.0 ns, the digital reported trace steps high at 5 ns and the digital real-time trace steps high at 5.2 ns. Signal B: the analog trace falls from 5.2 ns to about 5.6 ns, and both the digital reported and the digital real-time traces step low at 6 ns. Opposed arrows mark the analog gate delay.">
-<g stroke="#1a1a1a" fill="none" stroke-width="0.9">
-  <line x1="142.6" y1="99.3" x2="142.6" y2="349.7"/>
-  <line x1="94.1" y1="203.7" x2="558.8" y2="203.7"/>
-  <path d="M289.6,98.8 V351.4" stroke-dasharray="4 3"/>
-  <path d="M437.9,197.4 V357.2" stroke-dasharray="4 3"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="3.4">
-  <polyline points="142.6,114.3 243.3,114.3 326.6,97.5 556.6,97.3"/>
-  <polyline points="142.6,145.3 259.1,145.3 259.1,127.5 555.6,127.3"/>
-  <polyline points="142.1,175.5 289.9,175.5 289.9,154.2 555.5,153.8"/>
-  <polyline points="141.1,230.7 397.4,230.7 483.3,250.0 553.1,249.7"/>
-  <polyline points="142.5,265.8 438.3,265.8 438.3,285.0 553.1,284.7"/>
-  <polyline points="140.4,305.5 438.3,305.5 438.3,328.3 553.8,328.0"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="0.9">
-  <line x1="243.3" y1="199.2" x2="243.3" y2="203.3"/>
-  <line x1="273.3" y1="199.2" x2="273.3" y2="203.3"/>
-  <line x1="289.9" y1="199.2" x2="289.9" y2="203.3"/>
-  <line x1="309.1" y1="199.2" x2="309.1" y2="203.3"/>
-  <line x1="327.4" y1="199.2" x2="327.4" y2="203.3"/>
-  <line x1="347.4" y1="199.2" x2="347.4" y2="203.3"/>
-  <line x1="366.6" y1="199.2" x2="366.6" y2="203.3"/>
-  <line x1="386.6" y1="199.2" x2="386.6" y2="203.3"/>
-  <line x1="405.8" y1="199.2" x2="405.8" y2="203.3"/>
-  <line x1="424.1" y1="199.2" x2="424.1" y2="203.3"/>
-  <line x1="455.0" y1="199.2" x2="455.0" y2="203.3"/>
-  <line x1="472.5" y1="199.2" x2="472.5" y2="203.3"/>
-  <line x1="259.1" y1="196.7" x2="259.1" y2="215.7"/>
-  <line x1="438.3" y1="195.8" x2="438.3" y2="213.8"/>
-  <path d="M262.1,347.2 H287.8"/>
-  <path d="M468.8,348.8 H440.6"/>
-</g>
-<g fill="#1a1a1a">
-  <text x="96.6" y="127.5" text-anchor="start">signal</text>
-  <text x="105.6" y="147.9" text-anchor="start">A</text>
-  <text x="154.6" y="110.5" text-anchor="start">analog</text>
-  <text x="154.6" y="140.5" text-anchor="start">digital reported</text>
-  <text x="153.8" y="172.7" text-anchor="start">digital real-time</text>
-  <text x="96.1" y="231.8" text-anchor="start">signal</text>
-  <text x="104.1" y="252.3" text-anchor="start">B</text>
-  <text x="152.1" y="244.8" text-anchor="start">analog</text>
-  <text x="152.1" y="283.8" text-anchor="start">digital reported</text>
-  <text x="152.9" y="322.7" text-anchor="start">digital real-time</text>
-  <text x="132.1" y="226.8" text-anchor="start">4 ns</text>
-  <text x="254.1" y="228.8" text-anchor="start">5 ns</text>
-  <text x="432.3" y="228.0" text-anchor="start">6 ns</text>
-  <text x="191.3" y="363.5" text-anchor="start">Analog gate delay</text>
-</g>
-</svg>
-<figcaption><strong>Figure 8-5&mdash;Unit delay transient solution times.</strong> Redrawn from the <a href="VAMS-LRM-2023.pdf#page=222">source figure on physical PDF page 222 (printed page 209)</a>.</figcaption>
+<figure id="figure-8-5">
+<img src="figures/lrm-figure-8-5.png" alt="Source Figure 8-5: Analog and digital timing for a unit-delay inverter, including the ramp centered on time 6 and gate-delay guides.">
+<figcaption><strong>Figure 8-5.</strong> Unit-delay digital inverter timing (editorial description). Direct reproduction, including the original caption, from <a href="VAMS-LRM-2023.pdf#page=222">physical PDF page 222 (printed page 209)</a>.</figcaption>
 </figure>
 
 <h3 id="s8-4-4">8.4.4 The synchronization loop</h3>
@@ -516,57 +283,12 @@ endmodule</code></pre>
 <tr><td>6.00ns</td><td>Non blocking assign performed (digital event).<br><br>Value of B doesn&rsquo;t change.</td></tr>
 </table>
 
-<figure>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="88 88 478 290" width="620" height="376" font-size="9.5" role="img" aria-label="Timing waveforms with a glitch. Signal A: the analog trace ramps up from 4.8 ns, peaks near 5.1 ns and falls back by 5.3 ns, with a dashed line showing the ramp it would have followed; the digital reported trace shows a narrow spike near 5.0 ns and the digital real-time trace is a pulse that rises at 5.2 ns and falls at 5.4 ns. Signal B stays flat: neither the analog, the digital reported nor the digital real-time trace changes.">
-<g stroke="#1a1a1a" fill="none" stroke-width="0.9">
-  <line x1="140.6" y1="99.3" x2="140.6" y2="349.7"/>
-  <line x1="92.1" y1="203.7" x2="556.7" y2="203.7"/>
-  <path d="M287.6,98.8 V352.2" stroke-dasharray="4 3"/>
-  <path d="M325.4,94.9 V215.8" stroke-dasharray="4 3"/>
-  <path d="M245.4,114.2 L331.2,94.2" stroke-dasharray="4 3"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="3.4">
-  <polyline points="140.6,114.3 241.2,114.3 306.2,100.8 335.4,111.7 552.9,113.3"/>
-  <polyline points="140.6,145.3 257.1,145.3 257.1,127.5 257.1,145.3"/>
-  <polyline points="140.1,175.5 287.9,175.5 287.9,153.7 326.4,153.7 326.4,175.0 551.7,175.0"/>
-  <polyline points="139.1,230.7 552.4,230.7"/>
-  <polyline points="140.4,265.8 552.4,265.8"/>
-  <polyline points="138.4,305.5 552.4,305.5"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="0.9">
-  <line x1="241.2" y1="199.2" x2="241.2" y2="203.3"/>
-  <line x1="271.2" y1="199.2" x2="271.2" y2="203.3"/>
-  <line x1="287.9" y1="199.2" x2="287.9" y2="203.3"/>
-  <line x1="307.1" y1="199.2" x2="307.1" y2="203.3"/>
-  <line x1="325.4" y1="199.2" x2="325.4" y2="203.3"/>
-  <line x1="345.4" y1="199.2" x2="345.4" y2="203.3"/>
-  <line x1="364.6" y1="199.2" x2="364.6" y2="203.3"/>
-  <line x1="384.6" y1="199.2" x2="384.6" y2="203.3"/>
-  <line x1="403.7" y1="199.2" x2="403.7" y2="203.3"/>
-  <line x1="422.1" y1="199.2" x2="422.1" y2="203.3"/>
-  <line x1="452.9" y1="199.2" x2="452.9" y2="203.3"/>
-  <line x1="470.4" y1="199.2" x2="470.4" y2="203.3"/>
-  <line x1="257.1" y1="196.7" x2="257.1" y2="215.7"/>
-  <line x1="436.2" y1="195.8" x2="436.2" y2="213.8"/>
-</g>
-<g fill="#1a1a1a">
-  <text x="94.6" y="127.5" text-anchor="start">signal</text>
-  <text x="103.6" y="147.9" text-anchor="start">A</text>
-  <text x="152.6" y="110.5" text-anchor="start">analog</text>
-  <text x="152.6" y="140.5" text-anchor="start">digital reported</text>
-  <text x="151.7" y="172.7" text-anchor="start">digital real-time</text>
-  <text x="94.1" y="231.8" text-anchor="start">signal</text>
-  <text x="102.1" y="252.3" text-anchor="start">B</text>
-  <text x="150.1" y="244.8" text-anchor="start">analog</text>
-  <text x="150.1" y="283.8" text-anchor="start">digital reported</text>
-  <text x="150.9" y="322.7" text-anchor="start">digital real-time</text>
-  <text x="130.1" y="226.8" text-anchor="start">4 ns</text>
-  <text x="252.1" y="228.8" text-anchor="start">5 ns</text>
-  <text x="430.2" y="228.0" text-anchor="start">6 ns</text>
-</g>
-</svg>
-<figcaption><strong>Figure 8-6&mdash;Transient solution times with glitch.</strong> Redrawn from the <a href="VAMS-LRM-2023.pdf#page=224">source figure on physical PDF page 224 (printed page 211)</a>.</figcaption>
+<figure id="figure-8-6">
+<img src="figures/lrm-figure-8-6.png" alt="Source Figure 8-6: Source glitch example showing analog pulse, reported and real digital event times, and unchanged B traces; see the cancellation qualification in the audit.">
+<figcaption><strong>Figure 8-6.</strong> Glitch timing example (editorial description). Direct reproduction, including the original caption, from <a href="VAMS-LRM-2023.pdf#page=224">physical PDF page 224 (printed page 211)</a>.</figcaption>
 </figure>
+
+<div class="note"><strong>Editorial oracle warning:</strong> The example's cancellation of a queued assignment must not be generalized to ordinary nonblocking assignments. IEEE 1364-2005, 9.2.2, preserves queued assignments, including ordered updates to the same variable. The interaction between this AMS example's driver look-ahead, transition filtering and assignment semantics remains an open source discrepancy in the <a href="conformance-scheduling.md#source-discrepancies-and-oracle-policy">scheduling audit</a>.</div>
 
 <p>If the canceling event arrived after the ramp on <code>B</code> had started but before the assignment to the digital <code>B</code>, it is possible to see the glitch propagate back into the analog domain without an event appearing on <code>B</code>.</p>
 
@@ -576,69 +298,9 @@ endmodule</code></pre>
 
 <p>The synchronization algorithm can exploit characteristics of the analog and digital kernels described in the next section. The arrows represent an engine moving from one synchronization point to another, which in the case of an analog macro-process involves one or more time-steps and in the case of a digital engine, involves once or more discrete times at which events are processed.</p>
 
-<figure>
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="85 95 480 250" width="620" height="323" font-size="9.5" role="img" aria-label="Synchronization timing diagram. An ANALOG line and a DIGITAL line run in parallel. Numbered arrows 1 to 18 show control passing between the two engines: 1 analog runs to T2, 2 hands to digital, 3 and 4 digital advances to T2, 5 and 6 return control and analog runs to T3, 7 to 9 repeat, 10 and 11 advance to T4, 12 produces a D2A event, 13 returns control to analog, 14 accepts at the D2A time, 15 steps on, 16 raises an A2D event, 17 and 18 hand control back to analog at T6, and the run continues (etc.).">
-<defs><marker id="ar87" viewBox="0 0 10 10" refX="9.5" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="#1a1a1a"/></marker></defs>
-<g stroke="#1a1a1a" fill="none" stroke-width="1.3" marker-end="url(#ar87)">
-  <path d="M91.1,148.3 H233.3"/>
-  <path d="M235.1,148.3 H305.3"/>
-  <path d="M307.1,148.3 H449.3"/>
-  <path d="M523.1,148.3 H557.3"/>
-  <path d="M91.1,292.3 H161.3"/>
-  <path d="M163.1,292.3 H233.3"/>
-  <path d="M235.1,292.3 H305.3"/>
-  <path d="M307.1,292.3 H377.3"/>
-  <path d="M379.1,292.3 H521.3"/>
-  <path d="M235.1,148.3 L92.4,291.0"/>
-  <path d="M235.1,292.3 V150.1"/>
-  <path d="M307.1,148.3 L235.9,290.7"/>
-  <path d="M307.1,292.3 V150.1"/>
-  <path d="M451.1,148.3 L308.4,291.0"/>
-  <path d="M379.1,292.3 L450.3,149.9"/>
-  <path d="M451.1,148.3 L414.9,112.3 L380.0,147.0"/>
-  <path d="M379.1,148.3 L451.1,184.3 L521.5,149.1"/>
-  <path d="M523.1,148.3 L380.4,291.0"/>
-  <path d="M523.3,292.3 V150.1"/>
-</g>
-<g stroke="#1a1a1a" fill="none" stroke-width="1.1">
-  <path d="M163.1,280.3 V304.3"/>
-  <path d="M379.1,280.3 V304.3"/>
-  <path d="M379.1,136.3 V160.3"/>
-  <path d="M523.1,136.3 V160.3"/>
-</g>
-<g fill="#1a1a1a">
-  <text x="163.1" y="143.5" text-anchor="start">1</text>
-  <text x="264.9" y="143.5" text-anchor="start">6</text>
-  <text x="353.1" y="143.5" text-anchor="start">10</text>
-  <text x="385.1" y="112.5" text-anchor="start">14</text>
-  <text x="513.3" y="129.5" text-anchor="start">A2D</text>
-  <text x="534.3" y="143.5" text-anchor="start">etc.</text>
-  <text x="463.1" y="171.5" text-anchor="start">15</text>
-  <text x="368.1" y="215.5" text-anchor="start">11</text>
-  <text x="425.1" y="214.5" text-anchor="start">13</text>
-  <text x="168.9" y="230.5" text-anchor="start">2</text>
-  <text x="276.9" y="230.5" text-anchor="start">7</text>
-  <text x="240.9" y="193.7" text-anchor="start">5</text>
-  <text x="313.1" y="226.5" text-anchor="start">9</text>
-  <text x="455.1" y="230.5" text-anchor="start">16</text>
-  <text x="525.1" y="230.5" text-anchor="start">18</text>
-  <text x="120.9" y="305.5" text-anchor="start">3</text>
-  <text x="192.9" y="305.5" text-anchor="start">4</text>
-  <text x="267.9" y="305.5" text-anchor="start">8</text>
-  <text x="337.1" y="305.5" text-anchor="start">12</text>
-  <text x="448.1" y="305.5" text-anchor="start">17</text>
-  <text x="368.3" y="317.5" text-anchor="start">D2A</text>
-  <text x="106.1" y="162.2" text-anchor="start">ANALOG</text>
-  <text x="106.3" y="290.2" text-anchor="start">DIGITAL</text>
-  <text x="156.2" y="337.7" text-anchor="middle">T1</text>
-  <text x="228.3" y="337.7" text-anchor="middle">T2</text>
-  <text x="300.3" y="337.7" text-anchor="middle">T3</text>
-  <text x="372.3" y="337.7" text-anchor="middle">T4</text>
-  <text x="444.3" y="337.7" text-anchor="middle">T5</text>
-  <text x="516.3" y="337.7" text-anchor="middle">T6</text>
-</g>
-</svg>
-<figcaption><strong>Figure 8-7&mdash;Sample run.</strong> Redrawn from the <a href="VAMS-LRM-2023.pdf#page=225">source figure on physical PDF page 225 (printed page 212)</a>.</figcaption>
+<figure id="figure-8-7">
+<img src="figures/lrm-figure-8-7.png" alt="Source Figure 8-7: Analog and digital control transfers numbered 1 through 18, with T1 through T6 boundaries and provisional analog solution path.">
+<figcaption><strong>Figure 8-7.</strong> Mixed-signal simulation sequence (editorial description). Direct reproduction, including the original caption, from <a href="VAMS-LRM-2023.pdf#page=225">physical PDF page 225 (printed page 212)</a>.</figcaption>
 </figure>
 
 <ol>
@@ -731,6 +393,8 @@ endmodule</code></pre>
 
 <h3 id="s8-5-2">8.5.2 The Verilog-AMS digital engine reference model</h3>
 
+<div class="note"><strong>Editorial source discrepancy:</strong> The published pseudocode below selects inactive events before explicit D2A events, whereas the region descriptions in 8.5.1 require explicit D2A events first. It also lacks a closing brace before the first <code>else if</code>. Both are present in the PDF; the transcription preserves them. See the <a href="conformance-scheduling.md#source-discrepancies-and-oracle-policy">audit's interpretation policy</a> before deriving an executable oracle.</div>
+
 <p>In all the examples that follow, T refers to the current simulation time of the digital engine, and all events are held in the event queue, ordered by simulation time.</p>
 
 <pre><code>while (there are events){
@@ -799,6 +463,8 @@ endmodule</code></pre>
 <p>The IEEE Std 1364 Verilog source elements that model switches are various forms of transistors, called <strong>tran</strong>, <strong>tranif0</strong>, <strong>tranif1</strong>, <strong>rtran</strong>, <strong>rtranif0</strong>, and <strong>rtranif1</strong>.</p>
 
 <p>Switch processing shall consider all the devices in a bidirectional switch-connected net before it can determine the appropriate value for any node on the net, because the inputs and outputs interact. A simulator can do this using a relaxation technique. The simulator can process tran at any time. It can process a subset of tran-connected events at a particular time, intermingled with the execution of other active events. Further refinement is required when some transistors have gate value x. A conceptually simple technique is to solve the network repeatedly with these transistors set to all possible combinations of fully conducting and non-conducting transistors. Any node that has a unique logic level in all cases has steady-state response equal to this level. All other nodes have steady-state response.</p>
+
+<div class="note"><strong>Editorial source discrepancy for 8.5.3.5:</strong> The preceding switch-processing paragraph ends without specifying the remaining nodes' value in the supplied AMS PDF. IEEE 1364-2005, 11.6.5 (printed pages 161&ndash;162), specifies <code>x</code>. The AMS wording above is preserved; the inherited rule and its evidence must be tracked separately.</div>
 
 <h4 id="s8-5-3-6">8.5.3.6 Processing explicit D2A events (region 1b)</h4>
 

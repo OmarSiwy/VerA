@@ -52,13 +52,20 @@ read -r pass fail unas xfail < <(grep -A1 -P '^pass\tfail\tunasserted\txfail$' <
 }
 total=$((pass + fail + unas + xfail))
 
-# --- Measure C: two-way clause evidence -------------------------------------
-# `  196 tested both ways · 257 accepted only · 76 refused only · 83 uncited`
-cov="$(zig build benchmark -- --coverage 2>&1)"
-read -r both acc ref unc < <(grep -oP '\d+(?= (tested both ways|accepted only|refused only|uncited))' \
+# --- Measure C: static clause citations, not verified rule coverage ----------
+if [ -n "${COVERAGE_LOG:-}" ]; then
+  cov="$(cat "$COVERAGE_LOG")" || die "could not read COVERAGE_LOG"
+else
+  cov="$(zig build benchmark -- --coverage 2>&1)" || die "coverage command failed"
+fi
+read -r both acc ref unc < <(grep -oP '\d+(?= (cited both ways|positive citations only|rejection citations only|uncited))' \
   <<<"$cov" | paste -sd' ')
 clauses="$(grep -oP '^\d+ of \K\d+(?= LRM clauses cited)' <<<"$cov" | head -1)"
 [[ "${clauses:-}" =~ ^[0-9]+$ ]] || die "could not parse the coverage tally. harness.zig:564 changed?"
+for value in "${both:-}" "${acc:-}" "${ref:-}" "${unc:-}"; do
+  [[ "$value" =~ ^[0-9]+$ ]] || die "incomplete coverage polarity tally"
+done
+(( both + acc + ref + unc == clauses )) || die "coverage tally does not sum to clause denominator"
 
 # --- The two gates that are pass/fail, not a percentage ----------------------
 zig build test         >/dev/null 2>&1 && unit=pass    || unit=FAIL
@@ -71,10 +78,10 @@ block="$(cat <<EOF
 |---|---|---|---|
 | **A** — fixtures behaving as stated | **$pass / $total — $(pct "$pass" "$total")** | $((total - pass)) rows | \`zig build benchmark -- --strict\` |
 | &nbsp;&nbsp;↳ FAIL · unasserted · XFAIL | $fail · $unas · $xfail | all three to 0 | same run |
-| **C** — clauses with two-way evidence | **$both / $clauses — $(pct "$both" "$clauses")** | $((clauses - both)) clauses | \`zig build benchmark -- --coverage\` |
-| &nbsp;&nbsp;↳ accepted-only · refused-only · uncited | $acc · $ref · $unc | all three to 0 or classified | same run |
-| **B** — IEEE 1364 §§17–18 obligations | hand-entered, see \`docs/CLAUSE-AUDIT.md\` §7.1 | 0 open | rows are read, not measured; \`tools/measure-b.sh\` checks the tally sums |
-| **D** — \`ARCHITECTURE.md\` §6 phases landed | hand-entered, see \`ARCHITECTURE.md\` §8 | 9 of 9 | not machine-measurable |
+| **C** — clauses with both citation polarities (static) | **$both / $clauses — $(pct "$both" "$clauses")** | $((clauses - both)) clauses | \`zig build benchmark -- --coverage\` |
+| &nbsp;&nbsp;↳ positive-only · rejection-only · uncited | $acc · $ref · $unc | requires rule-level review | same run |
+| **B** — IEEE 1364 §§17–18 obligations | hand-entered, see \`docs/CLAUSE-AUDIT.md\` §7.1 | not measured by this script | source and evidence review required |
+| **D** — \`ARCHITECTURE.md\` §6 phases landed | hand-entered, see \`ARCHITECTURE.md\` §8 | not measured by this script | architecture review required |
 | \`zig build test\` | **$unit** | pass | \`zig build test\` |
 | \`zig build test-devices\` | **$devices** | pass | \`zig build test-devices\` |
 
@@ -82,6 +89,10 @@ block="$(cat <<EOF
 A and C are measured by this script and nothing else may write them. B and D are
 hand-entered against their source documents; if you change one, say which
 document you read.
+
+C counts citations without executing fixtures. It is not a conformance score:
+XFAILs and implementation-limit rejections can supply citations, and a clause
+can contain multiple untested rules. See \`docs/CONFORMANCE.md\`.
 EOF
 )"
 

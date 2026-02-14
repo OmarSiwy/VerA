@@ -1,5 +1,12 @@
 # Annex D coverage — standard definitions
 
+Historical construct inventory; its counts and “green” statements below are
+not current measurements. The source-led review and remaining evidence gaps
+are tracked in [the Annex D audit](../../../docs/conformance-standard-definitions.md).
+In particular, `audit_physical_base_names.va` now directly observes the
+vintage-specific physical constants that the historical table left untested.
+Acceptance of nature declarations still does not establish their metadata.
+
 Source: `docs/annex-d-stddefs.html`, read in full. Annex D is normative and
 publishes three files verbatim: `disciplines.vams`, `constants.vams` and
 `driver_access.vams`. There is no prose to conform to — the conformance question is

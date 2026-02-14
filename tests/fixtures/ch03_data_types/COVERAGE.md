@@ -1,5 +1,85 @@
 # Chapter 3 coverage
 
+Branch/scope rejection follow-up, 2026-09-23: `44_vector_branch_size_mismatch.va`
+now pins E0353 with cascading invalid-branch reads removed. The block-local
+net/branch fixtures `48` and `49` pin their actual parser diagnostics E0214 and
+E0209, not generic failed phases. Temporary controls with matching sizes or
+module-scope declarations compile. The branch ledger retains the distinction
+between parser rejection and dedicated semantic scope diagnostics.
+
+Compatibility audit, 2026-09-23: the potential-incompatibility rejection `54`
+now pins E0355. `audit_incompatible_flow_natures_rejected.va` independently
+tests incompatible flows while both potentials permit V access; the legal
+`audit_compatible_flow_units.va` uses unrelated flow bases with equal units.
+The nature ledger keeps these access cases separate from full connection and
+discipline-resolution coverage.
+
+Ground/implicit-net audit, 2026-09-23: `62_ground_non_continuous.va` now pins
+E0344 rather than a generic failed phase. New solved-node cases observe ground
+identity and the implicit structural net through a declared child port. Removing
+the ground declaration in a temporary control makes both ground assertions
+fail with the independently derived floating-reference solution. See the
+[net ledger](../../../docs/conformance-nodesets.md) for remaining resolution gaps.
+
+Nodeset audit, 2026-09-23: `audit_nodeset_unclamped_solution.va` passes a
+free-node KCL solution distinct from the declared nodeset. The older `21` case
+prescribes that node and is not solver evidence. Both a08 cubic regressions
+currently pass, but their final roots depend on harness policy; their null-bus
+case cannot distinguish an explicit zero from a zero cold start. See the
+[nodeset ledger](../../../docs/conformance-nodesets.md) for independent
+consumption, null-preservation and hierarchy-precedence obligations still open.
+
+Missing-attribute isolation follow-up, 2026-09-23: fixtures `35` and the two
+`57_base_nature_missing_*` now use legal output signal-flow ports, removing
+incidental inout errors. Each still reports its intended E0332. Temporary
+controls adding only the omitted attribute all compile; this validates the
+rejection setup, not behavioral coverage of the attributes.
+
+Nature audit, 2026-09-23: `65_nature_access_as_string.va`,
+`65_nature_units_as_identifier.va` and `68_nonconstant_user_attribute.va` now
+pin E0340; `68_duplicate_user_attribute.va` pins E0343. Direct diagnostics
+supersede the historical generic-phase rationale below. The
+[nature ledger](../../../docs/conformance-natures.md) separates inherited access
+probes from unobserved metadata, compatibility and tolerance requirements.
+
+Genvar audit, 2026-09-23: `50_genvar_assigned_outside_loop.va` now isolates
+the illegal assignment and pins E0313 rather than accepting any failed phase.
+The positive nested-static-dependency case independently observes values and
+trip counts, including zero iterations. See
+[the genvar ledger](../../../docs/conformance-genvars.md) for the scope and
+analog-operator-state limitations of these tests.
+
+Array-size audit, 2026-09-23: the exact-size override case independently observes
+each replacement element. Three isolated rejection fixtures expose accepted
+short/long overrides and resizing without a replacement as
+PARAM-ARRAY-SIZE-001/002/003 (XFAIL). The existing Chapter 6
+`h01_11_dependent_range_and_array_override.va` is the legal resize counterpart.
+These failures must not be hidden by the existing declaration/pattern tests;
+see the parameter ledger for shape and override-path gaps.
+
+Local-parameter audit, 2026-09-23: `06_local_parameter.va` now claims only
+host-bound dependency evaluation. Its former ignored localparam host binding
+did not establish illegal HDL override rejection; that claim moves to
+`audit_localparam_override_rejected.va` (E0907). The duplicate original/alias
+HDL override fixture `78_alias_double_override.va` now pins E0908, superseding
+the historical broad-substring rationale below. See the parameter worklist
+for separate array, alias and simulator-output obligations still open.
+
+Parameter-inference audit, 2026-09-23: `74_untyped_parameter_type_derivation.va`
+now uses an integer denominator, removing a promotion that could hide the wrong
+inferred type. `audit_parameter_override_type.va` passes both override-direction
+and dependent-type observations. Removing its HDL overrides in a temporary
+source copy makes every assertion fail. See
+[the parameter worklist](../../../docs/conformance-parameters.md) for limits.
+
+Source-audit follow-up, 2026-09-23: see
+[the type ledger](../../../docs/conformance-types.md) for §§3.1–3.3 rule and
+evidence boundaries. `audit_string_comparison_context.va` passes independent
+typed-string/NUL and lexicographical boundary observations.
+`audit_string_literal_equality.va` is a positive XFAIL, STR-LITERAL-001:
+literal-only integer equality incorrectly behaves like normalized string
+equality. The passing fixture does not cover or excuse this failing context.
+
 Runtime multidimensional element reads and writes are covered by
 `89_dynamic_multidim_numeric.va`, `89_dynamic_multidim_scope.va`,
 `89_dynamic_multidim_parameter_index.va`, `89_dynamic_multidim_order.va`, and

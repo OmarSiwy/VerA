@@ -28,6 +28,8 @@ nav a:hover { text-decoration: underline; }
 <nav><a href="index.html">Index</a> <a href="ch9-system.html">&larr; Prev</a> <a href="ch11-vpi.html">Next &rarr;</a> </nav>
 <h1>10. Compiler directives</h1>
 
+<div class="note"><strong>Editorial transcription notes:</strong> Compared with <a href="VAMS-LRM-2023.pdf#page=281">physical PDF pages 281&ndash;286</a>. Typographic quotation marks used for apostrophe/grave-accent code characters in 10.1, 10.4 and 10.5 are normalized to ASCII. Line-wrapped <code>Verilog-AMS</code> and <code>VAMS-2.3</code> retain their hyphens. Syntax boxes distinguish bold literal tokens from unbold grammar notation; source color is not reproduced. The source examples are retained, including the missing whitespace after <code>\logic</code> in 10.6; that example does not override the escaped-identifier termination rule in 2.8.1.</div>
+
 <h2 id="s10-1">10.1 Overview</h2>
 
 <p>All Verilog-AMS HDL compiler directives are preceded by the ( <code>`</code> ) character. This character is called accent grave (ASCII 0x60). It is different from the character ( <code>'</code> ), which is the apostrophe character (ASCII 0x27). The scope of compiler directives extends from the point where it is processed, across all files processed, to the point where another compiler directive supersedes it or the processing completes.</p>
@@ -67,10 +69,10 @@ nav a:hover { text-decoration: underline; }
 <p>In addition to <code>`resetall</code>, if this directive is used without a discipline name, discipline resolution will not use a default discipline for nets declared after this directive is encountered in the text stream. Syntax 10-1 shows the syntax for this directive.</p>
 
 <div class="syntax">default_discipline_directive ::=
-	`default_discipline [discipline_identifier [ qualifier ] ]
+	<b>`default_discipline</b> [discipline_identifier [ qualifier ] ]
 qualifier ::=
-	integer | real | reg | wreal | wire | tri | wand | triand
-	| wor | trior | trireg | tri0 | tri1 | supply0 | supply1
+	<b>integer</b> | <b>real</b> | <b>reg</b> | <b>wreal</b> | <b>wire</b> | <b>tri</b> | <b>wand</b> | <b>triand</b>
+	| <b>wor</b> | <b>trior</b> | <b>trireg</b> | <b>tri0</b> | <b>tri1</b> | <b>supply0</b> | <b>supply1</b>
 
 <em>Syntax 10-1&mdash;Syntax for the default discipline compiler directive</em></div>
 
@@ -95,7 +97,7 @@ endmodule</code></pre>
 <p>The scope of this directive is similar to the scope of the <code>`define</code> compiler directive although it can be used only outside of module definitions. This directive specifies the default value for rise and fall time for the transition filter (see 4.5.8). There are no scope restrictions for this directive. The syntax for this directive is shown in Syntax 10-2.</p>
 
 <div class="syntax">default_transition_compiler_directive ::=
-	`default_transition transition_time
+	<b>`default_transition</b> transition_time
 transition_time ::=
 	constant_expression
 
@@ -116,11 +118,11 @@ transition_time ::=
 <p>The syntax for text macro definitions is given in Syntax 10-3</p>
 
 <div class="syntax">text_macro_definition ::=
-	`define text_macro_name macro_text
+	<b>`define</b> text_macro_name macro_text
 text_macro_name ::=
-	text_macro_identifier [ ( list_of_formal_arguments ) ]
+	text_macro_identifier [ <b>(</b> list_of_formal_arguments <b>)</b> ]
 list_of_formal_arguments ::=
-	formal_argument_identifier { , formal_argument_identifier }
+	formal_argument_identifier { <b>,</b> formal_argument_identifier }
 formal_argument_identifier ::=
 	simple_identifier
 text_macro_identifier ::=

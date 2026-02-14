@@ -3,17 +3,15 @@
 // digital context the inherited IEEE 1364-2005 §17.1 wording for the same task
 // is that the arguments are sampled and printed at the END of the current time
 // step, after every other event in that step has been processed — which in the
-// §5.4 region ordering means AFTER the nonblocking assign update region. That
+// IEEE §11.3 region ordering means AFTER the nonblocking assign update region. That
 // is what makes $strobe different from $display, whose §9.4.1 description
 // ("The $display task provides the same capabilities as $strobe") is about
 // FORMATTING, not about when it runs; $display prints where it stands.
 //
-// The existing runner already implements the region ordering this file leans
-// on — tests/digital/scheduling.v pins that a nonblocking assignment made at
-// t=0 is not visible to a $display in the same active region, and only becomes
-// visible after a `#0`. So the ONLY new claim here is the scheduling of the
-// sampling point of $strobe itself, which is the 17.1 row's "strobe/monitor
-// scheduling, argument sampling" clause.
+// A #0 resumes in the inactive region, BEFORE NBA delivery; it is not a way
+// to observe a settled NBA. This fixture instead observes the monitor region
+// through $strobe, as required by IEEE 17.1.2. See the scheduling audit for
+// the source review and the separate NBA delivery fixtures.
 //
 // HAND DERIVATION, time step t=0:
 //   active region, in source order
@@ -25,9 +23,9 @@
 //     $display("after %b")   -> prints the CURRENT a: "after 0100"
 //   NBA update region
 //     a <- 0010              (the blocking 0100 written after the <= is
-//                             overwritten; §5.4 applies the queued update
+//                             overwritten; §11.3 applies the queued update
 //                             unconditionally)
-//   postponed region
+//   monitor region
 //     the queued strobe samples a NOW = 0010 -> "strobe 0010"
 //
 //   so the transcript order for t=0 is
@@ -41,23 +39,25 @@
 //
 // HAND DERIVATION, time step t=1:
 //   a = 4'b1000            -> a is 1000
-//   $strobe("s1 %b", a)    -> queues strobe #1
-//   $strobe("s2 %b", a)    -> queues strobe #2
+//   $strobe("repeat %b", a) -> queues strobe #1
+//   $strobe("repeat %b", a) -> queues strobe #2
 //   a = 4'b1001            -> a is 1001
-//   end of step: both queued strobes sample a = 1001 and print in CALL order
-//     s1 1001
-//     s2 1001
+//   end of step: both queued strobes sample a = 1001
+//     repeat 1001
+//     repeat 1001
 //   This is the "two $strobe calls in one time step" case: neither is dropped
-//   (a single-slot strobe register would print only "s2 1001"), both see the
-//   final settled value, and the order is the order of the calls and not the
-//   reverse.
+//   (a single-slot strobe register would print only one line), and both see
+//   the final settled value. Identical labels avoid requiring callback order:
+//   IEEE 11.3/11.4 and 17.1.2 do not establish the former call-order claim.
+//   That withdrawn claim is recorded as STROBE-ORDER-001 in the scheduling
+//   audit, not counted as conformance evidence elsewhere.
 //
 // t=2 runs only $finish(0), which per docs/digital-source-execution.md is
 // silent, so it contributes no line.
 //
 //! lrm 9.4.1
 //! inherited IEEE 1364-2005 17.1 ($strobe end-of-time-step sampling)
-//! expect stdout 03_strobe_scheduling.expected.txt
+//! expect stdout d09_03_strobe_scheduling.expected.txt
 `timescale 1ns/1ns
 module d09_strobe_scheduling;
   reg [3:0] a;
@@ -70,8 +70,8 @@ module d09_strobe_scheduling;
     $display("after %b", a);
     #1;
     a = 4'b1000;
-    $strobe("s1 %b", a);
-    $strobe("s2 %b", a);
+    $strobe("repeat %b", a);
+    $strobe("repeat %b", a);
     a = 4'b1001;
     #1 $finish(0);
   end

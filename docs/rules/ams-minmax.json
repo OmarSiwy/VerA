@@ -1,0 +1,2098 @@
+{
+  "schema_version": 1,
+  "denominator": "uncertified",
+  "completeness_review": "pending",
+  "scope": "Candidate AMS4.3/4.3.1 min/max finite-value/type/derivative decomposition with Table9-11 context branches; independent completeness and inherited dependencies pending.",
+  "rules": [
+    {
+      "id": "AMS-MINMAX-MIN-VALUE-LT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min(x,y) returns the minimum numeric operand value for x<y.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Use integer and real operands, both orders, negative values, zero and positive values; tie branch needs separate partial checks.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "min(2,5) and $min(2,5) both yield 2.",
+          "derivation": "Table4-14 defines minimum/maximum over all x,y. Equality value alone does not identify derivative branch.",
+          "wrong_implementation": "Always select second operand.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/82_min.va",
+              "assertion": "Named CHECKX value assertions; not CHECKI as a type oracle",
+              "runner": "Source fixture inspection only; no execution for this ledger",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ch4-functions-review.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-VALUE-GT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min(x,y) returns the minimum numeric operand value for x>y.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Use integer and real operands, both orders, negative values, zero and positive values; tie branch needs separate partial checks.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "min(5,2) and $min(5,2) both yield 2.",
+          "derivation": "Table4-14 defines minimum/maximum over all x,y. Equality value alone does not identify derivative branch.",
+          "wrong_implementation": "Always select first operand.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/82_min.va",
+              "assertion": "Named CHECKX value assertions; not CHECKI as a type oracle",
+              "runner": "Source fixture inspection only; no execution for this ledger",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ch4-functions-review.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-VALUE-EQ",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min(x,y) returns the minimum numeric operand value for x=y.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Use integer and real operands, both orders, negative values, zero and positive values; tie branch needs separate partial checks.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "min(3,3) and $min(3,3) both yield 3.",
+          "derivation": "Table4-14 defines minimum/maximum over all x,y. Equality value alone does not identify derivative branch.",
+          "wrong_implementation": "Return zero on equal nonzero inputs.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/82_min.va",
+              "assertion": "Named CHECKX value assertions; not CHECKI as a type oracle",
+              "runner": "Source fixture inspection only; no execution for this ledger",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ch4-functions-review.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-INT-TYPE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, integer min/max rule continuing from printed61"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min with two integer operands returns integer.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "min(3,5)/2 and its system spelling yield integer quotient1, before any integer assignment.",
+          "derivation": "Both operands give integer result3;4.2.4 integer division truncates3/2 to1. Incorrect real result gives1.5.",
+          "wrong_implementation": "Return real for every system-style math call.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_math_result_type_division.va",
+              "assertion": "CHECKX integer min quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            },
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_system_math_result_type_division.va",
+              "assertion": "CHECKX system integer min quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-system-math-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-MIXED-FIRST",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, else both operands/result converted to real"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min converts both operands and result to real when the first operand is real and the other integer.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "min(3.0,5)/2 and $min(3.0,5)/2 yield1.5.",
+          "derivation": "The selected numeric value is3; real conversion occurs before result typing so real division yields1.5 even when the winning source operand was integer.",
+          "wrong_implementation": "Type result from selected operand or first operand instead of both argument types.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_system_math_result_type_division.va",
+              "assertion": "CHECKX system mixed/reverse mixed min quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-system-math-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "System spelling both mixed positions has recorded bounded runtime evidence; traditional opposite-position case and conversion precision/large integers remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-MIXED-SECOND",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, else both operands/result converted to real"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min converts both operands and result to real when the second operand is real and the other integer.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "min(3,5.0)/2 and $min(3,5.0)/2 yield1.5.",
+          "derivation": "The selected numeric value is3; real conversion occurs before result typing so real division yields1.5 even when the winning source operand was integer.",
+          "wrong_implementation": "Type result from selected operand or first operand instead of both argument types.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_system_math_result_type_division.va",
+              "assertion": "CHECKX system mixed/reverse mixed min quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-system-math-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "System spelling both mixed positions has recorded bounded runtime evidence; traditional opposite-position case and conversion precision/large integers remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-REAL-TYPE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, else conversion rule"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min with two real operands returns real.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "min(3.0,5.0)/2 yields1.5 for both spellings.",
+          "derivation": "Neither operand pair is both integer; the source's else branch requires real result.",
+          "wrong_implementation": "Convert integral-valued real operands/results to integer.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-TIE-DX",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min at equality selects the second operand derivative: first independent partial is zero.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "At V(p)=V(q)=0.5, ddx(min(V(p),V(q)),V(p))=0, also for $min.",
+          "derivation": "The strict < test is false; selected V(q) has zero partial with respect to independent V(p).",
+          "wrong_implementation": "Use non-strict comparison selecting the first dual value at equality.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX min pq dp and $min pq dp",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        },
+        {
+          "id": "external-host-transition",
+          "kind": "behavior",
+          "boundary": "Sweep one independent input below, equal to, and above the other; swap arguments and repeat across analysis restart.",
+          "analysis": "external analog solver DC/Jacobian integration; transient crossing separately",
+          "state_transition": "Selected smooth branch changes at equality; no cached derivative from preceding evaluation may survive.",
+          "expected": "Contribution I(p)<+min(V(p),V(q)) exports first/second Jacobian partials matching strict branch selection at every sampled operating point. Equality gives0,1.",
+          "derivation": "The contribution expression is the same source-defined function; symbolic derivatives used by Newton must follow the source selection, not merely ddx report values.",
+          "wrong_implementation": "Correct generated testbench Dual while production host uses non-strict min/max or cached prior-branch derivatives.",
+          "mutation_status": "not-run; host artifact and controlled mutation not available in this handoff",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-TIE-DY",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min at equality selects the second operand derivative: second independent partial is one.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "At V(p)=V(q)=0.5, ddx(min(V(p),V(q)),V(q))=1, also for $min.",
+          "derivation": "The selected second argument is the differentiating unknown, whose partial is1.",
+          "wrong_implementation": "Average tie derivatives, yielding0.5 for each partial.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX min pq dq and $min pq dq",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-TIE-SWAP",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min tie selection follows argument position, not variable identity.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "After swapping q,p, partial with respect to p is1 and q is0 for both spellings.",
+          "derivation": "Strict comparison still fails but second operand is now V(p).",
+          "wrong_implementation": "Pin tie derivative to a particular node/order in the symbol table.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX min qp dp/dq and system counterparts",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-TIE-CONSTANT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min tie partial follows constant/variable second operand.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "ddx(min(V(p),0.5),V(p))=0 and ddx(min(0.5,V(p)),V(p))=1 at V(p)=0.5, both spellings.",
+          "derivation": "Selected constant has no dependency; selected variable has unit dependency.",
+          "wrong_implementation": "Specialize constant-operand operations using a different tie comparison.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX min const second/first and system counterparts",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-UNEQUAL-PARTIAL",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min derivatives away from equality follow the selected operand.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "At p=q=0.5, d/dp min(p,q+1)=1; d/dp min(p,q-1)=0, both spellings.",
+          "derivation": "Away from equality the winning branch is smooth; selected p contributes1 and independent q±1 contributes0.",
+          "wrong_implementation": "Repair ties by always selecting second derivatives, breaking unequal inputs.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX min unequal +1.0/-1.0 and system counterparts",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-DIGITAL-CONTEXT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "9.2",
+        "printed_page": 223,
+        "pdf_page": 236,
+        "passage": "Table9-11 continued, $min row, digital-context column"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Table9-11 explicitly supports these system functions in digital context.",
+          "source": "AMS9.2 Table9-11"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "This obligation explicitly requires digital-context execution, which the normative analog subset excludes; this is independent of fixture choice.",
+          "source": "AMS AnnexC.7"
+        }
+      },
+      "obligation": "$min is supported in digital context.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal digital initial block, numeric operands; no analog ddx.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "digital event-driven",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "A legal initial-block $min call produces the same independently derived finite value and integer/mixed result-type quotients.",
+          "derivation": "Table9-11 digital column explicitly says Yes; analog-context tests do not exercise this requirement.",
+          "wrong_implementation": "Support aliases only inside analog blocks.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.2",
+        "relation": "direct-text",
+        "limits": "Section anchor contains Table9-11 continued rows; no per-row anchor. Both Yes columns were checked against PDF236. This is text/table mapping, not runtime evidence."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-ANALOG-CONTEXT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "9.2",
+        "printed_page": 223,
+        "pdf_page": 236,
+        "passage": "Table9-11 continued, $min row, analog-context column"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "$min is supported in analog context.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "Alias value/type/derivative observations match its traditional counterpart.",
+          "derivation": "Table9-11 analog column says Yes and9.14 identifies aliases;4.3 supports both styles.",
+          "wrong_implementation": "Support traditional function only, or allow alias only in digital execution.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "System-spelling min checks beside traditional controls",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.2",
+        "relation": "direct-text",
+        "limits": "Section anchor contains Table9-11 continued rows; no per-row anchor. Both Yes columns were checked against PDF236. This is text/table mapping, not runtime evidence."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-NUMERIC",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 61,
+        "pdf_page": 74,
+        "passage": "4.3.1 opening paragraph, operands shall be numeric sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min operands must be numeric integer or real.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "Source-derived restriction needs an isolated relevant diagnostic and separate legal numeric/two-argument control."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "An unconverted nonnumeric aggregate operand is diagnosed; valid scalar integer/real neighbor executes.",
+          "derivation": "4.3.1 opening sentence explicitly constrains operand category; do not mistake packed string/integral coercions for a forbidden aggregate.",
+          "wrong_implementation": "Accept arbitrary aggregate operand by discarding all but the first element.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Exact legal aggregate source/control and diagnostic need independent grammar/type derivation before fixture creation. No unsupported syntax failure credited.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MIN-ARITY",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min row, traditional/system function forms"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "min and $min require the two displayed operands.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "Source-derived restriction needs an isolated relevant diagnostic and separate legal numeric/two-argument control."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "One- and three-argument forms receive relevant argument-count diagnostics; legal two-argument neighbor executes.",
+          "derivation": "Both Table4-14 forms show x,y; full AnnexA grammar dependency review remains pending.",
+          "wrong_implementation": "Blanket-reject all calls or ignore an extra argument.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Historical lowering-unit E0506 checks in system-math report are not production negative execution. Need exact grammar-source corroboration and legal neighbors.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-VALUE-LT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max(x,y) returns the maximum numeric operand value for x<y.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Use integer and real operands, both orders, negative values, zero and positive values; tie branch needs separate partial checks.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "max(2,5) and $max(2,5) both yield 5.",
+          "derivation": "Table4-14 defines minimum/maximum over all x,y. Equality value alone does not identify derivative branch.",
+          "wrong_implementation": "Always select first operand.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/83_max.va",
+              "assertion": "Named CHECKX value assertions; not CHECKI as a type oracle",
+              "runner": "Source fixture inspection only; no execution for this ledger",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ch4-functions-review.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-VALUE-GT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max(x,y) returns the maximum numeric operand value for x>y.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Use integer and real operands, both orders, negative values, zero and positive values; tie branch needs separate partial checks.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "max(5,2) and $max(5,2) both yield 5.",
+          "derivation": "Table4-14 defines minimum/maximum over all x,y. Equality value alone does not identify derivative branch.",
+          "wrong_implementation": "Always select second operand.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/83_max.va",
+              "assertion": "Named CHECKX value assertions; not CHECKI as a type oracle",
+              "runner": "Source fixture inspection only; no execution for this ledger",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ch4-functions-review.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-VALUE-EQ",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max(x,y) returns the maximum numeric operand value for x=y.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Use integer and real operands, both orders, negative values, zero and positive values; tie branch needs separate partial checks.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "max(3,3) and $max(3,3) both yield 3.",
+          "derivation": "Table4-14 defines minimum/maximum over all x,y. Equality value alone does not identify derivative branch.",
+          "wrong_implementation": "Return zero on equal nonzero inputs.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/83_max.va",
+              "assertion": "Named CHECKX value assertions; not CHECKI as a type oracle",
+              "runner": "Source fixture inspection only; no execution for this ledger",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "not-run",
+              "level": "citation",
+              "provenance": "docs/conformance-ch4-functions-review.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-INT-TYPE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, integer min/max rule continuing from printed61"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max with two integer operands returns integer.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "max(1,3)/2 and its system spelling yield integer quotient1, before any integer assignment.",
+          "derivation": "Both operands give integer result3;4.2.4 integer division truncates3/2 to1. Incorrect real result gives1.5.",
+          "wrong_implementation": "Return real for every system-style math call.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_math_result_type_division.va",
+              "assertion": "CHECKX integer max quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            },
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_system_math_result_type_division.va",
+              "assertion": "CHECKX system integer max quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-system-math-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-MIXED-FIRST",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, else both operands/result converted to real"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max converts both operands and result to real when the first operand is real and the other integer.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "max(1.0,3)/2 and $max(1.0,3)/2 yield1.5.",
+          "derivation": "The selected numeric value is3; real conversion occurs before result typing so real division yields1.5 even when the winning source operand was integer.",
+          "wrong_implementation": "Type result from selected operand or first operand instead of both argument types.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_system_math_result_type_division.va",
+              "assertion": "CHECKX system mixed/reverse mixed max quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-system-math-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "System spelling both mixed positions has recorded bounded runtime evidence; traditional opposite-position case and conversion precision/large integers remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-MIXED-SECOND",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, else both operands/result converted to real"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max converts both operands and result to real when the second operand is real and the other integer.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "max(1,3.0)/2 and $max(1,3.0)/2 yield1.5.",
+          "derivation": "The selected numeric value is3; real conversion occurs before result typing so real division yields1.5 even when the winning source operand was integer.",
+          "wrong_implementation": "Type result from selected operand or first operand instead of both argument types.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_system_math_result_type_division.va",
+              "assertion": "CHECKX system mixed/reverse mixed max quotient",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-system-math-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "System spelling both mixed positions has recorded bounded runtime evidence; traditional opposite-position case and conversion precision/large integers remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-REAL-TYPE",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "4.3.1 opening paragraph, else conversion rule"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max with two real operands returns real.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "max(1.0,3.0)/2 yields1.5 for both spellings.",
+          "derivation": "Neither operand pair is both integer; the source's else branch requires real result.",
+          "wrong_implementation": "Convert integral-valued real operands/results to integer.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-TIE-DX",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max at equality selects the second operand derivative: first independent partial is zero.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "At V(p)=V(q)=0.5, ddx(max(V(p),V(q)),V(p))=0, also for $max.",
+          "derivation": "The strict > test is false; selected V(q) has zero partial with respect to independent V(p).",
+          "wrong_implementation": "Use non-strict comparison selecting the first dual value at equality.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX max pq dp and $max pq dp",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        },
+        {
+          "id": "external-host-transition",
+          "kind": "behavior",
+          "boundary": "Sweep one independent input below, equal to, and above the other; swap arguments and repeat across analysis restart.",
+          "analysis": "external analog solver DC/Jacobian integration; transient crossing separately",
+          "state_transition": "Selected smooth branch changes at equality; no cached derivative from preceding evaluation may survive.",
+          "expected": "Contribution I(p)<+max(V(p),V(q)) exports first/second Jacobian partials matching strict branch selection at every sampled operating point. Equality gives0,1.",
+          "derivation": "The contribution expression is the same source-defined function; symbolic derivatives used by Newton must follow the source selection, not merely ddx report values.",
+          "wrong_implementation": "Correct generated testbench Dual while production host uses non-strict min/max or cached prior-branch derivatives.",
+          "mutation_status": "not-run; host artifact and controlled mutation not available in this handoff",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-TIE-DY",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max at equality selects the second operand derivative: second independent partial is one.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "At V(p)=V(q)=0.5, ddx(max(V(p),V(q)),V(q))=1, also for $max.",
+          "derivation": "The selected second argument is the differentiating unknown, whose partial is1.",
+          "wrong_implementation": "Average tie derivatives, yielding0.5 for each partial.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX max pq dq and $max pq dq",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-TIE-SWAP",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max tie selection follows argument position, not variable identity.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "After swapping q,p, partial with respect to p is1 and q is0 for both spellings.",
+          "derivation": "Strict comparison still fails but second operand is now V(p).",
+          "wrong_implementation": "Pin tie derivative to a particular node/order in the symbol table.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX max qp dp/dq and system counterparts",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-TIE-CONSTANT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max tie partial follows constant/variable second operand.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "ddx(max(V(p),0.5),V(p))=0 and ddx(max(0.5,V(p)),V(p))=1 at V(p)=0.5, both spellings.",
+          "derivation": "Selected constant has no dependency; selected variable has unit dependency.",
+          "wrong_implementation": "Specialize constant-operand operations using a different tie comparison.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX max const second/first and system counterparts",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-UNEQUAL-PARTIAL",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max derivatives away from equality follow the selected operand.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "At p=q=0.5, d/dp max(p,q+1)=0; d/dp max(p,q-1)=1, both spellings.",
+          "derivation": "Away from equality the winning branch is smooth; selected p contributes1 and independent q±1 contributes0.",
+          "wrong_implementation": "Repair ties by always selecting second derivatives, breaking unequal inputs.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "CHECKX max unequal +1.0/-1.0 and system counterparts",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-DIGITAL-CONTEXT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "9.2",
+        "printed_page": 223,
+        "pdf_page": 236,
+        "passage": "Table9-11 continued, $max row, digital-context column"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Table9-11 explicitly supports these system functions in digital context.",
+          "source": "AMS9.2 Table9-11"
+        },
+        "verilog-a": {
+          "applicability": "outside",
+          "reason": "This obligation explicitly requires digital-context execution, which the normative analog subset excludes; this is independent of fixture choice.",
+          "source": "AMS AnnexC.7"
+        }
+      },
+      "obligation": "$max is supported in digital context.",
+      "class": "mandatory",
+      "status": "open",
+      "preconditions": "Legal digital initial block, numeric operands; no analog ddx.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "digital event-driven",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "A legal initial-block $max call produces the same independently derived finite value and integer/mixed result-type quotients.",
+          "derivation": "Table9-11 digital column explicitly says Yes; analog-context tests do not exercise this requirement.",
+          "wrong_implementation": "Support aliases only inside analog blocks.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.2",
+        "relation": "direct-text",
+        "limits": "Section anchor contains Table9-11 continued rows; no per-row anchor. Both Yes columns were checked against PDF236. This is text/table mapping, not runtime evidence."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-ANALOG-CONTEXT",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "9.2",
+        "printed_page": 223,
+        "pdf_page": 236,
+        "passage": "Table9-11 continued, $max row, analog-context column"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "$max is supported in analog context.",
+      "class": "mandatory",
+      "status": "partial",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "Alias value/type/derivative observations match its traditional counterpart.",
+          "derivation": "Table9-11 analog column says Yes and9.14 identifies aliases;4.3 supports both styles.",
+          "wrong_implementation": "Support traditional function only, or allow alias only in digital execution.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": [
+            {
+              "fixture": "tests/fixtures/ch04_expressions/audit_minmax_source_selection.va",
+              "assertion": "System-spelling max checks beside traditional controls",
+              "runner": "vera --emit-exe --contract tools/contract.zig, then execute returned testbench path",
+              "revision": "2026-09-23 historical dirty-tree checkpoint; report identifies scoped implementation hashes, not a durable full snapshot",
+              "result": "pass",
+              "level": "production-execution",
+              "provenance": "docs/conformance-minmax-derivative-fix.md",
+              "limits": "Imported historical report, not rerun. No complete fixture/runner/transcript hash bundle. Prescribed-bias generated testbench is not external analog solver integration."
+            }
+          ]
+        }
+      ],
+      "residuals": "Independent decomposition review pending. Finite prescribed-bias evidence is bounded; arbitrary widths, nested composition, external-host solver/Jacobian and analysis-transition coverage remain open.",
+      "html_trace": {
+        "path": "docs/ch9-system.html",
+        "anchor": "s9.2",
+        "relation": "direct-text",
+        "limits": "Section anchor contains Table9-11 continued rows; no per-row anchor. Both Yes columns were checked against PDF236. This is text/table mapping, not runtime evidence."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-NUMERIC",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 61,
+        "pdf_page": 74,
+        "passage": "4.3.1 opening paragraph, operands shall be numeric sentence"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max operands must be numeric integer or real.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "Source-derived restriction needs an isolated relevant diagnostic and separate legal numeric/two-argument control."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "An unconverted nonnumeric aggregate operand is diagnosed; valid scalar integer/real neighbor executes.",
+          "derivation": "4.3.1 opening sentence explicitly constrains operand category; do not mistake packed string/integral coercions for a forbidden aggregate.",
+          "wrong_implementation": "Accept arbitrary aggregate operand by discarding all but the first element.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Exact legal aggregate source/control and diagnostic need independent grammar/type derivation before fixture creation. No unsupported syntax failure credited.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-MAX-ARITY",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 max row, traditional/system function forms"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "max and $max require the two displayed operands.",
+      "class": "prohibition",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "required",
+        "reason": "Source-derived restriction needs an isolated relevant diagnostic and separate legal numeric/two-argument control."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "diagnostic",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "One- and three-argument forms receive relevant argument-count diagnostics; legal two-argument neighbor executes.",
+          "derivation": "Both Table4-14 forms show x,y; full AnnexA grammar dependency review remains pending.",
+          "wrong_implementation": "Blanket-reject all calls or ignore an extra argument.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "Historical lowering-unit E0506 checks in system-math report are not production negative execution. Need exact grammar-source corroboration and legal neighbors.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "direct-text",
+        "limits": "Anchor contains numeric/result typing, Table4-14 and conditional identities. Case expectations are derivations, not verbatim additional source clauses; ddx dependency is separately at4.5.6."
+      }
+    },
+    {
+      "id": "AMS-MINMAX-NONFINITE-SIGNEDZERO",
+      "source": {
+        "document": "Accellera Verilog-AMS LRM",
+        "edition": "2023",
+        "sha256": "e93b5b6a767fe10e0e4a3ef312ffdc67907ffcc3c7553d16e04e03383a99c134",
+        "clause": "4.3.1",
+        "printed_page": 62,
+        "pdf_page": 75,
+        "passage": "Table4-14 min/max rows and following derivative-discontinuity conditional identities"
+      },
+      "profiles": {
+        "verilog-ams": {
+          "applicability": "applies",
+          "reason": "Clause4 mathematical behavior is part of the full language.",
+          "source": "AMS4.3/4.3.1"
+        },
+        "verilog-a": {
+          "applicability": "applies",
+          "reason": "AnnexC.5 includes Clause4 except case equality; numeric min/max is not excluded.",
+          "source": "AMS AnnexC.5; C.11 for system style"
+        }
+      },
+      "obligation": "Resolve nonfinite and signed-zero value/derivative paths without silently treating host C behavior as the AMS oracle.",
+      "class": "ambiguous",
+      "status": "open",
+      "preconditions": "Legal analog context with scalar numeric operands; derivative cases use independent branch-potential probes.",
+      "cross_references": "AMS4.2.4 integer division;4.2.13 conditional semantics;4.5.6 symbolic partials;9.14 aliases;9.2 Table9-11 context;AnnexC.5/C.7/C.11.",
+      "invalid_input": {
+        "disposition": "not-applicable",
+        "reason": "Legal value/type/derivative behavior; do not invent a domain rejection when Table4-14 permits all numeric x/y. Syntax/numeric restrictions have separate rows."
+      },
+      "cases": [
+        {
+          "id": "primary",
+          "kind": "behavior",
+          "boundary": "Both traditional and system spellings; finite scalar numeric operands.",
+          "analysis": "analog prescribed operating point",
+          "state_transition": "Evaluate at a fixed operating point; no adaptive transient or analysis restart is implied.",
+          "expected": "No unique full-language NaN or signed-zero oracle asserted here; preserve literal strict-comparison helper regression separately.",
+          "derivation": "The conditional identities are explicitly supplied in the derivative-discontinuity context; Table4-14 also names C fmin/fmax. Complete unordered/nonfinite/representation authority needs independent review.",
+          "wrong_implementation": "Equate C fmin NaN behavior with the literal conditional helper without source reconciliation.",
+          "mutation_status": "not-run for ledger; pre-fix observations in reports are historical defect evidence, not an executed controlled mutation.",
+          "evidence": []
+        }
+      ],
+      "residuals": "OPEN: numeric representation/IEEE inheritance, signed-zero observation, NaN/unordered inputs, all scalar backends and constant folding. Existing helper tests establish implementation behavior only.",
+      "html_trace": {
+        "path": "docs/ch4-expressions.html",
+        "anchor": "s4-3-1",
+        "relation": "unresolved",
+        "limits": "Anchor contains conditional identities and C function-name mapping, but does not settle a universal NaN/signed-zero oracle."
+      }
+    }
+  ]
+}

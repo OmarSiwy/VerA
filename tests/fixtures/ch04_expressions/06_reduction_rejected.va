@@ -1,22 +1,22 @@
-// LRM 4.2.10, the whole clause, verbatim: "The reduction operators can not be
+// LRM 4.2.10's prohibition: "The reduction operators can not be
 // used inside the analog block and only have meaning when used in the digital
 // context."
 //
 // There is no carve-out and no analog form: `&`, `|`, `~&` and `~|` are banned
 // here exactly as `^`, `~^` and `^~` are. The xor spellings are pinned
-// separately by 07_reduction_xor_rejected.va — it demands E0320, the code that
-// states the subset rule, and is xfail for the same reason this one is — so 06
-// and 07 together read as the one rule 4.2.10 states.
+// separately by 07_reduction_xor_rejected.va and the audit_reduction_xnor_*
+// fixtures. This file now isolates |; its formerly combined &, ~& and ~|
+// obligations move to audit_reduction_and_rejected.va,
+// audit_reduction_nand_rejected.va and audit_reduction_nor_rejected.va.
 //
 // This replaces a fixture that ASSERTED the four operators' IEEE 1364 values
 // inside `analog begin` and called the LRM ban a VerA extension. A conforming
 // compiler diagnoses that file and fails it; only VerA passed it. The suite
 // tests conformance, so the requirement is written the way the LRM writes it
-// and the gap is recorded on the xfail line.
+// rather than accepting an implementation extension as the expected result.
 //
 //! lrm 4.2.10
-//! reject reduction
-//! reject analog block
+//! reject E0348
 module ch04_reduction_rejected(p, n);
     inout p, n;
     electrical p, n;
@@ -25,9 +25,6 @@ module ch04_reduction_rejected(p, n);
     analog begin
         bits = 15;
         value = (|bits);
-        value = value + (&bits);
-        value = value + (~|bits);
-        value = value + (~&bits);
         I(p, n) <+ value;
     end
 endmodule

@@ -1,0 +1,13 @@
+// AMS §9.19 physical264: $param_given takes a single parameter identifier.
+// A declared real VARIABLE is not a parameter even when its value is constant.
+// Legal neighbors are audit_binding_source_overrides.va's gain parameters.
+// The distinctive rejection phrase below is the intended diagnostic contract,
+// pending implementation; current VerA accepts this source without a diagnostic.
+//! lrm 9.19
+//! reject $param_given requires a parameter identifier
+//! xfail VerA accepts a variable identifier as $param_given's parameter argument; AMS 9.19 requires a parameter identifier.
+module audit_param_given_variable_rejected;
+  real value;
+  integer flag;
+  analog flag = $param_given(value);
+endmodule

@@ -25,9 +25,12 @@
 // never declared — or is matching `(01)` as if it were a level, which would
 // make the first entry fire on a steady a=0 and change the function.
 //
-// Every other part is well formed: A.5.2's port order (output first, inputs
-// after), a two-input table, legal `output_symbol`s. The edge descriptor is the
-// only defect.
+// The old `? ? : 0` fallback also covered all-x with a known output and could
+// conflict with another row. IEEE8.1.4 forbids those independent defects.
+// The replacement `1 1 : 0` is disjoint from the first row's b=0. A matching
+// legal definition changes only `(01)` to level1; see
+// tools/udp-audit-controls/combinational_level_legal.v. The edge descriptor is
+// now the isolated table-shape defect (UDP-SHAPE-001 in the audit report).
 //
 // WHAT THE DIRECTIVES DEMAND, AND WHY THEY ARE NOT `DiagnosticsReported`.
 // This file carried `//! reject DiagnosticsReported` until review. That label
@@ -47,13 +50,9 @@
 // UDPs are not supported" satisfies the first and not the second; a generic
 // parse error satisfies neither.
 //
-// No `E0xxx` is written, and that is deliberate rather than lazy:
-// `lib/diag_code.zig` has no code for a UDP table shape violation today, and a
-// fixtures-only row may not mint one in `src/`. Prose is the weaker of the two
-// forms the runner accepts — it pins wording, where a code pins the rule
-// (torture.zig:248-252). Whoever implements UDPs should allocate the code for
-// "edge indicator in a combinational UDP body" and replace these two lines with
-// it. Replace, not delete: a bare `DiagnosticsReported` must not come back.
+// Current parser code E0234 identifies table shape violations. The two
+// distinctive phrases below remain required, preserving the existing strict
+// diagnostic oracle rather than accepting any unrelated unsupported feature.
 //
 //! lrm A.5.3
 //! reject combinational
@@ -66,7 +65,7 @@ primitive udp_bad_edge (o, a, b);
   table
   //  a     b  :  o
      (01)   0  :  1  ;
-      ?     ?  :  0  ;
+      1     1  :  0  ;
   endtable
 endprimitive
 

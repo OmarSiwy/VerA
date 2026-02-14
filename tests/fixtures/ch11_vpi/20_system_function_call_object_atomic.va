@@ -1,3 +1,6 @@
+// Source-audit correction: this HDL-only fixture does not execute VPI.
+// Chapter 11 API/object-model obligations remain open in
+// docs/conformance-ch11-review-draft.md; only language clauses are credited.
 // §11.6.16 sys func call, the half of the object that 06 cannot reach: the
 // clause gives the sys task call / sys func call class the properties
 // `-> value — vpi_put_value(), vpi_get_value()` and
@@ -20,7 +23,6 @@
 // At V(p)=1.5, V(n)=0.25 the branch potential is 1.5 - 0.25 = 1.25 V; the
 // second check is that the valued system call alongside it disturbs nothing.
 //
-//! lrm 11.6.16
 //! lrm 9.15
 //! temp 350.25
 //! bias V(p) = 1.5, V(n) = 0.25

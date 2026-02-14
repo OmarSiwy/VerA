@@ -1,3 +1,5 @@
+// Source-review evidence boundary: retained HDL test does not execute the VPI
+// contract. Chapter12 behavioral obligations are tracked in COVERAGE.md.
 // VAMS-12.32  (ch12-vpi-routines.html) — uniqueness is a property of the
 // REGISTRATION, not of the call sites.
 //
@@ -30,8 +32,6 @@
 // 1 + 2 + 4 = 7: it is reachable only if BOTH calls are accepted and neither
 // aborts the block.
 //
-//! lrm 12.32
-//! lrm 12.33.1
 //! lrm 5.3.1
 `include "check.vh"
 module ch12_systf_name_repeated_call_sites(p, n);

@@ -8,14 +8,13 @@
 // two directions are separate checks — a compiler that coerces everything to
 // real passes the string-parameter case and fails this one.
 //
-// The derived-type half of the same sentence is not testable here: it needs an
-// override that supplies a string to a parameter whose type was derived as real,
-// and the harness's `//! param` binding takes a number, so there is no way to
-// present that override to the front end. It is the one clause of §3.4.1 this
-// chapter leaves unheld.
+// The derived-type/override forms are not exercised by this fixture. Numeric
+// `//! param` bindings cannot supply a string, but that harness limitation is
+// not a language prohibition or evidence that source-level instance overrides
+// are untestable. Those paths remain separate obligations in the parameter audit.
 //
 //! lrm 3.4.1
-//! reject DiagnosticsReported
+//! reject E0345
 module ch3_real_parameter_from_string(p, n);
     inout p, n;
     electrical p, n;

@@ -1,0 +1,11 @@
+// LRM 2.9.2, desc: "The attribute must be assigned a string."
+// 7 is an integer constant, not a string. Isolate this violation so a check
+// for op or multiplicity alone cannot satisfy this fixture.
+//! lrm 2.9.2
+//! reject E0358
+module ch02_desc_attribute_numeric_rejected(p, n);
+    inout p, n;
+    electrical p, n;
+    (* desc = 7 *) parameter real gain = 1.0;
+    analog I(p, n) <+ gain * V(p, n);
+endmodule

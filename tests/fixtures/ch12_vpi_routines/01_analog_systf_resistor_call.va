@@ -1,3 +1,5 @@
+// Source-review evidence boundary: retained HDL test does not execute the VPI
+// contract. Chapter12 behavioral obligations are tracked in COVERAGE.md.
 // VAMS-12.22.2  (ch12-vpi-routines.html) — the LRM's own $resistor() example.
 //
 // `$resistor(curr, V(p,n), r)` is a USER-DEFINED analog system task: it exists
@@ -37,7 +39,6 @@
 //     at any nonzero bias a host-linked conforming tool would fail it. The
 //     output argument is out of reach from source. Leave it out.
 //
-//! lrm 12.22.2
 //! lrm 5.3.1
 `include "check.vh"
 module ch12_analog_systf_resistor_call(p, n);
