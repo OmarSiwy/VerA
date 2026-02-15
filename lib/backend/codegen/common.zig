@@ -1,0 +1,153 @@
+//! The shared core: values several units read, computed once per eval.
+//!
+//! In: every unit's backward slice. Out: the core's live-out set and its emission order
+//! (the part of eval/q all units share).
+//!
+//! LRM clauses this file's code cites: §4.5, §5.9, §5.10, §9.4.
+//!
+//! Cut verbatim from `codegen.zig`. Functions take `self: *Gen` and are called
+//! directly, `gen_common.f(self, ...)`; `codegen.zig` aliases only what other modules call.
+
+const std = @import("std");
+const codegen = @import("../codegen.zig");
+const Gen = codegen.Gen;
+const Mir = @import("ir").Mir;
+const proof = @import("ir").proof;
+const naming = @import("../naming.zig");
+const Error = codegen.Error;
+const none_u32 = codegen.none_u32;
+
+// ---------------------------------------------------- the shared core ----
+//
+// WHY THIS EXISTS. `emitUnit` renders the full backward slice of one
+// `Mir.Value` through a CFG all the units share, so ~105 units each emit the
+// same core: `hisimhv_va` measured 1 220 929 emitted values across 58 units
+// of which 22 214 distinct values appear in two or more — 190 MB of output
+// from 614 K of source.
+// CORPUS: `hisimhv_va` is one of the 38 foundry models in the ARPice host
+// repo (`../ARPice/src/devices/models`; `VERA_MODELS` overrides the path).
+// NOT vendored here and no fixture is within three orders of magnitude of
+// it, so every number in this block needs that checkout to re-measure.
+//
+// Recomputing the shared subexpressions per unit was the ORIGINAL shape and
+// it was deliberate: an anonymous subexpression was never promoted to a
+// hidden shared decl, so that every unit stayed independently skippable by
+// `zig -fincremental`. That justification does not hold, and naming.zig's
+// header already concedes the same point for NAMED units — `zig` tracks a
+// declaration by name and dirties its consumers correctly when it changes.
+// A shared declaration is therefore BETTER for incrementality, not worse —
+// one declaration to re-analyse instead of 58 copies of it — and the units'
+// own tails stay independently skippable either way.
+//
+// WHY ONE DECLARATION AND NOT ONE PER VALUE. The obvious shape — a function
+// per shared value, calling the functions of its operands — is wrong, and
+// measurably so: the shared values form a DAG, so a value reachable by two
+// paths would be recomputed once per path, and the cost is exponential in
+// the DAG depth. The values have to be computed ONCE and PASSED.
+//
+// WHY *EVERY* TARGET IS IN IT, and not just the ≥K-shared subexpressions.
+// Hoisting a shared region and leaving a per-unit tail behind was measured,
+// and it is the wrong shape twice over:
+//
+//   SIZE. The tails are not tails. `emitCode` walks the whole reachable CFG
+//   for every unit, so each one re-materialises every merge block and every
+//   §5.9 loop whether or not it computes anything in them. On `hisimhv_va`
+//   the 58 tails were 378 634 lines of which 10 830 — 2.86% — were
+//   arithmetic; the median tail was 6 007 lines containing 6 operations.
+//   Folding the targets into the core deletes all of it: 440 124 → 59 986
+//   lines, 23.73 → 3.25 MB. The merged body is the same size as the core
+//   already was (60 061 lines), because the tails carried no information.
+//
+//   RUNTIME. Every tail opened with `const c = core(...)`, so one `eval`
+//   evaluated the core once per contribution — 40 times on `hisimhv_va`,
+//   30 on `vbic13_4t`. LLVM does NOT recover this: built -OReleaseFast it
+//   inlines all 30 `vbic13_4t` tails into the caller and still emits 30
+//   calls to the core (`objdump | grep -c core` = 30), because it cannot
+//   prove a 60 000-line two-pointer function `readonly willreturn`. Merging
+//   is therefore a runtime fix, not a size optimisation: one core per
+//   `eval`, one per `q`.
+//   CORPUS: `vbic13_4t` is the public VBIC 1.3 four-terminal reference
+//   Verilog-A, from the same 38-model set — likewise not vendored here.
+//
+// WHAT IS LOST. The per-unit `@setFloatMode` — see `common_mode`. Nothing
+// else: `contract.zig` exposes only `eval`/`q`, and engine.zig (:511, :534,
+// :1216) always evaluates the whole residual, so a unit was never
+// independently callable in the first place.
+
+/// Decide what the one emitted body returns: every unit target, deduplicated
+/// and in job order.
+///
+/// Job order — contributions in source order, then §4.5 operator inputs,
+/// then §9.4 display — is what makes `f<k>` insert-tolerant in the same
+/// sense `naming.zig` makes declaration names insert-tolerant: adding a
+/// contribution at the end of a module appends fields, it does not renumber
+/// them.
+pub fn planCommon(self: *Gen) Error!void {
+    const a = self.arena;
+    self.lo_idx = try a.alloc(u32, self.an.nv);
+    @memset(self.lo_idx, none_u32);
+
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    var mode: proof.FloatMode = .optimized;
+    for (self.jobs) |job| {
+        // §9.4 the display root stays OUT: the core runs once per `eval`,
+        // and printing once per Newton iteration is exactly what
+        // `emitDisplay` exists to prevent. It keeps its own declaration and
+        // reads the core like the units used to.
+        if (job.is_display) continue;
+        mode = .strictest(mode, job.mode);
+        const v = self.an.rv(job.target);
+        if (v == .f_zero) continue; // an operator with no input; rendered inline
+        if (self.lo_idx[@intFromEnum(v)] != none_u32) continue;
+        self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
+        try vals.append(a, v);
+    }
+    // Path-latch operands ride the same live-out queue: `updateState`'s
+    // single core(R) sweep is where their staged values come from.
+    {
+        var pv: std.ArrayList(Mir.Value) = .empty;
+        var pl: std.ArrayList(u32) = .empty;
+        var qv: std.ArrayList(Mir.Value) = .empty;
+        var ql: std.ArrayList(u32) = .empty;
+        for (0..self.mir.insts.len) |ii| {
+            const row = self.mir.insts.get(ii);
+            if (row.op != .path_prev and row.op != .path_acc) continue;
+            const fam_v = if (row.op == .path_prev) &pv else &qv;
+            const fam_l = if (row.op == .path_prev) &pl else &ql;
+            const v = self.an.rv(@enumFromInt(row.a));
+            // ponytail: keep first-seen order with the stdlib membership scan.
+            if (std.mem.indexOfScalar(Mir.Value, fam_v.items, v) != null) continue;
+            if (self.lo_idx[@intFromEnum(v)] == none_u32) {
+                self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
+                try vals.append(a, v);
+            }
+            try fam_v.append(a, v);
+            try fam_l.append(a, self.lo_idx[@intFromEnum(v)]);
+        }
+        self.prev_vals = pv.items;
+        self.prev_lo = pl.items;
+        self.acc_vals = qv.items;
+        self.acc_lo = ql.items;
+    }
+    self.common_mode = mode;
+    self.lo_vals = vals.items;
+    // §5.10 which core field each held variable's write-back reads. Done
+    // here rather than by scanning `jobs` in `emitStateMachine`, because
+    // `lo_idx` is only meaningful once every job has been folded in.
+    self.held_idx = try a.alloc(u32, self.lower.held_vars.items.len);
+    for (self.lower.held_vars.items, 0..) |h, i| {
+        const v = self.an.rv(h.final);
+        self.held_idx[i] = if (v == .f_zero) none_u32 else self.lo_idx[@intFromEnum(v)];
+    }
+    if (self.lo_vals.len == 0) return;
+
+    var buf: [naming.max_name_len]u8 = undefined;
+    const n = naming.unitName(&buf, self.mir.name, .{
+        .role = .common,
+        // A single declaration, so the target is a fixed word rather than a
+        // key: naming.zig's insert-tolerance is about the NAME not moving,
+        // and this one cannot.
+        .target = "core",
+    }) catch return error.NameTooLong;
+    self.common_name = try a.dupe(u8, n);
+}
