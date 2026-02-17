@@ -114,10 +114,10 @@ const usage_text =
     \\  --allow/--warn/--deny/--forbid=CODE   per-code lint level
     \\  --unknown-bound=X       solver compliance limit (see --explain W0650)
     \\  --outline-chunk=N       split huge bodies into ~N-statement noinline
-    \\                          functions; the GPU-kernel lever (NVPTX chokes
-    \\                          on monolithic cores). 0 = never (default).
-    \\                          Costs host eval speed - codegen.Options has
-    \\                          the measurements
+    \\                          functions. 0 = never (default). Slower at
+    \\                          runtime; only for debug-info builds of very
+    \\                          large models, N in the thousands.
+    \\                          codegen.Options has the measurements
     \\
 ;
 

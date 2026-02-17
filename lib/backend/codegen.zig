@@ -175,26 +175,21 @@ pub const Options = struct {
     /// Outline a huge body into `noinline` chunk functions of ~this many
     /// statements each (0 = never, the default). See `emitUnitBody`.
     ///
-    /// MEASURED (bsim4va/hisimhv/bsimsoi, zig 0.16 / LLVM 21, -OReleaseFast):
-    ///   - nvptx64 (GPU kernels): the whole point. The monolithic bsim4va
-    ///     core takes the NVPTX backend 2 min 24 s and emits 1.2 GB of PTX
-    ///     (register-file spill storm — ../ARPice/docs/gpu-device-eval.md §4);
-    ///     chunked at 300 it is 1.3 s and 26 MB. Pass `--outline-chunk=300`
-    ///     when generating a model a GPU kernel root will compile.
-    ///   - host, -fstrip (how release hosts build): NEUTRAL to slightly
-    ///     negative (bsim4va 1.35 s -> 1.95 s) — the monolith's superlinear
-    ///     term was DWARF, which stripping already removes.
-    ///   - host, debug info on: 2.6-3.5x faster (6.4 s -> 2.3 s bsim4va,
-    ///     14 s -> 4.1 s hisimhv).
-    ///   - host RUNTIME of eval: 1.8-3x SLOWER chunked — cross-chunk values
-    ///     live in memory (the shared hoist arrays) where the monolith held
-    ///     them in registers; chunk-local `var`s claw back part (9.99 s ->
-    ///     7.58 s per 1e6 bsim4va evals at 300, monolith 3.18 s) and bigger
-    ///     chunks help (5.87 s at 2000), but no size meets a 2% budget.
+    /// MEASURED 2026-09-23 (zig 0.16 / LLVM 21, -OReleaseFast, one bsim4va
+    /// `evalQ` over the host's Dual(18); scratch harness, not in the tree):
+    ///   - The GPU blowup this knob was added for (2 min, 1.2 GB) is DWARF,
+    ///     not code size: nvptx64 unchunked is 123 s / 1.56 GB RSS with debug
+    ///     info and 3.7 s / 232 MB stripped. Stripped is how GPU roots build.
+    ///   - Chunked GPU code is WORSE: local memory per thread 14 KB -> 178 KB,
+    ///     ld/st.local 644 -> 5204. Host runtime 3.4 -> 9.5 us per eval.
+    ///   - LLVM goes superlinear past ~5-10k Dual ops in ONE function; only
+    ///     hisimhv-sized cores are near that. A chunk that helps there is
+    ///     ~2500 ops, not 300.
     ///
-    /// So: OFF unless the artifact is a GPU kernel or a build-time-bound
-    /// development loop. Emitted values are the same statements either way —
-    /// verified bit-identical (f, q, all partials) on the three models above.
+    /// So: OFF by default and for GPU roots that strip. Use it for a debug-info
+    /// build of a very large model, with a size in the thousands. Emitted
+    /// values are the same statements either way (f, q and all partials were
+    /// verified bit-identical when this landed).
     outline_chunk: u32 = 0,
 };
 

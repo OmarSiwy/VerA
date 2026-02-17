@@ -49,10 +49,11 @@ rest.
 
 Three flags matter to you:
 
-- `--outline-chunk=300` if a GPU kernel will compile the model. Without it, a
-  bsim4va core takes the NVPTX backend 2 min 24 s and emits 1.2 GB of PTX. With
-  it, 1.3 s and 26 MB. Leave it off for host builds, where it costs 1.8x to 3x
-  at runtime.
+- `--outline-chunk=N` cuts a very large model's core into functions of about
+  N statements. Leave it off: the old GPU compile blowup was debug info, and a
+  stripped bsim4va compiles for NVPTX in 3.7 s unchunked. Chunking costs 2.8x
+  at runtime and 12x GPU local memory. It helps only a debug-info build of a
+  hisimhv-sized model, at N in the thousands.
 - `--jac-f32` records that your device tolerates a single-precision derivative
   half. It emits a `pub const`, not different arithmetic, so the width stays your
   choice per target.
