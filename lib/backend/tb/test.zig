@@ -149,6 +149,15 @@ test "directives: an lrm cite is a section, and an xfail points either way" {
     try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! lrm Z.1\n"));
     try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! lrm\n"));
 
+    // An IEEE 1364 clause is not a clause of this LRM, so it never reaches
+    // `lrm` — and `lrm` still refuses one spelled as if it were.
+    const inh = try tb_directive.parse(arena, "//! inherited IEEE 1364-2005 18.1 ($dumpfile)\n//! inherited IEEE 1364-2005 8.1.4,8.2\n");
+    try testing.expectEqual(@as(usize, 0), inh.lrm.len);
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! lrm inherited IEEE 1364-2005 18.1\n"));
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! inherited 18.1\n"));
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! inherited IEEE 1364-2005 §18\n"));
+    try testing.expectError(error.BadLrmSection, tb_directive.parse(arena, "//! inherited IEEE 1364-2005\n"));
+
     // On a RUN fixture too: "the LRM prints this example and VerA cannot build
     // it yet" is the more common gap, and it has to be sayable.
     const run = try tb_directive.parse(arena, "//! xfail no array formals in analog functions\n");

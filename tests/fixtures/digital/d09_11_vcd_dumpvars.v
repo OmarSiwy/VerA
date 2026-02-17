@@ -79,8 +79,8 @@
 // a size-limit comment when the limit is reached. Deleting those sections is
 // permitted only for the old snapshot comparison, not a conformance check.
 //
-//! lrm inherited IEEE 1364-2005 18.1 ($dumpfile, $dumpvars)
-//! lrm inherited IEEE 1364-2005 18.2 (VCD format, identifier codes, value changes)
+//! inherited IEEE 1364-2005 18.1 ($dumpfile, $dumpvars)
+//! inherited IEEE 1364-2005 18.2 (VCD format, identifier codes, value changes)
 //! expect vcd d09_vcd.vcd == 11_vcd_dumpvars.expected.vcd
 `timescale 1ns/1ns
 module d09_vcd;

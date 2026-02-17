@@ -131,6 +131,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
         } else if (std.mem.eql(u8, kw, "lrm")) {
             if (!validSection(rest)) return error.BadLrmSection;
             try lrm.append(arena, try arena.dupe(u8, rest));
+        } else if (std.mem.eql(u8, kw, "inherited")) {
+            // `IEEE 1364-2005 18.1 (...)` — a clause §1.1 inherits whole, in
+            // the spelling the digital fixtures already use. NOT an `lrm`
+            // cite: `--coverage` counts clauses of THIS LRM, and 1364's are
+            // not (`harness.zig`'s `clausePrefix`). Checked, then dropped;
+            // measure B is hand-read, so nothing consumes it yet.
+            if (!validInherited(rest)) return error.BadLrmSection;
         } else if (std.mem.eql(u8, kw, "xfail")) {
             // The whole rest of the line is the reason, verbatim — it is prose
             // a human reads out of a failing run, not an operand.
@@ -176,6 +183,16 @@ pub fn validSection(s: []const u8) bool {
     if (!annex and !digits(first)) return false;
     while (it.next()) |part| if (!digits(part)) return false;
     return true;
+}
+
+/// Is this an `//! inherited` cite — `IEEE 1364-2005 17.2.9`, optionally
+/// followed by more clauses or a parenthesised note? Only the first clause is
+/// checked, with `validSection`'s own looseness.
+pub fn validInherited(s: []const u8) bool {
+    const std_name = "IEEE 1364-2005 ";
+    if (!std.mem.startsWith(u8, s, std_name)) return false;
+    const rest = s[std_name.len..];
+    return validSection(rest[0 .. std.mem.indexOfAny(u8, rest, " ,") orelse rest.len]);
 }
 
 pub fn digits(s: []const u8) bool {
