@@ -640,7 +640,7 @@ What changed at v0.0.3 is that the failure is now *reported* instead of silent.
 
 | # | Obligation | Verdict |
 |---|---|---|
-| 18.1-01 | `$dumpfile` — name the dump file, once per simulation | **missing** — digital: E1100 not-implemented; analog: silently accepted, exit 0 |
+| 18.1-01 | `$dumpfile` — name the dump file ("once per simulation" withdrawn 2026-09-23: §18.1.1 states no such limit, and `d09_90`, which refused a second call, is deleted) | **missing** — digital: E1100 not-implemented; analog: silently accepted, exit 0 |
 | 18.1-02 | `$dumpvars` — no args = whole design; depth argument; scope/variable arguments | **missing** — `d09_11_vcd_dumpvars.v` pins it; nothing runs the file |
 | 18.1-03 | `$dumpoff` / `$dumpon` — suspend and resume, with the `$dumpoff` all-x checkpoint | **missing** — `d09_12_vcd_dumpoff_on.v` pins it; nothing runs the file |
 | 18.1-04 | `$dumpall` — checkpoint of all selected variables | **missing** — same fixture, same non-execution |
