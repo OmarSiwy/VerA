@@ -34,12 +34,15 @@
 // the tempting future "fix" of re-reading `assign y = #5 a;` as
 // `assign #5 y = a;`, which would make the file compile and this directive fail.
 //
+// ROUTE. This is a digital rule, so the file runs under the digital runner
+// (`vera --run`). On the legacy analog compile route `assign` is itself
+// E0205, which says nothing about the rule above.
+// digital-runner: reject
 //! reject E0209
-//! lrm annex A.6.1
-//! lrm annex A.6.2
+//! lrm A.6.1
+//! lrm A.6.2
 //! lrm 8.5.3.1
 //! lrm 8.5.3.3
-//! timescale 1ns/1ns
 
 `timescale 1ns/1ns
 module reject_intra_assign_on_net;
