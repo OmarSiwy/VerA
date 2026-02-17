@@ -551,6 +551,60 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
     };
 }
 
+/// §6.5.3 and §3.7, the two `wreal` rules about STRUCTURE rather than value.
+/// Checked on the parsed file, before the parser's E1100 for `wreal` itself
+/// stops the run, so a file that breaks one hears the LRM's reason and not
+/// only "not implemented" — and keeps hearing it once `wreal` runs.
+// ponytail: drivers are counted per module (assigns and the declaration's
+// own `=`); a driver arriving through a port is not. Counting those needs the
+// elaborated net, which `declare` builds after this.
+fn wrealRules(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) std.mem.Allocator.Error!void {
+    const ex = &file.exprs;
+    for (file.modules) |*m| {
+        for (m.nets) |n| if (n.kind == .wreal) try wrealDrivers(file, starts, bag, m, n.name, n.init != .none);
+        for (m.ports) |p| if (p.kind == .wreal) try wrealDrivers(file, starts, bag, m, p.name, false);
+        for (m.instances) |inst| {
+            const child = for (file.modules) |*c| {
+                if (c.name == inst.module) break c;
+            } else continue;
+            for (inst.ports, 0..) |conn, i| {
+                if (conn.expr == .none or ex.tag(conn.expr) != .ident) continue;
+                const port = if (conn.name == .none) (if (i < child.ports.len) child.ports[i] else continue) else for (child.ports) |p| {
+                    if (p.name == conn.name) break p;
+                } else continue;
+                // A name the parent never declared as a net is a variable
+                // (a real expression, which 3.7 allows) or an implicit wire.
+                const outer = netKind(m, ex.strOf(conn.expr)) orelse continue;
+                if ((outer == .wreal) == (port.kind == .wreal)) continue;
+                const other = if (outer == .wreal) port.kind else outer;
+                if (other == .wire or other == .tri) continue;
+                const start = starts[@min(conn.main_tok, starts.len - 1)];
+                try bag.add(.lower, .E0919, .{ .start = start, .end = start }, "`{s}` is a {s} and port `{s}` is a {s}", .{
+                    file.str(ex.strOf(conn.expr)), @tagName(outer), file.str(port.name), @tagName(port.kind),
+                });
+            }
+        }
+    }
+}
+
+fn wrealDrivers(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag, m: *const Ast.ModuleDecl, name: Ast.StrId, declared: bool) std.mem.Allocator.Error!void {
+    var count: u32 = @intFromBool(declared);
+    for (m.assigns) |a| {
+        if (a.target == .none or file.exprs.tag(a.target) != .ident or file.exprs.strOf(a.target) != name) continue;
+        count += 1;
+        if (count != 2) continue;
+        const start = starts[@min(a.main_tok, starts.len - 1)];
+        try bag.add(.lower, .E0918, .{ .start = start, .end = start }, "`{s}` is already driven", .{file.str(name)});
+    }
+}
+
+/// The declared net type of `name` in `m`, or null if `m` declares no such net.
+fn netKind(m: *const Ast.ModuleDecl, name: Ast.StrId) ?Ast.NetKind {
+    for (m.ports) |p| if (p.name == name) return p.kind;
+    for (m.nets) |n| if (n.name == name) return n.kind;
+    return null;
+}
+
 // ---- the driver (§6.2.2, §6.1, §7.9, §17.3) ---------------------------------
 
 /// Callers own the run arena and diagnostic source lifetime. No analog lowering,
@@ -565,10 +619,13 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     var tokens = try Front.Lexer.Lexer.tokenize(arena, text);
     var parser = Front.Parser.Parser.init(arena, text, tokens.items(.tag), tokens.items(.start), bag);
     parser.digital = true;
-    const file = parser.parseSourceFile() catch |e| return switch (e) {
-        error.OutOfMemory => error.OutOfMemory,
-        error.ParseError => error.DigitalFailed,
+    // A failed parse still leaves every recovered module in `parser.file`, and
+    // the `wreal` refusal is itself a parse error, so the rules read that.
+    const file = parser.parseSourceFile() catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ParseError => parser.file,
     };
+    try wrealRules(&file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
     var r: Run = .{ .arena = arena, .file = &file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives };
     if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
@@ -818,6 +875,28 @@ pub fn expectRejected(source: []const u8, message: []const u8) !void {
     try std.testing.expect(std.mem.indexOf(u8, messages.written(), message) != null);
 }
 
+test "a legal wreal hears only the E1100, never the structural wreal codes" {
+    // §3.7's compatible list is wire, tri and wreal, and one driver is legal.
+    const legal = [_][]const u8{
+        "module m; real a; wreal w; assign w = a; endmodule",
+        "module c(o); output o; wreal o; endmodule\nmodule m; wire n; c u(.o(n)); endmodule",
+        "module c(o); output o; wreal o; endmodule\nmodule m; tri n; c u(n); endmodule",
+        "module c(o); output o; wreal o; endmodule\nmodule m; wreal n; c u(n); endmodule",
+    };
+    for (legal) |source| {
+        var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+        defer arena.deinit();
+        var bag = diag.Bag.init(arena.allocator());
+        var output = std.Io.Writer.Allocating.init(arena.allocator());
+        try std.testing.expectError(error.DigitalFailed, run(arena.allocator(), source, .{}, &bag, &output.writer));
+        var messages = std.Io.Writer.Allocating.init(arena.allocator());
+        try diag.render(&bag, &messages.writer, .{});
+        try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E1100") != null);
+        try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E0918") == null);
+        try std.testing.expect(std.mem.indexOf(u8, messages.written(), "E0919") == null);
+    }
+}
+
 test "the net and array declaration boundaries are explicit" {
     // §6.1/§6.2.2: neither form of assignment accepts the other's target.
     try expectRejected("module m; wire w; initial w = 1; endmodule", "no procedural assignment to a net");
@@ -825,6 +904,13 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; wire w; reg a; assign w[0] = a; endmodule", "whole-variable");
     // §7.9 uwire resolves nothing, so a second driver is an error.
     try expectRejected("module m; uwire u; reg a,b; assign u = a; assign u = b; endmodule", "uwire net accepts a single driver");
+    // §6.5.3 a wreal has at most one driver, and §3.7 closes the list of net
+    // types a port may join it to. Both are named even though `wreal` itself
+    // is still E1100.
+    try expectRejected("module m; real a,b; wreal w; assign w = a; assign w = b; endmodule", "E0918");
+    try expectRejected("module m; real a; wreal w = a; assign w = a; endmodule", "E0918");
+    try expectRejected("module c(o); output o; wreal o; endmodule\nmodule m; wand n; c u(.o(n)); endmodule", "E0919");
+    try expectRejected("module c(o); output o; wand o; endmodule\nmodule m; wreal n; c u(n); endmodule", "E0919");
     // A.2.2.2: every alternative pairs ONE 0-side spec with ONE 1-side spec,
     // and `charge_strength` is a different production that A.2.1.3 grants only
     // to `trireg`. A parser that read "any parenthesised strength after any net

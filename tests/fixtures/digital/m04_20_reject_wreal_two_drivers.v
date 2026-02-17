@@ -32,12 +32,17 @@
 // matched against each diagnostic's message, point and catalogue title
 // (`failureContains`, tests/torture.zig:210-245), so it demands that whatever
 // refuses this file refuses it for §6.5.3's reason and says so in the LRM's own
-// words. No `E####` code is written because none exists yet; when the
-// implementation assigns one, replace the substring with that code, which is
-// the repo's preferred form (39 fixtures pin a code, 48 pin the weaker
-// `DiagnosticsReported`).
+// words.
 //
-//! reject one driver
+// CODE ASSIGNED. The rule is now E0918 ("a wreal net has more than one
+// driver", LRM 6.5.3), so the directive pins the code as the paragraph above
+// asked. It runs under the digital runner (`vera --run`), not the legacy
+// analog compile route, which could only ever answer with the Annex C.4
+// refusal of `wreal` itself. `wreal` is still E1100 there too; E0918 is
+// reported beside it, at the second `assign`.
+//
+// digital-runner: reject
+//! reject E0918
 //! lrm 6.5.3
 //! lrm 3.7
 

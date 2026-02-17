@@ -34,10 +34,17 @@
 // diagnostic's message, point and catalogue title (`failureContains`,
 // tests/torture.zig:210-245) and demands that the refusal be about the net type
 // on the other side of the port, i.e. §3.7's closed compatible-interconnect
-// list. No `E####` code is written because none exists yet; when the
-// implementation assigns one, replace the substring with that code.
+// list.
 //
-//! reject net type
+// CODE ASSIGNED. The rule is now E0919 ("a wreal net is connected to an
+// incompatible net type", LRM 3.7), so the directive pins the code as the
+// paragraph above asked. It runs under the digital runner (`vera --run`), not
+// the legacy analog compile route, which could only ever answer with the
+// Annex C.4 refusal of `wreal` itself. `wreal` is still E1100 there too; E0919
+// is reported beside it, at the port connection.
+//
+// digital-runner: reject
+//! reject E0919
 //! lrm 3.7
 
 `timescale 1ns/1ns

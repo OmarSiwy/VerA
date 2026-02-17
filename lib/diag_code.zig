@@ -587,6 +587,10 @@ pub const Code = enum(u16) {
     W0950,
     /// §9.17.1 the only permitted negative discontinuity degree is -1.
     E0820,
+    /// §6.5.3 a real-valued (`wreal`) net has a second driver.
+    E0918,
+    /// §3.7 a port joins a `wreal` to a net type other than wire/tri/wreal.
+    E0919,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -4926,6 +4930,41 @@ fn infoOf(c: Code) Info {
             \\step 4.b's list) match an exclude rule's discipline list
             \\under 7.7.2.1, so the connection the rule exists to forbid is present.
             \\Separate the nets, or delete the exclude rule.
+            ,
+        },
+        .E0918 => .{
+            .title = "a wreal net has more than one driver",
+            .lrm = "6.5.3",
+            .explain =
+            \\LRM 6.5.3: "There can be a maximum of one driver of a real-valued
+            \\net." 3.7 says the same from the declaration side: a wreal "can be
+            \\used for real-valued nets which are driven by a single driver,
+            \\such as a continuous assignment."
+            \\
+            \\There is no resolution function to fall back on. Four-state nets
+            \\resolve disagreeing drivers through IEEE 1364's tables; two reals
+            \\have no resolved value, no x to collapse to and no strength to
+            \\break the tie. So a second driver is refused, not resolved.
+            \\
+            \\Drive the net from one continuous assignment, or compute the
+            \\combined value into a real variable and assign that.
+            ,
+        },
+        .E0919 => .{
+            .title = "a wreal net is connected to an incompatible net type",
+            .lrm = "3.7",
+            .explain =
+            \\LRM 3.7: "Compatible interconnect are nets of type wire, tri, and
+            \\wreal ... When the two nets connected by a port are of net type
+            \\wreal and wire/tri, the resulting single net will be assigned as
+            \\wreal. Connection to other net types will result in an error."
+            \\
+            \\The list is closed. A wand, wor, tri0, supply0 or any other net
+            \\type is defined by its resolution function, and merging it into a
+            \\wreal would silently delete that function.
+            \\
+            \\Declare the net on the other side of the port as wire, tri or
+            \\wreal.
             ,
         },
 
