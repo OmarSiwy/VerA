@@ -36,8 +36,17 @@
 // b_dig is given 1 by the §8.4.1 time-zero `initial` AND by the inverter's own
 // time-zero evaluation of a_dig = 0, so its pre-crossing value is 1 under either
 // resolution of the IEEE 1364 §11 time-zero start order; there is no race for the
-// assertion to depend on. The partition is on V(vi) rather than $abstime for the
-// reason spelled out in 04.
+// assertion to depend on.
+//
+// SHAPE OF THE CHECKS, as in 04 and 07: every want is the literal 1. Each got is
+// bounded at every point of the run and pinned only at declared points clear of
+// the 5.2 ns crossing: the pre-crossing value at <= 5 ns, the post-crossing value
+// at >= 6 ns. At the point a conforming simulator inserts within 1p of 5.2 ns
+// (§5.10.3.1) nothing is pinned, because which side of the A2D that strobe
+// falls on is not the clause's business. Figure 8-4's claim survives in full
+// through ana_b: `@(b_dig)` stamps the D2A's analog time once, and that stamp is
+// what is read at 6, 8 and 10 ns, to within the cross()'s own 1p time_tol
+// (§5.10.3.1's box, as in 04).
 //
 //! lrm 8.4.3.3
 //! lrm 8.4.4
@@ -61,12 +70,20 @@ module m02_zero_delay_d2a_roundtrip(vi, vo);
   always @(a_dig) begin b_dig = ~a_dig; tick_b = $time; end   // the zero delay inverter
   analog begin
     @(b_dig) ana_b = $abstime;
-    `CHECKI("the A2D edge at A is reported at digital tick 5", tick_a, (V(vi) > 0.52) ? 5 : 0);
+    `CHECKI("the A2D edge at A is reported at digital tick 5",
+            (tick_a == 0 || tick_a == 5)
+            && (($abstime <= 5n) ? (tick_a == 0) : 1)
+            && (($abstime >= 6n) ? (tick_a == 5) : 1), 1);
     `CHECKI("the zero-delay inverter output at B is reported at the SAME tick",
-            tick_b, (V(vi) > 0.52) ? 5 : 0);
-    `CHECK("but the D2A returns to the analog kernel at 5.2 ns, not at the tick",
-           ana_b, (V(vi) > 0.52) ? 5.2n : 0.0, 1p);
-    `CHECKX("and B has already fallen there", b_dig ? 1.0 : 0.0, (V(vi) > 0.52) ? 0.0 : 1.0);
+            (tick_b == 0 || tick_b == 5)
+            && (($abstime <= 5n) ? (tick_b == 0) : 1)
+            && (($abstime >= 6n) ? (tick_b == 5) : 1), 1);
+    `CHECKI("but the D2A returns to the analog kernel at 5.2 ns, not at the tick",
+            (($abstime <= 5n) ? (ana_b == 0.0) : 1)
+            && (($abstime >= 6n) ? (abs(ana_b - 5.2n) <= 1p) : 1), 1);
+    `CHECKI("and B has fallen",
+            (($abstime <= 5n) ? (b_dig == 1) : 1)
+            && (($abstime >= 6n) ? (b_dig == 0) : 1), 1);
     V(vo) <+ b_dig ? 1.0 : 0.0;
   end
 endmodule
