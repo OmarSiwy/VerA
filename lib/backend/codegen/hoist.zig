@@ -299,7 +299,7 @@ pub fn hpMarkInst(self: *Gen, inst: Mir.Inst) void {
     if (!hpPureInst(self, inst, 0)) self.hp_dirty = true;
 }
 
-/// A top-level statement boundary — `maybeCut`'s two call sites, which are
+/// A top-level statement boundary — `emitBlockInsts`/`emitTree` at depth 1, which are
 /// the only points where the emitter's depth is 1 and therefore no label,
 /// loop or arm is open. Probing: remember the last clean one. Emitting: open
 /// the guard at the top of the body, close it at the remembered boundary.
@@ -309,7 +309,7 @@ pub fn hpBoundary(self: *Gen) Error!void {
         if (!self.hp_dirty) {
             self.hp_cut = self.hp_bnd;
             self.hp_off = @intCast(self.out.items.len);
-            self.hp_insts = self.oc_insts;
+            self.hp_insts = self.stmt_count;
         }
     } else if (self.hp_bnd == 0) {
         self.uses_inst = true;
@@ -343,10 +343,8 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
     self.hp_on = false;
     self.hp_vals = &.{};
     self.hp_real = 0;
-    // No shared core to cut, or the cuts are already spoken for: the
-    // chunked layout puts a FUNCTION boundary at every top-level statement
-    // and no `if` may span two of them.
-    if (self.lo_vals.len == 0 or self.outline != 0) return;
+    // No shared core to cut.
+    if (self.lo_vals.len == 0) return;
     for (self.jobs) |job| {
         if (!job.is_display and job.pre_fatal != null) return;
     }
@@ -359,7 +357,6 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
     self.emitting_common = true;
     self.cur_strict = self.common_mode == .strict;
     self.plan.display_unit = false;
-    self.oc_on = false;
     try self.plan.analyze(.undef, true);
     // Straight-line: no phi to strand, so `pc__` already took everything
     // this could take, and a prefix guard would only add a branch.

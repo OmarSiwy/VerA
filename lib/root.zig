@@ -172,9 +172,6 @@ pub const Options = struct {
     /// permission on its CPU instantiation, not only where f32 is free. Implies
     /// `jac_f32`. See `codegen.Options.jac_f32_host`.
     jac_f32_host: bool = false,
-    /// Statements per outlined chunk function for huge bodies (0 = never).
-    /// Defaults to codegen's own default; see `codegen.Options.outline_chunk`.
-    outline_chunk: u32 = (codegen.Options{}).outline_chunk,
 };
 
 // ---------------------------------------------------------------------------
@@ -471,7 +468,6 @@ fn compileInArena(
             .jac_f32 = opts.jac_f32,
             .jac_f32_host = opts.jac_f32_host,
             .diags = opts.diags,
-            .outline_chunk = opts.outline_chunk,
         },
     };
 }

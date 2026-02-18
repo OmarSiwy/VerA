@@ -41,6 +41,7 @@ lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig strConst Mir.DefKind
+lib/backend/codegen/cfg.zig emitTerm Mir.Opcode
 lib/backend/codegen/dispatch.zig psdConst Mir.DefKind
 lib/backend/codegen/file.zig emitInstance op.OpKind
 lib/backend/codegen/file.zig emitInstance op.OpKind
@@ -54,7 +55,6 @@ lib/backend/codegen/hoist.zig hpPureInst Mir.Opcode
 lib/backend/codegen/hoist.zig libmClass Mir.Opcode
 lib/backend/codegen/hoist.zig pcClass Ast.ExprTag
 lib/backend/codegen/hoist.zig pcClass Mir.Opcode
-lib/backend/codegen/outline.zig emitTerm Mir.Opcode
 lib/backend/codegen/render.zig foldHidesSlot Ast.ExprTag
 lib/backend/codegen/render.zig maskCmp Mir.Opcode
 lib/backend/codegen/render.zig renderInst Mir.Opcode

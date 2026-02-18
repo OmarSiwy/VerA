@@ -14,7 +14,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
-const gen_outline = @import("outline.zig");
+const gen_cfg = @import("cfg.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
@@ -729,8 +729,6 @@ pub fn emitCommon(self: *Gen) Error!void {
     // explains why the join has to absorb `.strict`.
     try self.w("    @setFloatMode(.{t});\n", .{self.common_mode});
     self.cur_strict = self.common_mode == .strict;
-    self.oc_name = self.common_name;
-    self.oc_mode = @tagName(self.common_mode);
 
     const body_start = self.out.items.len;
     self.fatal = pre;
@@ -747,7 +745,6 @@ pub fn emitCommon(self: *Gen) Error!void {
     if (!self.uses_model) patchParam(self, at_model, "model".len);
     if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
     try self.w("}}\n\n", .{});
-    try gen_outline.emitChunkFns(self, .undef);
     try gen_file.recordUnitFile(self, self.common_name, lo, at_fn);
 }
 
@@ -813,8 +810,6 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     try self.w("inst: InstancePtr) S {{\n", .{});
     try self.w("    @setFloatMode(.{s});\n", .{mode});
     self.cur_strict = std.mem.eql(u8, mode, "strict");
-    self.oc_name = name;
-    self.oc_mode = mode;
 
     const body_start = self.out.items.len;
     try emitUnitBody(self, target);
@@ -830,7 +825,6 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     if (!self.uses_model) patchParam(self, at_model, "model".len);
     if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
     try self.w("}}\n\n", .{});
-    try gen_outline.emitChunkFns(self, target);
     return at_fn;
 }
 
@@ -887,14 +881,12 @@ pub fn slotNum(self: *Gen, i: usize) u32 {
 }
 pub fn writeSlotRef(self: *Gen, i: usize) Error!void {
     if (slotArr(self, i)) |arr| {
-        self.oc_use[@intFromEnum(self.an.vty[i])] = true;
         return self.b("{s}[{d}]", .{ arr, slotNum(self, i) });
     }
     return self.b("t{d}", .{slotNum(self, i)});
 }
 pub fn slotRefStr(self: *Gen, i: usize) Error![]const u8 {
     if (slotArr(self, i)) |arr| {
-        self.oc_use[@intFromEnum(self.an.vty[i])] = true;
         return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ arr, slotNum(self, i) });
     }
     return std.fmt.allocPrint(self.arena, "t{d}", .{slotNum(self, i)});
@@ -920,8 +912,8 @@ pub const Place = struct {
     uses: u32 = 0,
     def_off: u32 = 0,
     /// Offset of the LAST def — a loop-carried slot's final write sits
-    /// textually after its last read, and chunk-locality (below) must
-    /// cover it too.
+    /// textually after its last read, and the prefix planner
+    /// (`planHoistPrefix`) must see it.
     max_def: u32 = 0,
     max_use: u32 = 0,
     scope: u32 = 0,
@@ -970,9 +962,6 @@ pub fn probeUse(self: *Gen, slot: u32) void {
     // emitter never assigns at all (which is the `undefined`/zero seed the
     // hoist exists to provide).
     if (p.defs == 0) p.pinned = true;
-    // Outlining: a read from the driver's return crosses an emitted
-    // FUNCTION boundary — only a hoist array crosses one.
-    if (self.oc_in_ret) p.pinned = true;
     p.max_use = @max(p.max_use, @as(u32, @intCast(self.out.items.len)));
 }
 
@@ -998,36 +987,9 @@ pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
     self.hp_cut = 0;
     self.hp_off = 0;
     self.hp_dirty = false;
-    self.oc_insts = 0;
-    self.oc_cuts = 0;
-    self.oc_returns = 0;
-    self.oc_ret_at = 0;
-    self.oc_bad = false;
-    try scopeOpen(self); // the function body itself (the driver, chunked)
-    // Chunked, every top-level cut ends one of these scopes and opens the
-    // next, so `at_def` below answers "def and every use inside ONE
-    // emitted function".
-    self.oc_bounds.clearRetainingCapacity();
-    if (self.oc_on) {
-        try scopeOpen(self);
-        try self.oc_bounds.append(self.arena, @intCast(self.out.items.len));
-    }
-    try gen_outline.emitTree(self, 0, 1, target);
-    if (self.oc_on) {
-        scopeClose(self, self.out.items.len); // the last chunk
-        // The driver returns AFTER the last chunk call, so the layout is
-        // only sound when the one return already was the last executable
-        // text — anything after it but closing braces (merge code the
-        // return was nested under) would become reachable in a chunk
-        // that no longer returns. Checked on the probe's own text.
-        self.oc_bad = self.oc_returns != 1;
-        if (!self.oc_bad) for (self.out.items[self.oc_ret_at..]) |ch| {
-            if (ch != ' ' and ch != '\n' and ch != '}') {
-                self.oc_bad = true;
-                break;
-            }
-        };
-    }
+    self.stmt_count = 0;
+    try scopeOpen(self); // the function body itself
+    try gen_cfg.emitTree(self, 0, 1, target);
     scopeClose(self, self.out.items.len);
     self.probing = false;
     self.hp_bnd = 0; // the real walk counts the same boundaries from zero
@@ -1068,18 +1030,9 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try self.ind(1);
         try self.b("const c = core(S, x, model, inst);\n", .{});
     }
-    // Outlining gate. `n_slots` IS the emitted statement count (one slot,
-    // one statement), so a body at or under the chunk size keeps today's
-    // output byte for byte. No extra floor: the option is opt-in and the
-    // caller picks the size per artifact (`Options.outline_chunk` has the
-    // measured guidance — bodies under ~2-3 k statements are better off
-    // whole). `uses_cache` bodies hold a `const c` no chunk could see;
-    // they are the post-fold unit tails and small.
-    self.oc_on = self.outline != 0 and !self.plan.uses_cache and
-        !self.emitting_display and self.plan.n_slots > self.outline;
-    if (self.plan.straight and !self.oc_on) {
-        try gen_outline.emitBlockInsts(self, 0, 1, true);
-        try gen_outline.emitReturn(self, 1, target);
+    if (self.plan.straight) {
+        try gen_cfg.emitBlockInsts(self, 0, 1, true);
+        try gen_cfg.emitReturn(self, 1, target);
         return;
     }
     // Out-of-SSA: a function-scope `var` per surviving value that NEEDS
@@ -1114,21 +1067,6 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // contribution accumulator with `.f_zero`.
     // Pinned by tests/fixtures/exhaustive/069_conditional_operator_state.va.
     try probeBody(self, target);
-    // Outlining is off the table when the probe hit a fatal (the body
-    // becomes one `@compileError`), when the return shape failed the
-    // trailing-text check (`probeBody`), or when the body never actually
-    // crossed the chunk size. The probe's per-chunk scopes only ever make
-    // at_def STRICTER, so its result is valid for the unchunked layout
-    // too — but re-probe for the exact one-scope answer; two dry runs
-    // cost less than one hoist kept.
-    if (self.oc_on) {
-        if (self.fatal != null or self.oc_bad or self.oc_cuts == 0) {
-            self.oc_on = false;
-            try probeBody(self, target);
-        } else {
-            self.oc_total = self.oc_cuts + 1;
-        }
-    }
     const ret = self.an.rv(target);
 
     // One array per type instead of one `var` per slot. Two passes: assign
@@ -1142,9 +1080,6 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // explicit store after the declaration instead.
     var seeded: std.ArrayList(Mir.Value) = .empty;
     defer seeded.deinit(self.arena);
-    self.oc_local_chunk.clearRetainingCapacity();
-    self.oc_local_slot.clearRetainingCapacity();
-    self.oc_local_ty.clearRetainingCapacity();
     for (self.plan.live.items) |lv| {
         const v = @intFromEnum(lv);
         if (self.plan.slot[v] == none_u32) continue;
@@ -1154,18 +1089,6 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         // the emitted tree reaches neither end of it. Declaring it would be
         // an unused local.
         if (p.defs == 0 and p.uses == 0) continue;
-        // Chunked: a slot whose whole life sits inside one chunk becomes
-        // that chunk's own `var` — register-promotable, unlike a store
-        // through the escaped shared array. A returned slot can never
-        // classify (its return read lies past the terminal boundary).
-        if (self.oc_on and p.defs != 0) {
-            if (gen_outline.ocLocalIn(self, p)) |k| {
-                try self.oc_local_chunk.append(self.arena, k);
-                try self.oc_local_slot.append(self.arena, self.plan.slot[v]);
-                try self.oc_local_ty.append(self.arena, self.an.vty[v]);
-                continue;
-            }
-        }
         const ty = @intFromEnum(self.an.vty[v]);
         self.hoist_idx.items[self.plan.slot[v]] = n_hoist[ty];
         n_hoist[ty] += 1;
@@ -1184,34 +1107,9 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try writeSlotRef(self, v);
         try self.b(" = {s};\n", .{zeroOf(self.an.vty[v])});
     }
-    if (!self.oc_on) {
-        try gen_outline.emitTree(self, 0, 1, target);
-        // The guard opened at boundary 0 is closed at boundary `hp_cut`;
-        // if the real walk never reached it the emitted brace is unbalanced,
-        // which is a generator bug and not something to ship.
-        assert(!self.hp_on or !self.emitting_common or self.hp_bnd > self.hp_cut);
-        return;
-    }
-    // Chunked: this function is now the DRIVER — the hoist arrays above,
-    // one `@call(.never_inline, ...)` per chunk, and the one return. The
-    // chunk bodies follow the driver's closing brace (`emitChunkFns`,
-    // called by `emitUnit`/`emitCommon`); Zig's decl order doesn't care,
-    // and `writeTree`'s `pub ` splice at `fn_at` publishes only the
-    // driver. `.never_inline` is the point: LLVM must see N small
-    // functions, not one body it re-inlines into the very thing outlining
-    // exists to break up.
-    self.oc_n = n_hoist;
-    for (0..self.oc_total) |k| {
-        try self.ind(1);
-        try self.b("@call(.never_inline, {s}__c{d}, .{{ S, &x, model, inst", .{ self.oc_name, k });
-        for ([_]VTy{ .real, .int, .str }) |ty| {
-            if (self.oc_n[@intFromEnum(ty)] == 0) continue;
-            try self.b(", &{s}", .{hoistArray(ty)});
-        }
-        try self.b(" }});\n", .{});
-    }
-    try gen_outline.emitReturn(self, 1, target);
-    self.uses_x = true;
-    self.uses_model = true;
-    self.uses_inst = true;
+    try gen_cfg.emitTree(self, 0, 1, target);
+    // The guard opened at boundary 0 is closed at boundary `hp_cut`;
+    // if the real walk never reached it the emitted brace is unbalanced,
+    // which is a generator bug and not something to ship.
+    assert(!self.hp_on or !self.emitting_common or self.hp_bnd > self.hp_cut);
 }

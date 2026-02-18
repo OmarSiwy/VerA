@@ -169,8 +169,10 @@ make fast. The lane decisions — `pinLanes`, `lane_pinned`, `lane_clean`,
 `jac_f32`, `cur_strict` — are what `ARCHITECTURE.md §6` phase 5 gathers into
 `codegen/float/`.
 
-**The hardware knobs stay.** `--unknown-bound=`, `--outline-chunk=N`, `jac_f32`
-and the `abstol` table are physical-world tuning. Do not simplify them away.
+**The hardware knobs stay.** `--unknown-bound=`, `jac_f32` and the `abstol`
+table are physical-world tuning. Do not simplify them away. (`--outline-chunk`
+was removed 2026-09-23 at the user's request: its GPU motive was DWARF, and
+chunking measured 2.8x slower at runtime. See the commit that removed it.)
 
 ---
 

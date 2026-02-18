@@ -113,11 +113,6 @@ const usage_text =
     \\  --color=auto|always|never
     \\  --allow/--warn/--deny/--forbid=CODE   per-code lint level
     \\  --unknown-bound=X       solver compliance limit (see --explain W0650)
-    \\  --outline-chunk=N       split huge bodies into ~N-statement noinline
-    \\                          functions. 0 = never (default). Slower at
-    \\                          runtime; only for debug-info builds of very
-    \\                          large models, N in the thousands.
-    \\                          codegen.Options has the measurements
     \\
 ;
 
@@ -155,7 +150,6 @@ pub fn main(init: std.process.Init) !u8 {
     var display: vera.codegen.Display = .drop;
     var jac_f32 = false;
     var jac_f32_host = false;
-    var outline_chunk: u32 = (vera.Options{}).outline_chunk;
     // What the user actually TYPED, kept apart from the derived state above so
     // conflicting spellings can be refused by name after the loop — argument
     // order must not decide silently (`--emit-exe --display=drop` used to
@@ -245,11 +239,6 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.startsWith(u8, arg, "--unknown-bound=")) {
             unknown_bound = std.fmt.parseFloat(f64, arg["--unknown-bound=".len..]) catch {
                 try err.print("error: `{s}` is not a number\n", .{arg});
-                return 2;
-            };
-        } else if (std.mem.startsWith(u8, arg, "--outline-chunk=")) {
-            outline_chunk = std.fmt.parseInt(u32, arg["--outline-chunk=".len..], 10) catch {
-                try err.print("error: `{s}` is not an integer\n", .{arg});
                 return 2;
             };
         } else if (std.mem.startsWith(u8, arg, "--")) {
@@ -383,7 +372,6 @@ pub fn main(init: std.process.Init) !u8 {
         .display = display,
         .jac_f32 = jac_f32,
         .jac_f32_host = jac_f32_host,
-        .outline_chunk = outline_chunk,
     }) catch |e| {
         try report(&bag, err, json, use_color);
         // A diagnosed failure has already said everything useful; the Zig error

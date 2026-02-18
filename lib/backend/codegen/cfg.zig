@@ -1,12 +1,13 @@
-//! Outlining (`--outline-chunk=N`): cutting a long body into noinline chunks.
+//! Control-flow reconstruction: MIR's CFG emitted as structured Zig.
 //!
-//! In: a unit body being emitted. Out: the same statements, cut into chunk functions every N
-//! statements so the Zig compiler's time and memory stay bounded.
+//! In: one unit's MIR blocks, dominator tree and slot plan. Out: the unit body
+//! as nested labelled blocks, `while (true)` loops, `if`s and out-of-SSA phi
+//! copies (the dominator-tree scheme described in `codegen.zig`'s header).
 //!
 //! LRM clauses this file's code cites: §5.6.1.3.
 //!
 //! Cut verbatim from `codegen.zig`. Functions take `self: *Gen` and are called
-//! directly, `gen_outline.f(self, ...)`; `codegen.zig` aliases only what other modules call.
+//! directly, `gen_cfg.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");
@@ -20,101 +21,7 @@ const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 
-// ---- outlining ----------------------------------------------------------
-
-/// Cut trigger, called at the two places a chunk may end: between top-level
-/// statements (`emitBlockInsts` at depth 1) and before a top-level subtree
-/// (`emitTree` at depth 1). Depth 1 means no label, loop or arm is open —
-/// the emitter's depth IS its brace count — so a `break`/`continue` can
-/// never cross a chunk boundary, and every value that does is in a hoist
-/// array (the probe's per-chunk scopes force exactly that).
-pub fn maybeCut(self: *Gen) Error!void {
-    // Same two call sites, same reason (see below): depth 1 is the only
-    // place a region boundary can land. The two are mutually exclusive —
-    // `planHoistPrefix` declines whenever `outline` is set.
-    try gen_hoist.hpBoundary(self);
-    if (!self.oc_on or self.oc_insts < self.outline) return;
-    self.oc_insts = 0;
-    self.oc_cuts += 1;
-    if (self.probing) {
-        gen_unit.scopeClose(self, self.out.items.len);
-        try gen_unit.scopeOpen(self);
-        try self.oc_bounds.append(self.arena, @intCast(self.out.items.len));
-    } else if (self.oc_real) {
-        try closeChunkFn(self);
-        try openChunkFn(self);
-    }
-}
-
-/// The chunk whose probe-text interval contains this slot's whole life,
-/// or null when it spans a boundary (or the driver's return).
-pub fn ocLocalIn(self: *const Gen, p: gen_unit.Place) ?u32 {
-    const hi = @max(p.max_use, p.max_def);
-    const bounds = self.oc_bounds.items;
-    for (0..bounds.len - 1) |k| {
-        if (p.def_off >= bounds[k] and hi < bounds[k + 1]) return @intCast(k);
-    }
-    return null;
-}
-
-/// One chunk header. Uniform signature — always all three unit parameters
-/// plus every hoist array the unit has — with the same reserve-and-patch
-/// slots as `emitUnit`, so a chunk that reads only `h` says so.
-pub fn openChunkFn(self: *Gen) Error!void {
-    try self.w("fn {s}__c{d}(comptime S: type, ", .{ self.oc_name, self.oc_cuts });
-    self.oc_at[0] = self.out.items.len;
-    try self.w("x: *const [n_u]S, ", .{});
-    self.oc_at[1] = self.out.items.len;
-    try self.w("model: *const Model, ", .{});
-    self.oc_at[2] = self.out.items.len;
-    try self.w("inst: InstancePtr", .{});
-    for ([_]VTy{ .real, .int, .str }) |ty| {
-        const n = self.oc_n[@intFromEnum(ty)];
-        if (n == 0) continue;
-        try self.w(", ", .{});
-        self.oc_at[3 + @intFromEnum(ty)] = self.out.items.len;
-        try self.w("{s}: *[{d}]{s}", .{ gen_unit.hoistArray(ty), n, gen_unit.zigTy(ty) });
-    }
-    try self.w(") void {{\n", .{});
-    try self.w("    @setFloatMode(.{s});\n", .{self.oc_mode});
-    // This chunk's own share of the out-of-SSA vars (see `ocLocalIn`).
-    for (self.oc_local_chunk.items, self.oc_local_slot.items, self.oc_local_ty.items) |k, slot, ty| {
-        if (k != self.oc_cuts) continue;
-        try self.w("    var t{d}: {s} = undefined;\n", .{ slot, gen_unit.zigTy(ty) });
-    }
-    self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = false;
-    self.oc_use = @splat(false);
-}
-
-pub fn closeChunkFn(self: *Gen) Error!void {
-    if (!self.uses_x) gen_unit.patchParam(self, self.oc_at[0], "x".len);
-    if (!self.uses_model) gen_unit.patchParam(self, self.oc_at[1], "model".len);
-    if (!self.uses_inst) gen_unit.patchParam(self, self.oc_at[2], "inst".len);
-    if (self.oc_n[0] != 0 and !self.oc_use[0]) gen_unit.patchParam(self, self.oc_at[3], "h".len);
-    if (self.oc_n[1] != 0 and !self.oc_use[1]) gen_unit.patchParam(self, self.oc_at[4], "hi".len);
-    if (self.oc_n[2] != 0 and !self.oc_use[2]) gen_unit.patchParam(self, self.oc_at[5], "hs".len);
-    try self.w("}}\n\n", .{});
-}
-
-/// The real walk, emitted as sibling `fn`s after the driver's closing
-/// brace. Same walk the probe ran, so the cuts land on the same statements;
-/// the driver's call list was emitted from the probe's count and the assert
-/// is the agreement check.
-pub fn emitChunkFns(self: *Gen, target: Mir.Value) Error!void {
-    if (!self.oc_on) return;
-    self.oc_real = true;
-    self.oc_insts = 0;
-    self.oc_cuts = 0;
-    self.oc_returns = 0;
-    try openChunkFn(self);
-    try emitTree(self, 0, 1, target);
-    try closeChunkFn(self);
-    self.oc_real = false;
-    self.oc_on = false;
-    assert(self.oc_cuts + 1 == self.oc_total);
-}
+// ---- control-flow reconstruction ------------------------------------------
 
 /// A unit returns its one contribution value; the common declaration
 /// returns the whole cache. Same exit points either way, so this is the one
@@ -154,9 +61,9 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
     for (stmts) |inst| {
         const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
         if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
-        if (depth == 1) try maybeCut(self);
+        if (depth == 1) try gen_hoist.hpBoundary(self);
         gen_hoist.hpMarkInst(self, inst);
-        self.oc_insts += 1;
+        self.stmt_count += 1;
         gen_unit.probeDef(self, self.plan.slot[i], true);
         // `or` short-circuits, so the straight-line path (`decl`, which runs
         // without a probe) never touches `place`.
@@ -174,7 +81,7 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
 }
 
 pub fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
-    if (depth == 1) try maybeCut(self);
+    if (depth == 1) try gen_hoist.hpBoundary(self);
     if (self.an.is_loop[bi]) {
         try self.ind(depth);
         try self.b("L{d}: while (true) {{\n", .{bi});
@@ -251,29 +158,6 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
     if (t == .none) {
         // The block lowering ended in: the contribution accumulators are
         // read here (§5.6.1.3).
-        if (self.oc_on) {
-            self.oc_returns += 1;
-            if (self.oc_real) {
-                // The driver owns the VALUE return; the chunk still must
-                // LEAVE here — hisimhv's exit sits inside a `while (true)`,
-                // and falling through where the monolith returned re-runs
-                // the loop forever.
-                try self.ind(depth);
-                try self.b("return;\n", .{});
-                return;
-            }
-            // Probe: render it so its reads are counted — pinned into the
-            // hoist arrays by `probeUse` — and record where it ended for
-            // `probeBody`'s trailing-text feasibility check. The pre-
-            // return offset closes the last chunk-locality interval, so
-            // a slot the return reads can never classify chunk-local.
-            try self.oc_bounds.append(self.arena, @intCast(self.out.items.len));
-            self.oc_in_ret = true;
-            try emitReturn(self, depth, target);
-            self.oc_in_ret = false;
-            if (self.oc_returns == 1) self.oc_ret_at = self.out.items.len;
-            return;
-        }
         try emitReturn(self, depth, target);
         return;
     }
@@ -356,7 +240,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
         // A phi is transparent to `hpPure` because THIS is where its value
         // enters — one incoming copy per edge, each checked as it is written.
         gen_hoist.hpMark(self, self.an.phiIn(inst, from));
-        self.oc_insts += 1;
+        self.stmt_count += 1;
         try self.ind(d2);
         if (par) {
             try self.b("const c{d}: {s} = ", .{ k, gen_unit.zigTy(self.an.vty[i]) });
