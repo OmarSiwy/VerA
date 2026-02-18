@@ -106,6 +106,7 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
+const Lower = @import("ir").Lower;
 // The emitter owns these: `Display` is its §9.4 mode, and the two `op*`/`call*`
 // helpers classify a call the same way for the plan and for the text. Mutual
 // import with codegen.zig is fine here — nothing in the cycle is a comptime
@@ -136,6 +137,14 @@ display: Display,
 /// there and dead everywhere else. Marking them everywhere emitted locals the
 /// residual's rendering never reads, which Zig rejects outright.
 display_unit: bool = false,
+/// §9.5 values that carry a file call's RESULT, through any operand or phi.
+/// Only the display unit performs the call; every other unit reads the result
+/// the display unit last produced (`emitFileCallDropped`), which inside one
+/// point is the PREVIOUS point's. So in the display unit such a value is never
+/// a cache read: `fd = $fopen(..)` under `@(initial_step)` then `$ftell(fd)`
+/// has to see the descriptor the open just returned, not the core's copy of
+/// it. Empty under `.drop`, where no unit performs a file call at all.
+file_dep: []bool = &.{},
 /// The shared core's dedup index, from `planCommon`. Stable for the whole
 /// compilation; a value with an entry here is read out of the core rather than
 /// recomputed, unless this unit re-runs the loop that defines it.
@@ -219,7 +228,48 @@ pub fn init(
     self.blk_work = try arena.alloc(bool, an.nb);
     self.blk_phi = try arena.alloc(bool, an.nb);
     self.dead_branch = try arena.alloc(bool, an.nb);
+    if (display == .emit) try self.markFileDeps();
     return self;
+}
+
+/// Fill `file_dep`. A fixpoint because a loop phi reads a value defined after
+/// it; marking only ever adds, so it converges.
+fn markFileDeps(self: *UnitPlan) Error!void {
+    self.file_dep = try self.arena.alloc(bool, self.an.nv);
+    @memset(self.file_dep, false);
+    var grew = true;
+    while (grew) {
+        grew = false;
+        for (Mir.Value.first_dynamic..self.an.nv) |i| {
+            if (self.file_dep[i]) continue;
+            const def = self.mir.valueDef(@enumFromInt(i));
+            if (def != .inst_result) continue;
+            const inst = def.inst_result;
+            const hit = switch (self.mir.instData(inst)) {
+                .unary => |d| self.fileDep(d.operand),
+                .binary => |d| self.fileDep(d.lhs) or self.fileDep(d.rhs),
+                .ternary => |d| self.fileDep(d.cond) or self.fileDep(d.then_val) or self.fileDep(d.else_val),
+                .call => |d| Lower.isFileCall(d.name) or for (d.args) |a| {
+                    if (self.fileDep(a)) break true;
+                } else false,
+                .phi => |d| blk: {
+                    var k: u32 = 0;
+                    while (k < d.count) : (k += 1)
+                        if (self.fileDep(self.mir.phiPair(inst, k).value)) break :blk true;
+                    break :blk false;
+                },
+                .branch, .jump => false,
+            };
+            if (hit) {
+                self.file_dep[i] = true;
+                grew = true;
+            }
+        }
+    }
+}
+
+inline fn fileDep(self: *const UnitPlan, v: Mir.Value) bool {
+    return self.file_dep[@intFromEnum(self.an.rv(v))];
 }
 
 /// Is this Value a `precompute`d Instance field HERE? Unlike `cached` it is
@@ -235,6 +285,7 @@ pub inline fn pcHoisted(self: *const UnitPlan, v: Mir.Value) bool {
 /// defined inside a loop this unit re-runs.
 pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
     if (self.in_common or self.lo_idx[@intFromEnum(v)] == none_u32) return false;
+    if (self.display_unit and self.file_dep.len != 0 and self.file_dep[@intFromEnum(v)]) return false;
     // §5.9 A unit that re-materializes a loop must not read that loop's values
     // out of the cache — see `analyze`'s fixpoint.
     const blk = self.an.def_block[@intFromEnum(v)];

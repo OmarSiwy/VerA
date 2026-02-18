@@ -328,9 +328,13 @@ pub fn emitFileCall(g: *Gen, name: []const u8, args: []const Mir.Value, site: us
     // kernels made the generated device refuse to compile ("expected integer
     // type, found 'f64'"), which is why a real destination never worked.
     const from_int = !std.mem.eql(u8, name, "$fscanf$real");
+    // An integer result is latched for the other units — `file_kernels.zFRes`.
+    const keep = Analysis.callTy(name) == .int;
     if (wrap) try g.b("S.con(", .{});
     if (wrap and from_int) try g.b("@as(f64, @floatFromInt(", .{});
+    if (keep) try g.b("zFKeep({d}, ", .{site});
     try emitFileCallInner(g, name, args, site);
+    if (keep) try g.b(")", .{});
     if (wrap and from_int) try g.b("))", .{});
     if (wrap) try g.b(")", .{});
 }

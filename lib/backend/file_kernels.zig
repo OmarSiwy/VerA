@@ -459,3 +459,29 @@ fn zfClose1(k: usize) void {
     zf_slots[k].f.close(zfIo());
     zf_slots[k].open = false;
 }
+
+/// §9.5 one call site's RESULT, carried out of the display unit. The call is
+/// performed only there (§9.5.9), so every other unit — the core the residual
+/// and `updateState` read — answers with the value this site last produced:
+/// `fd = $fopen(..)` under `@(initial_step)` holds the descriptor the open
+/// returned, not a 0 that `$ftell(fd)` then reads as "no such file". Inside one
+/// point the core sees the PREVIOUS point's result until the display unit runs;
+/// `updateState` runs after it and sees this point's.
+///
+/// ponytail: one latch per call site, file scope, on `zSBuf`'s terms — per-
+/// instance latches are the upgrade the day a host runs two instances of a
+/// model that opens files. Integer results only (`callTy == .int`), which is
+/// every descriptor, count, position and status §9.5 returns.
+pub fn zFRes(comptime site: usize) *i64 {
+    const ZfRes = struct {
+        const n = site;
+        var v: i64 = 0;
+    };
+    return &ZfRes.v;
+}
+
+/// The display unit's half of `zFRes`: perform, latch, answer.
+pub fn zFKeep(comptime site: usize, v: i64) i64 {
+    zFRes(site).* = v;
+    return v;
+}
