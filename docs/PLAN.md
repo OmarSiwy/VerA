@@ -42,20 +42,22 @@ landed. PLAN §6's warning about that hazard earned its place twice over.
 The eight stragglers, each with its diagnosis already recorded:
 
   ch03 a08_nodeset_02_nodeset_bus_null_element
-  ch04 a01_03_parameterized_dimension_override   §3.2 array dims elaborated from the DECLARED default while the index reads `model.N`
-  ch05 a02_10_node_alias_reevaluated_when_a_parameter_changes
+  ch04 a01_03_parameterized_dimension_override   §3.2 array dims elaborated from the DECLARED default while the index reads `model.N`; fixture is right (§3.4.4), needs card-sized array storage — not a refusal
+  ch05 a02_10_node_alias_reevaluated_when_a_parameter_changes  `bindAlias` edits `node_voltages` while LOWERING, so the last-lowered `if` arm wins whatever `sel` is — wrong even at the default; needs card-selected topology
   ch06 h01_10_string_derived_parameter           `hostConditionalExpr` cannot render a string compare; cheaper route is the `!p.is_local` guard at codegen.zig:1982
   ch09 a05_08_file_loaded_on_first_executed_call `readTableFile` is eager at lowering
-  ch09 s01_05 / s01_06                           see below — TWO blockers, not one
+  ch09 s01_05 / s01_06                           CLOSED on conf-stragglers (2026-09-23) — see below
   digital d04_15_bare_event_trigger_in_analog_rejected  `lowerEventTrigger` wants the `in_event_stmt` gate `lowerDisable` already has, plus a diagnostic code
 
 `s01_05`/`s01_06` are the instructive pair. They were blamed on W0851 for a
-whole session; W0851 was lifted and they did not move. The real causes are (1)
-§9.4.1 change detection, implemented nowhere — `Lower.isDisplayTask` lists
-`$monitor` beside `$display` and gives it an unconditional inline print — and
-(2) a §9.5 call rendering as the literal `0` in every unit but the display one
-(`codegen.emitFileCallDropped`), so `fd` is 0 in the core and `$ftell(fd)` is
-`$ftell(0)`. Fixing (2) alone flips neither row. They want to land together.
+whole session; W0851 was lifted and they did not move. The real causes were (1)
+the §9.4.1 report was minted where the statement is, so a monitor registered
+once under a guard never reported again. Change detection itself already
+existed (`zMonitor`), so the earlier "implemented nowhere" was wrong. (2) A
+§9.5 call rendered as the literal `0` in every unit but the display one
+(`codegen.emitFileCallDropped`), so `fd` was 0 in the core and `$ftell(fd)` was
+`$ftell(0)`. Both are fixed: `lower_event.armMonitor` and
+`file_kernels.zFRes`.
 
 The 7 "asserts nothing" and 4 "want is an expression, not a literal" rows are
 all ch07, so they are part of the mixed-signal work rather than fixture chores.

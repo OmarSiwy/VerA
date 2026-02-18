@@ -53,18 +53,26 @@
 // parameter's DEFAULT, so the emitted device carries four cells:
 //
 //   switch (...) { 0 => h[0], 1 => h[1], 2 => h[2], 3 => h[3],
-//                  else => @panic("VerA: out-of-range array read is not implemented") }
+//                  else => S.con(0.0) }
 //
 // while the index arithmetic in the very same expression reads `model.N`, which
-// the card has set to 5. The two disagree by construction. Observed today, at
-// run time and not compile time:
-//
-//   thread ... panic: VerA: out-of-range array read is not implemented
-//
+// the card has set to 5. The two disagree by construction. Re-observed
+// 2026-09-23: `top` reads got=0 want=10 ok=0; `mid` (b[3], inside the default
+// shape) and b[0] pass. An earlier revision panicked on the out-of-range read;
+// it now takes the out-of-range answer 0, which is quieter and still wrong.
 // The writes to b[4] and b[5] are silently dropped first (the masked-write path
-// in `assignRuntimeIndex` treats an index past the folded bound as invalid), so
-// even without the panic the values would be wrong rather than absent. This is
-// the plan's "independently overridden structural dimensions" in one file.
+// in `assignRuntimeIndex` treats an index past the folded bound as invalid).
+// This is the plan's "independently overridden structural dimensions" in one
+// file.
+//
+// WHY IT IS NOT REFUSED INSTEAD. Nothing in §3.2, §3.4 or §6.3 lets an
+// implementation reject an override of a parameter because a dimension reads
+// it, and §3.4.4 says outright that "the array size may be changed by
+// overriding the appropriate parameters". So the fixture is right. The fix is
+// an array whose extent is a function of the model card, which means storage
+// the device sizes at card time rather than cells scalarized at compile time.
+// An instance-line override (`#(.N(5))`) already works, because it is folded
+// at elaboration (ch06 h01_11). Only the host card is a runtime value.
 //
 //! lrm 3.2
 //! lrm 3.4

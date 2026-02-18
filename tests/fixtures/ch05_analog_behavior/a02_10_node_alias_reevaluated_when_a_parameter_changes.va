@@ -57,6 +57,17 @@
 // explicitly encourages ("the user is encouraged to check the return value"),
 // cannot detect it.
 //
+// DIAGNOSIS (2026-09-23). It is worse than a stale binding. `bindAlias`
+// (lib/ir/lower/hier_name.zig) edits the compile-time map `node_voltages` while
+// the statement is being LOWERED, and lowering visits both arms of the `if`. So
+// the arm lowered last, the `else`, wins whatever `sel` is. A copy of this file
+// with the DEFAULT changed to `sel = 1` and no sweep at all still reads
+// V(n1) = 2.0 (got=-1 want=2). The alias condition is never evaluated, not even
+// against the declared default. `status` hides it because both arms resolve.
+// A real fix needs a probe and a contribution row that are selected by a
+// model-card value at run time. That is a device whose topology depends on
+// its card, and `U`/`jac_pattern` today are compile-time.
+//
 //! lrm 9.20
 //! lrm 5.2.1
 //! bias V(g) = 0.0
