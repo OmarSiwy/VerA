@@ -39,7 +39,6 @@ lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig i64Const Mir.Opcode
-lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig strConst Mir.DefKind
 lib/backend/codegen/cfg.zig emitTerm Mir.Opcode
 lib/backend/codegen/dispatch.zig psdConst Mir.DefKind
@@ -128,7 +127,6 @@ lib/ir/lower/event.zig formatBits Ast.UnaryOp
 lib/ir/lower/event.zig lowerEventExpr Ast.ExprTag
 lib/ir/lower/expr.zig cmp Ast.BinaryOp
 lib/ir/lower/expr.zig hasStatefulOp Ast.ExprTag
-lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
 lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
 lib/ir/lower/expr.zig lowerBinary Ast.BinaryOp
 lib/ir/lower/expr.zig lowerConcat Mir.DefKind

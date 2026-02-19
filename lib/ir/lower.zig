@@ -1157,6 +1157,50 @@ pub fn wrap32(x: i64) i64 {
     return @as(i32, @truncate(x));
 }
 
+/// §4.2.1.3 `b ** n` with both operands integer: "a common data type for each
+/// operand is determined before the operator is applied", and with neither
+/// real that type is integer. IEEE 1364-2005 §5.1.5 supplies the values: for
+/// n >= 0 the power at §3.2's 32-bit width ("The result value is 1 if the
+/// second operand is zero"), and for n < 0 Table 5-6's row — 1 for base 1,
+/// ±1 by parity for base -1, 0 for every other base (the true value lies
+/// strictly between -1 and 1 and an integer truncates it). A zero base under a
+/// negative exponent is Table 5-6's 'bx, which an analog integer cannot hold:
+/// null here, E0609 from the prover when it is provable, and 0 at run time.
+///
+/// Same three sites as `wrap32`: `foldBinary`, `analysis.foldConst`, and
+/// codegen's `ipow_fn`, which is this function as device text.
+pub fn ipow32(b: i64, n: i64) ?i64 {
+    if (n < 0) return switch (b) {
+        0 => null,
+        1 => 1,
+        -1 => if (@rem(n, 2) == 0) 1 else -1,
+        else => 0, // else: every |b| > 1 truncates to 0, Table 5-6's "negative" row
+    };
+    var x: i32 = @truncate(b);
+    var e = n;
+    var r: i32 = 1;
+    while (e > 0) : (e >>= 1) {
+        if (e & 1 != 0) r *%= x;
+        x *%= x;
+    }
+    return r;
+}
+
+test "ipow32 is IEEE 1364-2005 Table 5-6 at 32 bits" {
+    try std.testing.expectEqual(@as(?i64, 8), ipow32(2, 3));
+    try std.testing.expectEqual(@as(?i64, 1), ipow32(0, 0)); // "1 if the second operand is zero"
+    try std.testing.expectEqual(@as(?i64, 0), ipow32(0, 3));
+    try std.testing.expectEqual(@as(?i64, -27), ipow32(-3, 3));
+    try std.testing.expectEqual(@as(?i64, 0), ipow32(2, -1)); // |b| > 1, n < 0
+    try std.testing.expectEqual(@as(?i64, 0), ipow32(-2, -1));
+    try std.testing.expectEqual(@as(?i64, 1), ipow32(1, -5));
+    try std.testing.expectEqual(@as(?i64, -1), ipow32(-1, -3));
+    try std.testing.expectEqual(@as(?i64, 1), ipow32(-1, -4));
+    try std.testing.expectEqual(@as(?i64, null), ipow32(0, -1)); // 'bx
+    try std.testing.expectEqual(@as(?i64, -2147483648), ipow32(2, 31)); // §3.2 wrap
+    try std.testing.expectEqual(@as(?i64, 0), ipow32(2, 32));
+}
+
 /// §2.7 at an OPERAND: a string about to be used as a number becomes one.
 /// Everything else is returned untouched, including a string with no compile-
 /// time bytes — there is no runtime string in the emitted device, so that is

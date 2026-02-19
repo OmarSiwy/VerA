@@ -660,6 +660,7 @@ fn coeffAt(self: *Lower, v: Mir.Value, gen: Mir.Value, depth: u16, path: ?*const
                 .fmax,
                 .imin,
                 .imax,
+                .ipow,
                 .atan2,
                 => return .nonlinear,
                 // `instData` decodes `.binary` only for `opClass(op) == .binary`.
