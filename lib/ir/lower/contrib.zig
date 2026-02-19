@@ -998,6 +998,7 @@ pub fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
     spine: switch (ex.tag(e)) {
         .filter_call => {
             if (self.file.strings.eql(ex.strOf(e), "ddt")) {
+                if (!try lower_analog_op.checkOperatorPlace(self, e, "ddt")) return null;
                 const args = ex.args(e);
                 // A.8.2 gives a filter no `analog_expression_or_null` form, so
                 // an OMITTED slot (`ddt(,1.0)`) is as wrong as no argument at

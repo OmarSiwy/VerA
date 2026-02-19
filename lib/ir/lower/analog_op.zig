@@ -54,15 +54,16 @@ pub fn isHistoryless(name: []const u8) bool {
     return std.mem.eql(u8, name, "ddx") or std.mem.eql(u8, name, "limexp");
 }
 
-pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+/// §4.5.15's placement rules for the analog operator `name` at `e`. EVERY path
+/// that lowers one calls this — `lowerFilter`, and `lowerReactive`'s `ddt`
+/// spine, which strips the call without going through `lowerFilter` and so
+/// once let `if (V(p) > 0) I(p) <+ ddt(V(p));` compile. False when the
+/// operator must not be lowered at all.
+pub fn checkOperatorPlace(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!bool {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx});
-        return poison;
+        return false;
     }
-    const ex = &self.file.exprs;
-    const name = self.file.str(ex.strOf(e));
-    const args = ex.args(e);
-
     // §5.8.1 / §5.9: an analog operator is a state machine the kernel advances
     // once per accepted step, on the straight-line spine of the analog block.
     // Under a branch the solve can flip, the step its arm was off feeds it the
@@ -74,6 +75,14 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         b.help("hoist `{s}(...)` onto the spine and make only its USE conditional", .{name});
         try b.emit();
     }
+    return true;
+}
+
+pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+    const ex = &self.file.exprs;
+    const name = self.file.str(ex.strOf(e));
+    const args = ex.args(e);
+    if (!try checkOperatorPlace(self, e, name)) return poison;
 
     // §4.5.6 ddx(f, V(node)) — the second argument is a probe, not a value:
     // it names the unknown to differentiate with respect to.
