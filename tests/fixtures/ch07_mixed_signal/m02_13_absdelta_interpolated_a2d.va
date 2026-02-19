@@ -80,12 +80,45 @@
 // An earlier draft wrote 1u on all four arms and justified it as "expr_tol, not a
 // fudge factor". That justification was wrong for events 2, 3 and 4: the drift is
 // up to 4 * expr_tol = 4e-6 V and a conforming implementation failed the check.
-// The tolerance is therefore 4u - still DERIVED from expr_tol, not widened to
-// taste, and still 12500 times narrower than the 0.05 V gap to the nearest wrong
-// arm and 200000 times narrower than the 0.8 V a non-interpolating tool reads at
-// 8 ns. The count arms are unaffected: the same slack is 1e-6 V / 0.1 V/ns =
-// 1e-5 ns per event, so even four of them move an event time by 4e-5 ns against
-// selectors that are >= 0.5 ns clear of every observation.
+//
+// THE TIMESCALE, AND THE LAST 0.05u. `sampled = V(vi)` is read in the DIGITAL
+// context, so §7.3.6.3 governs it: "The expression shall be evaluated using the
+// analog value calculated for the time corresponding to a real promotion of the
+// digital time at which the expression is evaluated", and §7.3.6.1 puts that
+// digital time at "the nearest digital time tick to the time of the analog
+// event". This file used to run at `timescale 1ns/1ns`, where the events at
+// 2.5 ns and 7.5 ns are exact half-tick TIES — tick 2 or 3, tick 7 or 8, and
+// §8.4.3.3 names no tie-break — so a conforming tool read sampled = 0.2 or 0.3
+// and 0.7 or 0.8 V against wants of 0.25 and 0.75, and failed. At `timescale
+// 1ns/1fs` the tick is 1 fs, the rounding error is at most 0.5 fs, and on a
+// 0.1 V/ns ramp that is 0.5e-15 s * 1e8 V/s = 5e-8 V. It does not accumulate:
+// §5.10.3.4 measures each change from the previous absdelta() EVENT, an analog
+// quantity, not from the digitally rounded read. So the band on event k is
+// k * expr_tol + 0.05u, and the widest, event 4, is 4.05u. Still derived, and
+// still 12000 times narrower than the 0.05 V to the nearest wrong value.
+//
+// WHY THE CHECKS ARE BOUNDS AND NOT ARMS SPLIT AT THE EVENT TIMES. absdelta()
+// itself forces no timestep, but `V(vo) <+ sampled` below reads a digital
+// variable unguarded, so every event is also an implicit D2A, and §8.4.7:
+// "Digital to analog events shall cause an analog solution of the time where
+// they occur." A conforming tool therefore solves — and strobes — within
+// 4 * 10 fs + 0.5 fs of 2.5, 5, 7.5 and 10 ns, which an earlier draft's
+// `$abstime < 2.5n ? 1 : 2` arms split exactly down the middle. So, as in 04
+// and 07, every want is the literal 1:
+//
+//   - n is bounded by the events that CERTAINLY and POSSIBLY lie in the past,
+//     with a 0.4 ns margin that dwarfs the 40.5 fs of placement slack:
+//         lo = 1 + [t >= 2.9n] + [t >= 5.4n] + [t >= 7.9n] + [t >= 10.4n]
+//         hi = 1 + [t >= 2.1n] + [t >= 4.6n] + [t >= 7.1n] + [t >= 9.6n]
+//     At every declared point lo == hi, so the count is PINNED there:
+//         t = 0: 1    4 ns: 2    8 ns: 4    11 ns: 5    12 ns: 5
+//     and no declared point sits on a threshold.
+//   - sampled is tied to n: after the k-th event (k = n - 1) it is 0.25 * k V
+//     within 4.05u. Both are written in the same always block at the same
+//     digital time, so no analog read can see one updated and not the other.
+//     With n pinned at the declared points, so is sampled: 0, 0.25, 0.75, 1.0,
+//     1.0 V. A non-interpolating tool fires at 4 ns with sampled = 0.4 V against
+//     n - 1 = 1, and fails.
 //
 // time_tol is 1p against a 2.5 ns event spacing, so the "within time_tol of the
 // previous event" suppression never applies. The count is an integer and is
@@ -96,7 +129,7 @@
 //! analysis tran
 //! time 0, 4n, 8n, 11n, 12n
 //! wave V(vi) = 0, 0.4, 0.8, 1.1, 1.2
-`timescale 1ns/1ns
+`timescale 1ns/1fs
 `include "check.vh"
 module m02_absdelta_interpolated_a2d(vi, vo);
   inout vi, vo; electrical vi, vo;
@@ -115,18 +148,13 @@ module m02_absdelta_interpolated_a2d(vi, vo);
   end
   analog begin
     `CHECKI("absdelta posts one A2D event per 0.25 V, plus the initialization one",
-            n,
-            ($abstime < 2.5n) ? 1 :
-            (($abstime < 5n)  ? 2 :
-            (($abstime < 7.5n) ? 3 :
-            (($abstime < 10n) ? 4 : 5))));
-    `CHECK("and all four interior events were interpolated, not snapped to a timestep",
-           sampled,
-           ($abstime < 2.5n) ? 0.0 :
-           (($abstime < 5n)  ? 0.25 :
-           (($abstime < 7.5n) ? 0.5 :
-           (($abstime < 10n) ? 0.75 : 1.0))),
-           4u);   // 4 * expr_tol: the window is spent per event, see header
+            (n >= 1 + ($abstime >= 2.9n) + ($abstime >= 5.4n)
+                    + ($abstime >= 7.9n) + ($abstime >= 10.4n))
+            && (n <= 1 + ($abstime >= 2.1n) + ($abstime >= 4.6n)
+                       + ($abstime >= 7.1n) + ($abstime >= 9.6n)), 1);
+    `CHECKI("and every event was interpolated, not snapped to a timestep",
+            abs(sampled - 0.25 * (n - 1)) <= 4.05u, 1);
+    // 4.05u = 4 * expr_tol + half a 1 fs tick on the ramp, see header
     V(vo) <+ sampled;
   end
 endmodule

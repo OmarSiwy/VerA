@@ -41,8 +41,32 @@
 //     n_cross    is in [0,1] at EVERY point of the run, and exactly 1 from 6 ns
 //     tick_first == tick_last == 5 from 6 ns   (one delivery, not two at the
 //                                               same tick overwriting each other)
-//     sampled    is inside §5.10.3.1's box: at or above the 0.52 V threshold and
-//                no higher than 0.6 V, the value one full declared step later
+//     sampled    == 0.50 V from 6 ns, the ramp's value at 5.0 ns (below)
+//
+// WHAT `sampled` MUST READ. `sampled = V(vi)` is an analog primary in a digital
+// expression, and §7.3.6.3 fixes its value verbatim: "The expression shall be
+// evaluated using the analog value calculated for the time corresponding to a
+// real promotion of the digital time at which the expression is evaluated."
+// The always block runs at digital time 5 — §7.3.6.1: the statements "shall be
+// scheduled in the digital domain at the nearest digital time tick to the time
+// of the analog event", round(5.2) = 5, which the tick check above pins — so
+// the promoted time is 5.0e-9 and the ramp there reads 0.50 V. The analog kernel
+// is already at 5.2 ns when the event fires; §7.3.6.3's second paragraph covers
+// exactly that ("If the current time in the continuous and discrete kernels
+// differ, interpolation is used"), and V(vi) is a potential, not a variable
+// last assigned in an analog event statement, so the exception does not apply.
+// §7.3.6.1's "it may appear to be in a delta cycle belonging to a tick started
+// at an earlier or later time" places the EVENT among delta cycles; it does not
+// change the digital time at which the block evaluates, which is still 5.
+//
+// An earlier draft demanded 0.52 <= sampled <= 0.6, "inside the crossing box".
+// That applied §5.10.3.1's box — which governs where the analog kernel places
+// the crossing — to a digital read it does not govern, and a conforming tool
+// reads 0.50 and failed it. The tolerance is 1u, the cross()'s own expr_tol:
+// far wider than the rounding of a linear interpolation on this ramp (~1e-16 V)
+// and 2e4 times narrower than the 0.02 V to 0.52 (reading the analog event time
+// instead of the digital one) or the 0.1 V to 0.6 (a rejected trial one
+// declared step on), so both wrong answers still fail.
 //
 // The upper bound on n_cross is what makes the "exactly once" claim carry weight
 // before 6 ns as well - it is an assertion at every timepoint, not just the tail -
@@ -50,6 +74,7 @@
 // reason spelled out in 07.
 //
 //! lrm 8.4.7
+//! lrm 7.3.6.3
 //! lrm 8.4.3.2
 //! lrm 8.5
 //! lrm 5.10.3.1
@@ -84,8 +109,8 @@ module m02_rejected_trials_deliver_once(vi, vo);
             (n_cross >= 0 && n_cross <= 1) && (($abstime >= 6n) ? (n_cross == 1) : 1), 1);
     `CHECKI("and the single delivery carries one digital timestamp, tick 5",
             ($abstime >= 6n) ? (tick_first == 5 && tick_last == 5) : 1, 1);
-    `CHECKI("the sampled value is inside the crossing box, not a rejected trial's",
-            ($abstime >= 6n) ? (sampled >= 0.52 && sampled <= 0.6) : 1, 1);
+    `CHECKI("the sampled value is the ramp at the promoted digital time, 5.0 ns",
+            ($abstime >= 6n) ? (abs(sampled - 0.5) <= 1u) : 1, 1);
     // read unguarded: every `kick` toggle forces another macro-process solve
     V(vo) <+ (kick ? 0.1 : 0.0) + n_cross * 0.25;
   end
