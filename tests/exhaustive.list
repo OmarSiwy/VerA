@@ -144,7 +144,6 @@ lib/ir/lower/func.zig scanCallSitesExpr Ast.ExprTag
 lib/ir/lower/hier_name.zig checkAliasCall Ast.ExprTag
 lib/ir/lower/node.zig nodeOf Ast.ExprTag
 lib/ir/lower/param.zig rangeBound Ast.ExprTag
-lib/ir/lower/param.zig scanHeld Ast.Stmt
 lib/ir/lower/param.zig simStateInDefault Ast.ExprTag
 lib/ir/lower/param.zig simStateInDefault Ast.ExprTag
 lib/ir/lower/stmt.zig arrayRef Ast.ExprTag

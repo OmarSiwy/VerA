@@ -856,10 +856,24 @@ pub fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
 }
 
 /// One walk, two modes: outside an event body we are only looking for the
-/// `@(...)`; inside one, every assignment target names a variable that has to
-/// survive to the next evaluation.
+/// `@(...)`; inside one, every variable a statement WRITES has to survive to
+/// the next evaluation. "Writes" is `Ast.SourceFile.stmtWrites`, not only the
+/// assignment target: an output actual or a `$random` seed written only inside
+/// an event body used to revert to zero at the next evaluation.
 pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
     if (id == .none) return;
+    if (in_event) {
+        const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
+        var writes: std.ArrayList(Ast.ExprId) = .empty;
+        defer writes.deinit(self.arena);
+        try self.file.stmtWrites(funcs, id, self.arena, &writes);
+        // §3.2 `x[i] = …` holds the ARRAY; `declareVarDecl` scalarizes it.
+        for (writes.items) |w| {
+            const t = self.file.lvalueBase(w);
+            if (t == .none) continue;
+            try self.held_names.put(self.arena, try heldKey(self, self.file.str(self.file.exprs.strOf(t))), {});
+        }
+    }
     switch (self.file.stmt(id)) {
         .block => |b| {
             // §5.3.2 only a NAMED block's locals are static, so only a label
@@ -874,14 +888,6 @@ pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
             }
             for (b.body) |s| try scanHeld(self, s, in_event);
             if (named) _ = self.held_frames.pop();
-        },
-        .assign => |a| {
-            if (!in_event) return;
-            const ex = &self.file.exprs;
-            // §3.2.2 `x[i] = …` holds the ARRAY; `declareVarDecl` scalarizes it.
-            const t = if (ex.tag(a.target) == .index) ex.lhs(a.target) else a.target;
-            if (ex.tag(t) != .ident) return;
-            try self.held_names.put(self.arena, try heldKey(self, self.file.str(ex.strOf(t))), {});
         },
         .if_stmt => |s| {
             try scanHeld(self, s.then_s, in_event);
@@ -898,7 +904,8 @@ pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
         // §5.10 forbids nesting, so `true` is never re-entered; lowering
         // diagnoses that (E0703) and this walk does not need to.
         .event_control => |s| try scanHeld(self, s.body, true),
-        else => {},
+        // No child statement; their writes were collected above.
+        .assign, .sys_task, .contribute, .indirect, .jump, .empty, .event_trigger, .disable => {},
     }
 }
 

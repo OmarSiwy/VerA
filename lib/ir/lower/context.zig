@@ -188,29 +188,33 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
     if (id == .none or (!discrete and ctx.assigned.count() == 0)) return;
     const is_initial = if (discrete) {} else context;
     const ex = &self.file.exprs;
+    // Every variable the statement writes, not only an assignment target: an
+    // output actual and a `$random` seed assign too (`stmtWrites`). The target
+    // of `bus[3] = ...` is the array, so `lvalueBase` walks down to the name —
+    // §7.2.2's domain is a property of the DECLARATION.
+    const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
+    var writes: std.ArrayList(Ast.ExprId) = .empty;
+    defer writes.deinit(self.arena);
+    try self.file.stmtWrites(funcs, id, self.arena, &writes);
+    for (writes.items) |w| {
+        const t = self.file.lvalueBase(w);
+        if (t == .none) continue;
+        const name = self.file.str(ex.strOf(t));
+        if (discrete) {
+            if (self.vars.contains(name)) try ctx.assigned.put(self.arena, name, context);
+        } else if (ctx.assigned.get(name)) |dtok| {
+            var b = self.errWith(self.file.exprs.mainTok(t), .E0432);
+            b.msg("`{s}`", .{name});
+            b.label(
+                self.tokenSpan(dtok),
+                "`{s}` is also assigned here, in the discrete context",
+                .{name},
+            );
+            try b.emit();
+        }
+    }
     switch (self.file.stmt(id)) {
-        .assign => |a| {
-            // The target of `bus[3] = ...` is the array, so walk down to the
-            // base name — §7.2.2's domain is a property of the DECLARATION.
-            var t = a.target;
-            while (t != .none and (ex.tag(t) == .index or ex.tag(t) == .range)) t = ex.lhs(t);
-            if (t != .none and ex.tag(t) == .ident) {
-                const name = self.file.str(ex.strOf(t));
-                if (discrete) {
-                    if (self.vars.contains(name)) try ctx.assigned.put(self.arena, name, context);
-                } else if (ctx.assigned.get(name)) |dtok| {
-                    var b = self.errWith(self.file.exprs.mainTok(t), .E0432);
-                    b.msg("`{s}`", .{name});
-                    b.label(
-                        self.tokenSpan(dtok),
-                        "`{s}` is also assigned here, in the discrete context",
-                        .{name},
-                    );
-                    try b.emit();
-                }
-            }
-            try scanContextExpr(self, a.value, discrete, is_initial, ctx);
-        },
+        .assign => |a| try scanContextExpr(self, a.value, discrete, is_initial, ctx),
         .block => |b| for (b.body) |s| try scanContext(self, s, discrete, context, ctx),
         .if_stmt => |s| {
             try scanContextExpr(self, s.cond, discrete, is_initial, ctx);
