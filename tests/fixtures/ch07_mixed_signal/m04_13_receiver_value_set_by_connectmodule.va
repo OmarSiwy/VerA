@@ -50,6 +50,10 @@
 //! lrm 7.9
 //! lrm 9.22.6
 //! lrm 9.22.3
+//! analysis tran
+//! time 0, 50n
+//! checks 3
+//! xfail VerA performs no §7.8 connect-module insertion (lib/ir/elaborate.zig:54-58, ROADMAP v0.6.0) and has no digital kernel in the device to run a connect module's §9.22 calls; today it stops earlier still, at the parser
 //
 // HAND DERIVATION — one ordinary driver, one ordinary receiver, one merged
 // connect module. §9.22.1 numbers the ordinary drivers 0..N-1 and here N is 1,
@@ -67,9 +71,25 @@
 //
 //   Every sample is 5 or more ticks after the assignment that determines it, so
 //   no intra-timestep ordering is asserted.
+//
+// HOW THIS FILE ASSERTS. Each sample is a check.vh CHECKI from a digital
+// `initial`, and `//! checks 3` makes the count exact: a tool that never runs
+// one of the asserting processes (in a connect module it did not insert, say)
+// FAILs on the count rather than passing on silence.
+// CHECKI is a $strobe, which prints at the END of its time step (IEEE 1364
+// §17.1), so each `$finish` is one tick after the last sample — a same-tick
+// `$finish` would end the run before that strobe. The transient runs to 50 ns
+// so the digital half reaches it. A receiver that reads x fails its CHECKI
+// too: `x == 1` is x, and x prints as `ok=x`, which the harness counts as a
+// failure. This file used to assert through
+// `$display` and a `.expected.txt` transcript, which the `.va` harness never
+// reads (tests/harness.zig `fixtureExt`: a golden is honoured for `.v` only), so
+// it asserted nothing. How `%b` spells a 32-bit integer is a digital display
+// rule and is no longer claimed here.
 
 `timescale 1ns/1ns
 `include "disciplines.vams"
+`include "check.vh"
 
 connectrules m04_seg_rules;
   connect m04_seg_c2e merged input ddiscrete, output electrical;
@@ -109,10 +129,10 @@ module m04_seg_ear(i);
   input i;
   ddiscrete i;
   initial begin
-    #5  $display("receiver_reads_the_connect_module_not_the_driver %b", i);
-    #15 $display("receiver_is_the_inverse_of_a_one_driver %b", i);
-    #20 $display("receiver_is_the_inverse_of_a_zero_driver %b", i);
-    $finish(0);
+    #5  `CHECKI("receiver_reads_the_connect_module_not_the_driver", i, 1);
+    #15 `CHECKI("receiver_is_the_inverse_of_a_one_driver", i, 0);
+    #20 `CHECKI("receiver_is_the_inverse_of_a_zero_driver", i, 1);
+    #1 $finish(0);
   end
 endmodule
 

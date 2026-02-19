@@ -34,6 +34,10 @@
 //
 //! lrm 9.22.1
 //! lrm 9.22.3
+//! analysis tran
+//! time 0, 50n
+//! checks 10
+//! xfail VerA performs no §7.8 connect-module insertion (lib/ir/elaborate.zig:54-58, ROADMAP v0.6.0) and has no digital kernel in the device to run a connect module's §9.22 calls; today it stops earlier still, at the parser
 //
 // HAND DERIVATION
 //   Four ordinary modules drive the mixed net `net`, each holding one constant:
@@ -53,31 +57,22 @@
 //   Samples are at t=1 and t=40, both clear of the t=30 assignments, so no
 //   intra-timestep ordering is asserted.
 //
-// THE WIDTH OF THE INTEGER COLUMNS. `n`, `ones`, `zeros`, `xs` and `zs` are
-// `integer`s; §3.2 gives an integer the range -2**31 .. 2**31-1, i.e. 32 bits.
-// %b is the only integer conversion `src/sim/digital.zig` implements; §9.4.3
-// Table 9-22 gives %b no width modifier, and IEEE Std 1364 makes the printed
-// field width of %b the SIZE OF THE EXPRESSION, not the number of significant
-// digits. So every one of those columns is exactly 32 binary digits,
-// zero-padded on the left:
-//
-//   decimal 0 -> 00000000000000000000000000000000
-//   decimal 1 -> 00000000000000000000000000000001
-//   decimal 2 -> 00000000000000000000000000000010
-//   decimal 4 -> 00000000000000000000000000000100
-//
-// `ok=%b` is the result of an `==`, self-determined at ONE bit, so it stays a
-// single digit.
-//
-// CORRECTED AFTER REVIEW. These columns previously held the minimum-width
-// strings "100", "1", "10", "0". VerA's %b is width-exact, and its own passing
-// regression in `src/sim/digital.zig` prints
-// `integer 11111111111111111111111111111111` for a 32-bit integer, so the old
-// transcript failed a conforming implementation and could only be made to pass
-// by making %b non-conformant.
+// HOW THIS FILE ASSERTS. Each sample is a check.vh CHECKI from a digital
+// `initial`, and `//! checks 10` makes the count exact: a tool that never runs
+// one of the asserting processes (in a connect module it did not insert, say)
+// FAILs on the count rather than passing on silence.
+// CHECKI is a $strobe, which prints at the END of its time step (IEEE 1364
+// §17.1), so each `$finish` is one tick after the last sample — a same-tick
+// `$finish` would end the run before that strobe. The transient runs to 50 ns
+// so the digital half reaches it. This file used to assert through
+// `$display` and a `.expected.txt` transcript, which the `.va` harness never
+// reads (tests/harness.zig `fixtureExt`: a golden is honoured for `.v` only), so
+// it asserted nothing. How `%b` spells a 32-bit integer is a digital display
+// rule and is no longer claimed here.
 
 `timescale 1ns/1ns
 `include "disciplines.vams"
+`include "check.vh"
 
 connectrules m04_ds_rules;
   connect m04_ds_c2e merged input ddiscrete, output electrical;
@@ -111,14 +106,19 @@ connectmodule m04_ds_c2e(d, a);
     out = 1'b0;
     #1;
     histogram;
-    $display("four_ordinary_drivers got=%b ok=%b", n, n == 4);
-    $display("initial_states ones=%b zeros=%b xs=%b zs=%b", ones, zeros, xs, zs);
+    `CHECKI("four_ordinary_drivers", n, 4);
+    `CHECKI("initial_states ones", ones, 1);
+    `CHECKI("initial_states zeros", zeros, 1);
+    `CHECKI("initial_states xs", xs, 1);
+    `CHECKI("initial_states zs", zs, 1);
     #39;
     histogram;
-    $display("count_unchanged_after_transitions got=%b ok=%b", n, n == 4);
-    $display("states_track_their_drivers ones=%b zeros=%b xs=%b zs=%b",
-             ones, zeros, xs, zs);
-    $finish(0);
+    `CHECKI("count_unchanged_after_transitions", n, 4);
+    `CHECKI("states_track_their_drivers ones", ones, 2);
+    `CHECKI("states_track_their_drivers zeros", zeros, 2);
+    `CHECKI("states_track_their_drivers xs", xs, 0);
+    `CHECKI("states_track_their_drivers zs", zs, 0);
+    #1 $finish(0);
   end
 
   analog V(a) <+ 0.0;

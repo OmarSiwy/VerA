@@ -124,9 +124,16 @@ names a section that exists in those files.
 
 ## Fixtures
 
-Each fixture has a matching `.expected.txt` holding the exact `$display`
+Each `.v` fixture has a matching `.expected.txt` holding the exact `$display`
 transcript. The two reject fixtures have none: the expected outcome is a
 diagnostic and empty stdout.
+
+Fixtures 10, 11 and 13–16 are `.va` files, and the `.va` harness reads no
+transcript (`tests/harness.zig` `fixtureExt` honours a golden for `.v` only), so
+they assert through `check.vh`'s `CHECKI` with an exact `//! checks N`, and
+carry `//! xfail` until §7.8 insertion lands (ROADMAP v0.6.0). Fixture 12's
+transcript, `tests/fixtures/digital/m04_12_*.expected.txt`, is kept unread until
+ROADMAP §7 decision 1 fixes its `updates=` column.
 
 ### How the integer columns are spelled
 
@@ -134,7 +141,7 @@ diagnostic and empty stdout.
 Table 9-22 gives `%b` no width modifier, and IEEE Std 1364 — reached through
 §1.1 — makes the printed field width of `%b` **the size of the expression**, not
 the number of significant digits. §3.2 makes an `integer` 32 bits wide. So every
-`integer` column in fixtures 03, 10, 11, 12 and 14 is **exactly 32 binary
+`integer` column in fixtures 03 and 12 is **exactly 32 binary
 digits**, zero-padded on the left:
 
 | decimal | printed |
@@ -380,8 +387,8 @@ syntax box turns out to have been absent from the row: 10–15 between them cove
 `tests/fixtures/annex_g_change_history/08_new_receiver_count.va` asserted the
 opposite of this file and has been withdrawn with it.
 
-`m04_16_receiver_count_reports_ordinary_receivers.va`, paired with a
-`.expected.txt` as every `--run` fixture in this row is.
+`m04_16_receiver_count_reports_ordinary_receivers.va`, asserting through
+`CHECKI` as 10, 11 and 13–15 do (see "Fixtures" above).
 
 Topology is 10's turned round: 10 has two ordinary drivers and one ordinary
 receiver; this has one ordinary driver and two. `net` is `electrical` carrying

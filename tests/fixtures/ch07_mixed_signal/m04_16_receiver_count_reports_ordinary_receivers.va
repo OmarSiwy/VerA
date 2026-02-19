@@ -92,20 +92,18 @@
 // which the digital value crosses are all irrelevant — the counts are read, not
 // computed — so the fixture cannot be turned green or red by a tolerance.
 //
-// THE WIDTH OF THE `got=` COLUMNS. §9.22.2 says $receiver_count "returns an
-// integer", and §3.2 gives an integer the range -2**31 .. 2**31-1, i.e. 32
-// bits. `%b` is the only integer conversion `--run`'s engine implements; §9.4.3
-// Table 9-22 gives %b no width modifier, and IEEE Std 1364 — reached through
-// §1.1 — makes the printed field width of %b the SIZE OF THE EXPRESSION, not
-// the number of significant digits. So each `got=` column is exactly 32 binary
-// digits, zero-padded on the left:
-//
-//   decimal 1 -> 00000000000000000000000000000001
-//   decimal 2 -> 00000000000000000000000000000010
-//
-// The `ok=` column is the fixture's own assertion. It is the result of an `==`,
-// which IEEE Std 1364 self-determines at ONE bit, so it prints as the single
-// digit `1` — and it, not the `got=` column, is what a wrong count fails on.
+// HOW THIS FILE ASSERTS. Each sample is a check.vh CHECKI from a digital
+// `initial`, and `//! checks 3` makes the count exact: a tool that never runs
+// one of the asserting processes (in a connect module it did not insert, say)
+// FAILs on the count rather than passing on silence.
+// CHECKI is a $strobe, which prints at the END of its time step (IEEE 1364
+// §17.1), so each `$finish` is one tick after the last sample — a same-tick
+// `$finish` would end the run before that strobe. The transient runs to 50 ns
+// so the digital half reaches it. This file used to assert through
+// `$display` and a `.expected.txt` transcript, which the `.va` harness never
+// reads (tests/harness.zig `fixtureExt`: a golden is honoured for `.v` only), so
+// it asserted nothing. How `%b` spells a 32-bit integer is a digital display
+// rule and is no longer claimed here.
 //
 // WHY THERE IS NO `//! timescale` LINE. There is no `timescale` directive in
 // `vera`'s fixture vocabulary — lib/backend/tb.zig:274 takes param, bias,
@@ -122,7 +120,8 @@
 // MANIFEST records the same defect in ten `.v` files ("an invented mechanism
 // written to look like a checked one"). `timescale` in the SOURCE — a
 // `` `timescale `` compiler directive, §10.2 — is a separate thing from a `//!`
-// tag, and no fixture in this row needs one.
+// tag. This file carries one (1ns/1ns, as 10-15 do) so that the `#1` and `#39`
+// below are nanoseconds and the 50 ns transient covers them.
 //
 // DELIBERATELY NOT COVERED: $receiver_count's ANALOG cell. Table 9-19 is the
 // only place in the LRM where a driver access function is granted the analog
@@ -131,8 +130,8 @@
 // `analog begin ... end` would have to emit from inside the solve, once per
 // solver iteration, so its transcript is not a fixed number of lines and cannot
 // be held in a `.expected.txt`. Pin the analog cell in a fixture that reads the
-// value rather than prints it, or in one that counts emissions; do not write a
-// $display into an analog block and expect a stable golden.
+// value rather than prints it, or in one that counts emissions; a strobe in an
+// analog block prints once per accepted point, so no fixed `//! checks` holds.
 //
 // STATUS, AND WHAT IT FAILS ON TODAY. Two unsupported module items inside the
 // connect module, in this order:
@@ -151,14 +150,20 @@
 // citing §9.22 — i.e. it knows exactly what the function is and only lacks the
 // connectmodule module items that would let this file reach it. This fixture
 // therefore becomes checkable the moment `assign` and `#` parse inside a
-// connectmodule, and not before; until then it is a wrong-reason failure of the
-// same kind as 20 and 21, and it says so here rather than in a review.
+// connectmodule AND §7.8 inserts it, and not before. That is what the
+// `//! xfail` line below says.
 
 //! lrm 9.22
 //! lrm 9.22.2
 //! lrm G.1
 //! lrm 7.8.4
+//! analysis tran
+//! time 0, 50n
+//! checks 3
+//! xfail VerA performs no §7.8 connect-module insertion (lib/ir/elaborate.zig:54-58, ROADMAP v0.6.0) and has no digital kernel in the device to run a connect module's §9.22 calls; today it stops earlier still, at the parser
+`timescale 1ns/1ns
 `include "disciplines.vams"
+`include "check.vh"
 
 connectrules m04_rc_rules;
   connect m04_rc_c2e merged input ddiscrete, output electrical;
@@ -180,14 +185,11 @@ connectmodule m04_rc_c2e(d, a);
   initial begin
     out = 1'b0;
     #1;
-    $display("receiver_count_counts_the_ordinary_receivers got=%b ok=%b",
-             $receiver_count(d), $receiver_count(d) == 2);
-    $display("driver_count_is_a_different_number got=%b ok=%b",
-             $driver_count(d), $driver_count(d) == 1);
+    `CHECKI("receiver_count_counts_the_ordinary_receivers", $receiver_count(d), 2);
+    `CHECKI("driver_count_is_a_different_number", $driver_count(d), 1);
     #39;
-    $display("receiver_count_is_elaboration_time_not_activity got=%b ok=%b",
-             $receiver_count(d), $receiver_count(d) == 2);
-    $finish(0);
+    `CHECKI("receiver_count_is_elaboration_time_not_activity", $receiver_count(d), 2);
+    #1 $finish(0);
   end
 
   analog V(a) <+ 0.0;

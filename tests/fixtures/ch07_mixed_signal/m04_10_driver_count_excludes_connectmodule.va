@@ -37,6 +37,10 @@
 //! lrm 9.22
 //! lrm 9.22.1
 //! lrm 7.8.4
+//! analysis tran
+//! time 0, 50n
+//! checks 2
+//! xfail VerA performs no §7.8 connect-module insertion (lib/ir/elaborate.zig:54-58, ROADMAP v0.6.0) and has no digital kernel in the device to run a connect module's §9.22 calls; today it stops earlier still, at the parser
 //
 // HAND DERIVATION
 //   `net` in m04_dc_top is `electrical`, so it has an analog segment; the three
@@ -60,31 +64,22 @@
 //   pin that: an implementation that recomputed the count from "drivers that
 //   have assigned something recently" would read 0 at t=1 or would drift.
 //
-// THE WIDTH OF THE `got=` COLUMN. §9.22.1 says $driver_count "returns an
-// integer", and §3.2 gives an integer the range -2**31 .. 2**31-1, i.e. 32
-// bits. %b is the only integer conversion `src/sim/digital.zig` implements;
-// §9.4.3 Table 9-22 gives %b no width modifier, and IEEE Std 1364 — reached
-// through §1.1 — makes the printed field width of %b the SIZE OF THE
-// EXPRESSION, not the number of significant digits. So the `got=` column is
-// exactly 32 binary digits, zero-padded on the left:
-//
-//   decimal 2 -> 00000000000000000000000000000010
-//
-// The `ok=` column is the fixture's own assertion, in the shape
-// tests/fixtures/check.vh uses for the analog suite. It is the result of an
-// `==`, which IEEE Std 1364 self-determines at ONE bit, so it prints as the
-// single digit `1` — and it, not the `got=` column, is what a wrong count
-// fails on.
-//
-// CORRECTED AFTER REVIEW. The `got=` column previously held the minimum-width
-// string "10". VerA's %b is width-exact, and its own passing regression in
-// `src/sim/digital.zig` prints `integer 11111111111111111111111111111111` for
-// a 32-bit integer. The old transcript therefore failed a conforming
-// implementation, and the cheapest way to make it pass was to make %b
-// minimum-width — which would have broken that green regression.
+// HOW THIS FILE ASSERTS. Each sample is a check.vh CHECKI from a digital
+// `initial`, and `//! checks 2` makes the count exact: a tool that never runs
+// one of the asserting processes (in a connect module it did not insert, say)
+// FAILs on the count rather than passing on silence.
+// CHECKI is a $strobe, which prints at the END of its time step (IEEE 1364
+// §17.1), so each `$finish` is one tick after the last sample — a same-tick
+// `$finish` would end the run before that strobe. The transient runs to 50 ns
+// so the digital half reaches it. This file used to assert through
+// `$display` and a `.expected.txt` transcript, which the `.va` harness never
+// reads (tests/harness.zig `fixtureExt`: a golden is honoured for `.v` only), so
+// it asserted nothing. How `%b` spells a 32-bit integer is a digital display
+// rule and is no longer claimed here.
 
 `timescale 1ns/1ns
 `include "disciplines.vams"
+`include "check.vh"
 
 connectrules m04_dc_rules;
   connect m04_dc_c2e merged input ddiscrete, output electrical;
@@ -106,12 +101,10 @@ connectmodule m04_dc_c2e(d, a);
   initial begin
     out = 1'b0;
     #1;
-    $display("connect_module_driver_is_not_counted got=%b ok=%b",
-             $driver_count(d), $driver_count(d) == 2);
+    `CHECKI("connect_module_driver_is_not_counted", $driver_count(d), 2);
     #39;
-    $display("count_is_elaboration_time_not_activity got=%b ok=%b",
-             $driver_count(d), $driver_count(d) == 2);
-    $finish(0);
+    `CHECKI("count_is_elaboration_time_not_activity", $driver_count(d), 2);
+    #1 $finish(0);
   end
 
   analog V(a) <+ 0.0;
