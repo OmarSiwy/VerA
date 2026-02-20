@@ -3905,7 +3905,7 @@ fn infoOf(c: Code) Info {
             \\    the same values and restores finiteness. See W0651.
             \\  - A call the prover does not model (an analog operator, a ch9
             \\    system function). Unmodelled always costs .strict rather than
-            \\    risking a wrong .optimized. See W0652.
+            \\    risking a wrong .optimized.
             \\
             \\If strict mode is what you want for this model, silence the
             \\warning with `--allow=W0650`.
@@ -3929,24 +3929,13 @@ fn infoOf(c: Code) Info {
             \\See W0650 for what the proof buys.
             ,
         },
-        .W0652 => .{
-            .title = "call is not modelled by the finiteness prover",
-            .lrm = "4.5",
-            .explain =
-            \\The prover has an abstract range for the LRM 4.3 math functions
-            \\and for the handful of system functions whose range the LRM fixes
-            \\($vt, $temperature, ...). Everything else — analog operators
-            \\carrying state, other ch9 system functions — is treated as
-            \\unbounded.
-            \\
-            \\That is deliberate: an unmodelled call costs the unit .strict
-            \\(W0650), never a wrong .optimized, which would be silent
-            \\Release-only undefined behaviour.
-            \\
-            \\Assign the call's result to a variable and constrain it with a
-            \\guard the prover can see, if the value really is bounded.
-            ,
-        },
+        .W0652 => retiredInfo(
+            \\"call is not modelled by the finiteness prover". Retired: nothing
+            \\emits it. An unmodelled call (an analog operator, a ch9 system
+            \\function) already reaches the user as W0650 on the unit it drags to
+            \\.strict, so a second code for the same event was never wired up.
+            \\The number is not reused.
+        ),
 
         // ------------------------------------------------------------ class 7
         .E0701 => .{

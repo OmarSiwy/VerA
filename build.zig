@@ -97,9 +97,10 @@ pub fn build(b: *std.Build) void {
         b.step(b.fmt("test-{s}", .{m.name}), b.fmt("Run the {s} module tests only", .{m.name}))
             .dependOn(r);
     }
-    // The CLI is an artifact and not a module, so without this the tests beside
-    // `main` are written and never run.
-    test_step.dependOn(testRun(b, "cli", cli_mod, runner));
+    // The CLI has no tests of its own; what `test` owes it is that it COMPILES.
+    // A test artifact over main.zig analysed nothing (Zig is lazy and there was
+    // no test to reach it), so the dependency is on the executable itself.
+    test_step.dependOn(&exe.step);
     // `tests/test_all.zig` is the one compilation that has every module at once,
     // and it owns the claims that span two of them.
     const all_mod = b.createModule(.{

@@ -19,59 +19,7 @@
 //! module-name check and the `@compileError` gate live here rather than in a
 //! separate wrapper tool.
 //!
-//! options:
-//!   --lint                 frontend only: parse, lower, prove. No codegen.
-//!   --emit-zig             generate the device; write it to stdout or -o
-//!   -o PATH                write the generated device.zig here instead
-//!   --expect-module=NAME   fail unless the compiled module is called NAME
-//!   --check                run the Zig compiler over the generated device and
-//!                          fail HERE if it does not type-check, so a codegen
-//!                          bug names the .va instead of surfacing three cache
-//!                          steps downstream as an error in generated code
-//!   --emit-so              go all the way: .va -> device.zig -> lib<name>.so
-//!   --emit-exe             the OTHER artifact: .va -> a runnable testbench.
-//!                          Same frontend and the same device.zig; ch9 display
-//!                          tasks become real prints, and a generated runner
-//!                          drives the module over the operating points the
-//!                          source's `//!` lines declare (backend/tb.zig). Prints
-//!                          the binary's path.
-//!   --run                  --emit-exe, then execute it and forward its status
-//!   --display=drop|emit    ch9 display handling on its own. `drop` (the
-//!                          default) is what a DEVICE gets: no text, no syscall
-//!                          in the Newton loop, nothing that blocks a GPU
-//!                          backend — and a W0850 naming every dropped call.
-//!                          `emit` lowers them to `std.debug.print` and gives
-//!                          the device a `display()` entry point.
-//!   --jac-f32              emit `pub const jac_f32 = true`: this device
-//!                          tolerates a host scalar S whose DERIVATIVE half is
-//!                          single precision. Emitted arithmetic is UNCHANGED —
-//!                          `eval` is already generic over S and touches it only
-//!                          through f64-boundary primitives, so the width is the
-//!                          host's to pick and this only records the permission.
-//!                          It is a PERMISSION, not an order: ESPice takes it on
-//!                          its GPU kernel and declines it on its CPU path, from
-//!                          this one decl.
-//!   --jac-f32-host         also emit `pub const jac_f32_host = true`: the host
-//!                          should take that permission on its CPU
-//!                          instantiation too. Implies --jac-f32.
-//!                          The residual stays f64; only the Jacobian degrades,
-//!                          which under inexact Newton costs iterations and not
-//!                          the converged answer.
-//!   --contract PATH        root of the `contract` module (--check, --emit-so,
-//!                          --emit-exe)
-//!   --dyn PATH             root of the `dyn` module (--emit-so)
-//!   --work-dir DIR         scratch + artifact directory (--emit-so)
-//!   --zig PATH             the zig executable to drive (default: `zig`)
-//!   -I DIR                 add an `include search directory (repeatable)
-//!   --no-std-defs          do not prepend the annex D prelude
-//!   --diagnostics=text     rendered snippets (default)
-//!   --diagnostics=json     one JSON object per diagnostic, for a tool
-//!   --color=auto|always|never
-//!   --allow=CODE           silence a warning        (an error cannot be allowed)
-//!   --warn=CODE            report but do not fail
-//!   --deny=CODE            report and fail
-//!   --forbid=CODE          like --deny, and refuse a later downgrade
-//!   --unknown-bound=X      solver compliance limit, in volts/amps (see W0650)
+//! options: `usage_text` below is the one list (`vera --help` prints it).
 //!
 //! exit status: 0 on success (warnings do not fail), 1 on a diagnosed error,
 //! 2 on a usage error. Conflicting flags are usage errors, not last-one-wins:
