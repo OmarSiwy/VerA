@@ -87,9 +87,7 @@ lib/ir/ifconv.zig countPreds Mir.Opcode
 lib/ir/lower.zig strLitBytes Ast.ExprTag
 lib/ir/lower.zig strNum Mir.DefKind
 lib/ir/lower/analog_op.zig appendVectorArg Ast.ExprTag
-lib/ir/lower/constfold.zig foldBinary Ast.BinaryOp
 lib/ir/lower/constfold.zig foldExpr Ast.ExprTag
-lib/ir/lower/constfold.zig foldExpr Ast.UnaryOp
 lib/ir/lower/constfold.zig foldStrBinary Ast.BinaryOp
 lib/ir/lower/constfold.zig integerSourceSigned Ast.BinaryOp
 lib/ir/lower/constfold.zig integerSourceSigned Ast.ExprTag
