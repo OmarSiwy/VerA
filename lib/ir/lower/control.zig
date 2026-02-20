@@ -11,6 +11,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
+const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
@@ -98,7 +99,8 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
-        .int_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => true,
+        // A.8.4 `number`, `string_literal`.
+        .int_literal, .logic_literal, .real_literal, .str_literal, .pos_inf, .neg_inf => true,
         .ident => blk: {
             const name = self.file.str(ex.strOf(e));
             if (self.vars.contains(name)) break :blk false;
@@ -106,13 +108,76 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
         },
         // A.8.2 analysis_function_call. Its value is fixed for the analysis,
         // which is the whole reason §5.8.1 spells out "analysis_or_constant".
-        .sys_call => std.mem.eql(u8, self.file.str(ex.strOf(e)), "analysis"),
+        // A.8.4 `system_parameter_identifier`: §9.18 Syntax 9-13's six hierarchical
+        // parameters, fixed per instance for the whole simulation.
+        .sys_call => blk: {
+            const name = self.file.str(ex.strOf(e));
+            if (std.mem.eql(u8, name, "analysis")) break :blk true;
+            if (ex.args(e).len != 0) break :blk false;
+            for ([_][]const u8{ "$mfactor", "$xposition", "$yposition", "$angle", "$hflip", "$vflip" }) |s| {
+                if (std.mem.eql(u8, name, s)) break :blk true;
+            }
+            break :blk false;
+        },
         .unary => isAnalysisOrConst(self, ex.lhs(e)),
-        .binary => isAnalysisOrConst(self, ex.lhs(e)) and isAnalysisOrConst(self, ex.rhs(e)),
+        // A.8.4 `parameter_identifier [ constant_range_expression ]`: the base
+        // has to name a §3.4.4 array PARAMETER, whose elements `param.zig`
+        // scalarizes into `param_index` under `elemKey`'s `name[i]` spelling.
+        .index => blk: {
+            var base = e;
+            while (ex.tag(base) == .index) {
+                if (!isAnalysisOrConst(self, ex.rhs(base))) break :blk false;
+                base = ex.lhs(base);
+            }
+            if (ex.tag(base) != .ident) break :blk false;
+            const name = self.file.str(ex.strOf(base));
+            const info = self.arrays.get(name) orelse break :blk false;
+            var buf: [lower_param.elem_key_len]u8 = undefined;
+            var w: std.Io.Writer = .fixed(&buf);
+            w.writeAll(name) catch break :blk false;
+            for (info.dims) |d| w.print("[{d}]", .{d.lo}) catch break :blk false;
+            break :blk self.param_index.contains(w.buffered());
+        },
+        .binary, .range, .multi_concat => isAnalysisOrConst(self, ex.lhs(e)) and isAnalysisOrConst(self, ex.rhs(e)),
         .ternary => isAnalysisOrConst(self, ex.lhs(e)) and
             isAnalysisOrConst(self, ex.rhs(e)) and
             isAnalysisOrConst(self, ex.ternaryElse(e)),
-        else => false,
+        // A.8.4 `constant_analog_built_in_function_call` and
+        // `constant_concatenation`: constant when every operand is.
+        .builtin_call, .concat => for (ex.args(e)) |a| {
+            if (!isAnalysisOrConst(self, a)) break false;
+        } else true,
+        // A.8.4 `nature_attribute_reference ::= net_identifier .
+        // potential_or_flow . nature_attribute_identifier` — a nature's
+        // attribute is fixed at declaration. Any other dotted name is a §6.8
+        // hierarchical reference to something that can move.
+        .hier_ident => blk: {
+            const parts = ex.nameParts(e);
+            if (parts.len != 3) break :blk false;
+            break :blk self.file.strings.eql(parts[1], "potential") or self.file.strings.eql(parts[1], "flow");
+        },
+        // Probes, analog operators and small-signal sources are exactly what
+        // moves between iterations; an assignment pattern and the event forms
+        // are not A.8.4 primaries.
+        //
+        // A user function call stays out even with constant arguments: A.8.4's
+        // `constant_analog_function_call` promises nothing about the BODY, which
+        // may read `$abstime` (§9.10), and §4.5.15's test is "terms which can
+        // not change their value during the course of a simulation".
+        .call,
+        .branch_access,
+        .port_access,
+        .filter_call,
+        .noise_call,
+        .assign_pattern,
+        .event_or,
+        .event_posedge,
+        .event_negedge,
+        .event_initial_step,
+        .event_final_step,
+        .event_function,
+        .event_driver_update,
+        => false,
     };
 }
 

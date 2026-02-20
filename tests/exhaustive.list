@@ -119,7 +119,6 @@ lib/ir/lower/contrib.zig scanFinite Mir.Opcode
 lib/ir/lower/contrib.zig splitTerm Ast.BinaryOp
 lib/ir/lower/contrib.zig splitTerm Ast.ExprTag
 lib/ir/lower/contrib.zig splitTerm Ast.UnaryOp
-lib/ir/lower/control.zig isAnalysisOrConst Ast.ExprTag
 lib/ir/lower/event.zig containsFlowRead Ast.ExprTag
 lib/ir/lower/event.zig formatBits Ast.BinaryOp
 lib/ir/lower/event.zig formatBits Ast.ExprTag
