@@ -1050,7 +1050,44 @@ pub fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
                 try mulCoeff(self, &t, try self.toReal(try lower_expr.lowerExpr(self, ex.rhs(e))), .fdiv);
                 return t;
             },
-            else => {},
+            // A sum of reactive terms under a factor, `c*(ddt(a) + ddt(b))`.
+            // §4.5.3's ddt is a time derivative, so it is linear: the charge
+            // of the sum is the sum of the charges, and the factor outside
+            // scales that as it scales one. Each side is finished to its own
+            // charge first, so a side with its own non-constant factor keeps
+            // its capacitance form. A side WITHOUT a ddt is a resistive term
+            // the factor would also have to scale, which this spine cannot
+            // return — still E0503.
+            .add, .sub => {
+                if (!containsDdt(self, ex.lhs(e)) or !containsDdt(self, ex.rhs(e))) break :spine;
+                const l = try lowerReactive(self, ex.lhs(e)) orelse return null;
+                const lq = try finishReactive(self, l);
+                const r = try lowerReactive(self, ex.rhs(e)) orelse return null;
+                const rq = try finishReactive(self, r);
+                return .{ .b = try self.emit(if (ex.binOp(e) == .add) .fadd else .fsub, &.{ lq, rq }) };
+            },
+            // No other operator keeps a ddt on a linear spine.
+            .mod,
+            .pow,
+            .eq,
+            .neq,
+            .case_eq,
+            .case_neq,
+            .lt,
+            .le,
+            .gt,
+            .ge,
+            .logical_and,
+            .logical_or,
+            .bit_and,
+            .bit_or,
+            .bit_xor,
+            .bit_xnor,
+            .shl,
+            .shr,
+            .ashl,
+            .ashr,
+            => {},
         },
         else => {},
     }
