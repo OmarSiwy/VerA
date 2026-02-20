@@ -519,16 +519,25 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
     defer h.deinit();
     _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items);
     const src = try h.gen(std.testing.allocator);
-    // domainOf(ln) != .all blocks the eager path: the select must render as
-    // the lazy `(if (...))` with `.log()` inside the guarded arm, and the
-    // proof must still accept the model (markSelectArms re-derives the guard).
+    // What this protects is §4.2.12 laziness, not a spelling: `ln` runs only
+    // on the path `V > vmin` selects. The guard may come out as a lazy
+    // `(if (c) a else b)` or as the CFG `if (c) { ... } else { ... }` that
+    // ifconv keeps for a domain-restricted arm — both pass, an eager `.sel(`
+    // or a `.log()` outside the then-arm fails.
     // Scoped to the unit body — the emitted math prelude also spells `.log()`.
     const unit = src[std.mem.indexOf(u8, src, "fn lg__").?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
-    const guard = std.mem.indexOf(u8, body, "(if (").?;
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, ".log()"));
     const lg2 = std.mem.indexOf(u8, body, ".log()").?;
-    try std.testing.expect(lg2 > guard);
+    // The nearest `if (` before the `.log()` opens the arm holding it, and no
+    // `else` between them makes that the THEN arm — the one `V > vmin` takes.
+    const guard = std.mem.lastIndexOf(u8, body[0..lg2], "if (").?;
+    try std.testing.expect(std.mem.indexOf(u8, body[guard..lg2], "else") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body[0..lg2], "model.vmin") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, ".sel(") == null);
+    // And the proof accepted `ln` UNDER that guard: without it V <= 0 is
+    // reachable and the unit would drop to `.strict`.
+    try std.testing.expect(std.mem.indexOf(u8, body, "@setFloatMode(.optimized)") != null);
 }
 
 test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {

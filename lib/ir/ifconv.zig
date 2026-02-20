@@ -16,11 +16,12 @@
 //! WHAT CONVERTS. Block X ending `branch(c, T, E)` where each arm side is
 //! either the join J itself (triangle) or a block with exactly one predecessor
 //! whose every instruction is a pure value op (unary/binary/ternary — no call,
-//! no opt_barrier, no live phi) ending `jump J`. Arms splice into X in
-//! then-else order, each join phi becomes `select(c, v_then, v_else)` in X,
-//! and X jumps to J. Effectful arms — calls, analog operators, display — never
-//! match, so §4.2.3's "side effects shall not occur" is preserved by
-//! construction; runtime-error laziness is the proof's job (see above).
+//! no opt_barrier, no live phi, no domain-restricted op) ending `jump J`. Arms
+//! splice into X in then-else order, each join phi becomes
+//! `select(c, v_then, v_else)` in X, and X jumps to J. Effectful arms — calls,
+//! analog operators, display — never match, so §4.2.3's "side effects shall
+//! not occur" is preserved by construction. Neither does an arm holding ln,
+//! sqrt, pow, integer `/` …: a runtime error keeps its CFG edge (classifyArm).
 //!
 //! Fixpoint: converting an inner diamond can collapse an outer arm to a single
 //! block (nested `?:`, `&&` chains), so sweep until a round converts nothing.
@@ -40,29 +41,25 @@ const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
 const proof = @import("proof.zig");
 
-/// `contributions` (Lower's) carry uses the MIR cannot see — each target's
-/// resist/react value. They enter the use counts so a domain-restricted op
-/// the guard must cover is never mistaken for exclusively-owned;
-/// proof.markSelectArms counts them the same way.
+/// `contributions` fed a use census that decided whether a domain-restricted
+/// op was exclusively owned. No such op converts any more (classifyArm), so
+/// nothing reads it.
+// ponytail: the parameter stays so root.zig and the tests keep their call.
 pub fn run(gpa: std.mem.Allocator, mir: *Mir, contributions: []const Lower.Contribution) !u32 {
+    _ = contributions;
     const nb = mir.blockCount();
     if (nb == 0) return 0;
     const preds = try gpa.alloc(u32, nb);
     defer gpa.free(preds);
-    // Re-sized per round: each conversion appends a select Value.
-    var uses: std.ArrayList(u32) = .empty;
-    defer uses.deinit(gpa);
 
     var converted: u32 = 0;
     var changed = true;
     while (changed) {
         changed = false;
         countPreds(mir, preds);
-        try uses.resize(gpa, mir.defs.len + Mir.Value.first_dynamic);
-        countUses(mir, contributions, uses.items);
         var b: u32 = 0;
         while (b < nb) : (b += 1) {
-            if (try tryConvert(gpa, mir, @enumFromInt(b), preds, uses.items)) {
+            if (try tryConvert(gpa, mir, @enumFromInt(b), preds)) {
                 converted += 1;
                 changed = true;
             }
@@ -88,48 +85,10 @@ fn countPreds(mir: *const Mir, preds: []u32) void {
     }
 }
 
-/// Per-round use counts, alias-resolved, chain-walked (orphaned rows from
-/// earlier conversions are in no chain and must not count). Mirrors
-/// proof.markSelectArms' counting — the same census that decides whether an
-/// arm's slice is exclusively owned and can carry the guard.
-fn countUses(mir: *const Mir, contributions: []const Lower.Contribution, uses: []u32) void {
-    @memset(uses, 0);
-    const bump = struct {
-        fn f(m: *const Mir, u: []u32, v: Mir.Value) void {
-            u[@intFromEnum(m.resolveAlias(v))] += 1;
-        }
-    }.f;
-    for (contributions) |c| {
-        bump(mir, uses, c.resist_val);
-        bump(mir, uses, c.react_val);
-    }
-    for (0..mir.blockCount()) |b| {
-        var it = mir.blockInsts(@enumFromInt(@as(u32, @intCast(b))));
-        while (it.next()) |inst| {
-            switch (mir.instData(inst)) {
-                .unary => |d| bump(mir, uses, d.operand),
-                .binary => |d| {
-                    bump(mir, uses, d.lhs);
-                    bump(mir, uses, d.rhs);
-                },
-                .ternary => |d| {
-                    bump(mir, uses, d.cond);
-                    bump(mir, uses, d.then_val);
-                    bump(mir, uses, d.else_val);
-                },
-                .call => |d| for (d.args) |a| bump(mir, uses, a),
-                .phi => |d| for (0..d.count) |k| bump(mir, uses, mir.phiPair(inst, @intCast(k)).value),
-                .branch => |d| bump(mir, uses, d.cond),
-                .jump => {},
-            }
-        }
-    }
-}
-
 /// Validate one side: either the direct edge to what the other side joins at,
 /// or a single-pred all-pure block ending in a jump. Returns null on any
 /// disqualifier. NO MUTATION here — both sides validate before either moves.
-fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32, uses: []const u32) ?Mir.Block {
+fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32) ?Mir.Block {
     if (arm == x) return null; // back edge to the branching block itself
     if (preds[@intFromEnum(arm)] != 1) return null;
     var join: ?Mir.Block = null;
@@ -147,29 +106,24 @@ fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32
             .phi => if (mir.resolveAlias(mir.instResult(inst)) == mir.instResult(inst)) return null,
             .call, .branch => return null,
         }
-        // A domain-restricted op (ln, sqrt, integer /, …) only keeps its
-        // guard through conversion if proof.markSelectArms can walk to it,
-        // and that walk stops at any value used more than once. The CFG edge
-        // guarded EVERYTHING it dominated, multi-use included — so a shared
-        // domain-op result must keep its diamond or a legal model turns
-        // rejected (integer div) or drops to `.strict` (real ops).
-        const op = mir.instOp(inst);
-        if (proof.domainOf(op) != .all) {
-            const res = mir.instResult(inst);
-            if (res == .undef) return null;
-            const ri = @intFromEnum(mir.resolveAlias(res));
-            // Past the census ⇒ the alias points at a select THIS round
-            // emitted; the counts are stale. Refuse now — the fixpoint
-            // re-offers the diamond next round with a fresh census.
-            if (ri >= uses.len or uses[ri] != 1) return null;
-        }
+        // §4.2.12 a domain-restricted op (ln, sqrt, pow, integer /, …) keeps
+        // its diamond, whatever its use count. Such an arm can never render
+        // branchless (render.eagerSafe refuses it), so converting it removes
+        // no branch — the lazy `(if (c) a else b)` is a branch too. It only
+        // cost: the arm's values leave their block, so nothing in the arm
+        // could be a statement any more, and every value it shared was
+        // re-rendered as a tree at each use (mesa: 3.0 MB of PTX where 0.65
+        // is enough). As a CFG arm the op runs only under its edge, and the
+        // edge guards every value it dominates, shared ones included, which
+        // the single-use walk in proof.markSelectArms cannot.
+        if (proof.domainOf(mir.instOp(inst)) != .all) return null;
     }
     const j = join orelse return null;
     if (j == x or j == arm) return null;
     return j;
 }
 
-fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32, uses: []const u32) !bool {
+fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bool {
     const term = lastInst(mir, x) orelse return false;
     if (mir.instOp(term) != .branch) return false;
     const br = mir.instData(term).branch;
@@ -177,8 +131,8 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32, use
 
     // Resolve the two sides. At least one must be a real arm; the other may be
     // the join itself (triangle from `&&`/`||` and one-armed `if`).
-    const then_join = classifyArm(mir, x, br.then_block, preds, uses);
-    const else_join = classifyArm(mir, x, br.else_block, preds, uses);
+    const then_join = classifyArm(mir, x, br.then_block, preds);
+    const else_join = classifyArm(mir, x, br.else_block, preds);
     var join: Mir.Block = undefined;
     var then_arm: ?Mir.Block = null;
     var else_arm: ?Mir.Block = null;
