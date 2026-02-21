@@ -26,7 +26,7 @@ const exec = @import("exec.zig");
 const display = @import("display.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
-const Pending = exec.Pending;
+const Row = exec.Row;
 const Waiter = exec.Waiter;
 const Delay = @import("net.zig").Delay;
 const Bridge = @import("net.zig").Bridge;
@@ -129,7 +129,10 @@ pub const Run = struct {
     // the process that reached it is suspended there, so it cannot reach it
     // again before the `deposit` consumes the value.
     holds: std.ArrayList(Int.Literal) = .empty,
-    pending: std.ArrayList(Pending) = .empty,
+    /// Payload rows, indexed by the scheduler's `payload`. Recycled through
+    /// `free_rows`, so this is bounded by the most events queued at once.
+    pending: std.ArrayList(Row) = .empty,
+    free_rows: std.ArrayList(u32) = .empty,
     waiters: std.ArrayList(Waiter) = .empty,
     scheduler: Scheduler,
     /// The source's own path, so §17.2.9's memory file resolves beside the
@@ -703,7 +706,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
             .delay = try r.declaredDelay3(a.delay, a.tok),
         };
         try grouped[a.net].append(arena, @intCast(i));
-        try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .continuous = @intCast(i) }) }, null, false);
+        _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .continuous = @intCast(i) }) }, null, false);
     }
     for (r.nets, grouped) |*n, g| {
         // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
@@ -720,7 +723,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
                 .{ .restart = .{ .target = start, .tok = process.main_tok } }
             else
                 .stop);
-            try exec.enqueue(&r, .{ .run_process = start }, null, false);
+            _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
         }
     }
     // A.6.5's `disable` names a block that needs no declaration before its use
@@ -734,11 +737,7 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     defer scratch.deinit();
     while (r.scheduler.next()) |event| {
         _ = scratch.reset(.retain_capacity);
-        // Take the row and empty it in one step: a row still holding a
-        // `.run_process` is a resumption that has NOT happened yet, which is
-        // what `disableRange` reads the list for.
-        const item = r.pending.items[event.payload];
-        r.pending.items[event.payload] = .retired;
+        const item = r.pending.items[event.payload].item;
         switch (item) {
             .run_process => |start| try exec.execute(&r, &scratch, start),
             .write => |w| try exec.store(&r, w.target, w.value.planes),
@@ -750,26 +749,31 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
                 r.monitor_pending = false;
                 try display.monitorPrint(&r, scratch.allocator(), false);
             },
-            // §6.1.3: an event whose generation has moved on was cancelled by a
-            // later evaluation and does nothing at all.
-            .drive => |d| if (d.gen == r.drivers[d.driver].transition.gen) {
-                r.drivers[d.driver].transition.target = null;
-                @memcpy(r.drivers[d.driver].current.planes, d.value.planes);
-                try exec.resolve(&r, r.drivers[d.driver].net);
+            // §6.1.3: a cancelled transition never gets here — the scheduler
+            // dropped it — so what arrives is the one still in flight.
+            .drive => |at| {
+                const d = &r.drivers[at];
+                d.transition.in_flight = null;
+                @memcpy(d.current.planes, d.transition.target.planes);
+                try exec.resolve(&r, d.net);
             },
-            .net_update => |u| if (u.gen == r.nets[u.net].transition.gen) {
-                r.nets[u.net].transition.target = null;
-                try exec.store(&r, r.nets[u.net].slot, u.value.planes);
+            .net_update => |at| {
+                const n = &r.nets[at];
+                n.transition.in_flight = null;
+                try exec.store(&r, n.slot, n.transition.target.planes);
             },
             // §3.8: the charge has been held for the decay time, and what a
             // trireg holds once it is worth nothing is x.
-            .decay => |d| if (d.gen == r.nets[d.net].charge_gen.gen) {
-                const n = r.nets[d.net];
+            .decay => |at| {
+                const n = &r.nets[at];
+                n.decay_event = null;
                 for (0..n.resolved.width) |i| setBit(n.resolved, @intCast(i), .x);
                 try exec.store(&r, n.slot, n.resolved.planes);
             },
-            .retired => {},
         }
+        // Freed only now: the `.write` planes above are this row's own, and
+        // nothing dispatched may reuse them before `store` has copied them.
+        try r.free_rows.append(arena, event.payload);
     }
 }
 

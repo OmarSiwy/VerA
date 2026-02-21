@@ -114,11 +114,20 @@ pub const Scheduler = struct {
     /// entry or FIFO link. Cancelled future entries never advance the clock.
     pub fn cancel(self: *Scheduler, handle: Handle) Error!bool {
         try self.checkMutation();
+        if (self.payloadOf(handle) == null) return false;
+        self.slots.items(.state)[@intFromEnum(handle.slot)] = .cancelled;
+        return true;
+    }
+
+    /// The payload `handle` was scheduled with while its event is still
+    /// pending, or null once it has dispatched or been cancelled. A caller that
+    /// recycles payload rows asks this before cancelling, to learn which row
+    /// the cancel frees.
+    pub fn payloadOf(self: *const Scheduler, handle: Handle) ?u32 {
         const index = @intFromEnum(handle.slot);
         if (index >= self.slots.len or self.slots.items(.generation)[index] != handle.generation or
-            self.slots.items(.state)[index] != .pending) return false;
-        self.slots.items(.state)[index] = .cancelled;
-        return true;
+            self.slots.items(.state)[index] != .pending) return null;
+        return self.slots.items(.payload)[index];
     }
 
     /// Explicit termination discards pending dispatches; deinit releases their
@@ -393,13 +402,16 @@ test "cancelling earliest or all future events does not create phantom times" {
     const first = try scheduler.scheduleAt(2, .inactive, 1);
     const second = try scheduler.scheduleAt(3, .nba, 2);
     _ = try scheduler.scheduleAt(9, .nba, 3);
+    try t.expectEqual(@as(?u32, 1), scheduler.payloadOf(first));
     try t.expect(try scheduler.cancel(first));
+    try t.expectEqual(@as(?u32, null), scheduler.payloadOf(first));
     try t.expect(try scheduler.cancel(second));
     try t.expect(!try scheduler.cancel(first));
     const event = scheduler.next().?;
     try t.expectEqual(@as(u32, 3), event.payload);
     try t.expectEqual(@as(Time, 9), event.time);
     try t.expect(!try scheduler.cancel(event.handle));
+    try t.expectEqual(@as(?u32, null), scheduler.payloadOf(event.handle));
     const last = try scheduler.scheduleAt(100, .inactive, 4);
     try t.expect(try scheduler.cancel(last));
     try t.expect(scheduler.next() == null);
