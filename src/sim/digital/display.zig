@@ -255,7 +255,7 @@ pub const Show = struct { radix: Radix, newline: bool };
 ///           timestep"), which is the `.monitor` scheduler region
 ///   monitor the same end-of-timestep print, but standing: it re-runs whenever
 ///           a value changes until another $monitor replaces it (§17.1.3)
-const Task = union(enum) {
+pub const Task = union(enum) {
     show: Show,
     strobe: Show,
     monitor: Show,

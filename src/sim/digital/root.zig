@@ -104,6 +104,10 @@ pub const Run = struct {
     events: std.AutoHashMapUnmanaged(u32, void) = .empty,
     // Natural types, indexed by AST ExprId; width zero marks an unvisited row.
     types: []Type = &.{},
+    /// Which system function each `.sys_call` is, indexed by AST ExprId and
+    /// written by `infer` — so evaluation switches on it instead of hashing
+    /// the name again. Null for every other node.
+    sys_calls: []?compile.SysFn = &.{},
     replications: std.AutoHashMapUnmanaged(Ast.ExprId, u32) = .empty,
     code: std.ArrayList(Instruction) = .empty,
     /// The instance scope each instruction was compiled in, one row per `code`
@@ -664,6 +668,8 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     r.nets = e.nets.items;
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
     @memset(r.types, .{ .width = 0, .signed = false });
+    r.sys_calls = try arena.alloc(?compile.SysFn, file.exprs.nodes.len);
+    @memset(r.sys_calls, null);
     // PASS TWO — drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
     // update reads all of a net's drivers.

@@ -26,8 +26,16 @@ const tasks = display.tasks;
 pub const Type = struct { width: u32, signed: bool };
 
 // All fields in a row are consumed by one dispatch; expressions stay in the AST.
-pub const Instruction = union(enum(u4)) {
-    statement: Ast.StmtId,
+// Every statement kind is its own instruction, decided here, so `execute` is
+// one switch over this union and never goes back to the statement.
+pub const Instruction = union(enum(u5)) {
+    // A.6.2 a blocking or nonblocking assignment with no intra-assignment
+    // timing control (those are `sample`/`deposit`).
+    assign: struct { target: Ast.ExprId, value: Ast.ExprId, nonblocking: bool },
+    // §9.7.1 `#d stmt`: suspend for the delay, resume at the next pc.
+    delay: struct { amount: Ast.ExprId, tok: u32 },
+    // One §17 system task, resolved against `display.tasks` at compile time.
+    task: struct { task: display.Task, args: []const Ast.ExprId, tok: u32 },
     // §6.1 one continuous assignment: evaluate, drive, resolve, then suspend
     // on its own operands. Its resumption point is its own pc.
     continuous: u32,
@@ -71,15 +79,12 @@ pub const Instruction = union(enum(u4)) {
     stop,
 };
 
-const Cast = enum(u1) { make_signed, make_unsigned };
-
-pub const casts = std.StaticStringMap(Cast).initComptime(.{ .{ "$signed", .make_signed }, .{ "$unsigned", .make_unsigned } });
-
-/// §9.14 Table 9-11's integral system functions, and the two of IEEE 1364
-/// §17.7 that read the clock. Separate from `casts` because these take their
-/// own arguments and have their own return widths; separate from `tasks`
-/// because they are EXPRESSIONS.
-const SysFn = enum {
+/// §9.14 Table 9-11's integral system functions, the two of IEEE 1364 §17.7
+/// that read the clock, and §4.2.1.4's `$signed`/`$unsigned` casts: every
+/// system function an integral expression may call. `infer` resolves each
+/// call once into `Run.sys_calls`; separate from `tasks` because these are
+/// EXPRESSIONS.
+pub const SysFn = enum {
     /// §17.7.1, 64 bits: "the time unit of the module that invoked it".
     time,
     /// §17.7.1's 32-bit half, "the low order 32 bits of the current
@@ -87,19 +92,26 @@ const SysFn = enum {
     stime,
     /// §9.14 Table 9-11 / IEEE 1364 §17.11: ceiling of log base 2.
     clog2,
+    make_signed,
+    make_unsigned,
 
     /// Does this read the simulation clock? Such a call is not a constant
     /// expression however constant its arguments are, which a replication
     /// count and a case label both depend on.
-    fn reads_clock(self: SysFn) bool {
-        return self != .clog2;
+    fn readsClock(self: SysFn) bool {
+        return switch (self) {
+            .time, .stime => true,
+            .clog2, .make_signed, .make_unsigned => false,
+        };
     }
 };
 
-pub const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
+const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$time", .time },
     .{ "$stime", .stime },
     .{ "$clog2", .clog2 },
+    .{ "$signed", .make_signed },
+    .{ "$unsigned", .make_unsigned },
 });
 
 // ---- expression typing (§5.5.1 Table 5-22, §5.1.14) -------------------------
@@ -163,7 +175,7 @@ fn constantExpression(self: *Run, e: Ast.ExprId) bool {
             // would be accepted as a replication count.
             if (ex.tag(e) == .sys_call) {
                 if (sys_fns.get(self.file.str(ex.strOf(e)))) |f| {
-                    if (f.reads_clock()) break :blk false;
+                    if (f.readsClock()) break :blk false;
                 }
             }
             for (ex.args(e)) |arg| if (!constantExpression(self, arg)) break :blk false;
@@ -250,10 +262,11 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             break :blk common(yes, no);
         },
         .sys_call => blk: {
-            const name = self.file.str(ex.strOf(e));
-            if (sys_fns.get(name)) |f| {
-                const args = ex.args(e);
-                switch (f) {
+            const f = sys_fns.get(self.file.str(ex.strOf(e))) orelse
+                return self.exprFail(e, "this digital expression form is not implemented");
+            self.sys_calls[@intFromEnum(e)] = f;
+            const args = ex.args(e);
+            switch (f) {
                     // §17.7.1 gives `$time` the 64-bit `time` type and
                     // `$stime` its low 32 bits. Both unsigned: simulation
                     // time has no negative half.
@@ -270,13 +283,12 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         _ = try inferValue(self, args[0], depth + 1);
                         break :blk .{ .width = 32, .signed = true };
                     },
-                }
+                    .make_signed, .make_unsigned => {
+                        if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
+                        const operand = try inferValue(self, args[0], depth + 1);
+                        break :blk .{ .width = operand.width, .signed = f == .make_signed };
+                    },
             }
-            const cast = casts.get(name) orelse return self.exprFail(e, "this digital expression form is not implemented");
-            const args = ex.args(e);
-            if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
-            const operand = try inferValue(self, args[0], depth + 1);
-            break :blk .{ .width = operand.width, .signed = cast == .make_signed };
         },
         .concat => blk: {
             var width: u32 = 0;
@@ -423,7 +435,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             try checkTarget(self, s.target);
             try checkExpr(self, s.value);
             if (s.timing == .none) {
-                _ = try append(self, .{ .statement = id });
+                _ = try append(self, .{ .assign = .{ .target = s.target, .value = s.value, .nonblocking = s.nonblocking } });
                 return;
             }
             // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
@@ -475,7 +487,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 },
                 .delay => {
                     try checkDelay(self, s.event, tok);
-                    _ = try append(self, .{ .statement = id });
+                    _ = try append(self, .{ .delay = .{ .amount = s.event, .tok = tok } });
                 },
                 // A.6.5 `wait_statement`. The condition's operands ARE the
                 // wake-up list, but unlike `@` they only bring the process
@@ -540,7 +552,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     }
                 },
             }
-            _ = try append(self, .{ .statement = id });
+            _ = try append(self, .{ .task = .{ .task = task, .args = s.args, .tok = tok } });
         },
         else => return self.fail(tok, "this digital statement is not implemented", .{}),
     }
