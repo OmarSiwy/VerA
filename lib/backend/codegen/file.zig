@@ -179,6 +179,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_state.emitCollapse(self, cpairs);
     try gen_state.emitNextBreakpoint(self);
     try gen_state.emitDelays(self);
+    try gen_dispatch.emitDerivReads(self, if (self.limits.len != 0) cg_limit.liveSets(self).writes else 0);
     // Lane-parallel permission (see `lane_pinned`): eval/q of this device
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.

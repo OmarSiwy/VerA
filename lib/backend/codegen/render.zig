@@ -12,6 +12,7 @@ const std = @import("std");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
+const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_hoist = @import("hoist.zig");
 const gen_cfg = @import("cfg.zig");
@@ -141,6 +142,10 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
         },
         .block_param => |u| {
             self.uses_x = true;
+            // Every probe the core or a unit reads needs its lane: what the
+            // op around it does with the lane is not looked at, so this is
+            // the sound superset `deriv_reads` is.
+            self.deriv_reads |= gen_dispatch.uBit(u);
             try self.b("x[@intFromEnum(U.{s})]", .{self.u_names[u]});
         },
         .inst_result => |inst| try renderInst(self, inst),

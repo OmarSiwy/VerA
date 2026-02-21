@@ -501,6 +501,21 @@ pub const Gen = struct {
     rows: [2]u64 = .{ 0, 0 },
     /// Which half of `pat` the current `emitStamps` writes.
     pat_react: bool = false,
+    /// Unknowns whose derivative LANE `eval`/`q` may read: the mask behind the
+    /// emitted `deriv_reads`. Syntactic and therefore a superset — every
+    /// `x[u]` `renderValueRef` writes (any unit, any control flow, whatever
+    /// the op around it), every `.ddxAt(u)`, and every dispatcher term whose
+    /// coefficient is not a constant. See `emitDerivReads`.
+    deriv_reads: u64 = 0,
+    /// The lanes a §4.5.14 `ddx` reads BY INDEX (`.ddxAt(u)`): the emitted
+    /// `ddx_reads`, and a subset of `deriv_reads` by construction.
+    ddx_reads: u64 = 0,
+    /// The dispatcher's constant-coefficient terms, per half:
+    /// `lin[react][row * n_u + col]` is the exact coefficient of `x[col]` in
+    /// `res[row]` as far as the stamps are linear. Only the columns OUTSIDE
+    /// `deriv_reads` leave as `jac_const`; inside, the lane carries them.
+    /// Empty above 64 unknowns, where neither decl is emitted.
+    lin: [2][]f64 = .{ &.{}, &.{} },
     /// Sanitized U-enum member name per unknown.
     u_names: [][]const u8 = &.{},
     /// Sanitized Model field name per `Lower.params` entry.

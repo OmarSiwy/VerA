@@ -32,6 +32,10 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     @memset(self.pat[0], 0);
     @memset(self.pat[1], 0);
     self.rows = .{ 0, 0 };
+    if (self.n_u <= 64) for (&self.lin) |*l| {
+        l.* = try self.arena.alloc(f64, self.n_u * self.n_u);
+        @memset(l.*, 0);
+    };
 
     try emitResidual(self, false);
     var any_q = false;
@@ -168,6 +172,9 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     // Which half `patRow` accumulates into. `eval`/`q` and `evalQ` emit the
     // same rows, so the second pass ORs in bits the first already set.
     self.pat_react = react;
+    // `lin` is a replay, not an accumulation: `evalQ` re-emits the same
+    // stamps, and adding them twice would double every coefficient.
+    @memset(self.lin[@intFromBool(react)], 0);
     // ONE core evaluation per residual, not one per contribution. LLVM does
     // not recover this by itself — measured, see `planCommon`'s header — so
     // the number of times the model runs is decided here, in the emitter.
@@ -264,10 +271,11 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             assert(!react); // splitContribution never runs on an indirect
             try self.ind(2);
             try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
-            try stamp(self, 2, c.hi, "add", "ib", uBit(u));
-            try stamp(self, 2, c.lo, "sub", "ib", uBit(u));
+            try stamp(self, 2, c.hi, "add", "ib", uBit(u), u);
+            try stamp(self, 2, c.lo, "sub", "ib", uBit(u), u);
             try self.ind(2);
             patRow(self, @intCast(u), self.an.unknownDeps(val));
+            linClear(self, u);
             try self.b("res[@intFromEnum(U.{s})] = c;\n", .{self.u_names[u]});
             try self.ind(1);
             try self.b("}}\n", .{});
@@ -284,16 +292,19 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 if (!react) {
                     try self.ind(2);
                     patRow(self, n, uBit(n) | self.an.unknownDeps(val));
+                    linClear(self, n);
+                    linTerm(self, n, n, 1);
                     try self.b("res[@intFromEnum(U.{0s})] = x[@intFromEnum(U.{0s})].sub(c);\n", .{self.u_names[n]});
                 } else {
                     try self.ind(2);
                     patRow(self, n, self.an.unknownDeps(val));
+                    linClear(self, n);
                     try self.b("res[@intFromEnum(U.{s})] = c.neg();\n", .{self.u_names[n]});
                 }
             } else {
                 // §1.3.1.2: the value flows INTO hi and OUT OF lo.
-                try stamp(self, 2, c.hi, "add", "c", self.an.unknownDeps(val));
-                try stamp(self, 2, c.lo, "sub", "c", self.an.unknownDeps(val));
+                try stamp(self, 2, c.hi, "add", "c", self.an.unknownDeps(val), null);
+                try stamp(self, 2, c.lo, "sub", "c", self.an.unknownDeps(val), null);
                 // §5.6.6: the model also READS `I(hi,lo)`, so there is an
                 // unknown for this current and it needs the row that says
                 // what it IS — `x[u] − Σ contributions`. Accumulated here
@@ -301,7 +312,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 // and closed with the `+ x[u]` term after the loop.
                 if (gen_state.freeFlowOf(self, c.hi, c.lo)) |f| {
                     assert(f.sourced);
-                    try stamp(self, 2, @intCast(f.u), "sub", "c", self.an.unknownDeps(val));
+                    try stamp(self, 2, @intCast(f.u), "sub", "c", self.an.unknownDeps(val), null);
                 }
             },
             .potential => {
@@ -313,10 +324,11 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     const u = self.branch_u[i];
                     try self.ind(2);
                     try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
-                    try stamp(self, 2, c.hi, "add", "ib", uBit(u));
-                    try stamp(self, 2, c.lo, "sub", "ib", uBit(u));
+                    try stamp(self, 2, c.hi, "add", "ib", uBit(u), u);
+                    try stamp(self, 2, c.lo, "sub", "ib", uBit(u), u);
                     try self.ind(2);
                     patRow(self, @intCast(u), nodeBit(c.hi) | nodeBit(c.lo) | self.an.unknownDeps(val));
+                    linBranch(self, u, c.hi, c.lo);
                     try self.b("res[@intFromEnum(U.{s})] = ", .{self.u_names[u]});
                     try nodeVoltage(self, c.hi);
                     try self.b(".sub(", .{});
@@ -328,6 +340,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                     // flux: v − dφ/dt = 0 ⇒ q on this row is −φ.
                     try self.ind(2);
                     patRow(self, @intCast(u), self.an.unknownDeps(val));
+                    linClear(self, u);
                     try self.b("res[@intFromEnum(U.{s})] = c.neg();\n", .{self.u_names[u]});
                 }
             },
@@ -349,16 +362,18 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             // contribution loop accumulated.
             try self.ind(1);
             patRow(self, @intCast(f.u), uBit(f.u));
+            linTerm(self, f.u, f.u, 1);
             try self.b("res[@intFromEnum(U.{0s})] = res[@intFromEnum(U.{0s})].add(x[@intFromEnum(U.{0s})]);\n", .{self.u_names[f.u]});
         } else {
             // §5.4.2.1 "The branch potential of a flow probe is zero (0)" —
             // the ammeter of Figure 5-1. Its current is a real branch
             // current and enters KCL at both ends, which is the half that
             // makes it a SHORT rather than an observation.
-            try stamp(self, 1, f.hi, "add", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.u_names[f.u]}), uBit(f.u));
-            try stamp(self, 1, f.lo, "sub", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.u_names[f.u]}), uBit(f.u));
+            try stamp(self, 1, f.hi, "add", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.u_names[f.u]}), uBit(f.u), f.u);
+            try stamp(self, 1, f.lo, "sub", try std.fmt.allocPrint(self.arena, "x[@intFromEnum(U.{s})]", .{self.u_names[f.u]}), uBit(f.u), f.u);
             try self.ind(1);
             patRow(self, @intCast(f.u), nodeBit(f.hi) | nodeBit(f.lo));
+            linBranch(self, f.u, f.hi, f.lo);
             try self.b("res[@intFromEnum(U.{s})] = ", .{self.u_names[f.u]});
             try nodeVoltage(self, f.hi);
             try self.b(".sub(", .{});
@@ -388,6 +403,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         // Reads the FINISHED res[port], so this row's columns are that
         // row's — already accumulated by the contribution loop above.
         patRow(self, pp.u, patOf(self, pp.port) | (if (react) 0 else uBit(pp.u)));
+        linPortProbe(self, pp.u, pp.port, !react);
         if (react) {
             try self.b("res[@intFromEnum(U.{s})] = res[@intFromEnum(U.{s})].neg();\n", .{
                 self.u_names[pp.u], self.u_names[pp.port],
@@ -516,6 +532,12 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
     const u = self.branch_u[i];
     const partner = gen_unit.switchFlowOf(self, i);
     const split = collapsible(self, i);
+    // Every coefficient on this row, and ib's in KCL, is picked per cycle by
+    // a runtime flag — and on a collapsible branch by the host's S as well.
+    // None is a constant, so every unknown it names keeps a lane, and so
+    // does whatever the row held before a conditional overwrite.
+    self.deriv_reads |= uBit(u) | nodeBit(c.hi) | nodeBit(c.lo);
+    linDynamic(self, u);
     const d: u32 = if (split) 4 else 2;
     if (split) {
         try self.ind(2);
@@ -531,8 +553,8 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
     if (!react) {
         try self.ind(d);
         try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.u_names[u]});
-        try stamp(self, d, c.hi, "add", "ib", uBit(u));
-        try stamp(self, d, c.lo, "sub", "ib", uBit(u));
+        try stamp(self, d, c.hi, "add", "ib", uBit(u), u);
+        try stamp(self, d, c.lo, "sub", "ib", uBit(u), u);
         try self.ind(d);
         patRow(self, @intCast(u), uBit(u) | nodeBit(c.hi) | nodeBit(c.lo) | switchRowDeps(self, i, c, react));
         try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.u_names[u]});
@@ -563,8 +585,8 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
         try switchOpen(self, partner, react);
         try self.b(";\n", .{});
         const bits = switchRowDeps(self, i, c, react);
-        try stamp(self, 3, c.hi, "add", "flow", bits);
-        try stamp(self, 3, c.lo, "sub", "flow", bits);
+        try stamp(self, 3, c.hi, "add", "flow", bits, null);
+        try stamp(self, 3, c.lo, "sub", "flow", bits, null);
         try self.ind(2);
         try self.b("}}\n", .{});
     }
@@ -647,9 +669,13 @@ pub fn coreRef(self: *Gen, v: Mir.Value) Error!void {
     try self.b("m.f{d}", .{self.lo_idx[@intFromEnum(v)]});
 }
 
-pub fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8, bits: u64) Error!void {
+/// `col` names the unknown when `val` is exactly `x[col]` — a ±1 term whose
+/// coefficient `Gen.lin` records — and is null for a core value, whose
+/// columns are all lanes `renderValueRef` already marked.
+pub fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8, bits: u64, col: ?u32) Error!void {
     if (node == Lower.ground) return; // §1.3.1.1 ground has no equation
     patRow(self, node, bits);
+    if (col) |k| linTerm(self, node, k, if (std.mem.eql(u8, opx, "add")) 1 else -1);
     try self.ind(depth);
     try self.b("res[@intFromEnum(U.{0s})] = res[@intFromEnum(U.{0s})].{1s}({2s});\n", .{
         self.u_names[node], opx, val,
@@ -666,6 +692,99 @@ pub fn patRow(self: *Gen, node: u16, bits: u64) void {
     if (self.pat[@intFromBool(self.pat_react)].len == 0) return;
     self.pat[@intFromBool(self.pat_react)][node] |= bits;
     self.rows[@intFromBool(self.pat_react)] |= uBit(node);
+}
+
+/// Row `row` of the half being emitted gains `k · x[col]`. The two `Gen.lin`
+/// writers below and this one mirror the `res[...]` text beside them, the
+/// way `patRow` does: a ±1 on an unknown is the only term that is recorded,
+/// and every other term is a core value whose lanes are already marked.
+fn linTerm(self: *Gen, row: u32, col: u32, k: f64) void {
+    if (row == Lower.ground or col == Lower.ground) return;
+    const l = self.lin[@intFromBool(self.pat_react)];
+    if (l.len == 0) return;
+    l[row * self.n_u + col] += k;
+}
+
+/// Row `row` is ASSIGNED a term with no recorded unknown in it.
+fn linClear(self: *Gen, row: u32) void {
+    const l = self.lin[@intFromBool(self.pat_react)];
+    if (l.len == 0) return;
+    @memset(l[row * self.n_u ..][0..self.n_u], 0);
+}
+
+/// Row `row` is assigned `V(hi) − V(lo) − <core value>`: §5.6's branch
+/// relation, and §5.4.2.1's zero-potential flow probe.
+fn linBranch(self: *Gen, row: u32, hi: u16, lo: u16) void {
+    linClear(self, row);
+    linTerm(self, row, hi, 1);
+    linTerm(self, row, lo, -1);
+}
+
+/// §5.4.3 `res[u] = x[u] − res[port]` (eval) or `−res[port]` (q): the row
+/// is the FINISHED port row negated, so its constants are too.
+fn linPortProbe(self: *Gen, u: u32, port: u32, with_x: bool) void {
+    const l = self.lin[@intFromBool(self.pat_react)];
+    if (l.len == 0) return;
+    const n = self.n_u;
+    for (0..n) |c| l[u * n + c] = -l[port * n + c];
+    if (with_x) l[u * n + u] += 1;
+}
+
+/// Row `row` is about to be written under a runtime condition, so whatever
+/// constants it holds may or may not survive: each of their columns loses
+/// the promise and keeps a lane instead.
+fn linDynamic(self: *Gen, row: u32) void {
+    const l = self.lin[@intFromBool(self.pat_react)];
+    if (l.len == 0) return;
+    for (l[row * self.n_u ..][0..self.n_u], 0..) |k, c| {
+        if (k != 0) self.deriv_reads |= uBit(@intCast(c));
+    }
+}
+
+/// `deriv_reads`, `ddx_reads` and `jac_const` — see `contract.derivReads`.
+/// After every unit and residual is written, because all three are read off
+/// what was.
+///
+/// The derivation, and why it is sound. An unknown's lane can matter only
+/// if some emitted text reads `x[u]` or `.ddxAt(u)`. Every read in a core or
+/// unit goes through `renderValueRef`, which marks it whatever op surrounds
+/// it; `ddx` marks its lane in `ddx_reads`; the dispatcher marks every
+/// unknown under a runtime-selected row. What is left unmarked is an unknown
+/// the residual reads only in the dispatcher's own unconditional ±1 stamps,
+/// and `lin` replays those stamps exactly, so its entries ARE the partials.
+/// `ddx_reads` and `limit`'s writes are ORed in for `contract`'s rules.
+///
+/// Omitted above 64 unknowns, like `jac_pattern`: the defaults — every lane,
+/// no table — are correct.
+pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
+    if (self.n_u > 64) return;
+    const mask = self.deriv_reads | self.ddx_reads | limit_writes;
+    const n = self.n_u;
+    try self.w(
+        \\/// Unknowns whose derivative lane `eval`/`q` read. Every other
+        \\/// column's partials are constants, listed in `jac_const`; see
+        \\/// `contract.derivReads`.
+        \\pub const deriv_reads: u64 = 0x{x:0>16};
+        \\
+        \\/// The lanes §4.5.14 `ddx` reads by unknown index through `ddxAt`;
+        \\/// see `contract.ddxReads`.
+        \\pub const ddx_reads: u64 = 0x{x:0>16};
+        \\
+        \\/// The exact constant partials of the columns outside `deriv_reads`:
+        \\/// `g` of `eval`, `c` of `q`. Sorted by (row, col); absent is 0.
+        \\pub const jac_const = [_]contract.JacConst(U){{
+        \\
+    , .{ mask, self.ddx_reads });
+    for (0..n) |r| for (0..n) |c| {
+        if ((mask >> @intCast(c)) & 1 != 0) continue;
+        const g = self.lin[0][r * n + c];
+        const q = self.lin[1][r * n + c];
+        if (g == 0 and q == 0) continue;
+        try self.w("    .{{ .row = .{s}, .col = .{s}, .g = {s}, .c = {s} }},\n", .{
+            self.u_names[r], self.u_names[c], try gen_file.fmtF64(self, g), try gen_file.fmtF64(self, q),
+        });
+    };
+    try self.w("}};\n\n", .{});
 }
 
 /// The column bit of one unknown. Out of `u64` range answers "every

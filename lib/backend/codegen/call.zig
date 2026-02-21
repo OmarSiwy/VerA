@@ -11,6 +11,7 @@
 const std = @import("std");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
+const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_render = @import("render.zig");
@@ -682,11 +683,15 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     if (std.mem.eql(u8, name, "ddx")) {
         if (d.args.len > 0) gen_render.pinLanes(self, d.args[0]);
         const u = if (d.args.len > 1) self.an.foldConst(d.args[1], 0, true) else null;
+        const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
+        // The VALUE reads a lane, so that lane must exist in a narrow S —
+        // `ddx_reads`, which `contract.validate` holds inside `deriv_reads`.
+        self.ddx_reads |= if (lane >= 0) gen_dispatch.uBit(@intCast(@min(lane, 64))) else std.math.maxInt(u64);
         try self.b("S.con((", .{});
         try gen_render.renderVal(self, if (d.args.len > 0) d.args[0] else .f_zero, .real);
         // The index is a literal lowering minted, but the cast is still
         // saturating: a compiler panic is never the answer to bad MIR.
-        try self.b(").ddxAt({d}))", .{if (u) |x| std.math.lossyCast(i64, x.f) else 0});
+        try self.b(").ddxAt({d}))", .{lane});
         return;
     }
 
