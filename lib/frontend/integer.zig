@@ -161,12 +161,48 @@ pub const Literal = struct {
     /// by zero produce all X. Signed division truncates toward zero, and the
     /// remainder has the dividend's sign. Inputs and output never alias.
     pub fn arithmetic(self: Literal, allocator: std.mem.Allocator, op: Arithmetic, rhs: Literal) std.mem.Allocator.Error!Literal {
+        return self.arithmeticIn(allocator, op, rhs, @max(self.width, rhs.width) <= 64);
+    }
+
+    /// `one_word` is a result of at most 64 bits computed in one machine word:
+    /// wrap at the result width is arithmetic modulo 2^width, which a wrapping
+    /// u64 op followed by the width mask computes exactly, and operands
+    /// extended to 64 bits under the common signedness are exactly their
+    /// values, which is all divide and remainder read. Otherwise the standard
+    /// library's exact integers, at any width — also the oracle the word path
+    /// is tested against.
+    fn arithmeticIn(self: Literal, allocator: std.mem.Allocator, op: Arithmetic, rhs: Literal, one_word: bool) std.mem.Allocator.Error!Literal {
         const signed = self.signed and rhs.signed;
         const out = try allocate(allocator, @max(self.width, rhs.width), signed);
         errdefer allocator.free(out.planes);
         // Reduction masks padding and spare capacity outside the declared bits.
         if (self.reduce(.xor_bits) == .x or rhs.reduce(.xor_bits) == .x) {
             out.fillUnknown();
+            return out;
+        }
+        if (one_word) {
+            const extension: Extension = if (signed) .sign else .zero;
+            const a = self.extendedWord(self.values(), 0, extension);
+            const b = rhs.extendedWord(rhs.values(), 0, extension);
+            if ((op == .divide or op == .remainder) and b == 0) {
+                out.fillUnknown();
+                return out;
+            }
+            out.values()[0] = switch (op) {
+                .add => a +% b,
+                .subtract => a -% b,
+                .multiply => a *% b,
+                .divide, .remainder => if (!signed)
+                    (if (op == .divide) a / b else a % b)
+                else if (b == std.math.maxInt(u64))
+                    // x / -1 is -x, wrapping at the most negative value (the
+                    // one quotient an i64 divide would trap on); x % -1 is 0.
+                    (if (op == .divide) 0 -% a else 0)
+                else
+                    @bitCast(if (op == .divide) @divTrunc(@as(i64, @bitCast(a)), @as(i64, @bitCast(b))) else @rem(@as(i64, @bitCast(a)), @as(i64, @bitCast(b)))),
+            };
+            out.unknowns()[0] = 0;
+            out.clearPadding();
             return out;
         }
         var a = try self.arithmeticValue(allocator, signed);
@@ -197,10 +233,21 @@ pub const Literal = struct {
     /// Unary minus retains the operand width and signedness, including wrap at
     /// the most negative value. Any X/Z bit makes the entire result X.
     pub fn negate(self: Literal, allocator: std.mem.Allocator) std.mem.Allocator.Error!Literal {
+        return self.negateIn(allocator, self.width <= 64);
+    }
+
+    /// `one_word` as in `arithmeticIn`.
+    fn negateIn(self: Literal, allocator: std.mem.Allocator, one_word: bool) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         errdefer allocator.free(out.planes);
         if (self.reduce(.xor_bits) == .x) {
             out.fillUnknown();
+            return out;
+        }
+        if (one_word) {
+            out.values()[0] = 0 -% self.values()[0];
+            out.unknowns()[0] = 0;
+            out.clearPadding();
             return out;
         }
         var value = try self.arithmeticValue(allocator, self.signed);
@@ -215,6 +262,11 @@ pub const Literal = struct {
     /// signedness. Integer results wrap at the base width. Any declared X/Z
     /// bit yields all X, including an unknown base raised to zero.
     pub fn power(self: Literal, allocator: std.mem.Allocator, exponent: Literal) std.mem.Allocator.Error!Literal {
+        return self.powerIn(allocator, exponent, self.width <= 64);
+    }
+
+    /// `one_word` as in `arithmeticIn`: the same case split on one word.
+    fn powerIn(self: Literal, allocator: std.mem.Allocator, exponent: Literal, one_word: bool) std.mem.Allocator.Error!Literal {
         const out = try allocate(allocator, self.width, self.signed);
         errdefer allocator.free(out.planes);
         if (self.reduce(.xor_bits) == .x or exponent.reduce(.xor_bits) == .x) {
@@ -229,6 +281,26 @@ pub const Literal = struct {
             return out;
         }
         const negative = exponent.signed and exponent.bit(exponent.width - 1) == .one;
+        if (one_word) {
+            const m = mask(self.width);
+            const b = self.values()[0] & m;
+            if (b == 0) {
+                if (negative) out.fillUnknown();
+            } else if (b == 1 or (self.signed and b == m)) {
+                // ±1: 1 stays 1, and -1 alternates with the exponent's parity.
+                out.values()[0] = if (b == 1 or exponent.bit(0) == .zero) 1 else m;
+            } else if (!negative) {
+                var result: u64 = 1;
+                var base = b;
+                var bit_index: u32 = 0;
+                while (bit_index < bits) : (bit_index += 1) {
+                    if (exponent.bit(bit_index) == .one) result *%= base;
+                    if (bit_index + 1 < bits) base *%= base;
+                }
+                out.values()[0] = result & m;
+            }
+            return out;
+        }
         var base = try self.arithmeticValue(allocator, self.signed);
         defer base.deinit();
         if (base.toConst().eqlZero()) {
@@ -1463,6 +1535,45 @@ fn testPowerAllocation(allocator: std.mem.Allocator) !void {
 
 test "packed power allocation failures release every intermediate" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testPowerAllocation, .{});
+}
+
+/// A random operand of 1..64 bits, either signedness, with x/z bits in about
+/// one operand in eight and a bias toward the words that end the ranges.
+fn testRandomWord(random: std.Random, storage: *[2]u64) Literal {
+    const width = random.intRangeAtMost(u32, 1, 64);
+    const edges = [_]u64{ 0, 1, std.math.maxInt(u64), @as(u64, 1) << 63, (@as(u64, 1) << 63) - 1, 2 };
+    storage[0] = if (random.boolean()) edges[random.uintLessThan(usize, edges.len)] else random.int(u64);
+    storage[1] = if (random.uintLessThan(u8, 8) == 0) random.int(u64) else 0;
+    const out: Literal = .{ .width = width, .sized = true, .signed = random.boolean(), .planes = storage };
+    out.clearPadding();
+    return out;
+}
+
+test "one-word arithmetic, negate and power agree with the big-integer path" {
+    // The word path replaces the big-integer path for every result of at
+    // most 64 bits, so the big one is kept as its oracle over exactly that
+    // domain: random widths, both signs, both planes.
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var prng = std.Random.DefaultPrng.init(0x1364_0064);
+    const random = prng.random();
+    var aa: [2]u64 = undefined;
+    var bb: [2]u64 = undefined;
+    for (0..20_000) |_| {
+        _ = arena_state.reset(.retain_capacity);
+        const a = testRandomWord(random, &aa);
+        const b = testRandomWord(random, &bb);
+        for (std.enums.values(Arithmetic)) |op| {
+            const want = try a.arithmeticIn(arena, op, b, false);
+            const got = try a.arithmeticIn(arena, op, b, true);
+            try std.testing.expectEqual(want.width, got.width);
+            try std.testing.expectEqual(want.signed, got.signed);
+            try std.testing.expectEqualSlices(u64, want.planes, got.planes);
+        }
+        try std.testing.expectEqualSlices(u64, (try a.negateIn(arena, false)).planes, (try a.negateIn(arena, true)).planes);
+        try std.testing.expectEqualSlices(u64, (try a.powerIn(arena, b, false)).planes, (try a.powerIn(arena, b, true)).planes);
+    }
 }
 
 fn testConcatOracle(allocator: std.mem.Allocator, parts: []const Literal, count: u32) !void {
