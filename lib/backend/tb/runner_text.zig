@@ -307,6 +307,64 @@ pub const runner_body =
     \\    }
     \\}
     \\
+    \\/// The narrow-lane gate, the one a host relies on when it seeds a Dual only
+    \\/// for `contract.derivReads(D)` and stamps `contract.jacConst(D)` for every
+    \\/// other column. The Jacobian is computed twice at this point:
+    \\///   WIDE    every unknown seeded, as `seed` does;
+    \\///   NARROW  lanes seeded only for deriv_reads, jac_const for the rest;
+    \\/// and the two must agree BIT FOR BIT, value and every partial, eval and q.
+    \\/// A lane this Dual keeps for an unseeded unknown is simply zero, so a
+    \\/// seeded lane runs the same IEEE ops as the wide one and any difference
+    \\/// is the device's claim being wrong — a column it called constant that is
+    \\/// not, or a `ddxAt` it reads without declaring.
+    \\///
+    \\/// ONE ESCAPE, and it is not a tolerance: on a constant column a zero
+    \\/// matches a zero of either sign. jac_const cannot carry a signed zero —
+    \\/// an absent entry is 0 by contract — while the wide Dual writes −0.0
+    \\/// wherever a `neg` meets an empty lane. Every nonzero compares by bits.
+    \\///
+    \\/// Always on, not behind a flag: it is two more evals of a fixture-sized
+    \\/// device, and a gate that has to be asked for is one somebody forgets.
+    \\fn narrowCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    const wide = seed(x);
+    \\    var narrow: [n_u]Dual = undefined;
+    \\    for (0..n_u) |i| {
+    \\        narrow[i] = .{ .v = x[i] };
+    \\        if (hasLane(i)) narrow[i].d[i] = 1.0;
+    \\    }
+    \\    narrowAssert("res", false, &D.eval(Dual, wide, model, inst, t), &D.eval(Dual, narrow, model, inst, t));
+    \\    if (comptime @hasDecl(D, "q"))
+    \\        narrowAssert("q", true, &D.q(Dual, wide, model, inst, t), &D.q(Dual, narrow, model, inst, t));
+    \\}
+    \\
+    \\fn hasLane(u: usize) bool {
+    \\    return u >= 64 or (contract.derivReads(D) >> @intCast(u)) & 1 != 0;
+    \\}
+    \\
+    \\fn narrowAssert(what: []const u8, react: bool, w: *const [n_u]Dual, nr: *const [n_u]Dual) void {
+    \\    for (0..n_u) |i| {
+    \\        if (@as(u64, @bitCast(w[i].v)) != @as(u64, @bitCast(nr[i].v))) {
+    \\            std.debug.print("narrow_check FAIL: {s}[{s}]: wide {e} vs narrow {e}\n", .{ what, u_names[i], w[i].v, nr[i].v });
+    \\            std.process.exit(1);
+    \\        }
+    \\        for (0..n_u) |j| {
+    \\            var k: f64 = nr[i].d[j];
+    \\            if (!hasLane(j)) {
+    \\                k = 0.0;
+    \\                for (contract.jacConst(D)) |e| {
+    \\                    if (@intFromEnum(e.row) == i and @intFromEnum(e.col) == j) k = if (react) e.c else e.g;
+    \\                }
+    \\                if (k == 0.0 and w[i].d[j] == 0.0) continue;
+    \\            }
+    \\            if (@as(u64, @bitCast(w[i].d[j])) == @as(u64, @bitCast(k))) continue;
+    \\            std.debug.print("narrow_check FAIL: d{s}[{s}]/dx[{s}]: wide {e} vs narrow {e}{s}\n", .{
+    \\                what, u_names[i], u_names[j], w[i].d[j], k, if (hasLane(j)) "" else " (jac_const)",
+    \\            });
+    \\            std.process.exit(1);
+    \\        }
+    \\    }
+    \\}
+    \\
     \\fn patAssert(what: []const u8, pat: [n_u]u64, r: *const [n_u]Dual) void {
     \\    for (0..n_u) |i| for (0..n_u) |j| {
     \\        if (r[i].d[j] == 0.0) continue;
@@ -436,6 +494,7 @@ pub const runner_body =
     \\    laneCheck(x, t, model, inst);
     \\    fusedCheck(x, t, model, inst);
     \\    patternCheck(x, t, model, inst);
+    \\    narrowCheck(x, t, model, inst);
     \\
     \\    const xd = seed(x);
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
