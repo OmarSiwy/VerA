@@ -635,7 +635,7 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
 
     const text = tokenText(self, tok);
     // §2.6.2 decoding — `_` removal and the Table 2-1 scale factor — lives
-    // in `lexer.parseReal` for the same reason §2.6.1 lives in `parseInt`:
+    // in `lexer.parseReal` for the same reason §2.6.1 lives in `integer.parse`:
     // exactly ONE decoder. The second one here computed `mantissa * scale`,
     // which rounds twice (once for the mantissa, once for the product) and
     // disagreed with the tested decoder on 2376 of the 9990 two-digit
@@ -647,7 +647,7 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
     return self.file.exprs.addReal(self.arena, tok, v);
 }
 
-/// The span `lexer.parseInt` has to see to name a MALFORMED §2.6.1 second
+/// The span `integer.parse` has to see to name a MALFORMED §2.6.1 second
 /// form — normally just the token, occasionally the token plus the one
 /// glued to it.
 ///

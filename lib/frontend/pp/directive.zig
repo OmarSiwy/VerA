@@ -4,8 +4,6 @@
 //! the side tables lowering reads (default discipline, transition, timescale).
 //!
 //! LRM clauses this file's code cites: §1, §2.6, §2.8.2, §4.5.8, §7.4, §9.15.
-//!
-//! Cut verbatim from `preprocessor.zig`.
 
 const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");

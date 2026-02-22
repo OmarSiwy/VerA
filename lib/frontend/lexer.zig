@@ -34,13 +34,14 @@
 //!
 //! Diagnostics: the lexer never fails (except OOM in `tokenize`). Malformed input
 //! becomes exactly one `.invalid` token whose extent `tokenEnd` recovers; the
-//! parser owns the message. §2.6 value decoding lives here too (`parseInt`,
-//! `parseReal`, `stringContents`) so the SI scale table (Table 2-1, where `M`
+//! parser owns the message. §2.6.2/§2.7 value decoding lives here too
+//! (`parseReal`, `stringContents`) so the SI scale table (Table 2-1, where `M`
 //! is 1e6 and `m` is 1e-3) exists in exactly one place.
 
 const std = @import("std");
 const token = @import("token.zig");
 const diag = @import("diag");
+const Integer = @import("integer.zig");
 
 pub const TokenList = std.MultiArrayList(token.Stored);
 
@@ -246,8 +247,8 @@ pub const Lexer = struct {
     /// The space between the SIZE and the apostrophe (`8 'h`) is `lexNumber`'s to
     /// skip, and it does. The space INSIDE the apostrophe group (`8 ' h`) is the
     /// one §2.6.1 names as illegal and stays illegal.
-    /// The whitespace ends up inside the token's text span, so `parseInt` skips
-    /// it in exactly the same place.
+    /// The whitespace ends up inside the token's text span, so `integer.parse`
+    /// skips it in exactly the same place.
     fn lexBasedTail(self: *Lexer) ?token.Tag {
         var i = self.pos + 1;
         if (i < self.src.len and (self.src[i] == 's' or self.src[i] == 'S')) i += 1; // signed designator
@@ -438,7 +439,7 @@ fn isIdentChar(c: u8) bool {
 }
 
 /// §2.6.1 binary/octal/hex/decimal digit for `radix`, plus `_`, plus the
-/// four-state digits x/X/z/Z/? (lexed here, rejected by `parseInt`).
+/// four-state digits x/X/z/Z/? (lexed here, decoded by `integer.parse`).
 /// `pub` for radix 16, the widest alphabet: the parser asks "is this glued text
 /// spelled entirely in digits of SOME base" to tell §2.6.1 Example 1's `4af`
 /// (a based number missing its base format) from `1g` (a number, an identifier).
@@ -546,18 +547,9 @@ pub fn stringRunaway(src: []const u8, span: diag.Span) StringRunaway {
 
 // ---- token value decoding (§2.6, §2.7) ------------------------------------
 
+/// `parseReal`'s errors. §2.6.1 integer decoding is `integer.parse`, with its
+/// own error set.
 pub const ValueError = error{
-    /// §2.6.1 x/z/? digit. The device contract is two-state: no representation.
-    FourStateDigit,
-    /// §2.6.1 `' `: apostrophe with no base_format after it.
-    MissingBase,
-    /// §2.6.1: a base_format must be followed by at least one digit.
-    MissingDigits,
-    /// §2.6.1: a digit outside the base's range (`4'b012`).
-    DigitOutOfRange,
-    /// §2.6.1 / Syntax 2-2: `size ::= non_zero_unsigned_number`, so `0'b1` is
-    /// not a narrow constant — it is not a constant.
-    ZeroSize,
     /// Value does not fit in 64 bits.
     Overflow,
     /// Literal longer than the fixed decode buffer (see `parseReal`).
@@ -573,19 +565,6 @@ pub const IntLiteral = struct {
     width: u32,
     signed: bool,
 };
-
-/// Legacy two-state consumer. The parser itself preserves the full literal;
-/// concatenation width checks use this bounded conversion.
-pub fn parseInt(text: []const u8) ValueError!IntLiteral {
-    var storage: [256]u8 align(@alignOf(u64)) = undefined;
-    var buffer = std.heap.FixedBufferAllocator.init(&storage);
-    const lit = @import("integer.zig").parse(buffer.allocator(), text) catch |err| return switch (err) {
-        error.OutOfMemory => error.Overflow,
-        else => |e| e,
-    };
-    if (lit.hasUnknown()) return error.FourStateDigit;
-    return .{ .value = lit.asInt() orelse return error.Overflow, .width = if (lit.sized) lit.width else 0, .signed = lit.signed };
-}
 
 /// Decode a `.real_literal`'s text. LRM §2.6.2. Strips `_` and rewrites a
 /// Table 2-1 scale factor into an exponent, so IEEE-754 rounding happens once.
@@ -751,7 +730,11 @@ test "numbers: bases, reals, scale factors (§2.6)" {
     // still joins to the base format. Both spacings are ONE literal.
     try expectTags("8 'h A5", &.{ .int_literal, .eof });
     try expectTags("32\n'h 12ab_f001", &.{ .int_literal, .eof });
-    try std.testing.expectEqual(@as(i64, 0xa5), (try parseInt("8 'h A5")).value);
+    {
+        var arena = std.heap.ArenaAllocator.init(testing.allocator);
+        defer arena.deinit();
+        try std.testing.expectEqual(@as(?i64, 0xa5), (try Integer.parse(arena.allocator(), "8 'h A5")).asInt());
+    }
     // …and the white space before an assignment pattern is NOT joined: `'{` is
     // not a base_format, so the number ends at its digits (§4.2.14).
     try expectTags("2 '{1}", &.{ .int_literal, .apostrophe_lbrace, .int_literal, .rbrace, .eof });
@@ -848,46 +831,51 @@ test "§2.6.2 a scale factor rounds ONCE: 2.2n is parseFloat(\"2.2e-9\"), not 2.
     try testing.expectEqual(@as(f64, 1.3e3), try parseReal("1.3k"));
 }
 
-test "parseInt decodes every base (§2.6.1)" {
+// The decoder is `integer.parse`; these cases pin it through the token texts
+// the lexer produces, which is where the white-space forms below come from.
+test "integer.parse decodes every base (§2.6.1)" {
+    var arena = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
     const val = struct {
-        fn f(text: []const u8) ValueError!i64 {
-            return (try parseInt(text)).value;
+        fn f(al: std.mem.Allocator, text: []const u8) !i64 {
+            return (try Integer.parse(al, text)).asInt().?;
         }
     }.f;
-    try testing.expectEqual(@as(i64, 27195), try val("27_195"));
-    try testing.expectEqual(@as(i64, 0x35), try val("16'b0011_0101"));
-    try testing.expectEqual(@as(i64, 0o7460), try val("12'o7460"));
-    try testing.expectEqual(@as(i64, 0x12abf001), try val("32'h12ab_f001"));
-    try testing.expectEqual(@as(i64, 0xaf), try val("8'HAf"));
+    try testing.expectEqual(@as(i64, 27195), try val(a, "27_195"));
+    try testing.expectEqual(@as(i64, 0x35), try val(a, "16'b0011_0101"));
+    try testing.expectEqual(@as(i64, 0o7460), try val(a, "12'o7460"));
+    try testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32'h12ab_f001"));
+    try testing.expectEqual(@as(i64, 0xaf), try val(a, "8'HAf"));
     // §2.6.1: the size is OPTIONAL — an unsized based constant is legal.
-    try testing.expectEqual(@as(i64, 0x837ff), try val("'h837ff"));
-    try testing.expectEqual(@as(u32, 0), (try parseInt("'h837ff")).width);
+    try testing.expectEqual(@as(i64, 0x837ff), try val(a, "'h837ff"));
+    try testing.expect(!(try Integer.parse(a, "'h837ff")).sized);
     // §2.6.1: a number wider than its size is truncated from the LEFT. These
     // two were silently wrong while the parser had its own decoder.
-    try testing.expectEqual(@as(i64, 0xf), try val("4'h1f"));
-    try testing.expectEqual(@as(i64, 255), try val("8'hFFFF"));
+    try testing.expectEqual(@as(i64, 0xf), try val(a, "4'h1f"));
+    try testing.expectEqual(@as(i64, 255), try val(a, "8'hFFFF"));
     // §2.6.1 `s`: truncate to the size first, then read as two's complement.
-    try testing.expectEqual(@as(i64, -1), try val("4'shf"));
-    try testing.expectEqual(@as(i64, -8), try val("4'sb1000"));
-    try testing.expectEqual(@as(i64, 7), try val("4'sd7"));
-    try testing.expectEqual(@as(i64, -1), try val("8'SHff"));
-    try testing.expect((try parseInt("4'shf")).signed);
+    try testing.expectEqual(@as(i64, -1), try val(a, "4'shf"));
+    try testing.expectEqual(@as(i64, -8), try val(a, "4'sb1000"));
+    try testing.expectEqual(@as(i64, 7), try val(a, "4'sd7"));
+    try testing.expectEqual(@as(i64, -1), try val(a, "8'SHff"));
+    try testing.expect((try Integer.parse(a, "4'shf")).signed);
     // §4.2.13 needs the declared width to reject unsized constants in a concat.
-    try testing.expectEqual(@as(u32, 4), (try parseInt("4'shf")).width);
-    try testing.expectError(error.FourStateDigit, parseInt("4'b01xz"));
-    try testing.expectError(error.MissingDigits, parseInt("4'h"));
-    try testing.expectError(error.MissingBase, parseInt("4'"));
-    try testing.expectError(error.DigitOutOfRange, parseInt("4'b012"));
+    try testing.expectEqual(@as(u32, 4), (try Integer.parse(a, "4'shf")).width);
+    try testing.expect((try Integer.parse(a, "4'b01xz")).hasUnknown());
+    try testing.expectError(error.MissingDigits, Integer.parse(a, "4'h"));
+    try testing.expectError(error.MissingBase, Integer.parse(a, "4'"));
+    try testing.expectError(error.DigitOutOfRange, Integer.parse(a, "4'b012"));
     // §2.6.1: "the unsigned number token shall immediately follow the base
     // format, OPTIONALLY PRECEDED BY WHITE SPACE" — four of the clause's five
     // examples are written that way.
-    try testing.expectEqual(@as(i64, 0xaf), try val("8'h Af"));
-    try testing.expectEqual(@as(i64, 3), try val("5 'D 3"));
-    try testing.expectEqual(@as(i64, 0x12abf001), try val("32 'h 12ab_f001"));
+    try testing.expectEqual(@as(i64, 0xaf), try val(a, "8'h Af"));
+    try testing.expectEqual(@as(i64, 3), try val(a, "5 'D 3"));
+    try testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32 'h 12ab_f001"));
     // Syntax 2-2 `size ::= non_zero_unsigned_number`: an explicit 0 is not the
     // unsized form, it is no form at all.
-    try testing.expectError(error.ZeroSize, parseInt("0'b1"));
-    try testing.expectError(error.ZeroSize, parseInt("0_0'h1"));
+    try testing.expectError(error.ZeroSize, Integer.parse(a, "0'b1"));
+    try testing.expectError(error.ZeroSize, Integer.parse(a, "0_0'h1"));
 }
 
 test "§2.6.1 white space splits the base format from the digits, and nothing else" {
