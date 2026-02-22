@@ -601,9 +601,9 @@ fn vectorSize(lower: *const Lower, flat_name: []const u8) u32 {
 
 /// §11.6.9's `vpiSize` for a `reg [msb:lsb]`.
 ///
-/// ponytail: LITERAL BOUNDS ONLY — which is what `sim/digital.zig` already
-/// requires of the same declaration ("packed reg bounds must be literal
-/// nonnegative integers"). A packed range over a parameter folds nowhere this
+/// ponytail: LITERAL BOUNDS ONLY — which is what `src/sim/digital/root.zig`
+/// already requires of the same declaration ("declaration bounds must be
+/// literal integers"). A packed range over a parameter folds nowhere this
 /// file can reach: `Lower.vectors` holds nets and ports, not regs. Reporting 1
 /// for a width the design knows would be a wrong answer, so a non-literal range
 /// reports 0 and `vpi_get(vpiSize, …)` turns that into `vpiUndefined` plus an

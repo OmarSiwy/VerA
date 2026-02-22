@@ -86,7 +86,7 @@ pub const Run = struct {
     /// slot at all.
     instances: std.AutoHashMapUnmanaged(Name, u32) = .empty,
     /// IEEE 1364 §19.10's regions, in text-stream order. Read once per
-    /// unconnected input port; `lib/ir/lower.zig`'s `applyUnconnectedDrive` is
+    /// unconnected input port; `lib/ir/lower/node.zig`'s `applyUnconnectedDrive` is
     /// the analog half of the same directive.
     drives: []const Front.Preprocessor.DriveRegion = &.{},
     /// Variables, array elements and nets share one slot space, so one `store`
