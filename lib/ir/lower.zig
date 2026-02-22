@@ -418,34 +418,19 @@ branch_reads: std.ArrayList(BranchRead) = .empty,
 /// reason class-6 diagnostics have a source location.
 src: []const u8 = "",
 tok_starts: []const u32 = &.{},
-/// §10.2 `default_discipline events, in text-stream order, as the preprocessor
-/// saw them. Set by the caller after `init` (root.zig): a text stage cannot
-/// apply the directive itself — §10.2 hands it to §7.4 discipline resolution,
-/// which needs the module's declarations — so all it can do is say WHERE each
-/// one took effect. Empty when the text never came through stage 1.
-default_disciplines: []const Preprocessor.DefaultDiscipline = &.{},
-/// §10.3 `default_transition events, in text-stream order, set by the same
-/// caller for the same reason: only the text stage knows where each directive
-/// sat, and only §4.5.8 codegen knows which `transition()` call it reaches.
-/// `codegen.defaultTransition` does the positional lookup.
-default_transitions: []const Preprocessor.DefaultTransition = &.{},
-/// IEEE 1364 §19.9 `timescale, set by the same caller and for the same reason:
-/// it is a text-stream fact with a §9.15 consumer. Null when the stream carried
-/// no `timescale, which is not the same as a default one — Table 9-27 defines
-/// "timeUnit" as "the time unit AS SPECIFIED IN `timescale", so with nothing
-/// specified the parameter is not known and §9.15's fallback rule applies.
-timescale: ?Preprocessor.Timescale = null,
-/// IEEE 1364 §19.2 `default_nettype regions, in text-stream order, set by the
-/// same caller for the same reason. Read wherever a §3.6.5 implicit net would be
-/// made: `nodeOf` for a behavioral reference, and `rejectImplicitNet` over
-/// `Design.implicit_nets` for the structural one elaboration spotted.
-nettypes: []const Preprocessor.NetTypeRegion = &.{},
-/// IEEE 1364 §19.1 `celldefine regions, in text-stream order. Read once, by
-/// `lowerModule`, to tag `Mir.is_cell`.
-cells: []const Preprocessor.CellRegion = &.{},
-/// IEEE 1364 §19.10 `unconnected_drive regions, in text-stream order. Read by
-/// `applyUnconnectedDrive`, over the ports `Design.unconnected_inputs` names.
-drives: []const Preprocessor.DriveRegion = &.{},
+/// The positional directive events the preprocessor published
+/// (`Preprocessor.Directives`), set by the caller after `init` (root.zig). A
+/// text stage cannot apply them itself — §10.2 hands `default_discipline to
+/// §7.4 discipline resolution, which needs the module's declarations; §10.3's
+/// `default_transition reaches a `transition()` only §4.5.8 codegen sees
+/// (`codegen.defaultTransition`); §9.15 reads `timescale back (`timescale()`,
+/// null when the stream specified none, which Table 9-27's "AS SPECIFIED IN
+/// `timescale" makes not known rather than a default) — so all it can say is
+/// WHERE each took effect. `nettypes` is read wherever a §3.6.5 implicit net
+/// would be made (`nodeOf`, `rejectImplicitNet`), `cells` once by
+/// `lowerModule` for `Mir.is_cell`, `drives` by `applyUnconnectedDrive`. Empty
+/// when the text never came through stage 1.
+directives: Preprocessor.Directives = .{},
 /// `Elaborate.Design.unconnected_inputs`, held between `lowerFile` (which has
 /// the design) and `lowerModule` (which has the nodes `drives` applies to).
 ///
@@ -1389,7 +1374,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // IEEE 1364 §19.1 (§10.1 carries it over): the tag of the module keyword's
     // own position, which is what "modules between `celldefine and
     // `endcelldefine" means once the directives are positional regions.
-    self.mir.is_cell = Preprocessor.CellRegion.inForce(self.cells, self.tokStart(module.main_tok), false);
+    self.mir.is_cell = Preprocessor.CellRegion.inForce(self.directives.cells, self.tokStart(module.main_tok), false);
 
     const entry = try self.mir.addBlock(self.arena);
     assert(entry == .entry);

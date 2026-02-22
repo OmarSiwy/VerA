@@ -28,7 +28,7 @@
 //! inactive `ifdef arms) is replaced by exactly the newlines it contained, so
 //! `\n`-counting a byte offset in the output yields the source line — for the
 //! LAST file processed. Prepended std defs and `include shift that; the caller
-//! gets the prelude length back via `Options.prelude_len` to compensate.
+//! gets the prelude length back via `Output.prelude_len` to compensate.
 //!
 //! PROVENANCE. The line-number contract above only ever held per file. This
 //! stage therefore also publishes a `diag.SourceMap`: one `Segment` every time
@@ -56,45 +56,60 @@ pub const Options = struct {
     /// compilation and nothing is appended. Only with `std_defs`, since a model
     /// card's interface comes from a Table E.1 primitive that would not be there.
     spice_netlist: []const u8 = "",
-    /// Out-param: how many modules `spice_netlist` contributed, so the caller can
-    /// tell the netlist-derived tail of the prelude from Table E.1's own rows —
-    /// E.2.1's case-insensitive fallback applies to the tail only.
-    spice_netlist_modules: ?*u32 = null,
-    /// Out-param: byte length of the prepended std-def prelude, so a caller
-    /// mapping an output offset back to a user source line can subtract it.
-    prelude_len: ?*u32 = null,
-    /// Out-param: every §10.2 `default_discipline event, in text-stream order,
-    /// for §7.4 discipline resolution to consult. Arena-owned like the output.
-    defaults: ?*[]const DefaultDiscipline = null,
-    /// Out-param: every §10.3 `default_transition event, in text-stream order,
-    /// for §4.5.8's rise/fall defaulting to consult. Arena-owned like the
-    /// output.
-    transitions: ?*[]const DefaultTransition = null,
-    /// Out-param: the IEEE 1364 §19.9 `timescale in force, or null if the
-    /// stream declared none. Read by §9.15 Table 9-27's "timeUnit" and
-    /// "timePrecision", which are the only two rows of that table whose value
-    /// comes out of the SOURCE rather than out of a simulator's preferences.
-    timescale: ?*?Timescale = null,
-    /// Positional timing records, including malformed directives/resetall.
-    timescale_events: ?*[]const TimescaleEvent = null,
-    /// Out-param: every IEEE 1364 §19.2 `default_nettype event, in text-stream
-    /// order, for §3.6.5 implicit-net creation to consult
-    /// (`Lower.rejectImplicitNet`). Arena-owned like the output.
-    nettypes: ?*[]const NetTypeRegion = null,
-    /// Out-param: every IEEE 1364 §19.1 `celldefine/`endcelldefine event, in
-    /// text-stream order. Read by whoever wants the cell tag of a module
-    /// (`Mir.is_cell`).
-    cells: ?*[]const CellRegion = null,
-    /// Out-param: every IEEE 1364 §19.10 `unconnected_drive/`nounconnected_drive
-    /// event, in text-stream order, for §6.2.2's blank port connections to
-    /// consult (`Lower.applyUnconnectedDrive`).
-    drives: ?*[]const DriveRegion = null,
     /// Where diagnostics go, and where the file table and the source map are
     /// published. Required: preprocessing that nobody can hear is not useful.
     bag: *diag.Bag,
 };
 
 pub const Error = Allocator.Error || error{PreprocessFailed};
+
+/// What `process` publishes. Arena-owned, like the text.
+pub const Output = struct {
+    /// The preprocessed bytes: the cache identity and the lexer's input.
+    text: []const u8,
+    /// Byte length of the prepended std-def prelude, so a caller mapping an
+    /// output offset back to a user source line can subtract it.
+    prelude_len: u32 = 0,
+    /// How many modules `Options.spice_netlist` contributed, so the caller can
+    /// tell the netlist-derived tail of the prelude from Table E.1's own rows —
+    /// E.2.1's case-insensitive fallback applies to the tail only.
+    netlist_modules: u32 = 0,
+    directives: Directives = .{},
+};
+
+/// Every directive whose state outlives its own line, as the POSITIONAL event
+/// list `Region` explains, in text-stream order. The text stage cannot apply
+/// any of them — each governs a question only a later stage can ask — so it
+/// says WHERE each took effect and the consumer looks its own offset up.
+pub const Directives = struct {
+    /// §10.2 `default_discipline, for §7.4 discipline resolution.
+    disciplines: []const DefaultDiscipline = &.{},
+    /// §10.3 `default_transition, for §4.5.8's rise/fall defaulting.
+    transitions: []const DefaultTransition = &.{},
+    /// IEEE 1364 §19.9 `timescale; a null value is §19.6's `resetall.
+    timescales: []const TimescaleEvent = &.{},
+    /// IEEE 1364 §19.2 `default_nettype, for §3.6.5 implicit-net creation
+    /// (`Lower.rejectImplicitNet`).
+    nettypes: []const NetTypeRegion = &.{},
+    /// IEEE 1364 §19.1 `celldefine/`endcelldefine (`Mir.is_cell`).
+    cells: []const CellRegion = &.{},
+    /// IEEE 1364 §19.10 `unconnected_drive/`nounconnected_drive, for §6.2.2's
+    /// blank port connections (`Lower.applyUnconnectedDrive`).
+    drives: []const DriveRegion = &.{},
+
+    /// The `timescale in force at the END of the stream, or null if none is.
+    /// Read by §9.15 Table 9-27's "timeUnit" and "timePrecision", the only two
+    /// rows of that table whose value comes out of the SOURCE.
+    ///
+    /// ponytail: the last one wins, so every module of one file shares it,
+    /// although the directive scopes to the design elements that FOLLOW it.
+    /// No fixture pins two modules with a `timescale between them (§9.6's tick
+    /// has no analog kernel behind it — see E0908's note); look the module's
+    /// own offset up with `TimescaleEvent.inForce` the day one does.
+    pub fn timescale(self: Directives) ?Timescale {
+        return if (self.timescales.len == 0) null else self.timescales[self.timescales.len - 1].value;
+    }
+};
 
 /// Depth caps. Blown caps are reported as normal diagnostics, never panics.
 pub const max_include_depth = 32;
@@ -176,11 +191,10 @@ pub const DefaultDiscipline = struct {
 ///
 /// `at` is an offset into the PREPROCESSED output, the currency every later
 /// stage reports in, so it compares directly against a token start.
-pub const DefaultTransition = struct {
-    at: u32,
-    /// Seconds. §10.3's transition_time, used for BOTH the rise and the fall.
-    time: f64,
-};
+///
+/// `value` is seconds: §10.3's transition_time, used for BOTH the rise and the
+/// fall.
+pub const DefaultTransition = Region(?f64);
 
 /// IEEE Std 1364 §19.9 `` `timescale <unit> / <precision> ``, in SECONDS.
 ///
@@ -190,7 +204,7 @@ pub const DefaultTransition = struct {
 /// makes both operands readable, "Time unit as specified in `timescale, in
 /// seconds", and they are the only two rows of that table that are a property
 /// of the SOURCE rather than of a simulator's preference file.
-pub const TimescaleEvent = struct { at: u32, scale: ?Timescale };
+pub const TimescaleEvent = Region(?Timescale);
 
 pub const Timescale = struct {
     unit: f64,
@@ -212,8 +226,8 @@ pub const Timescale = struct {
 /// That sentence is why a single latched value is the wrong shape: it answers
 /// the first directive or the last, never "the nearest one above THIS
 /// declaration". `DefaultDiscipline` and `DefaultTransition` publish their own
-/// hand-rolled version of this for the same reason; the three IEEE 1364
-/// directives below share this one.
+/// version of this for the same reason; `DefaultTransition`, `TimescaleEvent`
+/// and the three IEEE 1364 directives below are this one.
 ///
 /// `at` is an offset into the PREPROCESSED output, the currency every later
 /// stage reports in, so it compares directly against a token start.
@@ -316,7 +330,7 @@ pub const directive_map = std.StaticStringMap(Directive).initComptime(.{
     .{ "end_keywords", .keywords },
 
     // §10.2 and IEEE 1364 §19.7: both carry state past their own line, so both
-    // are parsed here and published (`Options.defaults`, `Pp.line_*`).
+    // are parsed here and published (`Directives`, `Pp.line_*`).
     .{ "default_discipline", .default_discipline },
     .{ "line", .line },
     .{ "default_transition", .default_transition }, // §10.3 — read by §4.5.8
@@ -380,7 +394,7 @@ pub const builtin_includes = std.StaticStringMap([]const u8).initComptime(.{
 /// and prepends the annex D standard definitions.
 /// Returns arena-owned bytes; on failure adds to `opts.bag` and returns
 /// `error.PreprocessFailed`.
-pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]const u8 {
+pub fn process(arena: Allocator, source: []const u8, opts: Options) Error!Output {
     var pp: Pp = .{ .arena = arena, .opts = opts };
 
     // FIRST, so the compilation unit is `.root`. The prelude files register
@@ -391,6 +405,7 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
         try pp.macros.put(arena, name, .{ .body = "1", .predefined = true });
     }
 
+    var netlist_modules: u32 = 0;
     if (opts.std_defs) {
         // The three shipped files, replayed from the process-lifetime snapshot
         // rather than re-preprocessed — see `Prelude`. Byte-identical to
@@ -402,11 +417,10 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
         const cards = try spice_cards.synthesize(arena, opts.spice_netlist);
         if (cards.modules != 0) {
             try pp.runFile(cards.text, "spice_netlist.vams", null);
-            if (opts.spice_netlist_modules) |n| n.* = cards.modules;
+            netlist_modules = cards.modules;
         }
     }
-    const prelude = pp.out.items.len;
-    if (opts.prelude_len) |p| p.* = @intCast(prelude);
+    const prelude_len: u32 = @intCast(pp.out.items.len);
 
     try pp.runFile(source, opts.file_name, root);
 
@@ -424,25 +438,30 @@ pub fn process(arena: Allocator, source: []const u8, opts: Options) Error![]cons
         return error.PreprocessFailed;
     }
 
-    if (opts.defaults) |d| d.* = try pp.defaults.toOwnedSlice(arena);
-    if (opts.transitions) |t| t.* = try pp.transitions.toOwnedSlice(arena);
-    if (opts.timescale) |t| t.* = pp.timescale;
-    if (opts.timescale_events) |t| t.* = try pp.timescale_events.toOwnedSlice(arena);
-    if (opts.nettypes) |n| n.* = try pp.nettypes.toOwnedSlice(arena);
-    if (opts.cells) |c| c.* = try pp.cells.toOwnedSlice(arena);
-    if (opts.drives) |d| d.* = try pp.drives.toOwnedSlice(arena);
-
+    const directives: Directives = .{
+        .disciplines = try pp.defaults.toOwnedSlice(arena),
+        .transitions = try pp.transitions.toOwnedSlice(arena),
+        .timescales = try pp.timescale_events.toOwnedSlice(arena),
+        .nettypes = try pp.nettypes.toOwnedSlice(arena),
+        .cells = try pp.cells.toOwnedSlice(arena),
+        .drives = try pp.drives.toOwnedSlice(arena),
+    };
     opts.bag.map = .{
         .segs = try pp.segs.toOwnedSlice(arena),
         // ZERO, not the prelude's newline count: `prelude_lines` corrects a
         // root line number that was measured in the PREPROCESSED text, and the
         // segments above already resolve a root offset to root's own text.
         // Subtracting twice would put every user error ~100 lines too early.
-        // `Options.prelude_len` still reports the byte length for callers that
+        // `Output.prelude_len` still reports the byte length for callers that
         // slice the output themselves.
         .prelude_lines = 0,
     };
-    return pp.out.toOwnedSlice(arena);
+    return .{
+        .text = try pp.out.toOwnedSlice(arena),
+        .prelude_len = prelude_len,
+        .netlist_modules = netlist_modules,
+        .directives = directives,
+    };
 }
 
 // The prelude snapshot: the Annex D/E definitions, preprocessed once and reused — pp/prelude.zig
@@ -496,24 +515,10 @@ pub const Pp = struct {
     /// Provenance of the output so far. Appended to only, so it stays sorted
     /// by `out_start` and `SourceMap.resolve` can binary-search it.
     segs: std.ArrayList(diag.Segment) = .empty,
-    /// §10.2 events, in text-stream order. Published via `Options.defaults`.
+    /// The `Directives` lists, filled in text-stream order.
     defaults: std.ArrayList(DefaultDiscipline) = .empty,
-    /// §10.3 events, in text-stream order. Published via `Options.transitions`.
     transitions: std.ArrayList(DefaultTransition) = .empty,
-    /// IEEE 1364 §19.9. Last one wins rather than a positional event list like
-    /// `defaults`, and that IS a ceiling now: the directive scopes to the design
-    /// elements that FOLLOW it, and since elaboration walks a hierarchy every
-    /// module of one file shares this single value. Two modules with a
-    /// `timescale between them therefore both see the second one. No fixture
-    /// pins that (§9.6's tick has no analog kernel behind it — see E0908's
-    /// note), which is why it stays a ceiling and not a bug report.
-    // ponytail: make it a positional event list, exactly like `defaults`, the
-    // day a fixture puts a `timescale between two module definitions.
-    timescale: ?Timescale = null,
     timescale_events: std.ArrayList(TimescaleEvent) = .empty,
-    /// IEEE 1364 §19.2/§19.1/§19.10 events, in text-stream order. Published via
-    /// `Options.nettypes` / `.cells` / `.drives`. Positional for the reason
-    /// `Region` gives: §10.1 scopes a directive forward from where it sits.
     nettypes: std.ArrayList(NetTypeRegion) = .empty,
     cells: std.ArrayList(CellRegion) = .empty,
     drives: std.ArrayList(DriveRegion) = .empty,
@@ -888,9 +893,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             // IEEE 1364 §19.6: `resetall returns every directive to its default
             // value, and `timescale's default is "none specified" — which is
             // what §9.15 answers "not known" for.
-            pp.timescale = null;
-            if (pp.opts.timescale_events != null)
-                try pp.timescale_events.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .scale = null });
+            try pp.mark(&pp.timescale_events, null);
             // The same §19.6 sentence, for the three directives that publish a
             // `Region`. Written as ordinary events rather than by clearing the
             // lists, because the lists are POSITIONAL: a `resetall halfway down

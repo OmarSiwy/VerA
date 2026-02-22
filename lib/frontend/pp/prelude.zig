@@ -207,7 +207,7 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     // rather than lose the event.
     std.debug.assert(pp.defaults.items.len == 0);
     std.debug.assert(pp.transitions.items.len == 0);
-    std.debug.assert(pp.timescale == null);
+    std.debug.assert(pp.timescale_events.items.len == 0);
     std.debug.assert(pp.conds.items.len == 0);
     std.debug.assert(pp.nettypes.items.len == 0);
     std.debug.assert(pp.cells.items.len == 0);

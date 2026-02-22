@@ -853,7 +853,7 @@ const diag = @import("diag");
 /// tests do not reach into another file's test scaffolding.
 fn genDisplayText(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
     var bag = diag.Bag.init(arena);
-    const text = try Preprocessor.process(arena, src, .{ .bag = &bag });
+    const text = (try Preprocessor.process(arena, src, .{ .bag = &bag })).text;
     const toks = try Lexer.Lexer.tokenize(arena, text);
     var p = Parser.Parser.init(arena, text, toks.items(.tag), toks.items(.start), &bag);
     var file = try p.parseSourceFile();

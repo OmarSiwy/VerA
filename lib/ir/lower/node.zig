@@ -74,7 +74,7 @@ pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void
 }
 
 pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
-    if (self.default_disciplines.len == 0) return;
+    if (self.directives.disciplines.len == 0) return;
     const idx = self.node_voltages.get(name) orelse return;
     if (idx == ground) return;
     if (self.node_disciplines.items[idx].len != 0) return;
@@ -84,10 +84,10 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
     // Backwards from the declaration: the most recent directive wins, and a
     // wire-qualified one wins over an unqualified one however old it is.
     var fallback: ?[]const u8 = null;
-    var i = self.default_disciplines.len;
+    var i = self.directives.disciplines.len;
     const chosen = while (i > 0) {
         i -= 1;
-        const e = self.default_disciplines[i];
+        const e = self.directives.disciplines[i];
         if (e.at > at) continue;
         // §10.2: the bare form and `resetall withdraw the default outright,
         // so nothing older than one of those is still in force.
@@ -117,7 +117,7 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
 /// differ in. Upgrade path is the discrete net type on `Ast.NetDecl`, at which
 /// point this function stops discarding the value and starts stamping it.
 pub fn rejectImplicitNet(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
-    if (Preprocessor.NetTypeRegion.inForce(self.nettypes, self.tokStart(main_tok), .default) != .none) return;
+    if (Preprocessor.NetTypeRegion.inForce(self.directives.nettypes, self.tokStart(main_tok), .default) != .none) return;
     var b = self.errWith(main_tok, .E0367);
     b.msg("`{s}` was never declared, and `default_nettype none is in force", .{name});
     b.note("§3.6.5 would make it an implicit net; IEEE 1364 §19.2's `none` is what withdraws that", .{});
@@ -153,9 +153,9 @@ pub fn rejectImplicitNet(self: *Lower, name: []const u8, main_tok: u32) Oom!void
 /// turn a directive into an E0501 about an access function the model never
 /// wrote.
 pub fn applyUnconnectedDrive(self: *Lower) Oom!void {
-    if (self.drives.len == 0) return;
+    if (self.directives.drives.len == 0) return;
     for (self.unconnected_inputs) |site| {
-        const drive = Preprocessor.DriveRegion.inForce(self.drives, self.tokStart(site.main_tok), .default);
+        const drive = Preprocessor.DriveRegion.inForce(self.directives.drives, self.tokStart(site.main_tok), .default);
         if (drive == .float) continue;
         const idx = self.node_voltages.get(site.name) orelse continue;
         if (idx == ground) continue;

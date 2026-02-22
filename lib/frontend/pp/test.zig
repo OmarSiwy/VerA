@@ -41,7 +41,7 @@ pub fn runTest(src: []const u8) ![]u8 {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     var bag: diag.Bag = .init(arena_state.allocator());
-    const text = try process(arena_state.allocator(), src, .{ .std_defs = false, .bag = &bag });
+    const text = (try process(arena_state.allocator(), src, .{ .std_defs = false, .bag = &bag })).text;
     return testing.allocator.dupe(u8, text);
 }
 
@@ -249,12 +249,10 @@ test "escaped identifiers reach `undef, the conditionals and `default_discipline
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     var bag: diag.Bag = .init(arena_state.allocator());
-    var defs: []const DefaultDiscipline = &.{};
-    _ = try process(arena_state.allocator(), "`default_discipline \\logic\n", .{
+    const defs = (try process(arena_state.allocator(), "`default_discipline \\logic\n", .{
         .std_defs = false,
-        .defaults = &defs,
         .bag = &bag,
-    });
+    })).directives.disciplines;
     try testing.expectEqual(@as(usize, 1), defs.len);
     try testing.expectEqualStrings("logic", defs[0].discipline);
 }
@@ -303,13 +301,10 @@ test "§9.15 Table 9-27 reads `timescale back, in seconds" {
             var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
             defer arena_state.deinit();
             var bag: diag.Bag = .init(arena_state.allocator());
-            var out: ?Timescale = null;
-            _ = try process(arena_state.allocator(), src, .{
+            return (try process(arena_state.allocator(), src, .{
                 .std_defs = false,
-                .timescale = &out,
                 .bag = &bag,
-            });
-            return out;
+            })).directives.timescale();
         }
     };
     // Table 9-27's units column is "s", not ticks.
@@ -375,15 +370,8 @@ pub fn regionsOf(arena: Allocator, src: []const u8) !struct {
     drives: []const DriveRegion,
 } {
     var bag: diag.Bag = .init(arena);
-    var out: @TypeOf(try regionsOf(arena, src)) = .{ .nettypes = &.{}, .cells = &.{}, .drives = &.{} };
-    _ = try process(arena, src, .{
-        .std_defs = false,
-        .nettypes = &out.nettypes,
-        .cells = &out.cells,
-        .drives = &out.drives,
-        .bag = &bag,
-    });
-    return out;
+    const d = (try process(arena, src, .{ .std_defs = false, .bag = &bag })).directives;
+    return .{ .nettypes = d.nettypes, .cells = d.cells, .drives = d.drives };
 }
 
 test "IEEE 1364 §19.2 `default_nettype publishes a region per directive" {
@@ -524,15 +512,15 @@ test "§10.1 scopes a directive across a source file boundary" {
     // only ones this test can include without a filesystem, and they are enough
     // because what is being checked is that the boundary changes NOTHING.
     var bag: diag.Bag = .init(arena);
-    var nettypes: []const NetTypeRegion = &.{};
-    var cells: []const CellRegion = &.{};
-    _ = try process(arena,
+    const d = (try process(arena,
         \\`default_nettype none
         \\`celldefine
         \\`include "constants.vams"
         \\module after_the_include; endmodule
         \\
-    , .{ .std_defs = false, .nettypes = &nettypes, .cells = &cells, .bag = &bag });
+    , .{ .std_defs = false, .bag = &bag })).directives;
+    const nettypes = d.nettypes;
+    const cells = d.cells;
 
     // One event each — the included file wrote none — and both still in force
     // at the end of the stream, which is the far side of the boundary.
@@ -571,12 +559,10 @@ test "§10.3 `default_transition Syntax 10-2" {
             var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
             defer arena_state.deinit();
             var bag: diag.Bag = .init(arena_state.allocator());
-            var out: []const DefaultTransition = &.{};
-            _ = try process(arena_state.allocator(), src, .{
+            const out = (try process(arena_state.allocator(), src, .{
                 .std_defs = false,
-                .transitions = &out,
                 .bag = &bag,
-            });
+            })).directives.transitions;
             return testing.allocator.dupe(DefaultTransition, out);
         }
     };
@@ -584,7 +570,7 @@ test "§10.3 `default_transition Syntax 10-2" {
     const one = try T.ev("`default_transition 4n\n");
     defer testing.allocator.free(one);
     try testing.expectEqual(@as(usize, 1), one.len);
-    try testing.expectEqual(@as(f64, 4e-9), one[0].time);
+    try testing.expectEqual(@as(f64, 4e-9), one[0].value.?);
 
     // §10.3's supersession sentence: BOTH are published, in text order, so the
     // consumer can pick "the directive which immediately precedes" a call
@@ -592,8 +578,8 @@ test "§10.3 `default_transition Syntax 10-2" {
     const two = try T.ev("`default_transition 8n\n`default_transition 4n\n");
     defer testing.allocator.free(two);
     try testing.expectEqual(@as(usize, 2), two.len);
-    try testing.expectEqual(@as(f64, 8e-9), two[0].time);
-    try testing.expectEqual(@as(f64, 4e-9), two[1].time);
+    try testing.expectEqual(@as(f64, 8e-9), two[0].value.?);
+    try testing.expectEqual(@as(f64, 4e-9), two[1].value.?);
     try testing.expect(two[0].at < two[1].at);
 
     // Every §2.6.2 spelling of the same time, since the operand is read in a
@@ -603,7 +589,7 @@ test "§10.3 `default_transition Syntax 10-2" {
         defer testing.allocator.free(src);
         const e = try T.ev(src);
         defer testing.allocator.free(e);
-        try testing.expectEqual(@as(f64, 4e-9), e[0].time);
+        try testing.expectEqual(@as(f64, 4e-9), e[0].value.?);
     }
 
     // fixture ch10 48: the operand is not bracketed in Syntax 10-2, so it is
@@ -650,14 +636,16 @@ test "annex D prelude is deterministic and self-guarded" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
-    var n1: u32 = 0;
-    var n2: u32 = 0;
     const src = "`include \"disciplines.vams\"\nmodule m; endmodule\n";
     // One bag per run: the compilation unit must be the FIRST file registered.
     var bag1: diag.Bag = .init(arena);
     var bag2: diag.Bag = .init(arena);
-    const a = try process(arena, src, .{ .prelude_len = &n1, .bag = &bag1 });
-    const b = try process(arena, src, .{ .prelude_len = &n2, .bag = &bag2 });
+    const out_a = try process(arena, src, .{ .bag = &bag1 });
+    const out_b = try process(arena, src, .{ .bag = &bag2 });
+    const a = out_a.text;
+    const b = out_b.text;
+    const n1 = out_a.prelude_len;
+    const n2 = out_b.prelude_len;
     try testing.expectEqualStrings(a, b); // determinism == cache identity
     try testing.expectEqual(n1, n2);
 
@@ -740,14 +728,14 @@ test "the prelude token snapshot lexes exactly what lexing the whole text produc
         const arena = arena_state.allocator();
 
         var bag: diag.Bag = .init(arena);
-        const text = try process(arena,
+        const text = (try process(arena,
             \\module res(p, n);
             \\  inout p, n;
             \\  electrical p, n;
             \\  parameter real r = 1000.0 from (0.0:inf);
             \\  analog I(p, n) <+ V(p, n) / r;
             \\endmodule
-        , .{ .bag = &bag, .spice_netlist = netlist });
+        , .{ .bag = &bag, .spice_netlist = netlist })).text;
 
         // THE LONG WAY: no seed, one scan of the whole buffer.
         const long = try Lexer.Lexer.tokenize(arena, text);
@@ -772,7 +760,7 @@ test "`--no-std-defs` gets no seed, and lexes the same either way" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     var bag: diag.Bag = .init(arena);
-    const text = try process(arena, "module m; endmodule\n", .{ .std_defs = false, .bag = &bag });
+    const text = (try process(arena, "module m; endmodule\n", .{ .std_defs = false, .bag = &bag })).text;
 
     try testing.expectEqual(@as(?Lexer.Lexer.Seed, null), try pp_prelude.preludeTokens(false));
     try testing.expectEqual(@as(?*const Parser.Parser.Seed, null), try pp_prelude.preludeAst(false));
@@ -838,7 +826,7 @@ test "the prelude AST snapshot parses exactly what parsing the whole text produc
         const arena = arena_state.allocator();
 
         var bag: diag.Bag = .init(arena);
-        const text = try process(arena,
+        const text = (try process(arena,
             \\nature Pressure;
             \\  units = "Pa"; access = Pr; abstol = 1e-6;
             \\endnature
@@ -854,7 +842,7 @@ test "the prelude AST snapshot parses exactly what parsing the whole text produc
             \\    I(p, n) <+ V(p, n) / r + acc[1];
             \\  end
             \\endmodule
-        , .{ .bag = &bag, .spice_netlist = netlist });
+        , .{ .bag = &bag, .spice_netlist = netlist })).text;
 
         var toks = try Lexer.Lexer.tokenize(arena, text);
         const tags = toks.items(.tag);
@@ -924,11 +912,11 @@ test "an ABSTOL override reaches annex D.1" {
     var arena_state: std.heap.ArenaAllocator = .init(testing.allocator);
     defer arena_state.deinit();
     var bag: diag.Bag = .init(arena_state.allocator());
-    const text = try process(
+    const text = (try process(
         arena_state.allocator(),
         "`define CURRENT_ABSTOL 1e-15\n`include \"disciplines.vams\"\n",
         .{ .std_defs = false, .bag = &bag },
-    );
+    )).text;
     try testing.expect(std.mem.indexOf(u8, text, "abstol      = 1e-15;") != null);
     try testing.expect(std.mem.indexOf(u8, text, "abstol      = 1e-12;") == null);
 }
@@ -940,7 +928,7 @@ test "a span inside an `include resolves to the included file's own line" {
 
     var bag: diag.Bag = .init(arena);
     const src = "module m;\n`include \"disciplines.vams\"\nendmodule\n";
-    const out = try process(arena, src, .{ .std_defs = false, .bag = &bag });
+    const out = (try process(arena, src, .{ .std_defs = false, .bag = &bag })).text;
 
     // A byte that came from the included file.
     const needle = "discipline electrical;";
@@ -1012,7 +1000,7 @@ test "a span inside a macro expansion resolves to the invocation site" {
 
     var bag: diag.Bag = .init(arena);
     const src = "`define SQ(x) ((x)*(x))\ny = `SQ(v) + 1;\n";
-    const out = try process(arena, src, .{ .std_defs = false, .bag = &bag });
+    const out = (try process(arena, src, .{ .std_defs = false, .bag = &bag })).text;
 
     // Bytes that exist only in the expansion have no counterpart in the file;
     // the honest answer is the `SQ that produced them.

@@ -181,7 +181,7 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
         try b.emit();
         return error.PreprocessFailed;
     }
-    try pp.transitions.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .time = t });
+    try pp.mark(&pp.transitions, t);
 }
 
 /// IEEE Std 1364 §19.9 `` `timescale <unit> / <precision> ``.
@@ -203,8 +203,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     // Kept, even though a malformed directive now fails the compilation: a
     // `resetall writes the same null, and `resetall is not an error.
     const event = pp.timescale_events.items.len;
-    if (pp.opts.timescale_events != null)
-        try pp.timescale_events.append(pp.arena, .{ .at = @intCast(pp.out.items.len), .scale = null });
+    try pp.mark(&pp.timescale_events, null);
     var r: Rest = .{ .s = rest };
     const unit = timeLiteral(&r) orelse return badTimescale(pp, off, &r, "a Table 19-1 time unit");
     r.skipSpace();
@@ -222,9 +221,7 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     }
     r.skipSpace();
     if (r.i < r.s.len) return badTimescale(pp, off, &r, "nothing more");
-    pp.timescale = .{ .unit = unit, .precision = precision };
-    if (pp.opts.timescale_events != null)
-        pp.timescale_events.items[event].scale = pp.timescale;
+    pp.timescale_events.items[event].value = .{ .unit = unit, .precision = precision };
 }
 
 /// E0142 at the cursor, naming what §19.9's grammar wanted there. `r.i` is

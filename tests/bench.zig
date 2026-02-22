@@ -377,7 +377,7 @@ fn runPhase(
         var arena: std.heap.ArenaAllocator = .init(gpa);
         defer arena.deinit();
         var bag = vera.diag.Bag.init(arena.allocator());
-        const text = try vera.Preprocessor.process(arena.allocator(), source, .{ .bag = &bag });
+        const text = (try vera.Preprocessor.process(arena.allocator(), source, .{ .bag = &bag })).text;
         std.mem.doNotOptimizeAway(text.len);
         return text.len;
     }

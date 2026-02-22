@@ -289,29 +289,11 @@ fn compileInArena(
     bag: *diag.Bag,
 ) Error!CompileResult {
     const arena = arena_state.allocator();
-    var defaults: []const Preprocessor.DefaultDiscipline = &.{};
-    var transitions: []const Preprocessor.DefaultTransition = &.{};
-    var timescale: ?Preprocessor.Timescale = null;
-    // The three IEEE 1364 directives §10.1 carries over that scope FORWARD:
-    // §19.2 `default_nettype, §19.1 `celldefine, §19.10 `unconnected_drive.
-    var nettypes: []const Preprocessor.NetTypeRegion = &.{};
-    var cells: []const Preprocessor.CellRegion = &.{};
-    var drives: []const Preprocessor.DriveRegion = &.{};
-    // Annex E.2 — how many modules the `spice_netlist` cards contributed to the
-    // prelude. Zero unless the caller supplied netlist text.
-    var netlist_modules: u32 = 0;
-    const text = Preprocessor.process(arena, source, .{
+    const pp = Preprocessor.process(arena, source, .{
         .include_dirs = opts.include_dirs,
         .file_name = opts.file_name,
         .std_defs = opts.std_defs,
         .spice_netlist = opts.spice_netlist,
-        .spice_netlist_modules = &netlist_modules,
-        .defaults = &defaults,
-        .transitions = &transitions,
-        .timescale = &timescale,
-        .nettypes = &nettypes,
-        .cells = &cells,
-        .drives = &drives,
         .bag = bag,
     }) catch |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
@@ -320,6 +302,10 @@ fn compileInArena(
         // `include names that header rather than the top-level unit.
         error.PreprocessFailed => return error.CompileFailed,
     };
+    const text = pp.text;
+    // Annex E.2 — how many modules the `spice_netlist` cards contributed to the
+    // prelude. Zero unless the caller supplied netlist text.
+    const netlist_modules = pp.netlist_modules;
 
     // --- stage 2: lex (class 1) ---------------------------------------------
     // The annex D.2/D.1/E.1 prelude is a fixed byte prefix of `text` whenever
@@ -381,12 +367,7 @@ fn compileInArena(
     mir.* = .{};
     const lower = try arena.create(Lower);
     lower.* = Lower.init(arena, mir, file, text, starts, bag);
-    lower.default_disciplines = defaults;
-    lower.default_transitions = transitions;
-    lower.timescale = timescale;
-    lower.nettypes = nettypes;
-    lower.cells = cells;
-    lower.drives = drives;
+    lower.directives = pp.directives;
     lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
     {
         // SSA maps its matrix directly; the compilation arena cannot free it.
