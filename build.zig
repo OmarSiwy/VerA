@@ -52,8 +52,10 @@ const module_specs = [_]ModuleSpec{
     .{ .name = "vera", .path = "lib/root.zig", .imports = &.{ "diag", "frontend", "ir", "backend", "kernels" } },
 
     // src/ — what runs AFTER compilation. `sim` takes only the frontend: it is
-    // an interpreter over the shared AST, not a consumer of the pipeline.
-    .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "diag", "frontend" } },
+    // an interpreter over the shared AST, not a consumer of the pipeline. It
+    // takes `kernels` (std-only leaves) for the §9.4.3 C real conversion the
+    // analog devices already run, so both engines print one way.
+    .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "diag", "frontend", "kernels" } },
     .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera" } },
 };
 

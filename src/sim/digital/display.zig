@@ -21,6 +21,8 @@ const run = @import("root.zig").run;
 const expectRun = @import("root.zig").expectRun;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
+/// §9.4.3 Table 9-23's C conversion, the one the analog devices run.
+const zCReal = @import("kernels").str_kernels.zCReal;
 
 // ---- memory files (IEEE 1364 §17.2.9) ---------------------------------------
 
@@ -363,10 +365,8 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 'o', 'O' => .octal,
                 'h', 'H' => .hex,
                 'd', 'D' => .decimal,
-                // §9.4.3 Table 9-22's real conversions. All three print the
-                // same here: Zig's shortest round-tripping form is what %g
-                // asks for, and the suite's reals are exact halves and
-                // integers where %e and %f would agree with it anyway.
+                // §9.4.3 Table 9-23's real conversions, which "have the full
+                // formatting capabilities available in the C language".
                 'e', 'E', 'f', 'F', 'g', 'G' => null,
                 // §17.3 `%t` is not a radix at all — it reads the
                 // $timeformat state and formats a TIME, whose operand is
@@ -391,8 +391,10 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
             } else {
                 const real = try evalReal(self, args[arg]);
                 if (allocator != null) {
-                    var buf: [64]u8 = undefined;
-                    const text = std.fmt.bufPrint(&buf, "{d}", .{real}) catch unreachable;
+                    // 512: the longest %f of an f64 is 309 integer digits
+                    // plus ".000000"; a field width is padded here instead.
+                    var buf: [512]u8 = undefined;
+                    const text = zCReal(&buf, real, format[i], 0, 0, -1);
                     if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
                     try self.out.writeAll(text);
                 }
