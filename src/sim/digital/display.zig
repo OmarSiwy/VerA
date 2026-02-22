@@ -561,38 +561,43 @@ fn decimalText(self: *Run, buf: []u8, v: Int.Literal) Error![]const u8 {
     return std.fmt.bufPrint(buf, "{d}", .{raw}) catch unreachable;
 }
 
-/// Render the standing monitor and print it if §17.1.3's "any argument
-/// changed" holds.
-///
-/// ponytail: the test is on the RENDERED LINE, not on a sensitivity list
-/// over the argument expressions. Two consequences, both benign: a value
-/// that changes and changes back within one timestep correctly prints
-/// nothing, and a change to something the monitor does not name costs one
-/// wasted render. Build the sensitivity list if a design ever monitors a
-/// handful of signals out of thousands.
-pub fn monitorPrint(self: *Run, a: std.mem.Allocator, force: bool) Error!void {
+/// Print the standing monitor's argument list, if there is one and it is on.
+/// WHETHER to print is decided before this is called — a watched slot
+/// changed (`exec.store`), or `$monitoron` ran — never by comparing text.
+pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
     const m = self.monitor orelse return;
+    if (!self.monitor_on) return;
     // §17.1.3 the monitor renders in the instance that installed it; the
     // `.monitor` region runs outside any process's dispatch.
     self.scope = m.scope;
-    if (!self.monitor_on and !force) return;
-    var buffer = std.Io.Writer.Allocating.init(a);
-    const saved = self.out;
-    self.out = &buffer.writer;
-    display(self, m.args, a, m.show) catch |e| {
-        self.out = saved;
-        return e;
-    };
-    self.out = saved;
-    const text = buffer.written();
-    if (!force) {
-        if (self.monitor_last) |last| if (std.mem.eql(u8, last, text)) return;
-    }
-    self.monitor_last = try self.arena.dupe(u8, text);
-    try self.out.writeAll(text);
+    try display(self, m.args, a, m.show);
 }
 
 // ---- tests ------------------------------------------------------------------
+
+test "§17.1.3 monitor: clock queries do not trigger, a change and change back does" {
+    // t1: only `u` (unwatched) changes and $time advances: no line. t2: a
+    // goes 1 then back to 0 via #0 — it "changes value", so one line with
+    // the settled 0. t3: a = 1 prints with the current time. $monitoron at
+    // t4 prints although nothing changed and monitoring was already on.
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg a, u;
+        \\initial begin
+        \\  a = 0; u = 0;
+        \\  $monitor("a=%b t=%0d", a, $time);
+        \\  a <= 0;
+        \\  #1 u = 1;
+        \\  #1 a = 1;
+        \\  #0 a = 0;
+        \\  #1 a = 1;
+        \\  #1 $monitoron;
+        \\  #1 $finish(0);
+        \\end
+        \\endmodule
+    , "a=0 t=0\na=0 t=2\na=1 t=3\na=1 t=4\n");
+}
 
 test "readmem validates high token characters beyond destination width" {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
