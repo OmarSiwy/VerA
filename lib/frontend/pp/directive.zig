@@ -11,7 +11,7 @@ const Lexer = @import("../lexer.zig");
 const Error = Preprocessor.Error;
 const max_include_depth = Preprocessor.max_include_depth;
 const max_include_bytes = Preprocessor.max_include_bytes;
-const qualifiers = Preprocessor.qualifiers;
+const Qualifier = Preprocessor.Qualifier;
 const NetType = Preprocessor.NetType;
 const Drive = Preprocessor.Drive;
 const builtin_includes = Preprocessor.builtin_includes;
@@ -110,10 +110,11 @@ pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void
     // Syntax 10-1 closes it over fifteen KEYWORDS, and §2.8.2 makes an escaped
     // identifier never a keyword.
     const disc = r.escapedIdent() orelse r.ident() orelse "";
-    const qual = if (disc.len == 0) "" else r.ident() orelse "";
-    if (qual.len != 0 and !qualifiers.has(qual)) {
-        var b = pp.failWith(pp.spanAt(off + r.i - qual.len, off + r.i), .E0127);
-        b.msg("`{s}` is not a qualifier", .{qual});
+    const word = if (disc.len == 0) "" else r.ident() orelse "";
+    const qual = std.meta.stringToEnum(Qualifier, word);
+    if (word.len != 0 and qual == null) {
+        var b = pp.failWith(pp.spanAt(off + r.i - word.len, off + r.i), .E0127);
+        b.msg("`{s}` is not a qualifier", .{word});
         b.note("Syntax 10-1 allows one of: {s}", .{"integer, real, reg, wreal, wire, tri, wand, triand, wor, trior, trireg, tri0, tri1, supply0, supply1"});
         try b.emit();
         return error.PreprocessFailed;
