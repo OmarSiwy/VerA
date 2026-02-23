@@ -1016,3 +1016,11 @@ test "a span inside a macro expansion resolves to the invocation site" {
     const after = bag.map.resolve(@intCast(std.mem.indexOf(u8, out, "+ 1").?));
     try testing.expectEqualStrings("+ 1;\n", src[after.offset..]);
 }
+
+test "IEEE 1364 §19.3.1: an escaped-identifier actual keeps its terminator" {
+    // §2.8.1: white space ends an escaped identifier. `macroArgs` trims the
+    // actual, so substitution puts one space back after it.
+    try expectPreserved("`define ID(A) (A)\n`ID(\\a.b )\n", &.{"(\\a.b )"}, &.{});
+    // A string's escape sequence is not an escaped identifier.
+    try expectPreserved("`define ID(A) (A)\n`ID(\"x\\n\")\n", &.{"(\"x\\n\")"}, &.{});
+}
