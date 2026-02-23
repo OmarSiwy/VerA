@@ -625,34 +625,6 @@ pub fn isKeyword(tag: Tag) bool {
     return @intFromEnum(tag) >= @intFromEnum(Tag.first_keyword);
 }
 
-/// LRM §3.5 / §6.5 port direction.
-pub fn isPortDirection(tag: Tag) bool {
-    return switch (tag) {
-        .kw_input, .kw_output, .kw_inout => true,
-        else => false,
-    };
-}
-
-/// LRM §3.7 / annex A.2.1.3 net type (optional prefix on a discipline decl).
-pub fn isNetType(tag: Tag) bool {
-    return switch (tag) {
-        .kw_wire,
-        .kw_tri,
-        .kw_tri0,
-        .kw_tri1,
-        .kw_triand,
-        .kw_trior,
-        .kw_trireg,
-        .kw_wand,
-        .kw_wor,
-        .kw_uwire,
-        .kw_supply0,
-        .kw_supply1,
-        => true,
-        else => false,
-    };
-}
-
 /// LRM §4.3.2/§4.3.3 — built-in math functions. EXACTLY annex A.8.2
 /// `analog_built_in_function_name` (26 names); the parser turns these into
 /// `Ast.ExprTag.builtin_call`. These are the tags whose domains `proof.zig`

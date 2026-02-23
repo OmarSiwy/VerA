@@ -287,7 +287,7 @@ pub fn nameIn(comptime T: type, decls: []const T, name: Ast.StrId) bool {
 /// §6.5.2 body port declaration: it re-declares a header port's direction
 /// and discipline, it does not introduce a new terminal.
 pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
-    const dir = parse_module.portDirection(self.peek());
+    const dir = parse_module.portDirection(self.peek()).?;
     const dir_tok = self.pos;
     self.pos += 1;
     // A.2.1.2's `[ net_type | wreal ]`, which used to be eaten and dropped.
@@ -483,10 +483,12 @@ pub fn constIndex(self: *Parser, e: Ast.ExprId) ?i64 {
     };
 }
 
-/// A.2.2.1 net_type keyword -> `Ast.NetKind`. Anything else is `.wire`,
-/// which is what a declaration naming no net type resolves as (§7.9).
-pub fn netKind(tag: token.Tag) Ast.NetKind {
+/// A.2.2.1 net_type keyword -> `Ast.NetKind`, null for a token that is not
+/// one. A declaration naming no net type resolves as `.wire` (§7.9); that
+/// default is the caller's, not a spelling's.
+pub fn netKind(tag: token.Tag) ?Ast.NetKind {
     return switch (tag) {
+        .kw_wire => .wire,
         .kw_tri => .tri,
         .kw_tri0 => .tri0,
         .kw_tri1 => .tri1,
@@ -498,7 +500,7 @@ pub fn netKind(tag: token.Tag) Ast.NetKind {
         .kw_uwire => .uwire,
         .kw_supply0 => .supply0,
         .kw_supply1 => .supply1,
-        else => .wire,
+        else => null,
     };
 }
 

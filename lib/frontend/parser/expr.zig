@@ -48,8 +48,9 @@ pub fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
             });
             continue;
         }
-        const prec = binopPrec(t);
-        if (prec == 0 or prec < min_prec) return lhs;
+        const op = binOp(t) orelse return lhs;
+        const prec = binopPrec(op);
+        if (prec < min_prec) return lhs;
         const tok = self.pos;
         self.pos += 1;
         try self.skipAttributes(); // A.8.3 `binary_operator { attribute_instance }`
@@ -64,7 +65,7 @@ pub fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
             .main_tok = tok,
             .lhs = lhs,
             .rhs = rhs,
-            .extra = @intFromEnum(binOp(t)),
+            .extra = @intFromEnum(op),
         });
     }
 }
@@ -549,30 +550,29 @@ pub fn parseCallArgs(self: *Parser) Error![]const Ast.ExprId {
 }
 
 /// Operator precedence. LRM §4.2.2 Table 4-3, highest binds tightest.
-/// 0 = not a binary operator.
-pub fn binopPrec(tag: token.Tag) u8 {
-    return switch (tag) {
-        .star_star => 12,
-        .star, .slash, .percent => 11,
-        .plus, .minus => 10,
-        .lt_lt, .gt_gt, .lt_lt_lt, .gt_gt_gt => 9,
-        .lt, .lt_eq, .gt, .gt_eq => 8,
-        .eq_eq, .bang_eq, .eq_eq_eq, .bang_eq_eq => 7,
-        .amp => 6,
-        .caret, .caret_tilde, .tilde_caret => 5,
-        .pipe => 4,
-        .amp_amp => 3,
-        .pipe_pipe => 2,
-        else => 0,
+pub fn binopPrec(op: Ast.BinaryOp) u8 {
+    return switch (op) {
+        .pow => 12,
+        .mul, .div, .mod => 11,
+        .add, .sub => 10,
+        .shl, .shr, .ashl, .ashr => 9,
+        .lt, .le, .gt, .ge => 8,
+        .eq, .neq, .case_eq, .case_neq => 7,
+        .bit_and => 6,
+        .bit_xor, .bit_xnor => 5,
+        .bit_or => 4,
+        .logical_and => 3,
+        .logical_or => 2,
     };
 }
 
 /// §4.2.12 `?:` sits below every binary operator (Table 4-3, last row).
 pub const prec_ternary: u8 = 1;
 
-/// A.8.6 binary_operator → `Ast.BinaryOp`. `===`/`!==`/`<<<`/`>>>` are
-/// mapped, not rejected: annex C.5 rejection is lowering's message.
-pub fn binOp(tag: token.Tag) Ast.BinaryOp {
+/// A.8.6 binary_operator → `Ast.BinaryOp`, null for a token that is not one.
+/// `===`/`!==`/`<<<`/`>>>` are mapped, not rejected: annex C.5 rejection is
+/// lowering's message.
+pub fn binOp(tag: token.Tag) ?Ast.BinaryOp {
     return switch (tag) {
         .plus => .add,
         .minus => .sub,
@@ -598,7 +598,7 @@ pub fn binOp(tag: token.Tag) Ast.BinaryOp {
         .gt_gt => .shr,
         .lt_lt_lt => .ashl,
         .gt_gt_gt => .ashr,
-        else => unreachable,
+        else => null,
     };
 }
 
