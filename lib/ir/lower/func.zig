@@ -165,18 +165,8 @@ pub fn scanCallSitesExpr(
             break;
         };
     }
-    switch (tag) {
-        // Every tag whose `extra` is an ExprId list; the rest park a literal, an
-        // opcode or a StrId list there, which `args` must not be handed.
-        .call, .builtin_call, .sys_call, .filter_call, .noise_call, .concat, .assign_pattern, .event_function => {
-            for (ex.args(e)) |a| try scanCallSitesExpr(self, a, limits, fns, out);
-        },
-        .ternary => try scanCallSitesExpr(self, ex.ternaryElse(e), limits, fns, out),
-        else => {},
-    }
-    // `lhs`/`rhs` are `.none` on every tag that does not use them.
-    try scanCallSitesExpr(self, ex.lhs(e), limits, fns, out);
-    try scanCallSitesExpr(self, ex.rhs(e), limits, fns, out);
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| try scanCallSitesExpr(self, c, limits, fns, out);
 }
 
 pub fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {

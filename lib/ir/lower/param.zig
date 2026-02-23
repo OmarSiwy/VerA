@@ -114,9 +114,8 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
 /// operators, small-signal sources and event functions are state reads by
 /// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
 /// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
-/// before the solve and are left to the ordinary paths. Same walk shape as
-/// `scanCallSitesExpr`: list-carrying tags recurse `args`, the ternary's third
-/// operand lives in `extra`, and `lhs`/`rhs` are `.none` wherever unused.
+/// before the solve and are left to the ordinary paths. Every other tag is
+/// searched through its `children`, first in source order.
 pub fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
     if (e == .none) return null;
     const ex = &self.file.exprs;
@@ -129,17 +128,11 @@ pub fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
             const n = self.file.str(ex.strOf(e));
             if (simStateName(n)) return n;
         },
-        else => {},
+        else => {}, // else: a state read only through its children
     }
-    switch (tag) {
-        .call, .builtin_call, .sys_call, .concat, .assign_pattern => {
-            for (ex.args(e)) |a| if (simStateInDefault(self, a)) |w| return w;
-        },
-        .ternary => if (simStateInDefault(self, ex.ternaryElse(e))) |w| return w,
-        else => {},
-    }
-    if (simStateInDefault(self, ex.lhs(e))) |w| return w;
-    return simStateInDefault(self, ex.rhs(e));
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (simStateInDefault(self, c)) |w| return w;
+    return null;
 }
 
 /// The `$` (and `analysis`) names whose value belongs to a solve: time, the
@@ -889,25 +882,22 @@ pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
             for (b.body) |s| try scanHeld(self, s, in_event);
             if (named) _ = self.held_frames.pop();
         },
-        .if_stmt => |s| {
-            try scanHeld(self, s.then_s, in_event);
-            try scanHeld(self, s.else_s, in_event);
-        },
-        .case_stmt => |s| for (s.arms) |arm| try scanHeld(self, arm.body, in_event),
-        .for_stmt => |s| {
-            try scanHeld(self, s.init, in_event);
-            try scanHeld(self, s.step, in_event);
-            try scanHeld(self, s.body, in_event);
-        },
-        .while_stmt => |s| try scanHeld(self, s.body, in_event),
-        .repeat_stmt => |s| try scanHeld(self, s.body, in_event),
         // §5.10 forbids nesting, so `true` is never re-entered; lowering
         // diagnoses that (E0703) and this walk does not need to.
         .event_control => |s| try scanHeld(self, s.body, true),
-        // No child statement; their writes were collected above.
-        .assign, .sys_task, .contribute, .indirect, .jump, .empty, .event_trigger, .disable => {},
+        // The rest: only their child statements, whose writes the walk collects.
+        else => try self.file.stmtEdges(id, Held{ .l = self, .in_event = in_event }), // else: stmtEdges is exhaustive
     }
 }
+
+const Held = struct {
+    l: *Lower,
+    in_event: bool,
+    pub fn expr(_: Held, _: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {}
+    pub fn stmt(h: Held, s: Ast.StmtId) Oom!void {
+        try scanHeld(h.l, s, h.in_event);
+    }
+};
 
 pub fn zeroOf(ty: Ty) Mir.Value {
     return switch (ty) {
