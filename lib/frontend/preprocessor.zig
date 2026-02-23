@@ -127,7 +127,7 @@ pub const Directive = enum {
     @"else", // IEEE 1364
     endif, // IEEE 1364
     include, // IEEE 1364
-    resetall, // IEEE 1364 — clears user macros (predefined ones survive)
+    resetall, // IEEE 1364 §19.6 — directive state only; §19.3 keeps macros
     keywords, // §10.6 — emitted verbatim, handled by the parser
     default_discipline, // §10.2 — parsed here, applied by discipline resolution
     default_transition, // §10.3 — parsed here, applied by §4.5.8 codegen
@@ -872,12 +872,8 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         .undef => try pp_macro.removeDefine(pp, text[j..end], at, j),
         .include => try pp_directive.handleInclude(pp, text[j..end], at, j),
         .resetall => {
-            var it = pp.macros.iterator();
-            var dead: std.ArrayList([]const u8) = .empty;
-            while (it.next()) |e| {
-                if (!e.value_ptr.predefined) try dead.append(pp.arena, e.key_ptr.*);
-            }
-            for (dead.items) |k| _ = pp.macros.remove(k);
+            // IEEE 1364 §19.3: "The text macro facility is not affected by the
+            // compiler directive `resetall." Macros are left alone.
             // §10.2 opens its reset sentence with "In addition to `resetall",
             // which makes the global reset the second way to withdraw the
             // default discipline. An empty `discipline` is that withdrawal.
