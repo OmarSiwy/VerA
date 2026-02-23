@@ -197,20 +197,27 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     try b.aliasparams.appendSlice(self.arena, gb.aliasparams.items);
     try b.nets.appendSlice(self.arena, gb.nets.items);
     try b.branches.appendSlice(self.arena, gb.branches.items);
-    // §6.6.1 an instance inside a generate construct is an instance of the
-    // module: §6.6 gives the region no scope, and the unroll already named
-    // the block. It rides up with the nets for the same reason they do.
-    try b.instances.appendSlice(self.arena, gb.instances.items);
-    // §6.3.1 the same reasoning: a defparam names its target by a path that
-    // does not mention the generate block (VerA has no generate scope), so
-    // it means the same thing at module level.
-    try b.defparams.appendSlice(self.arena, gb.defparams.items);
+    // §6.6: a generate block "brings the objects, behavioral constructs, and
+    // module instances within the block into existence" — a conditional
+    // generate for at most one block of its alternatives, a loop generate once
+    // per iteration. Hoisting a module instance, a defparam or an
+    // `initial`/`always` to the module elaborated it exactly once WHATEVER the
+    // scheme said: the unselected arm's instance was built too. The analog
+    // bodies above stay under the scheme; these have nowhere to go until a
+    // generate block keeps its own items for elaboration to select or unroll,
+    // so they are refused (E0235) instead of silently misplaced, and not
+    // hoisted, so an enclosing block does not report them again.
+    // ponytail: interim. Per-block items selected/unrolled in elaboration
+    // replace this refusal.
+    for (gb.instances.items) |inst| try self.report(inst.main_tok, .E0235, "a module instance", .{});
+    for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
+    for (gb.discrete.items) |d| {
+        // An analog-mode `always` was refused at its own token (`parseDiscrete`).
+        if (d.is_always and !self.digital and !self.in_connect_module) continue;
+        try self.report(d.main_tok, .E0235, "an `{s}` block", .{if (d.is_always) "always" else "initial"});
+    }
     try b.genvars.appendSlice(self.arena, gb.genvars.items);
     try b.functions.appendSlice(self.arena, gb.functions.items);
-    // §6.6 gives a generate block no scope, so an `initial`/`always` inside
-    // one is in the module's discrete context (§7.2.2) and its body's rules
-    // are the module's. It has already been refused at its own token.
-    try b.discrete.appendSlice(self.arena, gb.discrete.items);
     // A nested generate construct's block names are declarations of the
     // scope they sit in and this one is not it — §6.6.2's rule is about "the
     // same scope", and VerA has no generate scope to hold them, so they ride
