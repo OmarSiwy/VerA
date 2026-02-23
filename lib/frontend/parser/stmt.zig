@@ -35,7 +35,7 @@ const found = Parser.found;
 /// reported, and `recoverStatement` is never involved.
 pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
     if (!self.digital and self.peek() == .semicolon)
-        _ = self.failAt(self.pos, .E0219, "", .{}) catch {};
+        try self.report(self.pos, .E0219, "", .{});
     return parseStmt(self);
 }
 
@@ -334,7 +334,7 @@ pub fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
         // derivation — annex G Table G.2 item 13 says it in prose
         // ("without arguments should not have parenthesis").
         if (self.peek() == .rparen)
-            _ = self.failAt(self.pos, .E0220, "after `{s}`", .{@tagName(tag)[6..]}) catch {};
+            try self.report(self.pos, .E0220, "after `{s}`", .{@tagName(tag)[6..]});
         if (self.peek() != .rparen) while (true) {
             const s = try self.expect(.string_literal);
             try names.append(self.arena, try parse_expr.internString(self, s));

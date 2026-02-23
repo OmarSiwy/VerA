@@ -146,7 +146,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
                 };
             },
             else => {
-                _ = self.failAt(self.pos, .E0201, "`{s}`", .{self.found(self.pos)}) catch {};
+                try self.report(self.pos, .E0201, "`{s}`", .{self.found(self.pos)});
                 recoverTopLevel(self, before);
             },
         }
