@@ -263,6 +263,12 @@ test "IEEE 1364 §19.5: only white space or a comment follows an `include" {
     testing.allocator.free(try runTest("`include \"constants.vams\" // why\n`include \"constants.vams\" /* why */\n"));
 }
 
+test "§2.8: a macro name does not start with $" {
+    try expectFail("`define $X 1\n", .E0109);
+    // Escaped, it is an identifier (§2.8.1) and a legal name.
+    try expectPreserved("`define \\$X 1\n`\\$X \n", &.{"1"}, &.{});
+}
+
 test "IEEE 1364 §19.3.1: a compiler directive is not a macro name" {
     try expectFail("`define include 1\n", .E0143);
     try expectFail("`define __LINE__ 7\n", .E0143);
