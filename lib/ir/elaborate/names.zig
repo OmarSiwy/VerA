@@ -16,12 +16,11 @@ const Unit = Flatten.Unit;
 
 // ---- names ------------------------------------------------------------
 
-/// `path ++ local`, interned, and recorded in the §6.7 path table.
+/// `path ++ local`, interned. The flat name IS the §6.7 path, so the path
+/// table (`Design.names`) needs no row for it.
 pub fn join(self: *Flatten, path: []const u8, local: Ast.StrId) Error!Ast.StrId {
     const s = try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(local) });
-    const id = try self.ctx.file.intern(self.ctx.arena, s);
-    try self.names.put(self.ctx.arena, s, s);
-    return id;
+    return self.ctx.file.intern(self.ctx.arena, s);
 }
 
 pub fn bind(self: *Flatten, unit: *Unit, path: []const u8, local: Ast.StrId) Error!void {
