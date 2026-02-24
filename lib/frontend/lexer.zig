@@ -112,7 +112,7 @@ pub const Lexer = struct {
         // unterminated block comment is the one case that yields a token.
         while (self.pos < self.src.len) {
             const c = self.src[self.pos];
-            if (std.ascii.isWhitespace(c)) { // §2.3: space, tab, newline, formfeed
+            if (isSpace(c)) {
                 self.pos += 1;
                 continue;
             }
@@ -192,7 +192,7 @@ pub const Lexer = struct {
         // `*_base`s), not to the concatenation of the three.
         {
             var i = self.pos;
-            while (i < self.src.len and std.ascii.isWhitespace(self.src[i])) i += 1;
+            while (i < self.src.len and isSpace(self.src[i])) i += 1;
             if (i < self.src.len and self.src[i] == '\'') {
                 const save = self.pos;
                 self.pos = i;
@@ -262,7 +262,7 @@ pub const Lexer = struct {
         };
         i += 1;
         const after_base = i;
-        while (i < self.src.len and std.ascii.isWhitespace(self.src[i])) i += 1;
+        while (i < self.src.len and isSpace(self.src[i])) i += 1;
         const digits = i;
         while (i < self.src.len and isBasedDigit(self.src[i], radix)) i += 1;
         // §2.6.1: the base format must be followed by an unsigned number. With
@@ -432,6 +432,14 @@ pub const Lexer = struct {
         return false;
     }
 };
+
+/// §2.3: "White space shall contain the characters for spaces, tabs,
+/// newlines, and formfeeds." Carriage return is added so CRLF source reads as
+/// LF source; vertical tab, which `std.ascii.isWhitespace` also admits, is not
+/// white space and lexes as `.invalid`. The preprocessor uses this one too.
+pub fn isSpace(c: u8) bool {
+    return c == ' ' or c == '\t' or c == '\n' or c == '\r' or c == 0x0c;
+}
 
 fn isIdentChar(c: u8) bool {
     // §2.8: letters, digits, `$` and `_` (only the first character is restricted).

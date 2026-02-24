@@ -1059,9 +1059,7 @@ pub fn indexOfString(haystack: []const []const u8, needle: []const u8) ?usize {
     return null;
 }
 
-pub fn isSpace(c: u8) bool {
-    return c == ' ' or c == '\t' or c == '\r' or c == '\n' or c == 0x0c;
-}
+pub const isSpace = @import("lexer.zig").isSpace;
 pub fn isIdentStart(c: u8) bool {
     // ponytail: stdlib ASCII classes; `_` and `$` are Verilog's extensions.
     return std.ascii.isAlphabetic(c) or c == '_' or c == '$';
