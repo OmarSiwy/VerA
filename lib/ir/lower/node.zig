@@ -21,12 +21,31 @@ const Preprocessor = @import("frontend").Preprocessor;
 const assert = Lower.assert;
 const Oom = Lower.Oom;
 const ground = Lower.ground;
+const unnamed_branch = Lower.unnamed_branch;
 const NodeKind = Lower.NodeKind;
 const VecRange = Lower.VecRange;
 const tokStart = Lower.tokStart;
 const err = Lower.err;
 const errWith = Lower.errWith;
 const emit = Lower.emit;
+
+/// This file's private state on `Lower` (`Lower.node_state`).
+pub const State = struct {
+    /// Last `BranchInfo.id` handed out. Starts at `unnamed_branch`, so the first
+    /// declared branch is 1 and no named branch can ever be mistaken for §5.4.1
+    /// Example 2's single implicit branch of a node pair.
+    last_branch_id: u32 = unnamed_branch,
+    /// Every spelling handed to `node_order`, so `appendNode` can keep them unique.
+    /// This is NOT an identity table — two different unknowns may want one spelling
+    /// (`uniqueSpelling` names both ways that happens); it exists because the
+    /// emitted `U` enum has one member per slot and two members cannot share a name.
+    /// Heap, and one entry per `node_order` slot: the only bound on that count is
+    /// the source, since |U| ≤ 256 is enforced by `codegen.emitTopology` AFTER
+    /// lowering has built the table.
+    spellings: std.StringHashMapUnmanaged(void) = .empty,
+    /// Deduped probe Value per node_order slot; `.undef` = not probed yet.
+    probe_cache: std.ArrayList(Mir.Value) = .empty,
+};
 
 // ---- §1.3.1 nodes ----------------------------------------------------------
 
@@ -224,12 +243,12 @@ pub fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: 
     const idx: u16 = @intCast(self.node_order.items.len);
     assert(idx != ground);
     const spelling = try uniqueSpelling(self, name);
-    try self.spellings.put(self.arena, spelling, {});
+    try self.node_state.spellings.put(self.arena, spelling, {});
     try self.node_order.append(self.arena, spelling);
     try self.node_kind.append(self.arena, kind);
     try self.node_disciplines.append(self.arena, discipline);
     try self.node_dir.append(self.arena, .unspecified);
-    try self.probe_cache.append(self.arena, .undef);
+    try self.node_state.probe_cache.append(self.arena, .undef);
     return idx;
 }
 
@@ -254,7 +273,7 @@ pub fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: 
 /// nothing else. A fixture that has to spell one of these writes the member as
 /// `emitTopology` prints it — the same rule as every other unknown.
 pub fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
-    if (!self.spellings.contains(name)) return name;
+    if (!self.node_state.spellings.contains(name)) return name;
     // The candidates that LOSE are hashed and thrown away, so they are built on
     // the stack and only the winner reaches the arena — `elemKey`'s trick, with
     // the same spill for a name too wide for the buffer.
@@ -263,7 +282,7 @@ pub fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
     while (true) : (k += 1) {
         const cand = std.fmt.bufPrint(&buf, "{s}#{d}", .{ name, k }) catch
             try std.fmt.allocPrint(self.arena, "{s}#{d}", .{ name, k });
-        if (!self.spellings.contains(cand)) return self.arena.dupe(u8, cand);
+        if (!self.node_state.spellings.contains(cand)) return self.arena.dupe(u8, cand);
     }
 }
 
@@ -519,17 +538,17 @@ pub fn nodeName(self: *const Lower, idx: u16) []const u8 {
 /// included). Ids are per-module and never reused; nothing outside lowering sees
 /// them, so they need no stable spelling.
 pub fn newBranchId(self: *Lower) u32 {
-    self.last_branch_id += 1;
-    return self.last_branch_id;
+    self.node_state.last_branch_id += 1;
+    return self.node_state.last_branch_id;
 }
 
 /// §4.4 potential probe of one node. Deduped so a node is one `block_param`
 /// (codegen's `x[idx]`); ground is the literal 0 (§1.3.1.1).
 pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
     if (idx == ground) return .f_zero;
-    if (self.probe_cache.items[idx] != .undef) return self.probe_cache.items[idx];
+    if (self.node_state.probe_cache.items[idx] != .undef) return self.node_state.probe_cache.items[idx];
     const v = try self.mir.addBlockParam(self.arena, idx);
-    self.probe_cache.items[idx] = v;
+    self.node_state.probe_cache.items[idx] = v;
     return v;
 }
 

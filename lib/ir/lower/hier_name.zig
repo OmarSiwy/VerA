@@ -27,6 +27,22 @@ const emit = Lower.emit;
 const call = Lower.call;
 const astTy = Lower.astTy;
 
+/// This file's private state on `Lower` (`Lower.hier_name_state`).
+pub const State = struct {
+    /// §9.20 the analog_net_reference of every alias call so far → the unknown that
+    /// net was DECLARED with, before any alias moved it.
+    ///
+    /// Two rules need this and neither can be answered from `node_voltages` once an
+    /// alias has been applied. The relation between two calls — "It shall be an
+    /// error for the hierarchical_reference_string to reference a node that is used
+    /// as an analog_net_reference in ANOTHER ... call" — is the key set. And the
+    /// clause's ban on a PORT as the analog_net_reference is about the net's own
+    /// declaration: once `n1` has been aliased onto a port, `node_voltages` says it
+    /// IS one, and the SECOND call of the last-writer rule would be refused for
+    /// something the source never wrote.
+    alias_home: std.StringHashMapUnmanaged(u16) = .empty,
+};
+
 /// §9.20 one resolved `hierarchical_reference_string`: the unknown it names,
 /// and whether the name was a node of the flat design itself (`direct`) rather
 /// than a child port flattening bound to one.
@@ -99,7 +115,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
             // The net's own unknown: §9.20's last-writer rule means `rname` may
             // already BE an alias, and every rule below is about the
             // declaration, not about where the previous call pointed it.
-            const idx = self.alias_home.get(rname) orelse self.node_voltages.get(rname);
+            const idx = self.hier_name_state.alias_home.get(rname) orelse self.node_voltages.get(rname);
             if (idx == null or idx.? == ground or self.vars.contains(rname)) {
                 try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
                 return .refused;
@@ -152,14 +168,14 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
     // `$root.top.a` names something this module does not declare.
     const ref_name = self.file.str(ex.strOf(args[0]));
     if (std.mem.indexOfScalar(u8, target, '.') == null and !std.mem.eql(u8, target, ref_name)) {
-        if (self.alias_home.contains(target)) {
+        if (self.hier_name_state.alias_home.contains(target)) {
             try self.err(self.file.exprs.mainTok(e), .E0812, "`\"{s}\"` is already the analog_net_reference of another $analog_node_alias/$analog_port_alias call", .{target});
             return .refused;
         }
     }
     // First call for this net records its DECLARED unknown; a later one must
     // not overwrite it with the alias the earlier call installed.
-    if (!self.alias_home.contains(ref_name)) try self.alias_home.put(self.arena, ref_name, local);
+    if (!self.hier_name_state.alias_home.contains(ref_name)) try self.hier_name_state.alias_home.put(self.arena, ref_name, local);
     return bindAlias(self, name, ref_name, local, target);
 }
 

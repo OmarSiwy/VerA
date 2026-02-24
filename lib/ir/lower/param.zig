@@ -31,6 +31,28 @@ const toInt = Lower.toInt;
 const coerceTo = Lower.coerceTo;
 const astTy = Lower.astTy;
 
+/// This file's private state on `Lower` (`Lower.param_state`).
+pub const State = struct {
+    /// Variables `markHeldVars` found assigned under an `@(...)`, collected BEFORE
+    /// the module's variables are declared. Empty for a module with no event
+    /// control.
+    ///
+    /// Keyed on §5.3.2's "unique location", i.e. the pair (scope, name) spelled as
+    /// a dotted path: a module variable is its bare name, a named block's local is
+    /// `<label>.<name>` (`<outer>.<inner>.<name>` when nested). A bare name would
+    /// make `lo.n`, `hi.n` and the module's own `n` one slot.
+    held_names: std.StringHashMapUnmanaged(void) = .empty,
+    /// The enclosing NAMED blocks during `scanHeld`, so a target resolves to the
+    /// nearest declaration of it — a module variable assigned from inside a block
+    /// still keys bare, because the block does not declare it.
+    held_frames: std.ArrayList(HeldFrame) = .empty,
+};
+
+/// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
+/// its locals are keyed under, and the declarations that say which names those
+/// are.
+const HeldFrame = struct { prefix: []const u8, vars: []const Ast.VarDecl };
+
 // ---------------------------------------------------------------------------
 // Class 3 — parameters (LRM §3.4) and variables (§3.2)
 // ---------------------------------------------------------------------------
@@ -728,7 +750,7 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
     // evaluation anyway), so a persistent slot for one would be storage
     // nothing can observe.
     const hold = (scope == .module or prefix.len != 0) and ty != .string and
-        self.held_names.contains(held_key);
+        self.param_state.held_names.contains(held_key);
 
     if (decl.dims.len != 0) {
         const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
@@ -827,7 +849,7 @@ pub fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, pla
 /// any of them is declared.
 pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.analog) |blk| try scanHeld(self, blk.body, false);
-    self.held_frames.clearRetainingCapacity();
+    self.param_state.held_frames.clearRetainingCapacity();
 }
 
 /// §5.3.2: "The block names give a means of uniquely identifying all variables
@@ -836,10 +858,10 @@ pub fn markHeldVars(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// innermost named block and falls back to the bare (module-scope) name — a
 /// module variable assigned from inside a block is still the module's.
 pub fn heldKey(self: *Lower, name: []const u8) Oom![]const u8 {
-    var i = self.held_frames.items.len;
+    var i = self.param_state.held_frames.items.len;
     while (i > 0) {
         i -= 1;
-        const f = self.held_frames.items[i];
+        const f = self.param_state.held_frames.items[i];
         for (f.vars) |v| {
             if (!self.file.strings.eql(v.name, name)) continue;
             return std.fmt.allocPrint(self.arena, "{s}{s}", .{ f.prefix, name });
@@ -864,7 +886,7 @@ pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
         for (writes.items) |w| {
             const t = self.file.lvalueBase(w);
             if (t == .none) continue;
-            try self.held_names.put(self.arena, try heldKey(self, self.file.str(self.file.exprs.strOf(t))), {});
+            try self.param_state.held_names.put(self.arena, try heldKey(self, self.file.str(self.file.exprs.strOf(t))), {});
         }
     }
     switch (self.file.stmt(id)) {
@@ -873,14 +895,14 @@ pub fn scanHeld(self: *Lower, id: Ast.StmtId, in_event: bool) Oom!void {
             // opens a frame; an unnamed `begin`'s declarations are ordinary.
             const named = b.name != .none;
             if (named) {
-                const outer = if (self.held_frames.getLastOrNull()) |f| f.prefix else "";
-                try self.held_frames.append(self.arena, .{
+                const outer = if (self.param_state.held_frames.getLastOrNull()) |f| f.prefix else "";
+                try self.param_state.held_frames.append(self.arena, .{
                     .prefix = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer, self.file.str(b.name) }),
                     .vars = b.vars,
                 });
             }
             for (b.body) |s| try scanHeld(self, s, in_event);
-            if (named) _ = self.held_frames.pop();
+            if (named) _ = self.param_state.held_frames.pop();
         },
         // §5.10 forbids nesting, so `true` is never re-entered; lowering
         // diagnoses that (E0703) and this walk does not need to.

@@ -23,6 +23,12 @@ const poison = Lower.poison;
 const call = Lower.call;
 const toReal = Lower.toReal;
 
+/// This file's private state on `Lower` (`Lower.table_model_state`).
+pub const State = struct {
+    /// Source identity survives repeated analog-function inlining.
+    table_sources: std.ArrayList(Ast.ExprId) = .empty,
+};
+
 // ---- §9.21 $table_model -----------------------------------------------------
 
 /// §9.21 Syntax 9-16, rewritten into ONE self-describing call:
@@ -190,8 +196,8 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const dep = nd;
 
     const site = if (cols.items.len == 0) 0 else blk: {
-        if (std.mem.indexOfScalar(Ast.ExprId, self.table_sources.items, e)) |existing| break :blk existing + 1;
-        try self.table_sources.append(self.arena, e);
+        if (std.mem.indexOfScalar(Ast.ExprId, self.table_model_state.table_sources.items, e)) |existing| break :blk existing + 1;
+        try self.table_model_state.table_sources.append(self.arena, e);
         try self.table_samples.append(self.arena, @intCast(rows.len));
         break :blk self.table_samples.items.len;
     };

@@ -21,7 +21,7 @@ const assert = Lower.assert;
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
-const GenvarBind = Lower.GenvarBind;
+const Const = Lower.Const;
 const VarSlot = Lower.VarSlot;
 const err = Lower.err;
 const errWith = Lower.errWith;
@@ -32,6 +32,51 @@ const toReal = Lower.toReal;
 const toInt = Lower.toInt;
 const chainCondDisplay = Lower.chainCondDisplay;
 const kernelCtlPlace = Lower.kernelCtlPlace;
+
+/// This file's private state on `Lower` (`Lower.event_state`).
+pub const State = struct {
+    /// §9.4.1 display statements whose CALL is created at the end of the analog
+    /// block (`finishDisplays`), in source order — see `queueDisplay` for the
+    /// clause reading. Parallel-ish to `displays`: each entry names the
+    /// placeholder `displays` row whose `.val` it fills.
+    deferred_displays: std.ArrayList(DeferredDisplay) = .empty,
+    /// §9.4.1 `$monitor`/`$fmonitor` statements lowered so far. Each one's ordinal
+    /// is the key its registration (`$monitor$arm`) and its end-of-step report
+    /// share — see `lower_event.armMonitor`.
+    monitor_sites: u32 = 0,
+};
+
+/// One §9.4/§9.7 task whose `call` is minted at the END of the analog block —
+/// every unconditional display-family statement takes this route (see
+/// `queueDisplay`). Holds what the statement position knew and the end of the
+/// block will not: the at-statement operand values and the genvar bindings.
+const DeferredDisplay = struct {
+    name: []const u8,
+    tok: u32,
+    /// The original argument list, `.none` slots included (A.6.9).
+    args: []const Ast.ExprId,
+    /// Parallel to `args`. Non-null = the operand's value, captured AT THE
+    /// STATEMENT (§5.6.1.2 sequential semantics for everything that is not
+    /// converged simulation data — a variable printed then reassigned shows
+    /// its at-statement value). Null = the operand reads a branch flow and is
+    /// lowered at the end of the block instead, against the converged
+    /// retention state (§9.4.1/§5.4.2.2).
+    pre: []const ?TypedValue,
+    /// §5.9.3 genvar bindings live at the statement, re-established around the
+    /// end-of-block lowering so `I(pair[k])` in an unrolled body still folds.
+    genvars: []const GenvarBind,
+    /// `Ast.AnalogBlock.unit` of the block this statement was written in.
+    /// Re-established around the end-of-block lowering for the same reason
+    /// `genvars` is: `flowAccum` keys on it (§5.6.8.1's per-instance branch),
+    /// and by `finishDisplays` time `cur_unit` is whatever block lowered last.
+    unit: u32,
+    /// Index of the placeholder row in `displays` whose `.val` this fills.
+    display: u32,
+    /// §9.4.1 a `$monitor`/`$fmonitor` report: the site key, prepended to the
+    /// call's operands. Every operand of one is lowered at the end of the block.
+    monitor: ?Mir.Value = null,
+};
+const GenvarBind = struct { name: []const u8, c: Const };
 
 // ---------------------------------------------------------------------------
 // Class 7 — events (LRM §5.10)
@@ -367,7 +412,7 @@ pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
             g.* = .{ .name = gname, .c = self.consts.get(gname).? };
         genvars = gs;
     }
-    try self.deferred_displays.append(self.arena, .{
+    try self.event_state.deferred_displays.append(self.arena, .{
         .name = name,
         .tok = tok,
         .args = args,
@@ -417,8 +462,8 @@ pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
         self.uses_file_tasks = true;
         self.uses_str_tasks = true;
     }
-    const k = try self.mir.addIntConst(self.arena, self.monitor_sites);
-    self.monitor_sites += 1;
+    const k = try self.mir.addIntConst(self.arena, self.event_state.monitor_sites);
+    self.event_state.monitor_sites += 1;
     try self.chainCondDisplay(try self.call("$monitor$arm", &.{k}));
     return k;
 }
@@ -452,7 +497,7 @@ pub fn containsFlowRead(self: *const Lower, e: Ast.ExprId) bool {
 /// accumulator reads — so a `flowAccum` read here is the §5.6.1.3 end-of-cycle
 /// retention state, phis and all.
 pub fn lowerDeferredDisplays(self: *Lower) Oom!void {
-    for (self.deferred_displays.items) |dd| {
+    for (self.event_state.deferred_displays.items) |dd| {
         // Provenance: instructions minted here belong to the display
         // statement, not to whatever token the block ended on.
         self.mir.cur_tok = dd.tok;
