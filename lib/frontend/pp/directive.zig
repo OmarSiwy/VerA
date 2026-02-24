@@ -353,13 +353,18 @@ pub fn timeLiteral(r: *Rest) ?f64 {
     return decades[@intCast(mag + (units.get(unit) orelse return null) + 15)];
 }
 
-/// IEEE Std 1364 §19.7 `line <number> ["<file>"] [<level>], which §10.7 names
-/// as the way `__LINE__` (and possibly `__FILE__`) is remapped. The operand is
-/// the number of the line FOLLOWING the directive.
+/// IEEE Std 1364 §19.7 `line <number> "<file>" <level>, which §10.7 names as
+/// the way `__LINE__` (and possibly `__FILE__`) is remapped. The number is
+/// that of the line FOLLOWING the directive. "All parameters in the `line
+/// directive are required": the number "shall be a positive integer", the
+/// level "shall be 0, 1, or 2", and "only white space may appear on the same
+/// line".
 ///
-/// The level is accepted and dropped: it says whether the remap enters, leaves
+/// The level is checked and dropped: it says whether the remap enters, leaves
 /// or stays in a file, which only matters to a tool that reconstructs an
 /// include stack out of `line directives. VerA has the real one.
+/// ponytail: §19.7 also forbids a COMMENT on the line; comments are stripped
+/// before directives are read, so that one is not diagnosed.
 pub fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     r.skipSpace();
@@ -369,16 +374,25 @@ pub fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
         return pp.fail(pp.spanAt(off, off + r.s.len), .E0128, "", .{});
     const n = std.fmt.parseInt(u32, r.s[start..r.i], 10) catch
         return pp.fail(pp.spanAt(off + start, off + r.i), .E0128, "`{s}` does not fit a line number", .{r.s[start..r.i]});
+    if (n == 0) return pp.fail(pp.spanAt(off + start, off + r.i), .E0128, "the line number must be a positive integer", .{});
 
     r.skipSpace();
-    if (r.peek() == '"') {
-        const q = r.i + 1;
-        r.i = q;
-        while (r.i < r.s.len and r.s[r.i] != '"') r.i += 1;
-        if (r.i >= r.s.len)
-            return pp.fail(pp.spanAt(off + q - 1, off + r.i), .E0128, "unterminated file name", .{});
-        pp.file_override = r.s[q..r.i];
-    }
+    if (r.peek() != '"') return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0128, "the file name is missing", .{});
+    const q = r.i + 1;
+    r.i = q;
+    while (r.i < r.s.len and r.s[r.i] != '"') r.i += 1;
+    if (r.i >= r.s.len)
+        return pp.fail(pp.spanAt(off + q - 1, off + r.i), .E0128, "unterminated file name", .{});
+    const file = r.s[q..r.i];
+    r.i += 1;
+    r.skipSpace();
+    const level = r.i;
+    if (r.i >= r.s.len or r.s[r.i] < '0' or r.s[r.i] > '2')
+        return pp.fail(pp.spanAt(off + level, off + r.s.len), .E0128, "the level must be 0, 1 or 2", .{});
+    r.i += 1;
+    if (std.mem.trim(u8, r.s[r.i..], " \t\r\n").len != 0)
+        return pp.fail(pp.spanAt(off + level, off + r.s.len), .E0128, "`{s}` is not a level", .{std.mem.trim(u8, r.s[level..], " \t\r\n")});
+    pp.file_override = file;
 
     pp.line_from = pp.physicalLine(at) + 1;
     pp.line_to = n;
