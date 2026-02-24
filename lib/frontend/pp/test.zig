@@ -257,6 +257,14 @@ test "escaped identifiers reach `undef, the conditionals and `default_discipline
     try testing.expectEqualStrings("logic", defs[0].discipline);
 }
 
+test "IEEE 1364 §19.3.1: a compiler directive is not a macro name" {
+    try expectFail("`define include 1\n", .E0143);
+    try expectFail("`define __LINE__ 7\n", .E0143);
+    try expectFail("`define resetall\n", .E0143);
+    // A name that merely CONTAINS one is an ordinary macro.
+    try expectPreserved("`define includes 1\n`includes\n", &.{"1"}, &.{});
+}
+
 test "§10.4 undef, and IEEE 1364 conditionals" {
     try expectPreserved(
         "`define A\n`undef A\n`ifdef A\ntaken\n`else\nother\n`endif\n",

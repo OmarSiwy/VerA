@@ -36,6 +36,12 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
     // `ident` stays in the formal loop below.
     const name = r.escapedIdent() orelse r.ident() orelse
         return pp.fail(pp.spanAt(at, off), .E0109, "", .{});
+    // IEEE 1364 §19.3.1: "All compiler directives shall be considered
+    // predefined macro names; it shall be illegal to redefine a compiler
+    // directive as a macro name." §10.1 Table 10-1 is the list, and it names
+    // `__FILE__ and `__LINE__ too.
+    if (Preprocessor.directive_map.has(name) or std.mem.eql(u8, name, "__FILE__") or std.mem.eql(u8, name, "__LINE__"))
+        return pp.fail(pp.spanAt(off + r.i - name.len, off + r.i), .E0143, "`{s}` is a compiler directive", .{name});
 
     var m: Macro = .{ .body = "" };
     // The '(' of a formal argument list must touch the macro name (§10.4).
