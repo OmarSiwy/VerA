@@ -18,7 +18,6 @@ const Mir = @import("../mir.zig");
 const diag = @import("diag");
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
-const deinit = Lower.deinit;
 const err = Lower.err;
 const poison = Lower.poison;
 const call = Lower.call;

@@ -25,7 +25,6 @@ const TypedValue = Lower.TypedValue;
 const VarSlot = Lower.VarSlot;
 const ArrayInfo = Lower.ArrayInfo;
 const init = Lower.init;
-const deinit = Lower.deinit;
 const err = Lower.err;
 const errWith = Lower.errWith;
 const emit = Lower.emit;

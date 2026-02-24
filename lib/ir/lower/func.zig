@@ -21,7 +21,6 @@ const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
 const VarSlot = Lower.VarSlot;
 const init = Lower.init;
-const deinit = Lower.deinit;
 const tokenSpan = Lower.tokenSpan;
 const err = Lower.err;
 const errWith = Lower.errWith;
