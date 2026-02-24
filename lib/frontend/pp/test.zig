@@ -257,6 +257,12 @@ test "escaped identifiers reach `undef, the conditionals and `default_discipline
     try testing.expectEqualStrings("logic", defs[0].discipline);
 }
 
+test "IEEE 1364 §19.5: only white space or a comment follows an `include" {
+    try expectFail("`include \"constants.vams\" x\n", .E0144);
+    // The clause's own legal form: a comment after the name, either kind.
+    testing.allocator.free(try runTest("`include \"constants.vams\" // why\n`include \"constants.vams\" /* why */\n"));
+}
+
 test "IEEE 1364 §19.3.1: a compiler directive is not a macro name" {
     try expectFail("`define include 1\n", .E0143);
     try expectFail("`define __LINE__ 7\n", .E0143);
