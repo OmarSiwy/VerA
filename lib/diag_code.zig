@@ -352,6 +352,10 @@ pub const Code = enum(u16) {
     /// Numbered past the two nodeset codes above: both landed in this release
     /// and both had claimed E0365 in their own branch.
     E0367,
+    /// §4.2.1.1 an `integer` parameter whose default folds to an infinity or
+    /// a NaN: the conversion is "rounding the real number to the nearest
+    /// integer", and a non-finite real has none.
+    E0368,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -2850,6 +2854,28 @@ fn infoOf(c: Code) Info {
             \\implementation limitation, not an illegal Verilog-AMS expression.
             ,
         },
+        .E0368 => .{
+            .title = "real value with no integer conversion",
+            .lrm = "4.2.1.1",
+            .explain =
+            \\LRM 4.2.1.1: "Real numbers are converted to integers by rounding
+            \\the real number to the nearest integer". An infinity or a NaN has
+            \\no nearest integer, so the conversion has no result, and 3.4.1
+            \\makes an `integer` parameter's default go through exactly that
+            \\conversion: "the value is converted to the type of the parameter
+            \\(see 4.2.1.1)".
+            \\
+            \\There is no in-range stand-in either: 3.2 gives an integer the
+            \\range -2**31 to 2**31-1, so a saturated or wrapped value would be
+            \\a number the source never produced.
+            \\
+            \\    parameter integer n = 1.0/0.0;   // no value
+            \\    parameter real    r = 1.0/0.0;   // fine: +inf is a real
+            \\
+            \\Declare it `real`, or fix the expression that overflows.
+            ,
+        },
+
         .E0367 => .{
             .title = "implicit net under `default_nettype none",
             .lrm = "3.6.5",

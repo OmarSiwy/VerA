@@ -97,6 +97,11 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     if (decl.dims.len != 0) return lowerParamArray(self, decl, name);
 
     const folded = if (lower_constfold.constEval(self, decl.default)) |c| parameterConst(decl.ty, c) else null;
+    // §4.2.1.1 converts by "rounding the real number to the nearest integer",
+    // and an infinity or a NaN has none: `parameterConst` leaves such a value
+    // real, and it used to reach the card as i64's saturation value.
+    if (decl.ty == .integer) if (folded) |c| if (c == .real and !std.math.isFinite(c.real))
+        try self.err(decl.main_tok, .E0368, "`{s}` = {d}", .{ name, c.real });
     try checkParamType(self, decl, name, folded);
     // §3.4.2's OTHER half: "the parameter value shall be within the range". It
     // needs a value somebody supplied, and `is_override` is the only marker that
