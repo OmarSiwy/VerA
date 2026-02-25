@@ -686,7 +686,7 @@ pub const Flatten = struct {
                     try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(p.name) }),
                     self.ctx.file.str(bound),
                 );
-                try elab_resolve.resolveDiscipline(self, path, p, bound);
+                try elab_resolve.resolveDiscipline(self, path, p, bound, if (unit.primitive) null else conn.?.main_tok);
             } else {
                 // §6.2.2 "a blank port connection shall represent the situation
                 // where the port is not to be connected", and an omitted named

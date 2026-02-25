@@ -112,12 +112,27 @@ pub fn oocDiscipline(self: *Flatten, path: []const u8, local: Ast.StrId) Error!?
 /// else the post-pass is a no-op and first-wins IS the answer, which is
 /// what keeps every pre-`connectrules` fixture's behaviour bit-identical.
 ///
-/// TWO declared segments of one signal are still not JUDGED here: that is
-/// §3.11's Signal Connection Rule (compatible disciplines) and lowering
-/// owns it (E0902 for one net, two declarations). What the post-pass adds
-/// is only what F.2.1 4.b states over the multi-candidate list — resolve
-/// by statement, or unknown, or E0903.
-pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId) Error!void {
+/// §3.11's Signal Connection Rule IS judged here, at the one place both
+/// segments are still visible: "It shall be an error to connect two ports or
+/// nets of the same domain with incompatible disciplines" (§7.4.3 says it of
+/// a continuous port). After this function the port's discipline has been
+/// merged into `bound` and lowering sees one node. A segment of the OTHER
+/// domain is §7.4.4's connect-module question, not this rule's. What the
+/// post-pass adds is only what F.2.1 4.b states over the multi-candidate
+/// list — resolve by statement, or unknown, or E0903.
+///
+/// ponytail: each arriving segment is compared with the discipline the
+/// signal has SO FAR, not with every earlier segment. Compatibility is not
+/// transitive (a natureless discipline is compatible with two disciplines
+/// that are not compatible with each other), so a third segment can slip
+/// past a natureless second. Upgrade: compare against every entry of
+/// `segs` for the net.
+///
+/// `at` is the connection's token, or null for an Annex E primitive: its
+/// ports' `electrical` is the prelude's placeholder, and E.3.2 resolves the
+/// discipline from the attribute or the connected net instead, so there is
+/// no declaration to judge.
+pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: Ast.StrId, at: ?u32) Error!void {
     const disc = (try oocDiscipline(self, path, p.name)) orelse p.discipline;
     if (disc == .none) return;
     // F.2 step 4.b's raw material: this port's lower connection is a child
@@ -132,6 +147,15 @@ pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: A
     }
     const declared = self.disc_of.get(bound) orelse .none;
     if (declared != .none) {
+        const file = self.ctx.file;
+        if (at != null and discipline.isContinuous(file, declared) == discipline.isContinuous(file, disc)) {
+            if (discipline.disciplineConflict(file, declared, disc)) |why| {
+                try self.err(at.?, .E0355, "port `{s}{s}` is of discipline `{s}` and is connected to `{s}`, of discipline `{s}` ({s})", .{
+                    path, file.str(p.name), file.str(disc), file.str(bound), file.str(declared), why,
+                });
+                return;
+            }
+        }
         // §7.4.4.1, and it is the whole of the basic mode's rule: "At each
         // level of the hierarchy where continuous and discrete meet for an
         // undeclared net that net segment is declared continuous." The
