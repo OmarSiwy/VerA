@@ -11,6 +11,7 @@ const std = @import("std");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const Ast = @import("frontend").Ast;
+const discipline = @import("../lower/discipline.zig");
 const Error = elaborate.Error;
 const Unit = Flatten.Unit;
 
@@ -187,17 +188,7 @@ pub fn primitiveAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId) Ast.S
     const name = netRefName(self, net) orelse return access;
     const disc = self.disc_of.get(name) orelse .none;
     if (disc == .none) return access; // §3.6.5 implicit, or resolved later
-    const d = for (self.ctx.file.disciplines) |*x| {
-        if (x.name == disc) break x;
-    } else return access;
-    const nature = switch (which) {
-        .potential => d.potential,
-        .flow => d.flow,
-    };
-    if (nature == .none) return access;
-    const v = self.ctx.file.natureAttrExpr(nature, "access") orelse return access;
-    if (self.ctx.file.exprs.tag(v) != .ident) return access;
-    return self.ctx.file.exprs.strOf(v);
+    return discipline.accessOf(self.ctx.file, disc, which) orelse access;
 }
 
 /// §6.3.6's two automatic scaling rules, applied to one already-cloned
@@ -238,13 +229,8 @@ pub fn mfactorScale(
     if (self.unit.mfactor == .none) return null;
     const name = netRefName(self, net) orelse return null;
     const disc = self.disc_of.get(name) orelse return null;
-    const d = for (self.ctx.file.disciplines) |*x| {
-        if (x.name == disc) break x;
-    } else return null;
-    if (d.flow == .none) return null;
-    const v = self.ctx.file.natureAttrExpr(d.flow, "access") orelse return null;
-    if (self.ctx.file.exprs.tag(v) != .ident) return null;
-    if (self.ctx.file.exprs.strOf(v) != access) return null; // a potential
+    const flow = discipline.accessOf(self.ctx.file, disc, .flow) orelse return null;
+    if (flow != access) return null; // a potential
     return try self.ctx.file.exprs.add(self.ctx.arena, .{
         .tag = .binary,
         .main_tok = tok,

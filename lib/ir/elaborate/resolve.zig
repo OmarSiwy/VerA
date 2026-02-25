@@ -12,6 +12,7 @@ const std = @import("std");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
+const discipline = @import("../lower/discipline.zig");
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const Error = elaborate.Error;
@@ -52,26 +53,6 @@ pub fn noteDiscipline(self: *Flatten, name: Ast.StrId, disc: Ast.StrId) Error!vo
     if (disc == .none) return;
     const gop = try self.disc_of.getOrPut(self.ctx.arena, name);
     if (!gop.found_existing) gop.value_ptr.* = disc;
-}
-
-/// §3.6.2.2: is this discipline continuous?
-///
-/// `domain` is `.unspecified` unless the source wrote one, and the clause
-/// makes binding a nature the deciding property — a discipline with a
-/// potential or a flow is continuous whether or not it says so. Nothing in
-/// this file asked what domain a discipline was in before §7.4.4.1 needed
-/// it; `primitiveAccess` is the other site that resolves a name to a
-/// `DisciplineDecl`, and it scans the same way.
-pub fn isContinuous(self: *Flatten, disc: Ast.StrId) bool {
-    if (disc == .none) return false;
-    const d = for (self.ctx.file.disciplines) |*x| {
-        if (x.name == disc) break x;
-    } else return false;
-    return switch (d.domain) {
-        .continuous => true,
-        .discrete => false,
-        .unspecified => d.potential != .none or d.flow != .none,
-    };
 }
 
 /// §3.10 precedence order 1: the out-of-context discipline for one segment,
@@ -164,8 +145,8 @@ pub fn resolveDiscipline(self: *Flatten, path: []const u8, p: Ast.Port, bound: A
         // declaration. `port_resolved` is what draws that line — first-wins
         // still holds everywhere else, which is what `noteDiscipline` says.
         if (!self.port_resolved.contains(bound)) return;
-        if (isContinuous(self, declared)) return;
-        if (!isContinuous(self, disc)) return;
+        if (discipline.isContinuous(self.ctx.file, declared)) return;
+        if (!discipline.isContinuous(self.ctx.file, disc)) return;
         self.disc_of.putAssumeCapacity(bound, disc);
         for (self.nets.items) |*n| {
             if (n.name == bound) n.discipline = disc;
@@ -231,7 +212,7 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
         // 4.a — all children digital → discrete, any others → continuous.
         var net_continuous = false;
         for (discs) |d| {
-            if (isContinuous(self, d)) net_continuous = true;
+            if (discipline.isContinuous(self.ctx.file, d)) net_continuous = true;
         }
 
         // 4.b's list: distinct matching-domain candidates, arrival order;
@@ -241,7 +222,7 @@ pub fn resolveMultiCandidates(self: *Flatten) Error!void {
         var cands: std.ArrayList(Ast.StrId) = .empty;
         var mixed_port = false;
         for (discs) |d| {
-            if (isContinuous(self, d) != net_continuous) {
+            if (discipline.isContinuous(self.ctx.file, d) != net_continuous) {
                 mixed_port = true;
                 continue;
             }
@@ -350,20 +331,10 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
             // discipline_identifier; one that names no discipline can
             // never match a candidate list, and would silently turn a
             // resolving design into an E0903 one.
-            for (r.disciplines) |d| if (!disciplineExists(self, d))
+            for (r.disciplines) |d| if (discipline.declOf(self.ctx.file, d) == null)
                 try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.ctx.file.str(d)});
-            if (!r.exclude and !disciplineExists(self, r.resolved))
+            if (!r.exclude and discipline.declOf(self.ctx.file, r.resolved) == null)
                 try self.err(r.main_tok, .E0916, "nothing declares a discipline `{s}`", .{self.ctx.file.str(r.resolved)});
         }
     }
-}
-
-/// Is `name` a declared discipline? Same linear scan as `isContinuous` and
-/// `primitiveAccess` — the discipline list is annex D's ~10 plus the
-/// user's few, and elaboration asks a handful of times.
-pub fn disciplineExists(self: *Flatten, name: Ast.StrId) bool {
-    for (self.ctx.file.disciplines) |*d| {
-        if (d.name == name) return true;
-    }
-    return false;
 }
