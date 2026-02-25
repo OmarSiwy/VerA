@@ -19,6 +19,7 @@ const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
+const Const = Lower.Const;
 const VarSlot = Lower.VarSlot;
 const init = Lower.init;
 const tokenSpan = Lower.tokenSpan;
@@ -305,9 +306,26 @@ pub fn inlineUserFuncPre(
     // swapped per call like `vars`, so a callee never sees its caller's
     // locals (§4.7.1 isolation).
     self.func_params = fd.params;
+    // `consts` is shared with the caller, and §4.7.1 lets the body see only
+    // "locally-defined parameters and module-level parameters" of what it
+    // holds. So for the body's duration the caller's genvars are taken out
+    // (a genvar is neither), and a local parameter's fold replaces a module
+    // parameter's of the same name; `shadowed` records every entry touched,
+    // and the exit below puts each one back. Without it a local `N` stayed
+    // the module's `N` for every constant fold after the call.
+    var shadowed: std.ArrayList(struct { name: []const u8, prev: ?Const }) = .empty;
+    defer shadowed.deinit(self.arena);
+    const saved_genvars = self.active_genvars;
+    self.active_genvars = .empty;
+    for (saved_genvars.items) |g| {
+        const prev = self.consts.fetchRemove(g) orelse continue;
+        try shadowed.append(self.arena, .{ .name = g, .prev = prev.value });
+    }
     for (fd.params) |*p| {
-        if (lower_constfold.constEval(self, p.default)) |c|
-            try self.consts.put(self.arena, self.file.str(p.name), c);
+        const c = lower_constfold.constEval(self, p.default) orelse continue;
+        const pname = self.file.str(p.name);
+        try shadowed.append(self.arena, .{ .name = pname, .prev = self.consts.get(pname) });
+        try self.consts.put(self.arena, pname, c);
     }
 
     const ret_ty = astTy(fd.ret_ty);
@@ -379,6 +397,11 @@ pub fn inlineUserFuncPre(
     self.func_params = saved_func_params;
     self.loops.deinit(self.arena);
     self.loops = saved_loops;
+    // Undo in reverse, so a name touched twice ends at its first `prev`.
+    while (shadowed.pop()) |sh| {
+        if (sh.prev) |c| try self.consts.put(self.arena, sh.name, c) else _ = self.consts.remove(sh.name);
+    }
+    self.active_genvars = saved_genvars;
 
     var w: usize = 0;
     for (fd.args, 0..) |formal, fi| {

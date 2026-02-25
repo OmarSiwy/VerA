@@ -357,12 +357,3 @@ pub fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
     return sa != sb;
 }
 
-// ponytail: §4.7.2 function-local `parameter` declarations fold into `consts` and
-//     are not restored on exit. DURING the body the shadowing is right —
-//     `func_params` masks `param_index`, so the local wins there and the
-//     module parameter wins again after the call (`lookupName` asks
-//     `param_index` before `consts`). What remains is the CONSTANT-fold view
-//     AFTER the call: `consts` still carries the local's value under that
-//     name, so a later array bound or generate bound folding the shadowed name
-//     reads the function's constant, not the module default. Give `consts` the
-//     same save/restore treatment as `vars` if a fixture ever does that.
