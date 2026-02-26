@@ -922,21 +922,15 @@ pub fn accumulate(self: *Lower, slot: *?Mir.Value, v: Mir.Value, negate: bool) O
     }
 }
 
-/// Does this subtree contain a `ddt` (§4.5.3)? Cheap recursive scan — the
-/// expression store is SoA, so this is a few column reads per node.
+/// Does this subtree contain a `ddt` (§4.5.3)? Every child edge is searched
+/// (`ExprStore.children`), assignment-pattern elements included.
 pub fn containsDdt(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
-    switch (ex.tag(e)) {
-        .filter_call, .call, .builtin_call, .sys_call, .noise_call => {
-            if (ex.tag(e) == .filter_call and self.file.strings.eql(ex.strOf(e), "ddt")) return true;
-            for (ex.args(e)) |a| if (containsDdt(self, a)) return true;
-            return false;
-        },
-        .ternary => return containsDdt(self, ex.lhs(e)) or containsDdt(self, ex.rhs(e)) or
-            containsDdt(self, ex.ternaryElse(e)),
-        else => return containsDdt(self, ex.lhs(e)) or containsDdt(self, ex.rhs(e)),
-    }
+    if (ex.tag(e) == .filter_call and self.file.strings.eql(ex.strOf(e), "ddt")) return true;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (containsDdt(self, c)) return true;
+    return false;
 }
 
 /// One reactive term with its multiplicative spine split apart: `b` is the

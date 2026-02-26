@@ -97,7 +97,6 @@ lib/ir/lower/constfold.zig mixedShiftComparison Ast.BinaryOp
 lib/ir/lower/context.zig collectInitialStmt Ast.Stmt
 lib/ir/lower/contrib.zig branchKey Ast.ExprTag
 lib/ir/lower/contrib.zig coeffIsConst Mir.DefKind
-lib/ir/lower/contrib.zig containsDdt Ast.ExprTag
 lib/ir/lower/contrib.zig isIndirectProbe Ast.ExprTag
 lib/ir/lower/contrib.zig isIndirectProbe Ast.ExprTag
 lib/ir/lower/contrib.zig isMfactorRead Ast.ExprTag

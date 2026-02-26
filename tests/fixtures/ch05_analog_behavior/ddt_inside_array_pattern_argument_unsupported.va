@@ -1,0 +1,34 @@
+// §5.6.1.2 splits a contribution into a resistive part and a reactive part,
+// the reactive part being the charge whose time derivative §4.5.3's ddt
+// takes. `ddt(V(p, n))` below is legal source: it is an ordinary operand of
+// an A.8.1 assignment pattern, the `input` array actual of a §4.7.2.3
+// function call, and `first` returns it unchanged — so the branch carries the
+// reactive current d/dt V(p,n), a 1 F capacitor.
+//
+// VerA models a reactive part only when ddt is a linear factor of the
+// contribution (E0503, "ddt() must be a linear factor of a contribution");
+// `first(ddt(V(p, n)))` has always been refused that way. The same ddt one
+// level deeper, inside the assignment pattern, was not seen by the scan that
+// asks "is there a ddt here", and was lowered as a RESISTIVE backward-Euler
+// difference: the emitted device had no charge function at all, so a host's
+// AC or small-signal analysis saw no capacitance. That is a silent loss of
+// the reactive part, and it now gets the same E0503 as the unwrapped call.
+//
+// A limitation of VerA, not an error in the source: this fixture pins the
+// refusal and moves to a positive one the day a ddt under a call is modelled.
+//
+//! lrm 5.6.1.2
+//! lrm 4.5.3
+//! reject E0503
+`include "disciplines.vams"
+module ch5_ddt_inside_array_pattern(p, n);
+  inout p, n; electrical p, n;
+  analog function real first;
+    input [0:1] a;
+    real a[0:1];
+    begin
+      first = a[0];
+    end
+  endfunction
+  analog I(p, n) <+ first('{ddt(V(p, n)), 0.0});
+endmodule
