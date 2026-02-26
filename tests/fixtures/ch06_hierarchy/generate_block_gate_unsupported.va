@@ -1,0 +1,26 @@
+// §6.6: a generate block may hold every module item except ports,
+// parameters, specify blocks and specparams, and A.1.4
+// module_or_generate_item lists gate_instantiation (A.3.1). An instance of a
+// generate block "brings the ... module instances within the block into
+// existence" — at most once for a conditional generate — and a gate
+// instance is one of those.
+//
+// VerA has no generate scope for a gate. It used to drop the one below
+// without a word (besides W0252's "modelled by nothing", which is about the
+// analog device, not about the generate block); it now refuses it with
+// E0235, "not supported inside a generate block". A limitation of VerA, not
+// an error in the source.
+//
+//! lrm 6.6
+//! reject E0235
+`include "disciplines.vams"
+module ch6_generate_block_gate(p);
+  inout p; electrical p;
+  wire a, y;
+  generate
+    if (1) begin : g
+      and g1(y, a, a);
+    end
+  endgenerate
+  analog I(p) <+ V(p);
+endmodule

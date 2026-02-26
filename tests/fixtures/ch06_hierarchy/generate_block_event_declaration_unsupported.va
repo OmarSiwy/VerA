@@ -1,0 +1,26 @@
+// §6.6: "A generate block may not contain port declarations, parameter
+// declarations, specify blocks, or specparam declarations. All other module
+// items, including other generate constructs, are allowed." A.1.4
+// module_or_generate_item_declaration lists event_declaration, so `event e;`
+// inside the if-generate below is legal, and §6.6 makes it a declaration of
+// the block's own scope, brought into existence only when the scheme
+// selects the block.
+//
+// VerA has no generate scope to hold the declaration. It used to drop it
+// without a word; it now refuses it (E0235, "not supported inside a generate
+// block"). This pins that refusal: a limitation of VerA, not an error in the
+// source, so it is a `reject` of VerA's own code and moves to a positive
+// fixture the day generate blocks keep their own items.
+//
+//! lrm 6.6
+//! reject E0235
+`include "disciplines.vams"
+module ch6_generate_block_event(p);
+  inout p; electrical p;
+  generate
+    if (1) begin : g
+      event e;
+    end
+  endgenerate
+  analog I(p) <+ V(p);
+endmodule
