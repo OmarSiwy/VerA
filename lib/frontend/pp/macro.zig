@@ -85,6 +85,14 @@ pub fn handleDefine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void
     if (std.mem.startsWith(u8, m.body, "__VAMS_"))
         return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0139, "`{s}` begins with __VAMS_", .{m.body});
 
+    // IEEE 1364 §19.3.1: "The text specified for macro text shall not be split
+    // across the following lexical tokens: ... Strings", and its own example of
+    // the illegal case is a body whose string literal never closes. The other
+    // five token kinds cannot be told apart from a legal fragment here; a
+    // string can, because it must close on the line that opened it (§2.7).
+    if (splitsString(m.body))
+        return pp.fail(pp.spanAt(off + r.i, off + r.s.len), .E0145, "`{s}`", .{name});
+
     // §10.4: a redefinition silently replaces. Predefined macros keep their flag
     // so `undef still has no effect on them.
     if (pp.macros.get(name)) |old| m.predefined = old.predefined;
@@ -405,6 +413,26 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
         i += 1;
     }
     return out.items;
+}
+
+/// Does `text` open a string literal it does not close? A `\`-started
+/// escaped identifier (§2.8.1) is skipped, so a `"` spelled inside one is not
+/// taken for a quote.
+fn splitsString(text: []const u8) bool {
+    var i: usize = 0;
+    while (i < text.len) : (i += 1) {
+        switch (text[i]) {
+            '"' => {
+                i = stringStop(text, i);
+                if (i >= text.len or text[i] != '"') return true;
+            },
+            '\\' => while (i + 1 < text.len and !isSpace(text[i + 1])) {
+                i += 1;
+            },
+            else => {},
+        }
+    }
+    return false;
 }
 
 /// Does `text` end inside a §2.8.1 escaped identifier, i.e. with no white

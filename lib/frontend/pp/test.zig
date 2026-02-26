@@ -269,6 +269,14 @@ test "§2.8: a macro name does not start with $" {
     try expectPreserved("`define \\$X 1\n`\\$X \n", &.{"1"}, &.{});
 }
 
+test "IEEE 1364 §19.3.1: macro text does not split a string" {
+    try expectFail("`define first_half \"start of string\n", .E0145);
+    // A closed string, an escaped quote inside one, and a `"` inside an
+    // escaped identifier are all whole tokens.
+    try expectPreserved("`define S \"a \\\" b\"\n`S\n", &.{"b"}, &.{});
+    try expectPreserved("`define E \\q\"x \n`E\n", &.{"q\"x"}, &.{});
+}
+
 test "IEEE 1364 §19.3.1: a compiler directive is not a macro name" {
     try expectFail("`define include 1\n", .E0143);
     try expectFail("`define __LINE__ 7\n", .E0143);

@@ -113,6 +113,8 @@ pub const Code = enum(u16) {
     E0143,
     /// IEEE 1364 §19.5: text after the file name of an `include.
     E0144,
+    /// IEEE 1364 §19.3.1: a macro text that opens a string it does not close.
+    E0145,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -1175,6 +1177,23 @@ fn infoOf(c: Code) Info {
             \\
             \\is legal and anything else after the file name is not. Put it on
             \\the next line.
+            ,
+        },
+
+        .E0145 => .{
+            .title = "macro text splits a string literal",
+            .lrm = "10.4",
+            .explain =
+            \\LRM 10.4 takes `define from IEEE Std 1364, whose 19.3.1 says: "The
+            \\text specified for macro text shall not be split across the
+            \\following lexical tokens: Comments, Numbers, Strings, Identifiers,
+            \\Keywords, Operators", and gives this as illegal:
+            \\
+            \\    `define first_half "start of string
+            \\    $display(`first_half end of string");
+            \\
+            \\A string literal has to open and close inside one macro's text.
+            \\Define the whole string, or pass the text in as an argument.
             ,
         },
 
