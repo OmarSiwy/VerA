@@ -7,8 +7,10 @@
 // VerA has no generate scope for a continuous assignment. It used to drop
 // this one without a word, leaving `y` undriven; it now refuses it with
 // E0235, "not supported inside a generate block". A limitation of VerA, not
-// an error in the source.
+// an error in the source. A continuous assignment is digital-only, so the
+// claim is about the `--run` path.
 //
+// digital-runner: reject
 //! lrm 6.6
 //! reject E0235
 `timescale 1ns/1ns
