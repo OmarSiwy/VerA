@@ -41,7 +41,6 @@
 const std = @import("std");
 const token = @import("token.zig");
 const diag = @import("diag");
-const Integer = @import("integer.zig");
 
 pub const TokenList = std.MultiArrayList(token.Stored);
 
@@ -738,11 +737,6 @@ test "numbers: bases, reals, scale factors (§2.6)" {
     // still joins to the base format. Both spacings are ONE literal.
     try expectTags("8 'h A5", &.{ .int_literal, .eof });
     try expectTags("32\n'h 12ab_f001", &.{ .int_literal, .eof });
-    {
-        var arena = std.heap.ArenaAllocator.init(testing.allocator);
-        defer arena.deinit();
-        try std.testing.expectEqual(@as(?i64, 0xa5), (try Integer.parse(arena.allocator(), "8 'h A5")).asInt());
-    }
     // …and the white space before an assignment pattern is NOT joined: `'{` is
     // not a base_format, so the number ends at its digits (§4.2.14).
     try expectTags("2 '{1}", &.{ .int_literal, .apostrophe_lbrace, .int_literal, .rbrace, .eof });
@@ -837,53 +831,6 @@ test "§2.6.2 a scale factor rounds ONCE: 2.2n is parseFloat(\"2.2e-9\"), not 2.
     try testing.expect((try parseReal("2.2n")) != mantissa * scale);
     // Deleting the second decoder is the point: nothing may re-spell Table 2-1.
     try testing.expectEqual(@as(f64, 1.3e3), try parseReal("1.3k"));
-}
-
-// The decoder is `integer.parse`; these cases pin it through the token texts
-// the lexer produces, which is where the white-space forms below come from.
-test "integer.parse decodes every base (§2.6.1)" {
-    var arena = std.heap.ArenaAllocator.init(testing.allocator);
-    defer arena.deinit();
-    const a = arena.allocator();
-    const val = struct {
-        fn f(al: std.mem.Allocator, text: []const u8) !i64 {
-            return (try Integer.parse(al, text)).asInt().?;
-        }
-    }.f;
-    try testing.expectEqual(@as(i64, 27195), try val(a, "27_195"));
-    try testing.expectEqual(@as(i64, 0x35), try val(a, "16'b0011_0101"));
-    try testing.expectEqual(@as(i64, 0o7460), try val(a, "12'o7460"));
-    try testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32'h12ab_f001"));
-    try testing.expectEqual(@as(i64, 0xaf), try val(a, "8'HAf"));
-    // §2.6.1: the size is OPTIONAL — an unsized based constant is legal.
-    try testing.expectEqual(@as(i64, 0x837ff), try val(a, "'h837ff"));
-    try testing.expect(!(try Integer.parse(a, "'h837ff")).sized);
-    // §2.6.1: a number wider than its size is truncated from the LEFT. These
-    // two were silently wrong while the parser had its own decoder.
-    try testing.expectEqual(@as(i64, 0xf), try val(a, "4'h1f"));
-    try testing.expectEqual(@as(i64, 255), try val(a, "8'hFFFF"));
-    // §2.6.1 `s`: truncate to the size first, then read as two's complement.
-    try testing.expectEqual(@as(i64, -1), try val(a, "4'shf"));
-    try testing.expectEqual(@as(i64, -8), try val(a, "4'sb1000"));
-    try testing.expectEqual(@as(i64, 7), try val(a, "4'sd7"));
-    try testing.expectEqual(@as(i64, -1), try val(a, "8'SHff"));
-    try testing.expect((try Integer.parse(a, "4'shf")).signed);
-    // §4.2.13 needs the declared width to reject unsized constants in a concat.
-    try testing.expectEqual(@as(u32, 4), (try Integer.parse(a, "4'shf")).width);
-    try testing.expect((try Integer.parse(a, "4'b01xz")).hasUnknown());
-    try testing.expectError(error.MissingDigits, Integer.parse(a, "4'h"));
-    try testing.expectError(error.MissingBase, Integer.parse(a, "4'"));
-    try testing.expectError(error.DigitOutOfRange, Integer.parse(a, "4'b012"));
-    // §2.6.1: "the unsigned number token shall immediately follow the base
-    // format, OPTIONALLY PRECEDED BY WHITE SPACE" — four of the clause's five
-    // examples are written that way.
-    try testing.expectEqual(@as(i64, 0xaf), try val(a, "8'h Af"));
-    try testing.expectEqual(@as(i64, 3), try val(a, "5 'D 3"));
-    try testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32 'h 12ab_f001"));
-    // Syntax 2-2 `size ::= non_zero_unsigned_number`: an explicit 0 is not the
-    // unsized form, it is no form at all.
-    try testing.expectError(error.ZeroSize, Integer.parse(a, "0'b1"));
-    try testing.expectError(error.ZeroSize, Integer.parse(a, "0_0'h1"));
 }
 
 test "§2.6.1 white space splits the base format from the digits, and nothing else" {

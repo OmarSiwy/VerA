@@ -2,7 +2,7 @@
 //! encoding: (value, unknown) = 00/10/11/01 for 0/1/X/Z respectively.
 const std = @import("std");
 
-pub const Error = error{ MissingBase, MissingDigits, DigitOutOfRange, ZeroSize, Overflow, FourStateDigit };
+pub const Error = error{ MissingBase, MissingDigits, DigitOutOfRange, ZeroSize, Overflow };
 
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
 pub const Extension = enum(u1) { zero, sign };
@@ -1652,4 +1652,53 @@ fn testConcatAllocation(allocator: std.mem.Allocator) !void {
 
 test "concatenation allocation failures release input and result storage" {
     try std.testing.checkAllAllocationFailures(std.testing.allocator, testConcatAllocation, .{});
+}
+
+// Moved from lexer.zig with the `parseInt` wrapper it tested.
+test "parse decodes every base, as the lexer spells the token (§2.6.1)" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const a = arena_state.allocator();
+    const val = struct {
+        fn f(al: std.mem.Allocator, text: []const u8) !i64 {
+            return (try parse(al, text)).asInt().?;
+        }
+    }.f;
+    try std.testing.expectEqual(@as(i64, 27195), try val(a, "27_195"));
+    try std.testing.expectEqual(@as(i64, 0x35), try val(a, "16'b0011_0101"));
+    try std.testing.expectEqual(@as(i64, 0o7460), try val(a, "12'o7460"));
+    try std.testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32'h12ab_f001"));
+    try std.testing.expectEqual(@as(i64, 0xaf), try val(a, "8'HAf"));
+    // §2.6.1: the size is OPTIONAL — an unsized based constant is legal.
+    try std.testing.expectEqual(@as(i64, 0x837ff), try val(a, "'h837ff"));
+    try std.testing.expect(!(try parse(a, "'h837ff")).sized);
+    // §2.6.1: a number wider than its size is truncated from the LEFT. These
+    // two were silently wrong while the parser had its own decoder.
+    try std.testing.expectEqual(@as(i64, 0xf), try val(a, "4'h1f"));
+    try std.testing.expectEqual(@as(i64, 255), try val(a, "8'hFFFF"));
+    // §2.6.1 `s`: truncate to the size first, then read as two's complement.
+    try std.testing.expectEqual(@as(i64, -1), try val(a, "4'shf"));
+    try std.testing.expectEqual(@as(i64, -8), try val(a, "4'sb1000"));
+    try std.testing.expectEqual(@as(i64, 7), try val(a, "4'sd7"));
+    try std.testing.expectEqual(@as(i64, -1), try val(a, "8'SHff"));
+    try std.testing.expect((try parse(a, "4'shf")).signed);
+    // §4.2.13 needs the declared width to reject unsized constants in a concat.
+    try std.testing.expectEqual(@as(u32, 4), (try parse(a, "4'shf")).width);
+    try std.testing.expect((try parse(a, "4'b01xz")).hasUnknown());
+    try std.testing.expectError(error.MissingDigits, parse(a, "4'h"));
+    try std.testing.expectError(error.MissingBase, parse(a, "4'"));
+    try std.testing.expectError(error.DigitOutOfRange, parse(a, "4'b012"));
+    // §2.6.1: "the unsigned number token shall immediately follow the base
+    // format, OPTIONALLY PRECEDED BY WHITE SPACE" — four of the clause's five
+    // examples are written that way.
+    try std.testing.expectEqual(@as(i64, 0xaf), try val(a, "8'h Af"));
+    try std.testing.expectEqual(@as(i64, 3), try val(a, "5 'D 3"));
+    try std.testing.expectEqual(@as(i64, 0x12abf001), try val(a, "32 'h 12ab_f001"));
+    // §10.3 substitution can leave white space at both joins (lexer.zig
+    // keeps `8 'h A5` one token for that reason).
+    try std.testing.expectEqual(@as(i64, 0xa5), try val(a, "8 'h A5"));
+    // Syntax 2-2 `size ::= non_zero_unsigned_number`: an explicit 0 is not the
+    // unsized form, it is no form at all.
+    try std.testing.expectError(error.ZeroSize, parse(a, "0'b1"));
+    try std.testing.expectError(error.ZeroSize, parse(a, "0_0'h1"));
 }
