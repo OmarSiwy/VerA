@@ -300,6 +300,8 @@ pub const Lexer = struct {
     /// because the set of reserved keywords is a property of the design
     /// elements that follow and §10.6 requires the directive to sit outside a
     /// design element — neither fact is visible to a text-level preprocessor.
+    /// `resetall is applied by the preprocessor AND passed through, for the
+    /// same second reason: IEEE 1364 §19.6 forbids it inside a module.
     /// Any other backtick is `.invalid`: nothing else may reach the lexer.
     fn lexDirective(self: *Lexer) token.Tag {
         const start = self.pos;
@@ -309,6 +311,7 @@ pub const Lexer = struct {
         const text = self.src[name..self.pos];
         if (std.mem.eql(u8, text, "begin_keywords")) return .dir_begin_keywords;
         if (std.mem.eql(u8, text, "end_keywords")) return .dir_end_keywords;
+        if (std.mem.eql(u8, text, "resetall")) return .dir_resetall;
         self.pos = start + 1;
         return .invalid;
     }

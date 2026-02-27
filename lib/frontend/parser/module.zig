@@ -519,6 +519,9 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             "{s} inside a module",
             .{token.Tag.lexeme(self.peek()).?},
         ),
+        // IEEE 1364 §19.6: "It shall be illegal for the `resetall directive
+        // to be specified within a module or UDP declaration."
+        .dir_resetall => return self.failAt(self.pos, .E0236, "", .{}),
         // A.4.2 loop_generate_construct / conditional_generate_construct.
         // §6.6: "Use of generate regions is optional. There is no semantic
         // difference in the module when a generate region is used", and the

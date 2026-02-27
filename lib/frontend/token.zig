@@ -102,6 +102,9 @@ pub const Tag = enum(u8) {
     // only the parser can check. See `KeywordSet`.
     dir_begin_keywords, // '`begin_keywords'
     dir_end_keywords, // '`end_keywords'
+    /// IEEE 1364 §19.6 `resetall, passed through only so the parser can
+    /// refuse one "within a module or UDP declaration".
+    dir_resetall, // '`resetall'
 
     // ---- keywords — §2.8.2 / annex B ---------------------------------------
     // FIRST KEYWORD. Everything from here to the end of the enum is a keyword;
@@ -404,6 +407,7 @@ pub const Tag = enum(u8) {
             .attr_close => "*)",
             .dir_begin_keywords => "`begin_keywords",
             .dir_end_keywords => "`end_keywords",
+            .dir_resetall => "`resetall",
 
             // Every keyword tag is "kw_" ++ its spelling (naming invariant).
             else => @tagName(tag)[3..],
