@@ -57,7 +57,7 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
         return error.PreprocessFailed;
     }
 
-    const text = (try readInclude(pp, path)) orelse {
+    const inc = (try readInclude(pp, path)) orelse {
         var b = pp.failWith(name_span, .E0126);
         b.msg("\"{s}\"", .{path});
         if (pp.opts.include_dirs.len == 0) {
@@ -71,27 +71,36 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
 
     try pp.includes.append(pp.arena, path);
     defer _ = pp.includes.pop();
-    try pp.runFile(text, path, null);
+    // Registered under the OPENED path, so `__FILE__` and every diagnostic
+    // inside the file name the file that was read (§10.7).
+    try pp.runFile(inc.text, inc.path, null);
     // `scan` resyncs the map back to the parent file when `directive` returns.
 }
 
 /// Search order: caller include dirs (in order), then the built-in annex D
 /// files by basename. Returns null if nothing matched.
-pub fn readInclude(pp: *Pp, path: []const u8) Error!?[]const u8 {
+/// The bytes of an `include, and the path they were opened by. §10.7 makes
+/// that path what `__FILE__` expands to inside the file: "the path by which a
+/// tool opened the file, not the short name specified in `include". A
+/// built-in annex D file is opened by no path, so it keeps the name written.
+pub const Included = struct { text: []const u8, path: []const u8 };
+
+pub fn readInclude(pp: *Pp, path: []const u8) Error!?Included {
     if (pp.opts.include_dirs.len != 0) {
         const io = std.Io.Threaded.global_single_threaded.io();
         const dir: std.Io.Dir = .cwd();
         for (pp.opts.include_dirs) |base| {
             const full = try std.fs.path.join(pp.arena, &.{ base, path });
             if (dir.readFileAlloc(io, full, pp.arena, .limited(max_include_bytes))) |bytes| {
-                return bytes;
+                return .{ .text = bytes, .path = full };
             } else |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 else => {}, // try the next dir
             }
         }
     }
-    return builtin_includes.get(std.fs.path.basename(path));
+    const text = builtin_includes.get(std.fs.path.basename(path)) orelse return null;
+    return .{ .text = text, .path = path };
 }
 
 // ---------------------------------------------------------------------------
