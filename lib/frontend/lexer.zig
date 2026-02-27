@@ -107,36 +107,12 @@ pub const Lexer = struct {
 
     /// Produce the next token. LRM §2.2.
     pub fn next(self: *Lexer) token.Stored {
-        // §2.3 white space and §2.4 comments are token separators only. An
-        // unterminated block comment is the one case that yields a token.
-        while (self.pos < self.src.len) {
-            const c = self.src[self.pos];
-            if (isSpace(c)) {
-                self.pos += 1;
-                continue;
-            }
-            if (c == '/' and self.peek(1) == '/') { // §2.4 one_line_comment
-                while (self.pos < self.src.len and self.src[self.pos] != '\n') self.pos += 1;
-                continue;
-            }
-            if (c == '/' and self.peek(1) == '*') { // §2.4 block_comment — never nested
-                const open = self.pos;
-                self.pos += 2;
-                while (true) {
-                    if (self.pos + 1 >= self.src.len) {
-                        self.pos = @intCast(self.src.len);
-                        return .{ .tag = .invalid, .start = open }; // unterminated
-                    }
-                    if (self.src[self.pos] == '*' and self.src[self.pos + 1] == '/') {
-                        self.pos += 2;
-                        break;
-                    }
-                    self.pos += 1;
-                }
-                continue;
-            }
-            break;
-        }
+        // §2.3 white space is a token separator only. §2.4 comments never
+        // reach here: the preprocessor strips every one (pp/comments.zig), so
+        // a `/` followed by `/` or `*` in this text is two operators — which
+        // is what IEEE 1364 §19.3.1 makes of macro text pasted into one: text
+        // "shall not be split across ... Comments".
+        while (self.pos < self.src.len and isSpace(self.src[self.pos])) self.pos += 1;
 
         const start = self.pos;
         if (start >= self.src.len) return .{ .tag = .eof, .start = start };
@@ -688,19 +664,15 @@ test "operators are longest-match (§2.5)" {
     });
 }
 
-test "white space and comments are separators (§2.3, §2.4)" {
-    try expectTags("a\t/* the // token is text here */\n\x0cb // trailing\n", &.{
-        .identifier, .identifier, .eof,
-    });
-    // §2.4: block comments do not nest — the inner close ends the comment.
-    try expectTags("/* /* */ x", &.{ .identifier, .eof });
-    // Unterminated block comment: one `.invalid` spanning to EOF.
-    var lx: Lexer = .{ .src = "a /* forever" };
-    _ = lx.next();
-    const bad = lx.next();
-    try testing.expectEqual(token.Tag.invalid, bad.tag);
-    try testing.expectEqual(@as(u32, 2), bad.start);
-    try testing.expectEqual(@as(u32, 12), lx.tokenEnd(bad.start));
+test "white space separates; comment characters are operators here (§2.3, §2.4)" {
+    try expectTags("a\t\n\x0cb\r\n", &.{ .identifier, .identifier, .eof });
+    // §2.4 is the preprocessor's (pp/test.zig "§2.4 comments vanish"): every
+    // real comment is gone before this text exists. What is left that LOOKS
+    // like one was pasted together by macros, and IEEE 1364 §19.3.1 forbids
+    // macro text split across a comment — so it is `/` `/` and `/` `*`.
+    try expectTags("x / / y", &.{ .identifier, .slash, .slash, .identifier, .eof });
+    try expectTags("x //y", &.{ .identifier, .slash, .slash, .identifier, .eof });
+    try expectTags("8 /* 2", &.{ .int_literal, .slash, .star, .int_literal, .eof });
 }
 
 test "identifiers, keywords, escaped and system names (§2.8)" {
