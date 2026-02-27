@@ -130,27 +130,8 @@ vty: []VTy = &.{},
 /// INVARIANT: nothing calls `Mir.setAlias` after `prepare`.
 alias: []Mir.Value = &.{},
 
-/// Per Value: is this quantity independent of EVERY §4.4 probe, so that its
-/// derivative vanishes structurally? Read through `dFree`, which resolves the
-/// alias first.
-///
-/// This is contract.zig's own rule for physics code — "everything not
-/// depending on x (param prep, temperature, geometry) stays plain f64; only
-/// x-dependent chains use S ops" — made available to the generator, which was
-/// the one writer of device code not following it.
-///
-/// It is worth a pass because `@setFloatMode(.strict)` forbids folding a
-/// multiply by a literal zero. A dual holding `splat(0)` therefore pays n_u
-/// real multiplies and an n_u-wide add at every operation it touches, and that
-/// arithmetic survives into the PTX (ARPice docs/gpu-device-eval.md §9.6).
-///
-/// Conservative in one direction only: `false` is always sound.
-dfree: []bool = &.{},
-
 /// Per Value: WHICH unknowns its derivative can be nonzero in — bit `u` set
-/// means `∂value/∂x[u]` may be nonzero. `dfree` is this table's "== 0" case,
-/// kept separate because it is the only question the render path asks and a
-/// bool is one byte.
+/// means `∂value/∂x[u]` may be nonzero. "No bit at all" is `dFree`.
 ///
 /// This is the STRUCTURAL Jacobian, and it exists for the host's scatter: a
 /// residual row's local Jacobian is `n_u` wide by construction, but the model
@@ -164,10 +145,12 @@ dfree: []bool = &.{},
 /// (`lt`) and `$prev` both have identically zero derivative, and both are
 /// still credited with their operands' bits.
 ///
-/// EMPTY when `lower.n_unknowns > 64`: one u64 per Value is the whole reason
-/// this is cheap, and no device in the catalog is near that. `unknownDeps`
-/// answers "all bits" there, which is the dense fallback.
+/// FOLDED when an unknown index reaches 64: one u64 per Value is the whole
+/// reason this is cheap, and no device in the catalog is near that. Unknown
+/// `u` then sets bit `u & 63` — still nonzero, so `dFree` stays exact — and
+/// `unknownDeps` answers "all bits", which is the dense fallback.
 deps: []u64 = &.{},
+deps_folded: bool = false,
 
 /// Everything above, in dependency order. `nv` first: `buildCfg`'s phi/stmt
 /// filters already call `rv`, and `nv` derives only from `mir.defs.len`.
@@ -178,7 +161,6 @@ pub fn build(
 ) Error!Analysis {
     var self = try buildStructure(arena, mir, lower);
     try self.buildValueTypes();
-    try self.buildDfree();
     try self.buildDeps();
     return self;
 }
@@ -611,97 +593,21 @@ pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
 
 // -------------------------------------------------- the derivative lattice --
 
-/// Fill `dfree`. Two points, one lattice: everything starts derivative-free
-/// and a `false` spreads from the probes outwards, so the fixpoint is monotone
-/// and cannot oscillate. Value order is definition order except across a back
-/// edge, which is why this iterates rather than sweeping once — a loop-carried
-/// phi needs the round after its body.
-fn buildDfree(self: *Analysis) Error!void {
-    self.dfree = try self.arena.alloc(bool, self.nv);
-    @memset(self.dfree, true);
-    var changed = true;
-    while (changed) {
-        changed = false;
-        var v: u32 = 0;
-        while (v < self.nv) : (v += 1) {
-            if (!self.dfree[v] or self.defDfree(@enumFromInt(v))) continue;
-            self.dfree[v] = false;
-            changed = true;
-        }
-    }
-}
-
-/// One step of the lattice: is `val` derivative-free GIVEN the current answer
-/// for its operands? Every opcode is a function of its operands, so a result
-/// depends on a probe exactly when one of its operands does.
-fn defDfree(self: *const Analysis, val: Mir.Value) bool {
-    switch (self.mir.valueDef(self.rv(val))) {
-        // §4.4 access functions ARE the derivative — everything else inherits.
-        .block_param => return false,
-        .undef, .float_const, .int_const, .str_const, .param_ref => return true,
-        .inst_result => |inst| {
-            const row = self.mir.instRow(inst);
-            switch (Mir.opClass(row.op)) {
-                .branch, .jump => return false, // no result to speak of
-                // A call inherits from its ARGUMENTS and from nothing else.
-                // That holds for the whole of §4.5 — `ddt`, `idt`, `slew`,
-                // `transition` and the filters all propagate the derivative of
-                // the expression handed to them — and for ch9, where a systf's
-                // partials arrive through `SystfHost.call`. The one thing that
-                // would break it is a call reading a §4.4 probe the argument
-                // list does not name, and codegen has exactly one place that
-                // can spell a probe (`renderValueRef`'s `block_param` arm), so
-                // no rendering of a call reaches one.
-                //
-                // Not an optimisation for its own sake: `$temperature` is a
-                // call, so without this EVERY temperature-dependent parameter
-                // in a compact model is derivative-carrying — which is most of
-                // the prep in mos9 and all of it in BSIM4.
-                .call => {
-                    for (self.mir.instData(inst).call.args) |arg| {
-                        if (!self.dFree(arg)) return false;
-                    }
-                    return true;
-                },
-                .unary => return self.dFree(@enumFromInt(row.a)),
-                .binary => return self.dFree(@enumFromInt(row.a)) and
-                    self.dFree(@enumFromInt(row.b)),
-                // §4.2.12: the CONDITION does not matter. It selects between
-                // arms rather than entering the value, so a conditional over
-                // two constants is constant however x steers it — the same
-                // reading `renderInst` already takes when it emits a Zig `if`.
-                .ternary => return self.dFree(@enumFromInt(row.b)) and
-                    self.dFree(@enumFromInt(row.c)),
-                .phi => {
-                    const d = self.mir.instData(inst).phi;
-                    for (0..d.count) |k| {
-                        if (!self.dFree(self.mir.phiPair(inst, @intCast(k)).value)) return false;
-                    }
-                    return true;
-                },
-            }
-        },
-    }
-}
-
-/// Does `v`'s derivative vanish structurally? See `dfree`.
-pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
-    return self.dfree[@intFromEnum(self.rv(v))];
-}
-
-/// `dfree`'s refinement: WHICH unknowns, not just whether any. See `deps`.
+/// Fill `deps`: WHICH unknowns, and so also whether any (`dFree`). See `deps`.
 ///
-/// Same monotone fixpoint, over `u64` instead of `bool` — the lattice only
-/// ever gains bits, so the loop terminates in at most (longest chain) sweeps
-/// exactly as `buildDfree`'s does.
+/// Everything starts at no bits and a bit spreads from the probes outwards,
+/// so the fixpoint is monotone and cannot oscillate: the lattice only ever
+/// gains bits, and it terminates in at most (longest chain) sweeps. Value
+/// order is definition order except across a back edge, which is why this
+/// iterates rather than sweeping once — a loop-carried phi needs the round
+/// after its body.
 fn buildDeps(self: *Analysis) Error!void {
-    // >64 unknowns: one word per Value stops being the cheap representation,
-    // and `unknownDeps` degrades to the dense answer. Detected before the
-    // fixpoint so the loop below never has to think about it.
+    // An unknown index ≥ 64 folds (see `deps`). Detected before the fixpoint
+    // so the loop below never has to think about it.
     var v0: u32 = 0;
     while (v0 < self.nv) : (v0 += 1) {
         const d = self.mir.valueDef(@enumFromInt(v0));
-        if (d == .block_param and d.block_param >= 64) return;
+        if (d == .block_param and d.block_param >= 64) self.deps_folded = true;
     }
     self.deps = try self.arena.alloc(u64, self.nv);
     @memset(self.deps, 0);
@@ -718,35 +624,53 @@ fn buildDeps(self: *Analysis) Error!void {
     }
 }
 
-/// One step of the lattice, mirroring `defDfree` arm for arm. Every rule is
-/// "union of the operands whose derivative the contract propagates".
+/// One step of the lattice: `val`'s bits GIVEN the current answer for its
+/// operands. Every opcode is a function of its operands, so a result depends
+/// on a probe exactly when one of its operands does — every rule is "union of
+/// the operands whose derivative the contract propagates".
 fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
     switch (self.mir.valueDef(self.rv(val))) {
         // §4.4 access function: the probe IS x[u], so its derivative is the
         // one unit vector.
-        .block_param => |u| return @as(u64, 1) << @intCast(u),
+        .block_param => |u| return @as(u64, 1) << @intCast(u & 63),
         .undef, .float_const, .int_const, .str_const, .param_ref => return 0,
         .inst_result => |inst| {
             const row = self.mir.instRow(inst);
             switch (Mir.opClass(row.op)) {
                 .branch, .jump => return 0, // no result to speak of
+                // A call inherits from its ARGUMENTS and from nothing else.
+                // That holds for the whole of §4.5 — `ddt`, `idt`, `slew`,
+                // `transition` and the filters all propagate the derivative of
+                // the expression handed to them — and for ch9, where a systf's
+                // partials arrive through `SystfHost.call`. The one thing that
+                // would break it is a call reading a §4.4 probe the argument
+                // list does not name, and codegen has exactly one place that
+                // can spell a probe (`renderValueRef`'s `block_param` arm), so
+                // no rendering of a call reaches one.
+                //
+                // Not an optimisation for its own sake: `$temperature` is a
+                // call, so without this EVERY temperature-dependent parameter
+                // in a compact model is derivative-carrying — which is most of
+                // the prep in mos9 and all of it in BSIM4.
                 .call => {
                     var acc: u64 = 0;
-                    for (self.mir.instData(inst).call.args) |arg| acc |= self.unknownDeps(arg);
+                    for (self.mir.instData(inst).call.args) |arg| acc |= self.depsOf(arg);
                     return acc;
                 },
-                .unary => return self.unknownDeps(@enumFromInt(row.a)),
-                .binary => return self.unknownDeps(@enumFromInt(row.a)) |
-                    self.unknownDeps(@enumFromInt(row.b)),
-                // §4.2.12, same reading as `defDfree`: the CONDITION selects an
-                // arm rather than entering the value, and `S.sel` lets the
-                // taken arm's derivative ride through unchanged.
-                .ternary => return self.unknownDeps(@enumFromInt(row.b)) |
-                    self.unknownDeps(@enumFromInt(row.c)),
+                .unary => return self.depsOf(@enumFromInt(row.a)),
+                .binary => return self.depsOf(@enumFromInt(row.a)) |
+                    self.depsOf(@enumFromInt(row.b)),
+                // §4.2.12: the CONDITION does not matter. It selects between
+                // arms rather than entering the value, so a conditional over
+                // two constants is constant however x steers it — the same
+                // reading `renderInst` already takes when it emits a Zig `if`
+                // — and `S.sel` lets the taken arm's derivative ride through.
+                .ternary => return self.depsOf(@enumFromInt(row.b)) |
+                    self.depsOf(@enumFromInt(row.c)),
                 .phi => {
                     const d = self.mir.instData(inst).phi;
                     var acc: u64 = 0;
-                    for (0..d.count) |k| acc |= self.unknownDeps(self.mir.phiPair(inst, @intCast(k)).value);
+                    for (0..d.count) |k| acc |= self.depsOf(self.mir.phiPair(inst, @intCast(k)).value);
                     return acc;
                 },
             }
@@ -754,12 +678,39 @@ fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
     }
 }
 
-/// Which unknowns `v`'s derivative can be nonzero in. All ones when the table
-/// was not built (>64 unknowns) — the sound answer, and the one that makes
-/// every consumer fall back to a dense Jacobian without a second code path.
-pub fn unknownDeps(self: *const Analysis, v: Mir.Value) u64 {
-    if (self.deps.len == 0) return std.math.maxInt(u64);
+/// Is `v` independent of EVERY §4.4 probe, so that its derivative vanishes
+/// structurally? Resolves the alias first.
+///
+/// This is contract.zig's own rule for physics code — "everything not
+/// depending on x (param prep, temperature, geometry) stays plain f64; only
+/// x-dependent chains use S ops" — made available to the generator, which was
+/// the one writer of device code not following it.
+///
+/// It is worth a pass because `@setFloatMode(.strict)` forbids folding a
+/// multiply by a literal zero. A dual holding `splat(0)` therefore pays n_u
+/// real multiplies and an n_u-wide add at every operation it touches, and that
+/// arithmetic survives into the PTX (ARPice docs/gpu-device-eval.md §9.6).
+///
+/// Conservative in one direction only: `false` is always sound.
+///
+/// Not a table of its own: it is `deps[v] == 0`. It used to be a second
+/// `[]bool` fixpoint mirroring `defDeps` arm for arm — the same lattice twice.
+pub fn dFree(self: *const Analysis, v: Mir.Value) bool {
+    return self.depsOf(v) == 0;
+}
+
+/// The raw word, folded or not — what the fixpoint and `dFree` read.
+fn depsOf(self: *const Analysis, v: Mir.Value) u64 {
     return self.deps[@intFromEnum(self.rv(v))];
+}
+
+/// Which unknowns `v`'s derivative can be nonzero in. All ones when the table
+/// is folded (an unknown index ≥ 64) — the sound answer, and the one that
+/// makes every consumer fall back to a dense Jacobian without a second code
+/// path.
+pub fn unknownDeps(self: *const Analysis, v: Mir.Value) u64 {
+    if (self.deps_folded) return std.math.maxInt(u64);
+    return self.depsOf(v);
 }
 
 /// Is this block inside some loop's natural body?
