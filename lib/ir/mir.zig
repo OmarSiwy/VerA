@@ -4,8 +4,8 @@
 //! Transformation: lowering writes MIR; proof.zig reads it; codegen.zig walks it.
 //!
 //! DOD (this is the performance core):
-//!   - Instructions are a MultiArrayList of fixed rows {op,a,b,c,result,next}
-//!     (21 B/inst as SoA columns), NOT tagged unions in a linked list.
+//!   - Instructions are a MultiArrayList of fixed rows {op,a,b,c,result,next,tok}
+//!     (25 B/inst as SoA columns), NOT tagged unions in a linked list.
 //!   - Values, blocks, and the extra payload pool are separate SoA arrays.
 //!   - Every reference is a typed enum(u32) handle.
 //!   - Constants are deduped (fconst_map/iconst_map) at construction.
@@ -27,7 +27,7 @@ const std = @import("std");
 const Ast = @import("frontend").Ast;
 const assert = std.debug.assert;
 
-pub const Mir = @This(); // so `Mir.Mir` also resolves for callers that spell it out
+const Mir = @This();
 
 pub const Inst = enum(u32) { none = std.math.maxInt(u32), _ };
 pub const Value = enum(u32) {

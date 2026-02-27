@@ -476,7 +476,6 @@ pub const Prover = struct {
                     const zr = self.isZeroConst(b.rhs);
                     const other: ?Mir.Value = if (zr) b.lhs else if (zl) b.rhs else null;
                     if (other) |o| {
-                        // ponytail: share the predicate classifier with if-conversion directly.
                         if (proof_lattice.isPredicateValue(self.mir, o)) return self.condFacts(o, taken != flip, buf);
                         if (taken != flip) {
                             buf[0] = .{ .v = self.idxOf(o), .iv = .{ .nonzero = true } };
