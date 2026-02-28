@@ -459,8 +459,6 @@ pub const Gen = struct {
     /// when `display == .drop`). Set by `buildJobs`, which is also where the job
     /// that renders it is queued.
     display_name: []const u8 = "",
-    /// Unit index of the analog-operator `call` at `Inst`, or `none_u32`.
-    op_unit: []u32 = &.{},
     /// Extra solver unknowns codegen appends after `Lower.node_order`: one
     /// branch current per §5.6 potential contribution that lowering did not
     /// already give a `flow(a,b)` slot. Values are node_order-space indices.
@@ -671,21 +669,6 @@ pub const Gen = struct {
             const n = naming.unitName(&buf, self.mir.name, u) catch return error.NameTooLong;
             self.unit_names[i] = try a.dupe(u8, n);
         }
-        // The analog-operator units are enumerated by naming.zig with exactly
-        // this walk; repeating it maps each stateful `call` back to its unit.
-        self.op_unit = try a.alloc(u32, self.mir.insts.len);
-        @memset(self.op_unit, none_u32);
-        var next = self.lower.contributions.items.len;
-        for (0..self.an.nb) |bi| {
-            for (self.an.blockInstsFlat(@intCast(bi))) |inst| {
-                if (self.mir.instOp(inst) != .call) continue;
-                if (opKind(self.mir.instData(inst).call.name) == .none) continue;
-                assert(next < self.units.len);
-                self.op_unit[@intFromEnum(inst)] = @intCast(next);
-                next += 1;
-            }
-        }
-        assert(next == self.units.len);
     }
 
     /// Is unknown `u` already the current of a source from a contribution
@@ -987,9 +970,8 @@ pub fn devSafe(op: Mir.Opcode) bool {
 // four independent switches over it; they are now a name each file already
 // spells, forwarding to a column. See that file's header for why.
 //
-// MUST agree with `naming.isStatefulAnalogOp`: that predicate decides which
-// calls get a unit, and `opHasState` decides which get Instance state — they
-// are the same set.
+// `naming.enumerateUnits` gives a unit to exactly the calls `opKind` names, and
+// `opHasState` decides which get Instance state — one table, one set.
 
 pub const OpKind = opdb.OpKind;
 pub const opKind = opdb.byName;
