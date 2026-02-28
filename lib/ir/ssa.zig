@@ -12,7 +12,9 @@
 //!   - per-block state (sealed?, preds, incomplete phis) in a MultiArrayList row
 //!     indexed by Block; the pred and incomplete-phi lists are intrusive u32
 //!     indices into two flat pools, not one allocation per block.
-//!   - trivial-phi removal aliases a phi to its single value (Mir.alias, so
+//!   - an ACYCLIC join whose predecessors agree gets no phi at all (the
+//!     `pending` cell, see `readVariableRecursive`); a phi created on a cycle
+//!     that turns out trivial is aliased to its single value (Mir.alias, so
 //!     codegen never emits a `var` for it).
 //!
 //! CONTRACT FOR CONSUMERS (proof.zig, codegen.zig):
@@ -52,6 +54,12 @@ const list_end: u32 = std.math.maxInt(u32);
 /// freshly mapped, all-zero page already reads as an empty matrix and no
 /// `@memset` is needed. See `defsIndex`; `writeVariable` asserts no overflow.
 const absent: u32 = 0;
+
+/// "This (place, block) is a join whose predecessors are being read right
+/// now" — see the ≥2-preds arm of `readVariableRecursive`. A read that meets
+/// it has come round a cycle and mints the phi there (`readVariable`). Never
+/// a biased Value: `writeVariable` keeps the Value space two short of it.
+const pending: u32 = std.math.maxInt(u32);
 
 /// `defs` ONLY: the matrix is mapped straight from the OS, which hands back
 /// zero-filled pages — `mmap(MAP_ANONYMOUS)` on POSIX, `NtAllocateVirtualMemory`
@@ -216,8 +224,8 @@ pub const SsaBuilder = struct {
 
     /// Record `place := value` in `block`. LRM §5.7 assignment.
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
-        // see `absent`: the +1 bias never overflows, the Value space never reaches maxInt
-        assert(@intFromEnum(value) != std.math.maxInt(u32));
+        // see `absent` and `pending`: the +1 bias lands on neither
+        assert(@intFromEnum(value) < std.math.maxInt(u32) - 1);
         const i = try self.defsIndex(place, block);
         self.defs[i] = @intFromEnum(value) + 1;
     }
@@ -226,17 +234,29 @@ pub const SsaBuilder = struct {
     /// Reading a place that is undefined on some path yields `.undef` there —
     /// initializing declared variables (§3.4.4) is lower.zig's job, not ours.
     pub fn readVariable(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
-        if (self.defsPeek(place, block)) |v| return v;
-        return self.readVariableRecursive(place, block);
+        const raw = self.defsRaw(place, block);
+        if (raw == absent) return self.readVariableRecursive(place, block);
+        if (raw != pending) return @enumFromInt(raw - 1);
+        // The read came round a cycle (§5.9) into a join whose predecessors
+        // are still being read: the join needs a real phi after all. Mint it
+        // empty; the frame that set `pending` fills it.
+        const phi = try self.mir.emitPhi(self.gpa, block, &.{});
+        try self.writeVariable(place, block, phi);
+        return phi;
     }
 
     /// Load without growing: an unallocated cell reads as absent, exactly like an
     /// allocated-but-unwritten one. Keeps the read path free of the resize branch.
-    fn defsPeek(self: *const SsaBuilder, place: Place, block: Mir.Block) ?Mir.Value {
+    fn defsRaw(self: *const SsaBuilder, place: Place, block: Mir.Block) u32 {
         const p = @intFromEnum(place);
         const b = @intFromEnum(block);
-        if (p >= self.place_cap or b >= self.block_stride) return null;
-        const v = self.defs[p * self.block_stride + b];
+        if (p >= self.place_cap or b >= self.block_stride) return absent;
+        return self.defs[p * self.block_stride + b];
+    }
+
+    fn defsPeek(self: *const SsaBuilder, place: Place, block: Mir.Block) ?Mir.Value {
+        const v = self.defsRaw(place, block);
+        assert(v != pending);
         return if (v == absent) null else @enumFromInt(v - 1);
     }
 
@@ -327,9 +347,37 @@ pub const SsaBuilder = struct {
             val = try self.readVariable(place, self.pred_pool.items[head].block);
         } else {
             // ≥2 preds (or 0 — an undefined read in a source-less block).
-            val = try self.mir.emitPhi(self.gpa, block, &.{});
-            try self.writeVariable(place, block, val); // break cycles before recursing
-            val = try self.addPhiOperands(place, val, block);
+            //
+            // Braun emits the phi FIRST (to break cycles) and collapses a
+            // trivial one afterwards by aliasing. The alias is the rewrite, so
+            // the dead row, its Value, its alias slot and its operands all
+            // stayed: a variable written at the top of a compact model and
+            // read after ~1000 sequential `if`s left ~1000 of them. MEASURED on
+            // bsim4va (ReleaseFast, --emit-zig): 653,271 of 665,981 MIR rows
+            // were phis, 651,266 of them dead — and every later pass sized by
+            // `nv` or walking `insts` paid for them.
+            //
+            // So the cell is marked `pending` instead, and a phi is emitted
+            // only when it is needed: when a read cycles back here
+            // (`readVariable` mints it, and it is filled and collapsed exactly
+            // as before) or when the predecessors disagree. An acyclic trivial
+            // join gets no row at all.
+            const cell = try self.defsIndex(place, block);
+            self.defs[cell] = pending;
+            const top = self.scratch.items.len;
+            defer self.scratch.shrinkRetainingCapacity(top);
+            try self.readPreds(place, block);
+            const pairs = self.scratch.items[top..];
+            // Re-index: the reads may have re-strided the matrix.
+            const now = self.defs[try self.defsIndex(place, block)];
+            if (now != pending) {
+                val = try self.fillPhi(@enumFromInt(now - 1), pairs);
+            } else if (sameValue(self.mir, pairs)) |same| {
+                val = same;
+            } else {
+                val = try self.mir.emitPhi(self.gpa, block, pairs);
+                for (pairs) |p| try self.addUser(p.value, val);
+            }
         }
         try self.writeVariable(place, block, val);
         return val;
@@ -341,7 +389,13 @@ pub const SsaBuilder = struct {
         // recurses back in), and a fresh list per phi was an allocation per phi.
         const top = self.scratch.items.len;
         defer self.scratch.shrinkRetainingCapacity(top);
+        try self.readPreds(place, block);
+        return self.fillPhi(phi, self.scratch.items[top..]);
+    }
 
+    /// Append `(pred, place's value at the end of pred)` to `scratch` for every
+    /// predecessor edge of `block`, in declaration order.
+    fn readPreds(self: *SsaBuilder, place: Place, block: Mir.Block) Error!void {
         var node = self.predsHead(block);
         while (node != list_end) {
             const pred = self.pred_pool.items[node]; // copy: recursion may realloc
@@ -349,10 +403,22 @@ pub const SsaBuilder = struct {
             const v = try self.readVariable(place, pred.block);
             try self.scratch.append(self.gpa, .{ .block = pred.block, .value = v });
         }
-        const pairs = self.scratch.items[top..];
+    }
+
+    fn fillPhi(self: *SsaBuilder, phi: Mir.Value, pairs: []const Mir.PhiPair) Error!Mir.Value {
         try self.mir.setPhiPairs(self.gpa, self.mir.valueDef(phi).inst_result, pairs);
         for (pairs) |p| try self.addUser(p.value, phi);
         return self.tryRemoveTrivialPhi(phi);
+    }
+
+    /// The one value every pair resolves to (`.undef` for no pairs), or null
+    /// when they disagree — `tryRemoveTrivialPhi`'s rule for a phi that does
+    /// not exist yet, so there is no self-reference to skip.
+    fn sameValue(mir: *const Mir, pairs: []const Mir.PhiPair) ?Mir.Value {
+        if (pairs.len == 0) return .undef;
+        const first = mir.resolveAlias(pairs[0].value);
+        for (pairs[1..]) |p| if (mir.resolveAlias(p.value) != first) return null;
+        return first;
     }
 
     /// Collapse a phi whose operands all resolve to one value (self-references
@@ -537,9 +603,15 @@ test "ssa: diamond phi, trivial collapse, loop phi, undefined read" {
     try std.testing.expectEqual(then_b, mir.phiPair(x_inst, 0).block);
     try std.testing.expectEqual(c2, mir.phiPair(x_inst, 1).value);
 
-    // y is the same on both arms ⇒ its join phi is trivial and collapses to y0.
+    // y is the same on both arms ⇒ the join is trivial: y0 itself, and no phi
+    // row at all (x's is the join's only one).
     const yj = try b.readVariable(y, join);
-    try std.testing.expectEqual(y0, mir.resolveAlias(yj));
+    try std.testing.expectEqual(y0, yj);
+    {
+        var it = mir.blockInsts(join);
+        try std.testing.expectEqual(x_inst, it.next().?);
+        try std.testing.expect(it.next() == null);
+    }
 
     // Reading x again is memoized, not a second phi.
     try std.testing.expectEqual(xj, try b.readVariable(x, join));
@@ -586,6 +658,17 @@ test "ssa: diamond phi, trivial collapse, loop phi, undefined read" {
     // Never written anywhere ⇒ undef, not a live phi.
     const z = b.newPlace();
     try std.testing.expectEqual(Mir.Value.undef, mir.resolveAlias(try b.readVariable(z, join)));
+
+    // A read that enters the SEALED loop from below cycles back into the
+    // header through the body: the pending header mints its phi, and the phi
+    // collapses onto the value from outside the loop.
+    const w = b.newPlace();
+    const w0 = try mir.addFloatConst(gpa, 3.0);
+    try b.writeVariable(w, join, w0);
+    const exit = try mir.addBlock(gpa);
+    try b.addPredecessor(exit, header);
+    try b.sealBlock(exit);
+    try std.testing.expectEqual(w0, mir.resolveAlias(try b.readVariable(w, exit)));
 }
 
 test "ssa: matrix growth preserves values, undefined cells and unused rows" {
