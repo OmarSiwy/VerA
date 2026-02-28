@@ -802,6 +802,75 @@ test "proof: an unprovable integer `/` or real `%` divisor is accepted as .stric
     try std.testing.expect(v.ok());
     try std.testing.expect(!h.has(.E0601));
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
+    // Accepted, but not silently: the device yields 0 for `10 / 0`.
+    const w = h.find(.W0653) orelse return error.NoIntDivisorWarning;
+    try std.testing.expectEqual(diag.Severity.warning, w.severity);
+    try std.testing.expect(!w.span.isNone());
+}
+
+test "W0653: only for an unproven INTEGER `/`, and a range or a guard silences it" {
+    // The same division with the divisor ranged, and guarded, proves; the
+    // real `%` and real `/` over an unranged parameter never raise W0653.
+    for ([_][]const u8{
+        "parameter integer k = 2 exclude 0; analog I(p,n) <+ (10 / k) * V(p,n);",
+        "parameter integer k = 2 from [1:inf); analog I(p,n) <+ (10 / k) * V(p,n);",
+        "parameter integer k = 2; analog if (k != 0) I(p,n) <+ (10 / k) * V(p,n);",
+        "parameter real r = 3.0; analog I(p,n) <+ V(p,n) % r + V(p,n) / r;",
+    }) |body| {
+        var h: Harness = undefined;
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p, n);
+            \\  inout p, n;
+            \\  electrical p, n;
+            \\  {s}
+            \\endmodule
+        , .{body});
+        defer std.testing.allocator.free(src);
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const v = try h.prove(std.testing.allocator, .{});
+        defer v.deinit(std.testing.allocator);
+        try std.testing.expect(v.ok());
+        try std.testing.expect(!h.has(.W0653));
+    }
+}
+
+test "W0653: a parameter derivation's integer `/` is announced too" {
+    // codegen/call.zig renders `-7 / k` in the derived default with the same
+    // zero-yields-0 guard; this is the compile-time half of that.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer k = 2;
+        \\  parameter integer q = -7 / k;
+        \\  analog I(p,n) <+ q * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(h.has(.W0653));
+}
+
+test "W0653: --allow silences it and changes nothing else" {
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  parameter integer k = 2;
+        \\  analog I(p,n) <+ (10 / k) * V(p,n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try h.bag.levels.set(h.arena_state.allocator(), .W0653, .allow);
+    const v = try h.prove(std.testing.allocator, .{});
+    defer v.deinit(std.testing.allocator);
+    try std.testing.expect(v.ok());
+    try std.testing.expect(!h.has(.W0653));
 }
 
 test "proof: a provably-zero divisor is still E0601, for `/` and real `%` alike" {

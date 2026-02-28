@@ -477,6 +477,9 @@ pub const Code = enum(u16) {
     W0650,
     W0651,
     W0652,
+    /// §4.2.4 an integer `/` whose divisor cannot be proven non-zero: legal,
+    /// and a zero divisor yields 0 at run time. See `Info`.
+    W0653,
 
     // ---------------------------------------------------------------- class 7
     // Events and timing — lower.zig.
@@ -3880,23 +3883,32 @@ fn infoOf(c: Code) Info {
             .title = "divisor cannot be proven non-zero",
             .lrm = "4.2.4",
             .explain =
-            \\LRM 4.2.8: "It shall be an error to pass zero (0) as the second
-            \\argument to the modulus operator." Integer `/` is the same case:
-            \\an integer has no infinity to represent the result, and the
-            \\generated code would execute illegal behaviour.
+            \\LRM 4.2.4: "It shall be an error to pass zero (0) as the second
+            \\argument to the modulus operator." VerA reports it in two cases:
             \\
-            \\Note that REAL division by zero is NOT an error here — x/0.0 is a
-            \\well-defined IEEE infinity, so VerA accepts it and the unit
-            \\forfeits its finiteness proof instead (see W0650). That is what
-            \\lets `I <+ V/r` compile for an unranged parameter r.
+            \\  - a divisor that is PROVABLY zero, for `%` of either type and
+            \\    for integer `/`;
+            \\  - an integer `%` whose divisor cannot be proven non-zero. The
+            \\    device has no defined value for it, so a proof is required.
             \\
-            \\To satisfy this code, give the divisor a range that excludes zero
-            \\(LRM 3.4.2):
+            \\A divisor that merely MIGHT be zero is otherwise accepted, as every
+            \\other domain rule is (provably outside -> error, unprovable ->
+            \\accept):
+            \\
+            \\  - real `%`: x % 0.0 is NaN, IEEE-defined; the unit forfeits its
+            \\    finiteness proof (W0650);
+            \\  - integer `/`: LRM 4.2.4 gives `/` no zero rule. The device yields
+            \\    0 for a zero divisor, and W0653 says so;
+            \\  - real `/`: x/0.0 is a well-defined IEEE infinity, which is what
+            \\    lets `I <+ V/r` compile for an unranged parameter r (W0650).
+            \\
+            \\To satisfy this code for an integer `%`, give the divisor a range
+            \\that excludes zero (LRM 3.4.2):
             \\
             \\    parameter integer n = 1 from [1:inf);
             \\    parameter integer m = 1 exclude 0;
             \\
-            \\or guard the division with an `if` the prover can see.
+            \\or guard the operation with an `if` the prover can see.
             ,
         },
         .E0602 => .{
@@ -4054,6 +4066,34 @@ fn infoOf(c: Code) Info {
             \\    parameter real r = 1k from (0:inf);
             \\
             \\See W0650 for what the proof buys.
+            ,
+        },
+        .W0653 => .{
+            .title = "integer division by a divisor that may be zero",
+            .lrm = "4.2.4",
+            .explain =
+            \\The source is LEGAL. LRM 4.2.4 makes only a zero MODULUS divisor an
+            \\error ("It shall be an error to pass zero (0) as the second
+            \\argument to the modulus operator"); it gives integer `/` no zero
+            \\rule, so a divisor the prover cannot show non-zero — typically an
+            \\unranged `parameter integer` — is accepted.
+            \\
+            \\The result still has to be something. IEEE 1364 5.1.5, which this
+            \\LRM inherits for integer arithmetic, makes division by zero `x`,
+            \\and an analog integer has no `x`. If the divisor is zero at run
+            \\time, the generated device yields 0. This warning is how you find
+            \\out, because nothing at run time will tell you.
+            \\
+            \\To silence it, show the prover the divisor is never zero:
+            \\
+            \\    parameter integer k = 2 exclude 0;
+            \\    parameter integer n = 2 from [1:inf);
+            \\
+            \\or guard the division with an `if (k != 0)` the prover can see, or
+            \\accept the 0 explicitly with `--allow=W0653`.
+            \\
+            \\A divisor that is PROVABLY zero is still an error (E0601), as is an
+            \\integer `%` whose divisor cannot be proven non-zero.
             ,
         },
         .W0652 => retiredInfo(

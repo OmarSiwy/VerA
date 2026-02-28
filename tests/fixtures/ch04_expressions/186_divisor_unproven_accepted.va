@@ -10,7 +10,11 @@
 //     k = 4, so 10 / k = 2.5 truncated = 2.
 //   - Table 4-6, row five: "10 % 3.75   2.5". With r = 3.75 as a parameter,
 //     10.0 % r is that row with the divisor unknown at compile time.
-// VerA used to refuse both with E0601 ("cannot be proven non-zero").
+// VerA used to refuse both with E0601 ("cannot be proven non-zero"). It now
+// accepts both and warns W0653 on `10 / k`: were k zero at run time the
+// device would yield 0, a value the LRM does not give (IEEE 1364 §5.1.5's
+// `x` has no analog integer). The harness cannot expect a warning in an
+// analog fixture; lib/ir/proof/test.zig pins W0653.
 //
 //! lrm 4.2.4
 `include "check.vh"

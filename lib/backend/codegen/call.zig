@@ -196,7 +196,9 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .ieq, .ine, .ilt, .ile, .igt, .ige => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs }),
                 // The quotient can reach +2^63 for minInt(i64)/-1;
                 // i65 holds that intermediate before the MIR's wrap32.
-                .idiv => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @panic(\"VerA: zero divisor in integer parameter derivation is not implemented\") else @as(i64, @as(i32, @truncate(@divTrunc(@as(i65, {s}), @as(i65, {s}))))))", .{ rhs, a, rhs }),
+                // A zero divisor yields 0, as the device's `renderOp` `.idiv`
+                // does; the prover's W0653 announced it at compile time.
+                .idiv => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @as(i64, 0) else @as(i64, @as(i32, @truncate(@divTrunc(@as(i65, {s}), @as(i65, {s}))))))", .{ rhs, a, rhs }),
                 .imod => try std.fmt.allocPrint(self.arena, "(if (({s}) == 0) @panic(\"VerA: zero divisor in integer parameter derivation is not implemented\") else @as(i64, @intCast(@rem(@as(i65, {s}), @as(i65, {s})))))", .{ rhs, a, rhs }),
                 .logand, .logor => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool((({s}) != 0) {s} (({s}) != 0)))", .{ a, if (row.op == .logand) "and" else "or", rhs }),
                 .shl => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(zShl({s}, {s}))))", .{ a, rhs }),
