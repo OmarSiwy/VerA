@@ -270,8 +270,7 @@ pub const Gen = struct {
     /// Owns `out` and nothing else — see `generate`.
     gpa: std.mem.Allocator,
     /// Per-unit state: the slice, use counts, inline decisions and slots for the
-    /// declaration being written. Carries deliberate cross-unit residue — see
-    /// unit_plan.zig's header before touching its reset.
+    /// declaration being written. Reset in full by every `analyze`.
     plan: UnitPlan = undefined,
     /// The derived facts this emitter reads and never writes: CFG, dominators,
     /// loops, block pools, instruction columns, value types, aliases

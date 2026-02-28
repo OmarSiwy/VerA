@@ -138,8 +138,6 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
     if (self.lower.table_samples.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
-    // Before `emitUnits`: its `plan.analyze` is the pass that clears the
-    // precompute plan's live-set residue (unit_plan.zig's partial reset).
     try emitPrecompute(self);
     const units_from = self.out.items.len;
     try gen_unit.emitUnits(self);
