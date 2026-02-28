@@ -34,8 +34,11 @@
 //!     `x/0.0` is an exact IEEE ±inf, so it is accepted and forfeits `finite`.
 //!     Rejecting it would refuse `I <+ V/r` — the plain resistor, and every
 //!     foundry compact model, which divide by unranged parameters.
-//!     Integer `/` and `%` DO stay errors: `@divTrunc(i64, 0)` is illegal
-//!     behavior in Zig, and integers have no inf to fall back on.
+//!     `%` by a PROVABLY zero divisor is that rule, and so is E0601 (so is a
+//!     provably-zero integer `/`); an unprovable one is accepted like any
+//!     other domain. Integer `/` has no inf to fall back on, so codegen
+//!     guards it (`@divTrunc(i64, 0)` is illegal behavior in Zig); integer
+//!     `%` has no guarded form and stays E0601 unless proven non-zero.
 //!
 //! DOD: three SoA arrays indexed by `Mir.Value` (interval, finite bit, guard
 //! ref). Instructions are walked once, in dominator-tree preorder. No per-op
