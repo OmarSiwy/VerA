@@ -254,7 +254,7 @@ fn buildCfg(self: *Analysis) Error!void {
         self.term[bi] = .none;
         var s: [2]u32 = undefined;
         var ns: usize = 0;
-        for (self.blockInstsFlat(@intCast(bi))) |inst| switch (self.mir.instOp(inst)) {
+        for (self.blockInstsFlat(@intCast(bi))) |inst| switch (Mir.opClass(self.mir.instOp(inst))) {
             .branch => {
                 const d = self.mir.instData(inst).branch;
                 self.term[bi] = inst;
@@ -267,7 +267,7 @@ fn buildCfg(self: *Analysis) Error!void {
                 s[0] = @intFromEnum(self.mir.instData(inst).jump.target);
                 ns = 1;
             },
-            else => {},
+            .unary, .binary, .ternary, .phi, .call => {},
         };
         self.succs[bi] = try a.dupe(u32, s[0..ns]);
     }
@@ -569,8 +569,8 @@ fn buildValueTypes(self: *Analysis) Error!void {
             const def = self.mir.valueDef(val);
             if (def != .inst_result) continue;
             const inst = def.inst_result;
-            switch (self.mir.instOp(inst)) {
-                .select => {
+            switch (Mir.opClass(self.mir.instOp(inst))) {
+                .ternary => { // `select`, the only ternary
                     const d = self.mir.instData(inst).ternary;
                     self.vty[v] = self.vty[@intFromEnum(self.rv(d.then_val))];
                 },
@@ -581,7 +581,7 @@ fn buildValueTypes(self: *Analysis) Error!void {
                     if (first == .undef) continue;
                     self.vty[v] = self.vty[@intFromEnum(first)];
                 },
-                else => {},
+                .unary, .binary, .branch, .jump, .call => {},
             }
         }
     }
@@ -729,9 +729,9 @@ pub fn livePhi(self: *const Analysis, inst: Mir.Inst) bool {
 /// Phis are block headers, terminators are `emitTerm`'s, and an aliased
 /// result was rewritten away by ssa.zig.
 pub fn liveStmt(self: *const Analysis, inst: Mir.Inst) bool {
-    switch (self.i_op[@intFromEnum(inst)]) {
+    switch (Mir.opClass(self.i_op[@intFromEnum(inst)])) {
         .phi, .branch, .jump => return false,
-        else => {},
+        .unary, .binary, .ternary, .call => {},
     }
     const r = self.i_res[@intFromEnum(inst)];
     return r != .undef and self.rv(r) == r;

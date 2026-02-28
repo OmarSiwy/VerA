@@ -132,20 +132,8 @@ pub const Interval = struct {
     }
 };
 
-/// LRM Tables 4-14 / 4-15 domains. The operand of each must be proven in-domain
-/// (else compile error), EXCEPT the "All x" group which governs float mode only.
-pub const Domain = enum {
-    all, // exp, expm1, sinh, cosh, tanh, sin, cos, floor, ceil, min, max, abs — §4.3.1/§4.3.2
-    positive, // ln, log10                                   §4.3.1  (x > 0)
-    gt_neg_one, // ln1p                                       §4.3.1  (x > -1)
-    non_negative, // sqrt                                     §4.3.1  (x >= 0)
-    unit_closed, // asin, acos                                §4.3.2  (-1 <= x <= 1)
-    unit_open, // atanh                                       §4.3.2  (-1 < x < 1)
-    ge_one, // acosh                                          §4.3.2  (x >= 1)
-    nonzero_divisor, // '/', '%'                              §4.2 / §4.3.1
-    tan_poles, // tan: x != n(π/2), n odd                     §4.3.2
-    pow_sign, // pow(x,y) sign rules                          §4.3.1 Table 4-14
-};
+/// LRM Tables 4-14 / 4-15 domains — an opcode fact, so it lives in the table.
+pub const Domain = Mir.opcode.Domain;
 
 /// Is this value a 0/1 predicate (§4.2.5/§4.2.8)? Shared with ifconv.zig's
 /// `peelToBool`: what peels there must be exactly what `condFacts` can mine
@@ -153,34 +141,11 @@ pub const Domain = enum {
 pub fn isPredicateValue(mir: *const Mir, v: Mir.Value) bool {
     const def = mir.valueDef(mir.resolveAlias(v));
     if (def != .inst_result) return false;
-    return switch (mir.instOp(def.inst_result)) {
-        .flt, .fgt, .fle, .fge, .feq, .fne, .ilt, .igt, .ile, .ige, .ieq, .ine, .lognot => true,
-        else => false,
-    };
+    return Mir.opcode.get(mir.instOp(def.inst_result)).predicate;
 }
 
 /// Map an Opcode to its LRM domain obligation. `.all` ⇒ nothing to prove.
-/// For the binary members the obligation is on the SECOND operand
-/// (`nonzero_divisor`) or on BOTH (`pow_sign`); everything else constrains the
-/// single unary operand.
+/// See `opcode.Info.domain`.
 pub fn domainOf(op: Mir.Opcode) Domain {
-    return switch (op) {
-        .ln, .log10 => .positive,
-        .ln1p => .gt_neg_one,
-        .sqrt => .non_negative,
-        .asin, .acos => .unit_closed,
-        .atanh => .unit_open,
-        .acosh => .ge_one,
-        .tan => .tan_poles,
-        // `ipow`'s one undefined corner is pow's: a zero base under a negative
-        // exponent (IEEE 1364-2005 Table 5-6's 'bx).
-        .pow, .ipow => .pow_sign,
-        // NOT `.fdiv`: §4.2.4 makes ONLY `%`-by-zero an error. `x/0.0` is an
-        // exact IEEE ±inf and is spec-legal, so it must not reject — it forfeits
-        // finiteness instead (see the `.fdiv` transfer), which drops the unit to
-        // `.strict`. Integer `/` and `%` stay errors: Zig's `@divTrunc(i64, 0)`
-        // is illegal behavior, and integers have no inf to fall back on.
-        .fmod, .idiv, .imod => .nonzero_divisor,
-        else => .all,
-    };
+    return Mir.opcode.get(op).domain;
 }
