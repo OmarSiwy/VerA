@@ -726,9 +726,35 @@ pub const Prover = struct {
             },
             // §4.5 analog operators / ch9 system functions: known ones carry a
             // spec-given range, everything else is ⊤.
-            .call => |c| return callAbstract(c.name),
+            .call => |c| return self.callTransfer(c.name, c.args),
             .branch, .jump => return .{ .iv = .top, .finite = false },
         }
+    }
+
+    /// `callAbstract`, plus the two calls whose range is a function of their
+    /// argument. Claiming either as `callAbstract` does — positive, nonzero,
+    /// finite whatever the argument — handed `1.0/$vt(V(p,n))` and
+    /// `1.0/limexp(V(p,n))` `@setFloatMode(.optimized)` over a division by a
+    /// value that can be zero: silent, Release-only UB.
+    fn callTransfer(self: *Prover, name: []const u8, args: []const Mir.Value) Abstract {
+        if (args.len == 1) {
+            const a = self.ivOf(args[0]);
+            const af = self.isFinite(args[0]);
+            // §9.15 `$vt(T)` = kT/q: T's sign, T's finiteness. $vt(0) = 0.
+            // Only the argument-free form reads the (positive) simulator
+            // temperature. The factor is codegen's; only its sign matters to a
+            // domain proof.
+            if (std.mem.eql(u8, name, "$vt"))
+                return .{ .iv = combine(a, proof_lattice.Interval.point(8.617333262145179e-5), mulOp), .finite = af };
+            // §4.5.13: "The apparent behavior of limexp() is not
+            // distinguishable from exp()" — so exp's interval, and exp(x)
+            // underflows to 0.0 below about -745, so NOT nonzero. Finite
+            // exactly when its argument is: the linearised side does not
+            // overflow the way exp does (SOUNDNESS MODEL 3 covers its slope).
+            if (std.mem.eql(u8, name, "limexp"))
+                return .{ .iv = unaryTransfer(.exp, a, af).iv, .finite = af };
+        }
+        return callAbstract(name);
     }
 
     /// Integer results (§3.2): clamp to the i64 range so an integer expression
@@ -1327,11 +1353,11 @@ pub const Prover = struct {
 pub fn callAbstract(name: []const u8) Prover.Abstract {
     const positive: proof_lattice.Interval = .{ .lo = 0, .lo_open = true, .nonzero = true };
     const non_negative: proof_lattice.Interval = .{ .lo = 0 };
-    // §9.10 environment parameter functions; §4.5.13 limexp; §9.18 $mfactor.
-    if (std.mem.eql(u8, name, "$vt") or // thermal voltage kT/q > 0
+    // §9.10 environment parameter functions; §9.18 $mfactor. `limexp` is
+    // not here: its range is its argument's (`Prover.callTransfer`).
+    if (std.mem.eql(u8, name, "$vt") or // thermal voltage kT/q > 0 — argument-free; see callTransfer
         std.mem.eql(u8, name, "$temperature") or // absolute temperature, kelvin
-        std.mem.eql(u8, name, "$mfactor") or // multiplicity factor > 0
-        std.mem.eql(u8, name, "limexp")) // §4.5.13: limited, hence finite
+        std.mem.eql(u8, name, "$mfactor")) // multiplicity factor > 0
         return .{ .iv = positive, .finite = true };
     if (std.mem.eql(u8, name, "$abstime") or std.mem.eql(u8, name, "$realtime"))
         return .{ .iv = non_negative, .finite = true };
