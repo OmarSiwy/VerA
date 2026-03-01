@@ -31,7 +31,8 @@ const enableArgIdx = codegen.enableArgIdx;
 // §4.5.2 the analog-operator state machine
 // =======================================================================
 
-/// What the accepted-step body needs, decided once.
+/// What the accepted-step body needs, decided once for `updateState` and
+/// `acceptQ` alike.
 const Accept = struct {
     /// Some operator steps on `dt = inst.abstime - state.t_prev`.
     uses_dt: bool = false,
@@ -112,6 +113,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     try emitStateClass(self);
     if (gen_file.emitsStateCtl(self)) try gen_file.emitStateCtl(self);
     try emitAdvanceIteration(self);
+    try emitAcceptQ(self, acc);
 }
 
 /// `contract.StateClass`, so a host's GPU gate reads one decl instead of
@@ -127,9 +129,62 @@ fn emitStateClass(self: *Gen) Error!void {
     });
 }
 
-/// The accepted-step body of `updateState` (`val` = ".v" on `R`): stage the
-/// path latches, advance every operator, write the held variables back.
-/// Reads the core result `m`.
+/// §5.6.1.2 + §4.5.2 the accepted-point pass as ONE core evaluation: the
+/// charge `q` at `x` and everything `updateState` stages. Built from
+/// `emitFused`'s mechanism — both halves are written against one hoisted
+/// `core` call. Emitted beside `updateState` whenever the device has a
+/// reactive half; a host that fetches `q` at the accepted point calls this
+/// instead of `q` followed by `updateState`, which ran the core twice.
+fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
+    if (!gen_dispatch.anyQ(self)) return;
+    self.uses_x = false;
+    self.uses_model = false;
+    self.uses_inst = true; // the §9.17 resets below always write it
+    self.core_wanted = false;
+    self.core_hoisted = true;
+    defer self.core_hoisted = false;
+    try self.w(
+        \\/// §5.6.1.2 + §4.5.2 the accepted-point pass from ONE core evaluation.
+        \\/// Returns `q(S, x, model, inst, t)` and then does what
+        \\/// `updateState(model, inst, <values of x>, state)` does, reading the
+        \\/// same core result; staged values carry `S`'s value semantics.
+        \\
+    , .{});
+    try self.w("pub fn acceptQ(comptime S: type, ", .{});
+    const at_x = self.out.items.len;
+    try self.w("x: [n_u]S, ", .{});
+    const at_model = self.out.items.len;
+    try self.w("model: *const Model, inst: *Instance, {s}: *State) [n_u]S {{\n", .{
+        if (acc.reads_t_prev) "state" else "_",
+    });
+    const at_core = self.out.items.len;
+    try self.ind(1);
+    try self.b("const qq = blk: {{\n", .{});
+    try self.ind(2);
+    const at_mut = self.out.items.len;
+    try self.b("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
+    self.ind_base = 1;
+    const stamps = try gen_dispatch.emitStamps(self, true);
+    self.ind_base = 0;
+    if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
+    try self.ind(2);
+    try self.b("break :blk res;\n", .{});
+    try self.ind(1);
+    try self.b("}};\n", .{});
+    try emitAcceptBody(self, acc, ".val()");
+    try self.w("    return qq;\n}}\n\n", .{});
+    if (self.core_wanted or acc.uses_core) {
+        self.uses_x = true;
+        self.uses_model = true;
+        try self.out.insertSlice(self.gpa, at_core, "    const m = core(S, x, model, inst);\n");
+    }
+    if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
+    if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
+}
+
+/// The accepted-step body shared by `updateState` (`val` = ".v" on `R`) and
+/// `acceptQ` (".val()" on the host's `S`): stage the path latches, advance
+/// every operator, write the held variables back. Reads the core result `m`.
 fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
     const uses_dt = acc.uses_dt;
     // §5.6.1.2 stage this iterate's path-latch operands. They become the

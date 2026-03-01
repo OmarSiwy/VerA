@@ -38,10 +38,7 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     };
 
     try emitResidual(self, false);
-    var any_q = false;
-    for (self.lower.contributions.items) |c| {
-        if (self.an.rv(c.react_val) != .f_zero) any_q = true;
-    }
+    const any_q = anyQ(self);
     if (any_q) {
         try emitResidual(self, true);
         try emitFused(self);
@@ -51,6 +48,14 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     // constant reading last in the file is the one written last.
     try emitPattern(self, any_q);
     try emitDisplay(self);
+}
+
+/// Does any contribution have a reactive half — i.e. is `q` emitted?
+pub fn anyQ(self: *const Gen) bool {
+    for (self.lower.contributions.items) |c| {
+        if (self.an.rv(c.react_val) != .f_zero) return true;
+    }
+    return false;
 }
 
 /// §5.6 structural Jacobian: which columns of each residual row can be
