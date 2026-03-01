@@ -236,7 +236,7 @@ test "codegen: acceptQ is q and updateState off ONE core evaluation" {
     const src = try h.gen(std.testing.allocator);
     const at = std.mem.indexOf(u8, src, "pub fn acceptQ(comptime S: type,") orelse return error.NoAcceptQ;
     const body = src[at..][0 .. std.mem.indexOf(u8, src[at..], "\n}\n") orelse return error.NoEnd];
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "core("));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, "@call(.always_inline, core,"));
     try std.testing.expect(std.mem.indexOf(u8, body, "inst.wq__0 = m.f") != null);
     try std.testing.expect(std.mem.indexOf(u8, body, "return qq;") != null);
 }
@@ -255,7 +255,7 @@ test "codegen: one stably-named declaration for the model, thin dispatcher" {
     // keys still exist (naming.zig, proof.zig, the `Instance` state fields) but
     // no longer name a declaration.
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(comptime S: type,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "const m = core(S, x, model, inst);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "const m = @call(.always_inline, core, .{ S, x, model, inst });") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "contract.validate(Self)") != null);
     // no reactive part ⇒ no q()
@@ -292,7 +292,7 @@ test "codegen: two contributions sharing a subexpression evaluate it ONCE" {
     // of times the model runs per Newton iteration.
     try std.testing.expectEqual(
         @as(usize, 1),
-        std.mem.count(u8, src, "const m = core(S, x, model, inst);"),
+        std.mem.count(u8, src, "const m = @call(.always_inline, core, .{ S, x, model, inst });"),
     );
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
     // The costly part — `exp` — is emitted once. That is the whole scaling
@@ -319,7 +319,7 @@ test "codegen: one declaration even for a single contribution" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(") != null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= core(S, x, model, inst);"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= @call(.always_inline, core, .{ S, x, model, inst });"));
 }
 
 test "codegen: the unit ranges tile the emission and each names its own decl" {
@@ -356,11 +356,8 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
         try std.testing.expect(std.mem.indexOf(u8, o.text[lo..hi], decl) != null);
         try std.testing.expect(lo <= o.unit_fn[i] and o.unit_fn[i] < hi);
         const at = o.text[o.unit_fn[i]..];
-        // `inline` included: splicing `pub ` in front of it gives
-        // `pub inline fn`, which is what the merged core is emitted as.
         try std.testing.expect(std.mem.startsWith(u8, at, decl) or
-            std.mem.startsWith(u8, at, "pub fn ") or
-            std.mem.startsWith(u8, at, "inline fn "));
+            std.mem.startsWith(u8, at, "pub fn "));
     }
     // The tail after the last unit is the dispatcher, not more units.
     try std.testing.expect(std.mem.indexOf(u8, o.text[o.unit_hi[o.unit_hi.len - 1]..], "pub fn eval(") != null);
@@ -487,9 +484,9 @@ test "codegen: evalQ fuses both residuals onto ONE core call" {
 
     // The whole point: ONE core call for both halves. Two would make `evalQ`
     // exactly the `eval` + `q` it exists to replace.
-    try std.testing.expect(std.mem.count(u8, fused, "core(S, x, model, inst)") == 1);
+    try std.testing.expect(std.mem.count(u8, fused, "@call(.always_inline, core, .{ S, x, model, inst })") == 1);
     // ...and it is hoisted ABOVE both blocks, not opened inside one of them.
-    try std.testing.expect(std.mem.indexOf(u8, fused, "core(S, x, model, inst)").? <
+    try std.testing.expect(std.mem.indexOf(u8, fused, "@call(.always_inline, core, .{ S, x, model, inst })").? <
         std.mem.indexOf(u8, fused, "blk:").?);
     try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: [n_u]S, q: [n_u]S }") != null);
     try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = rr, .q = qq };") != null);
@@ -1530,7 +1527,7 @@ test "codegen: §9.4 a display unit that reads an operator input opens the cache
     defer h.deinit();
     const exe = try h.genDisplay(std.testing.allocator);
     const at = std.mem.indexOf(u8, exe, "zTransition(S, c.f").?;
-    const open = std.mem.lastIndexOf(u8, exe[0..at], "const c = core(S, x, model, inst);");
+    const open = std.mem.lastIndexOf(u8, exe[0..at], "const c = @call(.always_inline, core, .{ S, x, model, inst });");
     const head = std.mem.lastIndexOf(u8, exe[0..at], "\nfn ") orelse 0;
     try std.testing.expect(open != null and open.? > head);
 }

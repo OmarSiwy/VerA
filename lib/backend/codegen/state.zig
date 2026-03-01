@@ -176,7 +176,7 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (self.core_wanted or acc.uses_core) {
         self.uses_x = true;
         self.uses_model = true;
-        try self.out.insertSlice(self.gpa, at_core, "    const m = core(S, x, model, inst);\n");
+        try self.out.insertSlice(self.gpa, at_core, "    const m = @call(.always_inline, core, .{ S, x, model, inst });\n");
     }
     if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);

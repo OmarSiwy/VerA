@@ -723,18 +723,21 @@ pub fn emitCommon(self: *Gen) Error!void {
         \\/// share one CFG, so they share one declaration and `eval`/`q` read
         \\/// their targets out of the returned struct.
         \\
-        \\/// `inline` because the ONLY caller shape is `eval`/`q`/`evalQ`
-        \\/// destructuring the returned struct immediately: behind a call
-        \\/// boundary the `[n_u]S` argument and the {d}-field result both go
-        \\/// to memory, the host's Dual derivative vectors spill instead of
-        \\/// staying in registers, and no live-out the caller drops can be
-        \\/// dead-coded. Measured on ARPice devices/mos6_inverter: 45.3 ms
-        \\/// inline vs 64.9 ms out-of-line (+43%), tran/fourbitadder +40%,
-        \\/// scaling/parallel_inverters_500 +51%.
+        \\/// Inlined at every host-scalar site (`@call(.always_inline, ...)` in
+        \\/// `eval`/`q`/`evalQ`), which destructure the returned struct at
+        \\/// once: behind a call boundary the `[n_u]S` argument and the
+        \\/// {d}-field result both go to memory, the host's Dual derivative
+        \\/// vectors spill instead of staying in registers, and no live-out the
+        \\/// caller drops can be dead-coded. Measured on ARPice
+        \\/// devices/mos6_inverter: 45.3 ms inline vs 64.9 ms out-of-line
+        \\/// (+43%), tran/fourbitadder +40%, scaling/parallel_inverters_500
+        \\/// +51%. NOT `inline fn`, so the value-only `core(R, ...)` sites —
+        \\/// updateState, noisePsd, collapse, limit, seed — share ONE
+        \\/// out-of-line instantiation instead of each inlining the model.
         \\
     , .{ self.jobs.len, self.jobs.len });
     const at_fn = self.out.items.len;
-    try self.w("inline fn {s}(comptime S: type, ", .{self.common_name});
+    try self.w("fn {s}(comptime S: type, ", .{self.common_name});
     const at_x = self.out.items.len;
     try self.w("x: [n_u]S, ", .{});
     const at_model = self.out.items.len;
@@ -1072,7 +1075,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         self.uses_model = true;
         self.uses_inst = true;
         try self.ind(1);
-        try self.b("const c = core(S, x, model, inst);\n", .{});
+        try self.b("const c = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
     }
     if (self.plan.straight) {
         try gen_cfg.emitBlockInsts(self, 0, 1, true);
