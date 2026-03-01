@@ -160,6 +160,34 @@ test "codegen: a core that reads analysis()/sim-state carries core_reads_simstat
     }
 }
 
+test "codegen: core_reads_simstate counts `analog initial` and the Newton iteration" {
+    // Both are Instance fields the HOST rewrites between evaluations
+    // (`is_analog_initial` per sub-task, `newton_iteration` through
+    // beginSolve/advanceIteration), which the old text scan did not list.
+    const srcs = [_][]const u8{
+        \\module ai(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  real g;
+        \\  analog initial g = 2.0;
+        \\  analog I(p, n) <+ g * V(p, n);
+        \\endmodule
+        ,
+        \\module it(p, n);
+        \\  inout p, n;
+        \\  electrical p, n;
+        \\  analog I(p, n) <+ V(p, n) * $simparam("iteration", 1.0);
+        \\endmodule
+    };
+    for (srcs) |text| {
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, text, &h);
+        defer h.deinit();
+        const src = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, src, "pub const core_reads_simstate = true;") != null);
+    }
+}
+
 test "codegen: one stably-named declaration for the model, thin dispatcher" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, resistor_va, &h);

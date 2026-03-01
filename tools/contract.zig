@@ -1549,10 +1549,11 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // field (analysis()/$abstime/ddt-family `inst.dt` and friends). A host
     // that keeps Instance blobs device-resident republishes those fields on
     // the HOST copy only, so such a core must not run device-resident
-    // (ARPice engine.gpuEligible keys off this). Emitted by codegen from a
-    // scan of exactly the unit range; the updateState epilogue's
-    // `state.t_prev = inst.abstime` latch does not count — nothing in the
-    // core reads it back.
+    // (ARPice engine.gpuEligible keys off this). Emitted by codegen from the
+    // calls in the core's slice: abstime, dt, analysis_kind, the step and
+    // `analog initial` flags, newton_iteration and limiter_previous. The
+    // updateState epilogue's `state.t_prev = inst.abstime` latch does not
+    // count — nothing in the core reads it back.
     .{ "core_reads_simstate", {} },
     .{ "mutable_eval", {} },
     // §4.6.4.3's array-parameter table at this card. Optional; see `validate`
