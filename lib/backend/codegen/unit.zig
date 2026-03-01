@@ -637,8 +637,8 @@ pub fn emitUnits(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         const k = opKind(u.target);
         if (k != .laplace and k != .zi) continue;
-        const inst = opInstOf(self, @intCast(i)) orelse continue;
-        const p = try cg_filters.filterPlan(self, inst, self.mir.instData(inst).call.args);
+        if (opInstOf(self, @intCast(i)) == null) continue;
+        const p = cg_filters.planOf(self, i);
         if (p.err != null) continue;
         const lo = self.out.items.len;
         const nm = try std.fmt.allocPrint(self.arena, "{s}__sec", .{self.unit_names[i]});

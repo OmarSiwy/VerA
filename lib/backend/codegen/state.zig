@@ -247,7 +247,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
             ),
             // §4.5.11 advance the cascade on the accepted solution.
             .laplace => {
-                const p = try cg_filters.filterPlan(self, inst, args);
+                const p = cg_filters.planOf(self, i);
                 if (p.err == null) try self.w(
                     "        zLaplaceStep({d}, {d}, in, {s}__sec(model), dt, &inst.{s}__u, &inst.{s}__y);\n",
                     .{ p.ns, p.deg, n, n, n },
@@ -259,7 +259,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
             // the step bound is what keeps the solver from stepping over a
             // sample and aliasing the filter.
             .zi => {
-                const p = try cg_filters.filterPlan(self, inst, args);
+                const p = cg_filters.planOf(self, i);
                 if (p.err == null) try self.w(
                     \\        const period = {1s};
                     \\        // §4.5.12: "T specifies the sampling period of the filter".

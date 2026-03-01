@@ -891,7 +891,8 @@ pub fn emitInstance(self: *Gen) Error!void {
             // is what keeps it a codegen-time constant even though every
             // coefficient VALUE is a runtime read of Model.
             .laplace, .zi => {
-                const p = try cg_filters.filterPlan(self, gen_unit.opInstOf(self, @intCast(i)) orelse continue, gen_unit.opArgs(self, i));
+                if (gen_unit.opInstOf(self, @intCast(i)) == null) continue;
+                const p = cg_filters.planOf(self, i);
                 if (p.err != null) continue;
                 try self.w("    {s}__u: [{d}]f64 = @splat(0.0), // §4.5.{s}\n", .{
                     n, p.ns * p.deg, if (opKind(u.target) == .zi) "12" else "11",
