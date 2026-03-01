@@ -94,7 +94,7 @@ pub fn planCommon(self: *Gen) Error!void {
         // and printing once per Newton iteration is exactly what
         // `emitDisplay` exists to prevent. It keeps its own declaration and
         // reads the core like the units used to.
-        if (job.is_display) continue;
+        if (job.kind == .display) continue;
         mode = .strictest(mode, job.mode);
         const v = self.an.rv(job.target);
         if (v == .f_zero) continue; // an operator with no input; rendered inline

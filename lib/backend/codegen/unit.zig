@@ -41,7 +41,11 @@ const opKind = codegen.opKind;
 /// value rendered as a cache read in a unit whose slice was never counted.
 /// One list, built once, walked twice.
 pub const Job = struct {
-    name: []const u8,
+    kind: Kind,
+    /// The declaration name. Only the §9.4 display job is emitted as a
+    /// declaration of its own (`emitUnits`); every other job exists to put
+    /// its target in the core, so it has none.
+    name: []const u8 = "",
     target: Mir.Value,
     mode: proof.FloatMode,
     comment: []const u8,
@@ -50,9 +54,41 @@ pub const Job = struct {
     /// Index into `units` for an analog-operator job whose §4.5.11/§4.5.12
     /// coefficient reader is emitted right after it; `none_u32` otherwise.
     sec_of: u32 = none_u32,
-    /// §9.4: the one job that is NOT folded into the core, because its body
-    /// has side effects the residual must not trigger. See `planCommon`.
-    is_display: bool = false,
+
+    /// Why the target is in the core. `buildJobs` queues the kinds in this
+    /// order, which is the insert-tolerance order of the core's fields.
+    pub const Kind = enum {
+        /// §5.6 a contribution's resistive target.
+        resist,
+        /// §5.6.1.2 a contribution's reactive target.
+        react,
+        /// §4.5 an analog operator's input, or a §9.17 request.
+        op_input,
+        /// §4.5 Table 4-20 a dynamic operator control argument.
+        ctrl,
+        /// §5.10 a held variable's end-of-block value.
+        held,
+        /// §4.5.15 a `$limit` algorithm argument.
+        limit_arg,
+        /// §9.17.3 a next-iteration limiter value.
+        limit_old,
+        /// §9.17.1 the iteration-rejection request.
+        reject_iteration,
+        /// §5.6.1.3 a runtime retention flag.
+        retained,
+        /// §4.6.4 a noise PSD, exponent or coefficient.
+        noise,
+        /// §4.6.3 a solve-computed AC stimulus magnitude or phase.
+        ac_stim,
+        /// §5.10.3.3 a timer's latest period.
+        timer_period,
+        /// §9.21.1/§9.13 table captures and distribution checks.
+        table_effect,
+        /// §9.4: the one job that is NOT folded into the core, because its
+        /// body has side effects the residual must not trigger. See
+        /// `planCommon`.
+        display,
+    };
 };
 
 pub fn unitMode(self: *const Gen, i: usize) proof.FloatMode {
@@ -371,13 +407,13 @@ pub fn buildJobs(self: *Gen) Error!void {
         const resist = self.an.rv(c.resist_val);
         const react = self.an.rv(c.react_val);
         if (resist != .f_zero) try jobs.append(self.arena, .{
-            .name = self.unit_names[i],
+            .kind = .resist,
             .target = resist,
             .mode = mode,
             .comment = unitComment(c, false),
         });
         if (react != .f_zero) try jobs.append(self.arena, .{
-            .name = try std.fmt.allocPrint(self.arena, "{s}__q", .{self.unit_names[i]}),
+            .kind = .react,
             .target = react,
             .mode = mode,
             .comment = unitComment(c, true),
@@ -389,7 +425,7 @@ pub fn buildJobs(self: *Gen) Error!void {
         const args = self.mir.instData(inst).call.args;
         const k = opKind(u.target);
         try jobs.append(self.arena, .{
-            .name = self.unit_names[i],
+            .kind = .op_input,
             .target = if (args.len == 0) Mir.Value.f_zero else self.an.rv(args[0]),
             .mode = unitMode(self, i),
             .comment = switch (k) {
@@ -421,9 +457,7 @@ pub fn buildJobs(self: *Gen) Error!void {
             if (v == .f_zero) continue;
             if (!try gen_call.ctrlIsDynamic(self, args[ai])) continue;
             try jobs.append(self.arena, .{
-                // Like `$limit`'s below, this job exists to put a value in
-                // the core; the name is never written.
-                .name = "$ctrl",
+                .kind = .ctrl,
                 .target = v,
                 .mode = unitMode(self, i),
                 .comment = "§4.5 Table 4-20 dynamic operator control argument",
@@ -436,9 +470,9 @@ pub fn buildJobs(self: *Gen) Error!void {
     // gains a held variable appends a core field, it renumbers none.
     //
     // `.strict` unconditionally: proof.zig rates contributions only.
-    for (self.lower.held_vars.items, 0..) |h, i| {
+    for (self.lower.held_vars.items) |h| {
         try jobs.append(self.arena, .{
-            .name = self.held_names[i],
+            .kind = .held,
             .target = self.an.rv(h.final),
             .mode = .strict,
             .comment = "§5.10 event-assigned variable, held across evaluations",
@@ -453,10 +487,7 @@ pub fn buildJobs(self: *Gen) Error!void {
         for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v| {
             if (v == .f_zero) continue;
             try jobs.append(self.arena, .{
-                // Only the §9.4 display job is emitted as a declaration of
-                // its own (see `emitUnits`); every other job exists to put
-                // its target in the core, so this name is never written.
-                .name = "$limit",
+                .kind = .limit_arg,
                 .target = v,
                 .mode = .strict,
                 .comment = "§4.5.15 $limit algorithm argument",
@@ -464,13 +495,13 @@ pub fn buildJobs(self: *Gen) Error!void {
         }
     }
     for (self.lower.limit_slots.items) |slot| try jobs.append(self.arena, .{
-        .name = "$limit$old",
+        .kind = .limit_old,
         .target = self.an.rv(slot.final),
         .mode = .strict,
         .comment = "§9.17.3 next-iteration limiter value",
     });
     if (self.lower.reject_iteration_place != null) try jobs.append(self.arena, .{
-        .name = "$discontinuity(-1)",
+        .kind = .reject_iteration,
         .target = self.an.rv(self.lower.reject_iteration),
         .mode = .strict,
         .comment = "§9.17.1 iteration rejection",
@@ -480,15 +511,13 @@ pub fn buildJobs(self: *Gen) Error!void {
     // fields. Queued after the limit arguments and before the §9.4 display
     // job for the same insert-tolerance reason as both neighbours — and a
     // module whose every potential contribution is unconditional queues
-    // NOTHING here, so its core fields do not move. Like the `$limit`
-    // arguments, these jobs exist to put a value in the core; the name is
-    // never written.
+    // NOTHING here, so its core fields do not move.
     for (self.lower.contributions.items, 0..) |c, i| {
         if (c.kind != .direct or c.access != .potential) continue;
         const ret = retention(self, c);
         if (ret != .runtime) continue;
         try jobs.append(self.arena, .{
-            .name = "$retained",
+            .kind = .retained,
             .target = ret.runtime,
             .mode = unitMode(self, i),
             .comment = "§5.6.1.3 retention flag",
@@ -496,7 +525,7 @@ pub fn buildJobs(self: *Gen) Error!void {
         if (switchFlowOf(self, i)) |j| {
             const fret = retention(self, self.lower.contributions.items[j]);
             if (fret == .runtime) try jobs.append(self.arena, .{
-                .name = "$retained",
+                .kind = .retained,
                 .target = fret.runtime,
                 .mode = unitMode(self, j),
                 .comment = "§5.6.1.3 retention flag",
@@ -530,9 +559,7 @@ pub fn buildJobs(self: *Gen) Error!void {
             if (v == .f_zero) continue;
             if (k != 0 and gen_dispatch.psdConst(self, v) != null) continue;
             try jobs.append(self.arena, .{
-                // Never written: like `$limit`/`$retained`, this job exists
-                // only to put its target in the core.
-                .name = "$noise",
+                .kind = .noise,
                 .target = v,
                 .mode = .strict,
                 .comment = "§4.6.4 noise PSD",
@@ -553,7 +580,7 @@ pub fn buildJobs(self: *Gen) Error!void {
             if (v == .f_zero) continue;
             if (!try gen_call.ctrlIsDynamic(self, v)) continue;
             try jobs.append(self.arena, .{
-                .name = "$ac_stim",
+                .kind = .ac_stim,
                 .target = v,
                 .mode = .strict,
                 .comment = "§4.6.3 AC stimulus magnitude or phase",
@@ -579,16 +606,14 @@ pub fn buildJobs(self: *Gen) Error!void {
         const v = self.an.rv(args[1]);
         if (v == .f_zero) continue;
         try jobs.append(self.arena, .{
-            // Never written: like `$limit`/`$retained`, this job exists
-            // only to put its target in the core.
-            .name = "$timer$period",
+            .kind = .timer_period,
             .target = v,
             .mode = .strict,
             .comment = "§5.10.3.3 the latest period, read by the schedule",
         });
     }
     if (self.lower.table_effect != .f_zero) try jobs.append(self.arena, .{
-        .name = "$table_effect",
+        .kind = .table_effect,
         .target = self.an.rv(self.lower.table_effect),
         .mode = .strict,
         .comment = "§9.21.1 table captures and §9.13 distribution checks in source order",
@@ -609,11 +634,11 @@ pub fn buildJobs(self: *Gen) Error!void {
         }) catch return error.NameTooLong;
         self.display_name = try self.arena.dupe(u8, n);
         try jobs.append(self.arena, .{
+            .kind = .display,
             .name = self.display_name,
             .target = root,
             .mode = .strict,
             .comment = "§9.4 display tasks, in source order",
-            .is_display = true,
         });
     }
     self.jobs = jobs.items;
@@ -646,7 +671,7 @@ pub fn emitUnits(self: *Gen) Error!void {
         try gen_file.recordUnitFile(self, nm, lo, at);
     }
     for (self.jobs) |job| {
-        if (!job.is_display) continue;
+        if (job.kind != .display) continue;
         self.pre_fatal = job.pre_fatal;
         // §9.5 the one unit where a descriptor operation may actually happen.
         self.emitting_display = true;
@@ -682,7 +707,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     // the whole device.
     self.fatal = null;
     for (self.jobs) |job| {
-        if (job.is_display) continue;
+        if (job.kind == .display) continue;
         if (job.pre_fatal) |m| {
             self.fatal = m;
             break;

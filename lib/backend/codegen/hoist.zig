@@ -180,7 +180,7 @@ pub fn planPrecompute(self: *Gen) Error!void {
         // `4kT/0` — where staying a core live-out gives it the zero seed
         // that is the right answer for a generator this bias does not have.
         // See `buildJobs`'s `$noise` queue.
-        if (std.mem.eql(u8, job.name, "$noise")) continue;
+        if (job.kind == .noise) continue;
         pcConsider(self, cls, root, job.target);
     }
 
@@ -346,7 +346,7 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
     // No shared core to cut.
     if (self.lo_vals.len == 0) return;
     for (self.jobs) |job| {
-        if (!job.is_display and job.pre_fatal != null) return;
+        if (job.kind != .display and job.pre_fatal != null) return;
     }
     const save_common = self.emitting_common;
     const save_strict = self.cur_strict;
