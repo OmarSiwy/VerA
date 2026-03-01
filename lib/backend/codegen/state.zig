@@ -31,27 +31,46 @@ const enableArgIdx = codegen.enableArgIdx;
 // §4.5.2 the analog-operator state machine
 // =======================================================================
 
+/// What the accepted-step body needs, decided once.
+const Accept = struct {
+    /// Some operator steps on `dt = inst.abstime - state.t_prev`.
+    uses_dt: bool = false,
+    /// Some operator input, held variable or path latch is a core field.
+    uses_core: bool = false,
+    /// `State.t_prev` has a reader: `dt`, or a §4.5.7 `absdelay` freezing its
+    /// td at the first evaluation. Without one the field and its store are
+    /// not emitted, and a path-latch-only `State` is `struct {}`.
+    reads_t_prev: bool = false,
+};
+
+fn scanAccept(self: *Gen) Error!Accept {
+    var a: Accept = .{};
+    for (self.units, 0..) |u, i| {
+        if (u.role != .analog_op) continue;
+        const k = opKind(u.target);
+        a.uses_dt = a.uses_dt or opdb.get(k).needs_dt;
+        if (k == .absdelay and try gen_call.absdelayFreezes(self, gen_unit.opArgs(self, i))) a.reads_t_prev = true;
+        if (!opHasState(k)) continue;
+        a.uses_core = a.uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
+    }
+    for (self.held_idx) |k| a.uses_core = a.uses_core or k != none_u32;
+    a.uses_core = a.uses_core or gen_file.pathLatches(self);
+    a.reads_t_prev = a.reads_t_prev or a.uses_dt;
+    return a;
+}
+
 /// Advance every stateful operator once the step is accepted. State lives in
 /// `Instance` (eval reads it); `State` only carries the bookkeeping the
 /// contract wants in its own struct.
 pub fn emitStateMachine(self: *Gen) Error!void {
-    var uses_dt = false;
-    var uses_core = false;
-    for (self.units, 0..) |u, i| {
-        if (u.role != .analog_op) continue;
-        const k = opKind(u.target);
-        uses_dt = uses_dt or opdb.get(k).needs_dt;
-        if (!opHasState(k)) continue;
-        uses_core = uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
-    }
-    for (self.held_idx) |k| uses_core = uses_core or k != none_u32;
-    uses_core = uses_core or gen_file.pathLatches(self);
+    const acc = try scanAccept(self);
+    const uses_core = acc.uses_core;
     try self.w(
         \\/// §4.5.2 accepted-step bookkeeping for the analog operators.
         \\pub const State = struct {{
-        \\    t_prev: f64 = 0.0,
         \\
     , .{});
+    if (acc.reads_t_prev) try self.w("    t_prev: f64 = 0.0,\n", .{});
     if (self.lower.limit_slots.items.len != 0) try self.w(
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lower.limit_slots.items.len},
@@ -64,13 +83,14 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\    return .{{}};
         \\}}
         \\
-        \\pub fn updateState({0s}: *const Model, inst: *Instance, {1s}: [n_u]f64, state: *State) contract.UpdateResult {{
+        \\pub fn updateState({0s}: *const Model, inst: *Instance, {1s}: [n_u]f64, {2s}: *State) contract.UpdateResult {{
         \\
     , .{
         // Both go unread when the only accepted-step work is §9.13.1's
         // internal-seed advance, which is a function of the seed alone.
         if (uses_core) "model" else "_",
         if (uses_core) "x" else "_",
+        if (acc.reads_t_prev) "state" else "_",
     });
     if (uses_core) try self.w(
         \\    var xr: [n_u]R = undefined;
@@ -82,15 +102,45 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     // costs exactly one model evaluation however many operators there are.
     // `model` is always live because that call reads it. `dt` is not.
     if (uses_core) try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_hoist.probeInstance(self)});
+    try emitAcceptBody(self, acc, ".v");
+    try self.w(
+        \\    return .ok;
+        \\}}
+        \\
+        \\
+    , .{});
+    try emitStateClass(self);
+    if (gen_file.emitsStateCtl(self)) try gen_file.emitStateCtl(self);
+    try emitAdvanceIteration(self);
+}
+
+/// `contract.StateClass`, so a host's GPU gate reads one decl instead of
+/// inferring the class from which fields exist. `.path_latch`: the state is
+/// the §5.6.1.2 latches alone — `updateState` only stages `wb`/`wq` and
+/// `stateCtl(.commit)` latches them, with no operator history, held FSM or
+/// §9.13.1 seed to advance. Anything else `updateState` carries is `.history`.
+fn emitStateClass(self: *Gen) Error!void {
+    const latch_only = gen_file.pathLatches(self) and !gen_file.hasStatefulOps(self) and
+        self.lower.rng_auto_sites == 0;
+    try self.w("pub const state_class: contract.StateClass = .{s};\n\n", .{
+        if (latch_only) "path_latch" else "history",
+    });
+}
+
+/// The accepted-step body of `updateState` (`val` = ".v" on `R`): stage the
+/// path latches, advance every operator, write the held variables back.
+/// Reads the core result `m`.
+fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
+    const uses_dt = acc.uses_dt;
     // §5.6.1.2 stage this iterate's path-latch operands. They become the
     // committed base ONLY at stateCtl(.commit): a rejected attempt leaves
     // pb/pq untouched, so the retry reopens on the accepted charge with a
     // zero α·Δq residual.
     for (self.prev_lo, 0..) |lo, k| {
-        try self.w("    inst.wb__{d} = m.f{d}.v; // path_prev staging\n", .{ k, lo });
+        try self.w("    inst.wb__{d} = m.f{d}{s}; // path_prev staging\n", .{ k, lo, val });
     }
     for (self.acc_lo, 0..) |lo, k| {
-        try self.w("    inst.wq__{d} = m.f{d}.v; // path_acc staging\n", .{ k, lo });
+        try self.w("    inst.wq__{d} = m.f{d}{s}; // path_acc staging\n", .{ k, lo, val });
     }
     if (uses_dt) try self.w("    const dt = inst.abstime - state.t_prev;\n", .{});
     // §9.17 reset FIRST, unconditionally: a `$bound_step` that only fired on
@@ -122,7 +172,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         if (lo == none_u32) {
             try self.w("    {{\n        const in: f64 = 0.0;\n", .{});
         } else {
-            try self.w("    {{\n        const in = m.f{d}.v;\n", .{lo});
+            try self.w("    {{\n        const in = m.f{d}{s};\n", .{ lo, val });
         }
         switch (k) {
             .ddt => try self.w("        inst.{s}__prev = in;\n", .{n}),
@@ -305,18 +355,10 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         } else if (h.ty == .integer) {
             try self.w("    inst.{s} = m.f{d};\n", .{ n, k });
         } else {
-            try self.w("    inst.{s} = m.f{d}.v;\n", .{ n, k });
+            try self.w("    inst.{s} = m.f{d}{s};\n", .{ n, k, val });
         }
     }
-    try self.w(
-        \\    state.t_prev = inst.abstime;
-        \\    return .ok;
-        \\}}
-        \\
-        \\
-    , .{});
-    if (gen_file.emitsStateCtl(self)) try gen_file.emitStateCtl(self);
-    try emitAdvanceIteration(self);
+    if (acc.reads_t_prev) try self.w("    state.t_prev = inst.abstime;\n", .{});
 }
 
 /// Called after evaluating a Newton iterate, with that iterate's x.
