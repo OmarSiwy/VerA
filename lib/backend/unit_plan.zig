@@ -707,7 +707,12 @@ pub fn planDeadBranches(self: *UnitPlan) void {
         self.blk_work[db] = true;
     }
     @memset(self.dead_branch, false);
-    for (self.an.rpo) |bi| {
+    // Innermost first (reverse RPO), so an arm whose only content is a branch
+    // already found dead reads as the jump it will be emitted as (`edgeAct`).
+    var k = self.an.rpo.len;
+    while (k > 0) {
+        k -= 1;
+        const bi = self.an.rpo[k];
         const t = self.an.term[bi];
         if (t == .none or self.mir.instOp(t) != .branch) continue;
         const d = self.mir.instData(t).branch;
@@ -721,12 +726,18 @@ pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
     var from = from0;
     var to = to0;
     var hops: u32 = 0;
+    // Merge blocks whose labels a block walked through here opened: the walk
+    // reaching one continues into it, because it is emitted INLINE right
+    // after its label closes (`emitCode`), not broken to from outside.
+    // ponytail: a fixed 32; a deeper nest answers null, the safe side.
+    var opened: [32]u32 = undefined;
+    var n_open: usize = 0;
     while (hops <= self.an.nb) : (hops += 1) {
         // A phi in `to` means `emitEdge` copies a value on this edge, which
         // is the one thing the two arms cannot share.
         if (self.blk_phi[to]) return null;
         if (self.an.is_loop[to] and self.an.dominates(to, from)) return .{ .cont = to };
-        if (self.an.is_merge[to]) return .{ .brk = to };
+        if (self.an.is_merge[to] and std.mem.indexOfScalar(u32, opened[0..n_open], to) == null) return .{ .brk = to };
         // Otherwise `to` is emitted INLINE here, so it has to be empty and
         // end in a plain jump for the two arms to stay indistinguishable.
         //
@@ -740,11 +751,19 @@ pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         // `hisimhv_va` moved 4 000 of 128 000 residual entries (CORPUS in
         // the header: not in this tree).
         if (self.an.is_loop[to] or self.an.inLoop(to) or self.blk_work[to]) return null;
-        if (self.an.mk_off[to + 1] != self.an.mk_off[to]) return null; // opens labels
+        const labels = self.an.mk_pool[self.an.mk_off[to]..self.an.mk_off[to + 1]];
+        if (n_open + labels.len > opened.len) return null;
+        @memcpy(opened[n_open..][0..labels.len], labels);
+        n_open += labels.len;
         const t = self.an.term[to];
-        if (t == .none or self.mir.instOp(t) != .jump) return null;
+        if (t == .none) return null;
         from = to;
-        to = @intFromEnum(self.mir.instData(t).jump.target);
+        // A dead branch emits as the edge to its `then` block (`emitTerm`).
+        to = switch (self.mir.instOp(t)) {
+            .jump => @intFromEnum(self.mir.instData(t).jump.target),
+            .branch => if (self.dead_branch[to]) @intFromEnum(self.mir.instData(t).branch.then_block) else return null,
+            else => return null, // else: a terminator is a jump or a branch; anything else ends the walk
+        };
     }
     return null;
 }
