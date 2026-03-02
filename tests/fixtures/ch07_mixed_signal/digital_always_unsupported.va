@@ -3,25 +3,14 @@
 // context in its plainest form — one reg, assigned from a digital process and
 // from nowhere else — and it is legal Verilog-AMS HDL.
 //
-// THE REFUSAL IS VerA'S CEILING, and it is no longer C.7's. This file used to say
-// "C.7 deletes it from this dialect", which is a rule of the Verilog-A SUBSET;
-// the `initial` half of the same sentence has been re-verdicted for that reason
-// (digital_initial_accepted.va) and the `reg` declaration below is accepted now.
-// What separates the two keywords is not dialect: an `initial` block of constant
-// assignments has exactly one reading, while an `always` block RE-RUNS on an
-// event, so what `state` holds is a function of §8.5's simulation cycle. VerA
-// implements no discrete kernel, so there is nothing for it to be a function of,
-// and E0205 says so at the keyword rather than inventing one of the readings.
-//
-// It is also the mask behind which one rule in this chapter still sits
-// unreachable — see cross_domain_function_unsupported.va, whose §7.3.6.3 claim is
-// made from inside an `always` block. Two rules that used to be masked no longer
-// are: both_contexts_assignment_rejected.va and
-// analog_function_from_digital_rejected.va both reach their own diagnostic now.
+// THE REFUSAL IS VerA'S CEILING, and it is not C.7's. `always` is a module item
+// of every module (A.1.4) and parses now; the E0205 this file used to pin was the
+// grammar refusing it. What refuses it is E0437: an `always` block RE-RUNS on an
+// event, so what `state` holds is a function of §8.5's simulation cycle, and VerA
+// does not yet run that cycle beside a device.
 //
 //! lrm 7.2.2
-//! lrm C.7
-//! reject E0205
+//! reject E0437
 module ch7_digital_always;
   reg state;
   always @(state) state = !state;

@@ -248,7 +248,7 @@ pub fn buildPrelude() Allocator.Error!*const Prelude {
     std.debug.assert(parser.kw_set == token.default_keyword_set);
     std.debug.assert(parser.kw_stack.items.len == 0);
     std.debug.assert(parser.attrs.items.len == 0 and parser.attr_depth == 0);
-    std.debug.assert(!parser.in_analog_fn and !parser.in_connect_module);
+    std.debug.assert(!parser.in_analog_fn and !parser.in_connect_module and !parser.in_discrete);
     std.debug.assert(parser.gen_depth == 0 and parser.gen_construct_depth == 0);
 
     var access: std.ArrayList([]const u8) = .empty;

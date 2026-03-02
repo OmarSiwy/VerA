@@ -37,11 +37,11 @@
 // which is why the worked example and not a paraphrase is worth a file.
 //
 // WHY IT CARRIES `xfail`, MEASURED NOT GUESSED. Two constructs in the example
-// are refused today, and they are in the order VerA reports them:
+// were refused, in the order VerA reported them:
 //
-//   line 87  `assign d=out;`  E0205 "unsupported module item: found `assign`",
-//                             note "LRM annex A.1.4" — the continuous assignment
-//                             of §9.22.6, unwritable in any module;
+//   line 87  `assign d=out;`  E0205 "unsupported module item: found `assign`"
+//                             — the continuous assignment of §9.22.6. FIXED: it
+//                             is a module item of every module (A.1.4) and parses;
 //   line 104 `out = 1'bx;`    E0130 "literal requires digital value support in
 //                             the execution backend" — the four-state literal of
 //                             §2.6.1 in a connect module's `always` block.
@@ -62,7 +62,7 @@
 //! lrm 9.22.6
 //! lrm 9.22
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail the LRM's own §9.22.7 example is refused twice over: `assign d=out;` is E0205 (unsupported module item, the §9.22.6 spelling), and behind it `out = 1'bx;` is E0130 (no four-state literal in the execution backend)
+//! xfail the LRM's own §9.22.7 example is refused: `out = 1'bx;` is E0130 (no four-state literal in the execution backend); the `assign d=out;` before it parses now
 `include "check.vh"
 connectmodule c2e(d,a);
     input d;

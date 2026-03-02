@@ -697,11 +697,10 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             try parse_generate.parseNetNames(self, b, disc, kind, false, st);
         },
         // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
-        // list_of_net_assignments ;`. Only the digital executor has nets
-        // with drivers to resolve; annex C.7 has no digital behavior, so
-        // outside a digital run this is the E0205 it has always been.
+        // list_of_net_assignments ;` — a module item of every module (A.1.4).
+        // Whether the net it drives can be EXECUTED is lowering's question
+        // (`Lower.checkDiscreteContext`), not the grammar's.
         .kw_assign => {
-            if (!self.digital) return parse_specify.unsupportedItem(self);
             self.pos += 1;
             // A.8.5 `net_lvalue` begins with an identifier or a `{`, never a
             // `(`, so the parenthesis is unambiguously A.2.2.2's.

@@ -3,14 +3,14 @@
 // time corresponding to a real promotion of the digital time at which the
 // expression is evaluated".
 //
-// C.7 removes the digital context that would do the evaluating — "No digital
-// behavior or events are supported in Verilog-A" — so the `always` block is an
-// unsupported module item and the rejection is conformance, not debt. There is
-// no digital time in this dialect to promote.
+// VerA's CEILING, named by E0437. This file used to cite C.7 as conformance;
+// that is a rule of the Verilog-A subset, and the source is legal Verilog-AMS.
+// What is missing is the probe half of the kernel: reading an accepted analog
+// solution at the promoted digital time. The positive row for the same clause is
+// m01_08_analog_probe_in_a_digital_expression.va.
 //
 //! lrm 7.3.6.3
-//! lrm C.7
-//! reject E0205
+//! reject E0437
 module ch7_digital_probe(p);
   inout p; electrical p; real sampled;
   always @(p) sampled = V(p);

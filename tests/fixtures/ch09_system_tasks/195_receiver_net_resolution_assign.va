@@ -49,24 +49,16 @@
 // green/red the runner can see. 0.75 - 0.25 = 0.5, both operands exact in
 // binary, so the number is exact rather than tolerated.
 //
-// WHY IT CARRIES `xfail`. The `assign` statement does not parse anywhere in VerA
-// — E0205, "unsupported module item: found `assign`", note "LRM annex A.1.4"
-// (annex_c_analog_subset/23_continuous_assign_rejected.va is green on the same
-// diagnostic in a plain module). So rule 2 cannot be written at all: there is no
-// connect module in this language that can set the value its receivers see, and
-// §9.22.6's whole subject is that assignment. Rule 1 is therefore also the only
-// answer a VerA design can give, which is the default — and "the default is
-// always taken" is not the same rule as "the default is taken when nothing is
-// assigned".
-//
-// WHEN IT GOES GREEN. A continuous assignment on a connect module's digital port
-// is the whole ask; the connect module then has to be inserted for the value to
-// reach a receiver, which is ch07's M03/M04 row and not this file's.
+// WHY IT USED TO CARRY `xfail`. The `assign` statement did not parse anywhere in
+// VerA — E0205, "unsupported module item". A.1.4 makes `continuous_assign` a
+// module item of every module and it parses now, so rule 2 can be written; the
+// connect module is accepted and not elaborated (§7.6), exactly as the file
+// claims. The value then reaching a receiver is §7.8 insertion — ch07's M03/M04
+// rows, not this file's.
 //
 //! lrm 9.22.6
 //! lrm 9.22
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail §9.22.6's only spelling for the receiver value is `assign d = out;`, and `assign` is E0205 ("unsupported module item") everywhere in VerA, connect module or not — so rule 2 cannot be written and rule 1's bypass is the only answer available
 `include "check.vh"
 connectmodule ch09_receiver_net_resolution(d, a);
   input d; output a;
