@@ -208,9 +208,12 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value, site:
     try emitScratch(g, ops.items);
     if (mon) {
         // §9.4.1's mechanism: format into this site's scratch row, then report
-        // only when the RECORD differs from the one this site last produced.
-        // An overrun formats to the empty string, `emitStringFormat`'s rule.
-        try g.b("if (zMonitor({d}, std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ monitorKey(g, args), site, std.zig.fmtString(fmt.items) });
+        // only when a watched argument VALUE differs from the step this site
+        // last reported (`monitorValues`). An overrun formats to the empty
+        // string, `emitStringFormat`'s rule.
+        try g.b("if (zMonitor({d}, ", .{monitorKey(g, args)});
+        try monitorValues(g, ops.items);
+        try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
         try renderPrintArgs(g, ops.items);
         try g.b("}}) catch \"\")) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
     } else {
@@ -480,10 +483,50 @@ fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize
     try renderPrintArgs(g, ops.items);
     try g.b("}}) catch \"\"", .{});
     if (mon) {
-        try g.b("; break :zf if (zMonitor({d}, zt)) |zm| zFPut(", .{monitorKey(g, args)});
+        try g.b("; break :zf if (zMonitor({d}, ", .{monitorKey(g, args)});
+        try monitorValues(g, ops.items);
+        try g.b(", zt)) |zm| zFPut(", .{});
         try g.renderVal(if (all.len > 0) all[0] else Mir.Value.zero, .int);
         try g.b(", zm) else 0; }}", .{});
     } else try g.b("); }}", .{});
+}
+
+/// §9.4.1 what a monitor watches: one u64 per argument — a real's or an
+/// integer's bit pattern, a string's hash — for `zMonitor` to compare against
+/// the last reported step. `$abstime` and `$realtime` are left out: "with the
+/// exception of the $abstime or $realtime system functions", a change in one
+/// of them alone is not a change.
+fn monitorValues(g: *Gen, ops: []const PrintArg) Error!void {
+    try g.b("&[_]u64{{", .{});
+    var first = true;
+    for (ops) |p| {
+        const v = g.an.rv(p.v);
+        const def = g.mir.valueDef(v);
+        if (def == .inst_result and g.mir.instOp(def.inst_result) == .call) {
+            const callee = g.mir.instData(def.inst_result).call.name;
+            if (std.mem.eql(u8, callee, "$abstime") or std.mem.eql(u8, callee, "$realtime")) continue;
+        }
+        if (first) try g.b(" ", .{}) else try g.b(", ", .{});
+        first = false;
+        switch (g.an.tyOf(v)) {
+            .real => {
+                try g.b("@as(u64, @bitCast((", .{});
+                try g.renderVal(v, .real);
+                try g.b(").val()))", .{});
+            },
+            .int => {
+                try g.b("@as(u64, @bitCast(@as(i64, ", .{});
+                try g.renderVal(v, .int);
+                try g.b(")))", .{});
+            },
+            .str => {
+                try g.b("std.hash.Wyhash.hash(0, ", .{});
+                try g.renderVal(v, .str);
+                try g.b(")", .{});
+            },
+        }
+    }
+    if (first) try g.b("}}", .{}) else try g.b(" }}", .{});
 }
 
 /// §9.4.1 `$monitor` and its §9.5.2 file twin — the two members of the family
@@ -1017,16 +1060,19 @@ test "§9.4.1 $monitor reports a step only when the record changed" {
     const k = @import("kernels").str_kernels;
     // "When a $monitor task is invoked ... the simulator sets up a mechanism":
     // before the statement has run there is no mechanism and nothing reports.
-    try std.testing.expect(k.zMonitor(9001, "a\n") == null);
+    try std.testing.expect(k.zMonitor(9001, &.{1}, "a\n") == null);
     _ = k.zMonitorArm(9001);
     _ = k.zMonitorArm(9002);
-    try std.testing.expectEqualStrings("a\n", k.zMonitor(9001, "a\n").?); // first step: no predecessor
-    try std.testing.expect(k.zMonitor(9001, "a\n") == null); // unchanged
-    try std.testing.expectEqualStrings("b\n", k.zMonitor(9001, "b\n").?);
-    try std.testing.expect(k.zMonitor(9001, "b\n") == null);
+    try std.testing.expectEqualStrings("a\n", k.zMonitor(9001, &.{1}, "a\n").?); // first step: no predecessor
+    try std.testing.expect(k.zMonitor(9001, &.{1}, "a\n") == null); // unchanged
+    // The watched VALUES decide, not the text: a line that differs only in an
+    // exempt `$abstime` (never in `vals`) is not a change.
+    try std.testing.expect(k.zMonitor(9001, &.{1}, "t=2 a\n") == null);
+    try std.testing.expectEqualStrings("b\n", k.zMonitor(9001, &.{2}, "b\n").?);
+    try std.testing.expect(k.zMonitor(9001, &.{2}, "b\n") == null);
     // A DISTINCT site is a distinct latch — two monitors must not mask each
     // other, exactly as two `$sformat` sites must not share a row.
-    try std.testing.expectEqualStrings("b\n", k.zMonitor(9002, "b\n").?);
+    try std.testing.expectEqualStrings("b\n", k.zMonitor(9002, &.{2}, "b\n").?);
 }
 
 test "§9.5.4.2 a scan consumes per DIRECTIVE, and says how much" {
