@@ -144,6 +144,16 @@ pub const Scheduler = struct {
     /// During a returned monitor event, schedule/cancel reject mutation until
     /// the caller invokes next again. Empty returns null without changing time.
     pub fn next(self: *Scheduler) ?Event {
+        return self.nextUntil(std.math.maxInt(Time));
+    }
+
+    /// `next`, bounded: time never advances past `limit`. Once every region
+    /// at `now` is empty and the earliest future event lies after `limit`,
+    /// this returns null and leaves `now` and the future heap untouched, so a
+    /// later call with a larger limit resumes exactly where this one stopped.
+    /// The bound is what lets a caller outside the queue — VAMS §8.4.4's
+    /// "common global time" — hold the digital engine at a tick.
+    pub fn nextUntil(self: *Scheduler, limit: Time) ?Event {
         if (self.phase == .stopped) return null;
         self.phase = .idle;
         while (true) {
@@ -175,8 +185,24 @@ pub const Scheduler = struct {
                 }
             }
             if (promoted) continue;
-            if (!self.advance()) return null;
+            if (!self.advance(limit)) return null;
         }
+    }
+
+    /// The time of the event `next` would return, or null when nothing is
+    /// pending. `now` while any current-time region holds a live event.
+    /// Cancelled future minima are purged first, so a cancelled event never
+    /// reports a phantom time (the same rule `advance` keeps).
+    pub fn peekTime(self: *Scheduler) ?Time {
+        if (self.phase == .stopped) return null;
+        for (self.heads) |head| {
+            var cursor = head;
+            while (cursor != .none) : (cursor = self.slots.items(.next)[@intFromEnum(cursor)]) {
+                if (self.slots.items(.state)[@intFromEnum(cursor)] == .pending) return self.now;
+            }
+        }
+        self.purgeCancelled();
+        return if (self.future.peek()) |entry| entry.time else null;
     }
 
     fn checkMutation(self: *const Scheduler) Error!void {
@@ -237,15 +263,20 @@ pub const Scheduler = struct {
         return slot;
     }
 
-    fn advance(self: *Scheduler) bool {
-        // Purge dead minima before choosing a time: cancellation must not cause
-        // a phantom timestep, including when every future event was cancelled.
+    fn purgeCancelled(self: *Scheduler) void {
         while (self.future.peek()) |entry| {
             if (self.slots.items(.state)[@intFromEnum(entry.slot)] != .cancelled) break;
             _ = self.future.pop();
             self.release(entry.slot);
         }
+    }
+
+    fn advance(self: *Scheduler, limit: Time) bool {
+        // Purge dead minima before choosing a time: cancellation must not cause
+        // a phantom timestep, including when every future event was cancelled.
+        self.purgeCancelled();
         const first = self.future.peek() orelse return false;
+        if (first.time > limit) return false;
         self.now = first.time;
         while (self.future.peek()) |entry| {
             if (entry.time != self.now) break;
@@ -302,6 +333,29 @@ test "seven logical regions follow normative AMS order and integer future time" 
     }
     try t.expect(scheduler.next() == null);
     try t.expectEqual(@as(Time, 7), scheduler.now);
+}
+
+test "nextUntil never advances past its limit; peekTime reports what next would" {
+    var scheduler = Scheduler.init(t.allocator);
+    defer scheduler.deinit();
+    try t.expectEqual(@as(?Time, null), scheduler.peekTime());
+    _ = try scheduler.schedule(.nba, 1);
+    const late = try scheduler.scheduleAt(5, .inactive, 2);
+    _ = try scheduler.scheduleAt(9, .inactive, 3);
+    try t.expectEqual(@as(?Time, 0), scheduler.peekTime());
+    try t.expectEqual(@as(u32, 1), scheduler.nextUntil(4).?.payload);
+    // Time 0 drained; 5 is past the limit, so null and `now` stays.
+    try t.expect(scheduler.nextUntil(4) == null);
+    try t.expectEqual(@as(Time, 0), scheduler.now);
+    try t.expectEqual(@as(?Time, 5), scheduler.peekTime());
+    // A cancelled minimum is not a time anything happens at.
+    try t.expect(try scheduler.cancel(late));
+    try t.expectEqual(@as(?Time, 9), scheduler.peekTime());
+    try t.expect(scheduler.nextUntil(8) == null);
+    const e = scheduler.nextUntil(9).?;
+    try t.expectEqual(@as(u32, 3), e.payload);
+    try t.expectEqual(@as(Time, 9), e.time);
+    try t.expectEqual(@as(?Time, null), scheduler.peekTime());
 }
 
 test "NBA batch, inactive reentry and analog feedback settle before monitor" {
