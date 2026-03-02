@@ -15,6 +15,7 @@ const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
+const Lower = @import("ir").Lower;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
@@ -77,7 +78,8 @@ pub fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
                     break :blk std.mem.eql(u8, d.name, "$temperature") or
                         std.mem.eql(u8, d.name, "$param_given") or
                         std.mem.eql(u8, d.name, "$port_connected") or
-                        (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0);
+                        (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0) or
+                        simparamFixed(self, d);
                 },
                 // A phi is not one value; the path latches read Instance
                 // state `updateState`/commit have not written yet at
@@ -100,6 +102,18 @@ pub fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
     };
     cls[i] = if (ok) .yes else .no;
     return ok;
+}
+
+/// §9.15 `$simparam` with a literal name other than `iteration` (Table 9-27):
+/// `call.zig` renders it as a Model field (`tnom`, which the host writes with
+/// the card) or a constant (the rest, including the homotopy knobs VerA folds
+/// today), so it is as parameter-only as a `param_ref`. `iteration` reads
+/// `inst.newton_iteration`, which moves every Newton step. A fallback argument
+/// renders through `f64Expr`, which reads Model alone.
+fn simparamFixed(self: *const Gen, d: anytype) bool {
+    if (!std.mem.eql(u8, d.name, "$simparam")) return false;
+    const nm = self.strArg(d.args, 0) orelse return false;
+    return !Lower.simparamIsRuntime(nm);
 }
 
 pub fn libmClass(op: Mir.Opcode) bool {
@@ -266,7 +280,8 @@ pub fn hpPureInst(self: *Gen, inst: Mir.Inst, depth: u32) bool {
             return std.mem.eql(u8, d.name, "$temperature") or
                 std.mem.eql(u8, d.name, "$param_given") or
                 std.mem.eql(u8, d.name, "$port_connected") or
-                (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0);
+                (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0) or
+                simparamFixed(self, d);
         },
         // `path_prev`/`path_acc` read the §5.6.1.2 latches, which move on
         // every accepted step — the one class of Instance state that looks
