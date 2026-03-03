@@ -19,6 +19,9 @@ pub const Lexer = @import("lexer.zig");
 pub const Ast = @import("ast.zig");
 pub const Parser = @import("parser.zig");
 
+/// §4.2 constant_expression: the one folder every stage shares.
+pub const constfold = @import("constfold.zig");
+
 /// SPICE `.MODEL`/`.SUBCKT` card synthesis. Reached through `Preprocessor`
 /// in the pipeline; exported so its tests have a name and a caller can
 /// synthesize without running the preprocessor.
@@ -31,5 +34,6 @@ test {
     _ = Lexer;
     _ = Ast;
     _ = Parser;
+    _ = constfold;
     _ = spice_cards;
 }

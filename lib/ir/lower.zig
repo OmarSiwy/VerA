@@ -13,6 +13,7 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
+const constfold = @import("frontend").constfold;
 const Mir = @import("mir.zig");
 const Ssa = @import("ssa.zig");
 const Elaborate = @import("elaborate.zig");
@@ -763,8 +764,6 @@ pub const Display = struct {
     conditional: bool,
 };
 
-
-
 pub const VarSlot = struct { place: Ssa.Place, ty: Ty };
 const ScopeEntry = struct { name: []const u8, prev: ?VarSlot, prev_array: ?ArrayInfo };
 /// A declared array's shape (§3.2), one `Bounds` per dimension, outermost
@@ -805,64 +804,8 @@ pub const VecRange = struct {
     }
 };
 
-/// A folded constant (§4.2 constant_expression). Genvars (§3.5) and parameter
-/// defaults live here so `for (i=0;i<N;i=i+1)` can unroll (§6.6.1).
-pub const Const = union(enum) {
-    int: i64,
-    real: f64,
-    str: []const u8,
-
-    pub fn asReal(c: Const) f64 {
-        return switch (c) {
-            .int => |i| @floatFromInt(i),
-            .real => |r| r,
-            .str => 0,
-        };
-    }
-    /// §4.2.1.1 real→integer rounds, ties away from zero — and says nothing
-    /// about a real that has no nearest integer, because it never contemplates
-    /// one. A NaN, an infinity, and anything past i64 are all in that hole.
-    ///
-    /// Returns null there rather than inventing a value. Any caller holding a
-    /// real the USER wrote must go through this and diagnose; `asInt` below is
-    /// only for operands already known to be in range.
-    pub fn asIntExact(c: Const) ?i64 {
-        return switch (c) {
-            .int => |i| i,
-            .real => |r| blk: {
-                const v = @round(r);
-                if (!std.math.isFinite(v)) break :blk null;
-                // Compared against 2^63 and not maxInt(i64): 2^63 is exactly
-                // representable as an f64 and maxInt(i64) is not, so rounding
-                // the bound itself would let 2^63 through as "in range".
-                if (v >= 9223372036854775808.0 or v < -9223372036854775808.0) break :blk null;
-                break :blk @intFromFloat(v);
-            },
-            .str => 0,
-        };
-    }
-    pub fn asInt(c: Const) i64 {
-        // Saturating, NaN to zero. This MUST NOT be able to panic: a bare
-        // `@intFromFloat` on an out-of-range double is illegal behavior, and it
-        // used to abort the whole compilation — no diagnostic, and every other
-        // error in the file lost with it — whenever a folded subscript or a
-        // `$discontinuity` degree reached it as an infinity. The two paths that
-        // can see such a value now call `asIntExact` and report; this fallback
-        // is what remains for operands a range check has already passed.
-        return c.asIntExact() orelse blk: {
-            const r = c.asReal();
-            if (std.math.isNan(r)) break :blk 0;
-            break :blk if (r > 0) std.math.maxInt(i64) else std.math.minInt(i64);
-        };
-    }
-    pub fn isTrue(c: Const) bool {
-        return switch (c) {
-            .int => |i| i != 0,
-            .real => |r| r != 0,
-            .str => |s| s.len != 0,
-        };
-    }
-};
+/// A folded constant (§4.2 constant_expression) — the shared kernel's.
+pub const Const = constfold.Const;
 
 // ---------------------------------------------------------------------------
 // Lifecycle
@@ -1000,75 +943,11 @@ pub fn strToInt(s: []const u8, bits: u8) i64 {
     return @bitCast(acc);
 }
 
-/// §3.2, two sentences and one width: an `integer` "can hold values ranging from
-/// -2^31 to 2^31-1", and "arithmetic operations performed on integer variables
-/// produce 2's complement results". So the answer to `2147483647 + 1` is
-/// -2147483648, and a 64-bit type is wrong at both ends of the range.
-///
-/// The width is imposed on the OPERATION, not on the storage: an `integer` stays
-/// in an i64 slot (one machine word, and every ch9 status return and array
-/// index already fits) and every integer arithmetic result is truncated to 32
-/// bits and widened back. That is exact rather than approximate, because both
-/// operands of an integer operation are themselves in range — either literals
-/// §2.5.1 keeps in range or the output of another wrapped operation — so
-/// truncating the 64-bit result is bit-for-bit the 32-bit result.
-///
-/// THREE SITES MUST AGREE and this is the only definition of the rule: this fold
-/// (`foldBinary`, §4.2 constant expressions), `analysis.foldConst` (parameter
-/// defaults and §4.5 operator control arguments) and `codegen.intBin` (the
-/// device). A fold that disagreed with the runtime would make one expression
-/// answer differently depending on whether it landed in a parameter default.
-///
-/// NOT applied to a literal: §2.5.1's `-2147483648` is `ineg` of the in-range-
-/// as-unsigned 2147483648, and wrapping the operand first would make the
-/// negation of it positive.
-pub fn wrap32(x: i64) i64 {
-    return @as(i32, @truncate(x));
-}
-
-/// §4.2.1.3 `b ** n` with both operands integer: "a common data type for each
-/// operand is determined before the operator is applied", and with neither
-/// real that type is integer. IEEE 1364-2005 §5.1.5 supplies the values: for
-/// n >= 0 the power at §3.2's 32-bit width ("The result value is 1 if the
-/// second operand is zero"), and for n < 0 Table 5-6's row — 1 for base 1,
-/// ±1 by parity for base -1, 0 for every other base (the true value lies
-/// strictly between -1 and 1 and an integer truncates it). A zero base under a
-/// negative exponent is Table 5-6's 'bx, which an analog integer cannot hold:
-/// null here, E0609 from the prover when it is provable, and 0 at run time.
-///
-/// Same three sites as `wrap32`: `foldBinary`, `analysis.foldConst`, and
-/// codegen's `ipow_fn`, which is this function as device text.
-pub fn ipow32(b: i64, n: i64) ?i64 {
-    if (n < 0) return switch (b) {
-        0 => null,
-        1 => 1,
-        -1 => if (@rem(n, 2) == 0) 1 else -1,
-        else => 0, // else: every |b| > 1 truncates to 0, Table 5-6's "negative" row
-    };
-    var x: i32 = @truncate(b);
-    var e = n;
-    var r: i32 = 1;
-    while (e > 0) : (e >>= 1) {
-        if (e & 1 != 0) r *%= x;
-        x *%= x;
-    }
-    return r;
-}
-
-test "ipow32 is IEEE 1364-2005 Table 5-6 at 32 bits" {
-    try std.testing.expectEqual(@as(?i64, 8), ipow32(2, 3));
-    try std.testing.expectEqual(@as(?i64, 1), ipow32(0, 0)); // "1 if the second operand is zero"
-    try std.testing.expectEqual(@as(?i64, 0), ipow32(0, 3));
-    try std.testing.expectEqual(@as(?i64, -27), ipow32(-3, 3));
-    try std.testing.expectEqual(@as(?i64, 0), ipow32(2, -1)); // |b| > 1, n < 0
-    try std.testing.expectEqual(@as(?i64, 0), ipow32(-2, -1));
-    try std.testing.expectEqual(@as(?i64, 1), ipow32(1, -5));
-    try std.testing.expectEqual(@as(?i64, -1), ipow32(-1, -3));
-    try std.testing.expectEqual(@as(?i64, 1), ipow32(-1, -4));
-    try std.testing.expectEqual(@as(?i64, null), ipow32(0, -1)); // 'bx
-    try std.testing.expectEqual(@as(?i64, -2147483648), ipow32(2, 31)); // §3.2 wrap
-    try std.testing.expectEqual(@as(?i64, 0), ipow32(2, 32));
-}
+/// §3.2's 32-bit integer wrap and IEEE 1364-2005 Table 5-6's integer power:
+/// defined once, in the shared constant kernel, because codegen spells them
+/// as device text and a fold must agree with the device.
+pub const wrap32 = constfold.wrap32;
+pub const ipow32 = constfold.ipow32;
 
 /// §2.7 at an OPERAND: a string about to be used as a number becomes one.
 /// Everything else is returned untouched, including a string with no compile-
