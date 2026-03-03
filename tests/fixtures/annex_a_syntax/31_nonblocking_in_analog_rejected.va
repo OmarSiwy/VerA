@@ -9,9 +9,9 @@
 // message: in an analog block, `<=` at statement level is almost always a
 // mistyped `<+`.
 //
-// The suite's other nonblocking fixture (ch08_scheduling/nonblocking_unsupported.va)
-// writes `always @(source) target <= source;` and so dies on the digital
-// process; no fixture put `<=` at analog statement level before this one.
+// The suite's other nonblocking fixture (ch07_mixed_signal/m02_10_macro_process_-
+// runs_after_nba.va) writes `always @(posedge clk) q <= d;`, where `<=` is legal
+// and runs; no fixture put `<=` at analog statement level before this one.
 //
 //! lrm A.6.4
 //! lrm A.6.2

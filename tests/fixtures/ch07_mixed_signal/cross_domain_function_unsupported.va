@@ -19,10 +19,10 @@
 // those reaches its own diagnostic now.
 //
 // WHAT REFUSES IT IS VerA'S CEILING, and not C.7's subset rule. `always` parses
-// now (A.1.4); the refusal is E0437: the block re-runs on §8.5's event queue and
-// reads an analog probe at a promoted digital time, and VerA runs neither beside
-// a device yet. §7.3.6.3's interpolation rule is therefore still never reached;
-// its positive row is m01_08_analog_probe_in_a_digital_expression.va.
+// (A.1.4) and runs on the mixed-signal kernel; the refusal is E0437 on `V(p)`:
+// reading an analog probe at a promoted digital time is the part of the kernel
+// VerA does not have yet. §7.3.6.3's interpolation rule is therefore still never
+// reached; its positive row is m01_08_analog_probe_in_a_digital_expression.va.
 //
 //! lrm 7.3.6.3
 //! lrm 7.3.7

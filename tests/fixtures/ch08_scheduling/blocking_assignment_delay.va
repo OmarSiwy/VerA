@@ -29,16 +29,14 @@
 // what they must read: 1, the value x held when the right-hand side was
 // sampled, not 2.
 //
-// WHY THIS IS `//! xfail` AND NOT `//! reject`. blocking_timing_unsupported.va
-// in this directory pins VerA's refusal of the construct — it says `#` has no
-// statement production (E0209) and that `y = #5 x` is therefore not
-// representable. This file is the rule that refusal leaves unimplemented: it
-// states what a conforming compiler prints, and it XPASSes the day the
-// statement is parsed. A fixture that only demanded the diagnostic would go
-// stale on that day; this one cannot, because its number is the LRM's.
+// WHY THIS IS `//! xfail` AND NOT `//! reject`. The statement parses now and
+// the module runs on the mixed-signal kernel, but the source gives no
+// `timescale, and VerA's digital engine takes no default time unit for `#5`
+// (it refuses the delay, E1100, at testbench start). The file keeps the LRM's
+// number; it XPASSes the day the default is decided.
 //
 //! lrm 8.5.3.3
-//! xfail VerA has no statement production for a `#` delay in an initial block (E0209, lib/frontend/parser.zig), so the assignment is never scheduled and no transcript exists to read `y` from
+//! xfail the source gives no `timescale and VerA's digital engine takes no default time unit, so `#5` is refused (E1100) and no transcript exists to read `y` from
 //! analysis tran
 //! time 0, 25
 `include "check.vh"

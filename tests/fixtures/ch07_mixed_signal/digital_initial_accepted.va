@@ -2,8 +2,8 @@
 // are in the discrete (digital) context. This is the `initial` half of that
 // sentence — the §7.3.2 `converter` example drives its discrete net exactly
 // this way — with A.6.3's `seq_block` as the initial's statement, and it is legal
-// Verilog-AMS HDL. digital_always_unsupported.va is the other half of the
-// sentence and is still a rejection, for a reason that is not dialect: see below.
+// Verilog-AMS HDL. m02_10_macro_process_runs_after_nba.va is the other half of
+// the sentence, an `always` block, and runs on the mixed-signal kernel.
 //
 // THIS FILE USED TO DEMAND E0205, arguing C.7 ("No digital behavior or events are
 // supported in Verilog-A") deleted the block. That is a rule of the Verilog-A

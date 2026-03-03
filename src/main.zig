@@ -411,13 +411,16 @@ pub fn main(init: std.process.Init) !u8 {
             try err.print("error: {s}: `//!` directive: {t}\n", .{ in_path, e });
             return 2;
         };
-        const runner = try vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), d);
+        var dm = d;
+        dm.mixed = vera.tb.mixedPlan(result.lower);
+        const runner = try vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm);
         const built = vera.tb.buildExe(gpa, io, device, runner, .{
             .work_dir = wd,
             .contract = contract,
             .name = result.mir.name,
             .out_path = out_path,
             .zig_exe = zig_exe,
+            .mixed = dm.mixed != null,
         }) catch |e| {
             try err.print("error: {s}: building the testbench failed: {t}\n", .{ in_path, e });
             return 1;

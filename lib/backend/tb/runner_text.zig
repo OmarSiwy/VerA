@@ -772,3 +772,66 @@ pub const runner_body =
     \\
     \\
 ;
+
+/// The mixed-signal runner's fixed text (`renderMixed`): the digital half, the
+/// coordinator call, and the two conversions the adapter needs. Only a
+/// testbench built with `BuildOptions.mixed` imports `sim` and `diag`.
+pub const mixed_body =
+    \\const sim = @import("sim");
+    \\const diag = @import("diag");
+    \\const Timescale = @typeInfo(@FieldType(sim.digital.Mixed, "timescale")).optional.child;
+    \\
+    \\/// VAMS §7.3.1 Table 7-1: a bit grouping, a net and an `integer` all reach
+    \\/// the continuous context as an integer. §7.3.2: "It is an error if these
+    \\/// operands return x or z bit values when solved" — and a solve is exactly
+    \\/// where this is read, so an x or z bit fails the run by name.
+    \\fn mixedInput(dig: *sim.digital.Run, slot: u32, name: []const u8) i64 {
+    \\    return dig.values[slot].asInt() orelse {
+    \\        std.debug.print("{s}: FAIL §7.3.2: the discrete input `{s}` holds an x or z bit when the analog block reads it\n", .{ title, name });
+    \\        std.process.exit(1);
+    \\    };
+    \\}
+    \\
+    \\/// A `//! wave`, piecewise linear over the declared `//! time`s. At a
+    \\/// declared point it is the fixed-grid runner's value, a short list holds its
+    \\/// last entry, and an inserted point between two declared ones interpolates.
+    \\fn pwl(values: []const f64, t: f64) f64 {
+    \\    var k: usize = 0;
+    \\    while (k + 1 < times.len and times[k + 1] <= t) k += 1;
+    \\    const v0 = values[@min(k, values.len - 1)];
+    \\    if (k + 1 >= times.len or k + 1 >= values.len) return v0;
+    \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
+    \\}
+    \\
+    \\fn mixedFail(bag: *diag.Bag, e: anyerror) noreturn {
+    \\    var buf = std.Io.Writer.Allocating.init(std.heap.page_allocator);
+    \\    diag.render(bag, &buf.writer, .{ .explain_hint = false, .summary = false }) catch {};
+    \\    std.debug.print("{s}FAIL {s}: the digital half did not run: {t}\n", .{ buf.written(), title, e });
+    \\    std.process.exit(1);
+    \\}
+    \\
+    \\/// One analysis: elaborate the digital half afresh, bind the inputs, and
+    \\/// let `sim.mixed.run` own the global time.
+    \\fn runMixed(model: *D.Model, inst: *D.Instance, x: *[n_u]f64, forced: *[n_u]?f64, state: *State, n: *usize) void {
+    \\    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    \\    defer arena_state.deinit();
+    \\    const arena = arena_state.allocator();
+    \\    var bag = diag.Bag.init(arena);
+    \\    bag.setSingleFile(title, mixed_source, 0) catch {};
+    \\    var dout = std.Io.Writer.Allocating.init(arena);
+    \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
+    \\    var a: Analog = .{ .model = model, .inst = inst, .x = x, .forced = forced, .state = state, .dout = &dout, .n = n, .slots = undefined };
+    \\    inline for (input_names, 0..) |name, i| {
+    \\        a.slots[i] = dig.slotOf(name) orelse {
+    \\            std.debug.print("{s}: FAIL the digital half holds no `{s}` for the analog block to read\n", .{ title, name });
+    \\            std.process.exit(1);
+    \\        };
+    \\        dig.watchAnalog(a.slots[i]);
+    \\    }
+    \\    const tick = if (mixed_timescale) |ts| ts.precision else 1.0;
+    \\    sim.mixed.run(Analog, &a, &dig, .{ .times = &times, .tick = tick }) catch |e| mixedFail(&bag, e);
+    \\    a.flush();
+    \\}
+    \\
+    \\
+;

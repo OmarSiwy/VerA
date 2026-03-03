@@ -427,6 +427,8 @@ pub const Code = enum(u16) {
     /// §8.5 a discrete process in a module VerA compiles as a device, where
     /// executing it needs a mixed-signal kernel feature VerA does not have.
     E0437,
+    /// A.6.1 a continuous assignment whose target is not a net.
+    E0438,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -3538,6 +3540,22 @@ fn infoOf(c: Code) Info {
             \\VerA does not have. It is a statement about this compiler, not about
             \\the source: the construct becomes accepted when the named feature
             \\lands, and the fixtures that pin it are written to flip then.
+            ,
+        },
+
+        .E0438 => .{
+            .title = "a continuous assignment drives a net, not a variable",
+            .lrm = "A.6.1",
+            .explain =
+            \\A.6.1 derives `continuous_assign ::= assign list_of_net_assignments ;`
+            \\with `net_assignment ::= net_lvalue = expression`, and IEEE Std
+            \\1364-2005 6.1 (part of Verilog-AMS by LRM 1.1) says why: a
+            \\continuous assignment is a DRIVER, and only a net has drivers to
+            \\resolve. A variable holds the last value a procedural statement
+            \\stored in it.
+            \\
+            \\Declare the target as a net (`wire`), or assign the variable from
+            \\an `always` block.
             ,
         },
 

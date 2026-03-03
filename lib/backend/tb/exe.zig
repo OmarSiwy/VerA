@@ -26,6 +26,11 @@ pub const BuildOptions = struct {
     /// `-O` for the testbench. Debug by default; see `buildExe` for why that is
     /// not the timid choice.
     optimize: std.builtin.OptimizeMode = .Debug,
+    /// The runner is `renderMixed`'s: it imports the digital engine (`sim`) and
+    /// `diag`, which are compiled from the VerA source tree the contract sits
+    /// in (`<root>/tools/contract.zig`). Only mixed-signal testbenches pay the
+    /// extra build; every other one is byte-for-byte the build it always was.
+    mixed: bool = false,
 };
 
 pub const BuildResult = union(enum) {
@@ -95,9 +100,23 @@ pub fn buildExe(
         ".zig-cache",
     });
     try argv.appendSlice(arena, &.{ "--dep", "device" });
+    if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
     try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });
     try argv.appendSlice(arena, &.{ "--dep", "contract", m_dev });
     try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));
+    if (opts.mixed) {
+        // build.zig's `module_specs` rows for these four, spelled for build-exe.
+        const root = std.fs.path.dirname(std.fs.path.dirname(opts.contract) orelse ".") orelse ".";
+        const src = struct {
+            fn m(a: Allocator, r: []const u8, name: []const u8, rel: []const u8) ![]const u8 {
+                return std.fmt.allocPrint(a, "-M{s}={s}", .{ name, try std.fs.path.join(a, &.{ r, rel }) });
+            }
+        };
+        try argv.appendSlice(arena, &.{ "--dep", "diag", "--dep", "frontend", "--dep", "kernels", try src.m(arena, root, "sim", "src/sim/root.zig") });
+        try argv.append(arena, try src.m(arena, root, "diag", "lib/diag.zig"));
+        try argv.appendSlice(arena, &.{ "--dep", "diag", try src.m(arena, root, "frontend", "lib/frontend/root.zig") });
+        try argv.append(arena, try src.m(arena, root, "kernels", "lib/backend/kernels.zig"));
+    }
 
     var child = try std.process.spawn(io, .{
         .argv = argv.items,
