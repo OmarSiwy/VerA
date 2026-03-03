@@ -49,7 +49,7 @@ const none_u32 = std.math.maxInt(u32);
 /// (LRM §3.2 integer). §4.2.1.1/§4.2.1.2 conversions are inserted at the use
 /// site, so a typing miss degrades to a redundant cast, never to code that does
 /// not compile.
-pub const VTy = enum(u8) { real, int, str };
+pub const VTy = Mir.callee.Ty;
 
 arena: std.mem.Allocator,
 mir: *const Mir,
@@ -552,7 +552,7 @@ fn buildValueTypes(self: *Analysis) Error!void {
             .block_param => .real,
             .inst_result => |inst| blk: {
                 const op = self.mir.instOp(inst);
-                if (op == .call) break :blk callTy(self.mir.instData(inst).call.name);
+                if (op == .call) break :blk Mir.callee.ty(self.mir.instData(inst).call.callee);
                 if (op == .phi or op == .select) break :blk .real; // refined below
                 break :blk if (Mir.opIsInteger(op)) .int else .real;
             },
@@ -760,26 +760,11 @@ pub fn tyOfParam(t: Ast.Type) VTy {
     };
 }
 
-/// ch9 return types from `Lower.sysFuncTy` (§9.11/§9.12/§9.19/§9.22).
-/// Everything else, including every §4.5 operator and §4.6 event, is real:
-/// lowering compares an event guard against `0.0`, so it must stay real.
-/// MUST agree with `Lower.sysFuncTy`: the two type the same call from opposite
-/// sides of the MIR, and a disagreement puts an `S` expression in an `i64` slot,
-/// which does not compile.
-///
-/// §9.11 Table 9-8: `$realtobits` yields the bit PATTERN (an integer),
-/// `$bitstoreal` yields the real that pattern stands for. Only the first belongs
-/// here — see tests/fixtures/exhaustive/122_bit_conversions.va.
+/// A call's value type, by NAME: the `callee.zig` table's `ty` column, which
+/// `Lower.sysFuncTy` reads too, so the two sides of the MIR cannot disagree.
+/// For readers holding only a name; a MIR reader has `call.callee`.
 pub fn callTy(name: []const u8) VTy {
-    // §5.10 `Lower.holdSlot`'s synthetic seed. Not a ch9 task and not in
-    // `Lower.sysFuncTy`: the callee is chosen by the variable's declared type,
-    // so the name IS the type and the two sides agree by construction.
-    if (std.mem.eql(u8, name, "$held_int")) return .int;
-    return switch (Lower.sysFuncTy(name)) {
-        .real => .real,
-        .integer => .int,
-        .string => .str,
-    };
+    return Mir.callee.ty(Mir.Callee.fromName(name));
 }
 
 // ---------------------------------------------------------------------------
@@ -935,7 +920,7 @@ pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_param
                 .call => {
                     if (!resolve_params) return null;
                     const d = self.mir.instData(inst).call;
-                    if (!std.mem.eql(u8, d.name, "$simparam") or d.args.len == 0) return null;
+                    if (d.callee != .@"$simparam" or d.args.len == 0) return null;
                     const arg = self.mir.valueDef(self.rv(d.args[0]));
                     if (arg != .str_const) return null;
                     if (Lower.simparamHostField(arg.str_const) == null) return null;

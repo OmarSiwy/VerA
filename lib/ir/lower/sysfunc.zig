@@ -399,46 +399,13 @@ pub fn simparamHostField(name: []const u8) ?[]const u8 {
     return if (std.mem.eql(u8, name, "tnom")) "nom_temp__" else null;
 }
 
-/// ch9 return types. Everything not listed is real (§9.14/§9.15 dominate).
-///
-/// `pub` for one consumer: analysis.zig's "sysFuncTy and callTy agree" test.
-/// The two type the same call from opposite sides of the MIR and their comments
-/// have said MUST AGREE since both were written; the test is what turns that
-/// into something a build can fail on.
+/// ch9 return types: the `callee.zig` table's `ty` column, the one list
+/// `analysis.callTy` reads as well. Everything not listed there is real
+/// (§9.14/§9.15 dominate), including a user `$name`.
 pub fn sysFuncTy(name: []const u8) Ty {
-    // Data: fixed system-call names -> MIR type, one lookup per lowered call.
-    // The keys and enum values are static; no instance storage or allocation.
-    // Calls are independent, but this cold lookup needs no lane kernel.
-    const types = std.StaticStringMap(Ty).initComptime(.{
-        .{ "$param_given", .integer },
-        .{ "$port_connected", .integer },
-        .{ "$test$plusargs", .integer },
-        .{ "$value$plusargs", .integer },
-        .{ "$rtoi", .integer },
-        .{ "$clog2", .integer },
-        .{ "$realtobits", .integer },
-        .{ "$analog_node_alias", .integer },
-        .{ "$analog_port_alias", .integer },
-        .{ "$sscanf", .integer },
-        .{ "$sscanf$int", .integer },
-        .{ "$display$width", .integer },
-        .{ "$idx$int", .integer },
-        .{ "$fopen", .integer },
-        .{ "$fgets", .integer },
-        .{ "$fscanf", .integer },
-        .{ "$fscanf$int", .integer },
-        .{ "$ftell", .integer },
-        .{ "$fseek", .integer },
-        .{ "$rewind", .integer },
-        .{ "$ferror", .integer },
-        .{ "$feof", .integer },
-        .{ "$simparam$str", .string },
-        .{ "$sformat", .string },
-        .{ "$sscanf$str", .string },
-        .{ "$idx$str", .string },
-        .{ "$fgets$str", .string },
-        .{ "$fscanf$str", .string },
-        .{ "$ferror$str", .string },
-    });
-    return types.get(name) orelse .real;
+    return switch (Mir.callee.ty(Mir.Callee.fromName(name))) {
+        .real => .real,
+        .int => .integer,
+        .str => .string,
+    };
 }
