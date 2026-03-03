@@ -228,7 +228,19 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         // §3.9 an array element has the element's declared type; the index
         // is self-determined and never widens the result.
         .index => blk: {
-            if (try self.indexedArray(e) == null) return self.exprFail(e, "bit and part selects are not implemented; only unpacked array elements are indexed");
+            if (try self.indexedArray(e) == null) {
+                // IEEE 1364-2005 §5.2.1 a bit-select of a vector: one bit,
+                // unsigned; the index is self-determined.
+                // ponytail: no part-select (`a[3:0]`, `+:`); it is the same
+                // arm with a width, and nothing reads one yet.
+                const lhs = ex.lhs(e);
+                if ((ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident) or ex.tag(ex.rhs(e)) == .range)
+                    return self.exprFail(e, "part selects are not implemented; a select is one bit of a whole vector, or an unpacked array element");
+                _ = try self.scalarSlot(lhs);
+                const index = try inferValue(self, ex.rhs(e), depth + 1);
+                if (index.width > 64) return self.exprFail(ex.rhs(e), "bit indices wider than 64 bits are not implemented");
+                break :blk .{ .width = 1, .signed = false };
+            }
             const index = try inferValue(self, ex.rhs(e), depth + 1);
             if (index.width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
             const v = self.values[try self.slot(ex.lhs(e))];
@@ -569,8 +581,10 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
         .ident, .hier_ident => try watch(self, try self.slot(e), out),
         .index => {
             const base = try self.slot(ex.lhs(e));
-            const arr = self.arrays.get(base).?; // infer proved this is an array
-            for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
+            // An array element, or (infer admitted it) a bit-select of `base`.
+            if (self.arrays.get(base)) |arr| {
+                for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
+            } else try watch(self, base, out);
             try sensitivity(self, ex.rhs(e), out);
         },
         .unary, .binary, .multi_concat, .ternary, .sys_call, .concat => {

@@ -53,6 +53,22 @@ pub const Options = struct {
     /// with no `Io` gets a diagnostic from those two tasks and an unchanged
     /// engine everywhere else. The unit tests are that caller.
     io: ?std.Io = null,
+    /// VAMS §7: elaborate the DIGITAL half of a mixed-signal module. See `Mixed`.
+    mixed: ?Mixed = null,
+};
+
+/// The digital half of a design an analog compile already accepted (VAMS
+/// §7.2.2's discrete context of an analog module). Elaboration then skips
+/// what belongs to the continuous side instead of refusing it: `analog`
+/// blocks, disciplined (continuous) nets and ports, parameters, analog
+/// functions, and every variable the digital engine cannot hold. A digital
+/// process that names one of those still fails, as an undeclared name.
+pub const Mixed = struct {
+    /// The module the analog compile lowered: the design's root.
+    top: []const u8,
+    /// `source` is the analog compile's own PREPROCESSED text, so it is not
+    /// preprocessed again and the `timescale it consumed comes in here.
+    timescale: ?Front.Preprocessor.Timescale,
 };
 
 // ---- engine state and name resolution (§6.2.2, §12.4, §3.9) -----------------
@@ -65,6 +81,9 @@ const Name = struct { scope: u32, str: Ast.StrId };
 // either order of declaration — no operation here observes element ORDER, only
 // which address names which element.
 const Array = struct { count: u32, low: i64, high: i64 };
+
+/// A packed vector's declared `[msb:lsb]` (§3.3).
+pub const VecRange = struct { msb: i64, lsb: i64 };
 
 /// Who is told when a slot's value changes. `analog` is VAMS §8.5's implicit
 /// D2A: the slot is read by an analog block, so a change posts a region-3b
@@ -185,6 +204,12 @@ pub const Run = struct {
     /// One region-3b event per tick however many analog-read values moved,
     /// the same coalescing `monitor_pending` does for region 4.
     analog_pending: bool = false,
+    /// Elaborating the digital half of a mixed-signal module (`Options.mixed`).
+    mixed: bool = false,
+    /// §3.3 the declared `[msb:lsb]` of every packed vector, by slot, so a
+    /// bit-select can name its bit (IEEE 1364-2005 §5.2.1). A slot absent from
+    /// here is `[width-1:0]`.
+    vec_ranges: std.AutoHashMapUnmanaged(u32, VecRange) = .empty,
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -434,7 +459,7 @@ fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
 fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, depth: u16) Error!void {
     const arena = r.arena;
     if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
-    if (m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0)
+    if (!r.mixed and (m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     r.scope = scope;
     try e.insts.append(arena, .{ .module = m, .scope = scope });
@@ -448,6 +473,11 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try r.events.put(arena, at, {});
     }
     for (m.vars) |v| {
+        // A mixed module's real and initialized variables are the ANALOG
+        // block's (§7.2.2); a digital process naming one is an undeclared name.
+        // ponytail: digital-context `real` (VAMS Table 7-1's real row) is the
+        // upgrade — a real lane in the slot space.
+        if (r.mixed and (v.ty != .integer or v.init != .none or v.storage == .time)) continue;
         if (v.ty != .integer or v.init != .none or v.storage == .time) return r.fail(v.main_tok, "only uninitialized scalar/packed reg and integer declarations are implemented", .{});
         // ponytail: one unpacked dimension. §3.9 admits any number; the second
         // one needs a row-major address fold this has no consumer for yet.
@@ -455,6 +485,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else if (v.storage == .reg) 1 else 32;
         const base: u32 = @intCast(e.values.items.len);
         try r.bind(v.name, base, v.main_tok);
+        if (v.packed_range) |range| try r.vec_ranges.put(arena, base, .{
+            .msb = try r.declaredBound(range.msb, v.main_tok),
+            .lsb = try r.declaredBound(range.lsb, v.main_tok),
+        });
         var count: u32 = 1;
         if (v.dims.len == 1) {
             const lo = try r.declaredBound(v.dims[0].lsb, v.main_tok);
@@ -469,10 +503,16 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         for (0..count) |_| try e.values.append(arena, try filled(arena, width, if (v.storage == .reg) v.is_signed else true, .x));
     }
     for (m.nets) |n| {
+        // §7.2.1: a disciplined net is continuous — the analog solver's.
+        if (r.mixed and (n.discipline != .none or n.is_ground)) continue;
         if (n.discipline != .none or n.is_ground)
             return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
         const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
         const at = try mintNet(r, e, n.kind, width, n.name, n.main_tok);
+        if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
+            .msb = try r.declaredBound(range.msb, n.main_tok),
+            .lsb = try r.declaredBound(range.lsb, n.main_tok),
+        });
         var net = &e.nets.items[at];
         net.delay = try r.declaredDelay3(n.delay, n.main_tok);
         // A.2.1.3 gives `trireg` its own alternatives, and in them the third
@@ -495,6 +535,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
     for (m.ports, 0..) |p, i| {
+        if (r.mixed and p.discipline != .none) continue; // §7.2.1 continuous
         const bind = if (i < binds.len) binds[i] else PortBind.open;
         const width = if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
         if (bind == .collapse) {
@@ -725,7 +766,10 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
 /// caller that holds it may step it with `runUntil` for as long as the arena
 /// lives — which is what a mixed-signal coordinator needs from it.
 pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!Run {
-    const pp = Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .bag = bag }) catch |e| return switch (e) {
+    const pp: Front.Preprocessor.Output = if (opts.mixed) |mx| .{
+        .text = source,
+        .directives = .{ .timescales = if (mx.timescale) |t| try arena.dupe(Front.Preprocessor.TimescaleEvent, &.{.{ .at = 0, .value = t }}) else &.{} },
+    } else Front.Preprocessor.process(arena, source, .{ .file_name = opts.file_name, .include_dirs = opts.include_dirs, .std_defs = false, .bag = bag }) catch |e| return switch (e) {
         error.OutOfMemory => error.OutOfMemory,
         error.PreprocessFailed => error.DigitalFailed,
     };
@@ -745,13 +789,19 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try wrealRules(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives };
-    if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
-    const m = try pickTop(&r, file.modules);
+    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null };
+    const m = if (opts.mixed) |mx| for (file.modules) |*c| {
+        if (file.strings.eql(c.name, mx.top)) break c;
+    } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
+        if (file.modules.len == 0 or file.disciplines.len != 0 or file.natures.len != 0 or file.paramsets.len != 0 or file.connectrules.len != 0) return r.fail(0, "digital execution requires ordinary modules and no analog declarations", .{});
+        break :blk try pickTop(&r, file.modules);
+    };
     // §6.2.2: a `timescale applies from where it is written, and the FIRST
     // description in the file is what "before any module" means once there is
     // more than one — the root is not necessarily the first one declared.
-    const first_tok = file.modules[0].main_tok;
+    // A mixed design's text opens with the annex D/E prelude, so its root is
+    // the module that has to come after the directive.
+    const first_tok = if (opts.mixed != null) m.main_tok else file.modules[0].main_tok;
     for (times) |event| {
         if (event.at > r.starts[first_tok]) return r.fail(m.main_tok, "timescale/resetall after module start is not implemented for digital execution", .{});
         // A null scale is now only ever IEEE 1364 §19.6's `resetall, which
@@ -899,6 +949,51 @@ test "elaborate + runUntil step the engine one bounded horizon at a time" {
     try std.testing.expectEqual(@as(?Tick, null), r.scheduler.peekTime());
 }
 
+test "IEEE 1364 §5.2.1 a bit-select names its bit against the declared range" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg [3:0] a; reg [0:3] b; wire [3:0] w; wire hi;
+        \\integer i;
+        \\assign w = a;
+        \\assign hi = w[3];
+        \\initial begin
+        \\  a = 4'b1010; b = 4'b1000; i = 1;
+        \\  #0 $display("%b%b %b %b%b %b %b", a[1], a[0], hi, b[0], b[3], a[i], a[4]);
+        \\end
+        \\endmodule
+    , "10 1 10 1 x\n");
+}
+
+test "VAMS §7.2.2 the digital half of a mixed-signal module elaborates beside its analog half" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    // Already preprocessed text, as an analog compile hands it over: the
+    // timescale arrives in `Mixed`, not as a directive.
+    var r = try elaborate(arena.allocator(),
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module helper(a); inout a; electrical a; analog V(a) <+ 0; endmodule
+        \\module dac(out);
+        \\  inout out; electrical out; electrical inner;
+        \\  parameter real gain = 2.0;
+        \\  reg [3:0] code; real x;
+        \\  initial begin code = 4'd3; #5 code = 4'd7; end
+        \\  analog begin x = gain * code; V(out) <+ x; end
+        \\endmodule
+    , .{ .mixed = .{ .top = "dac", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &output.writer);
+    const at = r.slotOf("code").?;
+    // The continuous half is not the digital engine's to hold.
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("x"));
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("out"));
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("inner"));
+    _ = try r.runUntil(0);
+    try std.testing.expectEqual(@as(?i64, 3), r.values[at].asInt());
+    _ = try r.runUntil(5);
+    try std.testing.expectEqual(@as(?i64, 7), r.values[at].asInt());
+}
+
 test "§12.4 a downward hierarchical reference reads the named instance's net" {
     try expectRun(
         \\`timescale 1ns/1ps
@@ -1037,7 +1132,7 @@ test "the net and array declaration boundaries are explicit" {
     // §3.9 an array has no value of its own, and a select is not an element.
     try expectRejected("module m; reg [3:0] mem [0:3]; initial $display(\"%b\",mem); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
-    try expectRejected("module m; reg [3:0] a; initial $display(\"%b\",a[0]); endmodule", "bit and part selects");
+    try expectRejected("module m; reg [3:0] a; initial $display(\"%b\",a[1:0]); endmodule", "part selects");
     try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"x\"); endmodule", "one unpacked array dimension");
     try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
     // §3.6 a disciplined net belongs to the analog solver, not to this executor.
