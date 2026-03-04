@@ -20,13 +20,16 @@
 // correctly and still FAILed. Two independent rules in two clauses need two
 // compiles.
 //
-// A substring rather than a code, kept after E0127 landed: "qualifier" is the
-// term Syntax 10-1 itself uses, it does not occur in the directive being
-// diagnosed, and it survives a renumbering of the code. E0127 is what VerA
-// prints, and annex_a_syntax pins codes where a code is the point.
+// Two pins. The substring "qualifier" is the term Syntax 10-1 itself uses and
+// does not occur in the directive being diagnosed, so it says which rule fired
+// in words any tool could print. E0127 is VerA's code for that same rule, and
+// codes are never renumbered (lib/diag_code.zig's RULES), so pinning it too
+// costs nothing and stops a different diagnostic that happens to say
+// "qualifier" from satisfying the file.
 //
 //! lrm 10.2
 //! reject qualifier
+//! reject E0127
 `default_discipline electrical electrical
 module ch10_default_discipline_qualifier_grammar(p, n);
   inout p, n; electrical p, n;

@@ -1,0 +1,23 @@
+// §10.1 takes `include from IEEE Std 1364. IEEE 1364-2005 §19.5 Syntax 19-6 has
+// ONE form:
+//
+//     include_compiler_directive ::= `include "filename"
+//
+// The angle-bracket form `include <file>` is C's, and SystemVerilog's (IEEE
+// 1800 §22.4), where it selects a tool-defined search path. Neither 1364 nor
+// the Verilog-AMS LRM admits it: §10.1 lists `include as "[IEEE Std 1364
+// Verilog]", and Annex A adds no alternative.
+//
+// VerA accepts it. lib/frontend/pp/directive.zig's handleInclude maps `<` to a
+// closing `>` and reads the file, although E0122's own --explain text says "The
+// angle-bracket form C uses is not part of the Verilog-AMS grammar".
+//
+//! lrm 10.1
+//! inherited IEEE 1364-2005 19.5
+//! reject E0122
+//! xfail handleInclude accepts `include <file> as a second quoting style; only "file" is in Syntax 19-6
+`include <disciplines.vams>
+module ch10_include_angle_brackets(p, n);
+  inout p, n; electrical p, n;
+  analog I(p, n) <+ V(p, n);
+endmodule
