@@ -17,6 +17,7 @@ const lower_expr = @import("expr.zig");
 const lower_node = @import("node.zig");
 const lower_param = @import("param.zig");
 const Ast = @import("frontend").Ast;
+const Const = Lower.Const;
 const Mir = @import("../mir.zig");
 const diag = @import("diag");
 const Oom = Lower.Oom;
@@ -349,48 +350,43 @@ pub fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!
 /// but §7.3.2.1's examples are IEEE division and every operator added here
 /// widens the surface for a false accusation. Add the transcendentals the day a
 /// model writes one.
-pub fn scanFinite(self: *const Lower, v0: Mir.Value, depth: u32, bad: *?f64) ?f64 {
+pub fn scanFinite(self: *const Lower, v0: Mir.Value, depth: u32, bad: *?f64) ?Const {
     if (depth > 32) return null;
     const v = self.mir.resolveAlias(v0);
-    const r: ?f64 = switch (self.mir.valueDef(v)) {
-        .float_const => |x| x,
-        .int_const => |x| @as(f64, @floatFromInt(x)),
-        .inst_result => |inst| blk: {
-            const row = self.mir.instRow(inst);
-            switch (Mir.opClass(row.op)) {
-                .unary => {
-                    const a = scanFinite(self, @enumFromInt(row.a), depth + 1, bad) orelse break :blk null;
-                    break :blk switch (row.op) {
-                        .fneg, .ineg => -a,
-                        .fabs, .iabs => @abs(a),
-                        .if_cast, .opt_barrier => a,
-                        else => null,
-                    };
-                },
-                .binary => {
-                    // Both sides walked before either is tested: the scan is
-                    // the point, the fold is only how it gets there.
-                    const a = scanFinite(self, @enumFromInt(row.a), depth + 1, bad);
-                    const b = scanFinite(self, @enumFromInt(row.b), depth + 1, bad);
-                    const x = a orelse break :blk null;
-                    const y = b orelse break :blk null;
-                    break :blk switch (row.op) {
-                        .fadd => x + y,
-                        .fsub => x - y,
-                        .fmul => x * y,
-                        .fdiv => x / y,
-                        else => null,
-                    };
-                },
-                else => break :blk null,
-            }
+    const r: ?Const = switch (self.mir.valueDef(v)) {
+        .float_const => |x| .{ .real = x },
+        .int_const => |x| .{ .int = x },
+        .inst_result => |inst| switch (self.mir.instData(inst)) {
+            .unary => |u| blk: {
+                const a = scanFinite(self, u.operand, depth + 1, bad) orelse break :blk null;
+                break :blk if (accuses(u.op)) Mir.opcode.fold(u.op, &.{a}) else null;
+            },
+            // Both sides walked before either is tested: the scan is the
+            // point, the fold is only how it gets there.
+            .binary => |bn| blk: {
+                const a = scanFinite(self, bn.lhs, depth + 1, bad);
+                const b = scanFinite(self, bn.rhs, depth + 1, bad);
+                if (!accuses(bn.op)) break :blk null;
+                break :blk Mir.opcode.fold(bn.op, &.{ a orelse break :blk null, b orelse break :blk null });
+            },
+            .ternary, .phi, .branch, .jump, .call => null,
         },
-        else => null,
+        .undef, .str_const, .param_ref, .block_param => null,
     };
-    if (r) |x| {
+    if (r) |c| {
+        const x = c.asReal();
         if (!std.math.isFinite(x) and bad.* == null) bad.* = x;
     }
     return r;
+}
+
+/// The opcodes `scanFinite` folds: IEEE arithmetic and sign, the ponytail
+/// above. The operation itself is the shared kernel's (`opcode.fold`).
+fn accuses(op: Mir.Opcode) bool {
+    return switch (op) {
+        .fneg, .ineg, .fabs, .iabs, .if_cast, .opt_barrier, .fadd, .fsub, .fmul, .fdiv => true,
+        else => false, // else: §7.3.2.1's examples are IEEE division; every other operator widens the surface for a false accusation
+    };
 }
 
 /// LRM §5.6.7 indirect branch contribution — `V(out) : V(in) == e;`, read

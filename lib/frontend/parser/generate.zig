@@ -17,6 +17,7 @@ const parse_module = @import("module.zig");
 const parse_stmt = @import("stmt.zig");
 const token = @import("../token.zig");
 const Ast = @import("../ast.zig");
+const constfold = @import("../constfold.zig");
 const Error = parser.Error;
 const found = Parser.found;
 
@@ -462,37 +463,15 @@ pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
     return self.file.intern(self.arena, joined.items);
 }
 
-/// Fold A.9.3's `[ constant_expression ]`: §2.6 integer literals and the
-/// +,-,*,/ arithmetic over them — the same set `Elaborate.constInt` folds
-/// for the instance-array RANGE these indices select from. Not parameter
-/// reads: the parameter table is elaboration's, and a value not in hand
-/// here cannot be spelled into interned text.
+/// Fold A.9.3's `[ constant_expression ]` through the one constant kernel:
+/// literals and every operator over them, with §4.2's integer typing — the
+/// same fold `Elaborate.constInt` applies to the instance-array RANGE these
+/// indices select from. Not parameter reads: the parameter table is
+/// elaboration's, and a value not in hand here cannot be spelled into
+/// interned text. A real-valued index is not one.
 pub fn constIndex(self: *Parser, e: Ast.ExprId) ?i64 {
-    if (e == .none) return null;
-    const x = &self.file.exprs;
-    return switch (x.tag(e)) {
-        .int_literal => x.intValue(e),
-        .unary => blk: {
-            const v = constIndex(self, x.lhs(e)) orelse break :blk null;
-            break :blk switch (x.unOp(e)) {
-                .plus => v,
-                .minus => -v,
-                else => null,
-            };
-        },
-        .binary => blk: {
-            const l = constIndex(self, x.lhs(e)) orelse break :blk null;
-            const r = constIndex(self, x.rhs(e)) orelse break :blk null;
-            break :blk switch (x.binOp(e)) {
-                .add => l + r,
-                .sub => l - r,
-                .mul => l * r,
-                .div => if (r == 0) null else @divTrunc(l, r),
-                else => null,
-            };
-        },
-        else => null,
-    };
+    const c = constfold.fold(&self.file, e, constfold.literal_env) orelse return null;
+    return if (c == .int) c.int else null;
 }
 
 /// A.2.2.1 net_type keyword -> `Ast.NetKind`, null for a token that is not

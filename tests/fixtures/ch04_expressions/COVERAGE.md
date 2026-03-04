@@ -88,7 +88,7 @@ the prose, never silently promoted.
 | 4.5.11.1 laplace_zp | `133_laplace_unpaired_complex_root_rejected.va` (a complex root with no conjugate partner) |
 | 4.5.11.2 laplace_zd | — no fixture cites it; `23_laplace_filters.va` runs the form under the 4.5.11 cite |
 | 4.5.11.3 laplace_np | — as 4.5.11.2 |
-| 4.5.11.4 laplace_nd | — as 4.5.11.2; also run by `35_filter_parameter_arrays.va` and `96_function_filter_ban.va` under other cites |
+| 4.5.11.4 laplace_nd | — as 4.5.11.2; also run by `35_filter_parameter_arrays.va` and `96_function_filter_ban.va` under other cites. `laplace_transcendental_coefficient.va` cites it: H(0) = n0/d0 with n0 = sin(π/6), and a laplace_zp whose conjugate roots are written with sin() |
 | 4.5.11.5 Examples | — no fixture cites it. `136_filter_null_zeros_argument.va` quotes this clause's band-limited-noise example as its source but cites 4.5.11 |
 | 4.5.12 Z-transform filters | `24_z_transform_filters.va` (all four forms), `94_operator_null_argument.va` (E0502), `134_z_filter_period_rejected.va` (non-positive period), `136_filter_null_zeros_argument.va` (null zeros, above), `135_z_filter_zero_transition_branch_rejected.va` (E0518 — a zero-transition-time Z-filter contributed straight to a branch; the zero itself is legal and reading it into a variable still compiles). VerA implements the τ = 0 / t0 = 0 form only, and refuses a nonzero τ rather than emitting a different waveform silently |
 | 4.5.12.1 zi_zp | — no fixture cites it; `24_z_transform_filters.va` runs the form under the 4.5.12 cite |

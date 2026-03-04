@@ -37,6 +37,7 @@ const std = @import("std");
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
 const Ast = @import("frontend").Ast;
+const Const = @import("frontend").constfold.Const;
 
 /// File-as-struct: `@import("analysis.zig")` is both the namespace and the type.
 pub const Analysis = @This();
@@ -775,160 +776,64 @@ pub fn callTy(name: []const u8) VTy {
 
 pub const Folded = struct { f: f64 };
 
-/// A folded INTEGER back in its own type, so §3.2's width can be applied to it.
-/// NOT exact by construction: a `fi_cast` arm below re-enters the carrier as
-/// `@round(a.f)` of an arbitrary REAL, so `integer x = 1e300;` (or a NaN out
-/// of `0.0/0.0`) reaches this cast at any magnitude — `@intFromFloat` here was
-/// safety-checked UB that panicked the compiler. `lossyCast` (saturate,
-/// NaN→0) is the SAME rule codegen emits for the runtime cast, so a folded
-/// expression and the running device answer garbage input identically.
-fn asI64(x: Folded) i64 {
-    return std.math.lossyCast(i64, @round(x.f));
-}
-
 /// §4.2 constant expression folding over MIR, used for parameter defaults
 /// (`parameter real b = a*2;` — §6.3.4) and for §4.5 operator control
 /// arguments. Anything touching an unknown or a call is not constant.
+///
+/// The operators are the one constant kernel's, applied per instruction by
+/// `opcode.fold` (the table's `fold` column): this walk only decides which
+/// values are leaves. `Folded` is the f64 the emitter renders.
 pub fn foldConst(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: bool) ?Folded {
+    const c = self.foldValue(v0, depth, resolve_params) orelse return null;
+    return .{ .f = c.asReal() };
+}
+
+fn foldValue(self: *const Analysis, v0: Mir.Value, depth: u32, resolve_params: bool) ?Const {
     if (depth > 32) return null;
     const v = self.rv(v0);
     switch (self.mir.valueDef(v)) {
-        .float_const => |x| return .{ .f = x },
-        .int_const => |x| return .{ .f = @floatFromInt(x) },
+        .float_const => |x| return .{ .real = x },
+        .int_const => |x| return .{ .int = x },
         // Only a Model DEFAULT may look through a parameter: everywhere
         // else the value is whatever the host overrode it with.
         .param_ref => |p| return if (resolve_params)
-            self.foldConst(self.lower.params.items[p].default, depth + 1, true)
+            self.foldValue(self.lower.params.items[p].default, depth + 1, true)
         else
             null,
-        .inst_result => |inst| {
-            const row = self.mir.instRow(inst);
-            switch (Mir.opClass(row.op)) {
-                .unary => {
-                    const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
-                    return switch (row.op) {
-                        .fneg => .{ .f = -a.f },
-                        .fabs => .{ .f = @abs(a.f) },
-                        // -(-2^31) and |-2^31| are the same §3.2 wrap: both
-                        // answer -2^31, which is `codegen`'s `.ineg`/`zIabs`.
-                        .ineg => .{ .f = @floatFromInt(Lower.wrap32(-%asI64(a))) },
-                        .iabs => .{ .f = @floatFromInt(Lower.wrap32(if (asI64(a) < 0) -%asI64(a) else asI64(a))) },
-                        .sqrt => .{ .f = @sqrt(a.f) },
-                        .exp => .{ .f = @exp(a.f) },
-                        .ln => .{ .f = @log(a.f) },
-                        .log10 => .{ .f = @log10(a.f) },
-                        .floor => .{ .f = @floor(a.f) },
-                        .ceil => .{ .f = @ceil(a.f) },
-                        .fi_cast => .{ .f = @round(a.f) },
-                        // .path_prev/.path_acc fall to `else`: their value is
-                        // an Instance latch, never the operand — no fold.
-                        .if_cast, .opt_barrier => .{ .f = a.f },
-                        // §4.2.8/§4.2.9 — the two integer-valued unary forms
-                        // `Lower.foldExpr`'s `.unary` arm already folds. Truth is
-                        // "not zero" (§4.2.8), and `~` is the 32-bit complement
-                        // §3.2's width defines.
-                        .lognot => .{ .f = @floatFromInt(@intFromBool(a.f == 0)) },
-                        .bitnot => .{ .f = @floatFromInt(Lower.wrap32(~asI64(a))) },
-                        else => null,
-                    };
-                },
-                .binary => {
-                    const a = self.foldConst(@enumFromInt(row.a), depth + 1, resolve_params) orelse return null;
-                    const b2 = self.foldConst(@enumFromInt(row.b), depth + 1, resolve_params) orelse return null;
-                    return switch (row.op) {
-                        // §3.2's 32-bit 2's complement result — `Lower.wrap32`
-                        // is the definition, and this fold has to agree with
-                        // `codegen.intBin32` or the same expression answers
-                        // differently in a parameter default than at runtime.
-                        // The i64 round trip is not decoration: the product of
-                        // two i32s reaches 2^62, which an f64 carrier cannot
-                        // hold exactly, so the wrap has to happen in the integer
-                        // type and only the wrapped result comes back to f64.
-                        .iadd => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) +% asI64(b2))) },
-                        .isub => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) -% asI64(b2))) },
-                        .imul => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) *% asI64(b2))) },
-                        .fadd => .{ .f = a.f + b2.f },
-                        .fsub => .{ .f = a.f - b2.f },
-                        .fmul => .{ .f = a.f * b2.f },
-                        .fdiv => .{ .f = a.f / b2.f },
-                        .idiv => if (asI64(b2) == 0)
-                            null
-                        else
-                            .{ .f = @floatFromInt(@as(i32, @truncate(@divTrunc(@as(i65, asI64(a)), @as(i65, asI64(b2)))))) },
-                        .pow => .{ .f = std.math.pow(f64, a.f, b2.f) },
-                        .ipow => if (Lower.ipow32(asI64(a), asI64(b2))) |r| .{ .f = @floatFromInt(r) } else null,
-                        .fmin, .imin => .{ .f = @min(a.f, b2.f) },
-                        .fmax, .imax => .{ .f = @max(a.f, b2.f) },
-                        // §4.2.4 remainder. No wrap: a remainder is never wider
-                        // than its operands. A zero divisor has no value to fold
-                        // to — proof.zig's E0601 is the diagnostic, this just
-                        // declines.
-                        .fmod => if (b2.f == 0) null else .{ .f = @rem(a.f, b2.f) },
-                        .imod => if (asI64(b2) == 0) null else .{ .f = @floatFromInt(@rem(@as(i65, asI64(a)), @as(i65, asI64(b2)))) },
-                        // §4.2.5/§4.2.7 relational and equality, §4.2.8 logical:
-                        // integer 0/1. Both operand flavours compare in the f64
-                        // carrier — a §3.2.1 integer is exact in it — so the `i`
-                        // and `f` opcodes share an arm.
-                        .flt, .ilt => .{ .f = @floatFromInt(@intFromBool(a.f < b2.f)) },
-                        .fgt, .igt => .{ .f = @floatFromInt(@intFromBool(a.f > b2.f)) },
-                        .fle, .ile => .{ .f = @floatFromInt(@intFromBool(a.f <= b2.f)) },
-                        .fge, .ige => .{ .f = @floatFromInt(@intFromBool(a.f >= b2.f)) },
-                        .feq, .ieq => .{ .f = @floatFromInt(@intFromBool(a.f == b2.f)) },
-                        .fne, .ine => .{ .f = @floatFromInt(@intFromBool(a.f != b2.f)) },
-                        .logand => .{ .f = @floatFromInt(@intFromBool(a.f != 0 and b2.f != 0)) },
-                        .logor => .{ .f = @floatFromInt(@intFromBool(a.f != 0 or b2.f != 0)) },
-                        // §4.2.9 bitwise, at §3.2's width.
-                        .bitand => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) & asI64(b2))) },
-                        .bitor => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) | asI64(b2))) },
-                        .bitxor => .{ .f = @floatFromInt(Lower.wrap32(asI64(a) ^ asI64(b2))) },
-                        .bitxnor => .{ .f = @floatFromInt(Lower.wrap32(~(asI64(a) ^ asI64(b2)))) },
-                        // §4.2.11, and the rule is `Lower.foldBinary`'s verbatim:
-                        // `<<` is §3.2's 32-bit truncation of an i64 shift, `>>`
-                        // zero-fills over 32 bits (NOT an i64 arithmetic shift),
-                        // and a shift count outside the carrier declines rather
-                        // than answering.
-                        .shl, .shr => blk: {
-                            const sh = asI64(b2);
-                            if (sh < 0 or sh > 63) break :blk null;
-                            if (row.op == .shl) break :blk Folded{
-                                .f = @floatFromInt(Lower.wrap32(asI64(a) << @as(u6, @intCast(sh)))),
-                            };
-                            if (sh == 0) break :blk a;
-                            if (sh > 31) break :blk Folded{ .f = 0 };
-                            const lo: u32 = @bitCast(@as(i32, @truncate(asI64(a))));
-                            break :blk Folded{ .f = @floatFromInt(lo >> @as(u5, @intCast(sh))) };
-                        },
-                        else => null,
-                    };
-                },
-                // §4.2.12 `?:`. Lazy, as `Lower.foldExpr`'s ternary arm is: only
-                // the taken arm has to be foldable, so `w > 0 ? 1/w : 0` folds
-                // for w = 0 instead of declining on a division it never performs.
-                .ternary => {
-                    const d = self.mir.instData(inst).ternary;
-                    const c = self.foldConst(d.cond, depth + 1, resolve_params) orelse return null;
-                    const taken = if (c.f != 0) d.then_val else d.else_val;
-                    return self.foldConst(taken, depth + 1, resolve_params);
-                },
-                // §9.15 a host-published `$simparam` under the SAME rule as
-                // `.param_ref` above: only a Model DEFAULT may look through it,
-                // and what it sees is Table 9-27's declared value. That is what
-                // `Model{}` means to a host that writes nothing; every other
-                // reader gets `model.<field>` (codegen's `f64Const`), so the
-                // §3.4 field initializer and the §6.3.4 `derive()` assignment
-                // split cleanly on `resolve_params`.
-                .call => {
-                    if (!resolve_params) return null;
-                    const d = self.mir.instData(inst).call;
-                    if (d.callee != .@"$simparam" or d.args.len == 0) return null;
-                    const arg = self.mir.valueDef(self.rv(d.args[0]));
-                    if (arg != .str_const) return null;
-                    if (Lower.simparamHostField(arg.str_const) == null) return null;
-                    return .{ .f = self.lower.simparamValue(arg.str_const) orelse return null };
-                },
-                else => return null,
-            }
+        .inst_result => |inst| switch (self.mir.instData(inst)) {
+            .unary => |u| {
+                const a = self.foldValue(u.operand, depth + 1, resolve_params) orelse return null;
+                return Mir.opcode.fold(u.op, &.{a});
+            },
+            .binary => |bn| {
+                const a = self.foldValue(bn.lhs, depth + 1, resolve_params) orelse return null;
+                const b2 = self.foldValue(bn.rhs, depth + 1, resolve_params) orelse return null;
+                return Mir.opcode.fold(bn.op, &.{ a, b2 });
+            },
+            // §4.2.12 `?:`. Lazy, as the kernel's `fold` is: only the taken
+            // arm has to be foldable, so `w > 0 ? 1/w : 0` folds for w = 0
+            // instead of declining on a division it never performs.
+            .ternary => |d| {
+                const c = self.foldValue(d.cond, depth + 1, resolve_params) orelse return null;
+                return self.foldValue(if (c.isTrue()) d.then_val else d.else_val, depth + 1, resolve_params);
+            },
+            // §9.15 a host-published `$simparam` under the SAME rule as
+            // `.param_ref` above: only a Model DEFAULT may look through it,
+            // and what it sees is Table 9-27's declared value. That is what
+            // `Model{}` means to a host that writes nothing; every other
+            // reader gets `model.<field>` (codegen's `f64Const`), so the
+            // §3.4 field initializer and the §6.3.4 `derive()` assignment
+            // split cleanly on `resolve_params`.
+            .call => |d| {
+                if (!resolve_params) return null;
+                if (d.callee != .@"$simparam" or d.args.len == 0) return null;
+                const arg = self.mir.valueDef(self.rv(d.args[0]));
+                if (arg != .str_const) return null;
+                if (Lower.simparamHostField(arg.str_const) == null) return null;
+                return .{ .real = self.lower.simparamValue(arg.str_const) orelse return null };
+            },
+            .phi, .branch, .jump => return null,
         },
-        else => return null,
+        .undef, .str_const, .block_param => return null,
     }
 }
