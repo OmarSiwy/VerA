@@ -16,6 +16,7 @@
 //! lrm 4.5.7
 //! reject td
 //! reject positive
+//! reject E0516
 module ch04_absdelay_negative_delay_rejected(p, n);
     inout p, n;
     electrical p, n;

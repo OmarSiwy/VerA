@@ -16,6 +16,7 @@
 //
 //! lrm 4.5.12
 //! reject shall not be directly assigned to a branch
+//! reject E0518
 module ch04_z_filter_zero_transition_branch_rejected(p, n);
     inout p, n;
     electrical p, n;

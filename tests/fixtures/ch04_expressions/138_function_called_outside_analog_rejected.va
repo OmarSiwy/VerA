@@ -19,6 +19,7 @@
 //! lrm 4.7.3
 //! reject scale
 //! reject analog
+//! reject E0430
 module ch04_function_called_outside_analog_rejected(p, n);
     inout p, n;
     electrical p, n;

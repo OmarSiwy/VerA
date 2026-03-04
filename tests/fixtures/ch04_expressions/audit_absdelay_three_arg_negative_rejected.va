@@ -4,6 +4,7 @@
 // A positive maxdelay cannot make negative td legal.
 //! lrm 4.5.7
 //! reject positive
+//! reject E0516
 module audit_absdelay_three_arg_negative_rejected(p, n);
     inout p, n;
     electrical p, n;

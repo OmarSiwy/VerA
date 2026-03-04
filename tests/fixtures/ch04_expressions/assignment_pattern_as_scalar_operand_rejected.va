@@ -1,0 +1,20 @@
+// §4.2.14 states where an array assignment pattern may appear: "Here are the
+// contexts in Verilog-AMS where an array assignment pattern is allowed;
+//   Analog operator arguments which are expected to be of type array (see 4.5.1)
+//   The data_source argument of the $table_model system task
+//   Parameter array assignment in an instantiation
+//   The RHS of an array variable or array parameter default assignment
+//   The RHS of an array variable assignment
+//   Array arguments in calls to user-defined functions".
+//
+// An operand of `*` is none of these. `'{1.0, 2.0}` below is a list of two
+// values multiplied by a scalar probe, which has no meaning. The legal uses are
+// 09_assignment_pattern.va and 23_laplace_filters.va.
+//
+//! lrm 4.2.14
+//! reject E0509
+`include "disciplines.vams"
+module ch04_assignment_pattern_as_scalar_operand(p, n);
+  inout p, n; electrical p, n;
+  analog I(p, n) <+ '{1.0, 2.0} * V(p, n);
+endmodule

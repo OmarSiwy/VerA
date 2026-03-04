@@ -18,6 +18,7 @@
 //! lrm 4.7.2.2
 //! reject return
 //! reject expression
+//! reject E0227
 module ch04_function_bare_return_rejected(p, n);
     inout p, n;
     electrical p, n;
