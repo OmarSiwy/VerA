@@ -6,12 +6,11 @@
 // case_default_only.va and case_statement.va are the legal forms and must keep
 // compiling; the only difference here is the second `default:`.
 //
-// No VerA code exists for this, so the expectation is the phase label: the file
-// must not compile at all. A conforming compiler satisfies that with whatever
-// code it has.
+// E0427 ("more than one `default` arm in a case statement") is VerA's code for
+// this rule, and it replaces the phase label pinned before the code existed.
 //
 //! lrm 5.8.3
-//! reject DiagnosticsReported
+//! reject E0427
 module ch5_case_duplicate_default(p);
   inout p; electrical p; integer s; real x;
   analog begin

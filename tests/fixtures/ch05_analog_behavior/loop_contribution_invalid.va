@@ -7,11 +7,11 @@
 // for_loop.va is the same loop with the contribution moved out after it, which
 // is the legal way to write this and must keep compiling.
 //
-// No VerA code exists for this, so the expectation is the phase label: the file
-// must not compile at all.
+// E0426 ("contribution inside a runtime loop") is VerA's code for this rule, and
+// it replaces the phase label pinned before the code existed.
 //
 //! lrm 5.9
-//! reject DiagnosticsReported
+//! reject E0426
 module ch5_loop_contribution(p);
   inout p; electrical p; integer i;
   analog begin
