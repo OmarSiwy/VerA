@@ -11,12 +11,13 @@
 // discipline collision, which VerA already diagnoses at E0336; this is the
 // same-kind duplicate, a different code path.
 //
-// The pinned substring is only the phase label: E0336 is worded and scoped for
-// the cross-kind case, so pinning it here would pin the wrong rule.
+// E0342 ("nature or discipline is already declared") is the same-kind code, and
+// E0336 stays the cross-kind one, so pinning E0342 pins the right rule. It
+// replaces the phase label pinned before E0342 existed.
 //
 //! lrm 3.6.1
 //! lrm 3.13.1
-//! reject DiagnosticsReported
+//! reject E0342
 nature ch3_twice_n; units="V"; access=TwiceA; abstol=1u; endnature
 nature ch3_twice_n; units="A"; access=TwiceB; abstol=1p; endnature
 module ch3_duplicate_nature_name; endmodule

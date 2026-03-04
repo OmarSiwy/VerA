@@ -11,12 +11,13 @@
 //
 // annex_c_analog_subset/07_discrete_discipline_current_behavior.va declares a
 // discrete discipline with NO nature bindings and therefore never reaches this
-// rule. Note that in a `.va` file annex C.4 also bears on `domain discrete`; the
-// phase label below cannot tell the two rules apart, and no net is bound here so
-// the §3.6.2.2 combination is the only thing the declaration itself states.
+// rule. In a `.va` file annex C.4 also bears on `domain discrete`, which the
+// phase label this file used to pin could not tell apart; E0339 ("`domain
+// discrete` on a discipline that binds a nature") is the §3.6.2.2 combination
+// and nothing else, so it is what is pinned now.
 //
 //! lrm 3.6.2.2
-//! reject DiagnosticsReported
+//! reject E0339
 nature ch3_discrete_n; units="V"; access=DiscreteV; abstol=1u; endnature
 discipline ch3_discrete_natured;
     domain discrete;
