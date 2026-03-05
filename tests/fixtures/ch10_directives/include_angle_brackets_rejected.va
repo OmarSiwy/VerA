@@ -8,14 +8,13 @@
 // the Verilog-AMS LRM admits it: §10.1 lists `include as "[IEEE Std 1364
 // Verilog]", and Annex A adds no alternative.
 //
-// VerA accepts it. lib/frontend/pp/directive.zig's handleInclude maps `<` to a
-// closing `>` and reads the file, although E0122's own --explain text says "The
-// angle-bracket form C uses is not part of the Verilog-AMS grammar".
+// So `<` is refused with E0122 exactly as any other opener that is not `"`
+// (lib/frontend/pp/directive.zig handleInclude). The legal neighbour, the quoted
+// form, is exercised by every fixture that writes `include "disciplines.vams".
 //
 //! lrm 10.1
 //! inherited IEEE 1364-2005 19.5
 //! reject E0122
-//! xfail handleInclude accepts `include <file> as a second quoting style; only "file" is in Syntax 19-6
 `include <disciplines.vams>
 module ch10_include_angle_brackets(p, n);
   inout p, n; electrical p, n;
