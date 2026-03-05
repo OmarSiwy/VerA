@@ -167,6 +167,7 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
         .filter_call,
         .noise_call,
         .assign_pattern,
+        .pattern_repl,
         .event_or,
         .event_posedge,
         .event_negedge,

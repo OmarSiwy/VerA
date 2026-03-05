@@ -514,11 +514,11 @@ pub fn joinQuoted(arena: std.mem.Allocator, items: []const []const u8) Oom![]con
 /// covers the spelling.
 pub fn flattenPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds) Oom![]const Ast.ExprId {
     const out = try self.arena.alloc(Ast.ExprId, shapeCells(dims));
-    fillPattern(self, e, dims, out);
+    try fillPattern(self, e, dims, out);
     return out;
 }
 
-pub fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) void {
+pub fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast.ExprId) Oom!void {
     if (dims.len == 0) {
         out[0] = e;
         return;
@@ -526,14 +526,42 @@ pub fn fillPattern(self: *Lower, e: Ast.ExprId, dims: []const Bounds, out: []Ast
     const ex = &self.file.exprs;
     const elems: []const Ast.ExprId = if (e != .none and
         (ex.tag(e) == .assign_pattern or ex.tag(e) == .concat))
-        ex.args(e)
+        try patternElems(self, e)
     else
         &.{};
     const stride = shapeCells(dims[1..]);
     for (0..@intCast(dims[0].count())) |k| {
         const child = if (k < elems.len) elems[k] else Ast.ExprId.none;
-        fillPattern(self, child, dims[1..], out[k * stride ..][0..stride]);
+        try fillPattern(self, child, dims[1..], out[k * stride ..][0..stride]);
     }
+}
+
+/// The elements of a pattern (or brace list), with A.8.1's replication form
+/// unrolled when the parser could not: `'{N{a, b}}` whose count is a
+/// constant_expression rather than a literal (§4.2.14), carried as one
+/// `.pattern_repl` element. The count folds like an array bound — parameters
+/// included (§3.4) — and must be a non-negative integer (§4.2.13), else E0223
+/// and no elements, so every cell keeps its §3.2 zero default.
+pub fn patternElems(self: *Lower, e: Ast.ExprId) Oom![]const Ast.ExprId {
+    const ex = &self.file.exprs;
+    const elems = ex.args(e);
+    if (elems.len != 1 or ex.tag(elems[0]) != .pattern_repl) return elems;
+    const count = ex.lhs(elems[0]);
+    const group = ex.args(ex.rhs(elems[0]));
+    const c = lower_constfold.constEval(self, count);
+    const n = if (c) |v| switch (v) {
+        .int => |i| i,
+        else => null,
+    } else null;
+    // ponytail: the cap is an unrolling guard, not a rule; no declared array
+    // comes near 2^20 cells.
+    if (n == null or n.? < 0 or n.? * @as(i64, @intCast(group.len)) > 1 << 20) {
+        try self.err(ex.mainTok(count), .E0223, "", .{});
+        return &.{};
+    }
+    const out = try self.arena.alloc(Ast.ExprId, @as(usize, @intCast(n.?)) * group.len);
+    for (0..@intCast(n.?)) |k| @memcpy(out[k * group.len ..][0..group.len], group);
+    return out;
 }
 
 pub const Bounds = struct {

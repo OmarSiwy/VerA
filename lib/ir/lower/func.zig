@@ -428,7 +428,7 @@ pub fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) O
             return true;
         },
         .assign_pattern, .concat => {
-            const elems = ex.args(actual);
+            const elems = try lower_param.patternElems(self, actual);
             if (elems.len != out.len) return false;
             for (elems, out) |e, *v| {
                 const tv = try lower_expr.lowerExpr(self, e);
@@ -460,7 +460,7 @@ pub fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) O
             }
         },
         .assign_pattern, .concat => {
-            for (ex.args(actual), vals) |e, v| {
+            for (try lower_param.patternElems(self, actual), vals) |e, v| {
                 const slot = try lower_stmt.resolveLvalue(self, e) orelse continue;
                 try self.builder.writeVariable(slot.place, self.cur, v);
             }

@@ -1518,7 +1518,7 @@ fn infoOf(c: Code) Info {
         },
 
         .E0223 => .{
-            .title = "replication count in an assignment pattern is not a literal",
+            .title = "replication count in an assignment pattern is not a non-negative constant",
             .lrm = "4.2.14",
             .explain =
             \\A.8.1's second alternative for an assignment pattern is
@@ -1526,17 +1526,12 @@ fn infoOf(c: Code) Info {
             \\    '{ constant_expression { expression { , expression } } }
             \\
             \\and 4.2.14's own example is `'{ 5{0.0} }`. The count says how many
-            \\ELEMENTS the pattern has, so it is unrolled while the pattern is
-            \\parsed — which is before any parameter has a value.
+            \\ELEMENTS the pattern has, so it must fold at elaboration like an
+            \\array bound: literals and parameters (3.4), never a variable.
+            \\4.2.13 makes a replication count "non-negative, non-x and non-z".
             \\
-            \\Write the digits, or write the elements out.
-            \\
-            \\A constant_expression naming a localparam is legal Verilog-AMS and
-            \\this is VerA's limit, not the LRM's: the unroll moves to lowering,
-            \\where the constant folder lives, the day one is needed. The
-            \\CONCATENATION form `{n{...}}` has no such limit — 3.3 Table 3-3
-            \\allows even a nonconstant multiplier there, and lowering handles
-            \\it, because a concatenation is one value and not a list of them.
+            \\The CONCATENATION form `{n{...}}` is a different rule: 3.3 Table
+            \\3-3 lets its multiplier be nonconstant when the result is a string.
             ,
         },
         // 4.7.1's bullet list, and 4.7.2.2's one sentence about `return`, are
