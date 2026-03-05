@@ -24,6 +24,7 @@
 //! lrm 9.2
 //! lrm 9.10
 //! reject analog context
+//! reject E0806
 module ch09_realtime_analog_rejected(p, n);
   inout p, n; electrical p, n;
   real t;

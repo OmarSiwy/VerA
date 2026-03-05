@@ -40,6 +40,7 @@
 //! lrm 9.2
 //! lrm 9.5
 //! reject analog context
+//! reject E0806
 module ch09_file_io_digital_only_analog_rejected(p, n);
   inout p, n; electrical p, n;
   integer fd, code;

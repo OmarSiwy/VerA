@@ -35,6 +35,7 @@
 //! lrm 9.4.1
 //! lrm 9.4.3
 //! reject format specifier
+//! reject E0810
 module ch09_display_argument_pairing_rejected(p, n);
   inout p, n; electrical p, n;
   analog begin
