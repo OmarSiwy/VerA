@@ -26,17 +26,17 @@
 //
 // 01_abstime_replaced_realtime.va owns the positive half of the same Annex G
 // row: $abstime is the analog spelling and it is in SECONDS whatever `timescale
-// says. It runs green, and stays out of this file so that its clean pass is not
-// swallowed by the xfail below.
+// says. It runs green, and stays out of this file so that this one is about the
+// refusal and nothing else.
 //
-// NO CODE IS PINNED: VerA emits no diagnostic here at all, so there is no stable
-// code to name, and a guessed one would leave the marker stuck at XFAIL on the
-// day the gap closes under a different code. The module's only defect is the
-// $realtime read.
+// E0806 ("system task is not supported in the analog context") is what VerA
+// emits now: Table 9-7's "No" in the analog column, which is the rule this file
+// is about. It replaces the phase label pinned while VerA emitted nothing here.
+// The module's only defect is the $realtime read.
 //
 //! lrm G.1
 //! lrm 9.10
-//! reject DiagnosticsReported
+//! reject E0806
 `timescale 1ns/1ns
 module annex_g_realtime_analog_context(p, n);
   inout p, n; electrical p, n;

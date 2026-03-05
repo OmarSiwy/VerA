@@ -19,12 +19,12 @@
 // may decline outright (see limit_pnj.va), which would mask the arity question
 // behind an earlier and unrelated refusal. `mid` is private to the device.
 //
-// The expectation is the PHASE label rather than a code: the LRM fixes that this
-// is an error, not what any tool calls it, and VerA has no code for it yet.
+// E0809 ("$limit is missing an argument its algorithm requires") is VerA's code
+// for this rule, and it replaces the phase label pinned before the code existed.
 //
 //! lrm 9.17.3
 //! lrm E.3.4
-//! reject DiagnosticsReported
+//! reject E0809
 module annex_e_pnjlim_missing_args(p);
   inout p; electrical p; electrical mid; real limited;
   analog begin

@@ -24,16 +24,16 @@
 // ch04_expressions/09_assignment_pattern.va.
 //
 // Either diagnosis is conforming -- a missing apostrophe, or an unsized
-// concatenation in a real-valued initialiser -- so the phase, not a code, is
-// pinned until VerA emits one. The parameter is deliberately NOT referenced in
-// the analog block: with `DiagnosticsReported` as the trigger, any second defect
-// in this module would XPASS the fixture and read as the apostrophe rule
-// landing. The declaration is the whole test.
+// concatenation in a real-valued initialiser. VerA's is the first: E0349
+// "array parameter initialiser is not an assignment pattern", which is the
+// §3.4 sentence quoted above, and it replaces the phase label pinned before
+// the code existed. The parameter is still deliberately NOT referenced in the
+// analog block, so the declaration is the whole test.
 //
 //! lrm G.1
 //! lrm 3.4
 //! lrm 4.2.14
-//! reject DiagnosticsReported
+//! reject E0349
 module annex_g_brace_array(p, n);
   inout p, n; electrical p, n;
   parameter real coeffs[0:1] = {2.1, 4.5};
