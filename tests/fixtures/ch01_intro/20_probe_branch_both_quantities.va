@@ -11,6 +11,7 @@
 //
 //! lrm 5.4.2.1
 //! reject both quantities of a probe branch are read
+//! reject E0423
 module ch01_probe_branch_both_quantities(p, n, o, r);
     inout p, n, o, r;
     electrical p, n, o, r;
