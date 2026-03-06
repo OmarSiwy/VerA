@@ -241,11 +241,42 @@ pub fn mfactorScale(
     });
 }
 
-/// §6.2.2 an instance array bound: a constant expression over literals,
-/// folded by the one constant kernel (§4.2's integer typing, every operator);
-/// a real-valued bound is not one. A bound reading a parameter is E0909,
-/// because the parameter table does not exist until lowering.
+/// §6.2.2 an instance array bound: a constant expression, folded by the one
+/// constant kernel (§4.2's integer typing, every operator); a real-valued
+/// bound is not one. §3.4 makes a parameter a constant expression, so a bound
+/// may read one — its value as this instance sees it, override included.
 pub fn constInt(self: *Flatten, e: Ast.ExprId) ?i64 {
-    const c = constfold.fold(self.ctx.file, e, constfold.literal_env) orelse return null;
+    const c = constfold.fold(self.ctx.file, e, ParamEnv{ .self = self, .local = true }) orelse return null;
     return if (c == .int) c.int else null;
 }
+
+/// `constfold.fold`'s identifiers, answered from the parameters flattened so
+/// far. The bound is written in the instantiating module's LOCAL names, while
+/// every value in `self.params` is already in the FLAT namespace — so only the
+/// first lookup renames. A scalar parameter only; anything else declines.
+const ParamEnv = struct {
+    self: *Flatten,
+    local: bool,
+    depth: u8 = 0,
+
+    pub fn leaf(env: ParamEnv, e: Ast.ExprId) ?constfold.Const {
+        const self = env.self;
+        const ex = &self.ctx.file.exprs;
+        // ponytail: a depth cap, not cycle detection; a cyclic default is
+        // lowering's diagnostic, this only has to terminate.
+        if (ex.tag(e) != .ident or env.depth > 32) return null;
+        const name = if (env.local) flat(self, ex.strOf(e)) else ex.strOf(e);
+        for (self.params.items) |p| if (p.name == name and p.dims.len == 0) {
+            const v = constfold.fold(self.ctx.file, p.default, ParamEnv{ .self = self, .local = false, .depth = env.depth + 1 }) orelse return null;
+            // §3.4.1: a declared `integer` type converts the value.
+            return if (p.ty == .integer and v == .real) .{ .int = v.asIntExact() orelse return null } else v;
+        };
+        return null;
+    }
+    pub fn refuse(_: ParamEnv, _: Ast.ExprId) bool {
+        return false;
+    }
+    pub fn signed(_: ParamEnv, _: Ast.ExprId) ?bool {
+        return null;
+    }
+};
