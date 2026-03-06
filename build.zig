@@ -56,7 +56,7 @@ const module_specs = [_]ModuleSpec{
     // takes `kernels` (std-only leaves) for the §9.4.3 C real conversion the
     // analog devices already run, so both engines print one way.
     .{ .name = "sim", .path = "src/sim/root.zig", .imports = &.{ "diag", "frontend", "kernels" } },
-    .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera" } },
+    .{ .name = "vpi", .path = "src/vpi/root.zig", .imports = &.{ "frontend", "ir", "vera", "sim" } },
 };
 
 pub fn build(b: *std.Build) void {
@@ -250,25 +250,27 @@ pub fn build(b: *std.Build) void {
     // All three files were deleted by `2cc1c08`, a DOCS commit, and restored
     // here from `2cc1c08^`. Nothing else in the tree had been updated to reflect
     // their absence, which is why `src/vpi/root.zig` never stopped citing them.
-    const vpi_host_mod = b.createModule(.{
-        .root_source_file = b.path("tests/vpi_host.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "vera", .module = byName(mods, "vera") },
-            .{ .name = "vpi", .module = byName(mods, "vpi") },
-        },
+    //
+    // The host is built ONCE, as a static library exporting C's `main`, and
+    // each application is one C file linked against it: a Zig executable per
+    // application would compile the whole engine once per application.
+    const vpi_host = b.addLibrary(.{
+        .name = "vera-vpi-host",
+        .linkage = .static,
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tests/vpi_host.zig"),
+            .target = target,
+            .optimize = optimize,
+            .link_libc = true,
+            .imports = &.{
+                .{ .name = "vera", .module = byName(mods, "vera") },
+                .{ .name = "vpi", .module = byName(mods, "vpi") },
+                .{ .name = "sim", .module = byName(mods, "sim") },
+            },
+        }),
     });
-    vpi_host_mod.addCSourceFile(.{
-        .file = b.path("tests/vpi_app.c"),
-        .flags = &.{ "-std=c99", "-Wall", "-Werror" },
-    });
-    vpi_host_mod.addIncludePath(b.path("src/vpi"));
-    const vpi_app = b.addRunArtifact(b.addExecutable(.{
-        .name = "vera-vpi-app",
-        .root_module = vpi_host_mod,
-    }));
+    const test_vpi = &b.top_level_steps.get("test-vpi").?.step;
+    const vpi_app = vpiApp(b, target, optimize, vpi_host, "tests/vpi_app.c", "tests");
     vpi_app.expectExitCode(0);
     // The counts are the design's own shape (tests/vpi_design.va: three levels,
     // two instances of one definition), and `checks` is how many assertions the
@@ -281,8 +283,60 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&vpi_app.step);
     // `test-vpi` is a top-level step the module loop already created; this is
     // the C half joining it, rather than a second step with the same name.
-    b.top_level_steps.get("test-vpi").?.step.dependOn(&vpi_app.step);
+    test_vpi.dependOn(&vpi_app.step);
+
+    // The C fixtures that RUN: each is paired with the design it was written
+    // against, executed on `src/sim`'s engine by `vpi.run.simulate`, and
+    // asserted by exit code and its exact stdout (and, where the fixture
+    // reports there, stderr). `test-vpi-fixtures` compiles all of them; these
+    // are the ones whose routines, design and engine exist end to end.
+    for (vpi_runs) |f| {
+        const r = vpiApp(b, target, optimize, vpi_host, f.c, std.fs.path.dirname(f.c).?);
+        r.addFileArg(b.path(f.design));
+        // Channels a fixture opens (§12.26) land in the cwd, which is the
+        // cache and not the source tree.
+        r.setCwd(b.path(".zig-cache"));
+        r.expectExitCode(0);
+        r.expectStdOutEqual(f.stdout);
+        if (f.stderr) |e| r.expectStdErrEqual(e);
+        test_step.dependOn(&r.step);
+        test_vpi.dependOn(&r.step);
+    }
 }
+
+/// A C application at `c`, compiled against src/vpi/vpi_user.h (and its own
+/// directory, for a fixture's shared header) with `vpi_app.c`'s flags, linked
+/// against the host library, and run.
+fn vpiApp(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    host: *std.Build.Step.Compile,
+    c: []const u8,
+    dir: []const u8,
+) *std.Build.Step.Run {
+    const mod = b.createModule(.{ .target = target, .optimize = optimize, .link_libc = true });
+    mod.addCSourceFile(.{ .file = b.path(c), .flags = &.{ "-std=c99", "-Wall", "-Werror" } });
+    mod.addIncludePath(b.path("src/vpi"));
+    mod.addIncludePath(b.path(dir));
+    mod.linkLibrary(host);
+    const name = std.fs.path.stem(c);
+    return b.addRunArtifact(b.addExecutable(.{ .name = b.fmt("vpi-{s}", .{name}), .root_module = mod }));
+}
+
+/// One runnable VPI application: its C file, the design it runs against, and
+/// the exact output it must produce. The `checks=N` counts are read off the
+/// first green run, as `vpi_app.c`'s `checks=711` was: a run that returns
+/// early reaches fewer checks and still exits 0.
+const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, stderr: ?[]const u8 = null };
+
+const vpi_runs = [_]VpiRun{
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_09_printf_mcd.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=27\np02_design: t=20 reached\n",
+    },
+};
 
 /// Create every module in `module_specs`, resolving each spec's imports against
 /// the ones already created. `addModule` and not `createModule` because an

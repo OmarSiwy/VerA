@@ -18,9 +18,18 @@
 
 #include "vpi_user.h"
 
+/* Not every application uses every helper, and under the harness's -Wall
+ * -Werror an unused `static` function is an error — the same reason
+ * p03_vpi_analog.h marks its helpers P03_UNUSED. */
+#if defined(__GNUC__) || defined(__clang__)
+#  define P02_UNUSED __attribute__((unused))
+#else
+#  define P02_UNUSED
+#endif
+
 static int p02_checks = 0;
 
-static void p02_report_error(void)
+static P02_UNUSED void p02_report_error(void)
 {
   s_vpi_error_info info;
   if (!vpi_chk_error(&info)) {
@@ -56,7 +65,7 @@ static void p02_report_error(void)
 /* 12.2: "The error status shall be reset by any VPI routine call except
  * vpi_chk_error()." Asserted after every call expected to SUCCEED, so a stale
  * error cannot make a later negative check pass for the wrong reason. */
-static void expect_no_error(const char *what)
+static P02_UNUSED void expect_no_error(const char *what)
 {
   s_vpi_error_info info;
   p02_checks++;
@@ -68,7 +77,7 @@ static void expect_no_error(const char *what)
   }
 }
 
-static void expect_error(const char *what)
+static P02_UNUSED void expect_error(const char *what)
 {
   s_vpi_error_info info;
   p02_checks++;
@@ -83,7 +92,7 @@ static void expect_error(const char *what)
 /* Every P02 application resolves its objects by name from the top, because
  * 12.21's hierarchical form is the only way a standalone C file can name a
  * design object without depending on iteration order. */
-static vpiHandle p02_by_name(const char *name)
+static P02_UNUSED vpiHandle p02_by_name(const char *name)
 {
   vpiHandle h = vpi_handle_by_name((PLI_BYTE8 *)name, NULL);
   CHECK(h != NULL, "vpi_handle_by_name(\"%s\", NULL) returned NULL", name);
@@ -91,7 +100,7 @@ static vpiHandle p02_by_name(const char *name)
   return h;
 }
 
-static void p02_done(const char *app)
+static P02_UNUSED void p02_done(const char *app)
 {
   printf("p02: %s checks=%d\n", app, p02_checks);
   fflush(stdout);

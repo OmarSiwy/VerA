@@ -199,6 +199,53 @@ typedef struct t_vpi_value {
 } s_vpi_value, *p_vpi_value;
 
 /* --------------------------------------------------------------------------
+ * §12.31 simulation callbacks — Figure 12-17, field for field (Figure 12-2 in
+ * §12.6 omits `index`; §12.31.1 requires it, and Annex G has it).
+ * -------------------------------------------------------------------------- */
+
+typedef struct t_cb_data {
+  PLI_INT32    reason;          /* cb... below */
+  PLI_INT32  (*cb_rtn)(struct t_cb_data *);
+  vpiHandle    obj;
+  p_vpi_time   time;
+  p_vpi_value  value;
+  PLI_INT32    index;           /* memory word / var select that changed */
+  PLI_BYTE8   *user_data;
+} s_cb_data, *p_cb_data;
+
+/* The reasons VerA delivers, Annex G numbering.
+ *
+ *   §12.31.1 event   cbValueChange        a net, reg, variable or array word
+ *                                          changed value
+ *                    cbForce, cbRelease   accepted; they fire on a force or
+ *                                          release, and VerA's digital engine
+ *                                          performs neither, so they never do
+ *   §12.31.2 time    cbAtStartOfSimTime   absolute time, before its queue —
+ *                                          "even if no event is present"
+ *                    cbAfterDelay         a delay from now, before its queue
+ *                    cbReadWriteSynch     a delay from now, after its queue
+ *                    cbReadOnlySynch      likewise; puts are refused inside
+ *                    cbNextSimTime        the next queue; time is ignored
+ *   §12.31.4 action  cbEndOfCompile, cbStartOfSimulation, cbEndOfSimulation
+ *
+ * A time reason needs a vpiSimTime or vpiScaledRealTime time (IEEE 1364
+ * 27.33.2); NULL or vpiSuppressTime is refused. Every callback is ONE-SHOT
+ * except cbValueChange, cbForce and cbRelease, which stand until removed. */
+#define cbValueChange           1
+#define cbForce                 3
+#define cbRelease               4
+#define cbAtStartOfSimTime      5
+#define cbReadWriteSynch        6
+#define cbReadOnlySynch         7
+#define cbNextSimTime           8
+#define cbAfterDelay            9
+#define cbEndOfCompile         10
+#define cbStartOfSimulation    11
+#define cbEndOfSimulation      12
+
+#define vpiCallback           107   /* §11.6.25 vpi_get(vpiType, callback) */
+
+/* --------------------------------------------------------------------------
  * The routines.
  *
  * WHAT IS TRAVERSABLE, which is the part of §11.6 VerA actually answers:
@@ -258,6 +305,12 @@ extern PLI_UINT32 vpi_mcd_close(PLI_UINT32 mcd);
 extern PLI_BYTE8 *vpi_mcd_name(PLI_UINT32 cd);
 extern PLI_INT32  vpi_mcd_printf(PLI_UINT32 mcd, PLI_BYTE8 *format, ...);
 extern PLI_INT32  vpi_printf(const PLI_BYTE8 *format, ...);
+
+/* §12.31 register, §12.34 remove, §12.6 read back. A removed callback's
+ * handle is invalid; a one-shot callback's handle is invalid once it fired. */
+extern vpiHandle  vpi_register_cb(p_cb_data cb_data_p);
+extern PLI_INT32  vpi_remove_cb(vpiHandle cb_obj);
+extern void       vpi_get_cb_info(vpiHandle obj, p_cb_data cb_data_p);
 
 /* §12.33.2. The APPLICATION defines this array and terminates it with 0; VerA
  * calls each entry in order, once, after the design is elaborated and the

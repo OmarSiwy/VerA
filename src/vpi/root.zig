@@ -56,15 +56,22 @@
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
+const sim = @import("sim");
 
 // The routine families that live in their own files. Referenced here so their
 // `export fn`s are emitted and their tests run with this module's.
 const print = @import("print.zig");
+pub const run = @import("run.zig");
+pub const callback = @import("callback.zig");
 comptime {
     _ = print;
+    _ = run;
+    _ = callback;
 }
 test {
     _ = print;
+    _ = run;
+    _ = callback;
 }
 const Lower = @import("ir").Lower;
 const Elaborate = @import("ir").Elaborate;
@@ -83,6 +90,7 @@ const Elaborate = @import("ir").Elaborate;
 // ---------------------------------------------------------------------------
 
 // §11.6 object types.
+pub const vpiIntegerVar: c_int = 25;
 pub const vpiIterator: c_int = 27;
 pub const vpiModule: c_int = 32;
 pub const vpiNet: c_int = 36;
@@ -166,6 +174,10 @@ const Kind = enum(u8) {
     net,
     reg,
     parameter,
+    /// IEEE 1364 §26.6.7 `integer` variable. Only the DIGITAL model has one:
+    /// an analog `integer` is a §11.6.10 variable the analog model does not
+    /// answer (see `build`).
+    integer,
 
     fn objType(k: Kind) c_int {
         return switch (k) {
@@ -174,6 +186,7 @@ const Kind = enum(u8) {
             .net => vpiNet,
             .reg => vpiReg,
             .parameter => vpiParameter,
+            .integer => vpiIntegerVar,
         };
     }
 };
@@ -186,7 +199,7 @@ const Kind = enum(u8) {
 /// realistic size, and the alternative costs every `vpi_get` arm a switch on
 /// the payload before it can switch on the property. The fields a class does
 /// not use hold their defaults and are never read; each names its owner.
-const Obj = struct {
+pub const Obj = struct {
     kind: Kind,
     /// §11.6's "one-to-one relationship back to module": the SCOPE INDEX this
     /// object is declared in. For a `.module` this is its PARENT scope, so the
@@ -213,6 +226,10 @@ const Obj = struct {
     is_local: bool = false,
     /// `.reg` only.
     is_signed: bool = true,
+    /// The digital engine's storage slot for this object's value, when the
+    /// design is a running digital one (`openDigital`). Null in the analog
+    /// model, whose values live in a compiled device this process never sees.
+    slot: ?u32 = null,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -237,6 +254,7 @@ const Scope = struct {
     nets: []const u32 = &.{},
     regs: []const u32 = &.{},
     params: []const u32 = &.{},
+    integers: []const u32 = &.{},
 };
 
 /// §12.23's iterator. Individually allocated so that a pointer VerA did not
@@ -295,7 +313,7 @@ pub const Design = struct {
 // has no thread parameter either.
 // ---------------------------------------------------------------------------
 
-var design: ?Design = null;
+pub var design: ?Design = null;
 
 /// Build the object model over one elaborated design and install it.
 ///
@@ -311,6 +329,8 @@ pub fn open(gpa: std.mem.Allocator, lower: *const Lower) !void {
 pub fn close() void {
     if (design) |*d| d.deinit();
     design = null;
+    run.detach();
+    callback.reset();
     clearError();
 }
 
@@ -362,6 +382,16 @@ const Building = struct {
     nets: std.ArrayList(u32) = .empty,
     regs: std.ArrayList(u32) = .empty,
     params: std.ArrayList(u32) = .empty,
+    integers: std.ArrayList(u32) = .empty,
+
+    fn deinit(s: *Building, gpa: std.mem.Allocator) void {
+        s.children.deinit(gpa);
+        s.ports.deinit(gpa);
+        s.nets.deinit(gpa);
+        s.regs.deinit(gpa);
+        s.params.deinit(gpa);
+        s.integers.deinit(gpa);
+    }
 };
 
 /// `lower` has not been through `lowerFile`, so there is no elaborated top to
@@ -400,13 +430,7 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
     };
     var scopes: std.ArrayList(Building) = .empty;
     defer {
-        for (scopes.items) |*s| {
-            s.children.deinit(gpa);
-            s.ports.deinit(gpa);
-            s.nets.deinit(gpa);
-            s.regs.deinit(gpa);
-            s.params.deinit(gpa);
-        }
+        for (scopes.items) |*s| s.deinit(gpa);
         scopes.deinit(gpa);
     }
     // A path → scope index table: a unit finds its parent by it, and bucketing
@@ -526,11 +550,18 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
         });
     }
 
-    d.objects = try gpa.dupe(Obj, objects.items);
+    try freeze(&d, objects.items, scopes.items);
+    return d;
+}
 
-    // --- freeze the scopes -------------------------------------------------
-    d.scopes = try gpa.alloc(Scope, scopes.items.len);
-    for (scopes.items, 0..) |*s, i| d.scopes[i] = .{
+/// The model's fixed arrays, from what a builder accumulated. `objects` must
+/// hold the modules first and in scope order — the `Scope` invariant.
+fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void {
+    const gpa = d.gpa;
+    const arena = d.arena.allocator();
+    d.objects = try gpa.dupe(Obj, objects);
+    d.scopes = try gpa.alloc(Scope, scopes.len);
+    for (scopes, 0..) |*s, i| d.scopes[i] = .{
         .parent = s.parent,
         .def_name = s.def_name,
         .path = s.path,
@@ -539,11 +570,164 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
         .nets = try arena.dupe(u32, s.nets.items),
         .regs = try arena.dupe(u32, s.regs.items),
         .params = try arena.dupe(u32, s.params.items),
+        .integers = try arena.dupe(u32, s.integers.items),
     };
     d.top_modules = try arena.dupe(u32, &[_]u32{0});
-
     for (d.objects, 0..) |o, i| try d.by_name.put(gpa, o.full, @intCast(i));
+}
+
+// ---------------------------------------------------------------------------
+// The model over a running digital design
+//
+// `open` models an ANALOG compile, whose values live in a device this process
+// never runs. A digital design runs HERE, in `src/sim`'s engine, so its model
+// can carry values: every net, reg and integer object is bound to the engine
+// slot that stores it (`Obj.slot`), which is what §12.16/§12.30 and
+// cbValueChange read and write through.
+//
+// The SHAPE is the engine's own elaboration, read back rather than redone:
+// `digital.Run` numbers instance scopes in depth-first pre-order (the root is
+// 0, and each child's scope is minted just before its body is declared), and
+// keys every declared name by (scope, name). Walking the same definitions in
+// the same order yields the same scope numbers, so `Run.names` answers each
+// declaration's slot and nothing here decides what an instance IS.
+// ---------------------------------------------------------------------------
+
+/// Build the object model over an elaborated digital run and install it. The
+/// run must outlive the model: object values are read from `run.values`.
+pub fn openDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) !void {
+    if (design != null) close();
+    design = try buildDigital(gpa, r);
+    run.attach(r);
+}
+
+/// §6.2.2: the root is the description nothing instantiates — the engine's
+/// own `pickTop` rule, which elaboration has already enforced to be unique.
+fn digitalTop(file: *const Ast.SourceFile) Error!*const Ast.ModuleDecl {
+    outer: for (file.modules) |*candidate| {
+        if (candidate.is_connect) continue;
+        for (file.modules) |other| for (other.instances) |inst| {
+            if (inst.module == candidate.name) continue :outer;
+        };
+        return candidate;
+    }
+    return error.NotElaborated;
+}
+
+fn digitalModule(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.ModuleDecl {
+    for (file.modules) |*m| if (m.name == name) return m;
+    return null;
+}
+
+fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
+    var d: Design = .{
+        .gpa = gpa,
+        .arena = .init(gpa),
+        .objects = &.{},
+        .scopes = &.{},
+        .top_modules = &.{},
+        .by_name = .empty,
+        .iters = .empty,
+    };
+    errdefer d.deinit();
+    const arena = d.arena.allocator();
+    const file = r.file;
+    const top = try digitalTop(file);
+    const top_name = try arena.dupe(u8, file.str(top.name));
+
+    var scopes: std.ArrayList(Building) = .empty;
+    defer {
+        for (scopes.items) |*s| s.deinit(gpa);
+        scopes.deinit(gpa);
+    }
+    try walkDigital(gpa, arena, file, &scopes, top, null, "");
+
+    var objects: std.ArrayList(Obj) = .empty;
+    defer objects.deinit(gpa);
+    for (scopes.items, 0..) |s, i| try objects.append(gpa, .{
+        .kind = .module,
+        .owner = s.parent,
+        .scope = @intCast(i),
+        .name = if (i == 0) top_name else lastComponent(s.path),
+        .full = try joinPath(arena, top_name, s.path),
+    });
+
+    for (scopes.items, 0..) |*s, i| {
+        const scope: u32 = @intCast(i);
+        const m = s.decl;
+        for (m.ports, 0..) |p, k| {
+            const at = r.names.get(.{ .scope = scope, .str = p.name });
+            try s.ports.append(gpa, @intCast(objects.items.len));
+            try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, p.name, .port, at));
+            objects.items[objects.items.len - 1].direction = p.direction;
+            objects.items[objects.items.len - 1].port_index = @intCast(k);
+        }
+        for (m.nets) |n| {
+            const at = r.names.get(.{ .scope = scope, .str = n.name }) orelse continue;
+            try s.nets.append(gpa, @intCast(objects.items.len));
+            try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, n.name, .net, at));
+        }
+        for (m.vars) |v| {
+            const at = r.names.get(.{ .scope = scope, .str = v.name }) orelse continue;
+            // §3.9 arrays are §11.6.10/§11.6.11's classes, modelled below.
+            if (r.arrays.contains(at)) continue;
+            const kind: Kind = if (v.storage == .reg) .reg else if (v.ty == .integer) .integer else continue;
+            const list = if (kind == .reg) &s.regs else &s.integers;
+            try list.append(gpa, @intCast(objects.items.len));
+            try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at));
+            objects.items[objects.items.len - 1].is_signed = v.is_signed or kind == .integer;
+        }
+    }
+    try freeze(&d, objects.items, scopes.items);
     return d;
+}
+
+/// One declared name of `scope`, bound to the slot `at` that stores it.
+fn digitalObj(
+    r: *const sim.digital.Run,
+    arena: std.mem.Allocator,
+    top_name: []const u8,
+    path: []const u8,
+    scope: u32,
+    name: Ast.StrId,
+    kind: Kind,
+    at: ?u32,
+) Error!Obj {
+    const local = try arena.dupe(u8, r.file.str(name));
+    return .{
+        .kind = kind,
+        .owner = scope,
+        .name = local,
+        .full = try joinPath(arena, top_name, try joinPath(arena, path, local)),
+        .size = if (at) |a| r.values[a].width else 1,
+        .slot = at,
+    };
+}
+
+/// The engine's instance order: this scope, then each child in source order,
+/// each child's subtree before the next child.
+fn walkDigital(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    file: *const Ast.SourceFile,
+    scopes: *std.ArrayList(Building),
+    m: *const Ast.ModuleDecl,
+    parent: ?u32,
+    path: []const u8,
+) Error!void {
+    const at: u32 = @intCast(scopes.items.len);
+    try scopes.append(gpa, .{
+        .decl = m,
+        .def_name = try arena.dupe(u8, file.str(m.name)),
+        .path = path,
+        .parent = parent,
+    });
+    if (parent) |p| try scopes.items[p].children.append(gpa, at);
+    for (m.instances) |inst| {
+        const child = digitalModule(file, inst.module) orelse return error.NotElaborated;
+        const child_path = try joinPath(arena, path, file.str(inst.name));
+        try walkDigital(gpa, arena, file, scopes, child, at, child_path);
+    }
 }
 
 /// §3.4.5 as the SOURCE wrote it: is `name` a `localparam` of `decl`? `null`
@@ -682,7 +866,7 @@ pub fn fail(code: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
 // done to it.
 // ---------------------------------------------------------------------------
 
-fn asObj(h: vpiHandle) ?*Obj {
+pub fn asObj(h: vpiHandle) ?*Obj {
     const d = &(design orelse return null);
     const p = h orelse return null;
     if (d.objects.len == 0) return null;
@@ -740,7 +924,7 @@ inline fn object(comptime who: []const u8, h: vpiHandle) ?*Obj {
 /// relationship back to module". A module's own containing scope is its parent
 /// instance, and the top module has none — NULL, and NOT an error: "no such
 /// object" is this routine's ordinary answer at the root of the hierarchy.
-export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
+pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const d = enter("vpi_handle") orelse return null;
     const o = object("vpi_handle", ref) orelse return null;
     switch (obj_type) {
@@ -769,7 +953,7 @@ export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
 /// the `scope != NULL` arm. With a NULL scope the name is absolute and matched
 /// against `vpiFullName` — the property §12.21 says the routine "can be applied
 /// to all objects with".
-export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle {
+pub export fn vpi_handle_by_name(name: [*c]const u8, scope: vpiHandle) vpiHandle {
     const d = enter("vpi_handle_by_name") orelse return null;
     if (name == null) {
         fail("BADNAME", "vpi_handle_by_name: the name is NULL", .{});
@@ -830,7 +1014,7 @@ pub const name_buf_len = 4096;
 /// time. Upgrade path: P02 adds net/reg/port bits — `Lower.vectors` already
 /// holds the folded `[msb:lsb]` each of them needs — and this body becomes a
 /// bounds check against that range.
-export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
+pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
     _ = enter("vpi_handle_by_index") orelse return null;
     const o = object("vpi_handle_by_index", obj) orelse return null;
     fail(
@@ -853,7 +1037,7 @@ export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
 /// is NULL with no error, `vpi_iterate(vpiPort, some_net)` is NULL with one. An
 /// application that does not check errors sees the documented empty loop either
 /// way; one that does can tell a fact about the design from a limit of VerA's.
-export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
+pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     const d = enter("vpi_iterate") orelse return null;
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
@@ -880,6 +1064,7 @@ export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         vpiNet => s.nets,
         vpiReg => s.regs,
         vpiParameter => s.params,
+        vpiIntegerVar => s.integers,
         else => {
             fail("NOTRAVERSE", "vpi_iterate: no one-to-many relationship {d} from a module", .{obj_type});
             return null;
@@ -910,7 +1095,7 @@ fn newIter(d: *Design, items: []const u32) vpiHandle {
 /// So exhaustion FREES, and the freed handle is then exactly the invalid handle
 /// the validation above rejects. That is the point of doing it this way: an
 /// application that scans a dead iterator gets an error, not a use-after-free.
-export fn vpi_scan(itr: vpiHandle) vpiHandle {
+pub export fn vpi_scan(itr: vpiHandle) vpiHandle {
     const d = enter("vpi_scan") orelse return null;
     const it = asIter(itr) orelse {
         fail("BADHANDLE", "vpi_scan: {s} is not a handle to a live iterator", .{describe(itr)});
@@ -940,7 +1125,7 @@ fn destroyIter(d: *Design, it: *Iter) void {
 /// for a property a class does not have — `vpiDirection` of a net, `vpiSize` of
 /// a module — is an error and not a zero: §11.6.8 simply gives a net no
 /// direction, and a 0 would be indistinguishable from `vpiNoDirection`.
-export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
+pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     _ = enter("vpi_get") orelse return vpiUndefined;
     // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
     // question with an answer. Nothing else about an iterator is a §11.6
@@ -948,6 +1133,12 @@ export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     if (asIter(obj)) |_| {
         if (prop == vpiType) return vpiIterator;
         fail("NOPROP", "vpi_get: an iterator has no property {d}", .{prop});
+        return vpiUndefined;
+    }
+    // §11.6.25's callback object has a type and nothing else §11.6 lists.
+    if (callback.asCb(obj)) |_| {
+        if (prop == vpiType) return callback.vpiCallback;
+        fail("NOPROP", "vpi_get: a callback has no property {d}", .{prop});
         return vpiUndefined;
     }
     // §12.5's NULL-object case is about vpiTimeUnit/vpiTimePrecision, neither of
@@ -963,7 +1154,7 @@ export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         },
         vpiSize, vpiScalar, vpiVector => {
             switch (o.kind) {
-                .port, .net, .reg => {},
+                .port, .net, .reg, .integer => {},
                 else => return propFail(prop, o),
             }
             // A width of 0 means the declared range did not fold (see
@@ -1016,7 +1207,7 @@ export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             };
         },
         vpiSigned => {
-            if (o.kind != .reg) return propFail(prop, o);
+            if (o.kind != .reg and o.kind != .integer) return propFail(prop, o);
             return @intFromBool(o.is_signed);
         },
         else => {
@@ -1045,7 +1236,7 @@ fn propFail(prop: c_int, o: *const Obj) c_int {
 ///
 /// A failing call returns NULL. §12.12 does not say so in as many words; it is
 /// the only value that is not a string an application would go on to print.
-export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
+pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
     const d = enter("vpi_get_str") orelse return null;
     const o = object("vpi_get_str", obj) orelse return null;
     const s: []const u8 = switch (prop) {
@@ -1085,7 +1276,7 @@ var str_buf: [name_buf_len]u8 = undefined;
 /// implementation that interned handles differently would pass the same tests
 /// through it. Two invalid handles are not "the same object": that is FALSE
 /// plus an error, not TRUE.
-export fn vpi_compare_objects(obj1: vpiHandle, obj2: vpiHandle) c_int {
+pub export fn vpi_compare_objects(obj1: vpiHandle, obj2: vpiHandle) c_int {
     _ = enter("vpi_compare_objects") orelse return 0;
     const a = issued(obj1) orelse {
         fail("BADHANDLE", "vpi_compare_objects: {s} is not a handle VerA issued", .{describe(obj1)});
@@ -1104,6 +1295,7 @@ export fn vpi_compare_objects(obj1: vpiHandle, obj2: vpiHandle) c_int {
 fn issued(h: vpiHandle) ?*anyopaque {
     if (asObj(h)) |o| return @ptrCast(o);
     if (asIter(h)) |it| return @ptrCast(it);
+    if (callback.asCb(h)) |cb| return @ptrCast(cb);
     return null;
 }
 
@@ -1116,13 +1308,15 @@ fn issued(h: vpiHandle) ?*anyopaque {
 /// Freeing an OBJECT is a no-op returning TRUE — objects are owned by the
 /// design and live as long as it does — because an application is entitled to
 /// call this on one and must not be told it failed.
-export fn vpi_free_object(obj: vpiHandle) c_int {
+pub export fn vpi_free_object(obj: vpiHandle) c_int {
     const d = enter("vpi_free_object") orelse return 0;
     if (asIter(obj)) |it| {
         destroyIter(d, it);
         return 1;
     }
-    if (asObj(obj)) |_| return 1;
+    // A callback handle is freed by vpi_remove_cb (§12.34), not here; freeing
+    // the handle leaves the callback registered, as an object's does.
+    if (asObj(obj) != null or callback.asCb(obj) != null) return 1;
     fail("BADHANDLE", "vpi_free_object: {s} is not a handle VerA issued", .{describe(obj)});
     return 0;
 }
@@ -1131,7 +1325,7 @@ export fn vpi_free_object(obj: vpiHandle) c_int {
 /// "free object" reads as though it destroyed the design object rather than the
 /// handle to it. Same contract, and deliberately the same body rather than a
 /// second one that could drift from it.
-export fn vpi_release_handle(obj: vpiHandle) c_int {
+pub export fn vpi_release_handle(obj: vpiHandle) c_int {
     return vpi_free_object(obj);
 }
 
