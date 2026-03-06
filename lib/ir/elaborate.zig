@@ -591,16 +591,15 @@ pub const Flatten = struct {
                 ps = try elab_paramset.selectParamset(self, &inst) orelse continue;
                 break :blk try elab_names.chainEnd(self, ps.?) orelse continue;
             };
-            // §7.6/§7.7: a connect module is placed by the connect module
-            // INSERTION PHASE, selected by a `connect` specification statement —
-            // "the designer can choose and specialize those in the design via the
-            // connect specification statements". It is not a child a module names.
-            // Refused rather than inlined because inlining one would be silently
-            // WRONG in a way the reader cannot see: the flatten carries analog
-            // blocks and drops `discrete` ones, so a bridge's continuous half
-            // would be stamped into the device with its digital half missing.
+            // §7.1: connect modules "can be manually inserted (by the user) or
+            // automatically inserted (by the simulator)", so naming one here is
+            // legal. Refused rather than inlined because inlining one would be
+            // silently WRONG in a way the reader cannot see: the flatten carries
+            // analog blocks and drops `discrete` ones, so a bridge's continuous
+            // half would be stamped into the device with its digital half
+            // missing. connect_module_manually_inserted.va is the xfail.
             if (child.is_connect) {
-                try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`, and §7.6 has the insertion phase place it on a mixed net", .{
+                try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`; §7.1 allows placing it by hand, but its digital half would not be carried into the device", .{
                     self.ctx.file.str(child.name),
                 });
                 continue;

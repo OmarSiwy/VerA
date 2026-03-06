@@ -5012,29 +5012,25 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0913 => .{
-            .title = "a connect module cannot be instantiated by name",
-            .lrm = "7.6",
+            .title = "instantiating a connect module by name is not supported",
+            .lrm = "7.1",
             .explain =
-            \\A `connectmodule` is accepted — LRM A.1.2 makes it the third
-            \\alternative of `module_keyword`, so it declares a module — but it is
-            \\not a module you instantiate. LRM 7.7: "Any number of connect
-            \\modules can be defined. The designer can choose and specialize those
-            \\in the design via the connect specification statements", and 7.8 has
-            \\the tool insert the chosen one AUTOMATICALLY at each mixed port.
-            \\7.6's own note that "the disciplines of mixed nets are determined
-            \\prior to the connect module insertion phase" puts that insertion
-            \\after discipline resolution, which is nothing a source can spell.
+            \\LRM 7.1: connect modules "can be manually inserted (by the user) or
+            \\automatically inserted (by the simulator)". A `connectmodule` is a
+            \\module (A.1.2's third `module_keyword`), so naming one in an
+            \\instantiation is legal Verilog-AMS. This is VerA's limit, not the
+            \\LRM's.
             \\
-            \\A connect module is therefore never elaborated on its own account
-            \\either: a source_text whose only design element is one has no device
-            \\to compile (E1001).
+            \\A connect module bridges a discrete side, and its digital half lives
+            \\in `initial` / `always` blocks. Flattening inlines a child's analog
+            \\blocks and does not carry its digital processes, so inlining a
+            \\bridge would stamp its continuous half into the device with the
+            \\digital half silently absent — a plausible-looking wrong device,
+            \\which is worse than a refusal that names the reason.
             \\
-            \\Refusing this rather than inlining it is deliberate. A connect module
-            \\bridges a discrete side, and its digital half lives in `initial` /
-            \\`always` blocks that VerA records and does not execute. Inlining one
-            \\would stamp its continuous half into the device with the digital half
-            \\silently absent — a plausible-looking wrong device, which is worse
-            \\than a refusal that names the reason.
+            \\Automatic insertion (7.8) is not performed either, and a
+            \\source_text whose only design element is a connect module has no
+            \\device to compile (E1001).
             ,
         },
         .E0914 => .{
@@ -5080,9 +5076,9 @@ fn infoOf(c: Code) Info {
             \\
             \\Either nothing in the compilation declares the name, or the name
             \\is an ordinary module — the message says which. An ordinary
-            \\module cannot be an insertion target for the reason E0913 gives
-            \\for the reverse mistake: a connect module's discrete half lives
-            \\in behavioral code the insertion phase owns, and 7.6's port
+            \\module cannot be an insertion target because a connect module's
+            \\discrete half lives in behavioral code the insertion phase owns,
+            \\and 7.6's port
             \\disciplines are what "define the default type of disciplines
             \\which shall be bridged".
             ,
