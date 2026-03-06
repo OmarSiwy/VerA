@@ -244,6 +244,7 @@ typedef struct t_cb_data {
 #define cbEndOfSimulation      12
 
 #define vpiCallback           107   /* §11.6.25 vpi_get(vpiType, callback) */
+#define vpiTimeQueue           64   /* §11.6.25 a pending time; vpi_iterate(vpiTimeQueue, NULL) */
 
 /* --------------------------------------------------------------------------
  * The routines.
@@ -306,6 +307,10 @@ extern PLI_BYTE8 *vpi_mcd_name(PLI_UINT32 cd);
 extern PLI_INT32  vpi_mcd_printf(PLI_UINT32 mcd, PLI_BYTE8 *format, ...);
 extern PLI_INT32  vpi_printf(const PLI_BYTE8 *format, ...);
 
+/* §12.15 the current time — or, for a vpiTimeQueue handle, that queue's
+ * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
+ * is in the object's time unit, or in ticks when obj is NULL. */
+extern void       vpi_get_time(vpiHandle obj, p_vpi_time time_p);
 /* §12.31 register, §12.34 remove, §12.6 read back. A removed callback's
  * handle is invalid; a one-shot callback's handle is invalid once it fired. */
 extern vpiHandle  vpi_register_cb(p_cb_data cb_data_p);

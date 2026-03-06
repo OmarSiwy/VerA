@@ -50,6 +50,10 @@ pub fn attach(r: *digital.Run) void {
 pub fn detach() void {
     engine = null;
     clock = 0;
+    var it = queues.valueIterator();
+    while (it.next()) |q| gpa.destroy(q.*);
+    queues.clearAndFree(gpa);
+    queue_live.clearAndFree(gpa);
 }
 
 pub fn attached() ?*digital.Run {
@@ -150,6 +154,85 @@ pub fn fillTime(ticks: u64, obj: vpiHandle, t: *Time) void {
 }
 
 // ---------------------------------------------------------------------------
+// §12.15 vpi_get_time
+// ---------------------------------------------------------------------------
+
+pub const vpiTimeQueue: c_int = 64;
+
+/// "shall retrieve the current simulation time, using the time scale of the
+/// object. If obj is NULL, the simulation time is retrieved using the
+/// simulation time unit." A §11.6.25 time queue answers ITS time — which is
+/// how an application reads the pending times it iterated.
+pub export fn vpi_get_time(obj: vpiHandle, time_p: ?*Time) void {
+    root.clearError();
+    const t = time_p orelse {
+        root.fail("BADTIME", "vpi_get_time: time_p is NULL", .{});
+        return;
+    };
+    if (t.type != callback.vpiSimTime and t.type != callback.vpiScaledRealTime) {
+        root.fail("BADTIME", "vpi_get_time: time type {d} is neither vpiSimTime nor vpiScaledRealTime", .{t.type});
+        return;
+    }
+    if (obj == null) return fillTime(clock, null, t);
+    if (asQueue(obj)) |q| return fillTime(q.time, null, t);
+    _ = root.asObj(obj) orelse {
+        root.fail("BADHANDLE", "vpi_get_time: that handle is not an object", .{});
+        return;
+    };
+    fillTime(clock, obj, t);
+}
+
+// ---------------------------------------------------------------------------
+// §11.6.25 time queues
+// ---------------------------------------------------------------------------
+
+/// One pending time. Interned per time, so two iterations hand out the same
+/// handle for the same queue and vpi_compare_objects can say so.
+pub const Queue = struct { time: u64 };
+
+const gpa = std.heap.smp_allocator;
+var queues: std.AutoHashMapUnmanaged(u64, *Queue) = .empty;
+var queue_live: std.AutoHashMapUnmanaged(usize, *Queue) = .empty;
+
+pub fn asQueue(h: vpiHandle) ?*Queue {
+    const p = h orelse return null;
+    return queue_live.get(@intFromPtr(p));
+}
+
+/// §11.6.25 NOTE 3: the pending time queues, in strictly increasing time. A
+/// time queue exists wherever the simulation must stop: an event, or a time
+/// callback — the data model gives a callback a one-to-one `vpiParent`
+/// relationship to its time queue, and §12.31.2 has the loop wake at a
+/// callback's time "even if no event is present". cbNextSimTime holds no
+/// time of its own ("the time structure is ignored"). Caller owns the slice.
+pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
+    var times: std.ArrayList(u64) = .empty;
+    defer times.deinit(a);
+    if (engine) |r| try r.scheduler.pendingTimes(a, &times);
+    try callback.pendingTimes(&times, a);
+    std.mem.sort(u64, times.items, {}, std.sort.asc(u64));
+    var out: std.ArrayList(root.vpiHandle) = .empty;
+    errdefer out.deinit(a);
+    var last: ?u64 = null;
+    for (times.items) |t| {
+        if (t < clock or (last != null and last.? == t)) continue;
+        last = t;
+        const entry = try queues.getOrPut(gpa, t);
+        if (!entry.found_existing) {
+            const q = gpa.create(Queue) catch |e| {
+                _ = queues.remove(t);
+                return e;
+            };
+            q.* = .{ .time = t };
+            entry.value_ptr.* = q;
+            try queue_live.put(gpa, @intFromPtr(q), q);
+        }
+        try out.append(a, @ptrCast(entry.value_ptr.*));
+    }
+    return out.toOwnedSlice(a);
+}
+
+// ---------------------------------------------------------------------------
 // Tests: a real digital run, driven through the loop above.
 // ---------------------------------------------------------------------------
 
@@ -241,4 +324,61 @@ test "§12.31.2: time callbacks fire at their times, eventless ones included, be
     try std.testing.expectEqualSlices(u64, &.{ 5, 7, 7 }, seen[0..seen_n]);
     try std.testing.expectEqual(@as(u64, 10), now());
     try std.testing.expectEqualStrings("done\n", h.out.written());
+}
+
+var walked: [8]u64 = undefined;
+var walked_n: usize = 0;
+
+fn walk(_: *callback.CbData) callconv(.c) c_int {
+    const itr = root.vpi_iterate(vpiTimeQueue, null);
+    while (root.vpi_scan(itr)) |q| {
+        var t: Time = .{ .type = callback.vpiSimTime, .high = 0, .low = 0, .real = 0 };
+        vpi_get_time(q, &t);
+        walked[walked_n] = t.low;
+        walked_n += 1;
+    }
+    return 0;
+}
+
+test "§12.15/§11.6.25: vpi_get_time scales by the object, and the time queues are the pending times" {
+    var h: Harness = undefined;
+    try h.init(
+        \\`timescale 1us/1ns
+        \\module q;
+        \\  reg r;
+        \\  initial begin r = 0; #2 r = 1; #3 r = 0; end
+        \\endmodule
+    );
+    defer h.deinit();
+    walked_n = 0;
+    // At t=1us (1000 ticks at the 1 ns precision), from a start-of-time
+    // callback: the design waits at 2us — its 5us step does not exist until
+    // the 2us one runs — and a callback of this test's own waits at 7us.
+    var t1: Time = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 1.0 };
+    const top = root.vpi_handle_by_name("q", null);
+    const at1: callback.CbData = .{ .reason = callback.cbAtStartOfSimTime, .cb_rtn = walk, .obj = top, .time = &t1, .value = null, .index = 0, .user_data = null };
+    try std.testing.expect(callback.vpi_register_cb(&at1) != null);
+    try register(callback.cbAtStartOfSimTime, 7000);
+    seen_n = 0;
+    try simulate();
+    try std.testing.expectEqualSlices(u64, &.{ 2000, 7000 }, walked[0..walked_n]);
+
+    // After the run: 7000 ticks. In the module's 1 us unit that is 7.0; with
+    // no object it is "the simulation time unit", the tick.
+    var t: Time = .{ .type = callback.vpiScaledRealTime, .high = 0, .low = 0, .real = 0 };
+    vpi_get_time(top, &t);
+    try std.testing.expectEqual(@as(f64, 7.0), t.real);
+    vpi_get_time(null, &t);
+    try std.testing.expectEqual(@as(f64, 7000.0), t.real);
+    t.type = callback.vpiSimTime;
+    vpi_get_time(null, &t);
+    try std.testing.expectEqual(@as(c_uint, 7000), t.low);
+    // A time with no type VerA reads, and a handle that is not an object.
+    t.type = callback.vpiSuppressTime;
+    vpi_get_time(null, &t);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
+    var junk: u32 = 0;
+    t.type = callback.vpiSimTime;
+    vpi_get_time(@ptrCast(&junk), &t);
+    try std.testing.expectEqual(root.vpiError, root.vpi_chk_error(null));
 }

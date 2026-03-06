@@ -264,6 +264,9 @@ const Iter = struct {
     /// Object indices, in §11.6's order, which is source order.
     items: []const u32,
     at: usize = 0,
+    /// Handles to objects that are not in `Design.objects` (§11.6.25 time
+    /// queues), OWNED by the iterator; scanned instead of `items` when set.
+    handles: ?[]vpiHandle = null,
 };
 
 pub const Design = struct {
@@ -288,7 +291,10 @@ pub const Design = struct {
 
     pub fn deinit(self: *Design) void {
         var it = self.iters.valueIterator();
-        while (it.next()) |p| self.gpa.destroy(p.*);
+        while (it.next()) |p| {
+            if (p.*.handles) |hs| self.gpa.free(hs);
+            self.gpa.destroy(p.*);
+        }
         self.iters.deinit(self.gpa);
         self.by_name.deinit(self.gpa);
         self.gpa.free(self.objects);
@@ -1042,8 +1048,19 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
     if (ref == null) {
+        if (obj_type == run.vpiTimeQueue) {
+            const handles = run.timeQueues(d.gpa) catch {
+                fail("NOMEM", "vpi_iterate: out of memory", .{});
+                return null;
+            };
+            if (handles.len == 0) {
+                d.gpa.free(handles);
+                return null;
+            }
+            return newHandleIter(d, handles);
+        }
         if (obj_type != vpiModule) {
-            fail("NOTRAVERSE", "vpi_iterate: only vpiModule is iterable from a NULL reference, not {d}", .{obj_type});
+            fail("NOTRAVERSE", "vpi_iterate: only vpiModule and vpiTimeQueue are iterable from a NULL reference, not {d}", .{obj_type});
             return null;
         }
         return newIter(d, d.top_modules);
@@ -1074,6 +1091,13 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     return newIter(d, items);
 }
 
+/// An iterator over `handles`, which it takes ownership of.
+fn newHandleIter(d: *Design, handles: []vpiHandle) vpiHandle {
+    const h = newIter(d, &.{});
+    if (asIter(h)) |it| it.handles = handles else d.gpa.free(handles);
+    return h;
+}
+
 fn newIter(d: *Design, items: []const u32) vpiHandle {
     const it = d.gpa.create(Iter) catch {
         fail("NOMEM", "vpi_iterate: out of memory", .{});
@@ -1101,6 +1125,14 @@ pub export fn vpi_scan(itr: vpiHandle) vpiHandle {
         fail("BADHANDLE", "vpi_scan: {s} is not a handle to a live iterator", .{describe(itr)});
         return null;
     };
+    if (it.handles) |hs| {
+        if (it.at >= hs.len) {
+            destroyIter(d, it);
+            return null;
+        }
+        it.at += 1;
+        return hs[it.at - 1];
+    }
     if (it.at >= it.items.len) {
         destroyIter(d, it);
         return null;
@@ -1112,6 +1144,7 @@ pub export fn vpi_scan(itr: vpiHandle) vpiHandle {
 
 fn destroyIter(d: *Design, it: *Iter) void {
     _ = d.iters.remove(@intFromPtr(it));
+    if (it.handles) |hs| d.gpa.free(hs);
     d.gpa.destroy(it);
 }
 
@@ -1139,6 +1172,11 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     if (callback.asCb(obj)) |_| {
         if (prop == vpiType) return callback.vpiCallback;
         fail("NOPROP", "vpi_get: a callback has no property {d}", .{prop});
+        return vpiUndefined;
+    }
+    if (run.asQueue(obj)) |_| {
+        if (prop == vpiType) return run.vpiTimeQueue;
+        fail("NOPROP", "vpi_get: a time queue has no property {d}; vpi_get_time reads its time", .{prop});
         return vpiUndefined;
     }
     // §12.5's NULL-object case is about vpiTimeUnit/vpiTimePrecision, neither of
@@ -1296,6 +1334,7 @@ fn issued(h: vpiHandle) ?*anyopaque {
     if (asObj(h)) |o| return @ptrCast(o);
     if (asIter(h)) |it| return @ptrCast(it);
     if (callback.asCb(h)) |cb| return @ptrCast(cb);
+    if (run.asQueue(h)) |q| return @ptrCast(q);
     return null;
 }
 
@@ -1316,7 +1355,7 @@ pub export fn vpi_free_object(obj: vpiHandle) c_int {
     }
     // A callback handle is freed by vpi_remove_cb (§12.34), not here; freeing
     // the handle leaves the callback registered, as an object's does.
-    if (asObj(obj) != null or callback.asCb(obj) != null) return 1;
+    if (asObj(obj) != null or callback.asCb(obj) != null or run.asQueue(obj) != null) return 1;
     fail("BADHANDLE", "vpi_free_object: {s} is not a handle VerA issued", .{describe(obj)});
     return 0;
 }
