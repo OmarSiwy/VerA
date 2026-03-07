@@ -311,6 +311,13 @@ extern PLI_INT32  vpi_printf(const PLI_BYTE8 *format, ...);
  * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
  * is in the object's time unit, or in ticks when obj is NULL. */
 extern void       vpi_get_time(vpiHandle obj, p_vpi_time time_p);
+/* §12.36 simulation control. vpiFinish (one int: the $finish diagnostic
+ * level) ends the run when the calling routine returns, at the current time.
+ * vpiStop, vpiReset and vpiSetInteractiveScope need an interactive mode VerA
+ * does not have and are deliberately absent. */
+#define vpiFinish              67
+extern PLI_INT32  vpi_sim_control(PLI_INT32 operation, ...);
+
 /* §12.31 register, §12.34 remove, §12.6 read back. A removed callback's
  * handle is invalid; a one-shot callback's handle is invalid once it fired. */
 extern vpiHandle  vpi_register_cb(p_cb_data cb_data_p);
