@@ -285,13 +285,13 @@ pub fn timeQueues(a: std.mem.Allocator) ![]root.vpiHandle {
 // Tests: a real digital run, driven through the loop above.
 // ---------------------------------------------------------------------------
 
-const Harness = struct {
+pub const Harness = struct {
     arena: std.heap.ArenaAllocator,
     bag: @import("vera").diag.Bag,
     out: std.Io.Writer.Allocating,
     run: digital.Run,
 
-    fn init(h: *Harness, source: []const u8) !void {
+    pub fn init(h: *Harness, source: []const u8) !void {
         h.arena = .init(std.testing.allocator);
         errdefer h.arena.deinit();
         h.bag = .init(h.arena.allocator());
@@ -300,7 +300,7 @@ const Harness = struct {
         try root.openDigital(std.testing.allocator, &h.run);
     }
 
-    fn deinit(h: *Harness) void {
+    pub fn deinit(h: *Harness) void {
         root.close();
         h.arena.deinit();
     }

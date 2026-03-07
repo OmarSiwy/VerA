@@ -19,6 +19,7 @@
 
 const std = @import("std");
 const root = @import("root.zig");
+const value = @import("value.zig");
 
 const vpiHandle = root.vpiHandle;
 
@@ -175,6 +176,20 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
             root.fail("BADHANDLE", "vpi_register_cb: obj is not a handle to an object", .{});
             return null;
         },
+        // §12.31.1 "After value change on an expression or terminal". The
+        // object must be one whose value can change in this process: a
+        // digital net, reg, variable or memory word.
+        cbValueChange => {
+            const o = root.asObj(d.obj) orelse {
+                root.fail("BADHANDLE", "vpi_register_cb: cbValueChange needs an object handle in obj", .{});
+                return null;
+            };
+            if (o.slot == null) {
+                root.fail("NOVALUE", "vpi_register_cb: `{s}` has no simulation value that can change", .{o.full});
+                return null;
+            }
+            value.watch(o);
+        },
         cbAtStartOfSimTime, cbReadWriteSynch, cbReadOnlySynch, cbAfterDelay, cbNextSimTime => {
             // IEEE 1364-2005 27.33.2, which §12.31 defers to for the header:
             // a time callback needs a time it can deliver in. cbNextSimTime is
@@ -299,6 +314,12 @@ fn call(cb: *Cb, index: c_int) void {
         root.run.timeNow(cb.obj, &t);
         data.time = &t;
     }
+    var v: Value = std.mem.zeroes(Value);
+    if (cb.reason == cbValueChange and cb.value_format != vpiSuppressVal) {
+        v.format = cb.value_format;
+        value.read(root.asObj(cb.obj).?, &v, &value.cb_store);
+        data.value = &v;
+    }
     depth += 1;
     defer depth -= 1;
     _ = cb.rtn(&data);
@@ -376,6 +397,19 @@ pub fn fireNext(now: u64) void {
         if (cb.dead or cb.reason != cbNextSimTime or now <= cb.since) continue;
         retire(cb);
         call(cb, cb.index);
+    }
+    sweep();
+}
+
+/// §12.31.1 cbValueChange for every callback watching the object stored in
+/// `slot`, which the engine just changed.
+pub fn fireSlot(slot: u32) void {
+    const n = cbs.items.len;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (cb.dead or cb.reason != cbValueChange) continue;
+        const target = root.asObj(cb.obj) orelse continue;
+        if (target.slot == slot) call(cb, cb.index);
     }
     sweep();
 }

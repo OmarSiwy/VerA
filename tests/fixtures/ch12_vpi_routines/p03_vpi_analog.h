@@ -18,7 +18,9 @@
  *
  * MOVED ALREADY, and now src/vpi/vpi_user.h's: s_cb_data/p_cb_data (Figure
  * 12-17, unchanged), cbEndOfCompile/cbStartOfSimulation/cbEndOfSimulation,
- * vpi_register_cb, vpi_remove_cb, vpi_get_cb_info. Declaring them here as
+ * vpi_register_cb, vpi_remove_cb, vpi_get_cb_info; the Table 12-4 value
+ * formats and the §12.30 delay modes, with vpi_get_value and vpi_put_value.
+ * Declaring them here as
  * well would be a C redefinition, not a harmless repeat.
  *
  * TWO INCONSISTENCIES IN THE LRM'S OWN TEXT, resolved here in favour of the
@@ -64,32 +66,6 @@ extern "C" {
 /* ==========================================================================
  * IEEE 1364 Annex G numbering — names that already have a standard value.
  * ========================================================================== */
-
-/* s_vpi_value.format — Annex G. vpiRealVal is the only one §12.10's Table 12-2
- * shares with 1364; the rest are here because vpi_get_value()/vpi_put_value()
- * on a systf argument (§12.22.2's resistor_calltf) needs them. */
-#define vpiBinStrVal            1
-#define vpiOctStrVal            2
-#define vpiDecStrVal            3
-#define vpiHexStrVal            4
-#define vpiScalarVal            5
-#define vpiIntVal               6
-#define vpiRealVal              7
-#define vpiStringVal            8
-#define vpiVectorVal            9
-#define vpiStrengthVal         10
-#define vpiTimeVal             11
-#define vpiObjTypeVal          12
-#define vpiSuppressVal         13
-
-/* vpi_put_value() delay modes — Annex G. §12.22.2 passes vpiNoDelay. */
-#define vpiNoDelay              1
-#define vpiInertialDelay        2
-#define vpiTransportDelay       3
-#define vpiPureTransportDelay   4
-#define vpiForceFlag            5
-#define vpiReleaseFlag          6
-#define vpiCancelEvent          7
 
 /* ==========================================================================
  * VerA ALLOCATION — names Verilog-AMS defines and gives no number to.
@@ -189,11 +165,6 @@ extern double    vpi_get_analog_time(void);
  * string buffer is the routine's, is overwritten by the next call, and §12.10
  * requires it to be a DIFFERENT buffer from vpi_get_str()'s. */
 extern void      vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p);
-
-/* §12.16/§12.30, on the digital/systf-argument side. */
-extern void      vpi_get_value(vpiHandle obj, p_vpi_value value_p);
-extern vpiHandle vpi_put_value(vpiHandle obj, p_vpi_value value_p,
-                               p_vpi_time time_p, PLI_INT32 flags);
 
 /* §12.32/§12.13. */
 extern vpiHandle vpi_register_analog_systf(p_vpi_analog_systf_data systf_data_p);

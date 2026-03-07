@@ -63,15 +63,18 @@ const sim = @import("sim");
 const print = @import("print.zig");
 pub const run = @import("run.zig");
 pub const callback = @import("callback.zig");
+pub const value = @import("value.zig");
 comptime {
     _ = print;
     _ = run;
     _ = callback;
+    _ = value;
 }
 test {
     _ = print;
     _ = run;
     _ = callback;
+    _ = value;
 }
 const Lower = @import("ir").Lower;
 const Elaborate = @import("ir").Elaborate;
@@ -230,6 +233,11 @@ pub const Obj = struct {
     /// design is a running digital one (`openDigital`). Null in the analog
     /// model, whose values live in a compiled device this process never sees.
     slot: ?u32 = null,
+    /// `.parameter` of the analog model: the constant lowering folded for it
+    /// (`Lower.consts`), copied. §11.6.12 NOTE 1 gives a parameter "the value
+    /// of the parameter" as a value, and this is the only value an analog
+    /// compile holds without running the device.
+    value: ?Lower.Const = null,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -337,6 +345,7 @@ pub fn close() void {
     design = null;
     run.detach();
     callback.reset();
+    value.reset();
     clearError();
 }
 
@@ -553,6 +562,10 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
             // declaration; the definition still has the declaration. §11.6.12
             // NOTE 1 is the same sentence about the value beside it.
             .is_local = declaredLocal(scopes.items[split.scope].decl, file, split.local) orelse p.is_local,
+            .value = if (lower.consts.get(flat_name)) |c| switch (c) {
+                .str => |text| .{ .str = try arena.dupe(u8, text) },
+                else => c,
+            } else null,
         });
     }
 
@@ -1174,6 +1187,13 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         fail("NOPROP", "vpi_get: a callback has no property {d}", .{prop});
         return vpiUndefined;
     }
+    // §12.30's vpiSchedEvent: a type, and whether it is still to happen.
+    if (value.asEvent(obj)) |e| {
+        if (prop == vpiType) return value.vpiSchedEvent;
+        if (prop == value.vpiScheduled) return @intFromBool(value.scheduled(e));
+        fail("NOPROP", "vpi_get: a scheduled event has no property {d}", .{prop});
+        return vpiUndefined;
+    }
     if (run.asQueue(obj)) |_| {
         if (prop == vpiType) return run.vpiTimeQueue;
         fail("NOPROP", "vpi_get: a time queue has no property {d}; vpi_get_time reads its time", .{prop});
@@ -1335,6 +1355,7 @@ fn issued(h: vpiHandle) ?*anyopaque {
     if (asIter(h)) |it| return @ptrCast(it);
     if (callback.asCb(h)) |cb| return @ptrCast(cb);
     if (run.asQueue(h)) |q| return @ptrCast(q);
+    if (value.asEvent(h)) |e| return @ptrCast(e);
     return null;
 }
 
@@ -1356,6 +1377,12 @@ pub export fn vpi_free_object(obj: vpiHandle) c_int {
     // A callback handle is freed by vpi_remove_cb (§12.34), not here; freeing
     // the handle leaves the callback registered, as an object's does.
     if (asObj(obj) != null or callback.asCb(obj) != null or run.asQueue(obj) != null) return 1;
+    // §12.30 "Calling vpi_free_object() on the handle shall free the handle
+    // but shall not effect the event."
+    if (value.asEvent(obj)) |e| {
+        value.freeEvent(e);
+        return 1;
+    }
     fail("BADHANDLE", "vpi_free_object: {s} is not a handle VerA issued", .{describe(obj)});
     return 0;
 }
