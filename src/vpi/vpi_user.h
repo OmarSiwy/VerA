@@ -362,6 +362,91 @@ extern vpiHandle  vpi_put_value(vpiHandle object, p_vpi_value value_p,
  * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
  * is in the object's time unit, or in ticks when obj is NULL. */
 extern void       vpi_get_time(vpiHandle obj, p_vpi_time time_p);
+/* --------------------------------------------------------------------------
+ * §12.32/§12.33 user system tasks and functions.
+ *
+ * REGISTRATION is complete: the `$` rule, the type/sysfunctype constants,
+ * §12.32's per-domain uniqueness (a name may be registered once digital and
+ * once analog), the info read-back and vpi_iterate(vpiUserSystf, NULL).
+ *
+ * INVOCATION is not. compiletf/sizetf/derivtf/calltf run at a CALL of the
+ * name, and neither engine here makes one: the digital engine has no
+ * user-systf call form, and an analog call runs inside a compiled device a
+ * host binds through contract.SystfHost in its own process. So
+ * vpi_handle(vpiSysTfCall, NULL) is NULL, and the call-object names below
+ * (vpiArgument, vpiUserDefn, vpiSysFuncType, vpiDerivative) name
+ * relationships of an object this process never hands out.
+ * -------------------------------------------------------------------------- */
+
+/* §12.33.1 type and sysfunctype. VAMS spells the function vpiSysFunction,
+ * Annex G vpiSysFunc: one number. */
+#define vpiSysTask              1
+#define vpiSysFunc              2
+#define vpiSysFunction          2
+#define vpiIntFunc              1
+#define vpiRealFunc             2
+#define vpiTimeFunc             3
+#define vpiSizedFunc            4
+#define vpiSizedSignedFunc      5
+
+/* §12.32.1. Verilog-AMS names these and numbers none: VerA's numbers.
+ * §12.22.2's listing spells the task vpiSysAnalogTask and Figure 12-18 the
+ * function vpiAnalogSysFunc; both spellings are given. */
+#define vpiAnalogSysTask      740
+#define vpiSysAnalogTask      740
+#define vpiAnalogSysFunc      741
+#define vpiAnalogSysFunction  741
+#define vpiDerivative         730   /* §12.22.1 vpi_handle_multi's first argument */
+
+#define vpiUserSystf           67   /* vpi_get(vpiType) of a registration handle */
+#define vpiSysTfCall           85   /* vpi_handle(vpiSysTfCall, NULL): the active call */
+#define vpiArgument            89   /* call -> its arguments */
+#define vpiUserDefn            45   /* bool: the call is to a registered systf */
+#define vpiSysFuncType         44   /* int: the function call's sysfunctype */
+
+typedef struct t_vpi_systf_data {
+  PLI_INT32  type;              /* vpiSysTask, vpiSysFunction */
+  PLI_INT32  sysfunctype;       /* vpi[Int,Real,Time,Sized,SizedSigned]Func */
+  PLI_BYTE8 *tfname;            /* first character shall be `$` */
+  PLI_INT32 (*calltf)(PLI_BYTE8 *);
+  PLI_INT32 (*compiletf)(PLI_BYTE8 *);
+  PLI_INT32 (*sizetf)(PLI_BYTE8 *);
+  PLI_BYTE8 *user_data;
+} s_vpi_systf_data, *p_vpi_systf_data;
+
+/* §12.32.2. The LRM prints the third member twice, as `derivative_wrt` in the
+ * structure definition and `derivative_to` in §12.22.2's example; both are the
+ * same pointer. It also uses `t_vpi_stf_partials` as a type name in that
+ * example, so the tag is a typedef name too. */
+typedef struct t_vpi_stf_partials {
+  PLI_INT32  count;
+  PLI_INT32 *derivative_of;     /* 0 = returned value, 1 = 1st arg, ... */
+  union {
+    PLI_INT32 *derivative_wrt;  /* 1 = 1st arg, 2 = 2nd arg, ... */
+    PLI_INT32 *derivative_to;
+  };
+} t_vpi_stf_partials, s_vpi_stf_partials, *p_vpi_stf_partials;
+
+/* Figure 12-18. The analog callbacks take the s_cb_data §12.22.2 passes. */
+typedef struct t_vpi_analog_systf_data {
+  PLI_INT32           type;         /* vpiAnalogSysTask, vpiAnalogSysFunction */
+  PLI_INT32           sysfunctype;  /* vpiIntFunc, vpiRealFunc */
+  PLI_BYTE8          *tfname;       /* first character shall be `$` */
+  PLI_INT32         (*calltf)(struct t_cb_data *);
+  PLI_INT32         (*compiletf)(struct t_cb_data *);
+  PLI_INT32         (*sizetf)(struct t_cb_data *);
+  p_vpi_stf_partials (*derivtf)(struct t_cb_data *);
+  PLI_BYTE8          *user_data;
+} s_vpi_analog_systf_data, *p_vpi_analog_systf_data;
+
+extern vpiHandle  vpi_register_systf(p_vpi_systf_data systf_data_p);
+extern vpiHandle  vpi_register_analog_systf(p_vpi_analog_systf_data systf_data_p);
+extern void       vpi_get_systf_info(vpiHandle obj, p_vpi_systf_data systf_data_p);
+extern void       vpi_get_analog_systf_info(vpiHandle obj, p_vpi_analog_systf_data systf_data_p);
+/* §12.22 many-to-one. vpiDerivative needs two arguments of an active analog
+ * call; see above for why there never is one here. */
+extern vpiHandle  vpi_handle_multi(PLI_INT32 type, vpiHandle refHandle1, vpiHandle refHandle2, ...);
+
 /* §12.36 simulation control. vpiFinish (one int: the $finish diagnostic
  * level) ends the run when the calling routine returns, at the current time.
  * vpiStop, vpiReset and vpiSetInteractiveScope need an interactive mode VerA

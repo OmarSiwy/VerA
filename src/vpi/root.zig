@@ -64,17 +64,20 @@ const print = @import("print.zig");
 pub const run = @import("run.zig");
 pub const callback = @import("callback.zig");
 pub const value = @import("value.zig");
+pub const systf = @import("systf.zig");
 comptime {
     _ = print;
     _ = run;
     _ = callback;
     _ = value;
+    _ = systf;
 }
 test {
     _ = print;
     _ = run;
     _ = callback;
     _ = value;
+    _ = systf;
 }
 const Lower = @import("ir").Lower;
 const Elaborate = @import("ir").Elaborate;
@@ -346,6 +349,7 @@ pub fn close() void {
     run.detach();
     callback.reset();
     value.reset();
+    systf.reset();
     clearError();
 }
 
@@ -944,6 +948,14 @@ inline fn object(comptime who: []const u8, h: vpiHandle) ?*Obj {
 /// instance, and the top module has none — NULL, and NOT an error: "no such
 /// object" is this routine's ordinary answer at the root of the hierarchy.
 pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
+    // §11.6.16 NOTE 1: the call whose compiletf/calltf is running. None ever
+    // is in this process (see systf.zig), so the answer is "no such object",
+    // which is NULL and not an error — the same answer vpiScope gives at the
+    // root.
+    if (obj_type == systf.vpiSysTfCall and ref == null) {
+        clearError();
+        return null;
+    }
     const d = enter("vpi_handle") orelse return null;
     const o = object("vpi_handle", ref) orelse return null;
     switch (obj_type) {
@@ -1061,6 +1073,17 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
     // §11.6.1 NOTE 1: "Top-level modules shall be accessed using vpi_iterate()
     // with a NULL reference object."
     if (ref == null) {
+        if (obj_type == systf.vpiUserSystf) {
+            const handles = systf.all(d.gpa) catch {
+                fail("NOMEM", "vpi_iterate: out of memory", .{});
+                return null;
+            };
+            if (handles.len == 0) {
+                d.gpa.free(handles);
+                return null;
+            }
+            return newHandleIter(d, handles);
+        }
         if (obj_type == run.vpiTimeQueue) {
             const handles = run.timeQueues(d.gpa) catch {
                 fail("NOMEM", "vpi_iterate: out of memory", .{});
@@ -1172,7 +1195,9 @@ fn destroyIter(d: *Design, it: *Iter) void {
 /// a module — is an error and not a zero: §11.6.8 simply gives a net no
 /// direction, and a 0 would be indistinguishable from `vpiNoDirection`.
 pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
-    _ = enter("vpi_get") orelse return vpiUndefined;
+    // Not `enter`: callbacks, time queues, events and systf registrations are
+    // objects without a design, and a handle to one still has a type.
+    clearError();
     // §12.23 types the iterator `vpiIterator`, so `vpi_get(vpiType, itr)` is a
     // question with an answer. Nothing else about an iterator is a §11.6
     // property.
@@ -1192,6 +1217,11 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         if (prop == vpiType) return value.vpiSchedEvent;
         if (prop == value.vpiScheduled) return @intFromBool(value.scheduled(e));
         fail("NOPROP", "vpi_get: a scheduled event has no property {d}", .{prop});
+        return vpiUndefined;
+    }
+    if (systf.asSystf(obj)) |_| {
+        if (prop == vpiType) return systf.vpiUserSystf;
+        fail("NOPROP", "vpi_get: a vpiUserSystf has no property {d}; vpi_get_systf_info reads it", .{prop});
         return vpiUndefined;
     }
     if (run.asQueue(obj)) |_| {
@@ -1335,7 +1365,7 @@ var str_buf: [name_buf_len]u8 = undefined;
 /// through it. Two invalid handles are not "the same object": that is FALSE
 /// plus an error, not TRUE.
 pub export fn vpi_compare_objects(obj1: vpiHandle, obj2: vpiHandle) c_int {
-    _ = enter("vpi_compare_objects") orelse return 0;
+    clearError();
     const a = issued(obj1) orelse {
         fail("BADHANDLE", "vpi_compare_objects: {s} is not a handle VerA issued", .{describe(obj1)});
         return 0;
@@ -1356,6 +1386,7 @@ fn issued(h: vpiHandle) ?*anyopaque {
     if (callback.asCb(h)) |cb| return @ptrCast(cb);
     if (run.asQueue(h)) |q| return @ptrCast(q);
     if (value.asEvent(h)) |e| return @ptrCast(e);
+    if (systf.asSystf(h)) |s| return @ptrCast(s);
     return null;
 }
 
@@ -1369,14 +1400,14 @@ fn issued(h: vpiHandle) ?*anyopaque {
 /// design and live as long as it does — because an application is entitled to
 /// call this on one and must not be told it failed.
 pub export fn vpi_free_object(obj: vpiHandle) c_int {
-    const d = enter("vpi_free_object") orelse return 0;
+    clearError();
     if (asIter(obj)) |it| {
-        destroyIter(d, it);
+        destroyIter(&design.?, it);
         return 1;
     }
     // A callback handle is freed by vpi_remove_cb (§12.34), not here; freeing
     // the handle leaves the callback registered, as an object's does.
-    if (asObj(obj) != null or callback.asCb(obj) != null or run.asQueue(obj) != null) return 1;
+    if (asObj(obj) != null or callback.asCb(obj) != null or run.asQueue(obj) != null or systf.asSystf(obj) != null) return 1;
     // §12.30 "Calling vpi_free_object() on the handle shall free the handle
     // but shall not effect the event."
     if (value.asEvent(obj)) |e| {

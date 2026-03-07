@@ -335,13 +335,19 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 ///   p02_06  a memory's words (§11.6.10) — see the array family
 ///   p02_10  a $systf call in digital code — the engine has no user-systf call
 ///   p02_11  an analog $systf — needs an analog solver in this process
-///   p02_12  runs against p02_analog.va, an analog design, and asserts
-///           registration only — see the systf family
 ///   p02_13  p02_scales.v — the engine refuses a second `timescale
 ///   p03_*   analog callbacks and values — needs an analog solver here
-///   audit_* whose .v the engine refuses (a `real` array, an instance array,
-///           no `timescale, `small` as a name, a function call argument)
+///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
+///           as p02_10
+///   audit_array_object_kinds, audit_module_array, audit_vpi_value_formats,
+///   audit_vpi_invalid_time_callback — the engine refuses their .v (a `real`
+///           array, an instance array, `small` as a name, no `timescale)
 const vpi_runs = [_]VpiRun{
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_12_systf_domains.c",
+        .design = "tests/fixtures/ch11_vpi/p02_analog.va",
+        .stdout = "p02: 12_systf_domains checks=26\n",
+    },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_09_printf_mcd.c",
         .design = "tests/fixtures/digital/p02_design.v",
