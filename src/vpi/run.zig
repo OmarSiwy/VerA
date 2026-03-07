@@ -94,10 +94,6 @@ pub fn simulate() digital.Error!void {
         read_only = true;
         callback.fireDue(callback.cbReadOnlySynch, t);
         read_only = false;
-        // A time holding only callbacks that all fired, with nothing after,
-        // ends the loop at the top; one holding nothing new would spin.
-        if (r.scheduler.peekTime() == t) continue;
-        if (callback.nextDue(t, false) == null and r.scheduler.peekTime() == null) break;
     }
     callback.endOfSimulation();
 }

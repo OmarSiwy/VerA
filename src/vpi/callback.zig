@@ -297,8 +297,10 @@ fn sweep() void {
 
 /// Call `cb` with a FRESH s_cb_data — §12.31.1 "this is not a pointer to the
 /// same structure which was passed to vpi_register_cb()" — whose time and
-/// value are filled in the registered type and format.
-fn call(cb: *Cb, index: c_int) void {
+/// value are filled in the registered type and format. A value-change
+/// callback reads its value from `from`: the array element that changed, or
+/// the registered object itself.
+fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) void {
     var t: Time = std.mem.zeroes(Time);
     var data: CbData = .{
         .reason = cb.reason,
@@ -317,7 +319,7 @@ fn call(cb: *Cb, index: c_int) void {
     var v: Value = std.mem.zeroes(Value);
     if (cb.reason == cbValueChange and cb.value_format != vpiSuppressVal) {
         v.format = cb.value_format;
-        value.read(root.asObj(cb.obj).?, &v, &value.cb_store);
+        value.read(from orelse root.asObj(cb.obj).?, &v, &value.cb_store);
         data.value = &v;
     }
     depth += 1;
@@ -333,7 +335,7 @@ fn fireAll(reason: c_int) void {
     const n = cbs.items.len;
     for (0..n) |i| {
         const cb = cbs.items[i];
-        if (!cb.dead and cb.reason == reason) call(cb, cb.index);
+        if (!cb.dead and cb.reason == reason) call(cb, cb.index, null);
     }
     sweep();
 }
@@ -383,7 +385,7 @@ pub fn fireDue(reason: c_int, now: u64) void {
         const cb = cbs.items[i];
         if (cb.dead or cb.reason != reason or cb.due != now) continue;
         retire(cb);
-        call(cb, cb.index);
+        call(cb, cb.index, null);
     }
     sweep();
 }
@@ -396,7 +398,7 @@ pub fn fireNext(now: u64) void {
         const cb = cbs.items[i];
         if (cb.dead or cb.reason != cbNextSimTime or now <= cb.since) continue;
         retire(cb);
-        call(cb, cb.index);
+        call(cb, cb.index, null);
     }
     sweep();
 }
@@ -410,7 +412,7 @@ pub fn fireSlot(slot: u32) void {
         if (cb.dead or cb.reason != cbValueChange) continue;
         const target = root.asObj(cb.obj) orelse continue;
         if (target.slot == slot) {
-            call(cb, cb.index);
+            call(cb, cb.index, null);
             continue;
         }
         // §12.31.1: a callback on an array hears each element's change, with
@@ -420,37 +422,10 @@ pub fn fireSlot(slot: u32) void {
         for (target.members) |m| {
             const word = &d.objects[m];
             if (word.slot != slot) continue;
-            callElement(cb, word, @intCast(d.objects[word.index.?].value.?.int));
+            call(cb, @intCast(d.objects[word.index.?].value.?.int), word);
         }
     }
     sweep();
-}
-
-fn callElement(cb: *Cb, word: *const root.Obj, index: c_int) void {
-    var t: Time = std.mem.zeroes(Time);
-    var data: CbData = .{
-        .reason = cb.reason,
-        .cb_rtn = cb.rtn,
-        .obj = cb.obj,
-        .time = null,
-        .value = null,
-        .index = index,
-        .user_data = cb.user_data,
-    };
-    if (cb.time_type != vpiSuppressTime) {
-        t.type = cb.time_type;
-        root.run.timeNow(cb.obj, &t);
-        data.time = &t;
-    }
-    var v: Value = std.mem.zeroes(Value);
-    if (cb.value_format != vpiSuppressVal) {
-        v.format = cb.value_format;
-        value.read(word, &v, &value.cb_store);
-        data.value = &v;
-    }
-    depth += 1;
-    defer depth -= 1;
-    _ = cb.rtn(&data);
 }
 
 fn retire(cb: *Cb) void {

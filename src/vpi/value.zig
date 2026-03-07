@@ -530,7 +530,7 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*const Value, time_p: ?*co
     const r = run.attached().?;
     const dest = r.values[at];
     put_buf.resize(gpa, dest.planes.len) catch return oom();
-    toPlanes(v, dest.width, put_buf.items, o.is_signed) catch |e| {
+    toPlanes(v, dest.width, put_buf.items) catch |e| {
         if (e == error.OutOfMemory) return oom();
         return null;
     };
@@ -585,8 +585,7 @@ fn engineFail() vpiHandle {
 }
 
 /// `v` as `width` bits in `planes` (value words, then unknown words).
-fn toPlanes(v: *const Value, width: u32, planes: []u64, signed: bool) !void {
-    _ = signed;
+fn toPlanes(v: *const Value, width: u32, planes: []u64) !void {
     @memset(planes, 0);
     const n = planes.len / 2;
     const val = planes[0..n];
