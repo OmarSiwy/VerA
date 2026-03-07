@@ -57,6 +57,10 @@ pub fn cloneDim(self: *Flatten, d: ?Ast.Dim) Error!?Ast.Dim {
     return .{ .msb = try cloneExpr(self, dim.msb), .lsb = try cloneExpr(self, dim.lsb) };
 }
 
+pub fn cloneDelay(self: *Flatten, d: Ast.Delay3) Error!Ast.Delay3 {
+    return .{ .rise = try cloneExpr(self, d.rise), .fall = try cloneExpr(self, d.fall), .off = try cloneExpr(self, d.off) };
+}
+
 pub fn cloneDims(self: *Flatten, dims: []const Ast.Dim) Error![]const Ast.Dim {
     if (dims.len == 0) return &.{};
     const out = try self.ctx.arena.alloc(Ast.Dim, dims.len);
@@ -474,10 +478,16 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
                 },
             };
         },
-        .assign => |v| .{ .assign = .{
-            .target = try cloneExpr(self, v.target),
-            .value = try cloneExpr(self, v.value),
-        } },
+        // Copied field by field over the source row, so the discrete-only
+        // fields — A.6.2's `<=` and intra-assignment timing — survive the
+        // clone of an `initial`/`always` body instead of reverting to `=`.
+        .assign => |v| blk: {
+            var o = v;
+            o.target = try cloneExpr(self, v.target);
+            o.value = try cloneExpr(self, v.value);
+            o.timing = try cloneExpr(self, v.timing);
+            break :blk .{ .assign = o };
+        },
         .contribute => |v| blk: {
             const lhs = try cloneTarget(self, v.lhs);
             const rhs = try cloneExpr(self, v.rhs);
@@ -533,10 +543,13 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
             .count = try cloneExpr(self, v.count),
             .body = try cloneStmt(self, v.body),
         } },
-        .event_control => |v| .{ .event_control = .{
-            .event = try cloneExpr(self, v.event),
-            .body = try cloneStmt(self, v.body),
-        } },
+        .event_control => |v| .{
+            .event_control = .{
+                .event = try cloneExpr(self, v.event),
+                .body = try cloneStmt(self, v.body),
+                .kind = v.kind, // `#`/`wait` are not `@`
+            },
+        },
         .event_trigger => |v| .{ .event_trigger = .{ .name = elab_names.flat(self, v.name) } },
         .disable => |v| .{ .disable = .{ .name = elab_names.flat(self, v.name) } },
         .sys_task => |v| blk: {
