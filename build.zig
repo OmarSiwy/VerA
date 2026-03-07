@@ -332,7 +332,6 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 
 /// NOT here, each for a reason outside the routine it exercises:
 ///   p02_04  force/release — the digital engine performs no force
-///   p02_06  a memory's words (§11.6.10) — see the array family
 ///   p02_10  a $systf call in digital code — the engine has no user-systf call
 ///   p02_11  an analog $systf — needs an analog solver in this process
 ///   p02_13  p02_scales.v — the engine refuses a second `timescale
@@ -352,6 +351,17 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ch11_vpi/p02_09_printf_mcd.c",
         .design = "tests/fixtures/digital/p02_design.v",
         .stdout = "p02 printf 7 ok\np02: 09_printf_mcd checks=27\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_06_cb_value_change.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 06_cb_value_change checks=62\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_end_compile_objects.c",
+        .design = "tests/fixtures/ieee_pli/audit_end_compile_objects.v",
+        .stdout = "",
+        .stderr = "pli-end-compile type=vpiModule\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_01_get_value_formats.c",

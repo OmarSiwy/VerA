@@ -96,8 +96,22 @@ const Elaborate = @import("ir").Elaborate;
 // ---------------------------------------------------------------------------
 
 // §11.6 object types.
+pub const vpiConstant: c_int = 7;
 pub const vpiIntegerVar: c_int = 25;
 pub const vpiIterator: c_int = 27;
+pub const vpiMemory: c_int = 29;
+pub const vpiMemoryWord: c_int = 30;
+pub const vpiRealVar: c_int = 47;
+pub const vpiVarSelect: c_int = 68;
+pub const vpiModuleArray: c_int = 112;
+pub const vpiRegArray: c_int = 116;
+
+// §11.6.10/§11.6.11 relationships and properties.
+pub const vpiArray: c_int = 28;
+pub const vpiIsMemory: c_int = 73;
+pub const vpiIndex: c_int = 78;
+pub const vpiParent: c_int = 81;
+pub const vpiDecConst: c_int = 1;
 pub const vpiModule: c_int = 32;
 pub const vpiNet: c_int = 36;
 pub const vpiParameter: c_int = 41;
@@ -180,22 +194,60 @@ const Kind = enum(u8) {
     net,
     reg,
     parameter,
-    /// IEEE 1364 §26.6.7 `integer` variable. Only the DIGITAL model has one:
-    /// an analog `integer` is a §11.6.10 variable the analog model does not
-    /// answer (see `build`).
+    /// §11.6.10 `integer` and `real` variables.
     integer,
-
-    fn objType(k: Kind) c_int {
-        return switch (k) {
-            .module => vpiModule,
-            .port => vpiPort,
-            .net => vpiNet,
-            .reg => vpiReg,
-            .parameter => vpiParameter,
-            .integer => vpiIntegerVar,
-        };
-    }
+    real_var,
+    /// §11.6.10/§11.6.11 arrays. A reg array is IEEE 1364 §26.6.9's memory
+    /// (vpiRegArray, vpiIsMemory); an integer or real array is a variable of
+    /// its element type with vpiArray set (§26.6.7). Each holds its elements
+    /// in `members`.
+    reg_array,
+    var_array,
+    /// One element: a memory word (a vpiReg) or a variable select.
+    word,
+    var_select,
+    /// §6.2.2's `u[1:0]`: one array object over its member module instances.
+    module_array,
+    /// An index expression — the object `vpiIndex` leads to. Always a
+    /// decimal integer constant, read by vpi_get_value.
+    constant,
 };
+
+/// `vpi_get(vpiType, o)`.
+fn typeOf(o: *const Obj) c_int {
+    return switch (o.kind) {
+        .module => vpiModule,
+        .port => vpiPort,
+        .net => vpiNet,
+        .reg, .word => vpiReg,
+        .parameter => vpiParameter,
+        .integer => vpiIntegerVar,
+        .real_var => vpiRealVar,
+        .reg_array => vpiRegArray,
+        .var_array => if (o.ty == .real) vpiRealVar else vpiIntegerVar,
+        .var_select => vpiVarSelect,
+        .module_array => vpiModuleArray,
+        .constant => vpiConstant,
+    };
+}
+
+/// §26.3.2's string form of a type: `vpi_get_str(vpiType, o)`.
+fn typeName(t: c_int) []const u8 {
+    return switch (t) {
+        vpiModule => "vpiModule",
+        vpiPort => "vpiPort",
+        vpiNet => "vpiNet",
+        vpiReg => "vpiReg",
+        vpiParameter => "vpiParameter",
+        vpiIntegerVar => "vpiIntegerVar",
+        vpiRealVar => "vpiRealVar",
+        vpiRegArray => "vpiRegArray",
+        vpiVarSelect => "vpiVarSelect",
+        vpiModuleArray => "vpiModuleArray",
+        vpiConstant => "vpiConstant",
+        else => "vpiUndefined",
+    };
+}
 
 /// One VPI object. Materialized once at `open`; a `vpiHandle` is a pointer to
 /// one of these.
@@ -241,6 +293,13 @@ pub const Obj = struct {
     /// of the parameter" as a value, and this is the only value an analog
     /// compile holds without running the device.
     value: ?Lower.Const = null,
+    /// An element (word, var select, array member module): the array object
+    /// it belongs to — §11.6.11's `vpiParent`, §6.2.2's `vpiModuleArray`.
+    parent: ?u32 = null,
+    /// An element: the `.constant` object its `vpiIndex` edge leads to.
+    index: ?u32 = null,
+    /// An array: its elements, in increasing index.
+    members: []const u32 = &.{},
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -266,6 +325,9 @@ const Scope = struct {
     regs: []const u32 = &.{},
     params: []const u32 = &.{},
     integers: []const u32 = &.{},
+    reals: []const u32 = &.{},
+    reg_arrays: []const u32 = &.{},
+    module_arrays: []const u32 = &.{},
 };
 
 /// §12.23's iterator. Individually allocated so that a pointer VerA did not
@@ -402,6 +464,9 @@ const Building = struct {
     regs: std.ArrayList(u32) = .empty,
     params: std.ArrayList(u32) = .empty,
     integers: std.ArrayList(u32) = .empty,
+    reals: std.ArrayList(u32) = .empty,
+    reg_arrays: std.ArrayList(u32) = .empty,
+    module_arrays: std.ArrayList(u32) = .empty,
 
     fn deinit(s: *Building, gpa: std.mem.Allocator) void {
         s.children.deinit(gpa);
@@ -410,6 +475,9 @@ const Building = struct {
         s.regs.deinit(gpa);
         s.params.deinit(gpa);
         s.integers.deinit(gpa);
+        s.reals.deinit(gpa);
+        s.reg_arrays.deinit(gpa);
+        s.module_arrays.deinit(gpa);
     }
 };
 
@@ -533,13 +601,34 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
         });
     }
     for (flat.vars) |v| {
-        // §11.6.9 is about REGS. A `real`/`integer` variable is §11.6.10's
-        // `variables` class — a different diagram with a different iteration
-        // tag — and P01 does not answer it; reporting one as a `vpiReg` would
-        // be a wrong answer rather than a missing one.
-        if (v.storage != .reg) continue;
+        // §11.6.9 is about REGS; `real` and `integer` are §11.6.10's
+        // variables, with their own tags. Arrays of either are §11.6.11.
         const flat_name = file.str(v.name);
         const split = (try splitPath(arena, &by_path, flat_name)) orelse continue;
+        if (v.dims.len == 1) {
+            const dim = literalDim(file, v.dims[0]) orelse continue;
+            const is_reg = v.storage == .reg;
+            if (!is_reg and v.ty != .real and v.ty != .integer) continue;
+            const at = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, split.scope, split.local, try joinPath(arena, top_name, flat_name), if (is_reg) .integer else v.ty, dim.low, dim.high, if (is_reg) packedWidth(file, v) else if (v.ty == .real) 64 else 32, null);
+            const list = if (is_reg) &scopes.items[split.scope].reg_arrays else if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
+            try list.append(gpa, at);
+            continue;
+        }
+        if (v.dims.len != 0) continue;
+        if (v.storage == .variable and (v.ty == .real or v.ty == .integer)) {
+            const list = if (v.ty == .real) &scopes.items[split.scope].reals else &scopes.items[split.scope].integers;
+            try list.append(gpa, @intCast(objects.items.len));
+            try objects.append(gpa, .{
+                .kind = if (v.ty == .real) .real_var else .integer,
+                .owner = split.scope,
+                .name = split.local,
+                .full = try joinPath(arena, top_name, flat_name),
+                .size = if (v.ty == .real) 64 else 32,
+                .ty = v.ty,
+            });
+            continue;
+        }
+        if (v.storage != .reg) continue;
         try scopes.items[split.scope].regs.append(gpa, @intCast(objects.items.len));
         try objects.append(gpa, .{
             .kind = .reg,
@@ -572,6 +661,7 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
             } else null,
         });
     }
+    try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
 
     try freeze(&d, objects.items, scopes.items);
     return d;
@@ -594,9 +684,129 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .regs = try arena.dupe(u32, s.regs.items),
         .params = try arena.dupe(u32, s.params.items),
         .integers = try arena.dupe(u32, s.integers.items),
+        .reals = try arena.dupe(u32, s.reals.items),
+        .reg_arrays = try arena.dupe(u32, s.reg_arrays.items),
+        .module_arrays = try arena.dupe(u32, s.module_arrays.items),
     };
     d.top_modules = try arena.dupe(u32, &[_]u32{0});
-    for (d.objects, 0..) |o, i| try d.by_name.put(gpa, o.full, @intCast(i));
+    // A constant has no name to be found by; everything else does.
+    for (d.objects, 0..) |o, i| if (o.kind != .constant) try d.by_name.put(gpa, o.full, @intCast(i));
+}
+
+/// §11.6.10/§11.6.11: an array object and, after it, each element preceded by
+/// the constant its `vpiIndex` leads to — elements in increasing index. The
+/// digital engine stores element `addr` in `base + (addr - low)`
+/// (`digital.Run.arrays`), which is the slot given each element here.
+fn addArray(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    objects: *std.ArrayList(Obj),
+    kind: Kind,
+    owner: u32,
+    name: []const u8,
+    full: []const u8,
+    ty: Ast.Type,
+    low: i64,
+    high: i64,
+    width: u32,
+    base: ?u32,
+) Error!u32 {
+    const at: u32 = @intCast(objects.items.len);
+    const count: u32 = @intCast(high - low + 1);
+    const members = try arena.alloc(u32, count);
+    try objects.append(gpa, .{ .kind = kind, .owner = owner, .name = name, .full = full, .size = count, .ty = ty, .members = members });
+    const elem: Kind = if (kind == .reg_array) .word else .var_select;
+    for (0..count) |k| {
+        const addr = low + @as(i64, @intCast(k));
+        const c: u32 = @intCast(objects.items.len);
+        try objects.append(gpa, .{ .kind = .constant, .owner = owner, .name = "", .full = "", .size = 32, .value = .{ .int = addr } });
+        members[k] = @intCast(objects.items.len);
+        const local = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ name, addr });
+        try objects.append(gpa, .{
+            .kind = elem,
+            .owner = owner,
+            .name = local,
+            .full = try std.fmt.allocPrint(arena, "{s}[{d}]", .{ full, addr }),
+            .size = width,
+            .ty = ty,
+            .slot = if (base) |b| b + @as(u32, @intCast(k)) else null,
+            .parent = at,
+            .index = c,
+        });
+    }
+    return at;
+}
+
+/// §6.2.2 `name_of_module_instance ::= module_instance_identifier [ range ]`:
+/// elaboration names each element `u[k]`, so sibling scopes that share the
+/// identifier before `[` are one array. The array object goes in the parent
+/// scope, and every member module learns its array and its index.
+fn addModuleArrays(gpa: std.mem.Allocator, arena: std.mem.Allocator, objects: *std.ArrayList(Obj), scopes: []Building, top_name: []const u8) Error!void {
+    for (scopes, 0..) |*parent, p| {
+        var i: usize = 0;
+        while (i < parent.children.items.len) : (i += 1) {
+            const first = parent.children.items[i];
+            const name = arrayBase(lastComponent(scopes[first].path)) orelse continue;
+            // Already grouped under an earlier sibling?
+            if (objects.items[first].parent != null) continue;
+            var members: std.ArrayList(u32) = .empty;
+            defer members.deinit(gpa);
+            for (parent.children.items[i..]) |c| {
+                const other = arrayBase(lastComponent(scopes[c].path)) orelse continue;
+                if (std.mem.eql(u8, other, name)) try members.append(gpa, c);
+            }
+            std.mem.sort(u32, members.items, scopes, struct {
+                fn lt(s: []Building, a: u32, b: u32) bool {
+                    return scopeIndex(s, a) < scopeIndex(s, b);
+                }
+            }.lt);
+            const at: u32 = @intCast(objects.items.len);
+            const path = if (parent.path.len == 0) name else try joinPath(arena, parent.path, name);
+            try objects.append(gpa, .{
+                .kind = .module_array,
+                .owner = @intCast(p),
+                .name = name,
+                .full = try joinPath(arena, top_name, path),
+                .size = @intCast(members.items.len),
+                .members = try arena.dupe(u32, members.items),
+            });
+            try parent.module_arrays.append(gpa, at);
+            for (members.items) |m| {
+                const c: u32 = @intCast(objects.items.len);
+                try objects.append(gpa, .{ .kind = .constant, .owner = @intCast(p), .name = "", .full = "", .size = 32, .value = .{ .int = scopeIndex(scopes, m) } });
+                objects.items[m].parent = at;
+                objects.items[m].index = c;
+            }
+        }
+    }
+}
+
+fn scopeIndex(scopes: []Building, m: u32) i64 {
+    return arrayIndex(lastComponent(scopes[m].path)).?;
+}
+
+/// `u` of `u[3]`, or null when the name is not an array element's.
+fn arrayBase(local: []const u8) ?[]const u8 {
+    if (local.len < 3 or local[local.len - 1] != ']') return null;
+    const open_at = std.mem.lastIndexOfScalar(u8, local, '[') orelse return null;
+    _ = arrayIndex(local) orelse return null;
+    return local[0..open_at];
+}
+
+fn arrayIndex(local: []const u8) ?i64 {
+    const open_at = std.mem.lastIndexOfScalar(u8, local, '[') orelse return null;
+    if (local[local.len - 1] != ']') return null;
+    return std.fmt.parseInt(i64, local[open_at + 1 .. local.len - 1], 10) catch null;
+}
+
+/// A declared unpacked dimension, folded when both bounds are literal integers
+/// — the same rule `packedWidth` applies. Null otherwise: the array is then
+/// not modelled rather than modelled with a guessed size.
+fn literalDim(file: *const Ast.SourceFile, dim: Ast.Dim) ?struct { low: i64, high: i64 } {
+    if (file.exprs.tag(dim.msb) != .int_literal or file.exprs.tag(dim.lsb) != .int_literal) return null;
+    const a = file.exprs.intValue(dim.msb);
+    const b = file.exprs.intValue(dim.lsb);
+    return .{ .low = @min(a, b), .high = @max(a, b) };
 }
 
 // ---------------------------------------------------------------------------
@@ -692,8 +902,15 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         }
         for (m.vars) |v| {
             const at = r.names.get(.{ .scope = scope, .str = v.name }) orelse continue;
-            // §3.9 arrays are §11.6.10/§11.6.11's classes, modelled below.
-            if (r.arrays.contains(at)) continue;
+            // §3.9 arrays: §11.6.11's classes, over the engine's own element
+            // slots.
+            if (r.arrays.get(at)) |a| {
+                const is_reg = v.storage == .reg;
+                const local = try arena.dupe(u8, file.str(v.name));
+                const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), .integer, a.low, a.high, r.values[at].width, at);
+                try (if (is_reg) &s.reg_arrays else &s.integers).append(gpa, arr);
+                continue;
+            }
             const kind: Kind = if (v.storage == .reg) .reg else if (v.ty == .integer) .integer else continue;
             const list = if (kind == .reg) &s.regs else &s.integers;
             try list.append(gpa, @intCast(objects.items.len));
@@ -963,11 +1180,34 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
             const owner = o.owner orelse return null;
             return handleOf(&d.objects[owner]);
         },
+        // §11.6.11: a word or variable select's array. A module in an
+        // instance array reaches its array by vpiModuleArray (§26.6.1).
+        vpiParent, vpiModuleArray => {
+            if (obj_type == vpiParent and o.kind != .word and o.kind != .var_select) return noEdge(obj_type, o);
+            if (obj_type == vpiModuleArray and o.kind != .module) return noEdge(obj_type, o);
+            const p = o.parent orelse return null;
+            return handleOf(&d.objects[p]);
+        },
+        // The index expression of an element. A module that is not in an
+        // array has none, and that is an answer — NULL — not an error.
+        vpiIndex => {
+            switch (o.kind) {
+                .word, .var_select, .module => {},
+                else => return noEdge(obj_type, o),
+            }
+            const c = o.index orelse return null;
+            return handleOf(&d.objects[c]);
+        },
         else => {
             fail("NOTRAVERSE", "vpi_handle: no one-to-one relationship {d} from a {s}", .{ obj_type, @tagName(o.kind) });
             return null;
         },
     }
+}
+
+fn noEdge(obj_type: c_int, o: *const Obj) vpiHandle {
+    fail("NOTRAVERSE", "vpi_handle: a {s} has no relationship {d}", .{ @tagName(o.kind), obj_type });
+    return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1032,22 +1272,26 @@ pub const name_buf_len = 4096;
 /// a parent object. ... This function can be used to access all objects which
 /// can access an expression using `vpiIndex`."
 ///
-/// ponytail: THERE IS NO INDEXED OBJECT CLASS YET, so this routine's honest
-/// answer is always §12.2's error indication. Every class §12.20 indexes — net
-/// bit, reg bit, port bit, memory word — is a bit-level object, and
-/// §11.6.5/§11.6.8 give each of them a `vpiIndex` edge to an EXPR, a class P01
-/// does not model at all. Materializing bits without the expr class beside them
-/// would answer `vpi_handle_by_index` and then fail on the first property a bit
-/// was asked for, which is a worse answer than this one.
+/// The indexed objects are the §11.6.11 array elements — memory words and
+/// variable selects — and the members of a §6.2.2 instance array: "for a memory
+/// word, obj is the associated memory". `index` is the element's own declared
+/// index, the value its vpiIndex constant holds.
 ///
-/// It exists NOW rather than in P02 because an application that calls it must
-/// get NULL and a reportable error rather than an unresolved symbol at link
-/// time. Upgrade path: P02 adds net/reg/port bits — `Lower.vectors` already
-/// holds the folded `[msb:lsb]` each of them needs — and this body becomes a
-/// bounds check against that range.
+/// ponytail: BIT-LEVEL objects (net bit, reg bit, port bit) are not modelled,
+/// so indexing a vector is still §12.2's error indication. Each would need
+/// §11.6.5's `vpiIndex` expr and its own properties; `Lower.vectors` already
+/// holds the folded `[msb:lsb]` they would need.
 pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
-    _ = enter("vpi_handle_by_index") orelse return null;
+    const d = enter("vpi_handle_by_index") orelse return null;
     const o = object("vpi_handle_by_index", obj) orelse return null;
+    if (o.members.len != 0) {
+        for (o.members) |m| {
+            const c = d.objects[m].index orelse continue;
+            if (d.objects[c].value.?.int == index) return handleOf(&d.objects[m]);
+        }
+        fail("NOINDEX", "vpi_handle_by_index: `{s}` has no element {d}", .{ o.full, index });
+        return null;
+    }
     fail(
         "NOINDEX",
         "vpi_handle_by_index: a {s} has no indexed object at {d} — bit-level objects are not modelled",
@@ -1102,8 +1346,18 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return newIter(d, d.top_modules);
     }
     const o = object("vpi_iterate", ref) orelse return null;
+    // §11.6.11 (IEEE 1364 §26.6.7-9): an array's elements. A memory's words by
+    // the legacy vpiMemoryWord tag or as vpiReg; a variable array's by
+    // vpiVarSelect; an instance array's members by vpiModule.
+    const elements: bool = switch (o.kind) {
+        .reg_array => obj_type == vpiMemoryWord or obj_type == vpiReg,
+        .var_array => obj_type == vpiVarSelect,
+        .module_array => obj_type == vpiModule,
+        else => false,
+    };
+    if (elements) return newIter(d, o.members);
     if (o.kind != .module) {
-        fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no one-to-many relationship", .{@tagName(o.kind)});
+        fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no one-to-many relationship {d}", .{ @tagName(o.kind), obj_type });
         return null;
     }
     const s = &d.scopes[o.scope];
@@ -1118,6 +1372,11 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         vpiReg => s.regs,
         vpiParameter => s.params,
         vpiIntegerVar => s.integers,
+        vpiRealVar => s.reals,
+        // IEEE 1364 §26.6.9: the legacy vpiMemory method returns the reg
+        // arrays, as vpiRegArray objects.
+        vpiMemory, vpiRegArray => s.reg_arrays,
+        vpiModuleArray => s.module_arrays,
         else => {
             fail("NOTRAVERSE", "vpi_iterate: no one-to-many relationship {d} from a module", .{obj_type});
             return null;
@@ -1233,7 +1492,20 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     // which VerA answers, so a NULL object is an invalid handle like any other.
     const o = object("vpi_get", obj) orelse return vpiUndefined;
     switch (prop) {
-        vpiType => return o.kind.objType(),
+        vpiType => return typeOf(o),
+        // IEEE 1364 §26.6.1/§26.6.7: "is item an array" — an array, or a
+        // module that is a member of an instance array.
+        vpiArray => return switch (o.kind) {
+            .reg_array, .var_array => 1,
+            .module => @intFromBool(o.parent != null),
+            .reg, .integer, .real_var, .word, .var_select => 0,
+            else => propFail(prop, o),
+        },
+        vpiIsMemory => return switch (o.kind) {
+            .reg_array => 1,
+            .var_array, .reg => 0,
+            else => propFail(prop, o),
+        },
         // §11.6.1 — true for the root of the instance tree, the one module
         // `Elaborate.pickTop` chose.
         vpiTopModule => {
@@ -1241,8 +1513,11 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             return @intFromBool(o.owner == null);
         },
         vpiSize, vpiScalar, vpiVector => {
+            // An array's size counts ELEMENTS (§26.6.9 "array size counts
+            // members"), everything else's counts bits.
             switch (o.kind) {
-                .port, .net, .reg, .integer => {},
+                .reg_array, .var_array, .module_array => if (prop == vpiSize) return @intCast(o.size) else return propFail(prop, o),
+                .port, .net, .reg, .integer, .real_var, .word, .var_select, .constant => {},
                 else => return propFail(prop, o),
             }
             // A width of 0 means the declared range did not fold (see
@@ -1283,6 +1558,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         // is a `parameter p = <expr>;` whose type lowering derives from the
         // default — a question about a VALUE, which is P02's.
         vpiConstType => {
+            if (o.kind == .constant) return vpiDecConst;
             if (o.kind != .parameter) return propFail(prop, o);
             return switch (o.ty) {
                 .real => vpiRealConst,
@@ -1330,6 +1606,7 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
     const s: []const u8 = switch (prop) {
         vpiName => o.name,
         vpiFullName => o.full,
+        vpiType => typeName(typeOf(o)),
         // §11.6.1 — a module property and only a module's. A net has no
         // definition to name.
         vpiDefName => blk: {
@@ -1909,4 +2186,120 @@ test "the scopes are elaboration's units, one for one" {
         try std.testing.expectEqualStrings(u.module, s.def_name);
         try std.testing.expectEqualStrings(std.mem.trimEnd(u8, u.path, &.{Elaborate.sep}), s.path);
     }
+}
+
+// ---- §11.6.10/§11.6.11 arrays and §6.2.2 instance arrays --------------------
+
+test "an instance array is a vpiModuleArray over its members (§6.2.2, IEEE 1364 §26.6.1)" {
+    var res = try openSource(
+        \\module top(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  sub u[1:0](p, n);
+        \\endmodule
+        \\module sub(a, b);
+        \\  inout a, b; electrical a, b;
+        \\  analog I(a,b) <+ V(a,b);
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+
+    const top = vpi_handle_by_name("top", null);
+    // A module in no array has no index, and that is not an error.
+    try std.testing.expect(vpi_handle(vpiIndex, top) == null);
+    try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_get(vpiArray, top));
+
+    const u = vpi_handle_by_name("top.u", null);
+    try std.testing.expectEqual(vpiModuleArray, vpi_get(vpiType, u));
+    try std.testing.expectEqual(@as(c_int, 2), vpi_get(vpiSize, u));
+    const itr = vpi_iterate(vpiModule, u);
+    var seen: u32 = 0;
+    while (vpi_scan(itr)) |m| {
+        try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiArray, m));
+        try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_handle(vpiModuleArray, m), u));
+        var v: callback.Value = std.mem.zeroes(callback.Value);
+        v.format = value.vpiIntVal;
+        const index = vpi_handle(vpiIndex, m);
+        try std.testing.expectEqual(vpiConstant, vpi_get(vpiType, index));
+        value.vpi_get_value(index, &v);
+        try std.testing.expectEqual(@as(c_int, 0), vpi_chk_error(null));
+        seen |= @as(u32, 1) << @intCast(v.value.integer);
+        try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_handle_by_index(u, v.value.integer), m));
+    }
+    try std.testing.expectEqual(@as(u32, 3), seen);
+    try std.testing.expect(vpi_handle_by_index(u, 2) == null);
+    try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+    // Iterating a module's instance arrays.
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_scan(vpi_iterate(vpiModuleArray, top)), u));
+}
+
+test "a digital memory is a vpiRegArray of vpiReg words, each bound to its engine slot" {
+    var h: run.Harness = undefined;
+    try h.init(
+        \\module m;
+        \\  reg [7:0] mem [0:3];
+        \\  integer counts [2:1];
+        \\  initial begin mem[2] = 8'h7e; counts[1] = 5; end
+        \\endmodule
+    );
+    defer h.deinit();
+    try run.simulate();
+
+    const top = vpi_handle_by_name("m", null);
+    const mem = vpi_scan(vpi_iterate(vpiMemory, top));
+    try std.testing.expectEqual(vpiRegArray, vpi_get(vpiType, mem));
+    try std.testing.expectEqualStrings("vpiRegArray", std.mem.span(vpi_get_str(vpiType, mem)));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiIsMemory, mem));
+    try std.testing.expectEqual(@as(c_int, 4), vpi_get(vpiSize, mem));
+    const w2 = vpi_handle_by_index(mem, 2);
+    try std.testing.expectEqual(vpiReg, vpi_get(vpiType, w2));
+    try std.testing.expectEqual(@as(c_int, 8), vpi_get(vpiSize, w2));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_handle(vpiParent, w2), mem));
+    try std.testing.expectEqualStrings("m.mem[2]", std.mem.span(vpi_get_str(vpiFullName, w2)));
+    var v: callback.Value = std.mem.zeroes(callback.Value);
+    v.format = value.vpiIntVal;
+    value.vpi_get_value(w2, &v);
+    try std.testing.expectEqual(@as(c_int, 0x7e), v.value.integer);
+    // Every word, by the legacy tag.
+    var words: u32 = 0;
+    const itr = vpi_iterate(vpiMemoryWord, mem);
+    while (vpi_scan(itr)) |_| words += 1;
+    try std.testing.expectEqual(@as(u32, 4), words);
+
+    // An integer array is an integer variable with vpiArray set, whose
+    // elements are variable selects.
+    const counts = vpi_handle_by_name("m.counts", null);
+    try std.testing.expectEqual(vpiIntegerVar, vpi_get(vpiType, counts));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiArray, counts));
+    const c1 = vpi_scan(vpi_iterate(vpiVarSelect, counts));
+    try std.testing.expectEqual(vpiVarSelect, vpi_get(vpiType, c1));
+    value.vpi_get_value(c1, &v);
+    try std.testing.expectEqual(@as(c_int, 5), v.value.integer);
+}
+
+test "an analog real array and real variable are §11.6.10's classes" {
+    var res = try openSource(
+        \\module ra(p);
+        \\  inout p; electrical p;
+        \\  real samples[1:0];
+        \\  real x;
+        \\  analog begin
+        \\    samples[0] = V(p); samples[1] = 2*V(p); x = samples[0];
+        \\    I(p) <+ x;
+        \\  end
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+    const arr = vpi_handle_by_name("ra.samples", null);
+    try std.testing.expectEqual(vpiRealVar, vpi_get(vpiType, arr));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiArray, arr));
+    try std.testing.expectEqual(@as(c_int, 2), vpi_get(vpiSize, arr));
+    const sel = vpi_handle_by_index(arr, 1);
+    try std.testing.expectEqual(vpiVarSelect, vpi_get(vpiType, sel));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_handle(vpiParent, sel), arr));
+    const x = vpi_handle_by_name("ra.x", null);
+    try std.testing.expectEqual(vpiRealVar, vpi_get(vpiType, x));
+    try std.testing.expectEqual(@as(c_int, 0), vpi_get(vpiArray, x));
 }

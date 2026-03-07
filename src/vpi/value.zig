@@ -712,9 +712,12 @@ fn badPut(why: []const u8) error{BadValue} {
 /// on. Cheap to repeat.
 pub fn watch(o: *const Obj) void {
     const r = run.attached() orelse return;
-    const at = o.slot orelse return;
-    r.watch[at].insert(.vpi);
     r.vpi_change = onChange;
+    if (o.slot) |at| r.watch[at].insert(.vpi);
+    // An array: every element (§12.31.1 "if the obj is a memory word or a
+    // variable array, ... the index field shall contain the index").
+    const d = &(root.design orelse return);
+    for (o.members) |m| if (d.objects[m].slot) |at| r.watch[at].insert(.vpi);
 }
 
 fn onChange(_: *digital.Run, slot: u32) void {

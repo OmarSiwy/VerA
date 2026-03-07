@@ -73,12 +73,20 @@ typedef PLI_UINT32 *vpiHandle;
  * `type` argument to vpi_iterate() from some reference object; see the
  * relationship table further down.
  * -------------------------------------------------------------------------- */
+#define vpiConstant             7   /* an array element's index expression */
+#define vpiIntegerVar          25   /* §11.6.10 integer variable (or array of) */
 #define vpiIterator            27   /* §12.23 the iterator vpi_scan() drives */
+#define vpiMemory              29   /* IEEE 1364 §26.6.9 legacy iteration tag */
+#define vpiMemoryWord          30   /* ...and its words' tag */
 #define vpiModule              32   /* §11.6.1 module instance */
 #define vpiNet                 36   /* §11.6.8/§11.6.5 scalar or vector net */
 #define vpiParameter           41   /* §11.6.12 module parameter */
 #define vpiPort                44   /* §11.6.4 module port */
-#define vpiReg                 48   /* §11.6.9 scalar or vector reg */
+#define vpiRealVar             47   /* §11.6.10 real variable (or array of) */
+#define vpiReg                 48   /* §11.6.9 scalar or vector reg; a memory word */
+#define vpiVarSelect           68   /* §11.6.11 one element of a variable array */
+#define vpiModuleArray        112   /* §6.2.2 an instance array, `u[1:0]` */
+#define vpiRegArray           116   /* §11.6.11 a reg array (memory) */
 
 /* --------------------------------------------------------------------------
  * Relationships — the `type` argument of vpi_handle()/vpi_iterate() when what
@@ -86,6 +94,10 @@ typedef PLI_UINT32 *vpiHandle;
  * -------------------------------------------------------------------------- */
 #define vpiScope               84   /* one-to-one: the containing scope */
 #define vpiInternalScope       92   /* one-to-many: §11.6.1 scopes in a module */
+#define vpiIndex               78   /* one-to-one: element -> its vpiConstant
+                                       index; NULL, no error, for a module
+                                       that is not in an array */
+#define vpiParent              81   /* one-to-one: word/var select -> its array */
 
 /* --------------------------------------------------------------------------
  * Properties — the `prop` argument of vpi_get() and vpi_get_str().
@@ -104,6 +116,8 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiConstType           40   /* int: §11.6.12, one of the values below */
 #define vpiSigned              65   /* bool: signedness of a reg */
 #define vpiLocalParam          70   /* bool: §3.4.5 localparam */
+#define vpiArray               28   /* bool: an array, or a module in one */
+#define vpiIsMemory            73   /* bool: a reg array */
 
 /* vpiDirection values — §6.5.2.2. */
 #define vpiInput                1
@@ -112,7 +126,9 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiMixedIO              4
 #define vpiNoDirection          5
 
-/* vpiConstType values — §11.6.12, over §3.4.1's parameter types. */
+/* vpiConstType values — §11.6.12, over §3.4.1's parameter types; an index
+ * constant is vpiDecConst. */
+#define vpiDecConst             1
 #define vpiRealConst            2
 #define vpiStringConst          6
 #define vpiIntConst             7
@@ -312,6 +328,18 @@ typedef struct t_cb_data {
  * followed.
  * -------------------------------------------------------------------------- */
 
+/* ARRAYS (§11.6.10/§11.6.11, IEEE 1364 §26.6.1/§26.6.7-9):
+ *
+ *   vpi_iterate(vpiMemory | vpiRegArray, module)   the reg arrays
+ *   vpi_iterate(vpiMemoryWord | vpiReg,  regarray) its words, each a vpiReg
+ *   vpi_iterate(vpiIntegerVar | vpiRealVar, module) variables and their arrays
+ *   vpi_iterate(vpiVarSelect,  vararray)           its elements
+ *   vpi_iterate(vpiModuleArray, module)            the instance arrays
+ *   vpi_iterate(vpiModule,      modulearray)       its member instances
+ *   vpi_handle_by_index(array, i)                  the element declared at i
+ *
+ * vpiSize of an array counts elements; of an element, bits. */
+
 /* §12.19 one-to-one traversal. */
 extern vpiHandle  vpi_handle(PLI_INT32 type, vpiHandle ref);
 /* §12.21 by name, hierarchical or simple; NULL scope searches from the top. */
@@ -324,7 +352,8 @@ extern vpiHandle  vpi_iterate(PLI_INT32 type, vpiHandle ref);
 extern vpiHandle  vpi_scan(vpiHandle itr);
 /* §12.5 integer and Boolean properties; vpiUndefined on error. */
 extern PLI_INT32  vpi_get(PLI_INT32 prop, vpiHandle obj);
-/* §12.12 string properties, into one buffer reused by every call. */
+/* §12.12 string properties, into one buffer reused by every call. vpiType
+ * is answered here too, as the constant's name ("vpiModule"). */
 extern PLI_BYTE8 *vpi_get_str(PLI_INT32 prop, vpiHandle obj);
 /* §12.3 object identity; `==` on handles does not answer this. */
 extern PLI_INT32  vpi_compare_objects(vpiHandle obj1, vpiHandle obj2);
