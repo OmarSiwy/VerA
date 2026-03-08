@@ -12,6 +12,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_param = @import("param.zig");
+const lower_discipline = @import("discipline.zig");
 const Ast = @import("frontend").Ast;
 const Oom = Lower.Oom;
 const init = Lower.init;
@@ -124,10 +125,23 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     var owned: std.ArrayList(Ast.ExprId) = .empty;
     for (module.assigns) |a| {
         const t = self.file.lvalueBase(a.target);
-        if (t == .none or !netDecl(module, ex.strOf(t))) {
+        const n = if (t == .none) null else netOf(module, ex.strOf(t));
+        if (n == null) {
             // IEEE 1364-2005 §6.1 (via VAMS §1.1): A.6.1's `net_assignment`
             // drives a `net_lvalue` — a variable has no driver to add.
             try self.err(a.main_tok, .E0438, "", .{});
+            continue;
+        }
+        // The declaration kind decided E0438; the DOMAIN decides this one.
+        // §7.2: "only digital blocks and primitives can drive a discrete net",
+        // and §7.3: "Write operations of nets ... are only allowed from the
+        // context of their domain" — and a continuous assignment is the
+        // discrete context. A `ddiscrete` net (§3.6.2.2 `domain discrete`) is
+        // a net exactly as `wire` is, and legal here.
+        if (lower_discipline.isContinuous(self.file, n.?.discipline)) {
+            var b = self.errWith(a.main_tok, .E0435);
+            b.msg("`{s}` is driven by a continuous assignment", .{self.file.str(ex.strOf(t))});
+            try b.emit();
             continue;
         }
         try owned.append(self.arena, t);
@@ -143,7 +157,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         if (self.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
         const ty: Ast.Type = for (module.vars) |v| {
             if (v.name == ex.strOf(t)) break v.ty;
-        } else if (netDecl(module, ex.strOf(t))) .integer else continue; // an undeclared name is §6.8's, reported elsewhere
+        } else if (netOf(module, ex.strOf(t)) != null) .integer else continue; // an undeclared name is §6.8's, reported elsewhere
         if (ty != .integer) {
             // VAMS Table 7-1's `real` row: a digital `real` is read as a real.
             // The digital engine holds four-state bits only.
@@ -167,14 +181,23 @@ const Reads = struct {
         const ex = &w.l.file.exprs;
         if (ex.tag(e) == .ident) try w.names.put(w.l.arena, w.l.file.str(ex.strOf(e)), {});
         var buf: [3]Ast.ExprId = undefined;
-        for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+        for (ex.children(e, &buf)) |c| {
+            // §4.4: a bare name in `V(d)` is the net the access function is
+            // applied to, not a Table 7-1 read of its digital value. Making it
+            // a discrete input would drop the node and turn a ddiscrete net's
+            // E0501 ("binds no potential nature") into a false E0337 ("has no
+            // discipline"). An index expression inside the argument is a read.
+            if (c != .none and ex.tag(e) == .branch_access and ex.tag(c) == .ident) continue;
+            try w.expr(c, .read);
+        }
     }
 };
 
-/// An undisciplined net of `module` — §7.2.1's discrete default.
-fn netDecl(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
-    for (module.nets) |n| if (n.name == name and n.discipline == .none) return true;
-    return false;
+/// The net `name` declares in `module`, of any discipline, or null (a
+/// variable, or undeclared). Its domain is the caller's question.
+fn netOf(module: *const Ast.ModuleDecl, name: Ast.StrId) ?*const Ast.NetDecl {
+    for (module.nets) |*n| if (n.name == name) return n;
+    return null;
 }
 
 fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
