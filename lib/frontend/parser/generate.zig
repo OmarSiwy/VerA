@@ -550,6 +550,11 @@ pub fn parseDriveStrength(self: *Parser, s0: *Ast.Strength, s1: *Ast.Strength) E
         return self.failAt(first_tok, .E0207, "a drive strength pairs one 0-side with one 1-side strength", .{});
     s0.* = if (a.side == 0) a.level else b.level;
     s1.* = if (a.side == 1) a.level else b.level;
+    // A.2.2.2 pairs `highz0`/`highz1` only with a real strength on the other
+    // side, and IEEE 1364-2005 §6.1.4 says why: "(highz1, highz0) and
+    // (highz0, highz1) shall be treated as illegal constructs".
+    if (s0.* == .highz and s1.* == .highz)
+        return self.failAt(first_tok, .E0207, "§6.1.4: both drive strengths cannot be high impedance", .{});
 }
 
 /// A.2.1.3 gives `trireg` alternatives of its own, and they are the only
