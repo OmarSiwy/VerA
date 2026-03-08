@@ -627,6 +627,13 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             .tok = g.main_tok,
         });
     }
+    // IEEE 1364-2005 §7.8 a pullup/pulldown "shall place a logic value 1 [0]
+    // on the nets connected", at pull strength unless one is written: a
+    // constant driver, the same row `unconnected_drive` contributes.
+    for (m.pulls) |p| {
+        const net = r.net_of.get(try r.scalarSlot(p.out)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
+        try e.wires.append(arena, .{ .net = net, .scope = scope, .pull = if (p.one) .one else .zero, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
+    }
     for (m.instances) |inst| {
         if (inst.range != null or inst.params.len != 0)
             return r.fail(inst.main_tok, "instance arrays and parameter overrides are not implemented by digital execution", .{});
@@ -1074,6 +1081,26 @@ test "§19.10 nounconnected_drive leaves an open input port floating" {
         \\initial #0 $display("%b", u.a);
         \\endmodule
     , "z\n");
+}
+
+// §7.8: a pull source drives at pull strength unless its OWN side's strength
+// is written, and the other side's is ignored — so `(weak0, strong1)` is a
+// strong pullup that beats a pulldown, and `(strong0, weak1)` a weak one.
+test "§7.8 pullup and pulldown are drivers at the strength of their own side" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\wire a, b, c, d;
+        \\pullup (weak0, strong1) pa(a);
+        \\pullup (strong0, weak1) pb(b);
+        \\pulldown da(a), db(b);
+        \\pullup (c);
+        \\reg r;
+        \\assign (weak0, weak1) d = r;
+        \\pullup (d);
+        \\initial begin r = 0; #1 $display("%b%b%b%b", a, b, c, d); end
+        \\endmodule
+    , "1011\n");
 }
 
 pub fn expectRejected(source: []const u8, message: []const u8) !void {

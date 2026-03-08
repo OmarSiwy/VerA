@@ -606,19 +606,25 @@ pub fn gateNotModelled(self: *Parser) Error!void {
 ///
 /// A `pull_gate_instance` takes ONE terminal and drives it to a constant,
 /// so like every other A.3.1 arm outside a digital run it is accepted and
-/// modelled by nothing (W0252).
-pub fn parsePullGate(self: *Parser) Error!void {
+/// modelled by nothing (W0252). Each instance is recorded on `b.pulls`,
+/// which the digital engine executes and an analog compile never reads.
+pub fn parsePullGate(self: *Parser, b: *parse_module.Body) Error!void {
     try gateNotModelled(self);
     // A.3.2's `strength0`/`strength1` name the side the gate pulls toward:
     // 0 for `pulldown`, 1 for `pullup`, which is also `StrengthWord.side`.
     const side: u8 = if (parse_module.reservedIs(self, self.pos, "pulldown")) 0 else 1;
+    const main_tok = self.pos;
     self.pos += 1;
+    // §7.8: "pull strength in the absence of a strength specification", and
+    // only the strength on the side the source pulls toward is kept.
+    var strength: Ast.Strength = .pull;
     if (self.peek() == .lparen and parse_generate.strengthWord(self, self.pos + 1) != null) {
         const tok = self.pos + 1;
         if (self.peekAt(2) == .comma) {
             var s0: Ast.Strength = .strong;
             var s1: Ast.Strength = .strong;
             try parse_generate.parseDriveStrength(self, &s0, &s1);
+            strength = if (side == 1) s1 else s0;
         } else {
             self.pos += 1;
             const w = parse_generate.strengthWord(self, self.pos).?;
@@ -630,6 +636,7 @@ pub fn parsePullGate(self: *Parser) Error!void {
                 "a single-strength bracket on this gate is A.3.2's `( strength{d} )`",
                 .{side},
             );
+            strength = w.level;
         }
     }
     while (true) {
@@ -637,7 +644,8 @@ pub fn parsePullGate(self: *Parser) Error!void {
         // the name tells the two apart, as in `parseGates`.
         if (self.identLike(self.pos)) self.pos += 1;
         _ = try self.expect(.lparen);
-        _ = try parse_expr.parseNetRef(self); // A.3.3 output_terminal ::= net_lvalue
+        const out = try parse_expr.parseNetRef(self); // A.3.3 output_terminal ::= net_lvalue
+        try b.pulls.append(self.arena, .{ .out = out, .one = side == 1, .strength = strength, .main_tok = main_tok });
         _ = try self.expect(.rparen);
         if (!self.eat(.comma)) break;
     }

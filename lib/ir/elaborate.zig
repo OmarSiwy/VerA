@@ -339,6 +339,8 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     // Lowering reads no gate in any module; the parser's W0252 reports each.
     // Merged anyway, so a child's gate is where a top's gate is.
     .gates = .merged,
+    // §7.8 pull sources, read by the digital engine only; merged like gates.
+    .pulls = .merged,
     .attrs = .merged,
     // `pickTop` never picks a connect module and `walkInstances` refuses
     // inlining one (E0913), so this is always the top's `false`.
@@ -369,6 +371,7 @@ pub const Flatten = struct {
     discrete: std.ArrayList(Ast.DiscreteBlock) = .empty,
     assigns: std.ArrayList(Ast.ContAssign) = .empty,
     gates: std.ArrayList(Ast.GateInst) = .empty,
+    pulls: std.ArrayList(Ast.PullInst) = .empty,
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,
 
     /// One entry per inlined INSTANCE that brought a discrete process or a
@@ -513,6 +516,7 @@ pub const Flatten = struct {
         try self.discrete.appendSlice(self.ctx.arena, top.discrete);
         try self.assigns.appendSlice(self.ctx.arena, top.assigns);
         try self.gates.appendSlice(self.ctx.arena, top.gates);
+        try self.pulls.appendSlice(self.ctx.arena, top.pulls);
 
         // Unit 0 is the top itself, and §9.15's example makes a top-level
         // module's instance name its module name ("testbench").
@@ -882,6 +886,11 @@ pub const Flatten = struct {
             o.ins = ins;
             o.delay = try elab_clone.cloneDelay(self, g.delay);
             try self.gates.append(self.ctx.arena, o);
+        }
+        for (child.pulls) |p| {
+            var o = p;
+            o.out = try elab_clone.cloneExpr(self, p.out);
+            try self.pulls.append(self.ctx.arena, o);
         }
         // The first process or assignment in source order anchors E0920.
         const first_digital: ?u32 = if (child.discrete.len != 0)

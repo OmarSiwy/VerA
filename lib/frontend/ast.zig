@@ -840,6 +840,18 @@ pub const GateInst = struct {
     main_tok: u32 = 0,
 };
 
+/// A.3.1 one `pull_gate_instance` — IEEE 1364-2005 §7.8's pullup/pulldown
+/// source. It drives one constant, so it is not a `GateInst`: it has no
+/// inputs and §7.8 gives it no delay. `strength` is the one side that counts
+/// ("a strength0 specification on a pullup source ... shall be ignored").
+pub const PullInst = struct {
+    out: ExprId,
+    /// `pullup` drives 1, `pulldown` drives 0.
+    one: bool,
+    strength: Strength = .pull,
+    main_tok: u32 = 0,
+};
+
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).
 ///
@@ -944,6 +956,8 @@ pub const ModuleDecl = struct {
     /// because §7.8.5's value tables are not the expression operators: a gate
     /// input is a logic VALUE, so z on one reads as x.
     gates: []const GateInst = &.{},
+    /// A.3.1 pullup/pulldown sources (§7.8), in source order.
+    pulls: []const PullInst = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value
