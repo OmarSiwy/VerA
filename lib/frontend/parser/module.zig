@@ -403,12 +403,14 @@ pub fn parsePortList(self: *Parser, b: *Body) Error!void {
     var dir: Ast.Direction = .unspecified;
     var disc: Ast.StrId = .none;
     var range: ?Ast.Dim = null;
+    var signed = false;
     while (true) {
         try self.skipAttributes();
         if (portDirection(self.peek())) |d| {
             dir = d;
             self.pos += 1;
-            disc = try optDiscipline(self);
+            var kind: Ast.NetKind = .wire;
+            disc = try optPortType(self, &kind, &signed);
             // A.1.3 `inout [ range ] port_identifier {, port_identifier}` —
             // the range belongs to the declaration, so it sticks to every
             // name in the list exactly as the direction and the discipline
@@ -435,6 +437,7 @@ pub fn parsePortList(self: *Parser, b: *Body) Error!void {
                 .discipline = disc,
                 .range = range,
                 .external_name = external,
+                .is_signed = signed,
                 .main_tok = tok,
             });
             if (!concat or !self.eat(.comma)) break;
@@ -468,10 +471,11 @@ pub fn portDirection(tag: token.Tag) ?Ast.Direction {
 /// the extra spelling is tested here.
 pub fn optDiscipline(self: *Parser) Error!Ast.StrId {
     var kind: Ast.NetKind = .wire;
-    return optPortType(self, &kind);
+    var signed = false;
+    return optPortType(self, &kind, &signed);
 }
 
-pub fn optPortType(self: *Parser, kind: *Ast.NetKind) Error!Ast.StrId {
+pub fn optPortType(self: *Parser, kind: *Ast.NetKind, signed: *bool) Error!Ast.StrId {
     var disc: Ast.StrId = .none;
     if (self.peek() == .identifier and self.identLike(self.pos + 1)) {
         disc = try self.internTok(self.pos);
@@ -491,7 +495,7 @@ pub fn optPortType(self: *Parser, kind: *Ast.NetKind) Error!Ast.StrId {
         kind.* = .wreal;
         self.pos += 1;
     }
-    _ = self.eat(.kw_signed);
+    signed.* = self.eat(.kw_signed);
     return disc;
 }
 
@@ -645,7 +649,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         .kw_ground => {
             self.pos += 1;
             const disc = try optDiscipline(self);
-            try parse_generate.parseNetNames(self, b, disc, .wire, true, .{});
+            try parse_generate.parseNetNames(self, b, disc, .wire, true, .{}, false);
         },
         // §6.5.2 non-ANSI port declarations
         .kw_input, .kw_output, .kw_inout => try parse_generate.parsePortDecl(self, b),
@@ -695,8 +699,10 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
                 else
                     st.charge = try parse_generate.parseChargeStrength(self, kind);
             }
-            const disc = try optDiscipline(self);
-            try parse_generate.parseNetNames(self, b, disc, kind, false, st);
+            var signed = false;
+            var ignored: Ast.NetKind = .wire;
+            const disc = try optPortType(self, &ignored, &signed);
+            try parse_generate.parseNetNames(self, b, disc, kind, false, st, signed);
         },
         // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
         // list_of_net_assignments ;` — a module item of every module (A.1.4).
@@ -836,7 +842,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             }
             const disc = try self.internTok(self.pos);
             self.pos += 1;
-            try parse_generate.parseNetNames(self, b, disc, .wire, false, .{});
+            try parse_generate.parseNetNames(self, b, disc, .wire, false, .{}, false);
         },
         // Annex B reserves a family of 1364 spellings that this compiler
         // has no tag for — `specify`, `specparam`, `primitive`, `pulldown`
@@ -915,8 +921,9 @@ pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
     // `[ discipline_identifier ]` — an identifier followed by another
     // identifier or a `[`, which is `optDiscipline`'s own lookahead.
     var ignored: Ast.NetKind = .wire;
-    const disc = try optPortType(self, &ignored);
-    try parse_generate.parseNetNames(self, b, disc, .wreal, false, .{});
+    var signed = false;
+    const disc = try optPortType(self, &ignored, &signed);
+    try parse_generate.parseNetNames(self, b, disc, .wreal, false, .{}, signed);
     try self.report(kw, .E1100, wreal_unimplemented, .{});
 }
 

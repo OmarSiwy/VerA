@@ -650,6 +650,9 @@ pub const NetDecl = struct {
     is_ground: bool = false,
     /// §6.5.2 vector net range; `null` for a scalar.
     range: ?Dim = null,
+    /// A.2.1.3 `[ signed ]`. IEEE 1364-2005 §12.3.11: signedness is a
+    /// property of the DECLARATION, so each side of a port keeps its own.
+    is_signed: bool = false,
     /// A.2.1.3 `charge_strength` — `trireg` only, and `medium` is IEEE
     /// 1364-2005 §3.8's default for a `trireg` that names none.
     charge: Strength = .medium,
@@ -719,6 +722,10 @@ pub const Port = struct {
     /// external name when the port expression is a concatenation (§6.5.1).
     /// Only an instantiation can observe it, so nothing reads it yet.
     external_name: StrId = .none,
+    /// A.2.1.2 `[ signed ]` on the direction or the net declaration of this
+    /// port — §12.3.3: "If either ... is declared as signed, then the other
+    /// shall also be considered signed."
+    is_signed: bool = false,
     main_tok: u32 = 0,
 };
 
