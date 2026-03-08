@@ -27,7 +27,7 @@
 //! lrm 7.6
 //! lrm 7.3.1
 //! solve
-//! xfail E0913: VerA refuses a connect module by name; the flatten inlines a child's analog blocks and drops its digital processes, so `initial cm` would never run
+//! xfail E0913: VerA refuses a connect module by name; a flattened child's digital processes cannot reach the event kernel (E0920), so no bridge is inlined
 `include "check.vh"
 connectmodule ch7_manual_a2d(el, cm);
   input el;
