@@ -44,7 +44,7 @@ pub const Pending = union(enum) {
     /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs and
     /// not when the call executed — the whole point of the task is that it
     /// reports the settled value.
-    strobe: struct { args: []const Ast.ExprId, show: Show, scope: u32 },
+    strobe: struct { args: []const Ast.ExprId, show: Show, scope: u32, pc: u32 },
     /// §17.1.3 "something changed this timestep, ask the standing monitor".
     /// One per timestep, coalesced by `monitor_pending`.
     monitor_tick,
@@ -722,12 +722,13 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 return;
             },
             .task => |s| {
+                self.pc = pc;
                 switch (s.task) {
                     .show => |sh| try display.display(self, s.args, scratch, sh),
                     // §17.1.2: the arguments are NOT captured, the call is.
                     // What it reports is the value at the end of the timestep,
                     // so evaluation waits for the `.monitor` region.
-                    .strobe => |sh| try enqueueMonitor(self, .{ .strobe = .{ .args = s.args, .show = sh, .scope = self.scope } }),
+                    .strobe => |sh| try enqueueMonitor(self, .{ .strobe = .{ .args = s.args, .show = sh, .scope = self.scope, .pc = pc } }),
                     // §17.1.3 one standing monitor: a new one replaces the
                     // old, watch list and all. Its first line is at the end
                     // of this step like every other, so it shows settled
@@ -738,7 +739,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         for (s.args) |arg| if (arg != .none and self.file.exprs.tag(arg) != .str_literal)
                             try compile.sensitivity(self, arg, &self.monitor_slots);
                         for (self.monitor_slots.items) |at| self.watch[at].insert(.monitor);
-                        self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope };
+                        self.monitor = .{ .args = s.args, .show = sh, .scope = self.scope, .pc = pc };
                         try requestMonitor(self);
                     },
                     // "$monitoron shall produce a display immediately after

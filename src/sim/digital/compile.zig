@@ -364,7 +364,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 if (entry.found_existing) return self.fail(tok, "duplicate named block", .{});
                 // `end` is one past the block, which is the statement
                 // execution continues with once the block is terminated.
-                entry.value_ptr.* = .{ .start = start, .end = position(self) };
+                entry.value_ptr.* = .{ .start = start, .end = position(self), .depth = depth };
             }
         },
         // A.6.5 `disable_statement`. The range is patched in once every
@@ -740,6 +740,13 @@ test "§3.6 a string operand is packed ASCII, right-justified and truncated on t
     , "0000415a 4243 00 1\n");
 }
 
+test "§17.1.1.6 %m names the instance path and the named blocks around it" {
+    try expectRun(
+        \\module leaf; initial begin : outer begin : inner $display("%m %l %s%c", "", 8'h21); end end endmodule
+        \\module m; leaf u(); initial $display("%M"); endmodule
+    , "m\nm.u.outer.inner work.leaf !\n");
+}
+
 test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"before\"); initial forever ; endmodule", "error");
     try expectRejected("module m; tran(a,b); initial $display(\"before\"); endmodule", "switch primitives");
@@ -754,9 +761,9 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; reg [3:0] a; initial a[0]=1; endmodule", "whole-variable");
     try expectRejected("module m; initial $finish(2); endmodule", "only $finish");
-    // The conversions that ARE implemented are §9.4.3 Table 9-22's; `%s` and
-    // `%c` are not, and the refusal names the table rather than one letter.
-    try expectRejected("module m; initial $display(\"%s\",1); endmodule", "Table 9-22");
+    // Past Table 9-22 and §17.1.1's %c %s %m %l %t, a conversion such as the
+    // strength `%v` is refused, and the refusal names the table.
+    try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
     // §17.7: a real conversion needs a real, and `$realtime` is the only one.
     try expectRejected("`timescale 1ns/1ns\nmodule m; reg a; initial $display(\"%g\",a); endmodule", "only one implemented");
     try expectRejected("module m; reg a; initial a=1; integer a; endmodule", "duplicate digital");

@@ -120,6 +120,13 @@ pub const Run = struct {
     scope: u32 = 0,
     /// The highest scope id handed out; the root is 0.
     scopes: u32 = 0,
+    /// Per scope id: the instance that minted it, its name and its module —
+    /// §17.1.1.6's `%m` path and §13.6's `%l` binding. Row 0 is the root,
+    /// named after its module.
+    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, module: Ast.StrId }) = .empty,
+    /// The instruction a system task is running from, so `%m` can name the
+    /// §5.3.2 named blocks around it.
+    pc: u32 = 0,
     /// §12.4 one instance NAME, keyed by the scope that instantiated it, to the
     /// scope it minted. `names` cannot carry this: an instance is not storage,
     /// and a downward hierarchical reference walks these before it reaches a
@@ -161,7 +168,9 @@ pub const Run = struct {
     /// §5.3.2 the pc range of each named sequential block, keyed the way every
     /// other declared name is — per §6.2.2 INSTANCE, so two instances of one
     /// definition disable their own copy and not each other's.
-    blocks: std.AutoHashMapUnmanaged(Name, struct { start: u32, end: u32 }) = .empty,
+    /// `depth` is the block's statement nesting, which orders two named
+    /// blocks with the same range (`begin : a begin : b ... end end`) for `%m`.
+    blocks: std.AutoHashMapUnmanaged(Name, struct { start: u32, end: u32, depth: u16 }) = .empty,
     /// The `.disable_block` instructions still waiting for their range, and the
     /// name each one is waiting for. A.6.5 puts no ordering rule on a
     /// `disable`: the block it names is routinely in ANOTHER process, which may
@@ -193,7 +202,7 @@ pub const Run = struct {
     time_format: TimeFormat = .{},
     /// §17.1.3 the one standing monitor. A second `$monitor` replaces it;
     /// there is no stack.
-    monitor: ?struct { args: []const Ast.ExprId, show: Show, scope: u32 } = null,
+    monitor: ?struct { args: []const Ast.ExprId, show: Show, scope: u32, pc: u32 } = null,
     monitor_on: bool = true,
     /// One `.monitor` event per timestep however many values moved.
     monitor_pending: bool = false,
@@ -252,6 +261,7 @@ pub const Run = struct {
                 .write => |w| try exec.store(r, w.target, w.value.planes),
                 .strobe => |s| {
                     r.scope = s.scope;
+                    r.pc = s.pc;
                     try display.display(r, s.args, scratch.allocator(), s.show);
                 },
                 .monitor_tick => {
@@ -658,6 +668,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
+        try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .module = child.name });
         // §12.4's path is walked by NAME, so the instance's own identifier has
         // to outlive the recursion that consumes it.
         if (inst.name != .none) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
@@ -847,6 +858,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // waiters. §6.2.2 elaboration walks the instance tree parent-first, which
     // is what lets a port connection resolve against nets that already exist.
     var e: Elab = .{};
+    try r.scope_info.append(arena, .{ .parent = 0, .name = m.name, .module = m.name });
     try declare(&r, &e, m, 0, &.{}, 0);
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
