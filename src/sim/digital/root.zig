@@ -549,11 +549,17 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // ponytail: digital-context `real` (VAMS Table 7-1's real row) is the
         // upgrade — a real lane in the slot space.
         if (r.mixed and (v.ty != .integer or v.init != .none or v.storage == .time)) continue;
-        if (v.ty != .integer or v.init != .none or v.storage == .time) return r.fail(v.main_tok, "only uninitialized scalar/packed reg and integer declarations are implemented", .{});
+        if (v.ty != .integer) return r.fail(v.main_tok, "only reg, integer and time variables are implemented", .{});
+        if (v.init != .none and v.dims.len != 0) return r.fail(v.main_tok, "an unpacked array declaration takes no initializer", .{});
         // ponytail: one unpacked dimension. §3.9 admits any number; the second
         // one needs a row-major address fold this has no consumer for yet.
         if (v.dims.len > 1) return r.fail(v.main_tok, "only one unpacked array dimension is implemented", .{});
-        const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else if (v.storage == .reg) 1 else 32;
+        // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
+        const width: u32 = if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
+            .reg => 1,
+            .variable => 32,
+            .time => 64,
+        };
         const base: u32 = @intCast(e.values.items.len);
         try r.bind(v.name, base, v.main_tok);
         if (v.packed_range) |range| try r.vec_ranges.put(arena, base, .{
@@ -571,7 +577,12 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             try r.arrays.put(arena, base, .{ .count = count, .low = low, .high = high });
         }
         if (count > std.math.maxInt(u32) - e.values.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
-        for (0..count) |_| try e.values.append(arena, try filled(arena, width, if (v.storage == .reg) v.is_signed else true, .x));
+        const signed = switch (v.storage) {
+            .reg => v.is_signed,
+            .variable => true,
+            .time => false,
+        };
+        for (0..count) |_| try e.values.append(arena, try filled(arena, width, signed, .x));
     }
     for (m.nets) |n| {
         // §7.2.1: a disciplined net is continuous — the analog solver's.
@@ -984,6 +995,17 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     }
     for (e.insts.items) |inst| {
         r.scope = inst.scope;
+        // IEEE 1364-2005 §6.2.1: a variable declaration assignment "shall be
+        // the same as" an initial block making the assignment, so it is one,
+        // queued ahead of the instance's own processes. A mixed module's
+        // initialized variables are the analog block's and were skipped.
+        for (inst.module.vars) |v| if (v.init != .none) {
+            const at = r.names.get(.{ .scope = inst.scope, .str = v.name }) orelse continue;
+            try compile.checkExpr(&r, v.init);
+            const start = try compile.append(&r, .{ .init_var = .{ .slot = at, .value = v.init } });
+            _ = try compile.append(&r, .stop);
+            _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
+        };
         for (inst.module.discrete) |process| {
             const start: u32 = @intCast(r.code.items.len);
             try compile.compileStmt(&r, process.body, 0);
@@ -1165,6 +1187,18 @@ test "§19.10 nounconnected_drive leaves an open input port floating" {
         \\initial #0 $display("%b", u.a);
         \\endmodule
     , "z\n");
+}
+
+// §6.2.1: the initializer is an initial-block assignment at time 0 — so a
+// net assigned from the variable tracks it, and a later write replaces it.
+test "§6.2.1 a variable declaration assignment is a time-0 write" {
+    try expectRun(
+        \\module m;
+        \\reg [7:0] v = 2*3+1; integer i = -5; time t = 64'd9;
+        \\wire [7:0] w = v;
+        \\initial begin #1 $display("%0d %0d %0d %0d", v, w, i, t); v = 12; #1 $display("%0d", w); end
+        \\endmodule
+    , "7 7 -5 9\n12\n");
 }
 
 // §12.2: a parameter is a constant of its value's type unless a range or a

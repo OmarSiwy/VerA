@@ -76,6 +76,9 @@ pub const Instruction = union(enum(u5)) {
     // Resolved to a range after every process is compiled, because a `disable`
     // may name a block written later in the file.
     disable_block: struct { start: u32, end: u32 },
+    // §6.2.1 a variable declaration assignment: one blocking write of a
+    // whole declared variable, which has a slot and no expression naming it.
+    init_var: struct { slot: u32, value: Ast.ExprId },
     stop,
 };
 
