@@ -142,10 +142,11 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
                 return self.exprFail(e, "unsized constants outside the implemented 32-bit integer width are not supported; use an explicit size");
             break :blk .{ .width = if (n.width == 0) 32 else n.width, .signed = n.signed };
         },
+        // An unsized based constant is an integer-sized operand (Table
+        // 5-22) whose x/z fill is decided in context — see `exec.unsizedFill`.
         .logic_literal => blk: {
             const n = ex.logicValue(e);
-            if (!n.sized) return self.exprFail(e, "unsized four-state literal context fill is not implemented; use an explicit size");
-            break :blk .{ .width = n.width, .signed = n.signed };
+            break :blk .{ .width = if (n.sized) n.width else 32, .signed = n.signed };
         },
         // IEEE 1364-2005 §3.6: a string operand is an unsigned number of
         // eight bits per character, and §5.2.3.3's "" is one NUL byte.
@@ -774,7 +775,6 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"before\"); initial forever ; endmodule", "error");
     try expectRejected("module m; tran(a,b); initial $display(\"before\"); endmodule", "switch primitives");
     try expectRejected("module m; initial $display(\"%b\",2147483648); endmodule", "unsized constants");
-    try expectRejected("module m; initial $display(\"%b\",'hx); endmodule", "unsized four-state");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
     try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");
     // §5.10 "events do not hold any data", so neither direction of the

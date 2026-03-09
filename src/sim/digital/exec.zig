@@ -185,6 +185,21 @@ fn normalize(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.Liter
     return result;
 }
 
+/// IEEE 1364-2005 §3.5.1 / Table 5-22's note: "if the size of the unsized
+/// constant is smaller than the context, and its leftmost bit is x or z, the
+/// x or z shall be extended" — to the size of the EXPRESSION, not to 32 bits.
+/// The parsed literal already carries the fill up to its own width, so it is
+/// its top bit that is replicated; a known top bit extends as usual.
+fn unsizedFill(a: std.mem.Allocator, v: Int.Literal, ty: Type) Error!Int.Literal {
+    const top = v.bit(v.width - 1);
+    var out = v.resize(a, ty.width, if (top == .x or top == .z or ty.signed) .sign else .zero) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.ZeroSize => unreachable,
+    };
+    out.signed = ty.signed;
+    return out;
+}
+
 fn scalar(a: std.mem.Allocator, bit: Int.Bit) Error!Int.Literal {
     return filled(a, 1, false, bit);
 }
@@ -206,6 +221,7 @@ fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal
 // self-determined or common comparison context prescribed by Table 5-22.
 fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
     const ex = &self.file.exprs;
+    if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .ident, .hier_ident, .index => return normalize(a, try leaf(self, a, e), ty),
         .unary => {
@@ -989,6 +1005,20 @@ test "continuous vector delay audit_assignment_pending_same_value" {
         \\original_deadline_passed=1
         \\
     );
+}
+
+test "§3.5.1 an unsized x/z constant fills its context, a known top digit does not" {
+    try expectRun(
+        \\module m;
+        \\reg [39:0] w;
+        \\initial begin
+        \\  w = 'hx; $display("%h", w);
+        \\  w = 'hz3; $display("%h", w);
+        \\  w = 'h3x; $display("%h", w);
+        \\  $display("%b", 'bz);
+        \\end
+        \\endmodule
+    , "xxxxxxxxxx\nzzzzzzzzz3\n000000003x\nzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz\n");
 }
 
 test "wait constant true and constant expression continue immediately" {
