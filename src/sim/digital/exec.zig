@@ -750,7 +750,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         self.monitor_on = on;
                         if (on) try display.monitorPrint(self, scratch);
                     },
-                    .timeformat => {
+                    .timeformat => if (s.args.len == 0) {
+                        self.time_format = .{ .units = self.finest };
+                    } else {
                         const ex = &self.file.exprs;
                         const units = try eval(self, scratch, s.args[0], 0);
                         const precision = try eval(self, scratch, s.args[1], 0);
@@ -764,7 +766,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     },
                     .readmem => |radix| try display.readMemory(self, scratch, s.args, radix),
                     .finish => {
-                        const verbose = s.args.len == 0 or self.file.exprs.intValue(s.args[0]) != 0;
+                        // An x/z level has no verbosity to select; the fullest
+                        // report is the reading that loses nothing.
+                        const verbose = s.args.len == 0 or ((try eval(self, scratch, s.args[0], 0)).asInt() orelse 1) != 0;
                         if (verbose) {
                             const start_byte = self.starts[s.tok];
                             const loc = self.bag.locate(.{ .start = start_byte, .end = start_byte }, null);

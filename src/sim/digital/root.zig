@@ -200,6 +200,9 @@ pub const Run = struct {
     /// absolute magnitude to reach §17.3's `units_number`.
     unit_exp: i32 = 0,
     time_format: TimeFormat = .{},
+    /// §17.3.2 Table 17-11's default `units_number`: "the smallest time
+    /// precision argument of all the `timescale compiler directives".
+    finest: i32 = 0,
     /// §17.1.3 the one standing monitor. A second `$monitor` replaces it;
     /// there is no stack.
     monitor: ?struct { args: []const Ast.ExprId, show: Show, scope: u32, pc: u32 } = null,
@@ -852,6 +855,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         // all the `timescale compiler directives in the source description".
         // One module here, so that is this one's precision.
         r.time_format.units = @intFromEnum(precision);
+        r.finest = r.time_format.units;
     }
     // PASS ONE — storage. Variables, array elements and nets share one slot
     // space, so one `store` publishes all three and wakes the same event
