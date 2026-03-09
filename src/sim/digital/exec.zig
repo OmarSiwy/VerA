@@ -200,6 +200,14 @@ fn unsizedFill(a: std.mem.Allocator, v: Int.Literal, ty: Type) Error!Int.Literal
     return out;
 }
 
+/// An assignment's conversion (§5.5.3): `value` extended by its OWN
+/// signedness or truncated to `ty.width`, then typed `ty`.
+pub fn convert(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.Literal {
+    var out = try normalize(a, value, .{ .width = ty.width, .signed = value.signed });
+    out.signed = ty.signed;
+    return out;
+}
+
 fn scalar(a: std.mem.Allocator, bit: Int.Bit) Error!Int.Literal {
     return filled(a, 1, false, bit);
 }

@@ -235,6 +235,12 @@ pub const Run = struct {
     /// parent's slot but keeps its own declaration's signedness. Keyed by the
     /// port's name in the child, and present only where the two differ.
     port_signed: std.AutoHashMapUnmanaged(Name, bool) = .empty,
+    /// Pass one's slot space while it is still growing: the view `constant`
+    /// evaluates a bound or a parameter against before `values` is final.
+    growing: ?*std.ArrayList(Int.Literal) = null,
+    /// §12.2 parameter slots — constants an expression may fold, never a
+    /// target.
+    params: std.AutoHashMapUnmanaged(u32, void) = .empty,
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -336,25 +342,38 @@ pub const Run = struct {
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
         return self.names.get(.{ .scope = self.scope, .str = ex.strOf(e) }) orelse self.exprFail(e, "undeclared digital variable");
     }
-    /// One declared bound. Digital execution takes literal bounds only: the
-    /// parameters and constant functions §3.9 also admits are not declared yet.
+    /// A constant expression's value at elaboration (IEEE 1364-2005 §5.2 /
+    /// §12.2): literals, parameters, operators and the constant system
+    /// functions, folded by the engine's own evaluator — so a bound and a
+    /// run-time expression cannot disagree about an operator. The result's
+    /// planes are fresh arena memory, never a literal's own.
+    pub fn constant(self: *Run, e: Ast.ExprId, tok: u32) Error!Int.Literal {
+        if (self.growing) |g| self.values = g.items;
+        try compile.checkExpr(self, e);
+        if (!compile.constantExpression(self, e)) return self.fail(tok, "a constant expression is required here", .{});
+        const v = try exec.eval(self, self.arena, e, 0);
+        const out = try filled(self.arena, v.width, v.signed, .zero);
+        @memcpy(out.planes, v.planes);
+        return out;
+    }
+    /// One declared bound (§3.3, §4.3.1): any constant expression, and — the
+    /// §4.3.1 example `[-2:1]` — any sign.
     fn declaredBound(self: *Run, e: Ast.ExprId, tok: u32) Error!i64 {
-        if (self.file.exprs.tag(e) != .int_literal) return self.fail(tok, "declaration bounds must be literal integers", .{});
-        return self.file.exprs.intValue(e);
+        if (self.file.exprs.tag(e) == .int_literal) return self.file.exprs.intValue(e);
+        return (try self.constant(e, tok)).asInt() orelse self.fail(tok, "a declaration bound cannot contain x or z", .{});
     }
     /// A.2.2.3 `delay_value ::= unsigned_number | real_number | identifier`, in
     /// scheduler ticks. Elaboration-time, because a net's or a driver's delay is
     /// fixed for the run — only a procedural `#` re-evaluates.
     ///
-    /// ponytail: the `identifier` alternative is refused. It would name a
-    /// `parameter`, and digital execution has no parameters at all yet; the
-    /// upgrade is one call to the constant folder once it does.
+    /// The `identifier` alternative names a parameter, so anything but a
+    /// literal goes through `constant`.
     fn declaredDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!u64 {
         const scale = self.scale orelse return self.fail(tok, "a delay needs an explicit valid timescale", .{});
         return switch (self.file.exprs.tag(e)) {
             .real_literal => scale.realDelay(self.file.exprs.realValue(e)),
             .int_literal => scale.signedDelay(self.file.exprs.intValue(e)),
-            else => self.fail(tok, "a declared delay must be a literal number", .{}),
+            else => scale.signedDelay((try self.constant(e, tok)).asInt() orelse return self.fail(tok, "a declared delay cannot contain x or z", .{})),
         } catch self.fail(tok, "digital delay cannot be represented", .{});
     }
 
@@ -374,7 +393,7 @@ pub const Run = struct {
     fn declaredWidth(self: *Run, range: Ast.Dim, tok: u32) Error!u32 {
         const hi = try self.declaredBound(range.msb, tok);
         const lo = try self.declaredBound(range.lsb, tok);
-        if (hi < 0 or lo < 0 or @abs(hi - lo) >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
+        if (@abs(hi - lo) >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
         return @intCast(@abs(hi - lo) + 1);
     }
     fn bind(self: *Run, name: Ast.StrId, at: u32, tok: u32) Error!void {
@@ -486,10 +505,35 @@ fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
 fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, depth: u16) Error!void {
     const arena = r.arena;
     if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
-    if (!r.mixed and (m.params.len != 0 or m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0))
+    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     r.scope = scope;
     try e.insts.append(arena, .{ .module = m, .scope = scope });
+    // IEEE 1364-2005 §12.2 module parameters, in declaration order so a
+    // default may name an earlier one. A mixed module's parameters are the
+    // analog block's (real-valued, overridable by the analog compile).
+    // ponytail: no overrides — an instance's `#( … )` and `defparam` are
+    // refused above and below — so one value per declaration is exact.
+    if (!r.mixed) for (m.params) |p| {
+        if (p.dims.len != 0 or (p.ty != .unspecified and p.ty != .integer))
+            return r.fail(p.main_tok, "only integral scalar parameters are implemented by digital execution", .{});
+        const value = try r.constant(p.default, p.main_tok);
+        // §12.2: a range or a type converts the value like an assignment;
+        // otherwise the parameter takes the type of its value.
+        const ty: compile.Type = if (p.packed_range) |range|
+            .{ .width = try r.declaredWidth(range, p.main_tok), .signed = false }
+        else if (p.ty == .integer)
+            .{ .width = 32, .signed = true }
+        else
+            .{ .width = value.width, .signed = value.signed };
+        const converted = try exec.convert(arena, value, ty);
+        const at: u32 = @intCast(e.values.items.len);
+        try r.bind(p.name, at, p.main_tok);
+        const slot_value = try filled(arena, ty.width, ty.signed, .zero);
+        @memcpy(slot_value.planes, converted.planes);
+        try e.values.append(arena, slot_value);
+        try r.params.put(arena, at, {});
+    };
     // §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
     // point on the waiter list; the stored value is never read or written.
     for (m.events) |name| {
@@ -863,15 +907,19 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // is what lets a port connection resolve against nets that already exist.
     var e: Elab = .{};
     try r.scope_info.append(arena, .{ .parent = 0, .name = m.name, .module = m.name });
-    try declare(&r, &e, m, 0, &.{}, 0);
-    r.values = e.values.items;
-    r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
-    @memset(r.watch, .initEmpty());
-    r.nets = e.nets.items;
+    // Allocated before pass one: a bound or a parameter is typed and folded
+    // while the slot space is still growing (`Run.constant`).
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
     @memset(r.types, .{ .width = 0, .signed = false });
     r.sys_calls = try arena.alloc(?compile.SysFn, file.exprs.nodes.len);
     @memset(r.sys_calls, null);
+    r.growing = &e.values;
+    try declare(&r, &e, m, 0, &.{}, 0);
+    r.growing = null;
+    r.values = e.values.items;
+    r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
+    @memset(r.watch, .initEmpty());
+    r.nets = e.nets.items;
     // PASS TWO — drivers, then processes. §6.1 one continuous assignment is one
     // driver of one net; §7.9 resolution needs them grouped, because every
     // update reads all of a net's drivers.
@@ -1107,6 +1155,26 @@ test "§19.10 nounconnected_drive leaves an open input port floating" {
     , "z\n");
 }
 
+// §12.2: a parameter is a constant of its value's type unless a range or a
+// type converts it, a later default may use an earlier parameter, and every
+// bound and delay is a constant expression over them.
+test "§12.2 parameters fold into bounds, delays and expressions" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m #(parameter W = 4) ();
+        \\localparam [2:0] SEVEN = 15, D = W / 2;
+        \\parameter integer N = -W;
+        \\reg [W-1:0] r; reg [-2:1] neg; wire #D late;
+        \\reg s; assign late = s;
+        \\initial begin
+        \\  r = 5'h1f; neg = 17; s = 1;
+        \\  #1 $display("%b %0d %0d %b %b %b", r, SEVEN, N, neg, late, W == 4);
+        \\  #2 $display("%b", late);
+        \\end
+        \\endmodule
+    , "1111 7 -4 0001 z 1\n1\n");
+}
+
 // §12.3.11: each side of a port reads the connected bits with ITS OWN
 // declaration's signedness — the child's `signed` port sees -1 in a parent's
 // unsigned 8'hff, and an unsigned port sees 255 in a signed parent net.
@@ -1203,7 +1271,7 @@ test "the net and array declaration boundaries are explicit" {
     // Both delay3 positions now RUN, so the boundary that remains is the fold,
     // not the syntax: A.2.2.3's `delay_value` admits an `identifier`, and
     // digital execution has no parameter for one to name.
-    try expectRejected("`timescale 1ns/1ns\nmodule m; wire #w y; reg a; assign y = a; endmodule", "must be a literal number");
+    try expectRejected("`timescale 1ns/1ns\nmodule m; wire #w y; reg a; assign y = a; endmodule", "undeclared digital variable");
     // A delay has to be measured against something, and §17.3 takes the
     // design's precision from a `timescale and nowhere else.
     try expectRejected("module m; wire w; reg a; assign #3 w = a; endmodule", "explicit valid timescale");
@@ -1217,7 +1285,9 @@ test "the net and array declaration boundaries are explicit" {
     // A net's `=` no longer joins them: A.2.4's `net_decl_assignment` is a
     // continuous assignment on an UNdisciplined net, and it runs.
     try expectRejected("module m; electrical e; initial $display(\"x\"); endmodule", "disciplined and ground");
-    try expectRejected("module m; wire [p:0] w; initial $display(\"x\"); endmodule", "bounds must be literal integers");
+    try expectRejected("module m; wire [p:0] w; initial $display(\"x\"); endmodule", "undeclared digital variable");
+    try expectRejected("module m; reg [3:0] a; wire [a:0] w; initial $display(\"x\"); endmodule", "constant expression is required");
+    try expectRejected("module m; parameter P = 1; initial P = 2; endmodule", "parameter is a constant");
 }
 
 test "timescale provenance rejects absent malformed or later directives" {
