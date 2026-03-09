@@ -301,7 +301,6 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     // time has no negative half.
                     .time, .stime => {
                         if (args.len != 0) return self.exprFail(e, "$time and $stime take no arguments");
-                        if (self.scale == null) return self.exprFail(e, "the time queries require an explicit valid timescale before the module");
                         break :blk .{ .width = if (f == .time) 64 else 32, .signed = false };
                     },
                     // §17.11's result is an `integer`, which §3.2 makes a
@@ -481,7 +480,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 return;
             }
             // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
-            if (s.timing_is_delay) try checkDelay(self, s.timing, tok) else {
+            if (s.timing_is_delay) try checkDelay(self, s.timing) else {
                 // ponytail: no `<= @(e) rhs`. §8.5.3.4's nonblocking form
                 // does not suspend, so the parked value would have to be
                 // held by the WAITER rather than by a per-site cell; give
@@ -528,7 +527,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     _ = try append(self, .{ .wait_event = s.event });
                 },
                 .delay => {
-                    try checkDelay(self, s.event, tok);
+                    try checkDelay(self, s.event);
                     _ = try append(self, .{ .delay = .{ .amount = s.event, .tok = tok } });
                 },
                 // A.6.5 `wait_statement`. The condition's operands ARE the
@@ -714,8 +713,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
 /// `#1`. A real literal is left untyped here and rounded to the module's
 /// PRECISION at run time (`Scale.realDelay`) rather than truncated to its
 /// unit, which is the only thing that makes a sub-unit delay mean anything.
-fn checkDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!void {
-    if (self.scale == null) return self.fail(tok, "digital delays require an explicit valid timescale before the module", .{});
+fn checkDelay(self: *Run, e: Ast.ExprId) Error!void {
     if (self.file.exprs.tag(e) == .real_literal) return;
     try checkExpr(self, e);
     if (typeOf(self, e).width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");

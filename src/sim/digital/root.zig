@@ -369,7 +369,7 @@ pub const Run = struct {
     /// The `identifier` alternative names a parameter, so anything but a
     /// literal goes through `constant`.
     fn declaredDelay(self: *Run, e: Ast.ExprId, tok: u32) Error!u64 {
-        const scale = self.scale orelse return self.fail(tok, "a delay needs an explicit valid timescale", .{});
+        const scale = self.scale.?; // elaborate always sets one (§19.8)
         return switch (self.file.exprs.tag(e)) {
             .real_literal => scale.realDelay(self.file.exprs.realValue(e)),
             .int_literal => scale.signedDelay(self.file.exprs.intValue(e)),
@@ -833,6 +833,13 @@ fn netKind(m: *const Ast.ModuleDecl, name: Ast.StrId) ?Ast.NetKind {
 
 // ---- the driver (§6.2.2, §6.1, §7.9, §17.3) ---------------------------------
 
+/// IEEE 1364-2005 §19.8: "If there is no `timescale specified or it has been
+/// reset by a `resetall directive, the time unit and precision are
+/// simulator-specific." Not an error — so this simulator's are one second,
+/// unit and precision alike, which makes every delay a whole count of units
+/// and `$time`, `$realtime` and `%t` print the numbers the source wrote.
+const default_quantum: Time.Quantum = .s;
+
 /// Callers own the run arena and diagnostic source lifetime. No analog lowering,
 /// generated-device interpretation, external compiler, or secondary lexer is used.
 pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *diag.Bag, out: *std.Io.Writer) Error!void {
@@ -883,24 +890,29 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // A mixed design's text opens with the annex D/E prelude, so its root is
     // the module that has to come after the directive.
     const first_tok = if (opts.mixed != null) m.main_tok else file.modules[0].main_tok;
+    var unit: Time.Quantum = default_quantum;
+    var precision: Time.Quantum = default_quantum;
     for (times) |event| {
         if (event.at > r.starts[first_tok]) return r.fail(m.main_tok, "timescale/resetall after module start is not implemented for digital execution", .{});
-        // A null scale is now only ever IEEE 1364 §19.6's `resetall, which
-        // returns `timescale to "none specified". A MALFORMED directive no
-        // longer reaches here at all: the preprocessor refuses it where it is
-        // written (E0142), which is a better place to hear about it than a
-        // consumer three stages away.
-        const t = event.value orelse return r.fail(m.main_tok, "a resetall timing state is not supported by digital execution", .{});
-        const unit = Time.Quantum.fromSeconds(t.unit) catch return r.fail(m.main_tok, "unsupported time unit", .{});
-        const precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(m.main_tok, "unsupported time precision", .{});
-        r.scale = Time.Scale.init(unit, precision, precision) catch return r.fail(m.main_tok, "invalid timescale", .{});
-        r.unit_exp = @intFromEnum(unit);
-        // §17.3: "the default ... is the smallest time precision argument of
-        // all the `timescale compiler directives in the source description".
-        // One module here, so that is this one's precision.
-        r.time_format.units = @intFromEnum(precision);
-        r.finest = r.time_format.units;
+        // A null value is IEEE 1364 §19.6's `resetall, which returns
+        // `timescale to "none specified" — §19.8's simulator-specific
+        // default below. A MALFORMED directive never reaches here: the
+        // preprocessor refuses it where it is written (E0142).
+        const t = event.value orelse {
+            unit = default_quantum;
+            precision = default_quantum;
+            continue;
+        };
+        unit = Time.Quantum.fromSeconds(t.unit) catch return r.fail(m.main_tok, "unsupported time unit", .{});
+        precision = Time.Quantum.fromSeconds(t.precision) catch return r.fail(m.main_tok, "unsupported time precision", .{});
     }
+    r.scale = Time.Scale.init(unit, precision, precision) catch return r.fail(m.main_tok, "invalid timescale", .{});
+    r.unit_exp = @intFromEnum(unit);
+    // §17.3: "the default ... is the smallest time precision argument of
+    // all the `timescale compiler directives in the source description".
+    // One timescale applies to the whole design here, so that is its precision.
+    r.time_format.units = @intFromEnum(precision);
+    r.finest = r.time_format.units;
     // PASS ONE — storage. Variables, array elements and nets share one slot
     // space, so one `store` publishes all three and wakes the same event
     // waiters. §6.2.2 elaboration walks the instance tree parent-first, which
@@ -1268,13 +1280,9 @@ test "the net and array declaration boundaries are explicit" {
     // type" would accept both of these.
     try expectRejected("module m; wire w; reg a; assign (strong0, pull0) w = a; endmodule", "pairs one 0-side with one 1-side");
     try expectRejected("module m; wire (small) w; reg a; assign w = a; endmodule", "charge strength is only legal on a trireg");
-    // Both delay3 positions now RUN, so the boundary that remains is the fold,
-    // not the syntax: A.2.2.3's `delay_value` admits an `identifier`, and
-    // digital execution has no parameter for one to name.
+    // A.2.2.3's `delay_value` admits an `identifier`, which must name a
+    // parameter; this one names nothing.
     try expectRejected("`timescale 1ns/1ns\nmodule m; wire #w y; reg a; assign y = a; endmodule", "undeclared digital variable");
-    // A delay has to be measured against something, and §17.3 takes the
-    // design's precision from a `timescale and nowhere else.
-    try expectRejected("module m; wire w; reg a; assign #3 w = a; endmodule", "explicit valid timescale");
     // §3.9 an array has no value of its own, and a select is not an element.
     try expectRejected("module m; reg [3:0] mem [0:3]; initial $display(\"%b\",mem); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
@@ -1290,8 +1298,15 @@ test "the net and array declaration boundaries are explicit" {
     try expectRejected("module m; parameter P = 1; initial P = 2; endmodule", "parameter is a constant");
 }
 
-test "timescale provenance rejects absent malformed or later directives" {
-    try expectRejected("module m; initial #1 ; endmodule", "explicit valid timescale");
+test "§19.8 no timescale is the simulator's own unit, not an error" {
+    // "If there is no `timescale specified or it has been reset by a
+    // `resetall directive, the time unit and precision are simulator-specific."
+    try expectRun("module m; wire w; reg a; assign #3 w = a; initial begin a = 1; #2 $display(\"%b %0d\", w, $time); #1 $display(\"%b %t\", w, $time); end endmodule",
+        "z 2\n1                    3\n");
+    try expectRun("`timescale 1ns/1ps\n`resetall\nmodule m; initial #1 $display(\"%0d %g\", $time, $realtime); endmodule", "1 1\n");
+}
+
+test "timescale provenance rejects malformed or later directives" {
     // All three are refused by the preprocessor now (E0142), so what the digital
     // executor sees is a failed preprocess and the message names the directive
     // rather than the consumer that could not use it.
@@ -1299,10 +1314,7 @@ test "timescale provenance rejects absent malformed or later directives" {
     try expectRejected("`timescale 1ns/1ps junk\nmodule m; initial #1 ; endmodule", "is not a `timescale");
     try expectRejected("`timescale 1ps/1ns\nmodule m; initial #1 ; endmodule", "coarser than the time unit");
     try expectRejected("`timescale 1ns/1ps\nmodule m; initial #1 ; endmodule\n`timescale 1ms/1us\n", "after module start");
-    try expectRejected("`timescale 1ns/1ps\n`resetall\nmodule m; initial #1 ; endmodule", "resetall");
     try expectRejected("`timescale 1ns/1ns\nmodule m; initial #(128'd1) ; endmodule", "wider than 64");
-    // §17.7: a clock query has no unit to report in without a timescale.
-    try expectRejected("module m; initial $display(\"%0d\", $time); endmodule", "explicit valid timescale");
 }
 
 fn testConcatRunAllocation(allocator: std.mem.Allocator) !void {
