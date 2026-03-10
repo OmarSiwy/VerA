@@ -49,6 +49,8 @@ const Lower = @import("ir").Lower;
 const proof = @import("ir").proof;
 const diag = @import("diag");
 const naming = @import("naming.zig");
+/// The backend half of the Opcode table: how each opcode is spelled in Zig.
+pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
 
 pub const Error = std.mem.Allocator.Error || error{
@@ -1017,14 +1019,9 @@ pub fn unitComment(c: Lower.Contribution, react: bool) []const u8 {
 /// afford that (it is a constant expression the host evaluates once); a residual
 /// cannot, and `intBin32` is the code that gets it right.
 pub fn devSafe(op: Mir.Opcode) bool {
-    return switch (op) {
-        .fadd, .fsub, .fmul, .fdiv, .fneg => true,
-        .fabs, .fmin, .fmax => true,
-        // sqrt/floor/ceil are sqrt.rn.f64 and cvt.rmi/rpi.f64.f64 — instructions.
-        .sqrt, .floor, .ceil => true,
-        .opt_barrier => true,
-        else => false,
-    };
+    // The `dev_safe` column: sqrt/floor/ceil are there because they are
+    // sqrt.rn.f64 and cvt.rmi/rpi.f64.f64 — instructions.
+    return opcode_zig.get(op).dev_safe;
 }
 
 // The operator set, and every fact about it, now lives in ONE place:
@@ -1076,4 +1073,5 @@ test {
     _ = Gen.gen_state;
     _ = gen_kernel_text;
     _ = gen_test;
+    _ = opcode_zig;
 }

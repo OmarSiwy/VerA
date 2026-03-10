@@ -13,6 +13,7 @@ const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
+const opcode_zig = @import("opcode_zig.zig");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Lower = @import("ir").Lower;
@@ -125,12 +126,7 @@ fn paramOnlyCall(self: *const Gen, d: anytype) bool {
 }
 
 pub fn libmClass(op: Mir.Opcode) bool {
-    return switch (op) {
-        .exp, .expm1, .ln, .ln1p, .log10, .pow, .hypot => true,
-        .sin, .cos, .tan, .asin, .acos, .atan, .atan2 => true,
-        .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => true,
-        else => false,
-    };
+    return opcode_zig.get(op).libm;
 }
 
 /// One use of `o` from outside the hoistable region: make it a root if it

@@ -27,12 +27,9 @@ lib/backend/cg_limit.zig probePair Mir.DefKind
 lib/backend/cg_limit.zig scValue Ast.ExprTag
 lib/backend/cg_limit.zig scValue Mir.Opcode
 lib/backend/cg_limit.zig spell Mir.DefKind
-lib/backend/codegen.zig devSafe Mir.Opcode
 lib/backend/codegen.zig dynCtrlArgs op.OpKind
 lib/backend/codegen/call.zig f64Const Ast.ExprTag
 lib/backend/codegen/call.zig f64Const Mir.DefKind
-lib/backend/codegen/call.zig f64Const Mir.Opcode
-lib/backend/codegen/call.zig f64Const Mir.Opcode
 lib/backend/codegen/call.zig i64Const Mir.DefKind
 lib/backend/codegen/call.zig i64Const Mir.Opcode
 lib/backend/codegen/call.zig i64Const Mir.Opcode
@@ -50,7 +47,6 @@ lib/backend/codegen/file.zig fsmStateCtl op.OpKind
 lib/backend/codegen/file.zig paramDefault Ast.Type
 lib/backend/codegen/hoist.zig hpPureInst Ast.ExprTag
 lib/backend/codegen/hoist.zig hpPureInst Mir.Opcode
-lib/backend/codegen/hoist.zig libmClass Mir.Opcode
 lib/backend/codegen/hoist.zig pcClass Ast.ExprTag
 lib/backend/codegen/hoist.zig pcClass Mir.Opcode
 lib/backend/codegen/render.zig foldHidesSlot Ast.ExprTag
