@@ -586,8 +586,8 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     }
     for (m.nets) |n| {
         // §7.2.1: a disciplined net is continuous — the analog solver's.
-        if (r.mixed and (n.discipline != .none or n.is_ground)) continue;
-        if (n.discipline != .none or n.is_ground)
+        if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
+        if (!r.mixed and (n.discipline != .none or n.is_ground))
             return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
         const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
         const at = try mintNet(r, e, n.kind, width, n.is_signed, n.name, n.main_tok);
@@ -617,7 +617,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
     for (m.ports, 0..) |p, i| {
-        if (r.mixed and p.discipline != .none) continue; // §7.2.1 continuous
+        if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
         const bind = if (i < binds.len) binds[i] else PortBind.open;
         const width = if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
         if (bind == .collapse) {
@@ -723,6 +723,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             };
             if (at >= child.ports.len) return r.fail(conn.main_tok, "more port connections than the module has ports", .{});
             r.scope = scope;
+            // A continuous port is the analog solver's on both sides (§7.2.1),
+            // so a mixed design's digital half connects nothing through it —
+            // the same skip the child's own port loop makes.
+            if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
             binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
@@ -733,6 +737,29 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try declare(r, e, child, child_scope, binds_out, depth + 1);
         r.scope = scope;
     }
+}
+
+/// VAMS §3.6.2.2: is `name` a CONTINUOUS discipline — the analog solver's —
+/// rather than a discrete one such as Annex D's `ddiscrete`, whose nets are
+/// §7.2's digital nets and this engine's? A net is a net by its declaration;
+/// the discipline only says which kernel resolves it. The same rule as
+/// `lib/ir/lower/discipline.zig`'s `isContinuous` (the last declaration wins;
+/// an undeclared domain is continuous when a nature is bound), restated here
+/// because `sim` cannot import `ir`.
+fn continuous(file: *const Ast.SourceFile, name: Ast.StrId) bool {
+    if (name == .none) return false;
+    var i = file.disciplines.len;
+    while (i > 0) {
+        i -= 1;
+        const d = &file.disciplines[i];
+        if (d.name != name) continue;
+        return switch (d.domain) {
+            .continuous => true,
+            .discrete => false,
+            .unspecified => d.potential != .none or d.flow != .none,
+        };
+    }
+    return false;
 }
 
 fn newScope(r: *Run, tok: u32) Error!u32 {

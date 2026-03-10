@@ -26,7 +26,6 @@
 //! lrm 7.3.6.5
 //! analysis tran
 //! time 0, 5n, 15n
-//! xfail E1100: the mixed-signal runner's digital engine elaborates the analog child `r1` as a digital instance
 `timescale 1ns/1ns
 `include "check.vh"
 module ch7_mixed_top(a, b);
