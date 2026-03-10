@@ -786,40 +786,43 @@ pub fn emitScan(self: *Gen, fn_name: []const u8, args: []const Mir.Value, want: 
 /// §9.13 one probabilistic draw. `$rng$auto` is the seedless form's
 /// `Instance` latch and reads a field; every other name is a `rng_kernels.zig`
 /// call taking the i64 seed and its real parameters.
-pub fn emitRng(self: *Gen, name: []const u8, args: []const Mir.Value) Error!void {
+pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
     // A draw is one scalar per CALL, not per lane: a batch eval draws once
     // where N scalar evals draw N times. Pins unconditionally.
     self.lane_pinned = self.lane_pinned or !self.emitting_display;
-    const tail = name["$rng$".len..];
-    if (std.mem.eql(u8, tail, "auto")) {
-        // §9.13.1's "internal seed", which "gets updated every time the call
-        // ... is made" — by `updateState` on the accepted step, never here.
-        self.uses_inst = true;
-        const site = intArg(self, args, 0) orelse 0;
-        return self.b("S.con(@floatFromInt(inst.rng_auto[{d}]))", .{site});
+    switch (c) {
+        .@"$rng$auto" => {
+            // §9.13.1's "internal seed", which "gets updated every time the call
+            // ... is made" — by `updateState` on the accepted step, never here.
+            self.uses_inst = true;
+            const site = intArg(self, args, 0) orelse 0;
+            return self.b("S.con(@floatFromInt(inst.rng_auto[{d}]))", .{site});
+        },
+        .@"$rng$check" => {
+            if (args.len != 4) return gen_call.abort(self, "malformed RNG validation effect", .{});
+            try self.b("S.con(zRngCheck(S.val(", .{});
+            try renderVal(self, args[0], .real);
+            try self.b("), {d}, S.val(", .{intArg(self, args, 1) orelse return gen_call.abort(self, "missing RNG validation rules", .{})});
+            try renderVal(self, args[2], .real);
+            try self.b("), S.val(", .{});
+            try renderVal(self, args[3], .real);
+            return self.b(")))", .{});
+        },
+        else => {}, // else: a distribution draw — `emitCall` routes only the `$rng$` tags here, and every other one is a kernel
     }
-    if (std.mem.eql(u8, tail, "check")) {
-        if (args.len != 4) return gen_call.abort(self, "malformed RNG validation effect", .{});
-        try self.b("S.con(zRngCheck(S.val(", .{});
-        try renderVal(self, args[0], .real);
-        try self.b("), {d}, S.val(", .{intArg(self, args, 1) orelse return gen_call.abort(self, "missing RNG validation rules", .{})});
-        try renderVal(self, args[2], .real);
-        try self.b("), S.val(", .{});
-        try renderVal(self, args[3], .real);
-        return self.b(")))", .{});
-    }
+    const tail = @tagName(c)["$rng$".len..];
     // `zRngIUniform`, `zRngChiSquare`, … — the kernel's camel spelling of the
     // callee's tail, so the two lists cannot drift apart by a typo.
     var fn_name: std.ArrayList(u8) = .empty;
     defer fn_name.deinit(self.gpa);
     try fn_name.appendSlice(self.gpa, "zRng");
     var up = true;
-    for (tail) |c| {
-        if (c == '_') {
+    for (tail) |ch| {
+        if (ch == '_') {
             up = true;
             continue;
         }
-        try fn_name.append(self.gpa, if (up) std.ascii.toUpper(c) else c);
+        try fn_name.append(self.gpa, if (up) std.ascii.toUpper(ch) else ch);
         up = false;
     }
     try self.b("S.con({s}(", .{fn_name.items});

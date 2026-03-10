@@ -407,7 +407,7 @@ fn compileInArena(
             // §9.5 the file family is on this list for SEQUENCING, not for text,
             // so the sentence it fell foul of is a different one — and the answer
             // it gets is one the LRM writes down rather than a dropped print.
-            if (Lower.isFileCall(d.name))
+            if (codegen.isFileCall(.fromName(d.name)))
                 try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
             else
                 try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});

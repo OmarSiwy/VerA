@@ -177,7 +177,7 @@ pub fn planPrecompute(self: *Gen) Error!void {
             .call => |d| for (d.args, 0..) |arg, k| {
                 // Control arguments render host-side through `f64Expr`
                 // (never a pc read), so a field for one would go unread.
-                if (callArgIsValue(d.name, k, self.display))
+                if (callArgIsValue(d.callee, k, self.display))
                     pcConsider(self, cls, root, arg);
             },
             .phi => |d| {

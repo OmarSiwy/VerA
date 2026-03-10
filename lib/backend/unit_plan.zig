@@ -212,7 +212,7 @@ fn markFileDeps(self: *UnitPlan) Error!void {
                 .unary => |d| self.fileDep(d.operand),
                 .binary => |d| self.fileDep(d.lhs) or self.fileDep(d.rhs),
                 .ternary => |d| self.fileDep(d.cond) or self.fileDep(d.then_val) or self.fileDep(d.else_val),
-                .call => |d| Lower.isFileCall(d.name) or for (d.args) |a| {
+                .call => |d| cg.isFileCall(d.callee) or for (d.args) |a| {
                     if (self.fileDep(a)) break true;
                 } else false,
                 .phi => |d| blk: {
@@ -422,7 +422,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // that rendering is a cache read. Without this the §9.4 display unit
         // (the one unit not folded into the core) emits `c.f1` with no `c`.
         const d = self.mir.instData(def.inst_result);
-        if (d == .call and cg.opNeedsInput(cg.opKind(d.call.name)) and d.call.args.len != 0 and
+        if (d == .call and cg.opNeedsInput(Mir.callee.opKind(d.call.callee)) and d.call.args.len != 0 and
             self.cached(self.an.rv(d.call.args[0]))) self.uses_cache = true;
         // §4.6.3 the same hole, for `ac_stim`'s magnitude and phase. A.8.2
         // gives both as `analog_expression` and `emitCall` renders them
@@ -431,7 +431,7 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         // A solve-computed one is a core live-out, so outside the core it is
         // a cache read this loop would otherwise never see. Argument 0 is the
         // analysis NAME and is never rendered.
-        if (d == .call and std.mem.eql(u8, d.call.name, "ac_stim")) {
+        if (d == .call and d.call.callee == .ac_stim) {
             for (d.call.args, 0..) |a, ai| {
                 if (ai != 0 and self.cached(self.an.rv(a))) self.uses_cache = true;
             }
@@ -467,7 +467,7 @@ fn markOperands(self: *UnitPlan, work: *std.ArrayList(Mir.Value), inst: Mir.Inst
             try self.mark(work, d.else_val);
         },
         .call => |d| for (d.args, 0..) |a, i| {
-            if (cg.callArgIsValue(d.name, i, self.dispHere())) try self.mark(work, a);
+            if (cg.callArgIsValue(d.callee, i, self.dispHere())) try self.mark(work, a);
         },
         .phi => |d| {
             var i: u32 = 0;
@@ -546,7 +546,7 @@ fn addUses(self: *UnitPlan, inst: Mir.Inst, undo: bool) void {
             bump(self, d.else_val, true, undo);
         },
         .call => |d| for (d.args, 0..) |a, i| {
-            if (cg.callArgIsValue(d.name, i, self.dispHere())) bump(self, a, false, undo);
+            if (cg.callArgIsValue(d.callee, i, self.dispHere())) bump(self, a, false, undo);
         },
         .phi => |d| {
             var i: u32 = 0;
@@ -635,7 +635,7 @@ fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
             (!self.foldedExponent(d) and self.an.rv(d.rhs) == v),
         .ternary => |d| self.an.rv(d.cond) == v,
         .call => |d| for (d.args, 0..) |a, i| {
-            if (cg.callArgIsValue(d.name, i, self.dispHere()) and self.an.rv(a) == v) break true;
+            if (cg.callArgIsValue(d.callee, i, self.dispHere()) and self.an.rv(a) == v) break true;
         } else false,
         else => false,
     };

@@ -175,12 +175,12 @@ fn renderPrintArgs(g: *Gen, ops: []const PrintArg) Error!void {
 ///
 /// Output goes to stderr, which is where `std.debug.print` writes and where a
 /// simulator's transcript belongs — stdout is for a host that pipes data.
-pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
+pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
     // §9.7.3: the severity is the message's whole reason for existing, and a
     // reader cannot recover it from the text.
-    if (severityWord(name)) |word| {
+    if (severityWord(c)) |word| {
         try fmt.appendSlice(g.arena, word);
         try fmt.appendSlice(g.arena, ": ");
     }
@@ -189,14 +189,14 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value, site:
     // the message, so it must not print. Dropped only when it is not a string,
     // so a (nonconforming but unambiguous) `$fatal("bye")` keeps its text.
     // §9.4.1 a monitor report carries its site key first (`Lower.armMonitor`).
-    const mon = isMonitor(name);
-    const body = if (mon or (std.mem.eql(u8, name, "$fatal") and args.len > 0 and g.strArg(args, 0) == null))
+    const mon = c == .@"$monitor";
+    const body = if (mon or (c == .@"$fatal" and args.len > 0 and g.strArg(args, 0) == null))
         args[1..]
     else
         args;
     try buildArgs(g, body, &fmt, &ops);
     // §9.4.1: `$write` is the family member that does NOT end the line.
-    if (!std.mem.startsWith(u8, name, "$write")) try fmt.append(g.arena, '\n');
+    if (endsLine(c)) try fmt.append(g.arena, '\n');
 
     // A width-padded integer is printed through `zPadInt` because Zig's
     // `{d:>5}` writes `+42` where §9.4.3 (and C, and every other Verilog
@@ -230,7 +230,7 @@ pub fn emitDisplayTask(g: *Gen, name: []const u8, args: []const Mir.Value, site:
     // read as success to a shell (`vera --run` forwards the status verbatim).
     // `zHalt` is f64-typed so the statements after it — §9.7's legal dead code
     // — still compile; `break :zd` is statically reachable, never taken.
-    if (std.mem.eql(u8, name, "$fatal")) {
+    if (c == .@"$fatal") {
         const lvl = finishLevel(g, args);
         try g.b("_ = zHalt({d}); ", .{std.math.clamp(lvl, 1, 255)});
     }
@@ -318,115 +318,115 @@ pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!voi
 /// One §9.5 call, in the display unit. `site` is the call's MIR instruction id,
 /// which is the per-call-site key for the formatted bytes (`zSBuf`) exactly as
 /// it is for `$sformat`.
-pub fn emitFileCall(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
+pub fn emitFileCall(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     // §9.5.1/§9.5.2/§9.5.6: `$fclose`, `$fflush` and the five output tasks are
-    // TASKS, so `analysis.callTy` leaves them real like every other void call —
+    // TASKS, so `Mir.callee.ty` leaves them real like every other void call —
     // but the kernels answer in bytes and channels, which are integers. The
     // conversion is here rather than in the type table because the value is
     // discarded either way: it exists only to give the display chain something to
     // carry (`Lower.sequenceFileCall`), and typing seven void tasks as integers to
     // avoid one cast would change what `$display`'s own chain carries too.
-    const wrap = Analysis.callTy(name) == .real;
+    const wrap = Mir.callee.ty(c) == .real;
     // `$fscanf$real` is the one real-typed §9.5 call whose KERNEL is already
     // f64 — §9.5.4.2 names `real` among the destinations a scan may write, and
     // `zScanR` answers one. Wrapping it in `@floatFromInt` like the integer
     // kernels made the generated device refuse to compile ("expected integer
     // type, found 'f64'"), which is why a real destination never worked.
-    const from_int = !std.mem.eql(u8, name, "$fscanf$real");
+    const from_int = c != .@"$fscanf$real";
     // An integer result is latched for the other units — `file_kernels.zFRes`.
-    const keep = Analysis.callTy(name) == .int;
+    const keep = Mir.callee.ty(c) == .int;
     if (wrap) try g.b("S.con(", .{});
     if (wrap and from_int) try g.b("@as(f64, @floatFromInt(", .{});
     if (keep) try g.b("zFKeep({d}, ", .{site});
-    try emitFileCallInner(g, name, args, site);
+    try emitFileCallInner(g, c, args, site);
     if (keep) try g.b(")", .{});
     if (wrap and from_int) try g.b("))", .{});
     if (wrap) try g.b(")", .{});
 }
 
-fn emitFileCallInner(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
-    const eq = std.mem.eql;
-    // ponytail: lowering owns the file-task list, including fclose/fflush.
-    if (Lower.isFileOutTask(name)) return emitFileWrite(g, name, args, site);
-    // §9.5.1 Syntax 9-2: one argument is a multichannel descriptor, two are a
-    // file descriptor. The presence of the type argument IS the discriminator,
-    // and it is the only thing that decides which encoding comes back.
-    if (eq(u8, name, "$fopen")) {
-        try g.b("zFOpen(", .{});
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.f_zero, .str);
-        try g.b(", ", .{});
-        if (args.len > 1) try g.renderVal(args[1], .str) else try g.b("\"\"", .{});
-        return g.b(", {s})", .{if (args.len > 1) "false" else "true"});
+fn emitFileCallInner(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
+    switch (c) {
+        // §9.5.2's five output tasks, and the two descriptor tasks that take no
+        // text (`Lower.isFileOutTask`).
+        .@"$fdisplay", .@"$fwrite", .@"$fstrobe", .@"$fmonitor", .@"$fdebug", .@"$fclose", .@"$fflush",
+        => return emitFileWrite(g, c, args, site),
+        // §9.5.1 Syntax 9-2: one argument is a multichannel descriptor, two are a
+        // file descriptor. The presence of the type argument IS the discriminator,
+        // and it is the only thing that decides which encoding comes back.
+        .@"$fopen" => {
+            try g.b("zFOpen(", .{});
+            try g.renderVal(if (args.len > 0) args[0] else Mir.Value.f_zero, .str);
+            try g.b(", ", .{});
+            if (args.len > 1) try g.renderVal(args[1], .str) else try g.b("\"\"", .{});
+            return g.b(", {s})", .{if (args.len > 1) "false" else "true"});
+        },
+        // The one-argument descriptor operations, in clause order.
+        .@"$fgets", .@"$ftell", .@"$feof", .@"$ferror" => {
+            try g.b("{s}(", .{switch (c) {
+                .@"$fgets" => "zFGets", // §9.5.4.1 — the character count
+                .@"$ftell" => "zFTell", // §9.5.5
+                .@"$feof" => "zFEof", // §9.5.8
+                else => "zFError", // else: `$ferror`, the one left (§9.5.7) — the errno
+            }});
+            try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+            return g.b(")", .{});
+        },
+        // §9.5.5 `$rewind(fd)` "is equivalent to $fseek (fd,0,0)" — the clause's own
+        // words, so it is the same kernel with the constants written in.
+        .@"$rewind" => {
+            try g.b("zFSeek(", .{});
+            try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+            return g.b(", 0, 0)", .{});
+        },
+        .@"$fseek" => {
+            try g.b("zFSeek(", .{});
+            try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
+            try g.b(", ", .{});
+            try g.renderVal(if (args.len > 1) args[1] else Mir.Value.zero, .int);
+            try g.b(", ", .{});
+            try g.renderVal(if (args.len > 2) args[2] else Mir.Value.zero, .int);
+            return g.b(")", .{});
+        },
+        // §9.5.4.2 the count. The two kernels are composed HERE rather than in
+        // `file_kernels.zig`, which cannot call `str_kernels.zScan`: each kernel
+        // file has to compile on its own for `kernels.zig`'s test root. Scan the
+        // unread window, then consume exactly what the directives matched —
+        // `zScan.used`, which is the clause's "the offending input character is
+        // left unread" made into a number. `Lower.lowerFileRead` built the
+        // operands as (fd, format); the ITEM readers below re-scan the same
+        // window, which `zFTake` deliberately leaves latched.
+        .@"$fscanf" => {
+            const fd = if (args.len > 0) args[0] else Mir.Value.zero;
+            try g.b("zk{d}: {{ const zw = zFWindow(", .{site});
+            try g.renderVal(fd, .int);
+            try g.b("); const zr = zScan(zw, ", .{});
+            try g.renderVal(if (args.len > 1) args[1] else Mir.Value.f_zero, .str);
+            try g.b(", -1); break :zk{d} zFTake(", .{site});
+            try g.renderVal(fd, .int);
+            return g.b(", zr.n, @intCast(zr.used)); }}", .{});
+        },
+        // The synthetic readers, all of which take the count first — see
+        // `file_kernels.zFLine` for why that operand is there and why it is read.
+        .@"$fgets$str" => return emitLine(g, args, "zFLine"),
+        .@"$ferror$str" => return emitLine(g, args, "zFErrorStr"),
+        // §9.5.4.2's items: the same three flavours `$sscanf` has, over the line the
+        // count's read latched. `(count, fd, format, item)`.
+        .@"$fscanf$int", .@"$fscanf$real", .@"$fscanf$str" => {
+            try g.b("{s}(", .{switch (c) {
+                .@"$fscanf$int" => "zScanI",
+                .@"$fscanf$real" => "zScanR",
+                else => "zScanS", // else: `$fscanf$str`, the one left
+            }});
+            try emitLine(g, args, "zFLine");
+            try g.b(", ", .{});
+            try g.renderVal(if (args.len > 2) args[2] else Mir.Value.f_zero, .str);
+            try g.b(", ", .{});
+            try g.renderVal(if (args.len > 3) args[3] else Mir.Value.zero, .int);
+            return g.b(")", .{});
+        },
+        else => return g.abort("VerA: unhandled §9.5 call `{s}`", .{@tagName(c)}), // else: `emitCall` routes only `codegen.isFileCall` here, and every one of those has a prong above
     }
-    // The one-argument descriptor operations, in clause order.
-    const one = [_]struct { n: []const u8, k: []const u8 }{
-        .{ .n = "$fgets", .k = "zFGets" }, // §9.5.4.1 — the character count
-        .{ .n = "$ftell", .k = "zFTell" }, // §9.5.5
-        .{ .n = "$feof", .k = "zFEof" }, // §9.5.8
-        .{ .n = "$ferror", .k = "zFError" }, // §9.5.7 — the errno
-    };
-    for (one) |o| if (eq(u8, name, o.n)) {
-        try g.b("{s}(", .{o.k});
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
-        return g.b(")", .{});
-    };
-    // §9.5.5 `$rewind(fd)` "is equivalent to $fseek (fd,0,0)" — the clause's own
-    // words, so it is the same kernel with the constants written in.
-    if (eq(u8, name, "$rewind")) {
-        try g.b("zFSeek(", .{});
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
-        return g.b(", 0, 0)", .{});
-    }
-    if (eq(u8, name, "$fseek")) {
-        try g.b("zFSeek(", .{});
-        try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
-        try g.b(", ", .{});
-        try g.renderVal(if (args.len > 1) args[1] else Mir.Value.zero, .int);
-        try g.b(", ", .{});
-        try g.renderVal(if (args.len > 2) args[2] else Mir.Value.zero, .int);
-        return g.b(")", .{});
-    }
-    // §9.5.4.2 the count. The two kernels are composed HERE rather than in
-    // `file_kernels.zig`, which cannot call `str_kernels.zScan`: each kernel
-    // file has to compile on its own for `kernels.zig`'s test root. Scan the
-    // unread window, then consume exactly what the directives matched —
-    // `zScan.used`, which is the clause's "the offending input character is
-    // left unread" made into a number. `Lower.lowerFileRead` built the
-    // operands as (fd, format); the ITEM readers below re-scan the same
-    // window, which `zFTake` deliberately leaves latched.
-    if (eq(u8, name, "$fscanf")) {
-        const fd = if (args.len > 0) args[0] else Mir.Value.zero;
-        try g.b("zk{d}: {{ const zw = zFWindow(", .{site});
-        try g.renderVal(fd, .int);
-        try g.b("); const zr = zScan(zw, ", .{});
-        try g.renderVal(if (args.len > 1) args[1] else Mir.Value.f_zero, .str);
-        try g.b(", -1); break :zk{d} zFTake(", .{site});
-        try g.renderVal(fd, .int);
-        return g.b(", zr.n, @intCast(zr.used)); }}", .{});
-    }
-    // The synthetic readers, all of which take the count first — see
-    // `file_kernels.zFLine` for why that operand is there and why it is read.
-    if (eq(u8, name, "$fgets$str")) return emitLine(g, args, "zFLine");
-    if (eq(u8, name, "$ferror$str")) return emitLine(g, args, "zFErrorStr");
-    // §9.5.4.2's items: the same three flavours `$sscanf` has, over the line the
-    // count's read latched. `(count, fd, format, item)`.
-    const scan: ?[]const u8 = if (eq(u8, name, "$fscanf$int"))
-        "zScanI"
-    else if (eq(u8, name, "$fscanf$real"))
-        "zScanR"
-    else if (eq(u8, name, "$fscanf$str")) "zScanS" else null;
-    if (scan) |k| {
-        try g.b("{s}(", .{k});
-        try emitLine(g, args, "zFLine");
-        try g.b(", ", .{});
-        try g.renderVal(if (args.len > 2) args[2] else Mir.Value.f_zero, .str);
-        try g.b(", ", .{});
-        try g.renderVal(if (args.len > 3) args[3] else Mir.Value.zero, .int);
-        return g.b(")", .{});
-    }
-    return g.abort("VerA: unhandled §9.5 call `{s}`", .{name});
 }
-
 /// The first two operands every synthetic reader carries: count, then fd.
 inline fn emitLine(g: *Gen, args: []const Mir.Value, comptime kernel: []const u8) Error!void {
     try g.b(kernel ++ "(", .{});
@@ -443,27 +443,23 @@ inline fn emitLine(g: *Gen, args: []const Mir.Value, comptime kernel: []const u8
 /// exactly as `$write` is. No radix-suffixed file spelling exists (§9.5.2
 /// Syntax 9-3 lists five names), so the default conversion is always the
 /// operand's own.
-fn emitFileWrite(g: *Gen, name: []const u8, args: []const Mir.Value, site: usize) Error!void {
-    const eq = std.mem.eql;
+fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) Error!void {
     // §9.5.1 `$fclose` and §9.5.6 `$fflush` take a descriptor and no text.
-    if (eq(u8, name, "$fclose") or eq(u8, name, "$fflush")) {
-        try g.b("{s}(", .{if (eq(u8, name, "$fclose")) "zFClose" else "zFFlush"});
+    if (c == .@"$fclose" or c == .@"$fflush") {
+        try g.b("{s}(", .{if (c == .@"$fclose") "zFClose" else "zFFlush"});
         try g.renderVal(if (args.len > 0) args[0] else Mir.Value.zero, .int);
         return g.b(")", .{});
     }
-    // "$fdisplay" → "display", "$fwrite" → "write": the §9.4.1 task §9.5.2 names
-    // this one after, with both the `$` and the `f` gone — read for §9.4.1's
-    // newline rule (`$write` is the member that does not end the line, and so
-    // is `$fwrite`).
-    const base = name[2..];
     // §9.4.1 a monitor report carries its site key ahead of the descriptor.
-    const mon = isMonitor(name);
+    const mon = c == .@"$fmonitor";
     const all = if (mon) args[1..] else args;
     const rest = if (all.len > 0) all[1..] else all;
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
     try buildArgs(g, rest, &fmt, &ops);
-    if (!std.mem.startsWith(u8, base, "write")) try fmt.append(g.arena, '\n');
+    // The §9.4.1 task §9.5.2 names this one after decides the newline:
+    // `$write` is the member that does not end the line, and so is `$fwrite`.
+    if (endsLine(c)) try fmt.append(g.arena, '\n');
 
     // The text is formatted into this call site's own scratch row and then
     // written, which is `emitStringFormat`'s sink with a descriptor instead of a
@@ -503,8 +499,8 @@ fn monitorValues(g: *Gen, ops: []const PrintArg) Error!void {
         const v = g.an.rv(p.v);
         const def = g.mir.valueDef(v);
         if (def == .inst_result and g.mir.instOp(def.inst_result) == .call) {
-            const callee = g.mir.instData(def.inst_result).call.name;
-            if (std.mem.eql(u8, callee, "$abstime") or std.mem.eql(u8, callee, "$realtime")) continue;
+            const callee = g.mir.instData(def.inst_result).call.callee;
+            if (callee == .@"$abstime" or callee == .@"$realtime") continue;
         }
         if (first) try g.b(" ", .{}) else try g.b(", ", .{});
         first = false;
@@ -529,10 +525,6 @@ fn monitorValues(g: *Gen, ops: []const PrintArg) Error!void {
     if (first) try g.b("}}", .{}) else try g.b(" }}", .{});
 }
 
-/// §9.4.1 `$monitor` and its §9.5.2 file twin — the two members of the family
-/// that report only on a CHANGE. Every other member prints unconditionally.
-const isMonitor = Lower.isMonitor;
-
 /// The site key `Lower.armMonitor` put first in a monitor's registration and in
 /// its report — a literal, so it can key a comptime latch.
 fn monitorKey(g: *const Gen, args: []const Mir.Value) i64 {
@@ -545,13 +537,23 @@ pub fn emitMonitorArm(g: *Gen, args: []const Mir.Value) Error!void {
 }
 
 /// §9.7.3 severity tasks. Null for the §9.4.1 display family.
-pub fn severityWord(name: []const u8) ?[]const u8 {
-    const eq = std.mem.eql;
-    if (eq(u8, name, "$fatal")) return "FATAL";
-    if (eq(u8, name, "$error")) return "ERROR";
-    if (eq(u8, name, "$warning")) return "WARNING";
-    if (eq(u8, name, "$info")) return "INFO";
-    return null;
+pub fn severityWord(c: Mir.Callee) ?[]const u8 {
+    return switch (c) {
+        .@"$fatal" => "FATAL",
+        .@"$error" => "ERROR",
+        .@"$warning" => "WARNING",
+        .@"$info" => "INFO",
+        else => null, // else: §9.7.3 has exactly these four; every other task prints no severity
+    };
+}
+
+/// §9.4.1: does the task end its line? `$write` and its radix forms are the
+/// members that do not, and §9.5.2's `$fwrite` is named after `$write`.
+fn endsLine(c: Mir.Callee) bool {
+    return switch (c) {
+        .@"$write", .@"$writeb", .@"$writeo", .@"$writeh", .@"$fwrite" => false,
+        else => true, // else: every other §9.4.1/§9.5.2 printing task is a `$display`-like one
+    };
 }
 
 /// §9.4.2/§9.4.3 one format string → Zig format text, consuming an operand per
@@ -691,7 +693,7 @@ pub fn appendConv(
     if (g.mir.valueDef(g.an.rv(v)) == .inst_result) {
         const inst = g.mir.valueDef(g.an.rv(v)).inst_result;
         const data = g.mir.instData(inst);
-        if (data == .call and std.mem.eql(u8, data.call.name, "$display$width")) {
+        if (data == .call and data.call.callee == .@"$display$width") {
             bits = @intCast(g.mir.valueDef(data.call.args[1]).int_const);
         }
     }
