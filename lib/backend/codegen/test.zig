@@ -1886,6 +1886,67 @@ test "codegen: no collapse hook without the zero-short pattern" {
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse") == null);
 }
 
+test "codegen: a zero short still collapses after if-conversion makes its join a select" {
+    // The diode idiom again, through ifconv as root.zig runs it. Both arms
+    // are pure, so the diamond converts and the retention flag and the
+    // potential accumulator become `select`s: `select(rs > 0, 0, 1)` and
+    // `select(rs > 0, 0, 0)`. `zeroOnEveryPath` walked phis only, so the
+    // converted form lost its collapse — and whether a model collapsed
+    // hung on whether ifconv could convert the diamond (a late phi row in
+    // the branching block stopped it, so ifconv finding the terminator by
+    // opcode changed hisimhv_va's BRddp from collapsed to not).
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module d(a, c);
+        \\  inout a, c;
+        \\  electrical a, c, ai;
+        \\  parameter real rs = 0.0 from [0:inf);
+        \\  branch (a, ai) rsb;
+        \\  analog begin
+        \\    I(ai, c) <+ 1e-3 * V(ai, c);
+        \\    if (rs > 0.0) I(rsb) <+ V(rsb) / rs;
+        \\    else          V(rsb) <+ 0.0;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.low.contributions.items) >= 1);
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse(") != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        src,
+        "zCollapseUnion(&parent, @intFromEnum(U.ai), @intFromEnum(U.a));",
+    ) != null);
+}
+
+test "codegen: an OBSERVED zero short is not collapsed" {
+    // §5.4.2 `I(rsb)` reads the branch-flow unknown, which `collapse` would
+    // alias onto a node voltage: the model would read V(a), not its current.
+    // static_switch_elision.va asserts the current and passed only because
+    // ifconv converted its diamond (and the select form never collapsed);
+    // the phi form — an arm ifconv keeps, here `sqrt` — read 0.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module d(a, c);
+        \\  inout a, c;
+        \\  electrical a, c, ai;
+        \\  parameter real rs = 0.0 from [0:inf);
+        \\  branch (a, ai) rsb;
+        \\  real seen;
+        \\  analog begin
+        \\    seen = I(rsb);
+        \\    I(ai, c) <+ 1e-3 * V(ai, c) + 0.0 * seen;
+        \\    if (rs > 0.0) I(rsb) <+ V(rsb) / rs + 0.0 * sqrt(rs);
+        \\    else          V(rsb) <+ 0.0;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse") == null);
+}
+
 test "codegen: an x-steered zero short is NOT collapsed" {
     // The guard reads a probe, so which arm is retained changes per
     // evaluation; a build-time alias would be a lie. `buildFree` refuses it.
