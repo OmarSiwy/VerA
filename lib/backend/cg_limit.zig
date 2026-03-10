@@ -137,7 +137,7 @@ pub fn collect(g: *Gen) Error!void {
         for (g.an.blockInstsFlat(bi)) |inst| {
             if (g.mir.instOp(inst) != .call) continue;
             const d = g.mir.instData(inst).call;
-            if (!std.mem.eql(u8, d.name, "$limit")) continue;
+            if (d.callee != .@"$limit") continue;
 
             const alg = algOf(g, d.args) orelse continue; // §4.5.15 declining is conformant
             const pair = probePair(g, d.args) orelse {
@@ -484,9 +484,11 @@ fn scValue(sc: *Sc, v0: Mir.Value, depth: u32) bool {
                 // unchecked argument can slip past the operand walk.
                 .call => {
                     const d = g.mir.instData(inst).call;
-                    break :blk std.mem.eql(u8, d.name, "$param_given") or
-                        std.mem.eql(u8, d.name, "$temperature") or
-                        (std.mem.eql(u8, d.name, "$vt") and d.args.len == 0);
+                    break :blk switch (d.callee) {
+                        .@"$param_given", .@"$temperature" => true,
+                        .@"$vt" => d.args.len == 0,
+                        else => false, // else: an ALLOWLIST — see above; a new callee is per-iterate until shown otherwise
+                    };
                 },
                 // §5.6.1.2 path latches: `updateState`/commit have not written
                 // them when `precompute` runs.
