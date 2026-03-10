@@ -616,7 +616,7 @@ fn fuseSingleUse(self: *UnitPlan) void {
                 if (nop == .call or nop == .phi) break;
                 switch (Mir.opClass(nop)) {
                     .unary, .binary, .ternary => {},
-                    else => break,
+                    .phi, .branch, .jump, .call => break,
                 }
             }
         }
@@ -637,7 +637,7 @@ fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
         .call => |d| for (d.args, 0..) |a, i| {
             if (cg.callArgIsValue(d.callee, i, self.dispHere()) and self.an.rv(a) == v) break true;
         } else false,
-        else => false,
+        .phi, .branch, .jump => false,
     };
 }
 

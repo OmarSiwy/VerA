@@ -1203,7 +1203,7 @@ pub fn psdConst(self: *const Gen, v: Mir.Value) ?f64 {
     return switch (self.mir.valueDef(v)) {
         .float_const => |x| x,
         .int_const => |x| @floatFromInt(x),
-        else => null,
+        .undef, .str_const, .param_ref, .block_param, .inst_result => null,
     };
 }
 

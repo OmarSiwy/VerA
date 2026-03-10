@@ -21,44 +21,12 @@
 //      codegen and sim, replacing six of the seven that disagree today.
 //   4. A Callee enum for MIR calls, turning `mem.eql` name dispatch into
 //      switches this guard can then see.
-lib/backend/cg_display.zig finishLevel Mir.DefKind
-lib/backend/cg_limit.zig algOf Mir.DefKind
-lib/backend/cg_limit.zig probePair Mir.DefKind
 lib/backend/cg_limit.zig scValue Ast.ExprTag
 lib/backend/cg_limit.zig scValue Mir.Opcode
-lib/backend/cg_limit.zig spell Mir.DefKind
-lib/backend/codegen.zig dynCtrlArgs op.OpKind
-lib/backend/codegen/call.zig f64Const Ast.ExprTag
-lib/backend/codegen/call.zig f64Const Mir.DefKind
-lib/backend/codegen/call.zig i64Const Mir.DefKind
-lib/backend/codegen/call.zig i64Const Mir.Opcode
-lib/backend/codegen/call.zig i64Const Mir.Opcode
-lib/backend/codegen/call.zig i64Const Mir.Opcode
-lib/backend/codegen/call.zig i64Const Mir.Opcode
-lib/backend/codegen/call.zig strConst Mir.DefKind
-lib/backend/codegen/cfg.zig emitTerm Mir.Opcode
-lib/backend/codegen/dispatch.zig psdConst Mir.DefKind
-lib/backend/codegen/file.zig emitInstance op.OpKind
-lib/backend/codegen/file.zig emitInstance op.OpKind
-lib/backend/codegen/file.zig emitStateCtl op.OpKind
-lib/backend/codegen/file.zig emitStateCtl op.OpKind
-lib/backend/codegen/file.zig flowOnlySignalFlowNet Ast.Direction
-lib/backend/codegen/file.zig fsmStateCtl op.OpKind
-lib/backend/codegen/file.zig paramDefault Ast.Type
 lib/backend/codegen/hoist.zig hpPureInst Ast.ExprTag
 lib/backend/codegen/hoist.zig hpPureInst Mir.Opcode
 lib/backend/codegen/hoist.zig pcClass Ast.ExprTag
 lib/backend/codegen/hoist.zig pcClass Mir.Opcode
-lib/backend/codegen/render.zig foldHidesSlot Ast.ExprTag
-lib/backend/codegen/render.zig maskCmp Mir.Opcode
-lib/backend/codegen/render.zig renderInst Mir.Opcode
-lib/backend/codegen/render.zig renderOp Mir.Opcode
-lib/backend/codegen/render.zig renderOp Mir.Opcode
-lib/backend/codegen/render.zig renderVal Mir.DefKind
-lib/backend/codegen/unit.zig buildJobs op.OpKind
-lib/backend/codegen/unit.zig retention Mir.DefKind
-lib/backend/unit_plan.zig eagerlyUses Ast.ExprTag
-lib/backend/unit_plan.zig fuseSingleUse Ast.ExprTag
 lib/frontend/parser/specify.zig parseGates Ast.GateKind
 lib/ir/elaborate/clone.zig constIntLit Ast.ExprTag
 lib/ir/elaborate/clone.zig constIntLit Ast.UnaryOp

@@ -100,7 +100,7 @@ pub fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
             self.uses_model = true;
             return try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]});
         },
-        else => return null,
+        .undef, .float_const, .int_const, .block_param, .inst_result => return null,
     }
 }
 
@@ -138,7 +138,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                     .fle => "<=",
                     .fgt => ">",
                     .fge => ">=",
-                    else => unreachable,
+                    else => unreachable, // else: the `if` above admits only these six real comparisons
                 };
                 return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) {s} ({s})))", .{ a, op, rhs });
             }
@@ -159,7 +159,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                     .ile => "!= .gt",
                     .igt => "== .gt",
                     .ige => "!= .lt",
-                    else => return null,
+                    else => return null, // else: Table 3-3 relates two strings and nothing else; no other op of two has an integer value
                 };
                 return try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(std.mem.order(u8, {s}, {s}) {s}))", .{ sa, sb, so });
             };
@@ -170,7 +170,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .iabs => try std.fmt.allocPrint(self.arena, "zIabs({s})", .{a}),
                 .bitnot => try std.fmt.allocPrint(self.arena, "~({s})", .{a}),
                 .lognot => try std.fmt.allocPrint(self.arena, "@as(i64, @intFromBool(({s}) == 0))", .{a}),
-                else => null,
+                else => null, // else: every real unary (and `fi_cast`) returned above through `f64Const`; what is left has no integer spelling
             };
             const rhs = try i64Const(self, bv, depth + 1) orelse return null;
             const op: []const u8 = switch (row.op) {
@@ -186,7 +186,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .ile => "<=",
                 .igt => ">",
                 .ige => ">=",
-                else => "",
+                else => "", // else: read only by the prongs below that print an infix `op`
             };
             return switch (row.op) {
                 .iadd, .isub, .imul => try std.fmt.allocPrint(self.arena, "@as(i64, @as(i32, @truncate(({s}) {s} ({s}))))", .{ a, op, rhs }),
@@ -250,7 +250,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 => unreachable,
             };
         },
-        else => return null,
+        .undef, .str_const, .block_param => return null,
     }
 }
 
@@ -391,10 +391,11 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                         fix[0], a, fix[1], b2, fix[2],
                     });
                 },
-                else => return null,
+                // `select`/`phi` returned above; the rest are not values.
+                .ternary, .phi, .branch, .jump, .call => return null,
             }
         },
-        else => return null,
+        .undef, .float_const, .int_const, .str_const, .block_param => return null,
     }
 }
 

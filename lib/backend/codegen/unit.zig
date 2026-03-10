@@ -119,7 +119,7 @@ pub fn retention(self: *const Gen, c: Lower.Contribution) Retention {
     return switch (self.mir.valueDef(v)) {
         .float_const => |x| if (x != 0.0) Retention.on else Retention.off,
         .int_const => |x| if (x != 0) Retention.on else Retention.off,
-        else => .{ .runtime = v },
+        .undef, .str_const, .param_ref, .block_param, .inst_result => .{ .runtime = v },
     };
 }
 
@@ -429,7 +429,7 @@ pub fn buildJobs(self: *Gen) Error!void {
             .mode = unitMode(self, i),
             .comment = switch (k) {
                 .bound_step, .discontinuity => "§9.17 analog kernel control request",
-                else => "§4.5 analog operator input",
+                .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => "§4.5 analog operator input",
             },
             .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
         });
