@@ -88,11 +88,11 @@ pub fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
                         pcClass(self, cls, d.then_val, depth + 1) and
                         pcClass(self, cls, d.else_val, depth + 1);
                 },
-                else => switch (Mir.opClass(row.op)) {
+                else => switch (Mir.opClass(row.op)) { // else: every other opcode is a pure op, decided by its operands
                     .unary => break :blk pcClass(self, cls, @enumFromInt(row.a), depth + 1),
                     .binary => break :blk pcClass(self, cls, @enumFromInt(row.a), depth + 1) and
                         pcClass(self, cls, @enumFromInt(row.b), depth + 1),
-                    else => break :blk false,
+                    .ternary, .phi, .branch, .jump, .call => break :blk false,
                 },
             }
         },
@@ -293,11 +293,11 @@ pub fn hpPureInst(self: *Gen, inst: Mir.Inst, depth: u32) bool {
                 hpPure(self, d.then_val, depth + 1) and
                 hpPure(self, d.else_val, depth + 1);
         },
-        else => return switch (Mir.opClass(row.op)) {
+        else => return switch (Mir.opClass(row.op)) { // else: every other opcode is a pure op, decided by its operands
             .unary => hpPure(self, @enumFromInt(row.a), depth + 1),
             .binary => hpPure(self, @enumFromInt(row.a), depth + 1) and
                 hpPure(self, @enumFromInt(row.b), depth + 1),
-            else => false,
+            .ternary, .phi, .branch, .jump, .call => false,
         },
     }
 }

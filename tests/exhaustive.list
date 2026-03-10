@@ -21,12 +21,6 @@
 //      codegen and sim, replacing six of the seven that disagree today.
 //   4. A Callee enum for MIR calls, turning `mem.eql` name dispatch into
 //      switches this guard can then see.
-lib/backend/cg_limit.zig scValue Ast.ExprTag
-lib/backend/cg_limit.zig scValue Mir.Opcode
-lib/backend/codegen/hoist.zig hpPureInst Ast.ExprTag
-lib/backend/codegen/hoist.zig hpPureInst Mir.Opcode
-lib/backend/codegen/hoist.zig pcClass Ast.ExprTag
-lib/backend/codegen/hoist.zig pcClass Mir.Opcode
 lib/frontend/parser/specify.zig parseGates Ast.GateKind
 lib/ir/elaborate/clone.zig constIntLit Ast.ExprTag
 lib/ir/elaborate/clone.zig constIntLit Ast.UnaryOp
