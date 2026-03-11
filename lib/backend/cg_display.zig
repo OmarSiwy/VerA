@@ -911,7 +911,7 @@ fn genDisplayText(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
     file.builtin_modules = Preprocessor.spice_module_count;
     var mir: Mir = .{};
     var low = Lower.init(arena, &mir, &file, text, toks.items(.start), &bag);
-    try low.lowerFile();
+    _ = try low.lowerFile();
     const v = try proof.prove(arena, &mir, &low, &bag);
     var fatal = false;
     return (try cg.generate(arena, arena, &mir, &low, v, &fatal, .{ .display = .emit })).text;

@@ -53,7 +53,7 @@ pub const Harness = struct {
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
-        try out.low.lowerFile();
+        _ = try out.low.lowerFile();
     }
 
     fn gen(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {

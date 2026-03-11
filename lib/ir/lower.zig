@@ -23,6 +23,8 @@ const diag = @import("diag");
 pub const assert = std.debug.assert;
 
 pub const Lower = @This(); // so `Lower.Lower` also resolves
+/// What lowering produces — lower/tables.zig.
+pub const Lowered = @import("lower/tables.zig");
 
 /// Only OOM unwinds during lowering; everything else goes in the shared
 /// `diag.Bag` and lowering continues with a poison value, so one run reports
@@ -456,7 +458,7 @@ param_index: std.StringHashMapUnmanaged(u32) = .empty,
 /// card, which `params` (one entry per real parameter) has no slot for.
 /// `param_index` cannot answer this because it holds both names with nothing
 /// saying which is the alias.
-aliases: std.ArrayList(struct { name: []const u8, param: u32 }) = .empty,
+aliases: std.ArrayList(Alias) = .empty,
 /// §3.4.7's one printed example whose right-hand side is NOT a parameter:
 /// `aliasparam m = $mfactor;`. The index of the parameter the alias declared, or
 /// null when this module never aliased it — see `aliasSystemParam`.
@@ -746,6 +748,9 @@ pub const LimitSlot = struct {
     /// it; the next iterate's `updateState` promotes it into the read field.
     final: Mir.Value = .undef,
 };
+
+/// §3.4.7 one `aliasparam`: the alias's spelling and the `params` index it names.
+pub const Alias = struct { name: []const u8, param: u32 };
 
 /// One §9.4/§9.7.3 print site.
 pub const Display = struct {
@@ -1098,7 +1103,7 @@ pub fn astTy(t: Ast.Type) Ty {
 /// Elaboration is called from lowering rather than from the driver because its
 /// input is the AST and its only consumer is the next line: a `Lower` field set
 /// by root.zig would buy a second entry path and nothing else.
-pub fn lowerFile(self: *Lower) Error!void {
+pub fn lowerFile(self: *Lower) Error!Lowered {
     // The current backend only executes two-state analog equations. Preserve
     // full source literals in the AST, but never silently coerce them here.
     for (self.file.exprs.nodes.items(.tag), 0..) |tag, i| {
@@ -1126,6 +1131,52 @@ pub fn lowerFile(self: *Lower) Error!void {
     self.unconnected_inputs = design.unconnected_inputs;
     try self.lowerModule(design.top);
     if (self.had_error) return error.DiagnosticsReported;
+    return self.lowered();
+}
+
+/// The output tables, as the value later stages read. Every buffer is shared
+/// with `self`, not copied.
+fn lowered(self: *const Lower) Lowered {
+    return .{
+        .file = self.file,
+        .src = self.src,
+        .tok_starts = self.tok_starts,
+        .directives = self.directives,
+        .module = self.module,
+        .hier_names = self.hier_names,
+        .unit_paths = self.unit_paths,
+        .consts = self.consts,
+        .vectors = self.vectors,
+        .node_order = self.node_order,
+        .node_kind = self.node_kind,
+        .node_disciplines = self.node_disciplines,
+        .node_dir = self.node_dir,
+        .num_ports = self.num_ports,
+        .flow_unknowns = self.flow_unknowns,
+        .port_probes = self.port_probes,
+        .nodesets = self.nodesets,
+        .disciplines = self.disciplines,
+        .params = self.params,
+        .aliases = self.aliases,
+        .contributions = self.contributions,
+        .held_vars = self.held_vars,
+        .limit_slots = self.limit_slots,
+        .table_samples = self.table_samples,
+        .rng_auto_sites = self.rng_auto_sites,
+        .displays = self.displays,
+        .display_root = self.display_root,
+        .table_effect = self.table_effect,
+        .reject_iteration_place = self.reject_iteration_place,
+        .reject_iteration = self.reject_iteration,
+        .uses_str_tasks = self.uses_str_tasks,
+        .uses_file_tasks = self.uses_file_tasks,
+        .uses_table_model = self.uses_table_model,
+        .uses_rng = self.uses_rng,
+        .uses_newton_iter = self.uses_newton_iter,
+        .uses_host_simparam = self.uses_host_simparam,
+        .discrete_inputs = self.discrete_inputs,
+        .mixed_signal = self.mixed_signal,
+    };
 }
 
 /// LRM §6.2/§6.9. Register ports (§6.5) into node_order, elaborate the
@@ -1762,5 +1813,6 @@ test {
     _ = lower_hier_name;
     _ = lower_func;
     _ = lower_constfold;
+    _ = Lowered;
     _ = lower_test;
 }
