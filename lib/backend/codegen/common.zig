@@ -134,8 +134,8 @@ pub fn planCommon(self: *Gen) Error!void {
     // §5.10 which core field each held variable's write-back reads. Done
     // here rather than by scanning `jobs` in `emitStateMachine`, because
     // `lo_idx` is only meaningful once every job has been folded in.
-    self.held_idx = try a.alloc(u32, self.lower.held_vars.items.len);
-    for (self.lower.held_vars.items, 0..) |h, i| {
+    self.held_idx = try a.alloc(u32, self.lowered.held_vars.items.len);
+    for (self.lowered.held_vars.items, 0..) |h, i| {
         const v = self.an.rv(h.final);
         self.held_idx[i] = if (v == .f_zero) none_u32 else self.lo_idx[@intFromEnum(v)];
     }

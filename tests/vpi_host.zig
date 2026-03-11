@@ -55,7 +55,7 @@ fn host(design: ?[]const u8) !u8 {
     };
     defer res.deinit();
 
-    try vpi.open(std.heap.page_allocator, res.lower);
+    try vpi.open(std.heap.page_allocator, res.lowered);
     defer vpi.close();
 
     // §12.33.2. Everything the acceptance test asserts happens inside this
@@ -81,7 +81,7 @@ fn analogHost(path: []const u8) !u8 {
         return 1;
     };
     defer res.deinit();
-    try vpi.open(gpa, res.lower);
+    try vpi.open(gpa, res.lowered);
     defer vpi.close();
     vpi.runStartupRoutines();
     vpi.callback.endOfCompile();

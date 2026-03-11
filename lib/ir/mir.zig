@@ -238,8 +238,8 @@ pub const DefKind = enum(u8) {
     float_const, // §4.2 constant expression, real
     int_const, // §4.2 constant expression, integer
     str_const, // §2.7 string literal (ch9 format args, §4.4 names)
-    param_ref, // §3.4 parameter — index into Lower.params
-    block_param, // §4.4 probe: index into the unknown vector (Lower.node_order)
+    param_ref, // §3.4 parameter — index into Lowered.params
+    block_param, // §4.4 probe: index into the unknown vector (Lowered.node_order)
     inst_result, // result of an instruction
 };
 
@@ -378,13 +378,13 @@ pub fn addStrConst(self: *Mir, gpa: std.mem.Allocator, bytes: []const u8) !Value
     return self.addValue(gpa, .str_const, @intFromEnum(s));
 }
 
-/// LRM §3.4 parameter reference. `param` indexes Lower.params.
+/// LRM §3.4 parameter reference. `param` indexes Lowered.params.
 pub fn addParamRef(self: *Mir, gpa: std.mem.Allocator, param: u32) !Value {
     return self.addValue(gpa, .param_ref, param);
 }
 
 /// LRM §4.4 signal-access probe. `unknown` indexes the solver unknown vector
-/// (Lower.node_order → the generated `U` enum, i.e. codegen's `x[unknown]`).
+/// (Lowered.node_order → the generated `U` enum, i.e. codegen's `x[unknown]`).
 /// V(a,b) lowers to fsub of two probes; a branch-current unknown gets its own
 /// node_order slot.
 pub fn addBlockParam(self: *Mir, gpa: std.mem.Allocator, unknown: u32) !Value {

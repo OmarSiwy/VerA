@@ -412,7 +412,7 @@ pub fn main(init: std.process.Init) !u8 {
             return 2;
         };
         var dm = d;
-        dm.mixed = vera.tb.mixedPlan(result.lower);
+        dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
         const runner = try vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm);
         const built = vera.tb.buildExe(gpa, io, device, runner, .{
             .work_dir = wd,

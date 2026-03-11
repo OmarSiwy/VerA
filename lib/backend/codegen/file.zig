@@ -22,6 +22,7 @@ const Analysis = @import("ir").Analysis;
 const cg_filters = @import("../cg_filters.zig");
 const cg_limit = @import("../cg_limit.zig");
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -75,17 +76,17 @@ pub fn emitFile(self: *Gen) Error!void {
     // so a printing artifact needs the string kernels whether or not the
     // model ever names `$sformat`. This is the same condition `display_txt`
     // has always carried, now spelled once.
-    const strs = self.lower.uses_str_tasks or self.display == .emit;
+    const strs = self.lowered.uses_str_tasks or self.display == .emit;
     // §9.21, set at the call for the same reason `strs` is: the lookup may
     // land in any unit once the MIR is sliced.
-    const tbl = self.lower.uses_table_model;
+    const tbl = self.lowered.uses_table_model;
     // §9.13, set at the call for the same reason: `lowerRandom` runs long
     // before the MIR is sliced into units.
-    const rng = self.lower.uses_rng;
+    const rng = self.lowered.uses_rng;
     // §9.5 the descriptor table. `display == .emit` is the second condition
     // and not a convenience: it is the artifact whose host runs the per-point
     // side-effect phase these kernels have to be sequenced in.
-    const files = self.display == .emit and self.lower.uses_file_tasks;
+    const files = self.display == .emit and self.lowered.uses_file_tasks;
     try buildPrelude(self, stateful, hist, filt, timer, strs, tbl, rng, files);
     try self.out.appendSlice(self.gpa, header_txt);
     try self.out.appendSlice(self.gpa, math_txt);
@@ -136,7 +137,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitDerive(self);
     try emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
-    if (self.lower.table_samples.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
+    if (self.lowered.table_samples.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
     try emitPrecompute(self);
     try gen_unit.emitUnits(self);
     try gen_dispatch.emitDispatchers(self);
@@ -146,7 +147,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
     // advance, which is the ONLY place a stream may move: a per-iteration draw
     // makes the residual non-deterministic and Newton never converges.
-    if (stateful or self.lower.rng_auto_sites != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
+    if (stateful or self.lowered.rng_auto_sites != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
     try cg_limit.emit(self);
     try gen_state.emitCollapse(self, cpairs);
     try gen_state.emitNextBreakpoint(self);
@@ -267,7 +268,7 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 /// `State` + `initState` + `updateState` as a set, which `emitStateMachine`
 /// emits together.
 pub fn hasStatefulOps(self: *const Gen) bool {
-    if (self.lower.held_vars.items.len != 0 or self.lower.limit_slots.items.len != 0 or self.lower.uses_newton_iter or self.lower.reject_iteration_place != null) return true;
+    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses_newton_iter or self.lowered.reject_iteration_place != null) return true;
     for (self.units) |u| {
         if (u.role == .analog_op and opHasState(u.op)) return true;
     }
@@ -309,10 +310,10 @@ pub fn emitTopology(self: *Gen) Error!void {
     try self.w("/// then §5.4.2 branch-flow unknowns.\n", .{});
     try self.w("pub const U = enum(u8) {{\n", .{});
     for (self.u_names, 0..) |n, i| {
-        const kindc: []const u8 = if (i < self.lower.num_ports) "port" else if (isFlowUnknown(self, @intCast(i))) "branch flow" else "internal";
+        const kindc: []const u8 = if (i < self.lowered.num_ports) "port" else if (isFlowUnknown(self, @intCast(i))) "branch flow" else "internal";
         try self.w("    {s}, // {s}\n", .{ n, kindc });
     }
-    try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lower.num_ports});
+    try self.w("}};\n\npub const num_ports: usize = {d};\nconst n_u = contract.nU(Self);\n\n", .{self.lowered.num_ports});
 
     if (self.jac_f32) try self.w(
         \\/// This device permits a single-precision DERIVATIVE half in the
@@ -381,7 +382,7 @@ pub fn emitTopology(self: *Gen) Error!void {
 /// has no net_decl_assignment to carry one, since the clause gives the
 /// value to "the potential of the net".
 pub fn emitNodesets(self: *Gen) Error!void {
-    if (self.lower.nodesets.items.len == 0) return;
+    if (self.lowered.nodesets.items.len == 0) return;
     try self.w("/// §3.6.3.2 nodeset: the initial guess the source states for each\n", .{});
     try self.w("/// unknown's potential. A HINT to the solver — not an initial\n", .{});
     try self.w("/// condition and not a clamp; the solved answer is unchanged by it.\n", .{});
@@ -393,7 +394,7 @@ pub fn emitNodesets(self: *Gen) Error!void {
         // non-hierarchical case of that sentence, so LAST wins here and the
         // clause permits either.
         var v: ?f64 = null;
-        for (self.lower.nodesets.items) |ns| {
+        for (self.lowered.nodesets.items) |ns| {
             if (ns.node == i) v = ns.value;
         }
         if (v) |x| try self.w("    {s},\n", .{try fmtF64(self, x)}) else try self.w("    null,\n", .{});
@@ -425,34 +426,34 @@ pub fn emitNodesets(self: *Gen) Error!void {
 pub fn flowOnlySignalFlowNet(self: *const Gen, c: Lower.Contribution) ?u16 {
     if (c.access != .flow or c.kind != .direct) return null;
     for ([_]u16{ c.hi, c.lo }) |n| {
-        if (n >= self.lower.node_order.items.len) continue; // ground
-        switch (self.lower.node_dir.items[n]) {
+        if (n >= self.lowered.node_order.items.len) continue; // ground
+        switch (self.lowered.node_dir.items[n]) {
             .input, .output => {},
             .unspecified, .inout => continue,
         }
-        const dname = self.lower.node_disciplines.items[n];
+        const dname = self.lowered.node_disciplines.items[n];
         if (dname.len == 0) continue;
-        const d = self.lower.disciplines.get(dname) orelse continue;
+        const d = self.lowered.disciplines.get(dname) orelse continue;
         if (!d.has_potential and d.has_flow) return n;
     }
     return null;
 }
 
 pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
-    if (i >= self.lower.node_order.items.len) return true; // codegen-added branch current
+    if (i >= self.lowered.node_order.items.len) return true; // codegen-added branch current
     // §5.4.2/§5.4.3. An array read: lowering records the kind where it
     // creates the slot. It used to be `startsWith("flow(")`, which §2.8.1
     // makes a lie — a net declared `\flow(p,n)` IS the identifier
     // `flow(p,n)` and was classified as a current.
-    if (self.lower.node_kind.items[i] != .net) return true;
+    if (self.lowered.node_kind.items[i] != .net) return true;
     // §1.3.4.2 a flow signal-flow net has no potential ("Potential for such
     // a node is not defined"), so its ONE unknown is a flow even though it
     // is a plain node with a plain name. Everything that asks this question
     // — the host's `u_kinds`, the §3.6.1.2 tolerance, §4.5.15's refusal to
     // `$limit` a current — wants the quantity, not the spelling.
-    const dname = self.lower.node_disciplines.items[i];
+    const dname = self.lowered.node_disciplines.items[i];
     if (dname.len == 0) return false;
-    const d = self.lower.disciplines.get(dname) orelse return false;
+    const d = self.lowered.disciplines.get(dname) orelse return false;
     return d.has_flow and !d.has_potential;
 }
 
@@ -477,13 +478,13 @@ pub fn isFlowUnknown(self: *const Gen, i: u32) bool {
 pub fn abstolOf(self: *const Gen, i: u32) f64 {
     const flow = isFlowUnknown(self, i);
     var idx: u16 = @intCast(i);
-    if (i < self.lower.node_kind.items.len) switch (self.lower.node_kind.items[i]) {
+    if (i < self.lowered.node_kind.items.len) switch (self.lowered.node_kind.items[i]) {
         .net => {},
         .branch_flow, .port_flow => |n| idx = n,
     };
-    if (idx == Lower.ground or idx >= self.lower.node_disciplines.items.len)
+    if (idx == Lower.ground or idx >= self.lowered.node_disciplines.items.len)
         return if (flow) 1e-12 else 1e-6;
-    const info = self.lower.disciplines.get(self.lower.node_disciplines.items[idx]) orelse
+    const info = self.lowered.disciplines.get(self.lowered.node_disciplines.items[idx]) orelse
         return if (flow) 1e-12 else 1e-6;
     return if (flow) info.flow_abstol else info.potential_abstol;
 }
@@ -491,7 +492,7 @@ pub fn abstolOf(self: *const Gen, i: u32) f64 {
 /// §3.4 parameters. One field, typed, with the constant-folded spec default.
 pub fn emitModel(self: *Gen) Error!void {
     try self.w("/// §3.4 module parameters (spec defaults folded at compile time).\npub const Model = struct {{\n", .{});
-    for (self.lower.params.items, 0..) |p, i| {
+    for (self.lowered.params.items, 0..) |p, i| {
         const ty: []const u8 = switch (Analysis.tyOfParam(p.ty)) {
             .real => "f64",
             .int => "i64",
@@ -516,8 +517,8 @@ pub fn emitModel(self: *Gen) Error!void {
     // emitted only for a parameter someone asked about): it is the only
     // thing that tells "the host overrode the alias" from "the host left
     // the alias at the original's default", and those two have to differ.
-    for (self.lower.aliases.items, 0..) |al, i| {
-        const p = self.lower.params.items[al.param];
+    for (self.lowered.aliases.items, 0..) |al, i| {
+        const p = self.lowered.params.items[al.param];
         const ty = Analysis.tyOfParam(p.ty);
         try self.w("    {s}: {s} = {s}, // §3.4.7 alias of `{s}`\n", .{
             self.a_names[i],
@@ -539,9 +540,9 @@ pub fn emitModel(self: *Gen) Error!void {
     // host that never writes it.
     if (self.uses_nom_temp) try self.w(
         "    {s}: f64 = {s}, // §9.15 $simparam(\"tnom\"), degC — host-written\n",
-        .{ Lower.simparamHostField("tnom").?, try fmtF64(self, self.lower.simparamValue("tnom").?) },
+        .{ Lower.simparamHostField("tnom").?, try fmtF64(self, self.lowered.simparamValue("tnom").?) },
     );
-    if (self.lower.params.items.len == 0 and !self.uses_nom_temp) {
+    if (self.lowered.params.items.len == 0 and !self.uses_nom_temp) {
         try self.w("    // (the module declares no parameters)\n    _unused: u8 = 0,\n", .{});
     }
     try self.w("}};\n\n", .{});
@@ -586,12 +587,12 @@ pub fn emitDerive(self: *Gen) Error!void {
     // override written through the alias has to be the original's value
     // BEFORE a §6.3.4 dependent parameter reads it, or `dtemp` derives from
     // the alias and everything over `dtemp` derives from the default.
-    for (self.lower.aliases.items, 0..) |al, i| {
+    for (self.lowered.aliases.items, 0..) |al, i| {
         try self.w("    if (model.{s}__given) model.{s} = model.{s};\n", .{
             self.a_names[i], self.p_names[al.param], self.a_names[i],
         });
     }
-    for (self.lower.params.items, 0..) |p, i| {
+    for (self.lowered.params.items, 0..) |p, i| {
         const ty = Analysis.tyOfParam(p.ty);
         // A string parameter has no arithmetic to redo; a string localparam
         // is left overridable rather than growing a second renderer for it.
@@ -605,7 +606,7 @@ pub fn emitDerive(self: *Gen) Error!void {
             // Defaults with no compile-time value retain W1050's explicit
             // host-supplied-value contract (for example $simparam("gmin")).
             if (!p.is_local and p.folded == null and self.an.foldConst(p.default, 0, true) == null) continue;
-            if (self.diags) |bag| try bag.add(.codegen, .E1004, self.lower.tokenSpan(p.tok), "host derivation of `{s}` uses an unsupported expression; its declared value cannot be frozen after parameter overrides", .{p.name});
+            if (self.diags) |bag| try bag.add(.codegen, .E1004, self.lowered.tokenSpan(p.tok), "host derivation of `{s}` uses an unsupported expression; its declared value cannot be frozen after parameter overrides", .{p.name});
             return error.UnsupportedParameterDefault;
         };
         // §6.3.4 gives the DEFAULT; an explicit host write wins. Only a
@@ -655,7 +656,7 @@ pub fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
     if (!bag.enabled(.W1050)) return;
     if (p.folded != null or self.an.foldConst(p.default, 0, true) != null) return;
     if (try gen_call.f64Const(self, p.default, 0, false) != null) return;
-    var d = bag.build(.codegen, .W1050, self.lower.tokenSpan(p.tok));
+    var d = bag.build(.codegen, .W1050, self.lowered.tokenSpan(p.tok));
     d.msg("`{s}`", .{p.name});
     d.point("this default has no compile-time value, so the field is 0", .{});
     d.help("write the model card field before the first solve, or give `{s}` a constant default", .{p.name});
@@ -794,15 +795,15 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\    systf: ?*const contract.SystfHost = null,
         \\
     , .{});
-    for (self.lower.table_samples.items, 0..) |count, site| {
+    for (self.lowered.table_samples.items, 0..) |count, site| {
         try self.w("    table_{d}: [{d}]f64 = @splat(0.0),\n", .{ site, count });
     }
-    if (self.lower.table_samples.items.len != 0) try self.w("    // §9.21.1 permanent first-call state; not timestep rollback state.\n    table_ready: [{d}]bool = @splat(false),\n", .{self.lower.table_samples.items.len});
-    if (self.lower.limit_slots.items.len != 0) try self.w(
+    if (self.lowered.table_samples.items.len != 0) try self.w("    // §9.21.1 permanent first-call state; not timestep rollback state.\n    table_ready: [{d}]bool = @splat(false),\n", .{self.lowered.table_samples.items.len});
+    if (self.lowered.limit_slots.items.len != 0) try self.w(
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
-        .{self.lower.limit_slots.items.len},
+        .{self.lowered.limit_slots.items.len},
     );
-    if (self.lower.uses_newton_iter) try self.w(
+    if (self.lowered.uses_newton_iter) try self.w(
         "    newton_iteration: u32 = 1,\n",
         .{},
     );
@@ -813,16 +814,16 @@ pub fn emitInstance(self: *Gen) Error!void {
     // whose numbers move between two identical runs cannot be debugged.
     // Distinct per site: §9.13.1 says the internal seed "gets updated every
     // time the call ... is made", so two call sites are two streams.
-    if (self.lower.rng_auto_sites != 0) {
+    if (self.lowered.rng_auto_sites != 0) {
         try self.w(
             "    /// §9.13.1 the internal seed of each seedless `$random`/`$arandom`\n" ++
                 "    /// call site. Advanced by `updateState` on the ACCEPTED step and only\n" ++
                 "    /// READ by `eval`: a draw that moved between Newton iterations would\n" ++
                 "    /// make the residual non-deterministic and the solve would not converge.\n" ++
                 "    rng_auto: [{d}]i64 = .{{",
-            .{self.lower.rng_auto_sites},
+            .{self.lowered.rng_auto_sites},
         );
-        for (0..self.lower.rng_auto_sites) |k| try self.w("{s}{d}", .{
+        for (0..self.lowered.rng_auto_sites) |k| try self.w("{s}{d}", .{
             if (k == 0) "" else ", ", 1 + 7919 * @as(u32, @intCast(k)),
         });
         try self.w("}},\n", .{});
@@ -906,7 +907,7 @@ pub fn emitInstance(self: *Gen) Error!void {
     // not move a single operator field, and the default is the DECLARED
     // initializer — the only evaluation that can observe it is the first,
     // before `updateState` has ever run.
-    for (self.lower.held_vars.items, 0..) |h, i| {
+    for (self.lowered.held_vars.items, 0..) |h, i| {
         // ponytail: a parameter-dependent initializer takes the parameter's
         // SPEC default, exactly like every §4.5 operator control argument
         // (`f64Expr`/`argF64`), because a struct field default is a comptime
@@ -931,7 +932,7 @@ pub fn emitInstance(self: *Gen) Error!void {
     // plain cross-observer — or a path-latch model — carries no dead
     // fields.
     if (fsmStateCtl(self)) {
-        for (self.lower.held_vars.items, 0..) |h, i| {
+        for (self.lowered.held_vars.items, 0..) |h, i| {
             const init = self.an.foldConst(self.an.rv(h.init), 0, true);
             const v: f64 = if (init) |c| c.f else 0.0;
             if (h.ty == .integer) {
@@ -1113,7 +1114,7 @@ pub fn emitPrecompute(self: *Gen) Error!void {
 /// (devices/switch: one 0.8-of-full-scale sample against a 1e-11 match
 /// everywhere else).
 pub fn fsmStateCtl(self: *const Gen) bool {
-    if (self.lower.held_vars.items.len == 0) return false;
+    if (self.lowered.held_vars.items.len == 0) return false;
     for (self.units) |u| {
         if (u.role != .analog_op) continue;
         switch (u.op) {
@@ -1139,7 +1140,7 @@ pub fn pathLatches(self: *const Gen) bool {
 /// advance on. They contribute nothing to `query` — the base moving is
 /// the integrator's business, not a step-reject condition.
 pub fn emitsStateCtl(self: *const Gen) bool {
-    return fsmStateCtl(self) or pathLatches(self) or self.lower.uses_newton_iter or self.lower.limit_slots.items.len != 0;
+    return fsmStateCtl(self) or pathLatches(self) or self.lowered.uses_newton_iter or self.lowered.limit_slots.items.len != 0;
 }
 
 /// The hook body. `query` compares the HELD (discrete) state only; the
@@ -1157,7 +1158,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         \\pub fn stateCtl(_: *const Model, inst: *Instance, {s}: *State, op: contract.StateCtlOp) bool {{
         \\    if (op == .query) {{
         \\        return
-    , .{if (self.lower.limit_slots.items.len != 0 or self.lower.uses_newton_iter) "state" else "_"});
+    , .{if (self.lowered.limit_slots.items.len != 0 or self.lowered.uses_newton_iter) "state" else "_"});
     var first = true;
     for (self.held_names) |n| {
         if (!fsm) break;
@@ -1171,11 +1172,11 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         \\    if (op == .commit) {{
         \\
     , .{});
-    if (self.lower.limit_slots.items.len != 0) try self.w(
+    if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
     );
-    if (self.lower.uses_newton_iter) try self.w(
+    if (self.lowered.uses_newton_iter) try self.w(
         "        state.newton_iteration = inst.newton_iteration;\n",
         .{},
     );
@@ -1191,11 +1192,11 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         }
     }
     try self.w("    }} else {{\n", .{});
-    if (self.lower.limit_slots.items.len != 0) try self.w(
+    if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        inst.limiter_previous = state.limiter_previous;\n",
         .{},
     );
-    if (self.lower.uses_newton_iter) try self.w(
+    if (self.lowered.uses_newton_iter) try self.w(
         "        inst.newton_iteration = state.newton_iteration;\n",
         .{},
     );

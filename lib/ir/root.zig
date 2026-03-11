@@ -27,6 +27,8 @@ pub const Analysis = @import("analysis.zig");
 pub const Ssa = @import("ssa.zig");
 pub const Elaborate = @import("elaborate.zig");
 pub const Lower = @import("lower.zig");
+/// What lowering hands every later stage — lower/tables.zig.
+pub const Lowered = Lower.Lowered;
 pub const ifconv = @import("ifconv.zig");
 pub const proof = @import("proof.zig");
 

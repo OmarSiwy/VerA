@@ -15,6 +15,7 @@ const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 const Mir = @import("../mir.zig");
 const Lower = @import("../lower.zig");
+const Lowered = Lower.Lowered;
 const Analysis = @import("../analysis.zig");
 const diag = @import("diag");
 const math = proof.math;
@@ -41,7 +42,7 @@ pub const Prover = struct {
     /// Scratch arena — dies with `prove`.
     arena: std.mem.Allocator,
     mir: *const Mir,
-    lower: *const Lower,
+    lowered: *const Lowered,
     opts: Options,
 
     // --- SoA, indexed by @intFromEnum(Mir.Value) ---
@@ -94,7 +95,7 @@ pub const Prover = struct {
         // the caret on whatever token 0 happened to be — the first line of the
         // annex-D prelude.
         if (tok == Mir.no_tok) return .{};
-        return self.lower.tokenSpan(tok);
+        return self.lowered.tokenSpan(tok);
     }
 
     /// Span of whatever DEFINED a value, so a label can point at the parameter
@@ -103,10 +104,10 @@ pub const Prover = struct {
         switch (self.mir.valueDef(self.mir.resolveAlias(v))) {
             .inst_result => |inst| return self.span(inst),
             .param_ref => |pi| {
-                if (pi >= self.lower.params.items.len) return .{};
-                const tok = self.lower.params.items[pi].tok;
+                if (pi >= self.lowered.params.items.len) return .{};
+                const tok = self.lowered.params.items[pi].tok;
                 if (tok == Mir.no_tok) return .{};
-                return self.lower.tokenSpan(tok);
+                return self.lowered.tokenSpan(tok);
             },
             else => return .{},
         }
@@ -194,8 +195,8 @@ pub const Prover = struct {
     /// that parameter's DEFAULT, which the model card can override — using it
     /// would be an unsound proof.
     fn paramInterval(self: *const Prover, param: u32) proof_lattice.Interval {
-        if (param >= self.lower.params.items.len) return .top;
-        const info = self.lower.params.items[param];
+        if (param >= self.lowered.params.items.len) return .top;
+        const info = self.lowered.params.items[param];
         if (info.ty == .string) return .top;
 
         var acc: ?proof_lattice.Interval = null;
@@ -257,7 +258,7 @@ pub const Prover = struct {
     /// [0,1], §4.2.4). Deliberately refuses identifiers (see
     /// `paramInterval`); `inf` (§3.4.2) folds to ±infinity.
     fn foldBound(self: *const Prover, e: Ast.ExprId) ?f64 {
-        const c = constfold.fold(self.lower.file, e, constfold.literal_env) orelse return null;
+        const c = constfold.fold(self.lowered.file, e, constfold.literal_env) orelse return null;
         return if (c == .str) null else c.asReal();
     }
 
@@ -381,7 +382,7 @@ pub const Prover = struct {
     /// select arm.
     fn countUses(self: *Prover) void {
         const mir = self.mir;
-        for (self.lower.contributions.items) |c| {
+        for (self.lowered.contributions.items) |c| {
             self.uses[self.idxOf(c.resist_val)] += 1;
             self.uses[self.idxOf(c.react_val)] += 1;
         }
@@ -1063,8 +1064,8 @@ pub const Prover = struct {
         switch (self.mir.valueDef(rv)) {
             .int_const => return true,
             .float_const => |c| return math.isFinite(c) and c == @trunc(c),
-            .param_ref => |pi| return pi < self.lower.params.items.len and
-                self.lower.params.items[pi].ty == .integer,
+            .param_ref => |pi| return pi < self.lowered.params.items.len and
+                self.lowered.params.items[pi].ty == .integer,
             .inst_result => |inst| {
                 const op = self.mir.instOp(inst);
                 // §4.2.1.2 integer→real conversion preserves integrality.
@@ -1144,12 +1145,12 @@ pub const Prover = struct {
         if (!self.bag.enabled(.W0650)) return;
 
         const access: []const u8 = if (c.access == .potential) "V" else "I";
-        var b = self.bag.build(.proof, .W0650, self.lower.tokenSpan(c.tok));
+        var b = self.bag.build(.proof, .W0650, self.lowered.tokenSpan(c.tok));
         b.msg("unit {d} — {s}({s},{s}) — compiles with @setFloatMode(.strict)", .{
             unit,
             access,
-            self.lower.nodeName(c.hi),
-            self.lower.nodeName(c.lo),
+            self.lowered.nodeName(c.hi),
+            self.lowered.nodeName(c.lo),
         });
 
         const def = self.valueSpan(culprit);
@@ -1203,8 +1204,8 @@ pub const Prover = struct {
     /// bound open admits the same finite values and keeps it.
     fn warnInfiniteRange(self: *Prover, pi: u32, iv: proof_lattice.Interval) !void {
         if (!self.bag.enabled(.W0651)) return;
-        if (pi >= self.lower.params.items.len) return;
-        const pinfo = self.lower.params.items[pi];
+        if (pi >= self.lowered.params.items.len) return;
+        const pinfo = self.lowered.params.items[pi];
         // Only worth saying when the user WROTE a range: a parameter with no
         // range at all is the ordinary case and W0650 already covers it.
         if (pinfo.ranges.len == 0) return;
@@ -1214,7 +1215,7 @@ pub const Prover = struct {
         // as that function's, for the same reason.
         if (pinfo.ty == .string) return;
 
-        var b = self.bag.build(.proof, .W0651, self.lower.tokenSpan(pinfo.tok));
+        var b = self.bag.build(.proof, .W0651, self.lowered.tokenSpan(pinfo.tok));
         b.msg("`{s}`", .{pinfo.name});
         b.point("{s} bound is closed on infinity", .{
             if (!math.isFinite(iv.lo) and !iv.lo_open) @as([]const u8, "lower") else "upper",
@@ -1228,14 +1229,14 @@ pub const Prover = struct {
     fn describe(self: *const Prover, v: Mir.Value) []const u8 {
         const rv = self.mir.resolveAlias(v);
         switch (self.mir.valueDef(rv)) {
-            .param_ref => |pi| return if (pi < self.lower.params.items.len)
-                std.fmt.allocPrint(self.arena, "parameter `{s}`", .{self.lower.params.items[pi].name}) catch "a parameter"
+            .param_ref => |pi| return if (pi < self.lowered.params.items.len)
+                std.fmt.allocPrint(self.arena, "parameter `{s}`", .{self.lowered.params.items[pi].name}) catch "a parameter"
             else
                 "a parameter",
             .block_param => |n| return std.fmt.allocPrint(
                 self.arena,
                 "a probe of node `{s}`",
-                .{self.lower.nodeName(@intCast(n))},
+                .{self.lowered.nodeName(@intCast(n))},
             ) catch "a node probe",
             .float_const => |c| return std.fmt.allocPrint(self.arena, "the constant {d}", .{c}) catch "a constant",
             .int_const => |c| return std.fmt.allocPrint(self.arena, "the constant {d}", .{c}) catch "a constant",
@@ -1294,7 +1295,7 @@ pub const Prover = struct {
     /// Per-unit float mode: walk each contribution's backward slice and AND the
     /// `finite` bits. See UNIT ORDERING at the top of the file.
     pub fn verdict(self: *Prover) !Verdict {
-        const n = unitCount(self.lower);
+        const n = unitCount(self.lowered);
         const modes = try self.gpa.alloc(FloatMode, n);
         errdefer self.gpa.free(modes);
 
@@ -1308,7 +1309,7 @@ pub const Prover = struct {
         var stack: std.ArrayList(Mir.Value) = .empty;
         defer stack.deinit(self.arena);
 
-        for (self.lower.contributions.items, 0..) |c, u| {
+        for (self.lowered.contributions.items, 0..) |c, u| {
             const gen: u32 = @intCast(u);
             stack.clearRetainingCapacity();
             try stack.append(self.arena, c.resist_val);

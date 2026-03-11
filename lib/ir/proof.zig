@@ -53,7 +53,7 @@
 //! One unit per `Lower.Contribution` (which is already one per (access, node
 //! pair), §5.6.1.3 — not one per `<+` statement; the exception is a §5.6.7
 //! INDIRECT contribution, where each statement is its own equation and so its
-//! own entry), in `Lower.contributions` append order, `naming.Role.analog`,
+//! own entry), in `Lowered.contributions` append order, `naming.Role.analog`,
 //! target = access + node pair. The mode is
 //! the JOIN over both `resist_val` (→ eval) and `react_val` (→ q): a unit gets
 //! `.optimized` only if BOTH its slices are proven finite, because codegen emits
@@ -104,6 +104,7 @@ const std = @import("std");
 const Ast = @import("frontend").Ast;
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
+const Lowered = Lower.Lowered;
 const Analysis = @import("analysis.zig");
 const diag = @import("diag");
 pub const math = std.math;
@@ -170,8 +171,8 @@ pub const max_errors = 64;
 
 /// Number of source units — the length of `Verdict.unit_modes`. naming.zig must
 /// agree with this (assert it there).
-pub fn unitCount(lower: *const Lower) usize {
-    return lower.contributions.items.len;
+pub fn unitCount(lowered: *const Lowered) usize {
+    return lowered.contributions.items.len;
 }
 
 // The lattice: intervals and math-function domains (§4.3.1/§4.3.2 Tables 4-14/4-15) — proof/lattice.zig
@@ -187,16 +188,16 @@ pub const domainOf = proof_lattice.domainOf;
 pub fn prove(
     gpa: std.mem.Allocator,
     mir: *const Mir,
-    lower: *const Lower,
+    lowered: *const Lowered,
     bag: *diag.Bag,
 ) !Verdict {
-    return proveOpts(gpa, mir, lower, .{}, bag);
+    return proveOpts(gpa, mir, lowered, .{}, bag);
 }
 
 pub fn proveOpts(
     gpa: std.mem.Allocator,
     mir: *const Mir,
-    lower: *const Lower,
+    lowered: *const Lowered,
     opts: Options,
     bag: *diag.Bag,
 ) !Verdict {
@@ -207,7 +208,7 @@ pub fn proveOpts(
         .gpa = gpa,
         .arena = scratch.allocator(),
         .mir = mir,
-        .lower = lower,
+        .lowered = lowered,
         .opts = opts,
         .bag = bag,
     };
@@ -217,7 +218,7 @@ pub fn proveOpts(
     // copy computing `idom`/`rpo_num` and nothing else; `Analysis` computes
     // those PLUS `is_loop`/`loop_of`, which is the missing input for the
     // loop-carried widening ceiling `walk` records.
-    p.an = try Analysis.buildStructure(p.arena, mir, lower);
+    p.an = try Analysis.buildStructure(p.arena, mir, lowered);
 
     try p.seedValues(); // §3.4.2 param ranges, §4.2 constants, §4.4 probes
     try p.buildClasses(); // structural congruence, so guards reach every copy

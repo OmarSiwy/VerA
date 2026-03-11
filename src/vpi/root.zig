@@ -18,12 +18,12 @@
 //!
 //!   - every flattened declaration is named by its §6.7 path (`u.v.r`), because
 //!     `Elaborate.sep` makes the mangling BE the path; and
-//!   - `Lower.hier_names` resolves a path to the entity it denotes, which is
+//!   - `Lowered.hier_names` resolves a path to the entity it denotes, which is
 //!     how a child port that was collapsed into its parent's net is still
 //!     reachable by the name the source wrote.
 //!
 //! So the scope tree here is not a second elaboration. It is the instance tree
-//! read back out: the SHAPE is `Lower.unit_paths`, the row elaboration
+//! read back out: the SHAPE is `Lowered.unit_paths`, the row elaboration
 //! publishes per inlined instance together with the definition it came from —
 //! §11.6.1's `vpiDefName`, the one fact flattening erases — and the CONTENTS
 //! of each scope come from the elaborated module, split at the last
@@ -80,6 +80,7 @@ test {
     _ = systf;
 }
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const Elaborate = @import("ir").Elaborate;
 
 // ---------------------------------------------------------------------------
@@ -289,7 +290,7 @@ pub const Obj = struct {
     /// model, whose values live in a compiled device this process never sees.
     slot: ?u32 = null,
     /// `.parameter` of the analog model: the constant lowering folded for it
-    /// (`Lower.consts`), copied. §11.6.12 NOTE 1 gives a parameter "the value
+    /// (`Lowered.consts`), copied. §11.6.12 NOTE 1 gives a parameter "the value
     /// of the parameter" as a value, and this is the only value an analog
     /// compile holds without running the device.
     value: ?Lower.Const = null,
@@ -396,13 +397,13 @@ pub var design: ?Design = null;
 
 /// Build the object model over one elaborated design and install it.
 ///
-/// `lower` is a compiled `Lower` whose `lowerFile` has run: `lower.module` is
-/// the elaborated top (`Elaborate.Design.top`) and `lower.hier_names` its §6.7
+/// `lowered` is what `Lower.lowerFile` produced: `lowered.module` is the
+/// elaborated top (`Elaborate.Design.top`) and `lowered.hier_names` its §6.7
 /// path table. Everything read out of it is copied, so the caller may free its
 /// `CompileResult` the moment this returns.
-pub fn open(gpa: std.mem.Allocator, lower: *const Lower) !void {
+pub fn open(gpa: std.mem.Allocator, lowered: *const Lowered) !void {
     if (design != null) close();
-    design = try build(gpa, lower);
+    design = try build(gpa, lowered);
 }
 
 pub fn close() void {
@@ -481,12 +482,12 @@ const Building = struct {
     }
 };
 
-/// `lower` has not been through `lowerFile`, so there is no elaborated top to
-/// model. Not a diagnostic: a caller that hands over an uncompiled `Lower` has
-/// a bug in its own sequencing.
+/// `lowered` carries no elaborated top to model. Not a diagnostic: a caller
+/// that hands over a `Lowered` no `lowerFile` produced has a bug in its own
+/// sequencing.
 pub const Error = error{ OutOfMemory, NotElaborated };
 
-fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
+fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     var d: Design = .{
         .gpa = gpa,
         .arena = .init(gpa),
@@ -499,20 +500,20 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
     errdefer d.deinit();
     const arena = d.arena.allocator();
 
-    const file = lower.file;
-    const flat = lower.module orelse return error.NotElaborated;
+    const file = lowered.file;
+    const flat = lowered.module orelse return error.NotElaborated;
     const top_name = try arena.dupe(u8, file.str(flat.name));
 
     // --- the scope tree ----------------------------------------------------
     // §11.6.1's `vpiInternalScope`, READ from elaboration rather than walked
-    // again. `Lower.unit_paths` is one row per inlined instance, depth first in
+    // again. `Lowered.unit_paths` is one row per inlined instance, depth first in
     // source order, and each row carries the definition it was inlined from —
     // `vpiDefName`, the one fact flattening erases. Instance arrays, §6.4.2
     // paramset selection and chains, and Annex E.2.1's netlist match were all
     // decided there, once; a second walk here was a second set of rules, and
     // it drifted. A tree of one publishes no rows (`Elaborate` hands the parsed
     // module over by pointer), so it is its own single row.
-    const units = if (lower.unit_paths.len != 0) lower.unit_paths else &[_]Elaborate.UnitPath{
+    const units = if (lowered.unit_paths.len != 0) lowered.unit_paths else &[_]Elaborate.UnitPath{
         .{ .module = top_name, .path = "", .decl = flat },
     };
     var scopes: std.ArrayList(Building) = .empty;
@@ -562,20 +563,20 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
     // still lets source name it and `hier_names` still resolves it.
     //
     // The SIZE comes back from the flat side through that same table: a port's
-    // width is the width of the node it denotes, and `Lower.vectors` is the
+    // width is the width of the node it denotes, and `Lowered.vectors` is the
     // §3.6.3 range already folded, keyed by the flat name.
     for (scopes.items, 0..) |*s, i| {
         for (s.decl.ports, 0..) |p, k| {
             const local = try arena.dupe(u8, file.str(p.name));
             const path = try joinPath(arena, s.path, local);
-            const node = lower.hier_names.get(path) orelse path;
+            const node = lowered.hier_names.get(path) orelse path;
             try s.ports.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, .{
                 .kind = .port,
                 .owner = @intCast(i),
                 .name = local,
                 .full = try joinPath(arena, top_name, path),
-                .size = vectorSize(lower, node),
+                .size = vectorSize(lowered, node),
                 .direction = p.direction,
                 .port_index = @intCast(k),
             });
@@ -597,7 +598,7 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
             .owner = split.scope,
             .name = split.local,
             .full = try joinPath(arena, top_name, flat_name),
-            .size = vectorSize(lower, flat_name),
+            .size = vectorSize(lowered, flat_name),
         });
     }
     for (flat.vars) |v| {
@@ -655,7 +656,7 @@ fn build(gpa: std.mem.Allocator, lower: *const Lower) Error!Design {
             // declaration; the definition still has the declaration. §11.6.12
             // NOTE 1 is the same sentence about the value beside it.
             .is_local = declaredLocal(scopes.items[split.scope].decl, file, split.local) orelse p.is_local,
-            .value = if (lower.consts.get(flat_name)) |c| switch (c) {
+            .value = if (lowered.consts.get(flat_name)) |c| switch (c) {
                 .str => |text| .{ .str = try arena.dupe(u8, text) },
                 else => c,
             } else null,
@@ -981,11 +982,11 @@ fn declaredLocal(decl: *const Ast.ModuleDecl, file: *const Ast.SourceFile, name:
 }
 
 /// §3.6.3 a vector net is N nets, and §11.6.8's `vpiSize` is that N.
-/// `Lower.vectors` is the folded `[msb:lsb]` keyed by the flat name — the same
+/// `Lowered.vectors` is the folded `[msb:lsb]` keyed by the flat name — the same
 /// fold lowering scalarised the net with, so this cannot disagree with the
 /// device's terminal count. A name absent from it is a scalar.
-fn vectorSize(lower: *const Lower, flat_name: []const u8) u32 {
-    const r = lower.vectors.get(flat_name) orelse return 1;
+fn vectorSize(lowered: *const Lowered, flat_name: []const u8) u32 {
+    const r = lowered.vectors.get(flat_name) orelse return 1;
     return @intCast(@abs(r.msb - r.lsb) + 1);
 }
 
@@ -994,7 +995,7 @@ fn vectorSize(lower: *const Lower, flat_name: []const u8) u32 {
 /// ponytail: LITERAL BOUNDS ONLY — which is what `src/sim/digital/root.zig`
 /// already requires of the same declaration ("declaration bounds must be
 /// literal integers"). A packed range over a parameter folds nowhere this
-/// file can reach: `Lower.vectors` holds nets and ports, not regs. Reporting 1
+/// file can reach: `Lowered.vectors` holds nets and ports, not regs. Reporting 1
 /// for a width the design knows would be a wrong answer, so a non-literal range
 /// reports 0 and `vpi_get(vpiSize, …)` turns that into `vpiUndefined` plus an
 /// error. Upgrade path: lowering interns packed regs into `vectors` the way it
@@ -1279,7 +1280,7 @@ pub const name_buf_len = 4096;
 ///
 /// ponytail: BIT-LEVEL objects (net bit, reg bit, port bit) are not modelled,
 /// so indexing a vector is still §12.2's error indication. Each would need
-/// §11.6.5's `vpiIndex` expr and its own properties; `Lower.vectors` already
+/// §11.6.5's `vpiIndex` expr and its own properties; `Lowered.vectors` already
 /// holds the folded `[msb:lsb]` they would need.
 pub export fn vpi_handle_by_index(obj: vpiHandle, index: c_int) vpiHandle {
     const d = enter("vpi_handle_by_index") orelse return null;
@@ -1781,7 +1782,7 @@ const nested_src =
 fn openSource(src: []const u8) !vera.CompileResult {
     var res = try vera.compileSource(std.testing.allocator, src, .lint);
     errdefer res.deinit();
-    try open(std.testing.allocator, res.lower);
+    try open(std.testing.allocator, res.lowered);
     return res;
 }
 
@@ -2141,7 +2142,7 @@ test "an instance resolved by Annex E.2.1's case-insensitive netlist match has i
         \\endmodule
     , .lint, .{ .spice_netlist = ".MODEL VERTNPN NPN BF=80 IS=1E-18\n" });
     defer res.deinit();
-    try open(std.testing.allocator, res.lower);
+    try open(std.testing.allocator, res.lowered);
     defer close();
 
     const q = try scopeAt("q");
@@ -2179,7 +2180,7 @@ test "the scopes are elaboration's units, one for one" {
     defer res.deinit();
     defer close();
 
-    const units = res.lower.unit_paths;
+    const units = res.lowered.unit_paths;
     try std.testing.expectEqual(@as(usize, 7), units.len);
     try std.testing.expectEqual(units.len, design.?.scopes.len);
     for (units, design.?.scopes) |u, s| {

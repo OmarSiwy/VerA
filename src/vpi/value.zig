@@ -8,7 +8,7 @@
 //!     0/1/X/Z), so every format here is a reading of those planes and nothing
 //!     is converted between state encodings.
 //!   - an ANALOG parameter (`Obj.value`) reads the constant lowering folded
-//!     for it (`Lower.consts`) — the one value an analog compile knows without
+//!     for it (`Lowered.consts`) — the one value an analog compile knows without
 //!     running the device. Node and branch values live in a compiled device
 //!     this process does not run, and are not answered.
 //!
@@ -835,7 +835,7 @@ test "§12.16: an analog parameter reads the value lowering folded" {
         \\endmodule
     , .lint);
     defer res.deinit();
-    try root.open(std.testing.allocator, res.lower);
+    try root.open(std.testing.allocator, res.lowered);
     defer root.close();
     var v: Value = std.mem.zeroes(Value);
     v.format = vpiRealVal;

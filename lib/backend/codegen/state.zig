@@ -20,6 +20,7 @@ const Mir = @import("ir").Mir;
 const opdb = @import("ir").op;
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
@@ -71,11 +72,11 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\
     , .{});
     if (acc.reads_t_prev) try self.w("    t_prev: f64 = 0.0,\n", .{});
-    if (self.lower.limit_slots.items.len != 0) try self.w(
+    if (self.lowered.limit_slots.items.len != 0) try self.w(
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
-        .{self.lower.limit_slots.items.len},
+        .{self.lowered.limit_slots.items.len},
     );
-    if (self.lower.uses_newton_iter) try self.w("    newton_iteration: u32 = 1,\n", .{});
+    if (self.lowered.uses_newton_iter) try self.w("    newton_iteration: u32 = 1,\n", .{});
     try self.w(
         \\}};
         \\
@@ -122,7 +123,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
 /// §9.13.1 seed to advance. Anything else `updateState` carries is `.history`.
 fn emitStateClass(self: *Gen) Error!void {
     const latch_only = gen_file.pathLatches(self) and !gen_file.hasStatefulOps(self) and
-        self.lower.rng_auto_sites == 0;
+        self.lowered.rng_auto_sites == 0;
     try self.w("pub const state_class: contract.StateClass = .{s};\n\n", .{
         if (latch_only) "path_latch" else "history",
     });
@@ -209,7 +210,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
     // §9.13.1 the internal seed advances HERE and nowhere else: this is the
     // accepted-step boundary, so a stream moves once per solved point and the
     // residual it feeds is fixed for the whole Newton loop that produced it.
-    if (self.lower.rng_auto_sites != 0) try self.w(
+    if (self.lowered.rng_auto_sites != 0) try self.w(
         \\    // §9.13.1 "this internal seed gets updated every time the call
         \\    // to $arandom is made" — once per ACCEPTED point, per call site.
         \\    for (&inst.rng_auto) |*rs| rs.* = @intFromFloat(zRngNext(rs.*));
@@ -398,7 +399,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
     // function runs on the ACCEPTED solution, once per step, exactly like
     // the operator history above — writing it from `eval` would latch a
     // Newton iterate that the solver goes on to throw away.
-    for (self.lower.held_vars.items, 0..) |h, i| {
+    for (self.lowered.held_vars.items, 0..) |h, i| {
         const k = self.held_idx[i];
         const n = self.held_names[i];
         if (k == none_u32) {
@@ -418,14 +419,14 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
 /// Called after evaluating a Newton iterate, with that iterate's x.
 /// All return values are computed before any history slot is changed.
 pub fn emitAdvanceIteration(self: *Gen) Error!void {
-    if (self.lower.limit_slots.items.len == 0 and !self.lower.uses_newton_iter and self.lower.reject_iteration_place == null) return;
-    if (self.lower.uses_newton_iter) try self.w(
+    if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses_newton_iter and self.lowered.reject_iteration_place == null) return;
+    if (self.lowered.uses_newton_iter) try self.w(
         "pub fn beginSolve(inst: *Instance) void {{\n    inst.newton_iteration = 1;\n}}\n\n",
         .{},
     );
     var uses_core = false;
-    for (self.lower.limit_slots.items) |slot| uses_core = uses_core or gen_dispatch.coreIdx(self, self.an.rv(slot.final)) != null;
-    const uses_inst = uses_core or self.lower.uses_newton_iter or self.lower.limit_slots.items.len != 0;
+    for (self.lowered.limit_slots.items) |slot| uses_core = uses_core or gen_dispatch.coreIdx(self, self.an.rv(slot.final)) != null;
+    const uses_inst = uses_core or self.lowered.uses_newton_iter or self.lowered.limit_slots.items.len != 0;
     try self.w("pub fn advanceIteration({s}: *const Model, {s}: *Instance, {s}: [n_u]f64) void {{\n", .{
         if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_",
     });
@@ -433,19 +434,19 @@ pub fn emitAdvanceIteration(self: *Gen) Error!void {
         "    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n    const m = core(R, xr, model, {s});\n",
         .{try gen_hoist.probeInstance(self)},
     );
-    for (self.lower.limit_slots.items, 0..) |slot, k| {
+    for (self.lowered.limit_slots.items, 0..) |slot, k| {
         if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |lo|
             try self.w("    inst.limiter_previous[{d}] = m.f{d}.v;\n", .{ k, lo })
         else
             try self.w("    inst.limiter_previous[{d}] = 0.0;\n", .{k});
     }
-    if (self.lower.uses_newton_iter) try self.w("    inst.newton_iteration +|= 1;\n", .{});
+    if (self.lowered.uses_newton_iter) try self.w("    inst.newton_iteration +|= 1;\n", .{});
     try self.w("}}\n\n", .{});
-    if (self.lower.reject_iteration_place != null) {
+    if (self.lowered.reject_iteration_place != null) {
         try self.w("pub fn checkConvergence(model: *const Model, inst: *const Instance, x: [n_u]f64) bool {{\n", .{});
         const probe_inst = try gen_hoist.probeInstance(self);
         try self.w("    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n" ++
-            "    return core(R, xr, model, {s}).f{d} == 0;\n}}\n\n", .{ probe_inst, gen_dispatch.coreIdx(self, self.an.rv(self.lower.reject_iteration)).? });
+            "    return core(R, xr, model, {s}).f{d} == 0;\n}}\n\n", .{ probe_inst, gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
     }
 }
 
@@ -517,14 +518,14 @@ pub const FreeFlow = struct { u: u32, hi: u16, lo: u16, sourced: bool };
 /// its iteration order is not the emitted order.
 pub fn freeFlows(self: *Gen) Error![]const FreeFlow {
     var out: std.ArrayList(FreeFlow) = .empty;
-    var it = self.lower.flow_unknowns.iterator();
+    var it = self.lowered.flow_unknowns.iterator();
     while (it.next()) |e| {
         const u: u32 = e.value_ptr.*;
         // A potential/indirect source already pins this current.
         if (std.mem.indexOfScalar(u32, self.branch_u, u) != null) continue;
         var sourced = false;
         var signal_flow = false;
-        for (self.lower.contributions.items) |c| {
+        for (self.lowered.contributions.items) |c| {
             if (c.kind != .direct or c.access != .flow) continue;
             if (c.hi != e.key_ptr.hi or c.lo != e.key_ptr.lo) continue;
             sourced = true;
@@ -667,8 +668,8 @@ fn unknownProbed(self: *const Gen, u: u32) bool {
 /// LU eliminates the short.
 pub fn collapsePairs(self: *Gen) Error![]CollapsePair {
     var out: std.ArrayList(CollapsePair) = .empty;
-    const np: u32 = @intCast(self.lower.num_ports);
-    for (self.lower.contributions.items, 0..) |c, i| {
+    const np: u32 = @intCast(self.lowered.num_ports);
+    for (self.lowered.contributions.items, 0..) |c, i| {
         if (c.kind != .direct or c.access != .potential) continue;
         const ret = gen_unit.retention(self, c);
         if (ret != .runtime) continue;
@@ -746,11 +747,11 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         // batch's, and it is the only writer of `hp_*`.
         if (self.pc_vals.len != 0 or self.hp_vals.len != 0)
             "    var pin = inst.*;\n    precompute(&pin, model);\n"
-        else if (self.lower.table_samples.items.len != 0)
+        else if (self.lowered.table_samples.items.len != 0)
             "    var pin = inst.*;\n"
         else
             "",
-        if (self.pc_vals.len != 0 or self.hp_vals.len != 0 or self.lower.table_samples.items.len != 0) "&pin" else "inst",
+        if (self.pc_vals.len != 0 or self.hp_vals.len != 0 or self.lowered.table_samples.items.len != 0) "&pin" else "inst",
     });
     for (pairs, 0..) |p, pi| {
         const fi = @intFromEnum(self.an.rv(p.flag));

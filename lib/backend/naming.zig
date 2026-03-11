@@ -21,6 +21,7 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
 const opdb = @import("ir").op;
 
 /// Identifies one emitted source unit: §5.6 contribution or §4.5 analog operator.
@@ -216,7 +217,7 @@ pub fn unitName(
 /// THE CANONICAL UNIT ORDER (proof.zig's `Verdict.unit_modes` and codegen.zig's
 /// declaration emission MUST both index units this way):
 ///
-///   1. every `Lower.contributions[i]`, in table order — which is source order
+///   1. every `Lowered.contributions[i]`, in table order — which is source order
 ///      of the first `<+` to that (access, node pair), or of each individual
 ///      §5.6.7 indirect statement (those are never deduped). Role `.analog`;
 ///      several indirect contributions to one branch therefore land in the same
@@ -239,14 +240,14 @@ pub fn unitName(
 ///
 /// `gpa` should be the per-compilation arena: the returned slice AND each
 /// `Unit.target` are allocated from it and are freed together with it.
-pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Lower) ![]Unit {
+pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lowered: *const Lowered) ![]Unit {
     var units: std.ArrayList(Unit) = .empty;
     errdefer units.deinit(gpa);
     var scratch: [max_name_len]u8 = undefined;
 
     // (1) contributions — §5.6. Target is the ACCESS FUNCTION plus the NODE
     // NAMES (never node_order indices: inserting a net renumbers those).
-    for (lower.contributions.items) |c| {
+    for (lowered.contributions.items) |c| {
         var b: Buf = .{ .buf = &scratch };
         // §4.4: the two access roles are closed even when a user nature renames
         // the access identifier (§3.6.1.4), so V/I is the canonical spelling.
@@ -259,7 +260,7 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Low
             // §1.3.1.1 global ground is not a node_order slot. Spell it "0"
             // (SPICE's ground node): `sanitize` escapes a leading digit, so no
             // real net — not even one literally named `gnd` — can collide.
-            if (n == Lower.ground) try b.byte('0') else try sanitizeInto(&b, lower.nodeName(n));
+            if (n == Lower.ground) try b.byte('0') else try sanitizeInto(&b, lowered.nodeName(n));
         }
         try units.append(gpa, .{ .role = .analog, .target = try gpa.dupe(u8, b.buf[0..b.len]) });
     }
@@ -313,8 +314,8 @@ pub fn enumerateUnits(gpa: std.mem.Allocator, mir: *const Mir, lower: *const Low
 /// O(units) — tens of iterations on the largest model in the catalogue, and
 /// `assert` is a no-op in ReleaseFast. The edit that would break this is made
 /// in Debug, which is where the tests run.
-pub fn assertCanonicalOrder(units: []const Unit, lower: *const Lower, unit_modes_len: usize) void {
-    const n_contrib = lower.contributions.items.len;
+pub fn assertCanonicalOrder(units: []const Unit, lowered: *const Lowered, unit_modes_len: usize) void {
+    const n_contrib = lowered.contributions.items.len;
     std.debug.assert(unit_modes_len == n_contrib); // (a)
     std.debug.assert(units.len >= n_contrib);
     for (units[0..n_contrib]) |u| std.debug.assert(u.role == .analog); // (b)
@@ -361,17 +362,13 @@ const Fixture = struct {
     arena: std.heap.ArenaAllocator,
     mir: Mir = .{ .name = "mymod" },
     file: Ast.SourceFile = .empty,
-    low: Lower = undefined,
-    /// Naming is tested on a hand-built Lower with no source behind it, so the
-    /// bag exists only to satisfy the signature: nothing here diagnoses.
-    bag: diag.Bag = undefined,
+    /// Naming is tested on a hand-built `Lowered` with no source behind it.
+    lowered: Lowered = undefined,
 
     fn init(f: *Fixture) !void {
-        const a0 = f.arena.allocator();
-        f.bag = diag.Bag.init(a0);
-        f.low = Lower.init(a0, &f.mir, &f.file, "", &.{}, &f.bag);
+        f.lowered = .{ .file = &f.file };
         const a = f.arena.allocator();
-        try f.low.node_order.appendSlice(a, &.{ "drain", "gate", "source" });
+        try f.lowered.node_order.appendSlice(a, &.{ "drain", "gate", "source" });
     }
 
     fn deinit(f: *Fixture) void {
@@ -381,7 +378,7 @@ const Fixture = struct {
     /// enumerate + name, in the canonical order.
     fn names(f: *Fixture, out: *std.ArrayList([]const u8)) !void {
         const a = f.arena.allocator();
-        const units = try enumerateUnits(a, &f.mir, &f.low);
+        const units = try enumerateUnits(a, &f.mir, &f.lowered);
         for (units) |u| {
             var buf: [max_name_len]u8 = undefined;
             try out.append(a, try a.dupe(u8, try unitName(&buf, f.mir.name, u)));
@@ -396,8 +393,8 @@ test "inserting a contribution for a different target renames nothing" {
     const a = f.arena.allocator();
 
     // I(drain,source) and V(gate,gnd)
-    try f.low.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
-    try f.low.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = Lower.ground });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
+    try f.lowered.contributions.append(a, .{ .access = .potential, .hi = 1, .lo = Lower.ground });
 
     var before: std.ArrayList([]const u8) = .empty;
     try f.names(&before);
@@ -407,7 +404,7 @@ test "inserting a contribution for a different target renames nothing" {
     // Insert a contribution for a DIFFERENT target. THE key property: every
     // pre-existing name must come back byte-identical, so `zig`'s TrackedInst
     // + src_hash skip those declarations entirely.
-    try f.low.contributions.append(a, .{ .access = .flow, .hi = 1, .lo = 2 });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 1, .lo = 2 });
 
     var after: std.ArrayList([]const u8) = .empty;
     try f.names(&after);
@@ -482,7 +479,7 @@ test "§9.17 kernel-control units drop the `$` and stay after the operator units
     defer f.deinit();
     const a = f.arena.allocator();
 
-    try f.low.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
+    try f.lowered.contributions.append(a, .{ .access = .flow, .hi = 0, .lo = 2 });
     _ = try f.mir.addBlock(a);
     const ddt = try f.mir.internString(a, "ddt");
     const bs = try f.mir.internString(a, "$bound_step");

@@ -403,7 +403,7 @@ fn runAndCheck(
 
     // VAMS §7: a module with a discrete half gets the mixed-signal runner.
     var dm = d;
-    dm.mixed = vera.tb.mixedPlan(result.lower);
+    dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
     const runner = try vera.tb.renderRunner(arena, f.stem, dm);
 
     // One work directory per fixture, keyed on the whole relative path: two
