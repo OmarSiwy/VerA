@@ -124,7 +124,7 @@ fn classifyArm(mir: *const Mir, x: Mir.Block, arm: Mir.Block, preds: []const u32
 }
 
 fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bool {
-    const term = lastInst(mir, x) orelse return false;
+    const term = terminator(mir, x) orelse return false;
     if (mir.instOp(term) != .branch) return false;
     const br = mir.instData(term).branch;
     if (br.then_block == br.else_block) return false;
@@ -168,7 +168,7 @@ fn tryConvert(gpa: std.mem.Allocator, mir: *Mir, x: Mir.Block, preds: []u32) !bo
     mir.cur_tok = mir.instTok(term);
 
     // Drop the branch row from X's chain, then splice the arms in.
-    truncateBefore(mir, x, term);
+    unlink(mir, x, term);
     if (then_arm) |a| splice(mir, x, a);
     if (else_arm) |a| splice(mir, x, a);
 
@@ -214,9 +214,17 @@ fn peelToBool(mir: *const Mir, cond0: Mir.Value) Mir.Value {
     }
 }
 
-fn lastInst(mir: *const Mir, b: Mir.Block) ?Mir.Inst {
-    const last = mir.blocks.items(.last)[@intFromEnum(b)];
-    return if (last == .none) null else last;
+/// `b`'s branch or jump, found by opcode and not by position: ssa.zig's
+/// contract 2 lets a phi row sit AFTER the terminator (phis are created on
+/// demand), exactly why analysis.buildCfg searches the same way. By position,
+/// such a phi made X look unterminated and a convertible diamond was skipped.
+fn terminator(mir: *const Mir, b: Mir.Block) ?Mir.Inst {
+    var it = mir.blockInsts(b);
+    while (it.next()) |inst| switch (Mir.opClass(mir.instOp(inst))) {
+        .branch, .jump => return inst,
+        .unary, .binary, .ternary, .phi, .call => {},
+    };
+    return null;
 }
 
 /// The phi's incoming value for edge `from` → phi's block, or null.
@@ -229,21 +237,18 @@ fn phiValueFor(mir: *const Mir, phi: Mir.Inst, from: Mir.Block) ?Mir.Value {
     return null;
 }
 
-/// Remove `inst` (X's terminator) from X's chain by re-terminating the chain
-/// at its predecessor. The row itself is orphaned, not reused.
-fn truncateBefore(mir: *Mir, b: Mir.Block, inst: Mir.Inst) void {
+/// Remove `inst` (X's terminator) from X's chain; any rows after it (late
+/// phis, see `terminator`) stay linked. The row itself is orphaned, not reused.
+fn unlink(mir: *Mir, b: Mir.Block, inst: Mir.Inst) void {
     const bi = @intFromEnum(b);
-    const first = mir.blocks.items(.first)[bi];
-    if (first == inst) {
-        mir.blocks.items(.first)[bi] = .none;
-        mir.blocks.items(.last)[bi] = .none;
-        return;
-    }
-    var prev = first;
-    while (mir.insts.items(.next)[@intFromEnum(prev)] != inst)
-        prev = mir.insts.items(.next)[@intFromEnum(prev)];
-    mir.insts.items(.next)[@intFromEnum(prev)] = .none;
-    mir.blocks.items(.last)[bi] = prev;
+    const next = mir.insts.items(.next);
+    const after = next[@intFromEnum(inst)];
+    var prev: Mir.Inst = .none;
+    var cur = mir.blocks.items(.first)[bi];
+    while (cur != inst) : (cur = next[@intFromEnum(cur)]) prev = cur;
+    if (prev == .none) mir.blocks.items(.first)[bi] = after else next[@intFromEnum(prev)] = after;
+    if (mir.blocks.items(.last)[bi] == inst) mir.blocks.items(.last)[bi] = prev;
+    next[@intFromEnum(inst)] = .none;
 }
 
 /// Move every row of `arm` except its jump terminator to the end of `dst`,
@@ -363,5 +368,36 @@ test "if conversion refreshes phi iterator when select emission grows instructio
         selects += 1;
     };
     try std.testing.expectEqual(@as(u32, 2), selects);
-    try std.testing.expectEqual(join, mir.instData(lastInst(&mir, entry).?).jump.target);
+    try std.testing.expectEqual(join, mir.instData(terminator(&mir, entry).?).jump.target);
+}
+
+test "a phi row after the branch neither blocks the conversion nor leaves the chain" {
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    const pre = try mir.addBlock(a);
+    const entry = try mir.addBlock(a);
+    const left = try mir.addBlock(a);
+    const right = try mir.addBlock(a);
+    const join = try mir.addBlock(a);
+    const cond = try mir.addBlockParam(a, 0);
+    _ = try mir.emitJump(a, pre, entry);
+    _ = try mir.emitBranch(a, entry, cond, left, right);
+    // ssa.zig contract 2: created on demand, after the terminator.
+    const late = try mir.emitPhi(a, entry, &.{.{ .block = pre, .value = cond }});
+    const lv = try mir.emit(a, left, .fadd, &.{ .f_one, .f_two });
+    _ = try mir.emitJump(a, left, join);
+    const rv = try mir.emit(a, right, .fmul, &.{ .f_two, .f_two });
+    _ = try mir.emitJump(a, right, join);
+    _ = try mir.emitPhi(a, join, &.{ .{ .block = left, .value = lv }, .{ .block = right, .value = rv } });
+
+    try std.testing.expectEqual(@as(u32, 1), try run(a, &mir, &.{}));
+    var saw_late = false;
+    var it = mir.blockInsts(entry);
+    while (it.next()) |inst| {
+        if (mir.instResult(inst) == late) saw_late = true;
+        try std.testing.expect(mir.instOp(inst) != .branch);
+    }
+    try std.testing.expect(saw_late);
+    try std.testing.expectEqual(join, mir.instData(terminator(&mir, entry).?).jump.target);
 }
