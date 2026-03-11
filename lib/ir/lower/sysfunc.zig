@@ -166,8 +166,8 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // `updateState`/`stateCtl` pair, so it is emitted only for a model that
         // reads one of the two names that need it (`simparamIsRuntime`).
         if (args.len >= 1) if (constStrArg(self, args[0])) |s| {
-            if (simparamIsRuntime(s)) self.out.uses_newton_iter = true;
-            if (simparamHostField(s) != null) self.out.uses_host_simparam = true;
+            if (simparamIsRuntime(s)) self.out.uses.insert(.newton_iter);
+            if (simparamHostField(s) != null) self.out.uses.insert(.host_simparam);
         };
     }
     const sys_args = if (ex.extraOf(e) < ex.pool.items.len) ex.args(e) else &[_]Ast.ExprId{};
@@ -311,7 +311,7 @@ pub fn lowerTaskArg(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValu
 }
 
 /// A system call argument. For the `takesNetRef` names a bare net name lowers
-/// to its node_order index, which is what codegen needs. For every OTHER task
+/// to its `nodes` row, which is what codegen needs. For every OTHER task
 /// the index is meaningless — `$strobe("%g", p)` printed p's INDEX — so the
 /// path is gated by the caller (`net_ok`) and a net name elsewhere falls
 /// through to `lowerExpr`, where §4.4's "a net is not a value" E0315 says to

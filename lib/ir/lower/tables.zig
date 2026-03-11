@@ -14,12 +14,61 @@ const Lexer = @import("frontend").Lexer;
 const Preprocessor = @import("frontend").Preprocessor;
 const diag = @import("diag");
 const Mir = @import("../mir.zig");
-const Ssa = @import("../ssa.zig");
 const Elaborate = @import("../elaborate.zig");
 const Lower = @import("../lower.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 
 pub const Lowered = @This();
+
+/// One row of `nodes`.
+pub const Node = struct {
+    /// The unknown's unique spelling (codegen's `U` member).
+    name: []const u8,
+    /// What the slot IS, as opposed to what it is SPELLED — see `NodeKind`.
+    kind: Lower.NodeKind,
+    /// Discipline name (`""` when undeclared, §3.9). A name and not an index:
+    /// a node may name a discipline `disciplines` has no row for (an undeclared
+    /// one, diagnosed where it is read), so an id would need a name table of
+    /// its own first, to save at most 15 bytes a row on a table codegen caps at
+    /// 256 rows.
+    disc: []const u8,
+    /// §6.5.2.2 port direction (`.unspecified` for an internal net or a port
+    /// whose direction is never declared). A DIRECTIONAL port — `input` or
+    /// `output` — is the one place the LRM's signal-flow port model (§1.3.4) is
+    /// unambiguous, and codegen has to refuse those; which of the two it is
+    /// decides §1.3.4.1's contribution-target rule (see E0425).
+    dir: Ast.Direction,
+};
+
+/// A device-side facility the model uses. Each gates a kernel file or an
+/// `Instance`/`Model` field in codegen; `uses` is the set.
+pub const Kernel = enum {
+    /// §9.5.3/§9.5.4.2 `$sformat`/`$swrite`/`$sscanf` → `str_kernels.zig`.
+    /// A flag rather than a site list because the SITE that needs a name (the
+    /// format scratch) is identified by its MIR instruction, which codegen
+    /// already has.
+    str_tasks,
+    /// §9.5.1–§9.5.8 the file-descriptor family → `file_kernels.zig`, and only
+    /// in the `display == .emit` artifact: a descriptor table is a HOST
+    /// facility (§9.5.1's own "if a file cannot be opened … a zero is returned"
+    /// is the answer a device with no such host must give).
+    file_tasks,
+    /// §9.21 `$table_model` → `table_kernels.zig`.
+    table_model,
+    /// §9.13 one of Table 9-10's 17 probabilistic distributions → `rng_kernels.zig`.
+    rng,
+    /// §9.15 the model queries the runtime Newton iteration number.
+    newton_iter,
+    /// §9.15 the model reads a `$simparam` whose value is the HOST's
+    /// (`simparamHostField`), so codegen owes its Model the reserved field. Set
+    /// at the call because a §3.4 parameter default is lowered outside the
+    /// block stream, and `parameter real tnom = $simparam("tnom")` is the whole
+    /// use.
+    host_simparam,
+    /// §9.17.1 `$discontinuity(-1)`: `reject_iteration` is a live root and the
+    /// device carries the rejection flag.
+    reject_iteration,
+};
 
 // ---- the source, for diagnostics and host facts ----
 /// The parsed (and elaborated) file every `Ast` id below indexes.
@@ -59,23 +108,22 @@ consts: std.StringHashMapUnmanaged(Lower.Const) = .empty,
 vectors: std.StringHashMapUnmanaged(Lower.VecRange) = .empty,
 
 // ---- §1.3.1 the unknown table ----
-/// The U-enum index space: ports (§6.5) first, then internal nodes (§3.6.3),
-/// then branch-flow unknowns (§5.4.2). Append-only ⇒ stable.
-node_order: std.ArrayList([]const u8) = .empty,
-/// What each node_order slot IS, as opposed to what it is SPELLED. One entry
-/// per slot, appended by `appendNode` — see `NodeKind` for why the two had to
-/// come apart.
-node_kind: std.ArrayList(Lower.NodeKind) = .empty,
-/// Discipline name per node_order slot (`""` when undeclared, §3.9).
-node_disciplines: std.ArrayList([]const u8) = .empty,
-/// §6.5.2.2 port direction per node_order slot (`.unspecified` for an internal
-/// net or a port whose direction is never declared). A DIRECTIONAL port —
-/// `input` or `output` — is the one place the LRM's signal-flow port model
-/// (§1.3.4) is unambiguous, and codegen has to refuse those; which of the two
-/// it is decides §1.3.4.1's contribution-target rule (see E0425).
-node_dir: std.ArrayList(Ast.Direction) = .empty,
-num_ports: usize = 0, // §6.5
-/// §5.4.2 branch-flow identity: the node PAIR → its unknown's node_order slot.
+/// The U-enum index space, one row per solver unknown: ports (§6.5) first,
+/// then internal nodes (§3.6.3), then branch-flow unknowns (§5.4.2).
+/// Append-only ⇒ stable. Every consumer walks it a column at a time (codegen's
+/// `U` enum reads `name`, `abstolOf` reads `kind` and `disc`, the signal-flow
+/// checks read `dir`), so it is SoA, and one `append` keeps the four columns
+/// one length — they used to be four lists that only `appendNode` kept equal.
+///
+/// A row index is a `u16` everywhere (`ground` is its max). Not the `u8` the
+/// device's `enum(u8) U` would allow: lowering has to be able to hold MORE
+/// than 256 unknowns so codegen can count them and refuse the module with a
+/// diagnostic (codegen/file.zig `emitTopology`) rather than overflow here.
+nodes: std.MultiArrayList(Node) = .{},
+/// §6.5 the port rows are `nodes[0..num_ports]`. A `u16` because it is a row
+/// index (see `nodes`).
+num_ports: u16 = 0,
+/// §5.4.2 branch-flow identity: the node PAIR → its unknown's `nodes` row.
 /// The pair is the identity the LRM gives the branch, and keying on it is what
 /// stopped `I(a)` and `I(a,gnd)` sharing an unknown when a plain net is spelled
 /// `gnd` — see `flowUnknown`. Bounded by the branch count of one module.
@@ -137,38 +185,15 @@ display_root: Mir.Value = .f_zero,
 /// Source-order chain over table captures and distribution checks; a core
 /// live-out.
 table_effect: Mir.Value = .f_zero,
-/// §9.17.1 rejection belongs to the Newton iteration, not timestep history.
-reject_iteration_place: ?Ssa.Place = null,
+/// §9.17.1 rejection belongs to the Newton iteration, not timestep history:
+/// the final value of the rejection flag, meaningful when
+/// `uses.contains(.reject_iteration)`.
 reject_iteration: Mir.Value = .zero,
 
 // ---- which kernels the device needs ----
-/// §9.5.3/§9.5.4.2 — does the module call `$sformat`/`$swrite`/`$sscanf`? Set at
-/// the call, read by codegen to decide whether `str_kernels.zig` is emitted. A
-/// flag rather than a site list because the SITE that needs a name (the format
-/// scratch) is identified by its MIR instruction, which codegen already has.
-uses_str_tasks: bool = false,
-/// §9.5.1–§9.5.8 — does the module call the file-descriptor family? Gates
-/// `file_kernels.zig` exactly as `uses_str_tasks` gates the string kernels, and
-/// only in the `display == .emit` artifact: a descriptor table is a HOST facility
-/// (§9.5.1's own "if a file cannot be opened … a zero is returned" is the answer
-/// a device with no such host must give), so a device compiled for a solver does
-/// not carry one.
-uses_file_tasks: bool = false,
-/// §9.21 — does the module call `$table_model`? Set at the call, read by codegen
-/// to decide whether `table_kernels.zig` is emitted, exactly as
-/// `uses_str_tasks` gates the string kernels.
-uses_table_model: bool = false,
-/// §9.13 — does the module call one of Table 9-10's 17 probabilistic
-/// distributions? Gates `rng_kernels.zig` exactly as `uses_str_tasks` gates the
-/// string kernels.
-uses_rng: bool = false,
-/// §9.15 the model queries the runtime Newton iteration number.
-uses_newton_iter: bool = false,
-/// §9.15 the model reads a `$simparam` whose value is the HOST's
-/// (`simparamHostField`), so codegen owes its Model the reserved field. Set at
-/// the call because a §3.4 parameter default is lowered outside the block
-/// stream, and `parameter real tnom = $simparam("tnom")` is the whole use.
-uses_host_simparam: bool = false,
+/// Replaces six `uses_*` bools and a leaked `?Ssa.Place` codegen only ever
+/// compared with null.
+uses: std.EnumSet(Kernel) = .initEmpty(),
 
 // ---- §7.3.6.5/§8 the discrete half ----
 /// §7.3.6.5/§8.5 a mixed module's digital-owned values the analog block may
@@ -182,9 +207,9 @@ pub fn tokenSpan(self: *const Lowered, tok: u32) diag.Span {
     return Lexer.tokenSpan(self.src, self.tok_starts, tok);
 }
 
-/// The name codegen prints for a node_order index (naming.zig unit targets).
+/// The name codegen prints for a `nodes` row (naming.zig unit targets).
 pub fn nodeName(self: *const Lowered, idx: u16) []const u8 {
-    return if (idx == Lower.ground) "gnd" else self.node_order.items[idx];
+    return if (idx == Lower.ground) "gnd" else self.nodes.items(.name)[idx];
 }
 
 /// §9.15 Table 9-27 — see `lower_sysfunc.simparamValueIn`.

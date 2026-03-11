@@ -873,8 +873,8 @@ pub fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, pla
         .ty = ty,
         .init = init_val,
         .seed = seed,
-        .place = place,
     });
+    try self.held_places.append(self.arena, place);
     return seed;
 }
 

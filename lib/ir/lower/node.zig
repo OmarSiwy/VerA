@@ -1,6 +1,6 @@
 //! §1.3.1 nodes: nets, ports, ground and the solver-unknown order.
 //!
-//! In: net and port declarations. Out: `node_order` (the U-enum index codegen depends on),
+//! In: net and port declarations. Out: `nodes` (the U-enum index codegen depends on),
 //! implicit nets, and the port/branch tables.
 //!
 //! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2.
@@ -35,15 +35,15 @@ pub const State = struct {
     /// declared branch is 1 and no named branch can ever be mistaken for §5.4.1
     /// Example 2's single implicit branch of a node pair.
     last_branch_id: u32 = unnamed_branch,
-    /// Every spelling handed to `node_order`, so `appendNode` can keep them unique.
+    /// Every spelling handed to `nodes`, so `appendNode` can keep them unique.
     /// This is NOT an identity table — two different unknowns may want one spelling
     /// (`uniqueSpelling` names both ways that happens); it exists because the
     /// emitted `U` enum has one member per slot and two members cannot share a name.
-    /// Heap, and one entry per `node_order` slot: the only bound on that count is
+    /// Heap, and one entry per `nodes` row: the only bound on that count is
     /// the source, since |U| ≤ 256 is enforced by `codegen.emitTopology` AFTER
     /// lowering has built the table.
     spellings: std.StringHashMapUnmanaged(void) = .empty,
-    /// Deduped probe Value per node_order slot; `.undef` = not probed yet.
+    /// Deduped probe Value per `nodes` row; `.undef` = not probed yet.
     probe_cache: std.ArrayList(Mir.Value) = .empty,
 };
 
@@ -96,7 +96,7 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
     if (self.directives.disciplines.len == 0) return;
     const idx = self.node_voltages.get(name) orelse return;
     if (idx == ground) return;
-    if (self.out.node_disciplines.items[idx].len != 0) return;
+    if (self.out.nodes.items(.disc)[idx].len != 0) return;
     if (main_tok >= self.tok_starts.len) return;
     const at = self.tok_starts[main_tok];
 
@@ -120,7 +120,7 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
     // nature, so leaving the net bare is the honest outcome: E0337 then says
     // the net has no discipline, which is exactly what happened.
     if (!self.out.disciplines.contains(dname)) return;
-    self.out.node_disciplines.items[idx] = dname;
+    self.out.nodes.items(.disc)[idx] = dname;
 }
 
 /// IEEE 1364 §19.2 `` `default_nettype none ``, on a name that is about to
@@ -178,7 +178,7 @@ pub fn applyUnconnectedDrive(self: *Lower) Oom!void {
         if (drive == .float) continue;
         const idx = self.node_voltages.get(site.name) orelse continue;
         if (idx == ground) continue;
-        const info = self.out.disciplines.get(self.out.node_disciplines.items[idx]) orelse continue;
+        const info = self.out.disciplines.get(self.out.nodes.items(.disc)[idx]) orelse continue;
         if (!info.has_potential) continue;
         const target: lower_contrib.Target = .{ .access = .potential, .hi = idx, .lo = ground };
         const acc = self.accum.items[try lower_contrib.contribIndex(self, target, site.main_tok)];
@@ -198,7 +198,7 @@ pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u1
     const gop = try self.node_voltages.getOrPut(self.arena, name);
     if (gop.found_existing) {
         if (discipline.len != 0 and gop.value_ptr.* != ground)
-            self.out.node_disciplines.items[gop.value_ptr.*] = discipline;
+            self.out.nodes.items(.disc)[gop.value_ptr.*] = discipline;
         return gop.value_ptr.*;
     }
     const idx = try appendNode(self, name, discipline, .net);
@@ -234,20 +234,17 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
     try self.out.nodesets.append(self.arena, .{ .node = node, .value = c.asReal(), .tok = tok });
 }
 
-/// The one place a `node_order` slot is created: it fixes the slot's KIND and
+/// The one place a `nodes` row is created: it fixes the slot's KIND and
 /// its SPELLING together, which is the split this table exists to keep. Every
 /// caller owns the IDENTITY question itself (`node_voltages` for a net,
 /// `flow_unknowns` for a branch, `port_probes` for a port) — this function does
 /// not dedupe and must not, since two distinct unknowns may ask for one name.
 pub fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
-    const idx: u16 = @intCast(self.out.node_order.items.len);
+    const idx: u16 = @intCast(self.out.nodes.len);
     assert(idx != ground);
     const spelling = try uniqueSpelling(self, name);
     try self.node_state.spellings.put(self.arena, spelling, {});
-    try self.out.node_order.append(self.arena, spelling);
-    try self.out.node_kind.append(self.arena, kind);
-    try self.out.node_disciplines.append(self.arena, discipline);
-    try self.out.node_dir.append(self.arena, .unspecified);
+    try self.out.nodes.append(self.arena, .{ .name = spelling, .kind = kind, .disc = discipline, .dir = .unspecified });
     try self.node_state.probe_cache.append(self.arena, .undef);
     return idx;
 }
@@ -265,8 +262,8 @@ pub fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: 
 /// `#` is not a §2.7 identifier character and `naming.sanitize` escapes it, so a
 /// suffixed member cannot collide with an unsuffixed one either — the same
 /// convention, and the same reasoning, as `codegen.freshUName`, which uniquifies
-/// the branch-current unknowns codegen appends after `node_order`. The loop
-/// terminates in at most `node_order.len` steps (each `k` it rejects is held by
+/// the branch-current unknowns codegen appends after `nodes`. The loop
+/// terminates in at most `nodes.len` steps (each `k` it rejects is held by
 /// a distinct earlier slot), and that is bounded by |U| ≤ 256.
 ///
 /// The suffix falls on the LATER slot, so it is a function of source order and
@@ -292,7 +289,7 @@ pub fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
 /// punctuation and a `#` with a `u32` after it.
 pub const spelling_buf_len = 2 * 1024 + 32;
 
-/// Resolve a net reference — `n` or `n[i]` — to a node_order index.
+/// Resolve a net reference — `n` or `n[i]` — to a `nodes` row.
 ///
 /// The element case is a plain `internNode` of the scalarised name, so a
 /// vector element is a node like any other from here on. What this function
@@ -529,7 +526,7 @@ pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
     try self.out.vectors.put(self.arena, name, .{ .msb = 0, .lsb = @as(i64, size) - 1 });
 }
 
-/// The name codegen prints for a node_order index (naming.zig unit targets).
+/// The name codegen prints for a `nodes` row (naming.zig unit targets).
 pub fn nodeName(self: *const Lower, idx: u16) []const u8 {
     return self.out.nodeName(idx);
 }
@@ -553,7 +550,7 @@ pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
 }
 
 /// §5.4.2 reading a flow (`I(a,b)`) makes the branch current a solver unknown
-/// of its own. It gets a node_order slot so codegen indexes it like any other
+/// of its own. It gets a `nodes` row so codegen indexes it like any other
 /// `x[i]`.
 ///
 /// Deduped on the PAIR, which is the identity §5.4.1 gives a branch, and not on

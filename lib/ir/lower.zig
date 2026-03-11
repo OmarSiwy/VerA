@@ -2,10 +2,10 @@
 //! tables. This is the largest frontend file; it realizes most of the LRM.
 //!
 //! Transformation: ast.SourceFile → Mir + Lower side tables (params, branches,
-//! contributions, node_order) consumed by proof.zig and codegen.zig.
+//! contributions, nodes) consumed by proof.zig and codegen.zig.
 //!
 //! DOD: side tables are SoA (parallel slices), keyed by small integer ids.
-//! node_order defines the U-enum index; keep it stable (codegen depends on it).
+//! `nodes` defines the U-enum index; keep it stable (codegen depends on it).
 //!
 //! FILE-AS-STRUCT: `@import("lower.zig")` is both the namespace
 //! (`Lower.ParamInfo`) and the type (`lower: *const Lower`), exactly like
@@ -61,8 +61,8 @@ pub const ParamInfo = struct {
 
 /// Class 4 — a branch (pair of nodes carrying a flow/potential). LRM §3.12.
 pub const BranchInfo = struct {
-    hi: u16, // node_order index
-    lo: u16, // node_order index (`ground` if implicit, §1.3.1.1)
+    hi: u16, // `nodes` row
+    lo: u16, // `nodes` row (`ground` if implicit, §1.3.1.1)
     /// §5.4.1 "There can be any number of named branches between any two
     /// signals" — so the node pair does NOT identify the branch, and everything
     /// that retains a value per branch (§5.6.1.2/§5.6.1.3) has to key on this
@@ -79,10 +79,10 @@ pub const BranchInfo = struct {
 pub const unnamed_branch: u32 = 0;
 
 /// §1.3.1.1 the global reference node. Not a solver unknown, so it is a
-/// sentinel rather than a node_order slot: probing it yields a literal 0.
+/// sentinel rather than a `nodes` row: probing it yields a literal 0.
 pub const ground: u16 = std.math.maxInt(u16);
 
-/// What quantity a `node_order` slot carries. The spelling does NOT answer this
+/// What quantity a `nodes` row carries. The spelling does NOT answer this
 /// and never could: §2.8.1 strips the backslash from an escaped identifier, so
 /// the net `\flow(p,n)` *is* the identifier `flow(p,n)` and collides byte-for-byte
 /// with what `flowUnknown` prints. Kind is recorded at the one place a slot is
@@ -143,8 +143,8 @@ pub const Contribution = struct {
     /// per-unit, so it needs the STATEMENT, not the instruction that happened
     /// to break the finiteness proof.
     tok: u32 = Mir.no_tok,
-    hi: u16, // node_order index (or `ground`)
-    lo: u16, // node_order index (or `ground`)
+    hi: u16, // `nodes` row (or `ground`)
+    lo: u16, // `nodes` row (or `ground`)
     resist_val: Mir.Value = .f_zero, // → eval()
     react_val: Mir.Value = .f_zero, // → q()   (§4.5.3 ddt)
     /// §5.6.1.3 "If a value is retained for the potential ... otherwise, if a
@@ -179,14 +179,14 @@ pub const Contribution = struct {
 
 pub const Kind = enum(u8) { direct, indirect };
 
-/// §5.4.3 one probed module port: the port's node_order slot and the
-/// node_order slot of the flow unknown that carries `I(<port>)`.
+/// §5.4.3 one probed module port: the port's `nodes` row and the
+/// `nodes` row of the flow unknown that carries `I(<port>)`.
 pub const PortProbe = struct { port: u16, u: u16 };
 
 /// §5.4.2.1 one access function READ, kept for the end-of-module probe sweep.
 pub const BranchRead = struct { access: Access, hi: u16, lo: u16, tok: u32 };
 
-/// §3.6.3.2 one net_decl_assignment: the net's `node_order` slot and the folded
+/// §3.6.3.2 one net_decl_assignment: the net's `nodes` row and the folded
 /// initializer — "a nodeset value for the potential of the net by the analog
 /// solver". An initial guess, never a constraint, so it is metadata for a host
 /// and reaches nothing in the residual.
@@ -335,13 +335,13 @@ cur: Mir.Block = .entry,
 /// Deduped `param_ref` Value per params[i] — parallel to `params`.
 param_values: std.ArrayList(Mir.Value) = .empty,
 branches: std.StringHashMapUnmanaged(BranchInfo) = .empty, // §3.12 named branches
-/// §3.12.1 port branches: branch name → the port's `node_order` slot. A table
+/// §3.12.1 port branches: branch name → the port's `nodes` row. A table
 /// of its own and not a flag on `BranchInfo`, because a port branch is not a
 /// node pair at all — it is the §5.4.3 port flow under a second name, and
 /// everything that consumes `branches` (contribution keying, `flowUnknown`,
 /// codegen's stamp reconstruction) is written on pairs.
 port_branches: std.StringHashMapUnmanaged(u16) = .empty,
-/// §1.3.1 NET name → node_order index. Nets only: a §5.4.2/§5.4.3 flow unknown
+/// §1.3.1 NET name → `nodes` row. Nets only: a §5.4.2/§5.4.3 flow unknown
 /// is not a net and is not reachable by name (`flow_unknowns` and `port_probes`
 /// are its identity), so the `contains`/`get`/`didYouMeanMap` callers below all
 /// mean "is this identifier a net of this module?" and now get that answer.
@@ -524,6 +524,18 @@ static_cond_depth: u32 = 0,
 /// called the task, so no unit and no state write.
 bound_step_place: ?Ssa.Place = null,
 disc_place: ?Ssa.Place = null,
+/// §9.17.1 `$discontinuity(-1)`'s flag, seeded 0 and set 1 at each call site;
+/// its final read is `out.reject_iteration`, and `out.uses.reject_iteration`
+/// says it exists.
+reject_iteration_place: ?Ssa.Place = null,
+/// The SSA place of each `out.held_vars` row, parallel to it: the variable's
+/// value during this evaluation, read back once into `HeldVar.final`.
+held_places: std.ArrayList(Ssa.Place) = .empty,
+/// Parallel to `out.limit_slots`: this evaluation's returned value. Seeded in
+/// the entry block with the `$limit$old` read, overwritten by each site, and
+/// read back at the end of the block — so a site under an `if` that does not
+/// run leaves the slot holding what it held, and never an undefined SSA value.
+limit_places: std.ArrayList(Ssa.Place) = .empty,
 /// §9.4.6 the same carrier for the CONDITIONAL prints, which cannot be
 /// `fadd`-chained directly: a call inside an `if` arm does not dominate the
 /// chain root at the end of the block. An SSA place does — seeded `.f_zero` in
@@ -581,7 +593,6 @@ pub const HeldVar = struct {
     /// The variable's value at the END of the analog block; `updateState`
     /// stores it back on the accepted solution. Filled by `finishHeldVars`.
     final: Mir.Value = .undef,
-    place: Ssa.Place,
 };
 
 /// §9.17.3 one `$limit(access, user_function, …)` STATE SLOT.
@@ -613,11 +624,6 @@ pub const LimitSlot = struct {
     lo: u16,
     neg: bool,
     br: u32,
-    /// This evaluation's returned value. Seeded in the entry block with the
-    /// `$limit$old` read, overwritten by each site, and read back at the end of
-    /// the block — so a site under an `if` that does not run leaves the slot
-    /// holding what it held, and never an undefined SSA value.
-    place: Ssa.Place,
     /// The `$limit$old` call seeded into the ENTRY block: the value this slot
     /// returned on the previous Newton iterate.
     seed: Mir.Value,
@@ -1022,7 +1028,7 @@ fn lowered(self: *Lower) Lowered {
     return self.out;
 }
 
-/// LRM §6.2/§6.9. Register ports (§6.5) into node_order, elaborate the
+/// LRM §6.2/§6.9. Register ports (§6.5) into `nodes`, elaborate the
 /// declarations, then lower each analog block (§5.2) in source order —
 /// multiple analog blocks are executed as if concatenated (§6.9.1).
 pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
@@ -1060,7 +1066,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const disc = self.strOrEmpty(p.discipline);
             for (0..r.size()) |k| {
                 const idx = try lower_node.internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), disc);
-                self.out.node_dir.items[idx] = p.direction;
+                self.out.nodes.items(.dir)[idx] = p.direction;
             }
             try self.out.vectors.put(self.arena, name, r);
             continue;
@@ -1068,13 +1074,13 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         const idx = try lower_node.internNode(self, try lower_node.netKey(self, self.file.str(p.name), p.main_tok), self.strOrEmpty(p.discipline));
         // §6.5.2.2. Recorded here and nowhere else: only a port can be
         // directional, and this loop is the only place the direction is known.
-        self.out.node_dir.items[idx] = p.direction;
+        self.out.nodes.items(.dir)[idx] = p.direction;
         // §1.3.4.1/§1.3.4.2's "not to `inout` ports" is NOT checked here, even
         // though the direction is: this line does not yet know the discipline.
         // See E0360, below the net loop, for where the rule lands and why it
         // cannot land any earlier.
     }
-    self.out.num_ports = self.out.node_order.items.len;
+    self.out.num_ports = @intCast(self.out.nodes.len);
 
     // §3.6.3 internal nets, then §3.6.4 ground.
     for (module.nets) |n| {
@@ -1137,7 +1143,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const dname = if (n.discipline != .none)
                 self.file.str(n.discipline)
             else if (self.node_voltages.get(name)) |idx|
-                (if (idx == ground) "" else self.out.node_disciplines.items[idx])
+                (if (idx == ground) "" else self.out.nodes.items(.disc)[idx])
             else
                 "";
             if (self.out.disciplines.get(dname)) |info| {
@@ -1163,7 +1169,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // ports carry `""`, and a later declaration of one of those is the
         // FIRST declaration, not a conflict.
         if (n.discipline != .none) if (self.node_voltages.get(name)) |idx| {
-            const had = if (idx == ground) "" else self.out.node_disciplines.items[idx];
+            const had = if (idx == ground) "" else self.out.nodes.items(.disc)[idx];
             if (had.len != 0) {
                 var b = self.errWith(n.main_tok, .E0902);
                 b.msg("`{s}` is already of discipline `{s}`", .{ name, had });
@@ -1221,7 +1227,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         const probe_name = if (self.out.vectors.get(base)) |r| try lower_param.elemKey(self, &key_buf, base, &.{r.at(0)}) else base;
         const idx = self.node_voltages.get(probe_name) orelse continue;
         if (idx == ground) continue;
-        const dname = self.out.node_disciplines.items[idx];
+        const dname = self.out.nodes.items(.disc)[idx];
         if (!lower_node.isSignalFlow(self, dname)) continue;
         var b = self.errWith(p.main_tok, .E0360);
         b.msg("`{s}` is an `inout` port of discipline `{s}`, which binds a {s} nature only", .{
@@ -1242,11 +1248,11 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // whose domain is decided by resolution (§7.4) and not by this module, and
     // E0337 already rules on it if anything analog touches it.
     for (self.out.nodesets.items) |ns| {
-        const dname = self.out.node_disciplines.items[ns.node];
+        const dname = self.out.nodes.items(.disc)[ns.node];
         const info = self.out.disciplines.get(dname) orelse continue;
         if (!info.is_discrete) continue;
         var b = self.errWith(ns.tok, .E0366);
-        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.out.node_order.items[ns.node], dname });
+        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.out.nodes.items(.name)[ns.node], dname });
         b.note("a nodeset is an initial guess for a POTENTIAL, and §3.6.2.2 leaves a discrete discipline with no nature to have one", .{});
         try b.emit();
     }
@@ -1466,11 +1472,11 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     }
     // §5.10 the same, for every held variable. Reads only — no `call` — so the
     // unit enumeration below is untouched.
-    for (self.out.held_vars.items) |*h| h.final = try self.builder.readVariable(h.place, self.cur);
+    for (self.out.held_vars.items, self.held_places.items) |*h, p| h.final = try self.builder.readVariable(p, self.cur);
     // §9.17.3 and the same again for every `$limit` state slot: the value the
     // last site on that access function returned this evaluation, or — if none
     // of them ran — the `$limit$old` seed, unchanged.
-    for (self.out.limit_slots.items) |*s| s.final = try self.builder.readVariable(s.place, self.cur);
+    for (self.out.limit_slots.items, self.limit_places.items) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
 
     // §9.17 analog kernel control. Emitted LAST and in this fixed order so the
     // unit enumeration stays a pure function of the source.
@@ -1493,7 +1499,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// `naming.enumerateUnits` gives that call a unit; `codegen.emitStateMachine`
 /// evaluates the unit once per accepted step and stores it into `Instance`.
 fn finishKernelCtl(self: *Lower) Oom!void {
-    if (self.out.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);
+    if (self.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);
     if (self.bound_step_place) |p| {
         const v = try self.builder.readVariable(p, self.cur);
         _ = try self.call("$bound_step", &.{v});

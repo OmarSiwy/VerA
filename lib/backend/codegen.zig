@@ -15,7 +15,7 @@
 //!
 //! SHAPE OF THE OUTPUT (top-down, so it reads like it is generated):
 //!   1. imports + S-generic value-form math helpers                      (§4.3)
-//!   2. `U` enum from Lowered.node_order (ports first) + `num_ports`  (§1.3.1/§6.5)
+//!   2. `U` enum from Lowered.nodes (ports first) + `num_ports`  (§1.3.1/§6.5)
 //!   3. `Model`  — one field per parameter, spec default                  (§3.4)
 //!   4. `Instance` — temperature/abstime/analysis kind + per-operator state (§4.5)
 //!   5. one fn per source unit, uniform signature, per-unit @setFloatMode
@@ -460,9 +460,9 @@ pub const Gen = struct {
     /// when `display == .drop`). Set by `buildJobs`, which is also where the job
     /// that renders it is queued.
     display_name: []const u8 = "",
-    /// Extra solver unknowns codegen appends after `Lowered.node_order`: one
+    /// Extra solver unknowns codegen appends after `Lowered.nodes`: one
     /// branch current per §5.6 potential contribution that lowering did not
-    /// already give a `flow(a,b)` slot. Values are node_order-space indices.
+    /// already give a `flow(a,b)` slot. Values are `nodes`-space indices.
     branch_u: []u32 = &.{},
     /// §5.4.2.1/§5.6.6 — the branch-flow unknowns NO branch row defines, in
     /// slot order. See `FreeFlow` and `emitStamps`.
@@ -695,7 +695,7 @@ pub const Gen = struct {
     }
 
     fn uNameTaken(self: *const Gen, nm: []const u8, extra: []const []const u8) bool {
-        for (self.lowered.node_order.items) |n| {
+        for (self.lowered.nodes.items(.name)) |n| {
             if (std.mem.eql(u8, n, nm)) return true;
         }
         for (extra) |n| {
@@ -710,12 +710,12 @@ pub const Gen = struct {
 
         // §5.6 potential contributions need a branch-current unknown. Lowering
         // allocates a `flow(a,b)` slot only where the model PROBES I(a,b), so
-        // codegen appends the missing ones after node_order — every existing
+        // codegen appends the missing ones after `nodes` — every existing
         // block_param index keeps its meaning.
-        const base: u32 = @intCast(self.lowered.node_order.items.len);
+        const base: u32 = @intCast(self.lowered.nodes.len);
         self.branch_u = try a.alloc(u32, self.lowered.contributions.items.len);
         @memset(self.branch_u, none_u32);
-        // Raw names of the unknowns appended after node_order, in append order.
+        // Raw names of the unknowns appended after `nodes`, in append order.
         var extra: std.ArrayList([]const u8) = .empty;
         for (self.lowered.contributions.items, 0..) |c, i| {
             // A §5.6 potential source and a §5.6.7 indirect (nullor) source are
@@ -728,7 +728,7 @@ pub const Gen = struct {
             // and each is a separate source with a separate current.
             //
             // Asked for by the NODE PAIR, which is the identity §5.4.1 gives the
-            // branch. This used to format `flow(hi,lo)` and scan `node_order`
+            // branch. This used to format `flow(hi,lo)` and scan `nodes`
             // for a string match, which made it the fourth place that re-derived
             // structure from a spelling — and the one that survived the key
             // split in lowering: §1.3.1.1's reference node prints `gnd`, so on a
@@ -749,7 +749,7 @@ pub const Gen = struct {
         self.n_u = base + @as(u32, @intCast(extra.items.len));
 
         self.u_names = try a.alloc([]const u8, self.n_u);
-        for (self.lowered.node_order.items, 0..) |n, i| {
+        for (self.lowered.nodes.items(.name), 0..) |n, i| {
             self.u_names[i] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
         }
         for (extra.items, 0..) |n, k| {
@@ -794,7 +794,7 @@ pub const Gen = struct {
         // §9.15's host-published `$simparam` is recorded at the CALL, not by
         // this walk: a parameter default is lowered outside the block stream,
         // and `parameter real tnom = $simparam("tnom")` is the whole point.
-        self.uses_nom_temp = self.lowered.uses_host_simparam;
+        self.uses_nom_temp = self.lowered.uses.contains(.host_simparam);
         // §9.19 $param_given(p): the flag lives in Model, but only for the
         // parameters actually asked about.
         for (0..self.an.nb) |bi| {

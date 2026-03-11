@@ -688,7 +688,7 @@ test "codegen: a §5.6 potential contribution gets its own branch-current unknow
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     // lowering only allocates `flow(a,b)` where the model PROBES I(a,b), so
-    // codegen appends the unknown AFTER node_order — existing indices hold.
+    // codegen appends the unknown AFTER `nodes` — existing indices hold.
     try std.testing.expect(std.mem.indexOf(u8, src, "flowZ28pZ2cnZ29, // branch flow") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const u_kinds") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".sub(c);") != null);

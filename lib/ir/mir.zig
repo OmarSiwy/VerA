@@ -239,7 +239,7 @@ pub const DefKind = enum(u8) {
     int_const, // §4.2 constant expression, integer
     str_const, // §2.7 string literal (ch9 format args, §4.4 names)
     param_ref, // §3.4 parameter — index into Lowered.params
-    block_param, // §4.4 probe: index into the unknown vector (Lowered.node_order)
+    block_param, // §4.4 probe: index into the unknown vector (Lowered.nodes)
     inst_result, // result of an instruction
 };
 
@@ -384,9 +384,9 @@ pub fn addParamRef(self: *Mir, gpa: std.mem.Allocator, param: u32) !Value {
 }
 
 /// LRM §4.4 signal-access probe. `unknown` indexes the solver unknown vector
-/// (Lowered.node_order → the generated `U` enum, i.e. codegen's `x[unknown]`).
+/// (Lowered.nodes → the generated `U` enum, i.e. codegen's `x[unknown]`).
 /// V(a,b) lowers to fsub of two probes; a branch-current unknown gets its own
-/// node_order slot.
+/// `nodes` row.
 pub fn addBlockParam(self: *Mir, gpa: std.mem.Allocator, unknown: u32) !Value {
     return self.addValue(gpa, .block_param, unknown);
 }

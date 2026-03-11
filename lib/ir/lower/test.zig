@@ -265,9 +265,9 @@ test "lower: contribution splits into resistive and reactive parts" {
     _ = try h.low.lowerFile();
 
     // §6.5 ports first, in header order — this is the host's terminal order.
-    try std.testing.expectEqual(@as(usize, 2), h.low.out.num_ports);
-    try std.testing.expectEqualStrings("p", h.low.out.node_order.items[0]);
-    try std.testing.expectEqualStrings("n", h.low.out.node_order.items[1]);
+    try std.testing.expectEqual(@as(u16, 2), h.low.out.num_ports);
+    try std.testing.expectEqualStrings("p", h.low.out.nodes.items(.name)[0]);
+    try std.testing.expectEqualStrings("n", h.low.out.nodes.items(.name)[1]);
 
     // §3.4.2 the value range MUST survive to proof.zig.
     try std.testing.expectEqual(@as(usize, 2), h.low.out.params.items.len);
@@ -484,7 +484,7 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
     defer h.deinit();
     _ = try h.low.lowerFile();
 
-    try std.testing.expectEqual(@as(usize, 2), h.low.out.num_ports);
+    try std.testing.expectEqual(@as(u16, 2), h.low.out.num_ports);
     try std.testing.expectEqual(@as(usize, 2), h.low.out.port_probes.items.len);
     // Deduped by port, in first-probe order, and never inside `num_ports`.
     try std.testing.expectEqual(@as(u16, 0), h.low.out.port_probes.items[0].port);
@@ -497,7 +497,7 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
         // The spelling still reaches the host as `flowZ28Z3cpZ3eZ29` and is
         // pinned there, in codegen.zig's "the `U` block is the SPELLING
         // contract" test; the two claims no longer ride on one string.
-        try std.testing.expectEqual(pp.port, h.low.out.node_kind.items[pp.u].port_flow);
+        try std.testing.expectEqual(pp.port, h.low.out.nodes.items(.kind)[pp.u].port_flow);
     }
     try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.out.port_probes.items[0].u));
 }
@@ -561,7 +561,7 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
         try Harness.run(std.testing.allocator, src, &g);
         defer g.deinit();
         _ = try g.low.lowerFile();
-        // `p` and `n` are node_order 0 and 1, so the branch is that pair.
+        // `p` and `n` are `nodes` rows 0 and 1, so the branch is that pair.
         try std.testing.expectEqual(c.unknown, g.low.out.flow_unknowns.contains(.{ .hi = 0, .lo = 1 }));
     }
 }

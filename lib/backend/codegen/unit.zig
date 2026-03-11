@@ -500,7 +500,7 @@ pub fn buildJobs(self: *Gen) Error!void {
         .mode = .strict,
         .comment = "§9.17.3 next-iteration limiter value",
     });
-    if (self.lowered.reject_iteration_place != null) try jobs.append(self.arena, .{
+    if (self.lowered.uses.contains(.reject_iteration)) try jobs.append(self.arena, .{
         .kind = .reject_iteration,
         .target = self.an.rv(self.lowered.reject_iteration),
         .mode = .strict,
