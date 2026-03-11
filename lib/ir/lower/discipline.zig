@@ -98,7 +98,7 @@ pub fn collectDisciplines(self: *Lower) Oom!void {
                 .flow => info.flow_abstol = v.asReal(),
             }
         }
-        try self.disciplines.put(self.arena, self.file.str(d.name), info);
+        try self.out.disciplines.put(self.arena, self.file.str(d.name), info);
     }
 }
 
@@ -502,8 +502,8 @@ pub fn checkNetCompat(self: *Lower, tok: u32, hi: u16, lo: u16) Oom!void {
     // not a second NET the rule can be about: `V(p)` is `V(p, gnd)` and spans
     // one discipline.
     if (hi == ground or lo == ground) return;
-    const an = self.node_disciplines.items[hi];
-    const bn = self.node_disciplines.items[lo];
+    const an = self.out.node_disciplines.items[hi];
+    const bn = self.out.node_disciplines.items[lo];
     // A net with no discipline at all is E0337's, not this rule's: §3.11
     // compares two disciplines and here there is only one.
     if (an.len == 0 or bn.len == 0) return;

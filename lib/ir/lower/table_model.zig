@@ -198,8 +198,8 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const site = if (cols.items.len == 0) 0 else blk: {
         if (std.mem.indexOfScalar(Ast.ExprId, self.table_model_state.table_sources.items, e)) |existing| break :blk existing + 1;
         try self.table_model_state.table_sources.append(self.arena, e);
-        try self.table_samples.append(self.arena, @intCast(rows.len));
-        break :blk self.table_samples.items.len;
+        try self.out.table_samples.append(self.arena, @intCast(rows.len));
+        break :blk self.out.table_samples.items.len;
     };
     if (site != 0 and self.table_effect_place == null) {
         const place = self.builder.newPlace();
@@ -221,7 +221,7 @@ pub fn lowerTableModel(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     for (args[0..nd]) |a| try vals.append(self.arena, try self.toReal(try lower_expr.lowerExpr(self, a)));
     // ponytail: rows are already lowered; append their contiguous values in order.
     try vals.appendSlice(self.arena, rows);
-    self.uses_table_model = true;
+    self.out.uses_table_model = true;
     const result = try self.call("$table_model", vals.items);
     if (site != 0) try self.builder.writeVariable(self.table_effect_place.?, self.cur, result);
     return .{ .v = result, .ty = .real };

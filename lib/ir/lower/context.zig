@@ -120,7 +120,7 @@ fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
 // which is codegen's to emit.
 pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     if (!isMixed(self.file, module)) return;
-    self.mixed_signal = true;
+    self.out.mixed_signal = true;
     const ex = &self.file.exprs;
     var owned: std.ArrayList(Ast.ExprId) = .empty;
     for (module.assigns) |a| {
@@ -154,7 +154,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     for (module.analog) |blk| try reads.stmt(blk.body);
     for (owned.items) |t| {
         const name = self.file.str(ex.strOf(t));
-        if (self.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
+        if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
         const ty: Ast.Type = for (module.vars) |v| {
             if (v.name == ex.strOf(t)) break v.ty;
         } else if (netOf(module, ex.strOf(t)) != null) .integer else continue; // an undeclared name is §6.8's, reported elsewhere
@@ -164,7 +164,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
             try self.err(ex.mainTok(t), .E0437, "`{s}` is a digital `real`, and the digital engine holds no real-valued variable yet", .{name});
             continue;
         }
-        try self.discrete_inputs.put(self.arena, name, ex.mainTok(t));
+        try self.out.discrete_inputs.put(self.arena, name, ex.mainTok(t));
         try lower_param.addParam(self, name, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
     }
 }
@@ -202,7 +202,7 @@ fn netOf(module: *const Ast.ModuleDecl, name: Ast.StrId) ?*const Ast.NetDecl {
 
 fn collectWrites(self: *Lower, id: Ast.StmtId, out: *std.ArrayList(Ast.ExprId)) Oom!void {
     if (id == .none) return;
-    const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
+    const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
     var writes: std.ArrayList(Ast.ExprId) = .empty;
     try self.file.stmtWrites(funcs, id, self.arena, &writes);
     for (writes.items) |w| {
@@ -253,7 +253,7 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
     // in the other crosses the A/D boundary — an A2D or an explicit D2A event,
     // neither of which the mixed-signal kernel carries yet. Refused rather than
     // lowered as two unrelated events that never meet.
-    if (self.mixed_signal and module.events.len != 0) {
+    if (self.out.mixed_signal and module.events.len != 0) {
         var dig: EventRefs = .{ .l = self, .module = module };
         for (module.discrete) |blk| try dig.stmt(blk.body);
         var ana: EventRefs = .{ .l = self, .module = module };
@@ -262,7 +262,7 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
             try self.err(tok, .E0437, "named event `{s}` is used in both contexts, and the kernel carries no event across the A/D boundary yet (§7.3.6.1, §7.3.6.2)", .{name});
     }
 
-    var ctx: DiscreteCtx = .{ .mixed = self.mixed_signal };
+    var ctx: DiscreteCtx = .{ .mixed = self.out.mixed_signal };
     // ANALOG functions only. §4.7.3/§7.3.7's rule is that an *analog* function
     // may not be called from the discrete context; a DIGITAL function called
     // from a digital process is the ordinary case and must not be refused.
@@ -318,7 +318,7 @@ pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!voi
 pub fn collectInitialState(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // A mixed module's `initial` blocks run on the kernel, with the rest of
     // its digital half: their writes are discrete inputs, not constants.
-    if (self.mixed_signal) return;
+    if (self.out.mixed_signal) return;
     for (module.discrete) |blk| {
         // `always` is refused at the keyword (E0205, parser): it re-runs on an
         // event, so it has no constant reading to collect. Reporting its body
@@ -396,7 +396,7 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
     // output actual and a `$random` seed assign too (`stmtWrites`). The target
     // of `bus[3] = ...` is the array, so `lvalueBase` walks down to the name —
     // §7.2.2's domain is a property of the DECLARATION.
-    const funcs: []const Ast.FuncDecl = if (self.module) |m| m.functions else &.{};
+    const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
     var writes: std.ArrayList(Ast.ExprId) = .empty;
     defer writes.deinit(self.arena);
     try self.file.stmtWrites(funcs, id, self.arena, &writes);
@@ -405,7 +405,7 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
         if (t == .none) continue;
         const name = self.file.str(ex.strOf(t));
         if (discrete) {
-            if (self.vars.contains(name) or self.discrete_inputs.contains(name)) try ctx.assigned.put(self.arena, name, context);
+            if (self.vars.contains(name) or self.out.discrete_inputs.contains(name)) try ctx.assigned.put(self.arena, name, context);
         } else if (ctx.assigned.get(name)) |dtok| {
             var b = self.errWith(self.file.exprs.mainTok(t), .E0432);
             b.msg("`{s}`", .{name});

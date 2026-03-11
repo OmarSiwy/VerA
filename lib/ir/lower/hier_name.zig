@@ -124,7 +124,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
             // or to be involved in port connections." A port is already bound to
             // whatever the instantiating netlist connected it to, and the alias
             // would bind the same matrix position a second time.
-            if (idx.? < self.num_ports) {
+            if (idx.? < self.out.num_ports) {
                 try self.err(self.file.exprs.mainTok(e), .E0812, "§9.20 does not allow the analog_net_reference to be a port: `{s}`", .{rname});
                 return .refused;
             }
@@ -223,10 +223,10 @@ pub fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u
     if (hit.idx != ground) {
         if (lower_discipline.nodeDisciplineConflict(
             self,
-            self.node_disciplines.items[local],
-            self.node_disciplines.items[hit.idx],
+            self.out.node_disciplines.items[local],
+            self.out.node_disciplines.items[hit.idx],
         ) != null) return .unresolved;
-        if (self.disciplines.get(self.node_disciplines.items[hit.idx])) |info| {
+        if (self.out.disciplines.get(self.out.node_disciplines.items[hit.idx])) |info| {
             if (info.is_discrete) return .unresolved;
         }
     }
@@ -246,7 +246,7 @@ pub fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u
         // §9.20 gives the honest 0 a meaning ("the user is encouraged to check
         // the return value"). The upgrade path is a per-instance terminal flow
         // unknown, which is elaboration's to mint, not this function's.
-        if (!hit.direct or hit.idx == ground or hit.idx >= self.num_ports) return .unresolved;
+        if (!hit.direct or hit.idx == ground or hit.idx >= self.out.num_ports) return .unresolved;
     }
     // The alias itself: from here the analog_net_reference names the resolved
     // node's unknown, so every later probe of it lands on that matrix position.
@@ -275,7 +275,7 @@ pub fn resolveAliasNode(self: *Lower, path: []const u8) ?AliasHit {
     if (lookupFlatNode(self, path)) |h| return h;
     var p = path;
     if (std.mem.startsWith(u8, p, "$root.")) p = p["$root.".len..];
-    if (self.module) |m| {
+    if (self.out.module) |m| {
         const mn = self.file.str(m.name);
         if (p.len > mn.len + 1 and p[mn.len] == Elaborate.sep and std.mem.startsWith(u8, p, mn))
             p = p[mn.len + 1 ..];
@@ -288,7 +288,7 @@ pub fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
     if (self.node_voltages.get(p)) |i| return .{ .idx = i, .direct = true };
     // A child port bound to a parent net is the same signal as that net, and
     // `Design.names` holds exactly those aliases (`flatName`'s one exception).
-    if (self.hier_names.get(p)) |flat| {
+    if (self.out.hier_names.get(p)) |flat| {
         if (self.node_voltages.get(flat)) |i| return .{ .idx = i, .direct = false };
     }
     return null;
@@ -321,8 +321,8 @@ pub fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
 /// with its last segment dropped, separator included, "" at the top. Joined to
 /// an `inst_name` it gives the flat name of a SIBLING.
 pub fn callerParentPath(self: *const Lower) []const u8 {
-    if (self.cur_unit >= self.unit_paths.len) return "";
-    const p = self.unit_paths[self.cur_unit].path;
+    if (self.cur_unit >= self.out.unit_paths.len) return "";
+    const p = self.out.unit_paths[self.cur_unit].path;
     if (p.len == 0) return p;
     // `path` ends with the separator, so the caller's own segment is the text
     // between the previous separator and the last one.
@@ -353,7 +353,7 @@ pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             callerParentPath(self), inst.?, &[_]u8{Elaborate.sep}, param.?,
         });
         if (self.param_index.get(path)) |pi|
-            return .{ .v = self.param_values.items[pi], .ty = astTy(self.params.items[pi].ty) };
+            return .{ .v = self.param_values.items[pi], .ty = astTy(self.out.params.items[pi].ty) };
         // §9.16's own first sentence: "$simprobe() queries the simulator for AN
         // OUTPUT VARIABLE named param_name in a sibling instance", and the
         // clause's example probes `id` of a mosfet — an operating-point

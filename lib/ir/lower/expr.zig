@@ -313,7 +313,7 @@ pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?Typ
     if (self.vars.get(key)) |slot|
         return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
     if (self.param_index.get(key)) |pi|
-        return .{ .v = self.param_values.items[pi], .ty = astTy(self.params.items[pi].ty) };
+        return .{ .v = self.param_values.items[pi], .ty = astTy(self.out.params.items[pi].ty) };
     return null;
 }
 
@@ -345,7 +345,7 @@ pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
     if (parts.len > 1 and self.file.strings.eql(parts[0], "$root")) {
         parts = parts[1..];
         if (parts.len > 1) {
-            if (self.module) |m| if (parts[0] == m.name) {
+            if (self.out.module) |m| if (parts[0] == m.name) {
                 parts = parts[1..];
             };
         }
@@ -359,7 +359,7 @@ pub fn flatName(self: *Lower, e: Ast.ExprId) Oom![]const u8 {
     // The one place the join is NOT the answer: a child port bound to a parent
     // net is the same signal as that net, so `u.a` denotes `p` and there is no
     // `u.a` to find. `Design.names` holds those aliases and nothing else.
-    return self.hier_names.get(path) orelse path;
+    return self.out.hier_names.get(path) orelse path;
 }
 
 /// §2.8 name resolution: variables (§3.2) shadow parameters (§3.4), which
@@ -373,7 +373,7 @@ pub fn lookupName(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!TypedValue 
     // same name shadows the module's, so `param_index` is masked and the local
     // value is found in `consts` (where `inlineUserFuncPre` folded it).
     if (!funcParamShadows(self, name)) if (self.param_index.get(name)) |idx|
-        return .{ .v = self.param_values.items[idx], .ty = astTy(self.params.items[idx].ty) };
+        return .{ .v = self.param_values.items[idx], .ty = astTy(self.out.params.items[idx].ty) };
     if (self.consts.get(name)) |c| return switch (c) {
         .int => .{ .v = try self.mir.addIntConst(self.arena, c.asInt()), .ty = .integer },
         .real => .{ .v = try self.mir.addFloatConst(self.arena, c.asReal()), .ty = .real },
@@ -843,7 +843,7 @@ pub fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// — see `potentialSourceHere` for the case where this unit's OWN source is the
 /// branch being read.
 pub fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
-    for (self.contributions.items, self.accum.items) |c, acc| {
+    for (self.out.contributions.items, self.accum.items) |c, acc| {
         if (c.kind == .direct and c.access == .flow and c.hi == t.hi and c.lo == t.lo and c.br == t.br)
             return acc;
     }
@@ -867,7 +867,7 @@ pub fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
 /// accumulator instead — two ideal potential sources in parallel is a degenerate
 /// topology the clause does not describe either way.
 pub fn potentialSourceHere(self: *const Lower, t: lower_contrib.Target) bool {
-    for (self.contributions.items) |c| {
+    for (self.out.contributions.items) |c| {
         if (c.kind == .direct and c.access == .potential and c.hi == t.hi and c.lo == t.lo and
             c.br == t.br and c.unit == self.cur_unit) return true;
     }
@@ -919,7 +919,7 @@ pub fn portFlowRead(self: *Lower, e: Ast.ExprId, p: u16) Oom!TypedValue {
     // of the module"; §5.4.1 "it must be a declared port of the module in which
     // the port access function is used." An internal net has no outside, so its
     // port flow would be an identically-zero substitute — reject instead.
-    if (p == ground or p >= self.num_ports) {
+    if (p == ground or p >= self.out.num_ports) {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0508);
         b.msg("`{s}(<{s}>)`", .{ name, lower_node.nodeName(self, p) });
         if (diag.didYouMeanMap(lower_node.nodeName(self, p), self.node_voltages)) |s|
@@ -1015,7 +1015,7 @@ pub fn unknownCall(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     b.msg("`{s}`", .{name});
 
     var names: std.ArrayList([]const u8) = .empty;
-    if (self.module) |m| {
+    if (self.out.module) |m| {
         for (m.functions) |*fd| try names.append(self.arena, self.file.str(fd.name));
     }
     try names.appendSlice(self.arena, unary_math.keys());

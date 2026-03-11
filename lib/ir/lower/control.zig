@@ -537,7 +537,7 @@ pub fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: As
 
 /// The genvar assigned by a `for` init statement, if any (§3.5).
 pub fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
-    const m = self.module orelse return null;
+    const m = self.out.module orelse return null;
     if (init_s == .none) return null;
     const s = self.file.stmt(init_s);
     if (s != .assign) return null;

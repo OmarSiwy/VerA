@@ -319,12 +319,9 @@ pub const TypedValue = struct { v: Mir.Value, ty: Ty };
 
 arena: std.mem.Allocator,
 mir: *Mir,
-/// §6.7 path → flat name, from elaboration. Read only by `flatName`.
-hier_names: std.StringHashMapUnmanaged([]const u8) = .empty,
-/// §9.15/§9.16, indexed by `Ast.AnalogBlock.unit`: the module a block was
-/// WRITTEN in and the instance path it was inlined at. See `Design.units` —
-/// flattening erases both, so elaboration publishes them.
-unit_paths: []const Elaborate.UnitPath = &.{},
+/// Everything a later stage reads, built in place and returned by `lowerFile`
+/// (lower/tables.zig). The fields below it are lowering's own.
+out: Lowered,
 /// MUTABLE, and only for one reason: `Elaborate.elaborate` APPENDS to the
 /// stores (§6.7 flat names, cloned expression rows, cloned statements) when it
 /// flattens an instance tree. It runs as the first statement of `lowerFile`,
@@ -335,8 +332,6 @@ builder: Ssa.SsaBuilder,
 /// The block statements are currently being appended to.
 cur: Mir.Block = .entry,
 
-// ---- class 3 side tables (the codegen/proof contract) ----
-params: std.ArrayList(ParamInfo) = .empty, // §3.4
 /// Deduped `param_ref` Value per params[i] — parallel to `params`.
 param_values: std.ArrayList(Mir.Value) = .empty,
 branches: std.StringHashMapUnmanaged(BranchInfo) = .empty, // §3.12 named branches
@@ -346,52 +341,11 @@ branches: std.StringHashMapUnmanaged(BranchInfo) = .empty, // §3.12 named branc
 /// everything that consumes `branches` (contribution keying, `flowUnknown`,
 /// codegen's stamp reconstruction) is written on pairs.
 port_branches: std.StringHashMapUnmanaged(u16) = .empty,
-contributions: std.ArrayList(Contribution) = .empty, // §5.6
-/// The U-enum index space: ports (§6.5) first, then internal nodes (§3.6.3),
-/// then branch-flow unknowns (§5.4.2). Append-only ⇒ stable.
-node_order: std.ArrayList([]const u8) = .empty,
-/// What each node_order slot IS, as opposed to what it is SPELLED. One entry
-/// per slot, appended by `appendNode` — see `NodeKind` for why the two had to
-/// come apart.
-node_kind: std.ArrayList(NodeKind) = .empty,
-/// Discipline name per node_order slot (`""` when undeclared, §3.9).
-node_disciplines: std.ArrayList([]const u8) = .empty,
-/// §6.5.2.2 port direction per node_order slot (`.unspecified` for an internal
-/// net or a port whose direction is never declared). A DIRECTIONAL port —
-/// `input` or `output` — is the one place the LRM's signal-flow port model
-/// (§1.3.4) is unambiguous, and codegen has to refuse those; which of the two
-/// it is decides §1.3.4.1's contribution-target rule (see E0425).
-node_dir: std.ArrayList(Ast.Direction) = .empty,
-/// §5.4.3 ports read with `I(<p>)`, in first-probe order, deduped. Each needs
-/// its own solver unknown (`u`) and a row pinning it to the module's KCL sum
-/// at `port`; codegen emits that row. Append-only ⇒ deterministic.
-port_probes: std.ArrayList(PortProbe) = .empty,
-/// §3.6.3.2 the net_decl_assignments of this module, in declaration order and
-/// already folded. Sparse — most modules declare none — so codegen emits the
-/// optional `u_nodeset` table only when this is non-empty.
-nodesets: std.ArrayList(Nodeset) = .empty,
-num_ports: usize = 0, // §6.5
 /// §1.3.1 NET name → node_order index. Nets only: a §5.4.2/§5.4.3 flow unknown
 /// is not a net and is not reachable by name (`flow_unknowns` and `port_probes`
 /// are its identity), so the `contains`/`get`/`didYouMeanMap` callers below all
 /// mean "is this identifier a net of this module?" and now get that answer.
 node_voltages: std.StringHashMapUnmanaged(u16) = .empty,
-/// §5.4.2 branch-flow identity: the node PAIR → its unknown's node_order slot.
-/// The pair is the identity the LRM gives the branch, and keying on it is what
-/// stopped `I(a)` and `I(a,gnd)` sharing an unknown when a plain net is spelled
-/// `gnd` — see `flowUnknown`. Bounded by the branch count of one module.
-flow_unknowns: std.AutoHashMapUnmanaged(FlowKey, u16) = .empty,
-disciplines: std.StringHashMapUnmanaged(DisciplineInfo) = .empty, // §3.6.2
-/// §3.6.3 declared vector nets and §3.12 vector branches, by base name.
-///
-/// SCALARISED, so this map is the only place a range survives elaboration:
-/// `electrical [3:0] p` interns four ordinary nodes called `p[3]`…`p[0]` and
-/// the node table never learns that ranges exist. Everything downstream —
-/// `internNode`, `probe`, the contribution index, codegen's `U` enum — sees
-/// four unrelated nets and needs no change at all. What is left over is the
-/// two questions a reference has to answer: is this name a vector, and is
-/// this index one of its elements (E0351, E0352).
-vectors: std.StringHashMapUnmanaged(VecRange) = .empty,
 
 // ---- internal lowering state (not part of the codegen contract) ----
 /// Sub-file-private state: each is read and written by that one file only.
@@ -451,14 +405,6 @@ scope_log: std.ArrayList(ScopeEntry) = .empty,
 consts: std.StringHashMapUnmanaged(Const) = .empty,
 /// name → index into `params` (aliasparam §3.4.7 maps two names to one index).
 param_index: std.StringHashMapUnmanaged(u32) = .empty,
-/// §3.4.7 the alias side of that map, in declaration order, for the ONE
-/// consumer that cannot read it out of `param_index`: the model card. An alias
-/// exists to carry an override — "nmos2 #(.trise(5))" and "nmos2 #(.dtemp(5))"
-/// have to mean the same thing — so the alias needs a field of its own on the
-/// card, which `params` (one entry per real parameter) has no slot for.
-/// `param_index` cannot answer this because it holds both names with nothing
-/// saying which is the alias.
-aliases: std.ArrayList(Alias) = .empty,
 /// §3.4.7's one printed example whose right-hand side is NOT a parameter:
 /// `aliasparam m = $mfactor;`. The index of the parameter the alias declared, or
 /// null when this module never aliased it — see `aliasSystemParam`.
@@ -523,40 +469,9 @@ inlining: std.ArrayList([]const u8) = .empty,
 /// Non-null inside an `analog initial` block (§5.2.1) or an analog function
 /// (§4.7.2); names the context in the "not allowed here" diagnostic.
 restrict: ?[]const u8 = null,
-/// §9.5.3/§9.5.4.2 — does the module call `$sformat`/`$swrite`/`$sscanf`? Set at
-/// the call, read by codegen to decide whether `str_kernels.zig` is emitted. A
-/// flag rather than a site list because the SITE that needs a name (the format
-/// scratch) is identified by its MIR instruction, which codegen already has.
-uses_str_tasks: bool = false,
-/// §9.5.1–§9.5.8 — does the module call the file-descriptor family? Gates
-/// `file_kernels.zig` exactly as `uses_str_tasks` gates the string kernels, and
-/// only in the `display == .emit` artifact: a descriptor table is a HOST facility
-/// (§9.5.1's own "if a file cannot be opened … a zero is returned" is the answer
-/// a device with no such host must give), so a device compiled for a solver does
-/// not carry one.
-uses_file_tasks: bool = false,
-/// §9.21 — does the module call `$table_model`? Set at the call, read by codegen
-/// to decide whether `table_kernels.zig` is emitted, exactly as
-/// `uses_str_tasks` gates the string kernels.
-uses_table_model: bool = false,
-/// First-call sample counts, one entry per array-source call site.
-table_samples: std.ArrayList(u32) = .empty,
 /// Guard-aware source-order chain for table captures and distribution checks;
 /// its final value is a core live-out.
 table_effect_place: ?Ssa.Place = null,
-table_effect: Mir.Value = .f_zero,
-/// §9.13 — does the module call one of Table 9-10's 17 probabilistic
-/// distributions? Gates `rng_kernels.zig` exactly as `uses_str_tasks` gates the
-/// string kernels.
-uses_rng: bool = false,
-/// §9.13.1 — how many call sites took the SEEDLESS form (`$random` with no
-/// argument, or a constant/parameter seed, whose "internal seed ... is not
-/// visible from the source"). One `Instance` latch slot each: codegen emits the
-/// array, `updateState` advances it on the accepted step, and the residual only
-/// reads it. Per SITE and not one shared counter because §9.13.1 says the
-/// internal seed "gets updated every time the call to $arandom is made", so two
-/// call sites are two streams, not two reads of one.
-rng_auto_sites: u32 = 0,
 /// Where a §9.21.1 `$table_model` data FILE is looked for, in order. The same
 /// list `include` searches, set by the caller (root.zig) for the same reason the
 /// directives above are: only the driver knows the search path. Empty means "the
@@ -599,8 +514,6 @@ cond_depth: u32 = 0,
 /// answer different questions: §5.6.7 (indirect contributions) and §5.8/§5.10.3.1
 /// (event control) ask for a CONSTANT condition, which `analysis("dc")` is not.
 static_cond_depth: u32 = 0,
-/// The module being lowered (§6.2). Set by `lowerModule`.
-module: ?*const Ast.ModuleDecl = null,
 /// §9.17.2 `$bound_step` / §9.17.1 `$discontinuity`. Each is an SSA place
 /// seeded to +inf ("nothing asked for") in the ENTRY block and `fmin`-ed at
 /// every call site, exactly like a contribution accumulator: a call under an
@@ -611,18 +524,6 @@ module: ?*const Ast.ModuleDecl = null,
 /// called the task, so no unit and no state write.
 bound_step_place: ?Ssa.Place = null,
 disc_place: ?Ssa.Place = null,
-/// §9.17.1 rejection belongs to the Newton iteration, not timestep history.
-reject_iteration_place: ?Ssa.Place = null,
-reject_iteration: Mir.Value = .zero,
-/// §9.4 display tasks, in source order. A display call's RESULT is never read,
-/// so it is dead code the moment codegen slices a unit out of the MIR — and the
-/// print vanishes with it. `display_root` is the one live root that keeps them
-/// all: see `finishDisplays`.
-displays: std.ArrayList(Display) = .empty,
-/// The chain root over every unconditional entry of `displays`, or `.f_zero`
-/// when the model prints nothing. codegen turns it into ONE unit function whose
-/// body is the prints, in source order.
-display_root: Mir.Value = .f_zero,
 /// §9.4.6 the same carrier for the CONDITIONAL prints, which cannot be
 /// `fadd`-chained directly: a call inside an `if` arm does not dominate the
 /// chain root at the end of the block. An SSA place does — seeded `.f_zero` in
@@ -638,38 +539,14 @@ display_cond_place: ?Ssa.Place = null,
 /// `tryUnrollFor` removes them from `consts` when the loop ends, which is
 /// before `finishDisplays` re-lowers the operand.
 active_genvars: std.ArrayList([]const u8) = .empty,
-/// §5.10 module variables assigned inside an `@(<event>)` body, in declaration
-/// order. Such a variable RETAINS its value between analog evaluations — that
-/// is the entire point of `@(cross(...)) x = V(p);`, and an ordinary SSA place
-/// cannot express it, because every module variable is re-initialised from its
-/// declaration at the top of every evaluation. Each entry gets a persistent
-/// `Instance` slot instead; codegen reads it directly.
-held_vars: std.ArrayList(HeldVar) = .empty,
 /// §5.3.2 the dotted prefix of the named block being lowered ("" at module
 /// scope, "lo." inside `begin : lo`). The lowering-side half of `held_names`'
 /// key; see `declareVarDecl`.
 block_path: []const u8 = "",
-/// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
-/// Collected by `scanCallSites` before the analog block is lowered.
-limit_slots: std.ArrayList(LimitSlot) = .empty,
-/// §9.15 the model queries the runtime Newton iteration number.
-uses_newton_iter: bool = false,
-/// §9.15 the model reads a `$simparam` whose value is the HOST's
-/// (`simparamHostField`), so codegen owes its Model the reserved field. Set at
-/// the call because a §3.4 parameter default is lowered outside the block
-/// stream, and `parameter real tnom = $simparam("tnom")` is the whole use.
-uses_host_simparam: bool = false,
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected BEFORE the module's
 /// variables are declared, for the same reason `held_names` is: the value a
 /// variable starts every evaluation with is decided at its declaration.
-/// §7.3.6.5/§8.5 a mixed module's digital-owned values the analog block may
-/// read, name → declaring token, in first-write order. Each is also a hidden
-/// §3.4 parameter (a host-written `Model` field). See
-/// `lower_context.declareDiscreteInputs`.
-discrete_inputs: std.StringArrayHashMapUnmanaged(u32) = .empty,
-/// The module's discrete half needs the event queue (`lower_context.isMixed`).
-mixed_signal: bool = false,
 /// Empty for a module with no `initial` block. See `collectInitialState`.
 initial_state: std.StringArrayHashMapUnmanaged(struct { value: Ast.ExprId, tok: u32 }) = .empty,
 /// §5.10.4 named events, name -> the flag slot `-> ev` writes and `@(ev)` reads.
@@ -831,6 +708,7 @@ pub fn init(
         .arena = arena,
         .mir = mir,
         .file = file,
+        .out = .{ .file = file },
         .src = src,
         .tok_starts = tok_starts,
         .bag = bag,
@@ -1121,8 +999,8 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
         .tok_starts = self.tok_starts,
         .bag = self.bag,
     });
-    self.hier_names = design.names;
-    self.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
+    self.out.hier_names = design.names;
+    self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
     // built on a mistyped instance terminal fails at the mistype instead of at
@@ -1134,56 +1012,21 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     return self.lowered();
 }
 
-/// The output tables, as the value later stages read. Every buffer is shared
-/// with `self`, not copied.
-fn lowered(self: *const Lower) Lowered {
-    return .{
-        .file = self.file,
-        .src = self.src,
-        .tok_starts = self.tok_starts,
-        .directives = self.directives,
-        .module = self.module,
-        .hier_names = self.hier_names,
-        .unit_paths = self.unit_paths,
-        .consts = self.consts,
-        .vectors = self.vectors,
-        .node_order = self.node_order,
-        .node_kind = self.node_kind,
-        .node_disciplines = self.node_disciplines,
-        .node_dir = self.node_dir,
-        .num_ports = self.num_ports,
-        .flow_unknowns = self.flow_unknowns,
-        .port_probes = self.port_probes,
-        .nodesets = self.nodesets,
-        .disciplines = self.disciplines,
-        .params = self.params,
-        .aliases = self.aliases,
-        .contributions = self.contributions,
-        .held_vars = self.held_vars,
-        .limit_slots = self.limit_slots,
-        .table_samples = self.table_samples,
-        .rng_auto_sites = self.rng_auto_sites,
-        .displays = self.displays,
-        .display_root = self.display_root,
-        .table_effect = self.table_effect,
-        .reject_iteration_place = self.reject_iteration_place,
-        .reject_iteration = self.reject_iteration,
-        .uses_str_tasks = self.uses_str_tasks,
-        .uses_file_tasks = self.uses_file_tasks,
-        .uses_table_model = self.uses_table_model,
-        .uses_rng = self.uses_rng,
-        .uses_newton_iter = self.uses_newton_iter,
-        .uses_host_simparam = self.uses_host_simparam,
-        .discrete_inputs = self.discrete_inputs,
-        .mixed_signal = self.mixed_signal,
-    };
+/// `out`, plus the inputs lowering read that a later stage still needs. Every
+/// buffer is shared with `self`, not copied.
+fn lowered(self: *Lower) Lowered {
+    self.out.src = self.src;
+    self.out.tok_starts = self.tok_starts;
+    self.out.directives = self.directives;
+    self.out.consts = self.consts;
+    return self.out;
 }
 
 /// LRM §6.2/§6.9. Register ports (§6.5) into node_order, elaborate the
 /// declarations, then lower each analog block (§5.2) in source order —
 /// multiple analog blocks are executed as if concatenated (§6.9.1).
 pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
-    self.module = module;
+    self.out.module = module;
     self.mir.name = self.file.str(module.name);
     // IEEE 1364 §19.1 (§10.1 carries it over): the tag of the module keyword's
     // own position, which is what "modules between `celldefine and
@@ -1217,25 +1060,25 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const disc = self.strOrEmpty(p.discipline);
             for (0..r.size()) |k| {
                 const idx = try lower_node.internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, r.at(@intCast(k)) }), disc);
-                self.node_dir.items[idx] = p.direction;
+                self.out.node_dir.items[idx] = p.direction;
             }
-            try self.vectors.put(self.arena, name, r);
+            try self.out.vectors.put(self.arena, name, r);
             continue;
         }
         const idx = try lower_node.internNode(self, try lower_node.netKey(self, self.file.str(p.name), p.main_tok), self.strOrEmpty(p.discipline));
         // §6.5.2.2. Recorded here and nowhere else: only a port can be
         // directional, and this loop is the only place the direction is known.
-        self.node_dir.items[idx] = p.direction;
+        self.out.node_dir.items[idx] = p.direction;
         // §1.3.4.1/§1.3.4.2's "not to `inout` ports" is NOT checked here, even
         // though the direction is: this line does not yet know the discipline.
         // See E0360, below the net loop, for where the rule lands and why it
         // cannot land any earlier.
     }
-    self.num_ports = self.node_order.items.len;
+    self.out.num_ports = self.out.node_order.items.len;
 
     // §3.6.3 internal nets, then §3.6.4 ground.
     for (module.nets) |n| {
-        if (self.discrete_inputs.contains(self.file.str(n.name))) continue;
+        if (self.out.discrete_inputs.contains(self.file.str(n.name))) continue;
         // §2.8.1 vs §3.6.3 — see `netKey`. A RANGED declaration is a vector and
         // its own name never reaches the node table, so the key is the scalar
         // path's and the `vectors` entry below keeps the declared spelling.
@@ -1277,7 +1120,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
                     if (k < seeds.len and seeds[k] != .none)
                         try lower_node.recordNodeset(self, idx, seeds[k], n.main_tok, name);
                 }
-                try self.vectors.put(self.arena, name, r);
+                try self.out.vectors.put(self.arena, name, r);
             }
             continue;
         }
@@ -1294,10 +1137,10 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const dname = if (n.discipline != .none)
                 self.file.str(n.discipline)
             else if (self.node_voltages.get(name)) |idx|
-                (if (idx == ground) "" else self.node_disciplines.items[idx])
+                (if (idx == ground) "" else self.out.node_disciplines.items[idx])
             else
                 "";
-            if (self.disciplines.get(dname)) |info| {
+            if (self.out.disciplines.get(dname)) |info| {
                 if (info.is_discrete)
                     try self.err(n.main_tok, .E0344, "`{s}` is of discipline `{s}`, whose domain is discrete", .{ name, dname });
             }
@@ -1320,7 +1163,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // ports carry `""`, and a later declaration of one of those is the
         // FIRST declaration, not a conflict.
         if (n.discipline != .none) if (self.node_voltages.get(name)) |idx| {
-            const had = if (idx == ground) "" else self.node_disciplines.items[idx];
+            const had = if (idx == ground) "" else self.out.node_disciplines.items[idx];
             if (had.len != 0) {
                 var b = self.errWith(n.main_tok, .E0902);
                 b.msg("`{s}` is already of discipline `{s}`", .{ name, had });
@@ -1349,7 +1192,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // nothing under it, leaving four natureless nets and four E0337s where
     // §10.2 supplied a discipline.
     for (module.ports) |p| try lower_node.applyDefaultToAll(self, self.file.str(p.name), p.main_tok);
-    for (module.nets) |n| if (!self.discrete_inputs.contains(self.file.str(n.name)))
+    for (module.nets) |n| if (!self.out.discrete_inputs.contains(self.file.str(n.name)))
         try lower_node.applyDefaultToAll(self, self.file.str(n.name), n.main_tok);
 
     // §1.3.4.1 "Nets of potential signal flow disciplines in modules may only
@@ -1375,14 +1218,14 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // discipline (§6.5.2), so the first element answers for all of them and
         // the violation is reported once, at the declaration that commits it.
         var key_buf: [lower_param.elem_key_len]u8 = undefined;
-        const probe_name = if (self.vectors.get(base)) |r| try lower_param.elemKey(self, &key_buf, base, &.{r.at(0)}) else base;
+        const probe_name = if (self.out.vectors.get(base)) |r| try lower_param.elemKey(self, &key_buf, base, &.{r.at(0)}) else base;
         const idx = self.node_voltages.get(probe_name) orelse continue;
         if (idx == ground) continue;
-        const dname = self.node_disciplines.items[idx];
+        const dname = self.out.node_disciplines.items[idx];
         if (!lower_node.isSignalFlow(self, dname)) continue;
         var b = self.errWith(p.main_tok, .E0360);
         b.msg("`{s}` is an `inout` port of discipline `{s}`, which binds a {s} nature only", .{
-            base, dname, if (self.disciplines.get(dname).?.has_potential) "potential" else "flow",
+            base, dname, if (self.out.disciplines.get(dname).?.has_potential) "potential" else "flow",
         });
         b.help("declare `{s}` as `input` or `output`", .{base});
         try b.emit();
@@ -1398,12 +1241,12 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // discipline at this point is left alone — it is §3.6.5's implicit net,
     // whose domain is decided by resolution (§7.4) and not by this module, and
     // E0337 already rules on it if anything analog touches it.
-    for (self.nodesets.items) |ns| {
-        const dname = self.node_disciplines.items[ns.node];
-        const info = self.disciplines.get(dname) orelse continue;
+    for (self.out.nodesets.items) |ns| {
+        const dname = self.out.node_disciplines.items[ns.node];
+        const info = self.out.disciplines.get(dname) orelse continue;
         if (!info.is_discrete) continue;
         var b = self.errWith(ns.tok, .E0366);
-        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.node_order.items[ns.node], dname });
+        b.msg("`{s}` is of discipline `{s}`, whose domain is discrete", .{ self.out.node_order.items[ns.node], dname });
         b.note("a nodeset is an initial guess for a POTENTIAL, and §3.6.2.2 leaves a discrete discipline with no nature to have one", .{});
         try b.emit();
     }
@@ -1430,7 +1273,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         }
         if (self.param_index.get(target)) |idx| {
             try self.param_index.put(self.arena, alias, idx);
-            try self.aliases.append(self.arena, .{ .name = alias, .param = idx });
+            try self.out.aliases.append(self.arena, .{ .name = alias, .param = idx });
         } else {
             var b = self.errWith(module.main_tok, .E0303);
             b.msg("`{s}`", .{target});
@@ -1500,7 +1343,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         // The BASE name is a vector, so `V(pair)` and `V(pair[9])` get the
         // vector diagnostics (E0351/E0352) rather than interning an implicit
         // net — exactly as `declareVectorBranch` arranges for a vector terminal.
-        if (arr) |r| try self.vectors.put(self.arena, base, r);
+        if (arr) |r| try self.out.vectors.put(self.arena, base, r);
     }
 
     // §3.5 genvars exist only for unrolling; they carry no runtime storage.
@@ -1516,7 +1359,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the whole of the difference.
     try lower_context.collectInitialState(self, module);
     for (module.vars) |*v| {
-        if (self.discrete_inputs.contains(self.file.str(v.name))) continue;
+        if (self.out.discrete_inputs.contains(self.file.str(v.name))) continue;
         var d = v.*;
         if (self.initial_state.get(self.file.str(d.name))) |a| {
             // §3.2.2 an array takes an assignment PATTERN, not a scalar, and
@@ -1616,18 +1459,18 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §5.6.1.3 the contribution accumulators' final values, and beside each the
     // final value of its retention flag — the "is a value retained [this
     // cycle]?" question the clause's three-way rule turns on.
-    for (self.contributions.items, self.accum.items) |*c, acc| {
+    for (self.out.contributions.items, self.accum.items) |*c, acc| {
         c.resist_val = try self.builder.readVariable(acc.resist, self.cur);
         c.react_val = try self.builder.readVariable(acc.react, self.cur);
         c.wrote_val = try self.builder.readVariable(acc.wrote, self.cur);
     }
     // §5.10 the same, for every held variable. Reads only — no `call` — so the
     // unit enumeration below is untouched.
-    for (self.held_vars.items) |*h| h.final = try self.builder.readVariable(h.place, self.cur);
+    for (self.out.held_vars.items) |*h| h.final = try self.builder.readVariable(h.place, self.cur);
     // §9.17.3 and the same again for every `$limit` state slot: the value the
     // last site on that access function returned this evaluation, or — if none
     // of them ran — the `$limit$old` seed, unchanged.
-    for (self.limit_slots.items) |*s| s.final = try self.builder.readVariable(s.place, self.cur);
+    for (self.out.limit_slots.items) |*s| s.final = try self.builder.readVariable(s.place, self.cur);
 
     // §9.17 analog kernel control. Emitted LAST and in this fixed order so the
     // unit enumeration stays a pure function of the source.
@@ -1638,7 +1481,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // (Deferred §9.4.1 operands are lowered inside, after the accumulator
     // finals above — that read order is what "converged" means here.)
     try self.finishDisplays();
-    if (self.table_effect_place) |p| self.table_effect = try self.builder.readVariable(p, self.cur);
+    if (self.table_effect_place) |p| self.out.table_effect = try self.builder.readVariable(p, self.cur);
 
     // AFTER `finishDisplays`: a deferred display operand appends its
     // `branch_reads` there, and §1.3.1's probe test has to see every read.
@@ -1650,7 +1493,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
 /// `naming.enumerateUnits` gives that call a unit; `codegen.emitStateMachine`
 /// evaluates the unit once per accepted step and stores it into `Instance`.
 fn finishKernelCtl(self: *Lower) Oom!void {
-    if (self.reject_iteration_place) |p| self.reject_iteration = try self.builder.readVariable(p, self.cur);
+    if (self.out.reject_iteration_place) |p| self.out.reject_iteration = try self.builder.readVariable(p, self.cur);
     if (self.bound_step_place) |p| {
         const v = try self.builder.readVariable(p, self.cur);
         _ = try self.call("$bound_step", &.{v});
@@ -1686,7 +1529,7 @@ fn finishDisplays(self: *Lower) Oom!void {
     try lower_event.lowerDeferredDisplays(self);
     var root: Mir.Value = .f_zero;
     var first = true;
-    for (self.displays.items) |d| {
+    for (self.out.displays.items) |d| {
         if (d.conditional) continue;
         // Every unconditional entry either carried its call from the
         // statement or was a `queueDisplay` placeholder just filled above.
@@ -1698,7 +1541,7 @@ fn finishDisplays(self: *Lower) Oom!void {
         const v = try self.builder.readVariable(p, self.cur);
         root = if (first) v else try self.emit(.fadd, &.{ root, v });
     }
-    self.display_root = root;
+    self.out.display_root = root;
 }
 
 /// Carry one guarded §9.4/§9.5/§9.7 call into the display slice. The value is
