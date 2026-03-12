@@ -218,6 +218,9 @@ pub const timing_checks = std.StaticStringMap(struct { u8, u8 }).initComptime(.{
     .{ "$nochange", .{ 4, 5 } },
 });
 
+/// The two commands whose first argument is a `controlled_reference_event`.
+const controlled_first = std.StaticStringMap(void).initComptime(.{ .{"$period"}, .{"$width"} });
+
 /// A.7.5.1 `system_timing_check`. A `$name` inside a specify block is one
 /// of exactly twelve commands — A.7.1 admits no other system task there —
 /// so a name the table does not hold is an error rather than a call.
@@ -237,7 +240,18 @@ pub fn parseTimingCheck(self: *Parser) Error!void {
         // comma outside the inner bracket, so the slot may be present and
         // EMPTY. That is why an argument is counted before it is read.
         n +|= 1;
-        if (self.peek() != .comma and self.peek() != .rparen) try parseTimingCheckArg(self);
+        const arg = self.pos;
+        const controlled = self.peek() != .comma and self.peek() != .rparen and try parseTimingCheckArg(self);
+        // A.7.5.1: `$period` and `$width` open with a
+        // `controlled_reference_event`, and A.7.5.3's
+        // `controlled_timing_check_event` makes its event control
+        // MANDATORY, unlike `timing_check_event`'s bracketed one.
+        if (n == 1 and !controlled and controlled_first.has(parse_expr.tokenText(self, tok))) return self.failAt(
+            arg,
+            .E0207,
+            "`{s}` timing check requires an event control (posedge, negedge or edge) on its reference event (A.7.5.3 controlled_timing_check_event)",
+            .{parse_expr.tokenText(self, tok)},
+        );
         if (!self.eat(.comma)) break;
     };
     _ = try self.expect(.rparen);
@@ -259,12 +273,14 @@ pub fn parseTimingCheck(self: *Parser) Error!void {
 ///             specify_terminal_descriptor [ &&& timing_check_condition ]
 ///     timing_check_event_control ::= posedge | negedge | edge_control_specifier
 ///
-/// One routine takes the union, which over-accepts: `$width`'s first
-/// argument is a `controlled_reference_event` whose event control is
-/// MANDATORY, and that is not checked here. What the union does buy is
-/// that every optional piece of A.7.5.3 is read rather than skipped.
-pub fn parseTimingCheckArg(self: *Parser) Error!void {
-    if (!self.eat(.kw_posedge) and !self.eat(.kw_negedge) and parse_module.reservedIs(self, self.pos, "edge")) {
+/// One routine takes the union and returns whether an event control was
+/// read; `parseTimingCheck` enforces the MANDATORY one of a
+/// `controlled_reference_event` (`$period`, `$width`). The union means
+/// every optional piece of A.7.5.3 is read rather than skipped.
+pub fn parseTimingCheckArg(self: *Parser) Error!bool {
+    var controlled = self.eat(.kw_posedge) or self.eat(.kw_negedge);
+    if (!controlled and parse_module.reservedIs(self, self.pos, "edge")) {
+        controlled = true;
         // A.7.5.3 `edge_control_specifier ::= edge [ edge_descriptor
         // { , edge_descriptor } ]`. The descriptors are two-character
         // symbols (`01`, `z1`, `0x`) that reach here as numbers or
@@ -283,6 +299,7 @@ pub fn parseTimingCheckArg(self: *Parser) Error!void {
     // A.7.5.3's `&&&`, which is three tokens' worth of `&` in a stream that
     // has no tag for it.
     if (parse_module.eatSymbol(self, "&&&")) _ = try parse_expr.parseExpr(self);
+    return controlled;
 }
 
 /// A.2.1.1 `specparam_declaration ::= specparam [ range ]

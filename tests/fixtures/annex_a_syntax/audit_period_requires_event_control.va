@@ -4,7 +4,6 @@
 //! lrm A.7.5.1
 //! lrm A.7.5.3
 //! reject timing check requires an event control
-//! xfail Parser accepts a bare $period reference; the rejection phrase is the intended rule-specific diagnostic, not an observed diagnostic
 module audit_period_requires_event_control(input clk);
     specify
         $period(clk, 2.0);
