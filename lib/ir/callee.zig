@@ -260,7 +260,7 @@ pub fn ty(c: Callee) Ty {
 /// The §4.5 operator, §5.10.3 event or §9.17 task this callee is — the unit
 /// `naming.enumerateUnits` gives it and the `Instance` state `op.table` says
 /// it owns — or `.none`. Written out, so a new callee states whether it owns
-/// state; `op.byName` is the same map over spellings, held equal below.
+/// state.
 pub fn opKind(c: Callee) op.OpKind {
     return switch (c) {
         .ddt => .ddt,
@@ -319,9 +319,16 @@ test "a callee name round-trips; anything else is .systf" {
     try std.testing.expectEqual(Ty.real, ty(.systf));
 }
 
-test "opKind is op.byName over every spelling" {
-    for (std.meta.tags(Callee)) |c| {
-        const want = if (c == .systf) op.OpKind.none else op.byName(@tagName(c));
-        try std.testing.expectEqual(want, opKind(c));
-    }
+test "opKind: every stateful spelling maps to a kind, and the pure ones do not" {
+    const names = [_][]const u8{
+        "ddt",        "idt",        "idtmod",     "absdelay",   "transition",
+        "slew",       "last_crossing", "laplace_zd", "laplace_zp", "laplace_nd",
+        "laplace_np", "zi_zd",      "zi_zp",      "zi_nd",      "zi_np",
+        "cross",      "above",      "timer",      "$bound_step", "$discontinuity",
+    };
+    for (names) |n| try std.testing.expect(opKind(Callee.fromName(n)) != .none);
+
+    // §4.5.13/§4.5.14 are pure and must NOT acquire a unit.
+    for ([_][]const u8{ "limexp", "ddx", "V", "" }) |n|
+        try std.testing.expectEqual(op.OpKind.none, opKind(Callee.fromName(n)));
 }

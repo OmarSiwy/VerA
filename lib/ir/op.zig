@@ -18,9 +18,9 @@
 //!
 //! WHAT IS DELIBERATELY NOT HERE:
 //!
-//!   - the name → `OpKind` mapping. It stays a `StaticStringMap` in `byName`
-//!     below because laplace/zi have four spellings each and §9.17 has two, so
-//!     it is a genuine many-to-one map and not a column.
+//!   - the callee → `OpKind` mapping. It is `callee.opKind`, a switch over
+//!     `Callee` (laplace/zi have four spellings each, so it is many-to-one and
+//!     not a column), and this file stays a leaf that imports only `std`.
 //!   - the `Instance` shapes of `absdelay`, `laplace` and `zi`. Their field
 //!     COUNT is a function of the call (the delay ring's length, the flattened
 //!     cascade's ns*deg), so codegen computes them from `filterPlan` /
@@ -254,38 +254,6 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
     },
 });
 
-/// Callee name → operator. Many-to-one: laplace and zi have four spellings
-/// each (`_zd`/`_zp`/`_nd`/`_np`), and §9.17's two tasks appear both with the
-/// `$` the MIR callee keeps and without it, which is how `naming.enumerateUnits`
-/// spells a unit target.
-pub fn byName(name: []const u8) OpKind {
-    const map = std.StaticStringMap(OpKind).initComptime(.{
-        .{ "ddt", .ddt },
-        .{ "idt", .idt },
-        .{ "idtmod", .idtmod },
-        .{ "absdelay", .absdelay },
-        .{ "transition", .transition },
-        .{ "slew", .slew },
-        .{ "last_crossing", .last_crossing },
-        .{ "laplace_zd", .laplace },
-        .{ "laplace_zp", .laplace },
-        .{ "laplace_nd", .laplace },
-        .{ "laplace_np", .laplace },
-        .{ "zi_zd", .zi },
-        .{ "zi_zp", .zi },
-        .{ "zi_nd", .zi },
-        .{ "zi_np", .zi },
-        .{ "cross", .cross },
-        .{ "above", .above },
-        .{ "timer", .timer },
-        .{ "$bound_step", .bound_step },
-        .{ "bound_step", .bound_step },
-        .{ "$discontinuity", .discontinuity },
-        .{ "discontinuity", .discontinuity },
-    });
-    return map.get(name) orelse .none;
-}
-
 pub fn get(k: OpKind) Row {
     return table.get(k);
 }
@@ -320,24 +288,6 @@ test "op: the table is total and internally consistent" {
         if (r.enable_arg != null)
             try std.testing.expect(k == .cross or k == .above or k == .timer);
     }
-}
-
-test "op: every name the MIR can carry maps to a kind, and back to a row" {
-    // The spellings codegen and naming.zig actually look up.
-    const names = [_][]const u8{
-        "ddt",        "idt",        "idtmod",     "absdelay",   "transition",
-        "slew",       "last_crossing", "laplace_zd", "laplace_zp", "laplace_nd",
-        "laplace_np", "zi_zd",      "zi_zp",      "zi_nd",      "zi_np",
-        "cross",      "above",      "timer",      "$bound_step", "bound_step",
-        "$discontinuity", "discontinuity",
-    };
-    for (names) |n| try std.testing.expect(byName(n) != .none);
-
-    // §4.5.13/§4.5.14 are pure and must NOT acquire a unit.
-    try std.testing.expectEqual(OpKind.none, byName("limexp"));
-    try std.testing.expectEqual(OpKind.none, byName("ddx"));
-    try std.testing.expectEqual(OpKind.none, byName("V"));
-    try std.testing.expectEqual(OpKind.none, byName(""));
 }
 
 test "op: the three §5.10.3 enable indices are the last argument" {
