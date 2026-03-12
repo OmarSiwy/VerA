@@ -2773,6 +2773,11 @@ fn infoOf(c: Code) Info {
             \\$mfactor scaling of an operating-point report, so a value outside
             \\the listed set has no reading at all.
             \\
+            \\Annex E adds a fifth. E.3.2.1: `port_discipline` on an analog
+            \\primitive or one of its ports "shall be of type string and the
+            \\value must be a valid discipline of domain continuous". On any other
+            \\module or port the same clause says it "shall be ignored", and it is.
+            \\
             \\Any OTHER attribute name is a tool convention and is not checked —
             \\2.9 leaves its meaning to the tool that reads it.
             ,

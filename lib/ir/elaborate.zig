@@ -666,6 +666,7 @@ pub const Flatten = struct {
             // the event kernel (E0920) — so its continuous half would be
             // stamped into the device alone.
             // connect_module_manually_inserted.va is the xfail.
+            if (elab_names.isPrimitive(self, child)) try elab_names.checkPortDiscipline(self, module, &inst);
             if (child.is_connect) {
                 try self.err(inst.main_tok, .E0913, "`{s}` is declared with `connectmodule`; §7.1 allows placing it by hand, but its digital half would not be carried into the device", .{
                     self.ctx.file.str(child.name),
