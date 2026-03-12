@@ -76,7 +76,7 @@
 //! lrm 7.6
 //! lrm 7.8.4
 //! solve
-//! xfail VerA has no digital kernel in the emitted device, so neither half of a bridge can run
+//! xfail the §7.8 bridge is inserted, but its digital half is a child's discrete process in a design that needs the event kernel, which the flatten refuses (E0920), so neither half runs
 `include "check.vh"
 
 connectmodule m03_d2a(cm, el);

@@ -69,7 +69,6 @@
 //! lrm 7.8.3.2
 //! lrm 6.3.1
 //! solve
-//! xfail VerA performs no §7.8 insertion, so neither split-generated name exists
 `include "check.vh"
 
 connectmodule m03_a2d(el, cm);

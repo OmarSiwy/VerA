@@ -84,7 +84,7 @@
 //! lrm 7.7.3
 //! lrm 6.7.1
 //! solve
-//! xfail VerA performs no §7.8 insertion, so the connect module — and the $analog_node_alias call inside it — is never instantiated
+//! xfail the §7.8 bridge is inserted, but its `initial lvl` is a child's discrete process in a design that needs the event kernel, which the flatten refuses (E0920)
 `include "check.vh"
 
 module m03_supply;

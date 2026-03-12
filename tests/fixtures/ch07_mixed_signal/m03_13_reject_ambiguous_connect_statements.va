@@ -42,16 +42,14 @@
 // each matches a DIFFERENT port (an input port and an output port). Multiple
 // connect statements are fine; multiple matches for one port are not.
 //
-// NOTE ON THE EXPECTATION TEXT: as with fixture 12, VerA has no code for this
-// check — the `//! reject` substring states the rule and should be replaced with
-// the allocated diagnostic code when §7.8.4's selection step exists.
+// NOTE ON THE EXPECTATION TEXT: §7.8.4's selection step now exists and this
+// refusal has its own code, E0922, which the tag names.
 //
 //! lrm 7.8.4
 //! lrm 7.8
 //! lrm 7.7.1
 //! lrm 7.7.2.1
-//! reject matches more than one connect statement
-//! xfail VerA accepts two connect statements that match the same mixed port with the same discipline pair and directions; §7.8.4 requires "the port shall match one (and only one) connect statement", and the two bridges here differ in rin, so silently picking one makes the node voltage depend on source order
+//! reject E0922
 
 connectmodule m03_a2d_fast(el, cm);
   input el;

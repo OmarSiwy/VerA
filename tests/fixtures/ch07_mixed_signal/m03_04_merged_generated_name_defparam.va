@@ -48,7 +48,6 @@
 //! lrm 7.8.4
 //! lrm 7.8.3
 //! solve
-//! xfail VerA performs no §7.8 insertion, so the §7.8.5 generated name does not exist and the defparam names nothing (E0907)
 `include "check.vh"
 
 connectmodule m03_a2d(el, cm);

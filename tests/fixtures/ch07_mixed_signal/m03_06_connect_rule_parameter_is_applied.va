@@ -36,7 +36,6 @@
 //! lrm 7.8.3.2
 //! lrm 7.8.4
 //! solve
-//! xfail VerA parses §7.7.3's parameter list and never applies it — there is no inserted instance to apply it to
 `include "check.vh"
 
 connectmodule m03_a2d(el, cm);

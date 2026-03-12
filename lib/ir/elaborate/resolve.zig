@@ -342,12 +342,9 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
             if (!m.is_connect) try self.err(ins.main_tok, .E0915, "`{s}` is not declared with `connectmodule`", .{
                 self.ctx.file.str(ins.module),
             });
-            // ponytail: the §7.7.1 discipline/direction overrides and the
-            // §7.7.3 parameter names are NOT judged against the connect
-            // module's declarations — they configure the §7.8 insertion
-            // phase VerA does not have, so a check would be validating
-            // arguments to a call that is never made. Validate them
-            // alongside the insertion phase, when there is one.
+            // The §7.7.1 overrides are judged where they are consumed,
+            // `elab_insert.ruleOf`; the §7.7.3 parameter names, as any
+            // instance's, when the inserted bridge is inlined (E0907).
         }
         for (cr.resolutions) |r| {
             // §7.7.2 every identifier in a resolution statement is a

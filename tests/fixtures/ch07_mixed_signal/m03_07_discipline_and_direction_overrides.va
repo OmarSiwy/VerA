@@ -1,5 +1,4 @@
-// §7.7.1 connect_port_overrides — the two reuse mechanisms of a connect
-// statement, in the grammar's own order:
+// §7.7.1 connect_port_overrides, the DISCIPLINE form:
 //
 //     connect_insertion ::= connect connectmodule_identifier [ connect_mode ]
 //         [ parameter_value_assignment ] [ connect_port_overrides ] ;
@@ -14,69 +13,53 @@
 // be used ... where the specified disciplines shall be compatible for both the
 // continuous and discrete disciplines of the given connect module."
 //
-// "It is also possible to override the port directions of the connect module,
-// which allows a module to be used both as a unidirectional and bidirectional
-// connect module."
-//
 // ONE connect module, `m03_bidir`, is declared inout/inout over
-// (electrical, ddiscrete). Neither port of either child below has discipline
-// `ddiscrete`; both use custom natureless discrete disciplines, which §3.11.1's
-// Natureless Discipline Rule makes compatible with `ddiscrete` ("a natureless
-// discipline is compatible with all other disciplines of the same domain") and
-// therefore legal override targets under §7.7.1's compatibility requirement.
+// (electrical, ddiscrete). The child's port has discipline `m03_cmos_io`, a
+// natureless discrete discipline, which §3.11.1's Natureless Discipline Rule
+// makes compatible with `ddiscrete` ("a natureless discipline is compatible with
+// all other disciplines of the same domain") and therefore a legal override
+// target under §7.7.1's compatibility requirement.
 //
-// TWO DISTINCT DISCRETE DISCIPLINES, NOT ONE, and that is required rather than
-// decorative. §7.8.4 says "the port shall match one (and only one) connect
-// statement". An inout/inout connect module bridges "any mixed port" (§7.6
-// Example 3), so if both children used the same discipline the inout statement
-// would also match the input port and the design would be ambiguous — the very
-// error 13_reject_ambiguous_connect_statements.va pins. Separate disciplines
-// keep each statement matching exactly one port.
-//
-// NET `a` — DISCIPLINE OVERRIDE ONLY. `u1.dio` is an INOUT port of discipline
-// m03_cmos_io. The statement
+// NET `a`. `u1.dio` is an INOUT port of discipline m03_cmos_io. The statement
 //     connect m03_bidir merged inout electrical, inout m03_cmos_io;
-// keeps the declared directions and re-types the discrete side. One merged
-// instance, rio at its declared default of 4000. Top: 1 kohm shunt, 1 mA source.
+// keeps the declared directions and re-types the discrete side. §7.6 Example 3:
+// an inout/inout bridge "can bridge any mixed port whose one connection is
+// compatible with discipline ddiscrete and whose connection is compatible with
+// electrical". One merged instance, rio at its declared default of 4000. Top:
+// 1 kohm shunt, 1 mA source.
 //
 //     V/1000 - 1e-3 + V/4000 = 0
 //     V * 1.25e-3 = 1e-3
 //     V(a) = 0.8
 //
-// NET `b` — DIRECTION OVERRIDE, plus §7.7.3's parameter list in the same
-// statement so the two override forms are distinguishable by their numbers.
-// `u2.din` is an INPUT port of discipline m03_cmos_in. The statement
-//     connect m03_bidir merged #(.rio(1500.0)) input electrical, output m03_cmos_in;
-// re-directs the same inout/inout module into the §7.6 EXAMPLE 2 (a2d) role —
-// Example 2 is the `a2d`, the one covering "a mixed input port whose upper
-// connection is compatible with electrical"; Example 1 is the mirror `d2a`, and
-// this line said Example 1 before the citation audit.
-// One merged instance, rio = 1500. Top: 1 kohm shunt, 1 mA source.
+// WHAT THE NUMBER DOES AND DOES NOT SEPARATE. Nothing inserted reads 1.0. But
+// the override does not change WHICH port matches: m03_cmos_io is compatible
+// with ddiscrete by the same §3.11.1 rule that makes it a legal override, so the
+// un-overridden statement would bridge `u1.dio` too. This row therefore pins
+// that a statement carrying a discipline override is accepted and still
+// inserts; the override's own effect is not observable with natureless discrete
+// disciplines, and no number here claims it is.
 //
-//     V/1000 - 1e-3 + V/1500 = 0
-//     V * (3 + 2)/3000 = 1e-3
-//     V * 5/3000 = 1e-3
-//     V(b) = 0.6
-//
-// Separating answers: an override that is parsed and ignored matches no port, so
-// nothing is inserted and BOTH nodes read 1.0 (the shunt alone). A compiler that
-// applied the discipline override but dropped the direction override reads 0.8
-// on `a` and 1.0 on `b`.
+// WHERE THE DIRECTION HALF WENT. This file used to carry a second net, `b`,
+// bridged by `connect m03_bidir merged #(.rio(1500.0)) input electrical, output
+// m03_cmos_in;`, and claimed the two distinct discrete disciplines kept each
+// statement matching one port. They did not: m03_cmos_in and m03_cmos_io are
+// both natureless discrete, so §3.11.1 makes them compatible, and the
+// inout/inout statement above bridges "any mixed port" — including `u2.din`.
+// `u2.din` then matched two statements, which §7.8.4 forbids ("the port shall
+// match one (and only one) connect statement"; E0922, the error
+// m03_13_reject_ambiguous_connect_statements.va pins). A conforming tool refused
+// the file. The direction override moved to
+// m03_14_direction_override_redirects_a_bridge.va, alone in its connectrules.
 //
 //! lrm 7.7.1
-//! lrm 7.7.3
 //! lrm 7.6
 //! lrm 3.11.1
 //! lrm 7.8.4
 //! solve
-//! xfail VerA parses connect_port_overrides into ast.ConnectInsertion and has no insertion phase to consume them
 `include "check.vh"
 
 discipline m03_cmos_io;
-  domain discrete;
-enddiscipline
-
-discipline m03_cmos_in;
   domain discrete;
 enddiscipline
 
@@ -96,36 +79,22 @@ module m03_bio(dio);
   m03_cmos_io dio;
   // No digital process here: the port is a receiver by its DISCIPLINE alone
   // (§7.8.4 selects on the two connections' disciplines and the port
-  // direction). An unread `reg seen` process only made the file stop at E0205
-  // before it could reach its own assertion.
-endmodule
-
-module m03_bin(din);
-  input din;
-  m03_cmos_in din;
-  // Likewise no digital process — see m03_bio above.
+  // direction).
 endmodule
 
 module m03_top;
   electrical a;
-  electrical b;
 
   m03_bio u1(a);
-  m03_bin u2(b);
 
   analog begin
     I(a) <+ V(a) / 1000.0;
     I(a) <+ -1.0e-3;
-    I(b) <+ V(b) / 1000.0;
-    I(b) <+ -1.0e-3;
     `CHECK("§7.7.1 discipline override: inout/inout m03_bidir bridges m03_cmos_io, rio=4k",
            V(a), 0.8, 1e-12);
-    `CHECK("§7.7.1 direction override: the same module re-directed input/output, rio=1.5k",
-           V(b), 0.6, 1e-12);
   end
 endmodule
 
 connectrules m03_rules;
   connect m03_bidir merged inout electrical, inout m03_cmos_io;
-  connect m03_bidir merged #(.rio(1500.0)) input electrical, output m03_cmos_in;
 endconnectrules

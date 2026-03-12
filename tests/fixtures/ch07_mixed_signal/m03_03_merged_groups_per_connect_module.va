@@ -55,7 +55,6 @@
 //! lrm 7.8.4
 //! lrm 7.6
 //! solve
-//! xfail VerA performs no §7.8 connect-module insertion, so the design solves with neither bridge and reads got=1 want=0.8
 `include "check.vh"
 
 connectmodule m03_a2d(el, cm);

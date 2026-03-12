@@ -620,6 +620,8 @@ pub const Code = enum(u16) {
     E0920,
     /// §3.4.4 a parameter array's value is not the size its range declares.
     E0921,
+    /// §7.8.4 a mixed port matches more than one connect statement.
+    E0922,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -5211,6 +5213,24 @@ fn infoOf(c: Code) Info {
             \\error, not a padded array, and `#(.count(3))` onto
             \\`coefficients[0:count-1] = '{1.0, 2.0}` must come with a new
             \\three-element `coefficients` in the same instantiation.
+            ,
+        },
+        .E0922 => .{
+            .title = "a mixed port matches more than one connect statement",
+            .lrm = "7.8.4",
+            .explain =
+            \\LRM 7.8.4: "A connection shall be selected for a port only if one of
+            \\the connections to the port is digital and the other is analog. In
+            \\this case, the port shall match one (and only one) connect
+            \\statement. The module named in the connect statement is the one
+            \\which shall be selected for the port."
+            \\
+            \\Two `connect` statements whose connect modules bridge the same
+            \\discipline pair in the same direction (7.6's Table 7-2, after any
+            \\7.7.1 overrides) both match such a port, and nothing chooses between
+            \\them: 7.7.2.1's "first match" rule is for `resolveto` statements
+            \\only. Keep one statement per discipline pair and direction, or use
+            \\7.7.1's overrides to make the pairs differ.
             ,
         },
 
