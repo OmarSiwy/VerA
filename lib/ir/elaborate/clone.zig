@@ -3,7 +3,7 @@
 //! In: one child instance. Out: its statements and expressions re-rooted in the parent,
 //! with ports bound and parameters overridden (§6.3).
 //!
-//! LRM clauses this file's code cites: §4.4, §4.7.1, §5.3.2, §5.10.2, §6.2.1, §6.3, §6.3.6, §6.4, §6.4.1, §6.7, §9.13.1, §9.13.2.
+//! LRM clauses this file's code cites: §3.4.4, §4.4, §4.7.1, §5.3.2, §5.10.2, §6.2.1, §6.3, §6.3.6, §6.4, §6.4.1, §6.7, §9.13.1, §9.13.2.
 //!
 //! Cut verbatim from `elaborate.zig`. Functions take `self: *Flatten` and are called
 //! directly, `elab_clone.f(self, ...)`; `elaborate.zig` aliases only what other modules call.
@@ -45,11 +45,57 @@ pub inline fn cloneParams(
         }
         out.is_local = true;
         try self.params.append(self.ctx.arena, out);
+        if (out.dims.len != 0) try checkArraySize(self, out, over.contains(p.name));
     }
     for (aliases) |al| try self.aliasparams.append(self.ctx.arena, .{
         .alias = elab_names.flat(self, al.alias),
         .target = elab_names.flat(self, al.target),
     });
+}
+
+/// §3.4.4, two of the restrictions whose failure "shall result in an
+/// error": "An array assigned to an instance of a module to override the
+/// default value of an array parameter shall be of the exact size of the
+/// parameter array, as determined by its declaration", and "If the array
+/// size is changed, the parameter array shall be assigned an array of the
+/// new size". Judged on the flat parameter `p`, whose range and value are
+/// already this instance's (overrides applied), so both rules are one
+/// comparison: the value's element count against the range's.
+///
+/// ponytail: "from the same module as the parameter assignment that changed
+/// the parameter array size" is not checked; a replacement of the right size
+/// from a defparam elsewhere is accepted. The upgrade is recording each
+/// override's source module in `over`.
+fn checkArraySize(self: *Flatten, p: Ast.ParamDecl, overridden: bool) Error!void {
+    const got, const want = patternMismatch(self, p.default, p.dims) orelse return;
+    const tok = if (overridden) self.ctx.file.exprs.mainTok(p.default) else p.main_tok;
+    if (overridden)
+        try self.err(tok, .E0921, "the array assigned to `{s}` has {d} elements, and its declared range has {d}", .{ self.ctx.file.str(p.name), got, want })
+    else
+        try self.err(tok, .E0921, "an override resized `{s}` to {d} elements, and no array of the new size was assigned to it (its default has {d})", .{ self.ctx.file.str(p.name), want, got });
+}
+
+/// The first `{ got, want }` element-count disagreement between assignment
+/// pattern `e` and `dims`, outermost dimension first; null when they agree
+/// or when either side does not fold (lowering owns those diagnostics).
+fn patternMismatch(self: *Flatten, e: Ast.ExprId, dims: []const Ast.Dim) ?struct { i64, i64 } {
+    if (dims.len == 0) return null;
+    const ex = &self.ctx.file.exprs;
+    if (e == .none or (ex.tag(e) != .assign_pattern and ex.tag(e) != .concat)) return null;
+    const msb = elab_names.constIntFlat(self, dims[0].msb) orelse return null;
+    const lsb = elab_names.constIntFlat(self, dims[0].lsb) orelse return null;
+    var elems = ex.args(e);
+    var reps: i64 = 1;
+    // A.8.1's `'{N{...}}` with a non-literal count: see `Ast.Tag.pattern_repl`.
+    if (elems.len == 1 and ex.tag(elems[0]) == .pattern_repl) {
+        reps = elab_names.constIntFlat(self, ex.lhs(elems[0])) orelse return null;
+        elems = ex.args(ex.rhs(elems[0]));
+    }
+    const got = reps * @as(i64, @intCast(elems.len));
+    const want = @as(i64, @intCast(@abs(msb - lsb))) + 1;
+    if (got != want) return .{ got, want };
+    for (elems) |el| if (patternMismatch(self, el, dims[1..])) |m| return m;
+    return null;
 }
 
 pub fn cloneDim(self: *Flatten, d: ?Ast.Dim) Error!?Ast.Dim {

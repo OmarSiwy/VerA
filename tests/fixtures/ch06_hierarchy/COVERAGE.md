@@ -3,7 +3,7 @@
 Inherited-parameter audit, 2026-09-23: IEEE 1364-2005 §4.10.1 makes body
 parameters local when the module has parameter assignments in its header.
 `audit_header_body_parameter_override_rejected.va` exposes accepted illegal
-HDL binding as PARAM-HEADER-001 (XFAIL), while
+HDL binding as PARAM-HEADER-001, now refused with E0907 (the parser marks body parameters local after a header), while
 `audit_header_body_parameter_dependency.va` independently exercises a legal
 header override and dependent body value. Header-default acceptance alone does
 not cover this rule. See `docs/conformance-parameters.md` for the evidence limits.

@@ -321,6 +321,13 @@ pub fn constInt(self: *Flatten, e: Ast.ExprId) ?i64 {
     return if (c == .int) c.int else null;
 }
 
+/// `constInt` for an expression already in the FLAT namespace (a cloned
+/// declaration's range, say), so no name is renamed.
+pub fn constIntFlat(self: *Flatten, e: Ast.ExprId) ?i64 {
+    const c = constfold.fold(self.ctx.file, e, ParamEnv{ .self = self, .local = false }) orelse return null;
+    return if (c == .int) c.int else null;
+}
+
 /// `constfold.fold`'s identifiers, answered from the parameters flattened so
 /// far. The bound is written in the instantiating module's LOCAL names, while
 /// every value in `self.params` is already in the FLAT namespace — so only the

@@ -2,8 +2,7 @@
 // replacement array from the same overriding module. Here size changes from
 // two to three, but no replacement is supplied. Padding the default is not legal.
 //! lrm 3.4.4
-//! reject array
-//! xfail PARAM-ARRAY-SIZE-003: resizing without a replacement array is accepted
+//! reject E0921
 module resize_array_target;
   parameter integer count = 2;
   parameter real coefficients[0:count-1] = '{1.0, 2.0};

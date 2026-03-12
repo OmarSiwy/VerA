@@ -618,6 +618,8 @@ pub const Code = enum(u16) {
     /// §6.2.2/§7.2.2 an inlined child brings a discrete process into a design
     /// whose digital half needs the event kernel — VerA's limit, not the LRM's.
     E0920,
+    /// §3.4.4 a parameter array's value is not the size its range declares.
+    E0921,
 
     /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
@@ -5188,6 +5190,27 @@ fn infoOf(c: Code) Info {
             \\
             \\Move the digital process into the top module, or keep the child's
             \\digital half to constant `initial` assignments.
+            ,
+        },
+        .E0921 => .{
+            .title = "parameter array value is not the size its range declares",
+            .lrm = "3.4.4",
+            .explain =
+            \\LRM 3.4.4 lists restrictions on parameter arrays whose failure
+            \\"shall result in an error", and two of them are about size:
+            \\
+            \\  "An array assigned to an instance of a module to override the
+            \\   default value of an array parameter shall be of the exact size
+            \\   of the parameter array, as determined by its declaration."
+            \\
+            \\  "If the array size is changed, the parameter array shall be
+            \\   assigned an array of the new size from the same module as the
+            \\   parameter assignment that changed the parameter array size."
+            \\
+            \\So `#(.coefficients('{4.0, 5.0}))` onto `coefficients[0:2]` is an
+            \\error, not a padded array, and `#(.count(3))` onto
+            \\`coefficients[0:count-1] = '{1.0, 2.0}` must come with a new
+            \\three-element `coefficients` in the same instantiation.
             ,
         },
 

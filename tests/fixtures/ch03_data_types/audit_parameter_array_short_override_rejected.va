@@ -2,8 +2,7 @@
 // size. This declaration has three elements but the replacement has only two.
 // h01_11_dependent_range_and_array_override.va supplies the legal resizing case.
 //! lrm 3.4.4
-//! reject array
-//! xfail PARAM-ARRAY-SIZE-001: short parameter array overrides are accepted
+//! reject E0921
 module short_array_target;
   parameter real coefficients[0:2] = '{1.0, 2.0, 3.0};
   analog begin end

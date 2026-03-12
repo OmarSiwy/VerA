@@ -7,7 +7,6 @@
 //! lrm 3.4.5
 //! lrm 6.2
 //! reject E0907
-//! xfail PARAM-HEADER-001: body parameters remain overridable after a parameter header
 module header_body_parameter_target #(parameter real header_value = 2.0) ();
   parameter real body_value = 2.0 * header_value;
   analog begin end
