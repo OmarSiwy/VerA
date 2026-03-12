@@ -10,8 +10,8 @@ syntax without semantics. Its presentation grammar also requires the applicable
 chapter restrictions.
 
 Fixture46 combines two incompatible source kinds and is not a valid required
-positive. Its executable checks/XFAIL remain as legacy regression behavior, but
-its normative tags are withdrawn. The missing map-reader obligation moves to
+positive. It is now a `//! reject E0232` regression (its xfail, which wanted the
+mixed file to compile, is withdrawn). The missing map-reader obligation moves to
 A-EVID-001: separate map and design inputs with actual binding evidence. The
 new isolated design-input negative checks E0232; accepting the combined file
 would not close the map-reader gap. Measure A includes legacy regression rows,
@@ -80,7 +80,7 @@ says so. Where a cite claims a section the source does not reach, the row says t
 | HTML id | Production area | Fixtures |
 |---|---|---|
 | `a-1` | heading | parent of A.1.1–A.1.9 |
-| `a-1-1` | `library_text`, `library_declaration`, `include_statement`, `config` binding | A-EVID-001: fixture46's mixed map/design input is not derivable from either start symbol; its former positive claim is withdrawn. The legacy XFAIL remains only as regression history. `audit_library_declaration_in_design_rejected.va` independently pins E0232 in design context. Positive map parsing, includes, binding and host invocation require separate valid map/design files and observable selection; these remain open. |
+| `a-1-1` | `library_text`, `library_declaration`, `include_statement`, `config` binding | A-EVID-001: fixture46's mixed map/design input is not derivable from either start symbol; its former positive claim is withdrawn and it is now `//! reject E0232`. `audit_library_declaration_in_design_rejected.va` independently pins E0232 in design context. Positive map parsing, includes, binding and host invocation require separate valid map/design files and observable selection; these remain open. |
 | `a-1-2` | `source_text ::= { description }`; `description` seven ways; `module_keyword ::= module \| macromodule` | `01_source_text.va` — five descriptions in one file (two `nature`, one `discipline`, two `module`), a selected witness of `{ description }` repetition, not exhaustive alternative or repetition coverage; the trailing `module annex_a_first(); endmodule` is a second, port-free module declaration. `43_macromodule.va` takes the second arm of `module_keyword`, and takes it as a RUN fixture: §6.2's "an implementation may choose to treat module definitions beginning with the macromodule keyword differently" is a licence to optimize, not to refuse, so the two spellings arrive at one arm of the top-level dispatch and nothing downstream can tell them apart |
 | `a-1-3` | `list_of_ports`, `list_of_port_declarations`, `port`, `port_expression`, `port_reference`, `module_parameter_port_list` | Non-ANSI `list_of_ports` plus separate `inout`: `01`, `03`, and most of the directory. ANSI `list_of_port_declarations` with all three directions and a discipline on each: `02_module_ports.va` (`input electrical sense, output electrical drive, inout electrical common`) — the only file in the directory that takes that arm. All three of the remaining arms are green: `13_parameter_port_list.va` (`module_parameter_port_list`, with one header parameter overridden and one left at its default), `41_named_port.va` (`port ::= . port_identifier ( [ port_expression ] )` — the body probes the INTERNAL name), `42_concatenated_port.va` (`port_expression ::= { port_reference { , port_reference } }`, two nets keeping their own identities). A concatenated port becomes N terminals rather than one N-bit terminal, which is the same scalarisation §6.5.2 vector ports get and which only an instantiation could tell apart |
 | `a-1-4` | `module_item`, `module_or_generate_item`, `non_port_module_item`, `parameter_override` | The reachable arms are spread across the directory: `analog_construct` and the declaration arms everywhere, `aliasparam_declaration` in `03_declarations.va`, `loop_generate_construct`/`conditional_generate_construct` in `09`/`14`/`15`, `module_instantiation` in `11`/`12`, the `{ attribute_instance }` prefix in `08_attributes_comments_identifiers.va`. `parameter_override ::= defparam list_of_defparam_assignments ;` is `12_defparam.va` alone, and cites A.1.4 for it — green: `defparam` is a `kw_defparam` token and a module-item arm, and elaboration applies the override to the flattened child |
@@ -160,14 +160,14 @@ The clause rows that used to say "no fixture" did not all become green fixtures;
 of them became `//! xfail` files, because the source they spell is derivable from Annex A,
 is required by §1.1, and VerA refused it. Each of the fifteen carried an assertion so the
 day the gap closed the file would XPASS and name itself rather than decaying into
-`unasserted`. **Thirteen have.** Two are open:
+`unasserted`. **Thirteen have.** One more, `46_library_source_text.va` (`a-1-1`), was
+withdrawn: its want was unmeetable (below) and it is now `//! reject E0232`. One is open:
 
 | Fixture | Section | First diagnostic VerA gives |
 |---|---|---|
-| `46_library_source_text.va` | `a-1-1` | E0232 "library map text in a source file" |
 | `66_case_equality_in_analog.va` | `a-8-6` | E0323 "case equality is not in the analog subset" (lowering) |
 
-Neither is an unimplemented production, and that is what the two have in common. `46`'s
+Neither `46` nor `66` is an unimplemented production. `46`'s
 `library_declaration` is reachable from `library_text` and from nothing else — the annex
 preamble gives a library map file its own starting symbol, and A.1.2's `description` list
 does not contain a `library_description` — so the text is read in full and then refused by

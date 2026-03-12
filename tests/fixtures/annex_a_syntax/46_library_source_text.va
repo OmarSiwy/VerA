@@ -1,11 +1,3 @@
-// AUDIT BOUNDARY: legacy implementation-regression row, NOT a normative positive.
-// The combined library declaration and module derive from neither Annex A start
-// symbol. Existing XFAIL/executable checks remain for regression continuity only.
-// Required map-reader evidence moved to docs/conformance-annex-a-review.md
-// A-EVID-001: separate library_text input, design source, real host invocation
-// and observable binding remain OPEN. Measure A includes regression behavior;
-// its denominator is not a count of valid normative conformance obligations.
-// The historical rationale below is retained, not endorsed by this audit.
 // A.1.1 Library source text:
 //
 //     library_text ::= { library_description }
@@ -16,74 +8,29 @@
 //     library_declaration ::=
 //             library library_identifier file_path_spec [ { , file_path_spec } ]
 //             [ -incdir file_path_spec { , file_path_spec } ] ;
-//     file_path_spec ::= file_path
-//     include_statement ::= include file_path_spec ;
 //
-// The annex's preamble names the starting symbol this production belongs to:
-// "The syntax of a library map file is derived from the starting symbol
-// library_text", while the `source_text` of A.1.2 is the one a `.va` is derived
-// from. So what follows is library text rather than a design.
+// Annex A's preamble: "The syntax of Verilog-AMS HDL source is derived from the
+// starting symbol source_text. The syntax of a library map file is derived from
+// the starting symbol library_text." A.1.2's `description` list (module, udp,
+// config, paramset, nature, discipline, connectrules) has no
+// `library_description`, and A.1.1 admits no module. So this file, a
+// `library_declaration` followed by a module, derives from NEITHER start
+// symbol, and the conforming answer to it as a `.va` is a refusal.
 //
-// WHY IT IS STILL A FIXTURE. §1.1: "Verilog-AMS HDL consists of the complete
-// IEEE Std 1364 Verilog specification". A library map file is part of that
-// specification, and the family is already half-claimed in this suite:
-// annex_b_keywords/05_config_library_keywords.va censuses `library`, `include`,
-// `config`, `incdir`, `liblist`, `use`, `cell`, `design`, `instance` and
-// `endconfig` as RESERVED, and its header says in as many words that the earlier
-// fixture there "spelled a well-formed library/config source and demanded an
-// error, which a conforming AMS tool would refuse to give". That is the negative
-// half — these spellings are not identifiers. This file is the positive half,
-// taken through the first arm the grammar offers.
+// This row used to be an xfail wanting the file to compile and run; that want
+// was one no conforming tool could meet (docs/conformance-annex-a-review.md,
+// A-EVID-001). The positive obligation, a library map file read as its own
+// input and binding a separate design, moved to COVERAGE.md row `a-1-1` /
+// A-EVID-001, where it stays open. What is left here is the refusal, pinned to
+// its code: E0232 "library map text in a source file".
 //
-// WHAT IS NOT CLAIMED. `include_statement` (a bare `include`, not the
-// preprocessor's `` `include `` of §10.3) is the second arm of the same
-// `library_description` and is NOT spelled below: VerA stops at `library`, the
-// first item of the file, so a second refused keyword would add nothing to what
-// the xfail records, and a real `include` names a file that would have to exist
-// on the day the gap closes. `config_declaration` is the third arm and is the
-// subject of 47_configuration_source_text.va.
-//
-// THE WANT IS THE BIAS READ BACK, so the day VerA accepts a library declaration
-// this file XPASSes loudly instead of decaying into silence: an xfail with no
-// assertion can only ever report `unasserted`.
-//
-// THE MARKER'S CLAIM HAS NARROWED, AND ITS GROUND HAS MOVED. It used to say the
-// whole library-text family was one E0201 "construct is not in the supported
-// subset"; that was true of all three arms and is now true of none of them.
-// `config_declaration` is ACCEPTED — A.1.2's `description` list contains it, so
-// a configuration in a source file is derivable from `source_text`, and
-// 47_configuration_source_text.va no longer carries a marker at all. The two
-// arms this file is about are read in full and then refused with a code of
-// their own, E0232 "library map text in a source file", which names the
-// starting symbol rather than the subset.
-//
-// WHICH IS WHY THIS ROW STAYS RED, AND IT IS NOT A GAP OF THE KIND THE OTHER
-// MARKERS IN THIS DIRECTORY RECORD. A `library_declaration` is reachable from
-// `library_text` and from nothing else. The preamble quoted above draws the
-// line and A.1.2's list confirms it from the other side: module, udp, config,
-// paramset, nature, discipline, connectrules — and no `library_description`. So
-// no growth of the analog subset makes this text legal in a `.va`, and a
-// compiler that accepted it would be accepting a file kind it was not given.
-// What is missing is a LIBRARY MAP READER, a second front end over a second
-// starting symbol, and until VerA has one there is nowhere for this text to go.
-// E0232's `--explain` states that in full.
-//
-// The marker therefore records a real absence, and the file's `CHECKX` remains
-// the thing that will fire on the day the absence is filled — this row wants a
-// compiler that can compile a library map file, not one that will take one
-// anywhere.
-//
-//! xfail VerA reads no library map files — a `library_declaration` is reachable only from A.1.1's `library_text`, and a `.va` is `source_text`, so the declaration is parsed and then refused with E0232 "library map text in a source file"
-//! bias V(p) = 0.75, V(n) = 0.25
+//! lrm A.1.1
+//! lrm A.1.2
+//! reject E0232
 `include "check.vh"
 library annex_a_lib "." ;
 module annex_a_library_host(p, n);
     inout p, n;
     electrical p, n;
-
-    analog begin
-        `CHECKX("the file carrying the A.1.1 library declaration compiles and runs",
-                V(p, n), 0.5);
-        I(p, n) <+ V(p, n);
-    end
+    analog I(p, n) <+ V(p, n);
 endmodule
