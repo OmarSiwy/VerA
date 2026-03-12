@@ -23,8 +23,15 @@
 // before the analysis, so a descriptor the analog context opens cannot be used
 // by the digital context first — and the clause grants both.
 //
-// WHAT IS ASSERTED, and why it is a number. `$fwrite(fd, "%d", 42)` writes the
-// characters `42`; §9.5.4.1's `$fgets` "reads characters ... into str until a
+// WHAT IS ASSERTED, and why it is a number. `$fwrite(fd, "%0d", 42)` writes the
+// characters `42`. The `0` is load-bearing: a bare `%d` is AUTOMATICALLY SIZED
+// (IEEE 1364-2005 §17.1.1.3: "the values written to the output file ... are
+// sized automatically", and "leading zeros are suppressed and replaced by
+// spaces"), so `%d` of the 32-bit constant 42 is space-padded to the widest
+// value the expression can hold, and neither `code == 2` nor `text == "42"`
+// would be true on a conforming tool. An earlier revision wrote `%d` and was
+// wrong for exactly that reason; audit_integer_default_fields.va is the file
+// that asserts the padding itself. §9.5.4.1's `$fgets` "reads characters ... into str until a
 // newline character is read and transferred to str", and §9.5.4.1 (printed
 // p.233) returns the number of characters read. There is no newline in a
 // two-byte file, so the count is 2, and the string is compared against the
@@ -44,6 +51,13 @@
 // dispatches four system tasks ($signed, $unsigned, $display, $finish) and none
 // of them is §9.5's. The gap is VerA's and not the LRM's.
 //
+// ONE WRITE, NOT ONE PER ITERATION. The analog block runs on every Newton
+// iteration, and an earlier revision wrote and CLOSED `fd` on each of them, so
+// every iteration after the first wrote through a descriptor it had already
+// closed. The write and the close now sit under `@(initial_step)` (§5.10.2,
+// active on the first point of the analysis); the read-back opens and closes
+// its own descriptor each time, as 046_fgets.va does.
+//
 // WHEN IT GOES GREEN. A `--std=verilog-ams` compiler with a discrete kernel and
 // a file table can run this file as written; the assertions are then a claim
 // about the sharing rather than about acceptance.
@@ -61,10 +75,13 @@ module ch09_file_descriptor_shared_across_contexts(p, n);
     fd = $fopen("ch09_194_shared.log", "w");
   end
   analog begin
-    $fwrite(fd, "%d", 42);
-    $fclose(fd);
+    @(initial_step) begin
+      $fwrite(fd, "%0d", 42);
+      $fclose(fd);
+    end
     rfd = $fopen("ch09_194_shared.log", "r");
     code = $fgets(text, rfd);
+    $fclose(rfd);
     `CHECKI("the analog context writes through the descriptor the digital context opened",
             code, 2);
     `CHECKI("the bytes in the file are the analog context's write",
