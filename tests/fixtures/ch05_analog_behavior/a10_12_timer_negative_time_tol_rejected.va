@@ -17,13 +17,12 @@
 // tests/fixtures/ch09_system_tasks/136_bound_step_negative_rejected.va), which
 // is the precedent this file asks the event operators to follow.
 //
-// A reject, so there is nothing to run and no `want` to write. The substring is
-// the clause's own word, so the message names the rule and not just the
-// argument.
+// A reject, so there is nothing to run and no `want` to write. The code is
+// E0517, the one cross() and above() already raise for the same sentence; its
+// message carries the clause's own word, "non-negative".
 //
 //! lrm 5.10.3.3
-//! reject non-negative
-//! xfail VerA accepts a negative literal time_tol on timer(); §5.10.3.3 says "The tolerance (time_tol) is an analog_expression and shall be non-negative", and $bound_step's identical rule is already refused as E0803, so the event operators are the hole
+//! reject E0517
 module a10_timer_negative_time_tol(p);
   inout p;
   electrical p;

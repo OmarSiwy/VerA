@@ -3832,7 +3832,7 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0517 => .{
-            .title = "cross()/above() argument is the wrong type or out of range",
+            .title = "cross()/above()/timer() argument is the wrong type or out of range",
             .lrm = "5.10.3.1",
             .explain =
             \\LRM 5.10.3.1 types cross()'s optional arguments in three
@@ -3848,7 +3848,8 @@ fn infoOf(c: Code) Info {
             \\   crossing is resolved, and which crossings count is the
             \\   direction's job — a tolerance without one narrows nothing.
             \\
-            \\LRM 5.10.3.2 gives above() the same tolerances and no direction.
+            \\LRM 5.10.3.2 gives above() the same tolerances and no direction,
+            \\and 5.10.3.3 gives timer() the same time_tol sentence verbatim.
             \\
             \\Eliding a slot is not itself an error: Syntax 5-16 types them
             \\analog_expression_or_null and 5.10.3.1's own `sh` example writes
