@@ -431,6 +431,9 @@ pub const Code = enum(u16) {
     E0437,
     /// A.6.1 a continuous assignment whose target is not a net.
     E0438,
+    /// §5.6.8.2 a potential and a flow contribution to one named branch from
+    /// two module instances.
+    E0439,
 
     // ---------------------------------------------------------------- class 5
     // Analog operators and math functions — lower.zig.
@@ -3584,6 +3587,23 @@ fn infoOf(c: Code) Info {
             \\
             \\Declare the target as a net (`wire`), or assign the variable from
             \\an `always` block.
+            ,
+        },
+        .E0439 => .{
+            .title = "hierarchical contribution changes the branch into a switch branch",
+            .lrm = "5.6.8.2",
+            .explain =
+            \\LRM 5.6.8.2 allows a hierarchical direct contribution to a branch
+            \\"provided that the branch is suitable for such contributions", and
+            \\lists the reasons it is not, among them: "The hierarchical
+            \\contribution changes the branch into a switch branch."
+            \\
+            \\Inside one module, a flow contribution after a potential one is
+            \\5.6.1.3's value retention: the module decides, per iteration, which
+            \\kind the branch is (5.6.5). Across a module boundary nothing orders
+            \\the two analog blocks, so which kind wins is not defined, and the
+            \\clause forbids it. Contribute the same access function the owning
+            \\module does, or move the decision into that module.
             ,
         },
 
