@@ -52,7 +52,7 @@ the prose, never silently promoted.
 |---|---|
 | 4.1 Overview | — no fixture cites it, and this is the only Clause 4 anchor in that state. The clause defines "expression" and "constant expression"; its one operative sentence ("The operands of a constant expression consists of constant numbers and parameter names, but they can use any of the operators defined in Table 4-1, Table 4-14, and Table 4-15") summarises A.8.4's `constant_primary` and §3.4's constancy rule, and both halves are pinned under those clauses — `ch03_data_types/82_parameter_default_not_constant_rejected.va` for the operand restriction, `ch03_data_types/90_dependent_control_guarded.va` for operators and functions in a default. A cite here would be a summary citing itself |
 | 4.2 Operators | — no fixture cites the parent; Table 4-1 is the inventory and each entry is a child clause below |
-| 4.2.1 Operators with real operands | `63_unary_plus.va`, `64_unary_minus.va` (Table 4-2 legal); `112_real_operand_illegal_operator_rejected.va` (E0322 — the closed-list half); `29_case_equality.va` (E0323, jointly with C.5) |
+| 4.2.1 Operators with real operands | `63_unary_plus.va`, `64_unary_minus.va` (Table 4-2 legal); `112_real_operand_illegal_operator_rejected.va` (E0322 — the closed-list half); `29_case_equality.va` (E0369 — `===`/`!==` on a real operand) |
 | 4.2.1.1 Real to integer conversion | `02_numeric_conversions.va` (35.5→36, −1.5→−2: rounding, away from zero at the half) |
 | 4.2.1.2 Integer to real conversion | — **no fixture.** The clause's own content is the x/z error case, which needs a four-state value system VerA does not have |
 | 4.2.1.3 Arithmetic conversion | — no fixture cites it. `02_numeric_conversions.va` runs this clause's printed examples (`1/2` integer, `1/2.0` real) but cites them to 4.2.4 |
@@ -60,7 +60,7 @@ the prose, never silently promoted.
 | 4.2.3 Expression evaluation order | `123_short_circuit_side_effects.va` (`&&`, `\|\|` and Example 1's non-short-circuiting bitwise `&`, each operand a counter so evaluation is observable). `125_short_circuit_ternary.va` — the clause's third operator, green: `?:` lowers to a CFG diamond (`Lower.lowerTernary`), so the call in the unselected arm never runs its side effect |
 | 4.2.4 Arithmetic operators | `01_arithmetic_operators.va`, `02_numeric_conversions.va`, atomics `41_add.va` `42_subtract.va` `43_multiply.va` `44_divide.va` `45_modulo.va` `46_power_operator.va` `63_unary_plus.va` `64_unary_minus.va`; `111_modulus_by_zero_rejected.va` (E0601). `186_divisor_unproven_accepted.va` — the other direction: a parameter divisor (integer `/`, and real `%` on Table 4-6's `10 % 3.75`) is legal source; E0601 is only the provably-zero case. `118_modulo_negative_divisor.va` — green: the range analysis folds unary minus on an integer literal now, so the legal `11 % -3` is not raises a false E0601 with a full-i64 divisor range |
 | 4.2.5 Relational operators | `04_relational_logical.va`; atomics `47_less_than.va` `48_greater_than.va` `49_less_equal.va` `50_greater_equal.va` |
-| 4.2.6 Case equality operators | — **deliberately not cited.** `29_case_equality.va` runs `===`/`!==` and rejects them at E0323, but cites C.5 and 4.2.1: read whole, 4.2.6 grants these operators "limited support in the analog block" and 7.3.2 prints `if (dnet === 1'b1)` inside `analog begin` as legal. Citing 4.2.6 would demand a diagnostic the clause forbids. The header says so in full |
+| 4.2.6 Case equality operators | — **deliberately not cited.** `29_case_equality.va` runs `===`/`!==` on REAL operands and rejects them at E0369, citing 4.2.1 alone: read whole, 4.2.6 grants these operators "limited support in the analog block" and 7.3.2 prints `if (dnet === 1'b1)` inside `analog begin` as legal. Citing 4.2.6 would demand a diagnostic the clause forbids. The header says so in full |
 | 4.2.7 Logical equality operators | `04_relational_logical.va`, `51_logical_equal.va`, `52_logical_unequal.va` |
 | 4.2.8 Logical operators | `04_relational_logical.va`, `53_logical_and.va`, `54_logical_or.va`, `55_logical_not.va` |
 | 4.2.9 Bitwise operators | `56_bitwise_and.va`, `57_bitwise_or.va`, `58_bitwise_xor.va`, `59_bitwise_xnor.va` (both `^~` and `~^`), `62_bitwise_not.va` |
@@ -197,9 +197,10 @@ cites, but 4.3 is counted below as an introduction.)
 **4.2.6 is different and should not be "closed".** `29_case_equality.va`
 rejects `===`/`!==` and deliberately does not cite 4.2.6, because 4.2.6 grants
 those operators limited support in the analog block and 7.3.2 prints a legal
-example of one. The reject is correct for the Verilog-A subset and cites C.5,
-which is the clause that says so categorically. Adding a 4.2.6 cite here would
-be claiming conformance to a rule this fixture contradicts.
+example of one. The reject stands on 4.2.1's real-operand rule alone; on
+integer operands VerA now accepts both operators (`annex_a_syntax/66`). Adding
+a 4.2.6 cite here would be claiming conformance to a rule this fixture
+contradicts.
 
 The accounting that used to close this file — twenty-four uncovered sections
 split into a thirteen-clause "bookkeeping gap", 4.2.6's deliberate abstention,

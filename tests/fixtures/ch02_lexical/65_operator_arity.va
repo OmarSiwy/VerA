@@ -50,10 +50,10 @@
 //
 // NOT PINNED HERE, deliberately: the third arm of the first sentence's
 // "single, double, or triple". The language's only three-character operators
-// are `===` and `!==` (§4.2.6), and VerA refuses both in the analog block
-// (E0323). The class is therefore exercised as a REJECTION and not here —
-// ch04_expressions/29_case_equality.va writes both spellings. Adding them to
-// this file would make a §2.5 fixture depend on §4.2.6's four-state support.
+// are `===` and `!==` (§4.2.6). annex_a_syntax/66_case_equality_in_analog.va
+// runs both in the analog block, and ch04_expressions/29_case_equality.va
+// refuses them on real operands (E0369, §4.2.1). Adding them to this file
+// would make a §2.5 fixture depend on §4.2.6's four-state support.
 //
 // §2.5 says what an operator IS; §4.2 says what each one does, and the atomics
 // (41_add.va … 64_unary_minus.va) pin the meanings. Nothing here restates one:

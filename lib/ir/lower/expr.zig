@@ -518,16 +518,31 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             .{ .v = try self.emit(.ipow, &.{ a.v, b.v }), .ty = .integer }
         else
             .{ .v = try self.emit(.pow, &.{ try self.toReal(a), try self.toReal(b) }), .ty = .real },
-        .eq, .neq, .lt, .le, .gt, .ge => {
+        .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => {
+            // §7.3.2 lists `===` and `!==` among the features the analog
+            // context supports, and §4.2.6 defers their meaning to IEEE 1364
+            // §5.1.8: x and z compare as bits. Every operand that reaches here
+            // is two-state (an x/z literal is E0130, a four-state net read is
+            // E0315), and on two-state bits the case operators ARE `==` and
+            // `!=`. §4.2.1 still bars them from a real operand: Table 4-2, the
+            // operators legal on reals, has no `===` or `!==`.
+            const case = op == .case_eq or op == .case_neq;
+            if (case and (a.ty == .real or b.ty == .real)) {
+                var d = self.errWith(self.file.exprs.mainTok(e), .E0369);
+                d.help("use `==`; for reals prefer `abs(a - b) < tol`", .{});
+                try d.emit();
+                return poison;
+            }
+            const op_cmp: Ast.BinaryOp = if (!case) op else if (op == .case_eq) .eq else .neq;
             // §4.2.9's unsigned context, applied to the pair rather than to
             // either operand. See `unsignedCompareMask`.
             if (a.ty == .integer and b.ty == .integer) if (lower_constfold.unsignedCompareMask(self, e)) |m| {
                 const k = try self.mir.addIntConst(self.arena, m);
                 const az: TypedValue = .{ .v = try self.emit(.bitand, &.{ a.v, k }), .ty = .integer };
                 const bz: TypedValue = .{ .v = try self.emit(.bitand, &.{ b.v, k }), .ty = .integer };
-                return .{ .v = try cmp(self, op, az, bz), .ty = .integer };
+                return .{ .v = try cmp(self, op_cmp, az, bz), .ty = .integer };
             };
-            return .{ .v = try cmp(self, op, a, b), .ty = .integer };
+            return .{ .v = try cmp(self, op_cmp, a, b), .ty = .integer };
         },
         .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr => {
             if (a.ty != .integer or b.ty != .integer) {
@@ -543,13 +558,6 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 else => .shr,
             };
             return .{ .v = try self.emit(opc, &.{ a.v, b.v }), .ty = .integer };
-        },
-        // §4.2.5 case equality is a 4-state comparison (annex C).
-        .case_eq, .case_neq => {
-            var d = self.errWith(self.file.exprs.mainTok(e), .E0323);
-            d.help("use `==`; for reals prefer `abs(a - b) < tol`", .{});
-            try d.emit();
-            return poison;
         },
         // §4.2.11 arithmetic shifts have no MIR opcode: a Verilog-A `integer`
         // is signed, so `<<<`/`>>>` would need a separate signed-shift op.

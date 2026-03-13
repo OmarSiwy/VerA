@@ -9,10 +9,10 @@
 //        to the mixed signal context, as defined in 7.3.2".
 //
 // So the verdict is reject and it is conformance, not debt. The pin is E0130
-// (the literal) rather than E0323 (the operator, whose lrm field is C.5)
+// (the literal) rather than E0323 (the operator)
 // because the lexer wins the race: `1'bx` is refused before the parser has an
 // operator to check, and E0323 never appears in the output. case_equality.va is
-// where `===` is pinned as E0323 on its own, with no x/z literal to mask it.
+// `===` on its own, two-state operands, accepted: E0323 no longer refuses it.
 //
 //! lrm 7.3.2
 //! lrm C.3

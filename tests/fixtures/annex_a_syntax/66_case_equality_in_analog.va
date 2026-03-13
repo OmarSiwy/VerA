@@ -23,12 +23,14 @@
 // operators. §4.2.6's "limited support" points AT §7.3.2, and §7.3.2's
 // limitation is on the operands — 4-state values translated to real or integer
 // — not on the spelling. So a full-AMS compiler must accept `===` in an analog
-// block, and this file is written the way the other refusals here are: an xfail
-// with a real assertion behind it, so the day it is fixed the file XPASSes
-// loudly instead of decaying into `unasserted`.
+// block. Annex C.5 ("not supported in Verilog-A") removes them from the
+// Verilog-A SUBSET only, and VerA targets full Verilog-AMS
+// (annex_c_analog_subset/COVERAGE.md).
 //
-// VERA REFUSES IT: E0323 "case equality is not in the analog subset", from
-// lowering, before any operand question is asked. The gap is the OPERATOR.
+// WHAT VERA DOES: on two-state operands a case comparison IS the logical one
+// (IEEE 1364 §5.1.8 differs from `==` only on x and z bits), so lowering emits
+// `==`/`!=`. The one refusal left is §4.2.1's — a real operand, E0369 — pinned
+// by ch04_expressions/29_case_equality.va.
 //
 // WHY THE OPERANDS ARE BARE LITERALS. §7.3.2's own example compares a
 // `ddiscrete` net, where the x and z states the clause is about can arise. VerA
@@ -41,14 +43,13 @@
 // of it, and the three values below are the ones Clause 4's tables give: two
 // equal vectors are 1, two unequal ones are 0, `!==` is the exact negation.
 //
-// THE NEXT FIXTURE, when E0323 goes away: `x` and `z` as digits (E0130) and a
+// THE NEXT FIXTURES, still open: `x` and `z` as digits (E0130) and a
 // four-state net read in the analog context (E0315) are two more gaps in the
 // same clause, each with its own diagnostic, and neither is measured here.
 //
 //! lrm A.8.6
 //! lrm 4.2.6
 //! lrm 7.3.2
-//! xfail VerA refuses `===` in analog context at lowering — E0323 "case equality is not in the analog subset" — although §7.3.2 lists both case operators as supported there
 //! bias V(p) = 0.75, V(n) = 0.25
 `include "check.vh"
 module annex_a_case_equality(p, n);
