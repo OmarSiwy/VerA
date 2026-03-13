@@ -990,8 +990,14 @@ pub fn astTy(t: Ast.Type) Ty {
 pub fn lowerFile(self: *Lower) Error!Lowered {
     // The current backend only executes two-state analog equations. Preserve
     // full source literals in the AST, but never silently coerce them here.
-    for (self.file.exprs.nodes.items(.tag), 0..) |tag, i| {
-        if (tag != .logic_literal) continue;
+    // A mixed module's discrete half is exempt: it runs on the four-state
+    // kernel (`markDiscreteExprs`).
+    const tags = self.file.exprs.nodes.items(.tag);
+    const discrete = try self.arena.alloc(bool, tags.len);
+    @memset(discrete, false);
+    lower_context.markDiscreteExprs(self.file, discrete);
+    for (tags, discrete, 0..) |tag, in_discrete, i| {
+        if (tag != .logic_literal or in_discrete) continue;
         const e: Ast.ExprId = @enumFromInt(i);
         const literal = self.file.exprs.logicValue(e);
         const span = self.tokenSpan(self.file.exprs.mainTok(e));

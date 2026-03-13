@@ -36,21 +36,20 @@
 // (`$driver_state(d,i)` indexed by a `for` counter bounded by `$driver_count(d)`),
 // which is why the worked example and not a paraphrase is worth a file.
 //
-// WHY IT CARRIES `xfail`, MEASURED NOT GUESSED. Two constructs in the example
-// were refused, in the order VerA reported them:
+// WHAT USED TO BE REFUSED, in the order VerA reported it:
 //
-//   line 87  `assign d=out;`  E0205 "unsupported module item: found `assign`"
-//                             — the continuous assignment of §9.22.6. FIXED: it
-//                             is a module item of every module (A.1.4) and parses;
-//   line 104 `out = 1'bx;`    E0130 "literal requires digital value support in
-//                             the execution backend" — the four-state literal of
-//                             §2.6.1 in a connect module's `always` block.
+//   `assign d=out;`  E0205 "unsupported module item: found `assign`" — the
+//                    continuous assignment of §9.22.6. FIXED: it is a module
+//                    item of every module (A.1.4) and parses;
+//   `out = 1'bx;`    E0130 — the four-state literal of §2.6.1 in a connect
+//                    module's `always` block. FIXED: lowering's x/z scan used
+//                    to refuse every x/z literal in the FILE, and now skips a
+//                    mixed module's discrete half, which runs on the
+//                    four-state kernel (§7.2.2) and is plain IEEE 1364.
 //
-// Both are VerA's, not the LRM's. The second only becomes visible when the first
-// is fixed, so this file stays xfail through that step and the reason above says
-// which line is which. Behind both is the larger fact that a connect module is
-// never inserted (§7.8) and never lowered, so nothing in the example can RUN even
-// once it parses: §9.22.7 is the whole mixed-signal row in one file.
+// Behind both is the larger fact that a connect module is never inserted (§7.8)
+// and never lowered, so nothing in the example RUNS: the claim below is the
+// weakest one the example supports, that the file compiles.
 //
 // WHAT IS ASSERTED. The host module's branch potential, the same acceptance
 // verdict 38_driver_update_connectmodule.va and 195_receiver_net_resolution_-
@@ -62,7 +61,6 @@
 //! lrm 9.22.6
 //! lrm 9.22
 //! bias V(p) = 0.75, V(n) = 0.25
-//! xfail the LRM's own §9.22.7 example is refused: `out = 1'bx;` is E0130 (no four-state literal in the execution backend); the `assign d=out;` before it parses now
 `include "check.vh"
 connectmodule c2e(d,a);
     input d;
