@@ -21,32 +21,19 @@
 // one-argument member of the family and is how a flat spectrum is spelled, so
 // nothing legal is lost by refusing this.
 //
-// VerA accepts it today — `lib/ir/lower.zig` seeds the exponent slot with
-// `.f_one` and notes that "`flicker_noise(pwr[, exp[, name]])` defaults `exp`
-// to 1" — and the generated device exports a `flicker` row with `.ef = 1`.
-// Grammar, not folklore: the LRM's brackets say otherwise.
+// VerA used to accept it — lowering seeded the exponent slot with `.f_one` —
+// and the generated device exported a `flicker` row with `.ef = 1`. It is now
+// E0522, "flicker_noise requires an exponent". Grammar, not folklore: the
+// LRM's brackets say so.
 //
-// THE `//! reject` PATTERN, corrected. An earlier draft wrote
-// `//! reject flicker_noise` on the reasoning that no code is assigned yet, so
-// the construct's name was all that could be demanded. That has no teeth:
-// `failureContains` (tests/torture.zig:211-220) tests the pattern against
-// `f.generated`, the generated Zig, before it looks at any diagnostic, and the
-// generated Zig carries `flicker_noise` twice inside this module's own name.
-// Any failure at all would have matched, including one with nothing to do with
-// Syntax 4-4.
-//
-// `DiagnosticsReported` is the repo's convention for "a refusal is required and
-// the code is not assigned yet" (48 files use it): it holds only if the failure
-// carries at least one vera diagnostic. Today VerA emits none here — it accepts
-// the call and seeds `exp` with 1 — so the fixture is red for its own reason.
-// But any vera diagnostic at all satisfies it, so the tag is now the rule's own
-// phrase, "flicker_noise requires an exponent", which the refusal's message has
-// to carry. Replace it with the code once Syntax 4-4's arity rule is given one.
+// THE `//! reject` PATTERN. `//! reject flicker_noise` would have had no teeth
+// (`failureContains` also matches the generated Zig, which carries the name in
+// this module's own), and the later `DiagnosticsReported` / rule-phrase
+// placeholders held only until the rule had a code. It has one now.
 //
 //! lrm 4.6.4.2
 //! lrm A.8.2
-//! reject flicker_noise requires an exponent
-//! xfail VerA accepts the one-argument call and seeds the exponent with 1, exporting a flicker row with .ef = 1; Syntax 4-4 brackets only the name — `flicker_noise ( analog_expression , analog_expression [ , string ] )` — so the exponent is mandatory and there is no default to invent
+//! reject E0522
 module a06_flicker_noise_missing_exponent_rejected(p, n);
     inout p, n;
     electrical p, n;

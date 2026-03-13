@@ -469,6 +469,17 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
     };
+    // Syntax 4-4 `flicker_noise ( analog_expression , analog_expression
+    // [ , string ] )`: only the name is bracketed. §4.6.4.2's "1/f^exp" has no
+    // default exponent, so a one-argument call has no spectrum to invent.
+    if (std.mem.eql(u8, name, "flicker_noise")) {
+        var n: usize = 0;
+        for (ex.args(e)) |a| n += @intFromBool(a != .none);
+        if (n < 2) {
+            try self.err(ex.mainTok(e), .E0522, "got {d} argument(s)", .{n});
+            return poison;
+        }
+    }
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     // §4.6.4 the PSD arguments, positionally: arg 0 is the power, arg 1 of
@@ -527,9 +538,9 @@ pub fn lowerNoise(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         reals += 1;
         try vals.append(self.arena, rv);
     }
-    // §4.6.4.1 `white_noise(pwr[, name])` has one real argument and §4.6.4.2's
-    // `flicker_noise(pwr[, exp[, name]])` defaults `exp` to 1, so the `.f_one`
-    // seed is the answer whenever the loop above did not overwrite it.
+    // §4.6.4.1 `white_noise(pwr[, name])` has one real argument, so its `.f_one`
+    // exponent seed is never read as a spectrum; `flicker_noise` always
+    // overwrites it (E0522 above refuses the call that would not).
     try self.noise_psd.put(self.arena, @intFromEnum(e), psd);
     if (tab) |r| try self.noise_tab.put(
         self.arena,
