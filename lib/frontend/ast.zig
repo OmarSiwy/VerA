@@ -1094,13 +1094,10 @@ pub const ConnectRulesDecl = struct {
 /// auto-insertion phase (§7.8) would place on a mixed net of the bridged
 /// discipline pair.
 ///
-/// ponytail: `mode`, `params` and `overrides` are parsed and checked for
-/// well-formedness but have no consumer — they parameterize the INSERTION
-/// phase (§7.7.3 parameter passing, §7.7.4 merged/split segregation, §7.7.1
-/// discipline/direction overrides), and VerA does no insertion: it emits one
-/// analog device, and §7.6 puts insertion after the resolution elaboration
-/// does perform. They are carried so a `connectrules` block round-trips
-/// losslessly the day an insertion phase exists.
+/// Consumed by `ir/elaborate/insert.zig` (§7.8 insertion, analog half):
+/// `mode` picks merged vs split segments (§7.7.4), `params` is passed to the
+/// inserted instance (§7.7.3), and `overrides` re-types a port's discipline
+/// and direction before matching (§7.7.1).
 pub const ConnectInsertion = struct {
     /// §7.7.1 connectmodule_identifier — resolved at elaboration, like
     /// `Instance.module`, because A.1.2 puts no order on descriptions.
