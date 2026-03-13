@@ -18,37 +18,20 @@
 // string parameter"), so the two clauses differ, and a compiler that treats all
 // string arguments alike gets this one wrong.
 //
-// The rule broken is A.8.2's production. What must NOT happen is what happens
-// today: `vera` accepts the module and then emits a device that does not
-// compile —
+// The rule broken is A.8.2's production. VerA used to accept the module and
+// emit a device that did not compile ("unused function parameter" in the
+// `eval` signature), which the harness reported as an ENGINE bug rather than a
+// model error. It is now E0521, "ac_stim analysis name is not a string
+// literal", at the argument.
 //
-//     error: unused function parameter   (device.zig, the `eval` signature)
-//
-// — which the harness reports as an ENGINE bug rather than a model error.
-//
-// THE `//! reject` PATTERN, corrected. An earlier draft wrote
-// `//! reject ac_stim`, reasoning that no diagnostic code is assigned yet so
-// only the construct's name could be demanded. That pattern has no teeth:
-// `failureContains` (tests/torture.zig:211-220) matches the pattern against
-// `f.generated` — the generated Zig — before it ever reaches a diagnostic, and
-// the generated Zig contains the string `ac_stim` twice, inside this module's
-// own name. So `//! reject ac_stim` is satisfied by TODAY's failure, the
-// unused-function-parameter engine bug, which is exactly the outcome this
-// fixture exists to forbid: it would have gone green on the defect.
-//
-// `DiagnosticsReported` is the repo's convention for "a refusal is required,
-// the code is not assigned yet" (48 files use it) and is the right demand here:
-// it holds only if the failure carries at least one vera diagnostic, so a
-// generated-Zig compile failure that emits none does NOT satisfy it. It is
-// still too weak: ANY vera diagnostic satisfies it, including one about
-// something else in the file. So the tag is now the rule's own phrase, "analysis
-// name must be a string literal", which the refusal's message has to carry; when
-// A.8.2's string-literal rule is given a code, replace the phrase with the code.
+// THE `//! reject` PATTERN. `//! reject ac_stim` would have had no teeth:
+// `failureContains` matches the generated Zig too, which carries `ac_stim` in
+// this module's own name. The drafts' placeholder `DiagnosticsReported` held
+// only while no code existed; the code is named now.
 //
 //! lrm 4.6.3
 //! lrm A.8.2
-//! reject analysis name must be a string literal
-//! xfail VerA accepts a string PARAMETER where A.8.2's production writes a quoted terminal — `ac_stim ( [ " analysis_identifier " ... ] )` — and emits a device with no diagnostic; §4.6.4.3 is the clause that does allow a string parameter, for a noise table file name, so the two are not interchangeable
+//! reject E0521
 module a06_ac_stim_name_not_literal_rejected(p, n);
     inout p, n;
     electrical p, n;
