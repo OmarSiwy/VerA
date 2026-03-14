@@ -54,6 +54,27 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         try b.emit();
         return poison;
     }
+    // §9.19: "The $param_given() function takes a single argument, which must
+    // be a parameter identifier", and $port_connected's "must be a port
+    // identifier". Elaboration already answered every call whose argument was
+    // one of an instance's own parameters or ports (`rewriteSysCall`), so what
+    // reaches here is the top module's, or an argument of the wrong kind.
+    const is_pg = std.mem.eql(u8, name, "$param_given");
+    if (is_pg or std.mem.eql(u8, name, "$port_connected")) {
+        const args = ex.args(e);
+        const arg: Ast.ExprId = if (args.len == 1) args[0] else .none;
+        const id: ?[]const u8 = if (arg != .none and ex.tag(arg) == .ident) self.file.str(ex.strOf(arg)) else null;
+        const ok = if (is_pg)
+            id != null and (self.param_index.contains(id.?) or self.consts.contains(id.?))
+        else if (id) |n| isPort(self, n) else arg != .none; // §9.19 port_scalar_expression: an element is judged elsewhere
+        if (!ok) {
+            try self.err(if (arg != .none) ex.mainTok(arg) else ex.mainTok(e), .E0822, "{s}", .{if (is_pg)
+                "$param_given requires a parameter identifier"
+            else
+                "$port_connected requires a port identifier"});
+            return poison;
+        }
+    }
     // §4.3.1 Table 4-14 gives these system spellings the same operand-sensitive
     // result types as their traditional spellings. A generic call's name-only
     // sysFuncTy cannot express that: it would turn integer division into real
@@ -262,6 +283,13 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // observes, so it is sequenced into the I/O phase like the tasks.
     if (lower_event.isFileFunc(name)) try lower_event.sequenceFileCall(self, ex.mainTok(e), name, v);
     return .{ .v = v, .ty = sysFuncTy(name) };
+}
+
+/// §9.19's "port identifier": a name in the lowered module's port list.
+fn isPort(self: *const Lower, name: []const u8) bool {
+    const m = self.out.module orelse return false;
+    for (m.ports) |p| if (std.mem.eql(u8, self.file.str(p.name), name)) return true;
+    return false;
 }
 
 /// A string literal argument, for the ch9 functions whose behaviour depends on

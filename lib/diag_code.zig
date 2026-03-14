@@ -623,6 +623,9 @@ pub const Code = enum(u16) {
     /// §9.2 a task or function whose digital-context cell is No, called from
     /// an `initial` or `always` block.
     E0821,
+    /// §9.19 a `$param_given`/`$port_connected` argument that is not a
+    /// parameter/port identifier.
+    E0822,
     /// §6.5.3 a real-valued (`wreal`) net has a second driver.
     E0918,
     /// §3.7 a port joins a `wreal` to a net type other than wire/tri/wreal.
@@ -4396,6 +4399,19 @@ fn infoOf(c: Code) Info {
             \\An `initial` or `always` block is the digital context (7.2.2).
             \\Move the call into the analog block, or use a task both columns
             \\allow, such as $display or $finish.
+            ,
+        },
+        .E0822 => .{
+            .title = "binding detection argument is the wrong kind of name",
+            .lrm = "9.19",
+            .explain =
+            \\LRM 9.19: "The $param_given() function takes a single argument,
+            \\which must be a parameter identifier", and "The $port_connected()
+            \\function takes one argument, which must be a port identifier."
+            \\
+            \\Both answer a question about the INSTANTIATION — was this
+            \\parameter overridden, was this port connected — so a variable or
+            \\an internal net has no answer: nothing instantiates it.
             ,
         },
         .E0806 => .{
