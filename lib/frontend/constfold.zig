@@ -272,9 +272,11 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
             if (sh > 31) break :blk Const{ .int = 0 };
             break :blk Const{ .int = @as(u32, @bitCast(v)) >> @as(u5, @intCast(sh)) };
         },
-        // §4.2.5 case equality is four-state; `lowerBinary` refuses it (E0323),
-        // and a fold would answer a question the analog subset does not ask.
-        .case_eq, .case_neq => null,
+        // §4.2.5 case equality on two-state operands IS `==`/`!=` (x and z
+        // cannot occur), which is how lowering lowers it (VAMS §7.3.2). A real
+        // operand is refused there (E0369), so it does not fold here either.
+        .case_eq => if (int) Const{ .int = @intFromBool(a.int == b.int) } else null,
+        .case_neq => if (int) Const{ .int = @intFromBool(a.int != b.int) } else null,
     };
 }
 
@@ -455,4 +457,13 @@ fn reduction(ex: *const Ast.ExprStore, op: Ast.UnaryOp, operand: Ast.ExprId, a: 
         .plus, .minus, .logical_not, .bit_not => unreachable, // `fold` sends these to `unary`
     };
     return .{ .int = @intFromBool(r) };
+}
+
+test "case equality folds on integers like ==, and declines on reals" {
+    const a: Const = .{ .int = 3 };
+    const b: Const = .{ .int = 3 };
+    const r: Const = .{ .real = 3.0 };
+    try std.testing.expectEqual(@as(i64, 1), (binary(.case_eq, a, b, null) orelse unreachable).int);
+    try std.testing.expectEqual(@as(i64, 0), (binary(.case_neq, a, b, null) orelse unreachable).int);
+    try std.testing.expect(binary(.case_eq, a, r, null) == null);
 }
