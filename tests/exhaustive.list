@@ -46,7 +46,6 @@ lib/ir/lower/expr.zig lowerConcat Mir.DefKind
 lib/ir/lower/expr.zig lowerConcat Mir.DefKind
 lib/ir/lower/expr.zig lowerUnary Mir.DefKind
 lib/ir/lower/func.zig funcArrayIn Ast.ExprTag
-lib/ir/lower/func.zig funcArrayOut Ast.ExprTag
 lib/ir/lower/hier_name.zig checkAliasCall Ast.ExprTag
 lib/ir/lower/node.zig nodeOf Ast.ExprTag
 lib/ir/lower/param.zig rangeBound Ast.ExprTag
