@@ -4,7 +4,6 @@
 // must be evaluated, not replaced by zero; no host override supplies a value.
 //! lrm 9.11
 //! checks 3
-//! xfail Constant evaluation does not fold $rtoi/$itor parameter defaults; W1050 replaces all three legal defaults with zero.
 `include "check.vh"
 module audit_conversion_constant_expressions;
   parameter integer cp = $rtoi(1.75), cn = $rtoi(-1.75);

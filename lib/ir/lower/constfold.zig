@@ -45,6 +45,7 @@ const Env = struct {
     pub fn leaf(env: Env, e: Ast.ExprId) ?Const {
         const self = env.self;
         const ex = &self.file.exprs;
+        if (ex.tag(e) == .sys_call) return conversion(env, e);
         if (ex.tag(e) != .ident) return null;
         const name = self.file.str(ex.strOf(e));
         if (self.vars.contains(name)) return null; // a runtime variable
@@ -53,6 +54,31 @@ const Env = struct {
         // to look through a parameter does not apply to a shadowing local.
         if (!env.params and self.param_index.contains(name) and !lower_expr.funcParamShadows(self, name)) return null;
         return self.consts.get(name);
+    }
+    /// IEEE 1364-2005 §5.2 (VAMS §1.1): "the system functions allowed in
+    /// constant expressions are the conversion system functions listed in 17.8
+    /// and the mathematical system functions listed in 17.11"; VAMS §9.11
+    /// admits the conversions to the analog context. §17.8: `$rtoi` converts
+    /// "by truncating", `$itor` "integers to real values".
+    // ponytail: $rtoi/$itor only. $realtobits/$bitstoreal need a 64-bit
+    // pattern `Const.int` would carry signed; add them when a default uses one.
+    fn conversion(env: Env, e: Ast.ExprId) ?Const {
+        const self = env.self;
+        const ex = &self.file.exprs;
+        const name = self.file.str(ex.strOf(e));
+        const args = ex.args(e);
+        if (args.len != 1) return null;
+        const a = constfold.fold(self.file, args[0], env) orelse return null;
+        if (a == .str) return null;
+        if (std.mem.eql(u8, name, "$rtoi")) {
+            // §3.2's 32-bit integer; anything outside it (or NaN) stays a
+            // run-time question rather than a folded guess.
+            const t = @trunc(a.asReal());
+            if (!(t >= -2147483648.0 and t <= 2147483647.0)) return null;
+            return .{ .int = @intFromFloat(t) };
+        }
+        if (std.mem.eql(u8, name, "$itor")) return .{ .real = @floatFromInt(a.asIntExact() orelse return null) };
+        return null;
     }
     pub fn refuse(env: Env, e: Ast.ExprId) bool {
         return mixedShiftComparison(env.self, e);
