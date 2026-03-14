@@ -851,7 +851,7 @@ pub fn strNum(self: *Lower, tv: TypedValue) Oom!TypedValue {
     if (tv.ty != .string) return tv;
     return switch (self.mir.valueDef(tv.v)) {
         .str_const => |s| .{ .v = try self.mir.addIntConst(self.arena, strToInt(s, 64)), .ty = .integer },
-        else => tv,
+        .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => tv,
     };
 }
 
@@ -945,7 +945,7 @@ fn strLitBytes(self: *Lower, e: Ast.ExprId, out: *std.ArrayList(u8)) Oom!bool {
             for (ex.args(e)) |el| if (!try self.strLitBytes(el, out)) return false;
             return true;
         },
-        else => return false,
+        else => return false, // else: not a literal or a concatenation of literals, so no compile-time bytes
     }
 }
 
