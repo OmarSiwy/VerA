@@ -481,6 +481,19 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // lhs already decides the result, so this needs real control flow.
     if (op == .logical_and or op == .logical_or) return lowerShortCircuit(self, e, op);
 
+    // §3.3 Table 3-3: "If both operands are string literals, the operator is
+    // the same Verilog equality operator as for integer types." Each literal
+    // is its packed bytes (§2.6.3), NULs included, and the shorter is
+    // zero-extended — which is byte equality once leading NULs are dropped.
+    // The literal's LEXICAL bytes, because string storage removes NULs.
+    const eq_op = op == .eq or op == .neq or op == .case_eq or op == .case_neq;
+    if (eq_op and ex.tag(ex.lhs(e)) == .str_literal and ex.tag(ex.rhs(e)) == .str_literal) {
+        const sa = (try lower_sysfunc.outputLiteral(self, ex.lhs(e))) orelse self.file.str(ex.strOf(ex.lhs(e)));
+        const sb = (try lower_sysfunc.outputLiteral(self, ex.rhs(e))) orelse self.file.str(ex.strOf(ex.rhs(e)));
+        const same = std.mem.eql(u8, std.mem.trimStart(u8, sa, "\x00"), std.mem.trimStart(u8, sb, "\x00"));
+        const want_same = op == .eq or op == .case_eq;
+        return .{ .v = if (same == want_same) .one else .zero, .ty = .integer };
+    }
     var a = try lowerExpr(self, ex.lhs(e));
     var b = try lowerExpr(self, ex.rhs(e));
     // §2.7 makes a string operand an unsigned integer, so a MIXED pair is

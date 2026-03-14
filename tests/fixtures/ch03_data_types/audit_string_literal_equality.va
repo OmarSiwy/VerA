@@ -6,7 +6,6 @@
 // comparison. audit_string_comparison_context.va tests that other context.
 //! lrm 3.3
 //! checks 2
-//! xfail STR-LITERAL-001: literal-only equality incorrectly removes NUL bytes
 `include "check.vh"
 module audit_string_literal_equality(p, n);
   inout p, n; electrical p, n;

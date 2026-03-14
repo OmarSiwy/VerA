@@ -76,9 +76,9 @@ Source-audit follow-up, 2026-09-23: see
 [the type ledger](../../../docs/conformance-types.md) for §§3.1–3.3 rule and
 evidence boundaries. `audit_string_comparison_context.va` passes independent
 typed-string/NUL and lexicographical boundary observations.
-`audit_string_literal_equality.va` is a positive XFAIL, STR-LITERAL-001:
-literal-only integer equality incorrectly behaves like normalized string
-equality. The passing fixture does not cover or excuse this failing context.
+`audit_string_literal_equality.va` (STR-LITERAL-001, closed) passes the
+literal-only context: two literals compare as zero-extended integers, NULs
+included, so `"A\0" == "A"` is 0.
 
 Runtime multidimensional element reads and writes are covered by
 `89_dynamic_multidim_numeric.va`, `89_dynamic_multidim_scope.va`,
