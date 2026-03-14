@@ -42,9 +42,8 @@ fallback), `161` (§9.4.3 format/argument pairing), the six §9.20 alias negativ
 `$random` argument rules (E0816), `164` (E0814) and the eight §9.22/§9.23 driver-access
 call-site refusals (E0818), and `169` (E0813 — §9.5.4.2's scan codes are lower case, so
 `%D` is refused rather than silently scanning nothing). `193` is the one rejection
-fixture here whose substring is `digital context` rather than `analog context`, and it
-is xfail because VerA's refusal comes from §7.2.2's `initial`-block model (E0433) and
-never says so.
+fixture here for the digital column: E0821, "system task is not supported in the digital
+context" (it was xfail while VerA's only refusal was §7.2.2's `initial`-block model, E0433).
 
 A passing row records only the behavior its assertions exercise. It does not
 close all of the cited clause. Runtime facilities, accepted/rejected side effects,
@@ -78,7 +77,7 @@ digital-context tasks and the distribution limits below still need work.
 | `s9.5.8` | `$feof` | `054_feof.va`, `11_file_position_status.va` pass. `054` puts the descriptor in both states in turn — zero until a read detects EOF, nonzero after the read that runs off the end — and it takes TWO `$fgets` to get there, because the first stops at the newline and need not have touched the end |
 | `s9.5.9` | file position rolled back on a rejected iteration; `$fdebug` excepted | — no fixture. The descriptor is real now, but the harness runs one accepted solve per point, so there is no rejected iteration to roll back. The rule is nevertheless what the implementation is BUILT on: every §9.5 call is sequenced in the per-accepted-point phase (`codegen.Gen.emitting_display`) and none of them runs inside `eval`, so a rejected Newton iteration cannot have written anything to undo |
 | `s9.6` | `$printtimescale` `$timeformat`, analog "No" | `154_timescale_pla_queue_analog_rejected.va` — green, `analog context`. This section is no longer all-negative-and-unmet |
-| `s9.7` | simulation control family | `193_severity_task_digital_context_rejected.va` — **xfail**. The parent is no longer only a pointer: §9.7's third paragraph and Table 9-4 give the four severity tasks a digital "Yes" and an analog "No", so a source that calls `$fatal`/`$error`/`$warning`/`$info` from the DIGITAL context is asking for the one column the table grants — the exact mirror of `153`, which pins the analog "No" with the substring `analog context`. VerA refuses the file, but by neither rule: the `initial` block is E0433 (§7.2.2's constant-assignment model), which names no context and cites §9.2/§9.7 nowhere, so the fixture pins the LRM's vocabulary (`digital context`) and stays xfail rather than freezing VerA's own wording as a conformance requirement. `9.7.1`–`9.7.3` still carry the family's accepted side |
+| `s9.7` | simulation control family | `193_severity_task_digital_context_rejected.va` — **green**, E0821. The parent is no longer only a pointer: §9.7's third paragraph and Table 9-4 give the four severity tasks a digital "No" and an analog "Yes", so a source that calls `$fatal`/`$error`/`$warning`/`$info` from the DIGITAL context is refused by the column the table denies — the exact mirror of `153`, which pins the analog "No" with the substring `analog context`. It was xfail while the only refusal was E0433 (§7.2.2's constant-assignment model), which named no context. `9.7.1`–`9.7.3` still carry the family's accepted side |
 | `s9.7.1` | `$finish` and its optional diagnostic level | `055_finish.va`, `12_finish_stop.va` (the guarded, not-reached half); `172_finish_terminates.va` executes it — the run exits after the accepted point, before the sweep's second point can print its deliberate `ok=0` |
 | `s9.7.2` | `$stop` and its optional diagnostic level | `056_stop.va`, `12_finish_stop.va`; `140_stop_in_analog_initial_rejected.va` — green, pinning `analog initial`: `$stop` is restricted by block kind. `174_stop_terminates.va` executes it: a batch artifact implements suspension as print-and-exit-0, and nothing after the call runs |
 | `s9.7.3` | `$fatal` `$error` `$warning` `$info` | `057_fatal.va`, `058_error.va`, `059_warning.va`, `060_info.va`, `13_severity_tasks.va`. The non-fatal three have no return value, so what is pinned is that the run *continues past* the call — the assertion sits after it. `173_fatal_terminates.va` executes `$fatal`: the message prints, the run terminates with a nonzero errorcode (the exit code itself is pinned by cg_display.zig's §9.7 emitter test), and the sweep's second point never prints |
@@ -221,7 +220,8 @@ never lowered, so no digital statement inside one executes — that alone holds
 `195` and `196`, and the absence of a digital file table holds `194`. And VerA's
 only vocabulary for "not in this context" is §7.2.2's `initial`-block model,
 which refuses the STATEMENT rather than the call site and cites no clause: that
-is `193`'s xfail and half of `194`'s. Each file's reason names its own line and
+was `193`'s xfail (closed by E0821) and is half of `194`'s; `196` closed when
+lowering's x/z scan stopped reading the discrete half. Each file's reason names its own line and
 its own next step, so when the piece lands the marker turns hard XPASS and the
 file has to be re-judged instead of quietly going green.
 

@@ -13,6 +13,7 @@ const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_param = @import("param.zig");
 const lower_discipline = @import("discipline.zig");
+const lower_event = @import("event.zig");
 const Ast = @import("frontend").Ast;
 const Oom = Lower.Oom;
 const init = Lower.init;
@@ -398,6 +399,14 @@ pub fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
             // block runs).
             try self.initial_state.put(self.arena, name, .{ .value = a.value, .tok = tok });
         },
+        // An analog-only task is §9.2's E0821 (`scanContext`), which names the
+        // rule; E0433 on top would blame the initial-block model instead.
+        .sys_task => |s| if (!lower_event.isAnalogOnlySysFunc(self.file.str(s.name))) try self.err(
+            self.file.stmtTok(id),
+            .E0433,
+            "only assignments of constant expressions are supported here",
+            .{},
+        ),
         else => try self.err(
             self.file.stmtTok(id),
             .E0433,
@@ -459,6 +468,13 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
             try scanContext(w.l, s, discrete, w.context, w.ctx);
         }
     };
+    // §9.2's digital column: a task whose "Supported in digital context" cell
+    // is No (§9.7: "$fatal, $error, $warning" are "in the analog context
+    // only"). Named by the table's own words, not by what VerA can execute.
+    if (discrete) if (self.file.stmt(id) == .sys_task) {
+        const n = self.file.str(self.file.stmt(id).sys_task.name);
+        if (lower_event.isAnalogOnlySysFunc(n)) try self.err(self.file.stmtTok(id), .E0821, "`{s}` in {s}", .{ n, ctx.where });
+    };
     switch (self.file.stmt(id)) {
         // The target is a write, collected above; only the value is read.
         .assign => |a| try scanContextExpr(self, a.value, discrete, is_initial, ctx),
@@ -511,6 +527,8 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
         // contexts: an operator carries state from one accepted timepoint to the
         // next, and none of these has a timepoint to advance.
         if (tag == .filter_call) try self.err(self.file.exprs.mainTok(e), .E0422, "not allowed in {s}", .{ctx.where});
+        if (tag == .sys_call and lower_event.isAnalogOnlySysFunc(self.file.str(ex.strOf(e))))
+            try self.err(ex.mainTok(e), .E0821, "`{s}` in {s}", .{ self.file.str(ex.strOf(e)), ctx.where });
         // What the mixed-signal kernel cannot do yet, named by the clause that
         // asks for it. Both are legal Verilog-AMS (§7.3.3/§7.3.5).
         if (ctx.mixed) switch (tag) {

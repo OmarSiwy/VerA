@@ -1461,6 +1461,23 @@ pub fn isDigitalOnlySysFunc(name: []const u8) bool {
     return false;
 }
 
+/// §9.2, the other column: the names whose "Supported in digital context" cell
+/// is No and analog cell Yes. §9.7 says it of the severity tasks in prose —
+/// "three new simulation control tasks in the analog context only" — and
+/// the other §9 tables give the rest.
+pub fn isAnalogOnlySysFunc(name: []const u8) bool {
+    const analog_only = [_][]const u8{
+        "$debug", "$fdebug", // Tables 9-1/9-2
+        "$fatal", "$warning", "$error", "$info", // Table 9-4
+        "$simprobe", // §9.15
+        "$discontinuity", "$limit", "$bound_step", // §9.17
+        "$param_given", "$port_connected", // §9.19
+        "$analog_node_alias", "$analog_port_alias", // §9.20
+    };
+    for (analog_only) |d| if (std.mem.eql(u8, name, d)) return true;
+    return false;
+}
+
 /// §9.22 paragraph 3, second sentence: "Driver access functions can only be
 /// called from connect modules." §9.23 repeats the fence for its four
 /// supplementary functions ("supported in the digital context of

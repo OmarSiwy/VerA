@@ -30,36 +30,19 @@
 // rejected.va, which is this file's mirror image: a Table 9-2 analog "No" column
 // refused at the call site with `analog context` in the message.
 //
-// WHY IT CARRIES `xfail`, AND WHAT THE DEBT IS EXACTLY. VerA DOES refuse this
-// file — but not for the reason Table 9-4 gives, and the distinction is not
-// cosmetic. Every statement in an `initial` block is refused here by E0433,
-// "statement in an initial block is not a constant assignment: only assignments
-// of constant expressions are supported here", whose own note is §7.2.2 and not
-// §9.2 or §9.7. That diagnostic is VerA's ceiling on `initial` blocks as such
-// (see ch07_mixed_signal/digital_initial_accepted.va) and it fires identically
-// for `x = 1;`. A user who writes $error in a digital context is told their
-// initial block is too complicated to compile, not that §9.2's table has no yes
-// for it — and a compiler whose `initial` blocks DID accept arbitrary statements
-// would have to consult Table 9-4 to refuse this at all.
-//
-// The pinned substring is `digital context` because that is the vocabulary this
-// directory already pins for the mirror rule (153 and friends pin `analog
-// context`, Table 9-1/9-2's column heading). Pinning the text VerA happens to
-// emit instead — `initial block` — would freeze an implementation's wording as
-// the conformance requirement, and a compiler that refused in the table's own
-// vocabulary would fail a file that is right about the LRM. The gap this records
-// is therefore real and precisely stated: the refusal exists, the reason does
-// not.
-//
-// WHEN IT GOES GREEN. The day a severity task in a discrete context is refused
-// by name (the E0806 family's digital twin), this file XPASSes into a hard FAIL
-// and the marker comes off.
+// WHAT USED TO HAPPEN. VerA refused this file, but not for Table 9-4's reason:
+// every statement in an `initial` block was E0433, "only assignments of
+// constant expressions are supported here", §7.2.2's initial-block ceiling,
+// which fires identically for `x = 1;`. A user who wrote $error in a digital
+// context was told their initial block was too complicated, not that §9.2's
+// table has no Yes for it. Each call is now E0821, "system task is not
+// supported in the digital context" — the E0806 family's digital twin — and
+// E0433 no longer fires on top of it.
 //
 //! lrm 9.2
 //! lrm 9.7
 //! lrm 9.7.3
-//! reject digital context
-//! xfail VerA refuses these calls under §7.2.2's initial-block model (E0433, "statement in an initial block is not a constant assignment"), never under Table 9-4's digital column, so the diagnostic does not name the context
+//! reject E0821
 module ch09_severity_task_digital_context_rejected(p, n);
   inout p, n; electrical p, n;
   initial begin
