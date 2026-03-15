@@ -109,7 +109,7 @@ pub const Prover = struct {
                 if (tok == Mir.no_tok) return .{};
                 return self.lowered.tokenSpan(tok);
             },
-            else => return .{},
+            .undef, .float_const, .int_const, .str_const, .block_param => return .{},
         }
     }
 
@@ -440,7 +440,7 @@ pub const Prover = struct {
                 const def = self.mir.valueDef(self.mir.resolveAlias(@enumFromInt(row.a)));
                 break :blk if (def == .int_const) @as(f64, @floatFromInt(def.int_const)) else null;
             },
-            else => null,
+            .undef, .str_const, .param_ref, .block_param => null,
         };
     }
 
@@ -477,43 +477,43 @@ pub const Prover = struct {
                     }
                 }
                 // Normalise every comparison to `lhs REL rhs`.
+                const cmp = Mir.opcode.get(b.op).rel orelse return buf[0..0];
                 const Rel = enum { lt, le, eq, none };
                 var rel: Rel = .none;
                 var swap = false;
-                switch (b.op) {
-                    .flt, .ilt => rel = if (taken) .lt else .none,
-                    .fle, .ile => rel = if (taken) .le else .none,
-                    .fgt, .igt => {
+                switch (cmp) {
+                    .lt => rel = if (taken) .lt else .none,
+                    .le => rel = if (taken) .le else .none,
+                    .gt => {
                         swap = true;
                         rel = if (taken) .lt else .none;
                     },
-                    .fge, .ige => {
+                    .ge => {
                         swap = true;
                         rel = if (taken) .le else .none;
                     },
-                    .feq, .ieq => rel = if (taken) .eq else .none,
-                    .fne, .ine => rel = if (taken) .none else .eq,
-                    else => {},
+                    .eq => rel = if (taken) .eq else .none,
+                    .ne => rel = if (taken) .none else .eq,
                 }
                 // The negated strict/loose forms: !(a<b) ⇒ b<=a, !(a<=b) ⇒ b<a.
-                if (!taken) switch (b.op) {
-                    .flt, .ilt => {
+                if (!taken) switch (cmp) {
+                    .lt => {
                         rel = .le;
                         swap = true;
                     },
-                    .fle, .ile => {
+                    .le => {
                         rel = .lt;
                         swap = true;
                     },
-                    .fgt, .igt => {
+                    .gt => {
                         rel = .le;
                         swap = false;
                     },
-                    .fge, .ige => {
+                    .ge => {
                         rel = .lt;
                         swap = false;
                     },
-                    else => {},
+                    .eq, .ne => {},
                 };
                 if (rel == .none) return buf[0..0];
                 const lo_v = if (swap) b.rhs else b.lhs;
@@ -543,7 +543,7 @@ pub const Prover = struct {
                 }
                 return buf[0..2];
             },
-            else => {},
+            .ternary, .phi, .branch, .jump, .call => {},
         }
         return buf[0..0];
     }
@@ -763,7 +763,7 @@ pub const Prover = struct {
             // value from an EARLIER solve, which current branch guards do not
             // constrain — an identity interval here would be wrong-narrow.
             .if_cast, .opt_barrier => .{ a.lo, a.hi },
-            else => null,
+            else => null, // else: not monotone, or no transfer: the switch below
         };
         if (monotone) |bounds| {
             const lo = bounds[0];
@@ -816,7 +816,7 @@ pub const Prover = struct {
             // §4.3.2 tan is unbounded between poles; the domain check has
             // already run, so only finiteness is left and it is not provable.
             .tan => .{ .iv = .top, .finite = false },
-            else => .{ .iv = .top, .finite = false },
+            else => .{ .iv = .top, .finite = false }, // else: ⊤, not finite, is sound for any opcode; only precision is lost
         };
     }
 
@@ -893,7 +893,7 @@ pub const Prover = struct {
                 .lo = @max(x.lo, y.lo),
                 .hi = @max(x.hi, y.hi),
             }, .finite = f },
-            else => return .{ .iv = .top, .finite = false },
+            else => return .{ .iv = .top, .finite = false }, // else: ⊤, not finite, is sound for any opcode; only precision is lost
         }
     }
 
@@ -1071,7 +1071,7 @@ pub const Prover = struct {
                 // §4.2.1.2 integer→real conversion preserves integrality.
                 return Mir.opIsInteger(op) or op == .if_cast;
             },
-            else => return false,
+            .undef, .str_const, .block_param => return false,
         }
     }
 
@@ -1180,7 +1180,7 @@ pub const Prover = struct {
                     b.help("constrain the operands with a range or a guard the prover can see", .{});
                 }
             },
-            else => {},
+            .undef, .float_const, .int_const, .str_const => {},
         }
         b.note("`.strict` is correct and spec-legal — this warning is about speed, not correctness", .{});
         try b.emit();
@@ -1247,7 +1247,7 @@ pub const Prover = struct {
                     return std.fmt.allocPrint(self.arena, "an expression of {s}", .{self.describe(leaf)}) catch "an expression";
                 return "a computed expression";
             },
-            else => return "an unknown value",
+            .undef, .str_const => return "an unknown value",
         }
     }
 
@@ -1274,7 +1274,7 @@ pub const Prover = struct {
                         n += 1;
                     }
                 },
-                else => {},
+                .undef, .float_const, .int_const, .str_const => {},
             }
         }
         return null;
