@@ -19,6 +19,7 @@ const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
+const Const = @import("frontend").constfold.Const;
 const Mir = @import("../mir.zig");
 const Elaborate = @import("../elaborate.zig");
 const diag = @import("diag");
@@ -261,16 +262,30 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     }
     var copies: i64 = 1;
     if (repl) {
-        const c = try lowerExpr(self, ex.lhs(e));
-        copies = switch (self.mir.valueDef(c.v)) {
-            .int_const => |n| n,
-            // A multiplier that survives to the residual has no width and no
-            // string to repeat: §3.3's `{i{"Hi"}}` is legal because `i` is
-            // knowable, not because the device could build a string at runtime.
-            .undef, .float_const, .str_const, .param_ref, .block_param, .inst_result => {
-                try self.err(self.file.exprs.mainTok(ex.lhs(e)), .E0328, "", .{});
-                return poison;
-            },
+        const count = ex.lhs(e);
+        const c = try lowerExpr(self, count);
+        const k: ?Const = switch (self.mir.valueDef(c.v)) {
+            .int_const => |n| .{ .int = n },
+            .float_const => |f| .{ .real = f },
+            // A constant expression the SSA left as arithmetic (`1.0 + 1.5`)
+            // still folds. Not through a parameter: the model card can
+            // override it, so its default is not the count.
+            .undef, .str_const, .param_ref, .block_param, .inst_result => lower_constfold.foldExpr(self, count, false),
+        };
+        // A multiplier that survives to the residual has no width and no
+        // string to repeat: §3.3's `{i{"Hi"}}` is legal because `i` is
+        // knowable, not because the device could build a string at runtime.
+        const v = k orelse Const{ .str = "" };
+        if (v == .str) {
+            try self.err(self.file.exprs.mainTok(count), .E0328, "", .{});
+            return poison;
+        }
+        // §4.2.1: a real replication factor "will first be converted to an
+        // integer value using the rules described in 4.2.1.1". A real with no
+        // nearest integer (inf, NaN, past i64) yields no count.
+        copies = v.asIntExact() orelse {
+            try self.err(self.file.exprs.mainTok(count), .E0327, "a replication constant shall be a finite integer after conversion, got {d}", .{v.asReal()});
+            return poison;
         };
         // §4.2.13: the replication constant is "non-negative, non-x and
         // non-z". Zero is legal and yields the empty string.

@@ -746,7 +746,7 @@ pub fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?As
                 try items.appendSlice(self.arena, inner.items);
                 return first;
             }
-            const n = replCount(self, first) orelse {
+            const n = concatReplCount(self, first) orelse {
                 try items.appendSlice(self.arena, inner.items);
                 return first;
             };
@@ -809,6 +809,23 @@ pub fn replCount(self: *const Parser, e: Ast.ExprId) ?u32 {
     const v = ex.intValue(e);
     if (v < 0 or v > 4096) return null;
     return @intCast(v);
+}
+
+/// `replCount` for a CONCATENATION's count, which §4.2.1 also lets be real:
+/// "If a real expression is used for the replication factor of a
+/// concatenation, the expression will first be converted to an integer value
+/// using the rules described in 4.2.1.1" — round to nearest, ties away from
+/// zero, which is `@round`. So `{2.5{4'd3}}` is `{3{4'd3}}`.
+///
+/// Only a concatenation's: an A.8.1 assignment pattern is not one, and keeps
+/// `replCount`. A negative real is a unary minus, not a literal, so it
+/// reaches `lowerConcat` exactly as `{-5{a}}` does.
+pub fn concatReplCount(self: *const Parser, e: Ast.ExprId) ?u32 {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) != .real_literal) return replCount(self, e);
+    const r = @round(ex.realValue(e));
+    if (!(r >= 0 and r <= 4096)) return null;
+    return @intFromFloat(r);
 }
 
 /// §4.2.13 integer concatenation. "Unsized constant numbers shall not be
