@@ -402,9 +402,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
 
     // §4.7.1 bullet list: "shall have at least one input argument declared".
     if (args.items.len == 0) {
-        var d = self.failWith(main_tok, .E0224);
-        d.msg("`{s}` has an empty formal list", .{self.file.str(name)});
-        try d.emit();
+        try self.report(main_tok, .E0224, "`{s}` has an empty formal list", .{self.file.str(name)});
     }
     // §4.7.1 bullet list: "all formal arguments shall have an associated
     // block item declaration specifying the data type of the argument".

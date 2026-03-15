@@ -398,11 +398,9 @@ pub fn copyWholeArray(
     const src = self.arrays.get(src_name) orelse return false;
 
     if (src.dims.len != dst.dims.len) {
-        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
-        b.msg("array `{s}` has {d} dimensions and `{s}` has {d}", .{
+        try self.err(self.file.exprs.mainTok(target), .E0429, "array `{s}` has {d} dimensions and `{s}` has {d}", .{
             dst_name, dst.dims.len, src_name, src.dims.len,
         });
-        try b.emit();
         return true;
     }
     for (dst.dims, src.dims, 0..) |d, s, k| {
@@ -422,11 +420,9 @@ pub fn copyWholeArray(
     // integer/real conversions are NOT that: a `real` array and an `integer`
     // array hold different objects, and the clause has no coercion in it.
     if (src.ty != dst.ty) {
-        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
-        b.msg("array `{s}` holds `{s}` and `{s}` holds `{s}`", .{
+        try self.err(self.file.exprs.mainTok(target), .E0429, "array `{s}` holds `{s}` and `{s}` holds `{s}`", .{
             dst_name, @tagName(dst.ty), src_name, @tagName(src.ty),
         });
-        try b.emit();
         return true;
     }
 
@@ -512,11 +508,9 @@ pub fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!b
     const dd = dst.info.dims[dst.subs.len..];
     const sd = src.info.dims[src.subs.len..];
     if (dd.len != sd.len or dst.info.ty != src.info.ty) {
-        var b = self.errWith(self.file.exprs.mainTok(target), .E0429);
-        b.msg("a `{s}` slice of `{s}` has {d} dimension(s) and a `{s}` slice of `{s}` has {d}", .{
+        try self.err(self.file.exprs.mainTok(target), .E0429, "a `{s}` slice of `{s}` has {d} dimension(s) and a `{s}` slice of `{s}` has {d}", .{
             @tagName(dst.info.ty), dst.name, dd.len, @tagName(src.info.ty), src.name, sd.len,
         });
-        try b.emit();
         return true;
     }
     for (dd, sd, 0..) |d, s, k| {
@@ -733,11 +727,9 @@ pub fn indexChain(self: *Lower, e: Ast.ExprId, buf: []Ast.ExprId) Oom!?IndexChai
 /// a whole ROW, as if it were a scalar.
 pub fn checkSubscriptCount(self: *Lower, e: Ast.ExprId, name: []const u8, info: ArrayInfo, n: usize) Oom!bool {
     if (n == info.dims.len) return true;
-    var b = self.errWith(self.file.exprs.mainTok(e), .E0356);
-    b.msg("`{s}` is declared with {d} dimension(s) and is indexed with {d}", .{
+    try self.err(self.file.exprs.mainTok(e), .E0356, "`{s}` is declared with {d} dimension(s) and is indexed with {d}", .{
         name, info.dims.len, n,
     });
-    try b.emit();
     return false;
 }
 

@@ -123,9 +123,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                         4
                     else if (std.mem.eql(u8, s, "fetlim")) 3 else 0;
                     if (need != 0 and args.len < need) {
-                        var b = self.errWith(self.file.exprs.mainTok(e), .E0809);
-                        b.msg("`\"{s}\"` needs {d} arguments to `$limit`, got {d}", .{ s, need, args.len });
-                        try b.emit();
+                        try self.err(self.file.exprs.mainTok(e), .E0809, "`\"{s}\"` needs {d} arguments to `$limit`, got {d}", .{ s, need, args.len });
                         return poison;
                     }
                 },
@@ -260,9 +258,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     if (std.mem.eql(u8, name, "$prev")) {
         const args = ex.args(e);
         if (args.len != 1 or args[0] == .none) {
-            var b = self.errWith(self.file.exprs.mainTok(e), .E0809);
-            b.msg("`$prev` takes exactly 1 argument, got {d}", .{args.len});
-            try b.emit();
+            try self.err(self.file.exprs.mainTok(e), .E0809, "`$prev` takes exactly 1 argument, got {d}", .{args.len});
             return poison;
         }
         const v = try self.toReal(try lower_expr.lowerExpr(self, args[0]));

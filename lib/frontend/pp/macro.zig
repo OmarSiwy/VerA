@@ -335,12 +335,7 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
                     '[' => ']',
                     else => '}',
                 };
-                if (c != want) {
-                    var b = pp.failWith(pp.spanAt(i, i + 1), .E0120);
-                    b.msg("`{s}`: `{c}` cannot close `{c}`", .{ name, c, open });
-                    try b.emit();
-                    return error.PreprocessFailed;
-                }
+                if (c != want) return pp.fail(pp.spanAt(i, i + 1), .E0120, "`{s}`: `{c}` cannot close `{c}`", .{ name, c, open });
                 if (opens.items.len == 0) {
                     try args.append(pp.arena, std.mem.trim(u8, text[arg_start..i], " \t\r\n"));
                     return .{ .args = args.items, .end = i + 1 };

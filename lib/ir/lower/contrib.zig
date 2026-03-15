@@ -106,9 +106,7 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     for ([_]u16{ target.hi, target.lo }) |n| {
         if (n >= self.out.nodes.len or self.out.nodes.items(.dir)[n] != .input) continue;
         if (!lower_node.isSignalFlow(self, self.out.nodes.items(.disc)[n])) continue;
-        var b = self.errWith(self.file.exprs.mainTok(lhs), .E0425);
-        b.msg("`{s}` is an `input` port of discipline `{s}`", .{ self.out.nodes.items(.name)[n], self.out.nodes.items(.disc)[n] });
-        try b.emit();
+        try self.err(self.file.exprs.mainTok(lhs), .E0425, "`{s}` is an `input` port of discipline `{s}`", .{ self.out.nodes.items(.name)[n], self.out.nodes.items(.disc)[n] });
         return;
     }
     // §5.6.8.2: a hierarchical contribution is not allowed when it "changes

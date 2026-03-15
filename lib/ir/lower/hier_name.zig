@@ -334,9 +334,7 @@ pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
     if (args.len < 2) {
-        var b = self.errWith(self.file.exprs.mainTok(e), .E0809);
-        b.msg("`$simprobe` takes an instance name and a parameter name", .{});
-        try b.emit();
+        try self.err(self.file.exprs.mainTok(e), .E0809, "`$simprobe` takes an instance name and a parameter name", .{});
         return poison;
     }
     const inst = lower_sysfunc.constStrArg(self, args[0]);

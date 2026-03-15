@@ -117,9 +117,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             if (self.param_index.contains(name) or self.consts.contains(name) or
                 self.node_voltages.contains(name) or self.block_locals.contains(name))
                 return lookupName(self, e, name);
-            var b = self.errWith(self.file.exprs.mainTok(e), .E0901);
-            b.msg("`{s}` names nothing in the elaborated design", .{name});
-            try b.emit();
+            try self.err(self.file.exprs.mainTok(e), .E0901, "`{s}` names nothing in the elaborated design", .{name});
             return poison;
         },
 
