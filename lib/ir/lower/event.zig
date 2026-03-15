@@ -177,7 +177,7 @@ pub fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
             try self.err(self.file.exprs.mainTok(e), .E0705, "`{s}`", .{name});
             return null;
         },
-        else => {
+        else => { // else: not an event expression: E0706
             try self.err(self.file.exprs.mainTok(e), .E0706, "", .{});
             return null;
         },
@@ -782,7 +782,7 @@ pub fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
         .unary => switch (ex.unOp(e)) {
             .plus => formatBits(self, ex.lhs(e)),
             .minus, .bit_not => if ((formatBits(self, ex.lhs(e)) orelse return null) <= 32) formatBits(self, ex.lhs(e)) else null,
-            else => 1,
+            .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => 1,
         },
         .ternary => blk: {
             const lhs = formatBits(self, ex.rhs(e)) orelse return null;
@@ -813,9 +813,9 @@ pub fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
             .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => 1,
             // General arithmetic needs expression-width propagation, not the
             // analog arithmetic emitter's current unconditional wrap32.
-            else => null,
+            .add, .sub, .mul, .div, .mod, .pow, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr => null,
         },
-        else => null,
+        else => null, // else: no preserved width, so E0819 refuses it rather than guess
     };
 }
 

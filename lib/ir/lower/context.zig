@@ -407,7 +407,7 @@ pub fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
             "only assignments of constant expressions are supported here",
             .{},
         ),
-        else => try self.err(
+        else => try self.err( // else: E0433 names every other statement; a new one is refused, not dropped
             self.file.stmtTok(id),
             .E0433,
             "only assignments of constant expressions are supported here",

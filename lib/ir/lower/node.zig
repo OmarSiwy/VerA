@@ -366,7 +366,7 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
             }
             return internNodeElem(self, name, i.asInt());
         },
-        else => {
+        else => { // else: not a net reference: E0306
             try self.err(self.file.exprs.mainTok(e), .E0306, "", .{});
             return ground;
         },

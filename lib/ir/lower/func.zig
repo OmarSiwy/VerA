@@ -452,7 +452,7 @@ pub fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) O
             }
             return true;
         },
-        else => return false,
+        else => return false, // else: §4.7.2.3 admits no third shape; the caller reports E0511
     }
 }
 
