@@ -858,7 +858,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
     // Conditionals run even inside an inactive arm — they nest.
     switch (kind) {
         .ifdef, .ifndef, .elsif, .@"else", .endif => return conditional(pp, text, at, j, kind),
-        else => {},
+        else => {}, // else: the line-oriented directives, below
     }
 
     // Everything else is line-oriented and dies with the arm it sits in.
@@ -925,7 +925,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             try pp.out.appendSlice(pp.arena, text[at..end]);
             return end;
         },
-        else => unreachable,
+        .ifdef, .ifndef, .elsif, .@"else", .endif => unreachable, // returned above
     }
     try pp.putNewlines(text[at..end]);
     return end;

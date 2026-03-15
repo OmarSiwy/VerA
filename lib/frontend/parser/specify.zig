@@ -113,7 +113,7 @@ pub fn parseSpecifyItem(self: *Parser) Error!void {
         },
         .lparen => return parsePathDeclaration(self),
         .system_identifier => return parseTimingCheck(self),
-        else => return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)}),
+        else => return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)}), // else: begins no A.7.1 specify_item: E0207
     }
 }
 
@@ -518,7 +518,7 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
         .kw_bufif1 => .g_bufif1,
         .kw_notif0 => .g_notif0,
         .kw_notif1 => .g_notif1,
-        else => unreachable, // the caller dispatched on exactly these
+        else => unreachable, // else: the caller dispatched on exactly these
     };
     self.pos += 1;
     // Unlike `assign`, a `(` here is ambiguous: A.3.1 makes the instance

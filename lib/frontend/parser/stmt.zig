@@ -140,7 +140,7 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
         },
         // A.6.9 analog_system_task_enable (§5.12, ch9)
         .system_identifier => return parseSysTask(self),
-        else => return parseExprOrContributeStmt(self),
+        else => return parseExprOrContributeStmt(self), // else: not a statement keyword, so an expression or contribution statement
     }
 }
 
@@ -178,7 +178,7 @@ pub fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
                 try parse_decl.parseVarDecl(self, &vars);
                 _ = try self.expect(.semicolon);
             },
-            else => break,
+            else => break, // else: not a declaration: the block's statements start here
         }
     }
 
@@ -324,7 +324,7 @@ pub fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
     const tag: Ast.ExprTag = switch (self.peek()) {
         .kw_initial_step => .event_initial_step,
         .kw_final_step => .event_final_step,
-        else => return parse_expr.parseExpr(self),
+        else => return parse_expr.parseExpr(self), // else: not a §5.10.2 global event, so an event expression
     };
     self.pos += 1;
     var names: std.ArrayList(Ast.StrId) = .empty;
@@ -407,7 +407,7 @@ pub fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
                 tok,
             );
         },
-        else => return self.failAt(self.pos, .E0214, "found {s}", .{self.found(self.pos)}),
+        else => return self.failAt(self.pos, .E0214, "found {s}", .{self.found(self.pos)}), // else: an lvalue is followed by `<+`, `=` or `:`: E0214
     }
 }
 
@@ -443,7 +443,7 @@ pub fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay
             const name = try self.expectIdent();
             return .{ .expr = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = id_tok, .str = name }), .is_delay = false };
         },
-        else => return .{ .expr = .none, .is_delay = false },
+        else => return .{ .expr = .none, .is_delay = false }, // else: no intra-assignment timing control
     }
 }
 

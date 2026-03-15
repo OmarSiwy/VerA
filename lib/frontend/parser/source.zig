@@ -148,7 +148,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
                     recoverTopLevel(self, before);
                 };
             },
-            else => {
+            else => { // else: not a description: E0201
                 try self.report(self.pos, .E0201, "`{s}`", .{self.found(self.pos)});
                 recoverTopLevel(self, before);
             },
@@ -245,7 +245,7 @@ pub fn recoverTopLevel(self: *Parser, before: u32) void {
         {
             if (self.pos != before) return;
         },
-        else => {},
+        else => {}, // else: any other token belongs to the description being skipped
     };
 }
 

@@ -29,9 +29,11 @@ const repo_root = @import("repo_options").repo_root;
 
 /// The boundary enums, read from the real types so the registry cannot drift.
 /// A switch is attributed to the FIRST entry whose fields cover all its prong
-/// labels. `token.Tag` is deliberately absent: its `else` arms are the grammar's
-/// loud "not this production", and its real losses are token-skipping loops
-/// this rule would not see anyway.
+/// labels. `token.Tag` is the lexer→parser boundary and is registered LAST:
+/// its `plus`/`int_literal`/… overlap UnaryOp and ExprTag, which keep those
+/// switches. Nearly all of its `else` arms are the grammar's "not this
+/// production", and each says so; `Preprocessor.Directive` is the text→token
+/// boundary.
 const registry = [_]struct { name: []const u8, fields: []const []const u8 }{
     .{ .name = "Ast.ExprTag", .fields = std.meta.fieldNames(Ast.ExprTag) },
     .{ .name = "Ast.Stmt", .fields = std.meta.fieldNames(Ast.Stmt) },
@@ -47,6 +49,8 @@ const registry = [_]struct { name: []const u8, fields: []const []const u8 }{
     .{ .name = "op.OpKind", .fields = std.meta.fieldNames(op.OpKind) },
     // Last: its `ddt`/`cross`/… overlap OpKind, which keeps those switches.
     .{ .name = "Mir.Callee", .fields = std.meta.fieldNames(Mir.Callee) },
+    .{ .name = "Preprocessor.Directive", .fields = std.meta.fieldNames(@import("frontend").Preprocessor.Directive) },
+    .{ .name = "token.Tag", .fields = std.meta.fieldNames(@import("frontend").token.Tag) },
 };
 
 const listed = @embedFile("exhaustive.list");

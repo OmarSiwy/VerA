@@ -410,7 +410,7 @@ pub const Tag = enum(u8) {
             .dir_resetall => "`resetall",
 
             // Every keyword tag is "kw_" ++ its spelling (naming invariant).
-            else => @tagName(tag)[3..],
+            inline else => |t| comptime if (isKeyword(t)) @tagName(t)[3..] else @compileError("give `." ++ @tagName(t) ++ "` its spelling above"), // else: the keywords; any other tag fails to compile
         };
     }
 
@@ -666,7 +666,7 @@ pub fn isMathFunction(tag: Tag) bool {
         .kw_acosh,
         .kw_atanh,
         => true,
-        else => false,
+        else => false, // else: not an A.8.2 math function keyword
     };
 }
 
@@ -696,7 +696,7 @@ pub fn isFilterFunction(tag: Tag) bool {
         .kw_zi_nd,
         .kw_zi_np,
         => true,
-        else => false,
+        else => false, // else: not an A.8.2 analog filter function keyword
     };
 }
 
@@ -712,7 +712,7 @@ pub fn isSmallSignalFunction(tag: Tag) bool {
         .kw_noise_table,
         .kw_noise_table_log,
         => true,
-        else => false,
+        else => false, // else: not an A.8.2 small-signal function keyword
     };
 }
 
@@ -731,7 +731,7 @@ pub fn isEventFunction(tag: Tag) bool {
         .kw_timer,
         .kw_absdelta,
         => true,
-        else => false,
+        else => false, // else: not an A.6.5 event function keyword
     };
 }
 
@@ -741,7 +741,7 @@ pub fn isEventFunction(tag: Tag) bool {
 pub fn isBuiltinFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_analysis, .kw_initial_step, .kw_final_step => true,
-        else => isMathFunction(tag) or isFilterFunction(tag) or isSmallSignalFunction(tag) or isEventFunction(tag),
+        else => isMathFunction(tag) or isFilterFunction(tag) or isSmallSignalFunction(tag) or isEventFunction(tag), // else: the four families above decide the rest
     };
 }
 

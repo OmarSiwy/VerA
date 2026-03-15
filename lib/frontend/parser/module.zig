@@ -194,12 +194,12 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
             // conditional wrapping such assignments — because the skip used
             // to take EVERYTHING, so a misspelled `paramter real rr;`
             // compiled clean and the paramset silently lacked a parameter.
-            else => {
+            else => { // else: every other paramset statement, gated to what A.1.9 admits just below
                 const legal = (self.identLike(self.pos) and
                     (self.peekAt(1) == .assign_eq or self.peekAt(1) == .lbracket)) or
                     switch (self.peek()) {
                         .kw_if, .kw_case, .kw_for, .kw_while, .kw_repeat, .kw_begin => true,
-                        else => false,
+                        else => false, // else: not a statement keyword A.1.9 admits here
                     };
                 if (!legal) try self.report(
                     self.pos,
@@ -290,7 +290,7 @@ pub fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
                     .kw_input => .input,
                     .kw_output => .output,
                     .kw_inout => .inout,
-                    else => .unspecified,
+                    else => .unspecified, // else: no direction keyword
                 };
                 if (a_dir != .unspecified) self.pos += 1;
                 const a = try self.expectIdent();
@@ -348,7 +348,7 @@ pub fn skipParamsetStatement(self: *Parser) void {
             self.pos += 1;
             return;
         },
-        else => {},
+        else => {}, // else: any other token is inside the statement being skipped
     };
 }
 
@@ -463,7 +463,7 @@ pub fn portDirection(tag: token.Tag) ?Ast.Direction {
         .kw_input => .input,
         .kw_output => .output,
         .kw_inout => .inout,
-        else => null,
+        else => null, // else: not a port_direction keyword
     };
 }
 
@@ -880,7 +880,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             if (std.mem.eql(u8, w, "wreal")) return parseWrealDecl(self, b);
             return parse_specify.unsupportedItem(self);
         },
-        else => return parse_specify.unsupportedItem(self),
+        else => return parse_specify.unsupportedItem(self), // else: not a module item: E0205
     }
 }
 

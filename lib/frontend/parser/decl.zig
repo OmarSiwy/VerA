@@ -147,7 +147,7 @@ pub fn parseRange(self: *Parser) Error!Ast.ValueRange {
     const hi_inclusive = switch (self.peek()) {
         .rbracket => true,
         .rparen => false,
-        else => return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)}),
+        else => return self.failAt(self.pos, .E0210, "found {s}", .{self.found(self.pos)}), // else: a value_range closes with `]` or `)` and nothing else: E0210
     };
     self.pos += 1;
     return .{
@@ -182,7 +182,7 @@ pub fn varType(tag: token.Tag) ?Ast.Type {
         .kw_integer, .kw_time => .integer,
         .kw_real, .kw_realtime => .real,
         .kw_string => .string,
-        else => null,
+        else => null, // else: not one of the five variable-type keywords
     };
 }
 
@@ -275,7 +275,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
         .kw_integer => .integer,
         .kw_real => .real,
         .kw_string => .string,
-        else => .real, // §4.7.1 default
+        else => .real, // else: no type keyword, so §4.7.1's `real` default
     };
     if (self.peek() == .kw_integer or self.peek() == .kw_real or self.peek() == .kw_string) {
         self.pos += 1;
@@ -302,7 +302,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
                     self.pos += 1;
                     break :blk d;
                 },
-                else => Ast.Direction.input, // A.2.7 defaults to `input`
+                else => Ast.Direction.input, // else: no direction keyword, so A.2.7's `input` default
             };
             const ty = varType(self.peek()) orelse .unspecified;
             if (ty != .unspecified) self.pos += 1 else _ = try parse_module.optDiscipline(self);
@@ -387,7 +387,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
                     }
                 }
             },
-            else => {
+            else => { // else: not a declaration, so the function body's statement
                 const before = self.pos;
                 const s = parse_stmt.parseStmt(self) catch |e| {
                     if (e == error.OutOfMemory) return e;
@@ -459,7 +459,7 @@ pub fn parseNature(self: *Parser) Error!Ast.NatureDecl {
             parent_access = switch (self.peek()) {
                 .kw_potential => .potential,
                 .kw_flow => .flow,
-                else => return self.failAt(self.pos, .E0211, "found {s}", .{self.found(self.pos)}),
+                else => return self.failAt(self.pos, .E0211, "found {s}", .{self.found(self.pos)}), // else: A.1.6 names `potential` or `flow` and nothing else: E0211
             };
             self.pos += 1;
         }
@@ -500,7 +500,7 @@ pub fn parseNatureAttr(self: *Parser) Error!Ast.NatureAttr {
             self.pos += 1;
             break :blk s;
         },
-        else => return self.failAt(self.pos, .E0208, "found {s}", .{self.found(self.pos)}),
+        else => return self.failAt(self.pos, .E0208, "found {s}", .{self.found(self.pos)}), // else: not a nature attribute name: E0208
     };
     _ = try self.expect(.assign_eq);
     const value = try parse_expr.parseExpr(self);
@@ -542,7 +542,7 @@ pub fn parseDiscipline(self: *Parser) Error!Ast.DisciplineDecl {
                 d.domain = switch (self.peek()) {
                     .kw_continuous => .continuous,
                     .kw_discrete => .discrete,
-                    else => return self.failAt(self.pos, .E0212, "found {s}", .{self.found(self.pos)}),
+                    else => return self.failAt(self.pos, .E0212, "found {s}", .{self.found(self.pos)}), // else: A.1.7 names `continuous` or `discrete` and nothing else: E0212
                 };
                 self.pos += 1;
                 _ = try self.expect(.semicolon);
@@ -561,7 +561,7 @@ pub fn parseDiscipline(self: *Parser) Error!Ast.DisciplineDecl {
                     return self.failAt(self.pos, .E0213, "found {s}", .{self.found(self.pos)});
                 try attrs.append(self.arena, try parseNatureAttr(self));
             },
-            else => return self.failAt(self.pos, .E0213, "found {s}", .{self.found(self.pos)}),
+            else => return self.failAt(self.pos, .E0213, "found {s}", .{self.found(self.pos)}), // else: not a discipline_item: E0213
         }
     }
     _ = try self.expect(.kw_enddiscipline);
