@@ -629,25 +629,47 @@ pub fn udpBodyName(sequential: bool) []const u8 {
 /// W0252 for the same reason a gate gets one: a UDP's function is a table
 /// (A.5.3) rather than a keyword, and the table computes a logic value for
 /// an event queue a compiled analog device does not have.
-pub fn parseUdpInst(self: *Parser) Error!void {
+pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
     try parse_specify.gateNotModelled(self);
+    const module = try self.internTok(self.pos);
     self.pos += 1; // the udp_identifier
     var s0: Ast.Strength = .strong;
     var s1: Ast.Strength = .strong;
     if (self.peek() == .lparen and parse_generate.strengthWord(self, self.pos + 1) != null) try parse_generate.parseDriveStrength(self, &s0, &s1);
     // A.2.2.3 `delay2` — a `delay3` that stops at two values, which
     // `parseDelay3` already returns for a two-value list.
-    if (self.peek() == .hash) _ = try parse_generate.parseDelay3(self);
+    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_generate.parseDelay3(self) else .{};
     while (true) {
+        const tok = self.pos;
+        var name: Ast.StrId = .none;
+        var range: ?Ast.Dim = null;
         if (self.identLike(self.pos)) {
+            name = try self.internTok(self.pos);
             self.pos += 1;
             // `name_of_udp_instance ::= udp_instance_identifier [ range ]`
-            if (self.peek() == .lbracket) _ = try parse_decl.parseDim(self);
+            if (self.peek() == .lbracket) range = try parse_decl.parseDim(self);
         }
         _ = try self.expect(.lparen);
-        _ = try parse_expr.parseNetRef(self); // A.3.3 output_terminal ::= net_lvalue
-        while (self.eat(.comma)) _ = try parse_expr.parseExpr(self); // input_terminal ::= expression
+        var ports: std.ArrayList(Ast.PortConn) = .empty;
+        const out_tok = self.pos;
+        try ports.append(self.arena, .{ .expr = try parse_expr.parseNetRef(self), .main_tok = out_tok }); // A.3.3 output_terminal ::= net_lvalue
+        while (self.eat(.comma)) {
+            const in_tok = self.pos;
+            try ports.append(self.arena, .{ .expr = try parse_expr.parseExpr(self), .main_tok = in_tok }); // input_terminal ::= expression
+        }
         _ = try self.expect(.rparen);
+        // The digital engine runs a UDP instance (IEEE 1364-2005 §8); an
+        // analog compile keeps nothing, as the W0252 above says.
+        if (self.digital) try b.instances.append(self.arena, .{
+            .module = module,
+            .name = name,
+            .range = range,
+            .ports = ports.items,
+            .delay = delay,
+            .strength0 = s0,
+            .strength1 = s1,
+            .main_tok = tok,
+        });
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);
