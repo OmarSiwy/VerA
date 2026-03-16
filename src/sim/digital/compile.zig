@@ -412,12 +412,28 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
     switch (self.file.stmt(id)) {
         .empty => {},
         .block => |b| {
-            // §5.3.2's block-local declarations are a SCOPE, which the flat
-            // `Name` space has no room for; the name on its own is not, and
-            // that is all `disable` needs.
-            if (b.vars.len != 0 or b.params.len != 0) return self.fail(tok, "block-local declarations are not implemented", .{});
+            // IEEE 1364-2005 §12.7: a named block's declarations are a scope
+            // of their own, searched before the one around it — so a local
+            // shadows a module variable of the same name. The block's NAME is
+            // still the enclosing scope's, which is where `disable` finds it.
+            // ponytail: `%m` inside such a block names the block but not the
+            // named blocks around it.
+            if (b.params.len != 0) return self.fail(tok, "block-local parameters are not implemented", .{});
+            const outer = self.scope;
+            defer self.scope = outer;
+            if (b.vars.len != 0) {
+                const root = @import("root.zig");
+                const inner = try root.newScope(self, tok);
+                try self.scope_info.append(self.arena, .{ .parent = outer, .name = b.name, .module = self.scope_info.items[outer].module, .lexical = true });
+                self.scope = inner;
+                for (b.vars) |v| {
+                    if (v.init != .none) return self.fail(tok, "an initialized block-local variable is not implemented", .{});
+                    _ = try root.mintVar(self, v);
+                }
+            }
             const start = position(self);
             for (b.body) |s| try compileStmt(self, s, depth + 1);
+            self.scope = outer;
             if (b.name != .none) {
                 const entry = try self.blocks.getOrPut(self.arena, .{ .scope = self.scope, .str = b.name });
                 if (entry.found_existing) return self.fail(tok, "duplicate named block", .{});
@@ -925,6 +941,13 @@ test "§17.1.1.6 %m names the instance path and the named blocks around it" {
         \\module leaf; initial begin : outer begin : inner $display("%m %l %s%c", "", 8'h21); end end endmodule
         \\module m; leaf u(); initial $display("%M"); endmodule
     , "m\nm.u.outer.inner work.leaf !\n");
+}
+
+test "§12.7 a named block's local shadows the module's, and each instance has its own" {
+    try expectRun(
+        \\module c; integer v; initial begin v = 1; begin : b integer v; v = 5; v = v + 1; $display("%m %0d", v); end $display("%0d", v); end endmodule
+        \\module m; c u(); c w(); endmodule
+    , "m.u.b 6\n1\nm.w.b 6\n1\n");
 }
 
 test "unsupported source is rejected before any process side effect" {
