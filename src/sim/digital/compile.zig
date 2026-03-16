@@ -284,9 +284,12 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 if (index.width > 64) return self.exprFail(ex.rhs(e), "bit indices wider than 64 bits are not implemented");
                 break :blk .{ .width = 1, .signed = false };
             }
-            const index = try inferValue(self, ex.rhs(e), depth + 1);
-            if (index.width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
-            const v = self.values[try self.slot(ex.lhs(e))];
+            var x = e;
+            while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
+                const index = try inferValue(self, ex.rhs(x), depth + 1);
+                if (index.width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
+            }
+            const v = self.values[try self.slot(x)];
             break :blk .{ .width = v.width, .signed = v.signed };
         },
         .unary => blk: {
@@ -632,8 +635,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         return self.fail(tok, "$readmemb/$readmemh take (file, memory [, start [, finish]])", .{});
                     if (s.args[0] == .none or ex.tag(s.args[0]) != .str_literal)
                         return self.exprFail(s.args[0], "the memory file name must be a string literal");
-                    if (s.args[1] == .none or ex.tag(s.args[1]) != .ident or !self.arrays.contains(try self.slot(s.args[1])))
-                        return self.exprFail(s.args[1], "$readmemb/$readmemh load an unpacked array");
+                    // ponytail: one dimension; §17.2.9's order over several
+                    // is the row-major walk, when a source loads one.
+                    const arr = if (s.args[1] == .none or ex.tag(s.args[1]) != .ident) null else self.arrays.get(try self.slot(s.args[1]));
+                    if (arr == null or arr.?.rest.len != 0)
+                        return self.exprFail(s.args[1], "$readmemb/$readmemh load a one-dimensional unpacked array");
                     for (s.args[2..]) |a| {
                         if (a == .none or !constantExpression(self, a))
                             return self.exprFail(a, "the $readmem address bounds must be constant");
@@ -780,12 +786,17 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
         .int_literal, .logic_literal, .str_literal => {},
         .ident, .hier_ident => try watch(self, try self.slot(e), out),
         .index => {
-            const base = try self.slot(ex.lhs(e));
-            // An array element, or (infer admitted it) a bit-select of `base`.
-            if (self.arrays.get(base)) |arr| {
+            // An array element — every element, since the one an index names
+            // is not known until it is read — or a select of a vector.
+            if (try self.indexedArray(e)) |arr| {
+                const base = try self.slot(self.chainBase(e).base);
                 for (0..arr.count) |i| try watch(self, base + @as(u32, @intCast(i)), out);
-            } else try watch(self, base, out);
-            try sensitivity(self, ex.rhs(e), out);
+                var x = e;
+                while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivity(self, ex.rhs(x), out);
+            } else {
+                try watch(self, try self.slot(ex.lhs(e)), out);
+                try sensitivity(self, ex.rhs(e), out);
+            }
         },
         .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range, .call => {
             var buf: [3]Ast.ExprId = undefined;
@@ -837,7 +848,8 @@ fn readSlots(self: *Run, id: Ast.StmtId, out: *std.ArrayList(u32), depth: u16) E
             try sensitivity(self, s.value, out);
             // An element lvalue reads its subscript; `sensitivity` on the
             // whole `.index` would also add the array's own elements.
-            if (ex.tag(s.target) == .index) try sensitivity(self, ex.rhs(s.target), out);
+            var x = s.target;
+            while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivity(self, ex.rhs(x), out);
         },
         .sys_task => |s| for (s.args) |a| {
             if (a != .none and ex.tag(a) != .str_literal) try sensitivity(self, a, out);
@@ -862,8 +874,11 @@ fn watch(self: *Run, at: u32, out: *std.ArrayList(u32)) Error!void {
 fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     const ex = &self.file.exprs;
     if (try self.indexedArray(e) != null) {
-        try checkExpr(self, ex.rhs(e));
-        if (typeOf(self, ex.rhs(e)).width > 64) return self.exprFail(ex.rhs(e), "array indices wider than 64 bits are not implemented");
+        var x = e;
+        while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
+            try checkExpr(self, ex.rhs(x));
+            if (typeOf(self, ex.rhs(x)).width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
+        }
         return;
     }
     // §5.2.1 a bit- or part-select of a variable writes those bits only;

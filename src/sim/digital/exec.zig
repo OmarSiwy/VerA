@@ -117,11 +117,24 @@ fn integerCeilingLog2(value: Int.Literal) u64 {
 fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     const ex = &self.file.exprs;
     if (ex.tag(e) != .index) return try self.slot(e);
-    const base = try self.slot(ex.lhs(e));
+    const c = self.chainBase(e);
+    const base = try self.slot(c.base);
     const arr = self.arrays.get(base).?; // infer proved this is an array
-    const at = (try eval(self, a, ex.rhs(e), 0)).asInt() orelse return null;
-    if (at < arr.low or at > arr.high) return null;
-    return base + @as(u32, @intCast(at - arr.low));
+    // §4.9 row-major: the innermost select is the last dimension.
+    var indices: [16]i64 = undefined;
+    var x = e;
+    var k = c.depth;
+    while (k != 0) : (x = ex.lhs(x)) {
+        k -= 1;
+        indices[k] = (try eval(self, a, ex.rhs(x), 0)).asInt() orelse return null;
+    }
+    var offset: u64 = 0;
+    for (indices[0..c.depth], 0..) |at, d| {
+        const span: @import("root.zig").Span = if (d == 0) .{ .low = arr.low, .high = arr.high } else arr.rest[d - 1];
+        if (at < span.low or at > span.high) return null;
+        offset = offset * @as(u64, @intCast(span.high - span.low + 1)) + @as(u64, @intCast(at - span.low));
+    }
+    return base + @as(u32, @intCast(offset));
 }
 
 /// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the DECLARED
@@ -1196,6 +1209,20 @@ test "continuous vector delay audit_assignment_pending_same_value" {
         \\original_deadline_passed=1
         \\
     );
+}
+
+test "§4.9 a multidimensional array is addressed row-major, one index per dimension" {
+    try expectRun(
+        \\module m;
+        \\reg [3:0] mem [-1:0][2:1][1:0];
+        \\integer i, j;
+        \\initial begin
+        \\  for (i = -1; i <= 0; i = i + 1) for (j = 1; j <= 2; j = j + 1) begin mem[i][j][0] = i + j; mem[i][j][1] = 4'hf; end
+        \\  mem[0][3][0] = 4'h9;
+        \\  $display("%0d %0d %0d %h %b", mem[-1][1][0], mem[0][2][0], mem[-1][2][0], mem[0][1][1], mem[1][1][0]);
+        \\end
+        \\endmodule
+    , "0 2 1 f xxxx\n");
 }
 
 test "§5.2.1 bit and part selects read and write against the declared range" {
