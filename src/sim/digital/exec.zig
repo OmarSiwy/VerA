@@ -40,7 +40,7 @@ const Show = display.Show;
 // lives in its row's own planes (see `Row`), never in mutable variable storage.
 pub const Pending = union(enum) {
     run_process: u32,
-    write: struct { target: u32, value: Int.Literal },
+    write: struct { target: u32, value: Int.Literal, sel: ?Sel = null },
     /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs and
     /// not when the call executed — the whole point of the task is that it
     /// reports the settled value.
@@ -124,18 +124,82 @@ fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     return base + @as(u32, @intCast(at - arr.low));
 }
 
-/// IEEE 1364-2005 §5.2.1: one bit of a vector, named against its DECLARED
-/// range — `[3:0]` counts up from the right, `[0:3]` down — and x when the
-/// index is x/z or outside that range.
-fn bitSelect(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
+/// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the DECLARED
+/// indices it names: `count` of them from `first`, one `step` apart. The
+/// selected value's bit i is declared index `first + i*step`.
+pub const Sel = struct { first: i64, count: u32, step: i2 };
+
+/// Where an assignment lands: a whole slot, or a selection of one (§5.2.1).
+pub const Place = struct { slot: u32, sel: ?Sel = null };
+
+/// The selection an `.index` of a vector makes right now. A bit-select's
+/// index is evaluated; a part-select's bounds were folded by `infer`. Null is
+/// an x/z index, which names no bit.
+fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
-    const at = try self.slot(ex.lhs(e));
-    const v = self.values[at];
-    const range: @import("root.zig").VecRange = self.vec_ranges.get(at) orelse .{ .msb = @as(i64, v.width) - 1, .lsb = 0 };
-    const index = (try eval(self, a, ex.rhs(e), 0)).asInt() orelse return filled(a, 1, false, .x);
+    const rhs = ex.rhs(e);
+    if (ex.tag(rhs) == .range) {
+        const b = self.part_selects.get(e).?; // infer folded it
+        return .{ .first = b.lsb, .count = @intCast(@abs(b.msb - b.lsb) + 1), .step = if (b.msb >= b.lsb) 1 else -1 };
+    }
+    const index = (try eval(self, a, rhs, 0)).asInt() orelse return null;
+    return .{ .first = index, .count = 1, .step = 1 };
+}
+
+/// The bit position a declared index names in `slot`, against its declared
+/// range — `[3:0]` counts up from the right, `[0:3]` down — or null outside it.
+fn position(self: *Run, slot: u32, index: i64) ?u32 {
+    const width = self.values[slot].width;
+    const range: @import("root.zig").VecRange = self.vec_ranges.get(slot) orelse .{ .msb = @as(i64, width) - 1, .lsb = 0 };
     const pos = if (range.msb >= range.lsb) index - range.lsb else range.lsb - index;
-    if (pos < 0 or pos >= v.width) return filled(a, 1, false, .x);
-    return filled(a, 1, false, v.bit(@intCast(pos)));
+    return if (pos < 0 or pos >= width) null else @intCast(pos);
+}
+
+/// §5.2.1: the selected bits, x wherever the index is x/z or outside the
+/// declared range. A select is unsigned whatever its vector is.
+fn readSelect(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
+    const at = try self.slot(self.file.exprs.lhs(e));
+    const width = compile.typeOf(self, e).width;
+    const out = try filled(a, width, false, .x);
+    const sel = (try selection(self, a, e)) orelse return out;
+    for (0..sel.count) |i| {
+        const pos = position(self, at, sel.first + @as(i64, @intCast(i)) * sel.step) orelse continue;
+        setBit(out, @intCast(i), self.values[at].bit(pos));
+    }
+    return out;
+}
+
+/// Where `e` lands if written now, or null when it names no storage (an
+/// out-of-range or x/z array index, §3.9; an x/z bit index, §5.2.1).
+fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) != .index) return .{ .slot = try self.slot(e) };
+    if (try self.indexedArray(e) != null) return .{ .slot = (try address(self, a, e)) orelse return null };
+    return .{ .slot = try self.slot(ex.lhs(e)), .sel = (try selection(self, a, e)) orelse return null };
+}
+
+/// The width an assignment to `e` is evaluated in (§5.5.3): a select's own
+/// width, else the variable's — an array element is as wide as element zero.
+pub fn targetWidth(self: *Run, e: Ast.ExprId) Error!u32 {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .index and try self.indexedArray(e) == null) return compile.typeOf(self, e).width;
+    return self.values[try self.baseSlot(e)].width;
+}
+
+/// Write `value` (already `targetWidth` wide) where `p` lands. A selection
+/// merges into the value the slot holds NOW — which for a nonblocking update
+/// is when it lands, so two NBAs to different bits both survive — and bits
+/// outside the declared range are dropped.
+pub fn write(self: *Run, a: std.mem.Allocator, p: Place, value: Int.Literal) Error!void {
+    const sel = p.sel orelse return store(self, p.slot, value.planes);
+    const cur = self.values[p.slot];
+    const merged = try filled(a, cur.width, cur.signed, .zero);
+    @memcpy(merged.planes, cur.planes);
+    for (0..sel.count) |i| {
+        const pos = position(self, p.slot, sel.first + @as(i64, @intCast(i)) * sel.step) orelse continue;
+        setBit(merged, pos, value.bit(@intCast(i)));
+    }
+    return store(self, p.slot, merged.planes);
 }
 
 fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
@@ -144,7 +208,7 @@ fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
         .ident, .hier_ident => self.values[try self.slot(e)],
         .index => blk: {
             const ty = compile.typeOf(self, e);
-            if (try self.indexedArray(e) == null) break :blk try bitSelect(self, a, e);
+            if (try self.indexedArray(e) == null) break :blk try readSelect(self, a, e);
             const at = (try address(self, a, e)) orelse break :blk try filled(a, ty.width, ty.signed, .x);
             break :blk self.values[at];
         },
@@ -740,11 +804,11 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .assign => |s| {
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                if (try address(self, scratch, s.target)) |target| {
-                    const dest = self.values[target];
-                    const rhs = try eval(self, scratch, s.value, dest.width);
-                    const value = try normalize(scratch, rhs, .{ .width = dest.width, .signed = rhs.signed });
-                    if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target, .value = value } }, null, true) else try store(self, target, value.planes);
+                if (try place(self, scratch, s.target)) |target| {
+                    const width = try targetWidth(self, s.target);
+                    const rhs = try eval(self, scratch, s.value, width);
+                    const value = try normalize(scratch, rhs, .{ .width = width, .signed = rhs.signed });
+                    if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target.slot, .value = value, .sel = target.sel } }, null, true) else try write(self, scratch, target, value);
                 }
                 pc += 1;
                 continue;
@@ -844,7 +908,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // may be an array element, so the width comes from the
                 // lvalue's base slot rather than from `address` — which
                 // §8.5.3.3 says is not resolved until the process resumes.
-                const width = self.values[try self.baseSlot(a.target)].width;
+                const width = try targetWidth(self, a.target);
                 const rhs = try eval(self, scratch, a.value, width);
                 // The cell's own planes, not scratch: the value has to
                 // outlive this dispatch, which is the whole point of parking
@@ -859,10 +923,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 if (a.nonblocking) {
                     // §8.5.3.4 the process does not suspend; the write is
                     // one more NBA update, delayed if the control was one.
-                    if (try address(self, scratch, a.target)) |target|
+                    if (try place(self, scratch, a.target)) |target|
                         _ = try enqueue(
                             self,
-                            .{ .write = .{ .target = target, .value = self.holds.items[s.cell] } },
+                            .{ .write = .{ .target = target.slot, .value = self.holds.items[s.cell], .sel = target.sel } },
                             if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null,
                             true,
                         );
@@ -882,8 +946,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const a = self.file.stmt(s.statement).assign;
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                if (try address(self, scratch, a.target)) |target|
-                    try store(self, target, self.holds.items[s.cell].planes);
+                if (try place(self, scratch, a.target)) |target|
+                    try write(self, scratch, target, self.holds.items[s.cell]);
                 pc += 1;
                 continue;
             },
@@ -1020,6 +1084,25 @@ test "continuous vector delay audit_assignment_pending_same_value" {
         \\original_deadline_passed=1
         \\
     );
+}
+
+test "§5.2.1 bit and part selects read and write against the declared range" {
+    // Two nonblocking writes to different bits both land (each merges into
+    // the value at its own landing), an x index writes nothing, and a
+    // part-select of a signed vector is unsigned.
+    try expectRun(
+        \\module m;
+        \\reg [7:0] a; reg [0:3] b; reg signed [3:0] s; reg [15:0] w;
+        \\integer i;
+        \\initial begin
+        \\  a = 0; b = 0; s = -1; i = 1'bx;
+        \\  a[1] <= 1; a[6] <= 1; a[i] = 1;
+        \\  b[0:1] = 2'b11; a[5:3] = 3'b101;
+        \\  w = s[3:0];
+        \\  #1 $display("%b %b %b %b %b", a, b, a[7:4], w, a[3]);
+        \\end
+        \\endmodule
+    , "01101010 1100 0110 0000000000001111 1\n");
 }
 
 test "§3.5.1 an unsized x/z constant fills its context, a known top digit does not" {

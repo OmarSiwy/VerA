@@ -241,6 +241,8 @@ pub const Run = struct {
     /// §12.2 parameter slots — constants an expression may fold, never a
     /// target.
     params: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
+    part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -267,7 +269,7 @@ pub const Run = struct {
             const item = r.pending.items[event.payload].item;
             switch (item) {
                 .run_process => |start| try exec.execute(r, &scratch, start),
-                .write => |w| try exec.store(r, w.target, w.value.planes),
+                .write => |w| try exec.write(r, scratch.allocator(), .{ .slot = w.target, .sel = w.sel }, w.value),
                 .strobe => |s| {
                     r.scope = s.scope;
                     r.pc = s.pc;
@@ -1347,7 +1349,7 @@ test "the net and array declaration boundaries are explicit" {
     // §3.9 an array has no value of its own, and a select is not an element.
     try expectRejected("module m; reg [3:0] mem [0:3]; initial $display(\"%b\",mem); endmodule", "requires an element index");
     try expectRejected("module m; reg [3:0] mem [0:1]; reg a; initial @(mem) a = 1; endmodule", "requires an element index");
-    try expectRejected("module m; reg [3:0] a; initial $display(\"%b\",a[1:0]); endmodule", "part selects");
+    try expectRejected("module m; reg [3:0] a; integer i; initial $display(\"%b\",a[i:0]); endmodule", "constant expression is required");
     try expectRejected("module m; reg [3:0] mem [0:1][0:1]; initial $display(\"x\"); endmodule", "one unpacked array dimension");
     try expectRejected("module m; reg [3:0] mem [0:1]; initial mem[65'h1] = 0; endmodule", "indices wider than 64 bits");
     // §3.6 a disciplined net belongs to the analog solver, not to this executor.
