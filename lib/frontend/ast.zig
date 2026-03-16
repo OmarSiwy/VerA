@@ -749,6 +749,33 @@ pub const FuncArg = struct {
     main_tok: u32 = 0,
 };
 
+/// IEEE 1364-2005 §10.2 task or §10.4 function (A.2.6 `function_declaration`,
+/// A.2.7 `task_declaration`) as a DIGITAL parse records it — the 1364
+/// spellings VAMS §4.7 admits beside the analog function: packed port ranges,
+/// `reg`/`integer`/`time` formals, `automatic`, and tasks at all. An analog
+/// parse never fills `ModuleDecl.tasks`; its bare `function` is a `FuncDecl`.
+///
+/// Every formal, local and the function result is a `VarDecl`, because that
+/// is what §10.2.3/§10.4.1 make them: variables of the subroutine's scope.
+pub const Subroutine = struct {
+    name: StrId,
+    is_function: bool,
+    /// A.2.6/A.2.7 `automatic`: storage per activation (§10.2.3, §10.4.2).
+    automatic: bool = false,
+    /// §10.4.1 "a variable with the same name as the function"; its type is
+    /// A.2.6's `function_range_or_type`. Unused for a task.
+    result: VarDecl = .{ .name = .none, .ty = .integer },
+    /// A.2.7 `tf_*_declaration`s in declaration order, which is call order.
+    ports: []const TfPort = &.{},
+    /// A.2.7 `block_item_declaration`s.
+    vars: []const VarDecl = &.{},
+    body: StmtId,
+    main_tok: u32 = 0,
+};
+
+/// One A.2.7 task/function formal: a direction and the variable it declares.
+pub const TfPort = struct { direction: Direction, v: VarDecl };
+
 /// User-defined analog function. LRM §4.7.1 (A.2.6 analog_function_declaration).
 /// The implicit return variable is the function's own name (§4.7.1).
 pub const FuncDecl = struct {
@@ -965,6 +992,9 @@ pub const ModuleDecl = struct {
     gates: []const GateInst = &.{},
     /// A.3.1 pullup/pulldown sources (§7.8), in source order.
     pulls: []const PullInst = &.{},
+    /// IEEE 1364-2005 §10 tasks and digital functions, filled by a digital
+    /// parse only (see `Subroutine`).
+    tasks: []const Subroutine = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value

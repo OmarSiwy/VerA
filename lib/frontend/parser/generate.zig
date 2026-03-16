@@ -222,6 +222,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     for (gb.assigns.items) |a| try self.report(a.main_tok, .E0235, "a continuous assignment", .{});
     for (gb.gates.items) |g| try self.report(g.main_tok, .E0235, "a gate instance", .{});
     for (gb.pulls.items) |g| try self.report(g.main_tok, .E0235, "a pull gate instance", .{});
+    for (gb.tasks.items) |t| try self.report(t.main_tok, .E0235, "a task or function declaration", .{});
     if (gb.events.items.len != 0) try self.report(tok, .E0235, "an event declaration (`{s}`)", .{self.file.str(gb.events.items[0])});
     try b.genvars.appendSlice(self.arena, gb.genvars.items);
     try b.functions.appendSlice(self.arena, gb.functions.items);

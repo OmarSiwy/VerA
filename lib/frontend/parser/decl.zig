@@ -210,6 +210,132 @@ pub fn parseVarDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void 
     }
 }
 
+/// IEEE 1364-2005 §10.2/§10.4, A.2.6 and A.2.7, for a digital parse:
+///
+///     task [ automatic ] name [ ( tf_port_list ) ] ; { tf_item } statement endtask
+///     function [ automatic ] [ function_range_or_type ] name
+///         [ ( tf_port_list ) ] ; { function_item } statement endfunction
+///
+/// A formal's direction sticks to the names after it until another one is
+/// written, in the port list and in a body declaration alike.
+pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) Error!void {
+    const main_tok = self.pos;
+    self.pos += 1; // `task` / `function`
+    const automatic = parse_module.reservedIs(self, self.pos, "automatic");
+    if (automatic) self.pos += 1;
+    var result: Ast.VarDecl = if (is_function) tfType(self) else .{ .name = .none, .ty = .integer };
+    if (is_function and result.storage == .reg and result.packed_range == null and self.peek() == .lbracket) result.packed_range = try parseDim(self);
+    const name_tok = self.pos;
+    const name = try self.expectIdent();
+    result.name = name;
+    result.main_tok = name_tok;
+    var ports: std.ArrayList(Ast.TfPort) = .empty;
+    if (self.eat(.lparen)) {
+        var dir: Ast.Direction = .input;
+        var ty: Ast.VarDecl = .{ .name = .none, .ty = .integer, .storage = .reg, .is_signed = false };
+        while (self.peek() != .rparen and self.peek() != .eof) {
+            if (parse_module.portDirection(self.peek())) |d| {
+                dir = d;
+                self.pos += 1;
+                ty = try tfPortType(self);
+            }
+            var v = ty;
+            v.main_tok = self.pos;
+            v.name = try self.expectIdent();
+            try ports.append(self.arena, .{ .direction = dir, .v = v });
+            if (!self.eat(.comma)) break;
+        }
+        _ = try self.expect(.rparen);
+    }
+    _ = try self.expect(.semicolon);
+    var vars: std.ArrayList(Ast.VarDecl) = .empty;
+    const end_word = if (is_function) "endfunction" else "endtask";
+    while (true) {
+        try self.skipAttributes();
+        if (parse_module.portDirection(self.peek())) |d| {
+            self.pos += 1;
+            const ty = try tfPortType(self);
+            while (true) {
+                var v = ty;
+                v.main_tok = self.pos;
+                v.name = try self.expectIdent();
+                try ports.append(self.arena, .{ .direction = d, .v = v });
+                if (!self.eat(.comma)) break;
+            }
+            _ = try self.expect(.semicolon);
+            continue;
+        }
+        switch (self.peek()) {
+            .kw_reg, .kw_integer, .kw_time, .kw_real, .kw_realtime => {
+                const ty = try tfPortType(self);
+                while (true) {
+                    var v = ty;
+                    v.main_tok = self.pos;
+                    v.name = try self.expectIdent();
+                    v.dims = try parseDims(self);
+                    if (self.eat(.assign_eq)) v.init = try parse_expr.parseExpr(self);
+                    try vars.append(self.arena, v);
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
+            },
+            else => break, // else: the first token that declares nothing begins the body
+        }
+    }
+    var body: std.ArrayList(Ast.StmtId) = .empty;
+    while (!(self.peek() == .kw_endfunction or parse_module.reservedIs(self, self.pos, end_word)) and self.peek() != .eof) {
+        try body.append(self.arena, try parse_stmt.parseStmt(self));
+    }
+    if (self.peek() == .kw_endfunction or parse_module.reservedIs(self, self.pos, end_word)) {
+        self.pos += 1;
+    } else return self.failAt(self.pos, .E0207, "found {s}: no `{s}` closes the declaration", .{ self.found(self.pos), end_word });
+    const body_id: Ast.StmtId = if (body.items.len == 1)
+        body.items[0]
+    else
+        try self.file.addStmt(self.arena, .{ .block = .{ .body = body.items } }, main_tok);
+    try b.tasks.append(self.arena, .{
+        .name = name,
+        .is_function = is_function,
+        .automatic = automatic,
+        .result = result,
+        .ports = ports.items,
+        .vars = vars.items,
+        .body = body_id,
+        .main_tok = main_tok,
+    });
+}
+
+/// A.2.7's formal and block-item types: `[ reg ] [ signed ] [ range ]`,
+/// `integer`, `time`, `real` or `realtime`. A bare direction is a 1-bit
+/// unsigned `reg` (IEEE 1364-2005 §10.2.1).
+fn tfPortType(self: *Parser) Error!Ast.VarDecl {
+    var v = tfType(self);
+    if (v.storage == .reg and self.peek() == .lbracket) v.packed_range = try parseDim(self);
+    return v;
+}
+
+/// The keyword half of `tfPortType`, which a function's result shares.
+fn tfType(self: *Parser) Ast.VarDecl {
+    switch (self.peek()) {
+        .kw_integer => {
+            self.pos += 1;
+            return .{ .name = .none, .ty = .integer, .storage = .variable, .is_signed = true };
+        },
+        .kw_time => {
+            self.pos += 1;
+            return .{ .name = .none, .ty = .integer, .storage = .time, .is_signed = false };
+        },
+        .kw_real, .kw_realtime => {
+            self.pos += 1;
+            return .{ .name = .none, .ty = .real };
+        },
+        else => { // else: `[ reg ] [ signed ] [ range ]`, every keyword optional
+            _ = self.eat(.kw_reg);
+            return .{ .name = .none, .ty = .integer, .storage = .reg, .is_signed = self.eat(.kw_signed) };
+        },
+    }
+}
+
 /// The width of `[msb:lsb]` when both bounds are integer LITERALS.
 ///
 /// ponytail: literals only. Folding `[W-1:0]` needs the constant evaluator,

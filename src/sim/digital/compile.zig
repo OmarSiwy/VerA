@@ -79,6 +79,14 @@ pub const Instruction = union(enum(u5)) {
     // §6.2.1 a variable declaration assignment: one blocking write of a
     // whole declared variable, which has a slot and no expression naming it.
     init_var: struct { slot: u32, value: Ast.ExprId },
+    // §10.2.2 a task enable run to completion in place: copy in, the body at
+    // `Sub.entry`, copy out. Every call of a function takes the same path.
+    call: struct { sub: u32, args: []const Ast.ExprId, tok: u32 },
+    // §10.2.2 an inlined enable's copy-out: `slot` (a formal) is assigned to
+    // the caller's lvalue `target`, resolved in the caller's scope.
+    copy_out: struct { target: Ast.ExprId, slot: u32 },
+    // §10.3 `disable` naming a task: every activation of it ends.
+    disable_task: u32,
     stop,
 };
 
@@ -188,7 +196,7 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
         .int_literal, .logic_literal, .str_literal => return true,
         // §12.2: a parameter is a constant; every other name is not.
         .ident => {
-            const at = self.names.get(.{ .scope = self.scope, .str = ex.strOf(e) }) orelse return false;
+            const at = self.lookup(self.scope, ex.strOf(e)) orelse return false;
             return self.params.contains(at);
         },
         .unary, .binary, .multi_concat, .ternary, .concat => {},
@@ -344,6 +352,18 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     },
             }
         },
+        // §10.4 a function call: the function's result variable is its type,
+        // so the call site's context never reaches inside it (d04_12).
+        .call => blk: {
+            const inst = self.instanceOf(self.scope);
+            const idx = self.sub_by_name.get(.{ .scope = inst, .str = ex.strOf(e) }) orelse return self.exprFail(e, "undeclared function");
+            const sub = self.subs.items[idx];
+            if (!sub.decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
+            try checkArgs(self, sub.decl, ex.args(e), ex.mainTok(e));
+            try self.call_subs.put(self.arena, e, idx - self.sub_base.get(inst).?);
+            const result = self.values[sub.frame.result];
+            break :blk .{ .width = result.width, .signed = result.signed };
+        },
         .concat => blk: {
             var width: u32 = 0;
             for (ex.args(e)) |arg| {
@@ -486,6 +506,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             for (exits) |at| self.code.items[at].jump = end;
         },
         .assign => |s| {
+            // §10.4.4: "Functions shall not contain any time-controlled
+            // statements" and "shall not have any nonblocking assignments".
+            if (self.in_function and s.nonblocking) return self.fail(tok, "§10.4.4: a function body cannot contain a nonblocking assignment", .{});
+            if (self.in_function and s.timing != .none) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
             try checkTarget(self, s.target);
             try checkExpr(self, s.value);
             if (s.timing == .none) {
@@ -513,12 +537,13 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         // A.6.5 `event_trigger`. The slot is resolved here, not at run
         // time, so a trigger cannot fail in the middle of a dispatch.
         .event_trigger => |s| {
-            const at = self.names.get(.{ .scope = self.scope, .str = s.name }) orelse
+            const at = self.lookup(self.scope, s.name) orelse
                 return self.fail(tok, "undeclared named event", .{});
             if (!self.events.contains(at)) return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
             _ = try append(self, .{ .trigger = at });
         },
         .event_control => |s| {
+            if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
             // A.6.5 `@*`. The terms come from the body, so the body has to
             // be type-checked before they can be read off it: emit the wait
             // with an empty list, compile the body, then patch the list in.
@@ -560,6 +585,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         },
         .sys_task => |s| {
             const name = self.file.str(s.name);
+            if (name[0] != '$') return compileEnable(self, s.name, s.args, tok, depth);
             const task = tasks.get(name) orelse return self.fail(tok, "digital system task `{s}` is not implemented", .{name});
             switch (task) {
                 // All three format the same surface, so all three are
@@ -614,6 +640,115 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
     }
 }
 
+// ---- tasks and functions (IEEE 1364-2005 §10) --------------------------------
+
+/// Compile every subroutine that can run synchronously — every function, and
+/// every task with no timing control (§10.2.1 allows one; §10.4.4 forbids it
+/// a function) — into a body of its own, entered by `.call`.
+pub fn compileSubs(self: *Run) Error!void {
+    for (self.subs.items, 0..) |*sub, i| {
+        if (try timed(self, @intCast(i))) continue;
+        self.scope = sub.frame.scope;
+        self.in_function = sub.decl.is_function;
+        defer self.in_function = false;
+        sub.entry = position(self);
+        try compileStmt(self, sub.decl.body, 0);
+        _ = try append(self, .stop);
+    }
+}
+
+/// Does task `idx` contain a timing control, directly or through a task it
+/// enables? Such a task can suspend, so it is inlined where it is enabled.
+/// A recursive enable is taken as untimed while it is being asked about.
+fn timed(self: *Run, idx: u32) Error!bool {
+    const sub = &self.subs.items[idx];
+    if (sub.timed) |t| return t;
+    sub.timed = false;
+    const t = !sub.decl.is_function and try stmtTimed(self, sub.inst, sub.decl.body);
+    self.subs.items[idx].timed = t;
+    return t;
+}
+
+fn stmtTimed(self: *Run, inst: u32, id: Ast.StmtId) Error!bool {
+    if (id == .none) return false;
+    return switch (self.file.stmt(id)) {
+        .event_control => true,
+        .assign => |s| s.timing != .none,
+        .block => |b| for (b.body) |s| {
+            if (try stmtTimed(self, inst, s)) break true;
+        } else false,
+        .if_stmt => |s| try stmtTimed(self, inst, s.then_s) or try stmtTimed(self, inst, s.else_s),
+        .while_stmt => |s| try stmtTimed(self, inst, s.body),
+        .repeat_stmt => |s| try stmtTimed(self, inst, s.body),
+        .for_stmt => |s| try stmtTimed(self, inst, s.body),
+        .case_stmt => |s| for (s.arms) |arm| {
+            if (try stmtTimed(self, inst, arm.body)) break true;
+        } else false,
+        .sys_task => |s| blk: {
+            if (self.file.str(s.name)[0] == '$') break :blk false;
+            const callee = self.sub_by_name.get(.{ .scope = inst, .str = s.name }) orelse break :blk false;
+            break :blk try timed(self, callee);
+        },
+        else => false, // else: no other statement suspends or nests one
+    };
+}
+
+/// §10.2.2's argument rules, for an enable and for a call: one argument per
+/// formal and none of them null, and an output or inout argument an lvalue
+/// the value can be copied back into.
+fn checkArgs(self: *Run, decl: *const Ast.Subroutine, args: []const Ast.ExprId, tok: u32) Error!void {
+    if (args.len != decl.ports.len) return self.fail(tok, "`{s}` takes {d} arguments, not {d}", .{ self.file.str(decl.name), decl.ports.len, args.len });
+    const ex = &self.file.exprs;
+    for (decl.ports, args) |p, a| {
+        if (a == .none) return self.fail(tok, "§10.2.2: null task arguments are not permitted", .{});
+        if (p.direction != .input) {
+            switch (ex.tag(a)) {
+                .ident, .hier_ident, .index => {},
+                else => return self.exprFail(a, "§10.2.2: a task output actual must be a procedural lvalue"), // else: every other form is an expression
+            }
+            try checkTarget(self, a);
+        }
+        if (p.direction != .output) try checkExpr(self, a);
+    }
+}
+
+/// §10.2.2 a task enable. An untimed task is one `.call`; a timed one is
+/// inlined here — copy in, the body in the task's frame, copy out — so its
+/// suspensions are this process's own. A static task shares one frame
+/// between every such copy (§10.2.3); an automatic one gets a frame per call
+/// site, which is per activation because a site cannot be re-entered while
+/// its process is suspended inside it.
+fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32, depth: u16) Error!void {
+    if (self.in_function) return self.fail(tok, "§10.4.4: a function cannot enable a task", .{});
+    const inst = self.instanceOf(self.scope);
+    const idx = self.sub_by_name.get(.{ .scope = inst, .str = name }) orelse return self.fail(tok, "undeclared task `{s}`", .{self.file.str(name)});
+    const decl = self.subs.items[idx].decl;
+    if (decl.is_function) return self.fail(tok, "§10.4: a function is called in an expression, not enabled", .{});
+    try checkArgs(self, decl, args, tok);
+    if (!try timed(self, idx)) {
+        _ = try append(self, .{ .call = .{ .sub = idx, .args = args, .tok = tok } });
+        return;
+    }
+    // ponytail: a timed task reaching itself would inline forever; a
+    // recursive task that can suspend needs per-activation frames on a stack.
+    if (self.subs.items[idx].inlining) return self.fail(tok, "a recursive task with timing controls is not implemented", .{});
+    self.subs.items[idx].inlining = true;
+    defer self.subs.items[idx].inlining = false;
+    const f = if (decl.automatic) try @import("root.zig").frame(self, decl, inst) else self.subs.items[idx].frame;
+    const start = position(self);
+    for (decl.ports, args, f.ports) |p, a, slot| if (p.direction != .output) {
+        _ = try append(self, .{ .init_var = .{ .slot = slot, .value = a } });
+    };
+    const caller = self.scope;
+    self.scope = f.scope;
+    try compileStmt(self, decl.body, depth + 1);
+    self.scope = caller;
+    for (decl.ports, args, f.ports) |p, a, slot| if (p.direction != .input) {
+        _ = try append(self, .{ .copy_out = .{ .target = a, .slot = slot } });
+    };
+    try self.subs.items[idx].ranges.append(self.arena, .{ .start = start, .end = position(self) });
+}
+
 // ---- static sensitivity and target checks (§6.1, §9.7.5, §9.7.1) ------------
 
 /// §6.1 "a continuous assignment is evaluated whenever an operand changes".
@@ -636,9 +771,9 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
             } else try watch(self, base, out);
             try sensitivity(self, ex.rhs(e), out);
         },
-        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range => {
+        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range, .call => {
             var buf: [3]Ast.ExprId = undefined;
-            for (ex.children(e, &buf)) |c| try sensitivity(self, c, out);
+            for (ex.children(e, &buf)) |c| if (c != .none) try sensitivity(self, c, out);
         },
         else => unreachable, // else: checkExpr admitted only the forms above
     }
