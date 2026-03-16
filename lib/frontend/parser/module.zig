@@ -897,13 +897,6 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
     }
 }
 
-/// The one sentence of §3.7 that a four-state engine gets wrong, which is
-/// why a `wreal` is refused rather than minted as one more net.
-pub const wreal_unimplemented =
-    "§3.7 real nets are not implemented by digital execution: a wreal " ++
-    "carries a real and reads 0.0 undriven, where every net this engine " ++
-    "resolves carries four-state bits and reads z";
-
 /// A.2.1.3's two `wreal` alternatives — §3.7's real net:
 ///
 ///     | wreal [ discipline_identifier ] [ range ] list_of_net_identifiers ;
@@ -922,22 +915,10 @@ pub const wreal_unimplemented =
 /// `wreal` is conformance, and three annex C fixtures pin it.
 ///
 /// UNDER `--run` the source is IEEE Std 1364 digital, C.4 does not reach
-/// it, and the declaration parses — and is then E1100, which is the case
-/// that must not be silent. `src/sim/digital.zig` resolves four-state
-/// bits: `undriven` returns `.z` for every kind it does not name, `wired`
-/// folds by agreement, `filled` starts a net at z. §3.7 says the opposite
-/// of all three — "If no driver is connected to a wreal net, its value
-/// shall be zero (0.0). Unlike other digital nets which have an initial
-/// value of 'z', wreal nets shall have an initial value of zero" — so
-/// accepting the declaration and letting it fall into those `else` arms
-/// would turn a refusal into a wrong number with no diagnostic.
-// ponytail: the refusal is one line and the upgrade deletes it. What it
-// wants is a real-valued lane in that file's net storage plus §3.7's
-// wire/tri/wreal port merge; `Ast.NetKind.wreal` is the frontend half and
-// it is here now.
+/// it, and the digital engine runs the net: a real lane that reads 0.0
+/// undriven, and §3.7's wire/tri/wreal port merge.
 pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
     if (!self.digital) return parse_specify.unsupportedItem(self);
-    const kw = self.pos;
     self.pos += 1;
     // `[ discipline_identifier ]` — an identifier followed by another
     // identifier or a `[`, which is `optDiscipline`'s own lookahead.
@@ -945,7 +926,6 @@ pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
     var signed = false;
     const disc = try optPortType(self, &ignored, &signed);
     try parse_generate.parseNetNames(self, b, disc, .wreal, false, .{}, signed);
-    try self.report(kw, .E1100, wreal_unimplemented, .{});
 }
 
 /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset

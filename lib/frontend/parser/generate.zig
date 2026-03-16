@@ -303,7 +303,6 @@ pub fn nameIn(comptime T: type, decls: []const T, name: Ast.StrId) bool {
 /// and discipline, it does not introduce a new terminal.
 pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     const dir = parse_module.portDirection(self.peek()).?;
-    const dir_tok = self.pos;
     self.pos += 1;
     // A.2.1.2's `[ net_type | wreal ]`, which used to be eaten and dropped.
     // It is §7.9's resolution input — see `Ast.Port.kind`.
@@ -393,10 +392,6 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);
-    // A.2.1.2's `wreal` alternative, refused AFTER the declaration is read
-    // and recorded — see `parseWrealDecl` for the clause and for why
-    // silence is the one answer that is not available.
-    if (kind == .wreal) try self.report(dir_tok, .E1100, parse_module.wreal_unimplemented, .{});
 }
 
 pub fn findPort(b: *parse_module.Body, name: Ast.StrId) ?*Ast.Port {

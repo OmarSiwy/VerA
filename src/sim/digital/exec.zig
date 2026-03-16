@@ -191,15 +191,7 @@ fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
     return .{ .slot = try self.slot(ex.lhs(e)), .sel = (try selection(self, a, e)) orelse return null };
 }
 
-/// The width an assignment to `e` is evaluated in (§5.5.3): a select's own
-/// width, else the variable's — an array element is as wide as element zero.
-pub fn targetWidth(self: *Run, e: Ast.ExprId) Error!u32 {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) == .index and try self.indexedArray(e) == null) return compile.typeOf(self, e).width;
-    return self.values[try self.baseSlot(e)].width;
-}
-
-/// Write `value` (already `targetWidth` wide) where `p` lands. A selection
+/// Write `value` (already converted by `evalFor`) where `p` lands. A selection
 /// merges into the value the slot holds NOW — which for a nonblocking update
 /// is when it lands, so two NBAs to different bits both survive — and bits
 /// outside the declared range are dropped.
@@ -293,8 +285,139 @@ fn scalar(a: std.mem.Allocator, bit: Int.Bit) Error!Int.Literal {
 // the RHS type. Operator contexts below propagate BOTH width and type.
 pub fn eval(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, width: u32) Error!Int.Literal {
     var ty = compile.typeOf(self, e);
+    // An integral reading of a real is §4.8.2's rounded integer.
+    if (ty.real) ty = .{ .width = 64, .signed = true };
     ty.width = @max(ty.width, width);
     return evalContext(self, a, e, ty);
+}
+
+// ---- reals (IEEE 1364-2005 §4.8, §17.8, §17.11.2) ---------------------------
+
+/// A real as the 64-bit slot value that holds it.
+pub fn realLiteral(a: std.mem.Allocator, r: f64) Error!Int.Literal {
+    const out = try filled(a, 64, true, .zero);
+    out.values()[0] = @bitCast(r);
+    return out;
+}
+
+/// §4.8.2 integer-to-real: the value, read by its own signedness. An x or z
+/// bit makes it 0 (§4.8.2 gives unknown bits no real reading).
+/// ponytail: the low 64 bits of a wider operand.
+fn realOfInt(v: Int.Literal) f64 {
+    if (v.hasUnknown()) return 0;
+    if (v.signed and v.width <= 64) return @floatFromInt(v.asInt().?);
+    return @floatFromInt(v.values()[0]);
+}
+
+/// §4.8.2 real-to-integer: "rounded off to the nearest integer" — 35.5 is
+/// 36 and -1.5 is -2 — as a 64-bit signed value; a non-finite real has no
+/// integer, and is x.
+fn intOfReal(a: std.mem.Allocator, r: f64) Error!Int.Literal {
+    if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return filled(a, 64, true, .x);
+    const out = try filled(a, 64, true, .zero);
+    out.values()[0] = @bitCast(@as(i64, @intFromFloat(@round(r))));
+    return out;
+}
+
+/// `e`'s value as a real, converting an integral one (§4.8.2).
+pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
+    const ex = &self.file.exprs;
+    if (!compile.typeOf(self, e).real) return realOfInt(try eval(self, a, e, 0));
+    return switch (ex.tag(e)) {
+        .real_literal => ex.realValue(e),
+        .ident, .hier_ident, .index => @bitCast((try leaf(self, a, e)).values()[0]),
+        .unary => switch (ex.unOp(e)) {
+            .minus => -(try evalReal(self, a, ex.lhs(e))),
+            else => try evalReal(self, a, ex.lhs(e)), // else: `+`, the only other real-valued unary
+        },
+        .binary => blk: {
+            const l = try evalReal(self, a, ex.lhs(e));
+            const r = try evalReal(self, a, ex.rhs(e));
+            break :blk switch (ex.binOp(e)) {
+                .add => l + r,
+                .sub => l - r,
+                .mul => l * r,
+                .div => l / r,
+                .pow => std.math.pow(f64, l, r),
+                else => unreachable, // else: infer admitted only these real-valued operators
+            };
+        },
+        .ternary => switch (try truthOf(self, a, ex.lhs(e))) {
+            .one => try evalReal(self, a, ex.rhs(e)),
+            .zero => try evalReal(self, a, ex.ternaryElse(e)),
+            // §5.1.13 combines an ambiguous condition bitwise, which a real
+            // has no bits for; equal arms are still that value.
+            .x, .z => blk: {
+                const y = try evalReal(self, a, ex.rhs(e));
+                const n = try evalReal(self, a, ex.ternaryElse(e));
+                break :blk if (y == n) y else 0;
+            },
+        },
+        .sys_call => blk: {
+            const f = self.sys_calls[@intFromEnum(e)].?;
+            const args = ex.args(e);
+            break :blk switch (f) {
+                .realtime => self.scale.?.realAt(self.scheduler.now),
+                .itor => realOfInt(try eval(self, a, args[0], 0)),
+                .bitstoreal => @bitCast((try eval(self, a, args[0], 64)).values()[0]),
+                .ln => @log(try evalReal(self, a, args[0])),
+                .log10 => @log10(try evalReal(self, a, args[0])),
+                .exp => @exp(try evalReal(self, a, args[0])),
+                .sqrt => @sqrt(try evalReal(self, a, args[0])),
+                .floor => @floor(try evalReal(self, a, args[0])),
+                .ceil => @ceil(try evalReal(self, a, args[0])),
+                .sin => @sin(try evalReal(self, a, args[0])),
+                .cos => @cos(try evalReal(self, a, args[0])),
+                .tan => @tan(try evalReal(self, a, args[0])),
+                .asin => std.math.asin(try evalReal(self, a, args[0])),
+                .acos => std.math.acos(try evalReal(self, a, args[0])),
+                .atan => std.math.atan(try evalReal(self, a, args[0])),
+                .sinh => std.math.sinh(try evalReal(self, a, args[0])),
+                .cosh => std.math.cosh(try evalReal(self, a, args[0])),
+                .tanh => std.math.tanh(try evalReal(self, a, args[0])),
+                .asinh => std.math.asinh(try evalReal(self, a, args[0])),
+                .acosh => std.math.acosh(try evalReal(self, a, args[0])),
+                .atanh => std.math.atanh(try evalReal(self, a, args[0])),
+                .pow => std.math.pow(f64, try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
+                .atan2 => std.math.atan2(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
+                .hypot => std.math.hypot(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
+                else => unreachable, // else: the integral system functions are not real-typed
+            };
+        },
+        else => unreachable, // else: infer types no other form real
+    };
+}
+
+/// A condition's truth (§9.4): a real is true when it is not zero.
+pub fn truthOf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Bit {
+    if (compile.typeOf(self, e).real) return if ((try evalReal(self, a, e)) != 0) .one else .zero;
+    return (try eval(self, a, e, 0)).truth();
+}
+
+/// The type an assignment to `e` converts its value to: a select's own width,
+/// else the variable's type, real included.
+pub fn targetType(self: *Run, e: Ast.ExprId) Error!Type {
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .index and try self.indexedArray(e) == null) return .{ .width = compile.typeOf(self, e).width, .signed = false };
+    const at = try self.baseSlot(e);
+    return self.slotType(at);
+}
+
+/// `e` converted for an assignment to `target` (§5.5.3; §4.8.2 between real
+/// and integral).
+pub fn evalFor(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, target: Type) Error!Int.Literal {
+    if (target.real) return realLiteral(a, try evalReal(self, a, e));
+    const rhs = try eval(self, a, e, target.width);
+    return normalize(a, rhs, .{ .width = target.width, .signed = rhs.signed });
+}
+
+/// A slot's value converted for an assignment to `target`.
+fn convertSlot(self: *Run, a: std.mem.Allocator, slot: u32, target: Type) Error!Int.Literal {
+    const v = self.values[slot];
+    const from_real = self.reals.contains(slot);
+    if (target.real) return if (from_real) v else realLiteral(a, realOfInt(v));
+    const i = if (from_real) try intOfReal(a, @bitCast(v.values()[0])) else v;
+    return normalize(a, i, .{ .width = target.width, .signed = i.signed });
 }
 
 fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal {
@@ -307,6 +430,10 @@ fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal
 fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
     const ex = &self.file.exprs;
     if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
+    // §4.8: a real context is a double; a real operand in an integral
+    // context is its §4.8.2 rounded integer.
+    if (ty.real) return realLiteral(a, try evalReal(self, a, e));
+    if (compile.typeOf(self, e).real) return normalize(a, try intOfReal(a, try evalReal(self, a, e)), ty);
     switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .ident, .hier_ident, .index => return normalize(a, try leaf(self, a, e), ty),
         .unary => {
@@ -321,9 +448,14 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                         else => unreachable,
                     };
                 },
+                .logical_not => return scalarContext(a, switch (try truthOf(self, a, ex.lhs(e))) {
+                    .one => .zero,
+                    .zero => .one,
+                    .x, .z => .x,
+                }, ty),
                 else => {
                     const value = try eval(self, a, ex.lhs(e), 0);
-                    const bit = if (op == .logical_not) value.logicalNot() else value.reduce(switch (op) {
+                    const bit = value.reduce(switch (op) {
                         .reduce_and => .and_bits,
                         .reduce_nand => .nand_bits,
                         .reduce_or => .or_bits,
@@ -341,6 +473,20 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
             switch (op) {
                 .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge => {
                     const operand_type = compile.common(compile.typeOf(self, ex.lhs(e)), compile.typeOf(self, ex.rhs(e)));
+                    if (operand_type.real) {
+                        const l = try evalReal(self, a, ex.lhs(e));
+                        const r = try evalReal(self, a, ex.rhs(e));
+                        const holds = switch (op) {
+                            .eq => l == r,
+                            .neq => l != r,
+                            .lt => l < r,
+                            .le => l <= r,
+                            .gt => l > r,
+                            .ge => l >= r,
+                            else => unreachable, // else: infer refuses === on a real
+                        };
+                        return scalarContext(a, if (holds) .one else .zero, ty);
+                    }
                     const lhs = try evalContext(self, a, ex.lhs(e), operand_type);
                     const rhs = try evalContext(self, a, ex.rhs(e), operand_type);
                     const bit = switch (op) {
@@ -360,12 +506,12 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                     return scalarContext(a, bit, ty);
                 },
                 .logical_and, .logical_or => {
-                    const lhs = try eval(self, a, ex.lhs(e), 0);
-                    const truth = lhs.truth();
+                    const truth = try truthOf(self, a, ex.lhs(e));
                     if ((op == .logical_and and truth == .zero) or (op == .logical_or and truth == .one))
                         return scalarContext(a, truth, ty);
-                    const rhs = try eval(self, a, ex.rhs(e), 0);
-                    return scalarContext(a, lhs.logical(if (op == .logical_and) .and_bits else .or_bits, rhs), ty);
+                    const rhs = try truthOf(self, a, ex.rhs(e));
+                    const lhs_bit = try scalar(a, truth);
+                    return scalarContext(a, lhs_bit.logical(if (op == .logical_and) .and_bits else .or_bits, try scalar(a, rhs)), ty);
                 },
                 .shl, .shr, .ashl, .ashr, .pow => {
                     const lhs = try evalContext(self, a, ex.lhs(e), ty);
@@ -400,6 +546,10 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
             };
         },
         .ternary => {
+            if (compile.typeOf(self, ex.lhs(e)).real) return switch (try truthOf(self, a, ex.lhs(e))) {
+                .one => evalContext(self, a, ex.rhs(e), ty),
+                else => evalContext(self, a, ex.ternaryElse(e), ty),
+            };
             const condition = try eval(self, a, ex.lhs(e), 0);
             return switch (condition.truth()) {
                 .one => evalContext(self, a, ex.rhs(e), ty),
@@ -414,6 +564,21 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                 value.signed = cast == .make_signed;
                 return normalize(a, value, ty);
             },
+            // §17.8: `$rtoi` truncates toward zero; `$realtobits` is the bits.
+            .rtoi => {
+                const r = try evalReal(self, a, ex.args(e)[0]);
+                const v = try filled(a, 32, true, .x);
+                if (std.math.isFinite(r) and @abs(r) < 0x1p31) {
+                    v.values()[0] = @as(u32, @bitCast(@as(i32, @intFromFloat(@trunc(r)))));
+                    v.unknowns()[0] = 0;
+                }
+                return normalize(a, v, ty);
+            },
+            .realtobits => {
+                const v = try filled(a, 64, false, .zero);
+                v.values()[0] = @bitCast(try evalReal(self, a, ex.args(e)[0]));
+                return normalize(a, v, ty);
+            },
             .time, .stime, .clog2, .test_plusargs, .value_plusargs => |f| {
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
@@ -426,7 +591,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                         break :blk integerCeilingLog2(n);
                     },
                     .test_plusargs, .value_plusargs => 0,
-                    .make_signed, .make_unsigned => unreachable, // the arm above
+                    else => unreachable, // else: the arms around this one
                 };
                 const planes = try a.alloc(u64, 2);
                 planes[0] = if (natural.width >= 64) raw else raw & ((@as(u64, 1) << @intCast(natural.width)) - 1);
@@ -434,6 +599,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                 const value: Int.Literal = .{ .width = natural.width, .signed = natural.signed, .sized = true, .planes = planes };
                 return normalize(a, value, ty);
             },
+            else => unreachable, // else: the real-valued functions left through the real path above
         },
         .concat => {
             var parts: std.ArrayList(Int.Literal) = .empty;
@@ -474,7 +640,12 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
 pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     const dest = self.values[target];
     const before = dest.bit(0);
-    const changed = !std.mem.eql(u64, dest.planes, planes);
+    // A real changes when its VALUE does: -0.0 and +0.0 compare equal
+    // (VAMS §3.7 via IEEE 754 `==`, m04_03), and a NaN never equals itself.
+    const changed = if (self.reals.contains(target))
+        @as(f64, @bitCast(dest.planes[0])) != @as(f64, @bitCast(planes[0]))
+    else
+        !std.mem.eql(u64, dest.planes, planes);
     // Not copied when unchanged — which also covers `planes` BEING
     // `dest.planes` (`a = a`), a copy @memcpy forbids.
     if (changed) @memcpy(dest.planes, planes);
@@ -542,6 +713,17 @@ fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
 /// `@(posedge w)` resume on a net.
 pub fn resolve(self: *Run, net: u32) Error!void {
     const n = self.nets[net];
+    // VAMS §3.7: a wreal has at most one driver and is that driver's value
+    // — no four-state resolution, no strength — and 0.0 with none.
+    if (n.kind == .wreal) {
+        n.resolved.values()[0] = 0;
+        n.resolved.unknowns()[0] = 0;
+        for (n.drivers) |d| {
+            const cur = self.drivers[d].current;
+            if (!cur.hasUnknown()) n.resolved.values()[0] = cur.values()[0];
+        }
+        return store(self, n.slot, n.resolved.planes);
+    }
     const current = self.values[n.slot];
     // ponytail: one bit at a time. The tables are 4x4 over two planes, so a
     // plane-parallel fold is possible; do it when a wide bus resolves often
@@ -693,9 +875,8 @@ fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!I
 
 /// The run-time counterpart of `checkDelay`, in the module's precision.
 fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Error!u64 {
-    const ex = &self.file.exprs;
-    if (ex.tag(e) == .real_literal) {
-        return self.scale.?.realDelay(ex.realValue(e)) catch |err|
+    if (compile.typeOf(self, e).real) {
+        return self.scale.?.realDelay(try evalReal(self, scratch, e)) catch |err|
             return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
     }
     const value = try eval(self, scratch, e, 0);
@@ -842,9 +1023,7 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     for (decl.ports, args, inputs, f.ports) |p, arg, *in, slot| {
         in.* = null;
         if (p.direction == .output) continue;
-        const w = self.values[slot].width;
-        const rhs = try eval(self, a, arg, w);
-        in.* = try normalize(a, rhs, .{ .width = w, .signed = rhs.signed });
+        in.* = try evalFor(self, a, arg, self.slotType(slot));
     }
     const saved_len = self.saved_planes.items.len;
     if (decl.automatic) for (f.first..f.first + f.count) |s| {
@@ -892,9 +1071,7 @@ fn copyLiteral(a: std.mem.Allocator, v: Int.Literal) Error!Int.Literal {
 /// under the assignment rules (§5.5.3) and in the caller's scope.
 fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Error!void {
     const p = (try place(self, a, target)) orelse return;
-    const w = try targetWidth(self, target);
-    const v = self.values[slot];
-    try write(self, a, p, try normalize(a, v, .{ .width = w, .signed = v.signed }));
+    try write(self, a, p, try convertSlot(self, a, slot, try targetType(self, target)));
 }
 
 // ---- the interpreter loop (A.6.5, §6.1, §8.5.3.3) ---------------------------
@@ -916,9 +1093,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
         switch (self.code.items[pc]) {
             .stop => return,
             .init_var => |s| {
-                const dest = self.values[s.slot];
-                const rhs = try eval(self, scratch, s.value, dest.width);
-                try store(self, s.slot, (try normalize(scratch, rhs, .{ .width = dest.width, .signed = rhs.signed })).planes);
+                try store(self, s.slot, (try evalFor(self, scratch, s.value, self.slotType(s.slot))).planes);
                 pc += 1;
                 continue;
             },
@@ -926,9 +1101,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
                 if (try place(self, scratch, s.target)) |target| {
-                    const width = try targetWidth(self, s.target);
-                    const rhs = try eval(self, scratch, s.value, width);
-                    const value = try normalize(scratch, rhs, .{ .width = width, .signed = rhs.signed });
+                    const value = try evalFor(self, scratch, s.value, try targetType(self, s.target));
                     if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target.slot, .value = value, .sel = target.sel } }, null, true) else try write(self, scratch, target, value);
                 }
                 pc += 1;
@@ -1012,7 +1185,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // all; one that is not comes back to THIS pc, not the next, so
             // the level is re-tested rather than the edge trusted.
             .wait_level => |s| {
-                if ((try eval(self, scratch, s.cond, 0)).truth() == .one) {
+                if (try truthOf(self, scratch, s.cond) == .one) {
                     pc += 1;
                     continue;
                 }
@@ -1029,12 +1202,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // may be an array element, so the width comes from the
                 // lvalue's base slot rather than from `address` — which
                 // §8.5.3.3 says is not resolved until the process resumes.
-                const width = try targetWidth(self, a.target);
-                const rhs = try eval(self, scratch, a.value, width);
                 // The cell's own planes, not scratch: the value has to
                 // outlive this dispatch, which is the whole point of parking
                 // it. The width is the site's, so the planes are sized once.
-                const parked = try normalize(scratch, rhs, .{ .width = width, .signed = rhs.signed });
+                const parked = try evalFor(self, scratch, a.value, try targetType(self, a.target));
                 const cell = &self.holds.items[s.cell];
                 if (cell.planes.len != parked.planes.len) cell.planes = try self.arena.alloc(u64, parked.planes.len);
                 @memcpy(cell.planes, parked.planes);
@@ -1100,8 +1271,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 else if (d.pull) |b|
                     try filled(scratch, d.current.width, false, b)
                 else blk: {
-                    const rhs = try eval(self, scratch, d.value, d.current.width);
-                    break :blk try normalize(scratch, rhs, .{ .width = d.current.width, .signed = rhs.signed });
+                    break :blk try evalFor(self, scratch, d.value, self.slotType(self.nets[d.net].slot));
                 };
                 // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,
                 // not what the net shows: the other drivers are unaffected
@@ -1172,8 +1342,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 continue;
             },
             .branch => |s| {
-                const value = try eval(self, scratch, s.condition, 0);
-                pc = if (value.truth() == .one) pc + 1 else s.otherwise;
+                pc = if (try truthOf(self, scratch, s.condition) == .one) pc + 1 else s.otherwise;
                 continue;
             },
             .repeat_start => |s| {
@@ -1238,6 +1407,25 @@ test "continuous vector delay audit_assignment_pending_same_value" {
         \\original_deadline_passed=1
         \\
     );
+}
+
+// §4.8.2 rounds a real into an integer (35.5 is 36, -1.5 is -2) and $rtoi
+// truncates; an integral operand makes a real one real; a real starts at 0.0;
+// a wreal follows its driver and a -0.0 is no change from 0.0.
+test "§4.8 real variables, conversions, and a VAMS §3.7 wreal" {
+    try expectRun(
+        \\module m;
+        \\real r, s; integer i, j, k; wreal w; integer hits;
+        \\assign w = s;
+        \\always @(w) hits = hits + 1;
+        \\initial begin
+        \\  hits = 0; $write("%g ", r);
+        \\  r = 35.5; i = r; r = -1.5; j = r; k = $rtoi(-1.5);
+        \\  r = 7 / 2 + 0.25; s = 1.0; #1 s = -0.0; #1 s = 0.0; #1 s = -0.0;
+        \\  #1 $display("%0d %0d %0d %g %b %0d %.3f", i, j, k, r, r > 3, hits, $sqrt(2.0));
+        \\end
+        \\endmodule
+    , "0 36 -2 -1 3.25 1 2 1.414\n");
 }
 
 test "§4.9 a multidimensional array is addressed row-major, one index per dimension" {

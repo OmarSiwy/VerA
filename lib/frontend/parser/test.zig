@@ -456,8 +456,8 @@ test "§3.7 wreal: a net type in a `.v`, not a word in a `.va`" {
     try std.testing.expectEqual(diag.Code.E0208, va.code(0)); // `input wreal a;`
 
     // Under `--run` the same text is A.2.1.2 `[ net_type | wreal ]` and
-    // A.2.1.3's two `wreal` arms. Both reach `NetKind.wreal`, and the
-    // declaration is then E1100 because the engine resolves four-state bits.
+    // A.2.1.3's two `wreal` arms. Both reach `NetKind.wreal`, cleanly: the
+    // digital engine runs a real-valued net.
     var list = try lexer.Lexer.tokenize(arena, src);
     const bag = try newBag(arena, src);
     var p = Parser.init(arena, src, list.items(.tag), list.items(.start), bag);
@@ -466,8 +466,7 @@ test "§3.7 wreal: a net type in a `.v`, not a word in a `.va`" {
         error.ParseError => p.file,
         else => return e,
     };
-    const res: TestResult = .{ .file = file, .bag = bag };
-    try std.testing.expectEqual(diag.Code.E1100, res.code(0));
+    try std.testing.expect(!bag.failed());
 
     const m = file.modules[0];
     try std.testing.expectEqual(Ast.NetKind.wreal, m.ports[0].kind); // `input wreal a;`

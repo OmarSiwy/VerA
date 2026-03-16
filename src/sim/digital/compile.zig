@@ -23,7 +23,10 @@ const tasks = display.tasks;
 
 // ---- the bytecode and its tables (A.6.5, §9.14 Table 9-11, §17.7) -----------
 
-pub const Type = struct { width: u32, signed: bool };
+/// An expression's type (§5.5.1): a width and a signedness, or IEEE 1364-2005
+/// §4.8's `real` — a double, held in a slot as its 64 bits.
+pub const Type = struct { width: u32, signed: bool, real: bool = false };
+pub const real_type: Type = .{ .width = 64, .signed = true, .real = true };
 
 // All fields in a row are consumed by one dispatch; expressions stay in the AST.
 // Every statement kind is its own instruction, decided here, so `execute` is
@@ -110,6 +113,36 @@ pub const SysFn = enum {
     /// zero, and `$value$plusargs` leaves its variable alone.
     test_plusargs,
     value_plusargs,
+    /// §17.7.3, the clock as a real in the module's unit.
+    realtime,
+    /// §17.8's conversions: `$rtoi` truncates, `$itor` converts, and
+    /// `$realtobits`/`$bitstoreal` move the 64 IEEE-754 bits unchanged.
+    rtoi,
+    itor,
+    realtobits,
+    bitstoreal,
+    /// §17.11.2 Table 17-17's real math functions.
+    ln,
+    log10,
+    exp,
+    sqrt,
+    floor,
+    ceil,
+    sin,
+    cos,
+    tan,
+    asin,
+    acos,
+    atan,
+    sinh,
+    cosh,
+    tanh,
+    asinh,
+    acosh,
+    atanh,
+    pow,
+    atan2,
+    hypot,
 
     /// Is a call a constant expression when its arguments are? A clock query
     /// never is, however constant its (absent) arguments — which a
@@ -117,8 +150,18 @@ pub const SysFn = enum {
     /// question about the invocation.
     fn constant(self: SysFn) bool {
         return switch (self) {
-            .time, .stime, .test_plusargs, .value_plusargs => false,
-            .clog2, .make_signed, .make_unsigned => true,
+            .time, .stime, .realtime, .test_plusargs, .value_plusargs => false,
+            else => true, // else: a pure function of its arguments
+        };
+    }
+
+    /// How many real arguments a Table 17-17 function takes, or null for a
+    /// function that is not one of them.
+    pub fn mathArity(self: SysFn) ?u32 {
+        return switch (self) {
+            .pow, .atan2, .hypot => 2,
+            .ln, .log10, .exp, .sqrt, .floor, .ceil, .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
+            else => null, // else: not a math function
         };
     }
 };
@@ -131,6 +174,32 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$unsigned", .make_unsigned },
     .{ "$test$plusargs", .test_plusargs },
     .{ "$value$plusargs", .value_plusargs },
+    .{ "$realtime", .realtime },
+    .{ "$rtoi", .rtoi },
+    .{ "$itor", .itor },
+    .{ "$realtobits", .realtobits },
+    .{ "$bitstoreal", .bitstoreal },
+    .{ "$ln", .ln },
+    .{ "$log10", .log10 },
+    .{ "$exp", .exp },
+    .{ "$sqrt", .sqrt },
+    .{ "$floor", .floor },
+    .{ "$ceil", .ceil },
+    .{ "$sin", .sin },
+    .{ "$cos", .cos },
+    .{ "$tan", .tan },
+    .{ "$asin", .asin },
+    .{ "$acos", .acos },
+    .{ "$atan", .atan },
+    .{ "$sinh", .sinh },
+    .{ "$cosh", .cosh },
+    .{ "$tanh", .tanh },
+    .{ "$asinh", .asinh },
+    .{ "$acosh", .acosh },
+    .{ "$atanh", .atanh },
+    .{ "$pow", .pow },
+    .{ "$atan2", .atan2 },
+    .{ "$hypot", .hypot },
 });
 
 // ---- expression typing (§5.5.1 Table 5-22, §5.1.14) -------------------------
@@ -143,6 +212,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             // §5.10: events "do not hold any data", so a named event has no
             // value an expression could read.
             if (self.events.contains(at)) return self.exprFail(e, "§5.10: a named event holds no data; it can only be triggered and waited on");
+            if (self.reals.contains(at)) break :blk real_type;
             const v = self.values[at];
             const own = if (ex.tag(e) == .ident) self.port_signed.get(.{ .scope = self.scope, .str = ex.strOf(e) }) else null;
             break :blk .{ .width = v.width, .signed = own orelse v.signed };
@@ -162,6 +232,7 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
         // IEEE 1364-2005 §3.6: a string operand is an unsigned number of
         // eight bits per character, and §5.2.3.3's "" is one NUL byte.
         .str_literal => .{ .width = stringWidth(self.file.str(ex.strOf(e))), .signed = false },
+        .real_literal => real_type,
         else => self.exprFail(e, "this expression requires digital context typing beyond the implemented leaf operands"),
     };
 }
@@ -170,7 +241,9 @@ pub fn stringWidth(text: []const u8) u32 {
     return @intCast(@max(1, text.len) * 8);
 }
 
+/// §5.5.1/§4.8.1: an operator with a real operand is real.
 pub fn common(a: Type, b: Type) Type {
+    if (a.real or b.real) return real_type;
     return .{ .width = @max(a.width, b.width), .signed = a.signed and b.signed };
 }
 
@@ -193,7 +266,7 @@ fn inferValue(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
 pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
-        .int_literal, .logic_literal, .str_literal => return true,
+        .int_literal, .logic_literal, .str_literal, .real_literal => return true,
         // §12.2: a parameter is a constant; every other name is not.
         .ident => {
             const at = self.lookup(self.scope, ex.strOf(e)) orelse return false;
@@ -257,7 +330,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     if (entry.width != 0 or self.replications.contains(e)) return entry.*;
     const ex = &self.file.exprs;
     const ty: Type = switch (ex.tag(e)) {
-        .int_literal, .logic_literal, .str_literal, .ident, .hier_ident => try leafType(self, e),
+        .int_literal, .logic_literal, .str_literal, .real_literal, .ident, .hier_ident => try leafType(self, e),
         // §3.9 an array element has the element's declared type; the index
         // is self-determined and never widens the result.
         .index => blk: {
@@ -270,7 +343,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 const lhs = ex.lhs(e);
                 if (ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident)
                     return self.exprFail(e, "a select is of a whole vector or an unpacked array element");
-                _ = try self.scalarSlot(lhs);
+                if (self.reals.contains(try self.scalarSlot(lhs))) return self.exprFail(e, "§4.8: a real has no bits to select");
                 const rg = ex.rhs(e);
                 if (ex.tag(rg) == .range) {
                     const tok = ex.mainTok(rg);
@@ -289,12 +362,18 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 const index = try inferValue(self, ex.rhs(x), depth + 1);
                 if (index.width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
             }
-            const v = self.values[try self.slot(x)];
+            const base = try self.slot(x);
+            if (self.reals.contains(base)) break :blk real_type;
+            const v = self.values[base];
             break :blk .{ .width = v.width, .signed = v.signed };
         },
         .unary => blk: {
             const operand = try inferValue(self, ex.lhs(e), depth + 1);
-            break :blk switch (ex.unOp(e)) {
+            const op = ex.unOp(e);
+            // §4.1.1 Table 4-2: a real takes the arithmetic, relational and
+            // logical operators, and none of the bitwise ones.
+            if (operand.real and op != .plus and op != .minus and op != .logical_not) return self.exprFail(e, "§4.1.1: this operator does not take a real operand");
+            break :blk switch (op) {
                 .plus, .minus, .bit_not => operand,
                 .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => .{ .width = 1, .signed = false },
             };
@@ -302,9 +381,15 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         .binary => blk: {
             const lhs = try inferValue(self, ex.lhs(e), depth + 1);
             const rhs = try inferValue(self, ex.rhs(e), depth + 1);
-            break :blk switch (ex.binOp(e)) {
+            const op = ex.binOp(e);
+            if (lhs.real or rhs.real) switch (op) {
+                .add, .sub, .mul, .div, .pow, .eq, .neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => {},
+                .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr, .case_eq, .case_neq => return self.exprFail(e, "§4.1.1: this operator does not take a real operand"),
+            };
+            break :blk switch (op) {
                 .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => common(lhs, rhs),
-                .shl, .shr, .ashl, .ashr, .pow => lhs,
+                .pow => if (rhs.real) real_type else lhs,
+                .shl, .shr, .ashl, .ashr => lhs,
                 .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => .{ .width = 1, .signed = false },
             };
         },
@@ -338,11 +423,27 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     .make_signed, .make_unsigned => {
                         if (args.len != 1 or args[0] == .none) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
                         const operand = try inferValue(self, args[0], depth + 1);
+                        if (operand.real) return self.exprFail(e, "$signed/$unsigned require exactly one integral argument");
                         break :blk .{ .width = operand.width, .signed = f == .make_signed };
                     },
                     // §17.10: `(string)` and `(format, variable)`, returning
                     // an integer. The variable is only ever written on a
                     // match, so it is resolved and never read.
+                    .realtime => {
+                        if (args.len != 0) return self.exprFail(e, "$realtime takes no arguments");
+                        break :blk real_type;
+                    },
+                    .rtoi, .itor, .realtobits, .bitstoreal => {
+                        if (args.len != 1 or args[0] == .none) return self.exprFail(e, "a §17.8 conversion takes exactly one argument");
+                        const operand = try inferValue(self, args[0], depth + 1);
+                        const wants_real = f == .rtoi or f == .realtobits;
+                        if (operand.real != wants_real) return self.exprFail(e, "$rtoi and $realtobits convert a real; $itor and $bitstoreal an integral value");
+                        break :blk switch (f) {
+                            .rtoi => .{ .width = 32, .signed = true },
+                            .realtobits => .{ .width = 64, .signed = false },
+                            else => real_type,
+                        };
+                    },
                     .test_plusargs, .value_plusargs => {
                         const want: usize = if (f == .test_plusargs) 1 else 2;
                         if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
@@ -353,6 +454,16 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         }
                         break :blk .{ .width = 32, .signed = true };
                     },
+                    // §17.11.2: every argument is read as a real and the
+                    // result is real.
+                    else => {
+                        if (args.len != f.mathArity().?) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
+                        for (args) |arg| {
+                            if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.11.2 math function");
+                            _ = try inferValue(self, arg, depth + 1);
+                        }
+                        break :blk real_type;
+                    }, // else: Table 17-17's math functions, mathArity's rows
             }
         },
         // §10.4 a function call: the function's result variable is its type,
@@ -371,6 +482,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             var width: u32 = 0;
             for (ex.args(e)) |arg| {
                 const operand = try infer(self, arg, depth + 1);
+                if (operand.real) return self.exprFail(arg, "§4.1.14: a real cannot be a concatenation operand");
                 if (unsizedConcatOperand(self, arg)) {
                     if (ex.tag(arg) == .int_literal or ex.tag(arg) == .logic_literal)
                         return self.exprFail(arg, "unsized constant numbers are not allowed as concatenation operands");
@@ -783,7 +895,7 @@ fn compileEnable(self: *Run, name: Ast.StrId, args: []const Ast.ExprId, tok: u32
 pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!void {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
-        .int_literal, .logic_literal, .str_literal => {},
+        .int_literal, .logic_literal, .str_literal, .real_literal => {},
         .ident, .hier_ident => try watch(self, try self.slot(e), out),
         .index => {
             // An array element — every element, since the one an index names
@@ -896,7 +1008,6 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
 /// PRECISION at run time (`Scale.realDelay`) rather than truncated to its
 /// unit, which is the only thing that makes a sub-unit delay mean anything.
 fn checkDelay(self: *Run, e: Ast.ExprId) Error!void {
-    if (self.file.exprs.tag(e) == .real_literal) return;
     try checkExpr(self, e);
     if (typeOf(self, e).width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");
 }
@@ -981,7 +1092,9 @@ test "unsupported source is rejected before any process side effect" {
     // strength `%v` is refused, and the refusal names the table.
     try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
     // §17.7: a real conversion needs a real, and `$realtime` is the only one.
-    try expectRejected("`timescale 1ns/1ns\nmodule m; reg a; initial $display(\"%g\",a); endmodule", "only one implemented");
+    // §4.1.1 Table 4-2: a real takes no bitwise, modulus or case operator.
+    try expectRejected("module m; real a; integer b; initial b = a % 2; endmodule", "does not take a real operand");
+    try expectRejected("module m; real a; reg [3:0] b; initial b = a[1]; endmodule", "a real has no bits");
     try expectRejected("module m; reg a; initial a=1; integer a; endmodule", "duplicate digital");
 }
 
@@ -1037,5 +1150,5 @@ test "concat unsized boundary and cast arity are explicit" {
     try expectRejected("module m; initial $display(\"%b\",{8'd1+1,1'b1}); endmodule", "unsized arithmetic");
     try expectRejected("module m; initial $display(\"%b\",$signed()); endmodule", "exactly one integral argument");
     try expectRejected("module m; initial $display(\"%b\",$unsigned(1,2)); endmodule", "exactly one integral argument");
-    try expectRejected("module m; initial $display(\"%b\",$signed(1.0)); endmodule", "expression form");
+    try expectRejected("module m; initial $display(\"%b\",$signed(1.0)); endmodule", "exactly one integral argument");
 }
