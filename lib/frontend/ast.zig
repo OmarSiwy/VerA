@@ -1400,6 +1400,10 @@ pub const SourceFile = struct {
     paramsets: []const ParamsetDecl = &.{}, // §6.4
     connectrules: []const ConnectRulesDecl = &.{}, // §7.7
     udps: []const UdpDecl = &.{}, // §8.5.3 / A.5.1
+    /// IEEE 1364-2005 §13.3.1.1 the cells every configuration's `design`
+    /// statement names, library prefix dropped: the design's top-level
+    /// modules when a configuration selects them.
+    config_cells: []const StrId = &.{},
 
     /// Annex E — how many LEADING entries of `modules` are shipped Table E.1
     /// SPICE primitives rather than the user's own declarations.
