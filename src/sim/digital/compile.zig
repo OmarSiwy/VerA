@@ -1125,6 +1125,10 @@ test "§12.7 a named block's local shadows the module's, and each instance has i
     , "m.u.b 6\n1\nm.w.b 6\n1\n");
 }
 
+test "§5.3 a min:typ:max expression reads its typical member everywhere" {
+    try expectRun("module m; initial $display(\"%0d\", (1:2:3) * 10 + (3:2:1)); endmodule", "22\n");
+}
+
 test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; initial $display(\"before\"); initial forever ; endmodule", "error");
     try expectRejected("module m; tran(a,b); initial $display(\"before\"); endmodule", "switch primitives");
