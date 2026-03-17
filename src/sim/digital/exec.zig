@@ -33,6 +33,7 @@ const setBit = @import("net.zig").setBit;
 const wired = @import("net.zig").wired;
 const undriven = @import("net.zig").undriven;
 const Show = display.Show;
+const Overrides = @import("root.zig").Overrides;
 
 // ---- scheduler rows and waiters (§6.1.3, §17.1.2, §17.1.3, §5.10.1) ---------
 
@@ -655,6 +656,12 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
 /// The one write path for both the active and NBA regions, so §5.10.1
 /// resumption cannot be bypassed by whichever region a source used.
 pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
+    // §9.3: while a procedural continuous assignment holds the slot, its own
+    // process is the only writer — an `assign` over a variable, a `force`
+    // over anything, including a net's resolution.
+    if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
+        if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
+    };
     const dest = self.values[target];
     const before = dest.bit(0);
     // A real changes when its VALUE does: -0.0 and +0.0 compare equal
@@ -971,6 +978,12 @@ fn claim(self: *Run, item: Pending) Error!u32 {
 /// arm separately jumps past a containing target block (IEEE1364 §10.3);
 /// this helper handles only suspended activity in that target range.
 fn disableRange(self: *Run, start: u32, end: u32) Error!void {
+    if (try stopRange(self, start, end)) _ = try enqueue(self, .{ .run_process = end }, null, false);
+}
+
+/// Drop every resumption point in [start, end): the waiters parked there and
+/// the queued `.run_process` rows. Whether anything was.
+fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
     var hit = false;
     var i = self.waiters.items.len;
     while (i != 0) {
@@ -990,7 +1003,7 @@ fn disableRange(self: *Run, start: u32, end: u32) Error!void {
         },
         .write, .strobe, .monitor_tick, .drive, .net_update, .decay => {},
     };
-    if (hit) _ = try enqueue(self, .{ .run_process = end }, null, false);
+    return hit;
 }
 
 pub fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!Handle {
@@ -1318,6 +1331,44 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             },
             // §17.5 an asynchronous PLA: its own process, which evaluates and
             // waits on its inputs and personality, forever.
+            .override_on => |o| {
+                const entry = try self.overrides.getOrPut(self.arena, o.slot);
+                if (!entry.found_existing) entry.value_ptr.* = .{};
+                const layer = if (o.force) &entry.value_ptr.force else &entry.value_ptr.assign;
+                if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
+                layer.* = .{ .start = o.start, .end = o.end };
+                _ = try enqueue(self, .{ .run_process = o.start }, null, false);
+                pc += 1;
+                continue;
+            },
+            .override_eval => |o| {
+                const layers = self.overrides.get(o.slot) orelse Overrides{};
+                // An assign under a force keeps tracking but does not write.
+                if (o.force or layers.force == null) {
+                    const value = try evalFor(self, scratch, o.value, self.slotType(o.slot));
+                    self.overriding = true;
+                    defer self.overriding = false;
+                    try store(self, o.slot, value.planes);
+                }
+                pc += 1;
+                continue;
+            },
+            .override_off => |o| {
+                if (self.overrides.getPtr(o.slot)) |layers| {
+                    const layer = if (o.force) &layers.force else &layers.assign;
+                    if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
+                    layer.* = null;
+                    const held = layers.assign;
+                    if (layers.force == null and layers.assign == null) _ = self.overrides.remove(o.slot);
+                    // §9.3.2: a released net is its drivers' again; a released
+                    // variable keeps its value, unless an assign holds it.
+                    if (o.force) {
+                        if (self.net_of.get(o.slot)) |net| try resolve(self, net) else if (held) |a| _ = try enqueue(self, .{ .run_process = a.start }, null, false);
+                    }
+                }
+                pc += 1;
+                continue;
+            },
             .fork => |f| {
                 if (f.arms.len == 0) {
                     pc = f.end;
@@ -1466,6 +1517,25 @@ test "§4.8 real variables, conversions, and a VAMS §3.7 wreal" {
         \\end
         \\endmodule
     , "0 36 -2 -1 3.25 1 2 1.414\n");
+}
+
+// §9.3: a force outranks an assign on the same variable, and releasing it
+// hands the variable back to the assign, which is still tracking.
+test "§9.3 force over assign, release back to the assign, deassign keeps" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\reg a, b, v;
+        \\initial begin
+        \\  a = 0; b = 1;
+        \\  assign v = a; #1 $write("%b", v);
+        \\  force v = b; #1 $write("%b", v);
+        \\  a = 1; b = 0; #1 $write("%b", v);
+        \\  release v; #1 $write("%b", v);
+        \\  deassign v; a = 0; v = 0; #1 $display("%b%b", v, a);
+        \\end
+        \\endmodule
+    , "010100\n");
 }
 
 test "§9.8.2 fork starts every arm at once and join waits for the last" {
