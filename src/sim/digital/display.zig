@@ -203,7 +203,7 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
 /// The data file sits beside the source that names it, which is what makes
 /// a fixture self-contained. The working directory is tried second, so a
 /// path written relative to where the simulator was launched still works.
-fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const u8 {
+pub fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const u8 {
     const io = self.io orelse return error.NoIo;
     const limit: usize = 1 << 22;
     const cwd = std.Io.Dir.cwd();
@@ -270,6 +270,8 @@ pub const Task = union(enum) {
     queue: system.QueueOp,
     /// §17.5 the sixteen PLA tasks.
     pla: system.Pla,
+    /// §17.2.7 `$fclose`.
+    fclose,
 };
 
 fn showAs(radix: Radix, newline: bool) Show {
@@ -305,6 +307,7 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$q_add", Task{ .queue = .add } },
     .{ "$q_remove", Task{ .queue = .remove } },
     .{ "$q_exam", Task{ .queue = .exam } },
+    .{ "$fclose", .fclose },
 }) ++ pla_rows);
 
 const pla_rows: []const TaskRow = blk: {

@@ -596,9 +596,19 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                 v.values()[0] = @bitCast(try evalReal(self, a, ex.args(e)[0]));
                 return normalize(a, v, ty);
             },
-            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full => |f| {
+            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => |f| {
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
+                    .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => @bitCast(try @import("system.zig").fileCall(self, a, switch (f) {
+                        .fopen => .fopen,
+                        .fgetc => .fgetc,
+                        .ungetc => .ungetc,
+                        .ftell => .ftell,
+                        .fseek => .fseek,
+                        .rewind => .rewind,
+                        .feof => .feof,
+                        else => .sscanf,
+                    }, ex.args(e), ex.mainTok(e))),
                     .q_full => @intCast(try @import("system.zig").queueFull(self, a, ex.args(e))),
                     .time, .stime => blk: {
                         const units = self.scale.?.unitsAt(self.scheduler.now);
@@ -1187,6 +1197,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .readmem => |radix| try display.readMemory(self, scratch, s.args, radix),
                     .queue => |op| try @import("system.zig").queueTask(self, scratch, op, s.args),
                     .pla => |p| try @import("system.zig").pla(self, scratch, p, s.args),
+                    .fclose => try @import("system.zig").fclose(self, scratch, s.args),
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest
                         // report is the reading that loses nothing.

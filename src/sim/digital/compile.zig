@@ -129,6 +129,16 @@ pub const SysFn = enum {
     value_plusargs,
     /// §17.6.5 `$q_full(q_id, status)`, which also writes its status.
     q_full,
+    /// §17.2 the file functions: open, the character reads, positioning,
+    /// end-of-file, and §17.2.4.3's `$sscanf`.
+    fopen,
+    fgetc,
+    ungetc,
+    ftell,
+    fseek,
+    rewind,
+    feof,
+    sscanf,
     /// §17.7.3, the clock as a real in the module's unit.
     realtime,
     /// §17.8's conversions: `$rtoi` truncates, `$itor` converts, and
@@ -166,7 +176,7 @@ pub const SysFn = enum {
     /// question about the invocation.
     fn constant(self: SysFn) bool {
         return switch (self) {
-            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full => false,
+            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
             else => true, // else: a pure function of its arguments
         };
     }
@@ -191,6 +201,14 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$test$plusargs", .test_plusargs },
     .{ "$value$plusargs", .value_plusargs },
     .{ "$q_full", .q_full },
+    .{ "$fopen", .fopen },
+    .{ "$fgetc", .fgetc },
+    .{ "$ungetc", .ungetc },
+    .{ "$ftell", .ftell },
+    .{ "$fseek", .fseek },
+    .{ "$rewind", .rewind },
+    .{ "$feof", .feof },
+    .{ "$sscanf", .sscanf },
     .{ "$realtime", .realtime },
     .{ "$rtoi", .rtoi },
     .{ "$itor", .itor },
@@ -451,6 +469,23 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         _ = try inferValue(self, args[0], depth + 1);
                         try checkTarget(self, args[1]);
                         break :blk .{ .width = 32, .signed = true };
+                    },
+                    // §17.2: every file function returns an integer; the
+                    // descriptor of `$fopen` is 32 bits with the MSB set.
+                    .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => {
+                        const lo: usize, const hi: usize = switch (f) {
+                            .fopen => .{ 1, 2 },
+                            .ungetc => .{ 2, 2 },
+                            .fseek => .{ 3, 3 },
+                            .sscanf => .{ 2, std.math.maxInt(usize) },
+                            else => .{ 1, 1 },
+                        };
+                        if (args.len < lo or args.len > hi) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
+                        for (args, 0..) |arg, i| {
+                            if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
+                            if (f == .sscanf and i >= 2) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
+                        }
+                        break :blk .{ .width = 32, .signed = f != .fopen };
                     },
                     .realtime => {
                         if (args.len != 0) return self.exprFail(e, "$realtime takes no arguments");
@@ -818,6 +853,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         _ = try append(self, .{ .pla_start = loop });
                         return;
                     }
+                },
+                .fclose => {
+                    if (s.args.len != 1 or s.args[0] == .none) return self.fail(tok, "$fclose takes one descriptor", .{});
+                    try checkExpr(self, s.args[0]);
                 },
                 // §17.4.1: the argument is an expression selecting how much
                 // is printed (0, 1 or 2), read when the task runs.
