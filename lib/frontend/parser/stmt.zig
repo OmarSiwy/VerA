@@ -67,6 +67,8 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
         const body = try parseStmt(self);
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = cond, .body = body, .kind = .level } }, tok);
     }
+    // A.6.3 `par_block`, IEEE 1364-2005 §9.8.2 — digital only.
+    if (self.digital and parse_module.reservedIs(self, self.pos, "fork")) return parseSeqBlock(self);
     switch (self.peek()) {
         .semicolon => {
             self.pos += 1;
@@ -149,8 +151,9 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
 /// diagnostic for the real error (an undeclared name) in lowering.
 pub fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
-    self.pos += 1; // 'begin'
-    var blk: Ast.SeqBlock = .{};
+    const parallel = self.peek() != .kw_begin; // `fork`
+    self.pos += 1; // 'begin' / 'fork'
+    var blk: Ast.SeqBlock = .{ .parallel = parallel };
     if (self.eat(.colon)) {
         const at = self.pos;
         blk.name = try self.expectIdent();
@@ -183,7 +186,7 @@ pub fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     }
 
     var body: std.ArrayList(Ast.StmtId) = .empty;
-    while (self.peek() != .kw_end and self.peek() != .eof) {
+    while (!(if (parallel) parse_module.reservedIs(self, self.pos, "join") else self.peek() == .kw_end) and self.peek() != .eof) {
         const before = self.pos;
         // A.6.3 `analog_seq_block ::= begin [ : id ... ] { analog_statement }`
         // — no null alternative, so a stray `;` here is E0219.
@@ -194,7 +197,10 @@ pub fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
         };
         try body.append(self.arena, s);
     }
-    _ = try self.expect(.kw_end);
+    if (parallel) {
+        if (!parse_module.reservedIs(self, self.pos, "join")) return self.failAt(self.pos, .E0207, "found {s}: no `join` closes the fork", .{self.found(self.pos)});
+        self.pos += 1;
+    } else _ = try self.expect(.kw_end);
 
     blk.params = params.items;
     blk.vars = vars.items;

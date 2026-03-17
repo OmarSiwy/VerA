@@ -1308,6 +1308,10 @@ pub const CaseArm = struct {
 /// concept, and lower.zig imports both namespaces.
 pub const SeqBlock = struct {
     name: StrId = .none,
+    /// A.6.3 `par_block ::= fork … join` (IEEE 1364-2005 §9.8.2): every
+    /// statement starts when the block does, and the block ends when the
+    /// last one does. Only a digital parse makes one.
+    parallel: bool = false,
     params: []const ParamDecl = &.{},
     vars: []const VarDecl = &.{},
     body: []const StmtId = &.{},

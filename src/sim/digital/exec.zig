@@ -1318,6 +1318,20 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             },
             // §17.5 an asynchronous PLA: its own process, which evaluates and
             // waits on its inputs and personality, forever.
+            .fork => |f| {
+                if (f.arms.len == 0) {
+                    pc = f.end;
+                    continue;
+                }
+                self.joins.items[f.join] = @intCast(f.arms.len);
+                for (f.arms) |arm| _ = try enqueue(self, .{ .run_process = arm }, null, false);
+                return;
+            },
+            .join_arm => |j| {
+                self.joins.items[j.join] -= 1;
+                if (self.joins.items[j.join] == 0) _ = try enqueue(self, .{ .run_process = j.end }, null, false);
+                return;
+            },
             .pla_start => |loop| {
                 _ = try enqueue(self, .{ .run_process = loop }, null, false);
                 pc += 1;
@@ -1452,6 +1466,19 @@ test "§4.8 real variables, conversions, and a VAMS §3.7 wreal" {
         \\end
         \\endmodule
     , "0 36 -2 -1 3.25 1 2 1.414\n");
+}
+
+test "§9.8.2 fork starts every arm at once and join waits for the last" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\initial begin
+        \\  fork #3 $write("a%0d ", $time); begin #1 $write("b%0d ", $time); #1 $write("c%0d ", $time); end join
+        \\  fork join
+        \\  $display("end%0d", $time);
+        \\end
+        \\endmodule
+    , "b1 c2 a3 end3\n");
 }
 
 test "§4.9 a multidimensional array is addressed row-major, one index per dimension" {
