@@ -23,6 +23,7 @@ const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
 /// §9.4.3 Table 9-23's C conversion, the one the analog devices run.
 const zCReal = @import("kernels").str_kernels.zCReal;
+const system = @import("system.zig");
 
 // ---- memory files (IEEE 1364 §17.2.9) ---------------------------------------
 
@@ -265,13 +266,19 @@ pub const Task = union(enum) {
     /// between `$readmemb` and `$readmemh`.
     readmem: Radix,
     finish,
+    /// §17.6 the four queue tasks.
+    queue: system.QueueOp,
+    /// §17.5 the sixteen PLA tasks.
+    pla: system.Pla,
 };
 
 fn showAs(radix: Radix, newline: bool) Show {
     return .{ .radix = radix, .newline = newline };
 }
 
-pub const tasks = std.StaticStringMap(Task).initComptime(.{
+const TaskRow = struct { []const u8, Task };
+
+pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.{
     .{ "$display", Task{ .show = showAs(.decimal, true) } },
     .{ "$displayb", Task{ .show = showAs(.binary, true) } },
     .{ "$displayo", Task{ .show = showAs(.octal, true) } },
@@ -294,7 +301,18 @@ pub const tasks = std.StaticStringMap(Task).initComptime(.{
     .{ "$readmemb", Task{ .readmem = .binary } },
     .{ "$readmemh", Task{ .readmem = .hex } },
     .{ "$finish", .finish },
-});
+    .{ "$q_initialize", Task{ .queue = .initialize } },
+    .{ "$q_add", Task{ .queue = .add } },
+    .{ "$q_remove", Task{ .queue = .remove } },
+    .{ "$q_exam", Task{ .queue = .exam } },
+}) ++ pla_rows);
+
+const pla_rows: []const TaskRow = blk: {
+    var rows: [system.pla_tasks.len]TaskRow = undefined;
+    for (system.pla_tasks, &rows) |t, *row| row.* = .{ t[0], Task{ .pla = t[1] } };
+    const out = rows;
+    break :blk &out;
+};
 
 /// §17.3 `$timeformat(units_number, precision, suffix, min_width)`, with the
 /// clause's own defaults: the units are the simulation's precision, nothing

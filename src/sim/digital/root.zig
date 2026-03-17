@@ -270,6 +270,8 @@ pub const Run = struct {
     /// holding a double's 64 bits, which typing, conversion and change
     /// detection read as a real.
     reals: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// §17.6 the stochastic queues, by `q_id`.
+    queues: std.AutoHashMapUnmanaged(i64, @import("system.zig").Queue) = .empty,
     /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
     part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
 
@@ -1283,6 +1285,10 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
 }
 
 // ---- tests ------------------------------------------------------------------
+
+test {
+    _ = @import("system.zig");
+}
 
 pub fn expectRun(source: []const u8, expected: []const u8) !void {
     var arena = std.heap.ArenaAllocator.init(std.testing.allocator);

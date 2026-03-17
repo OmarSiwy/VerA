@@ -195,6 +195,22 @@ fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
 /// merges into the value the slot holds NOW — which for a nonblocking update
 /// is when it lands, so two NBAs to different bits both survive — and bits
 /// outside the declared range are dropped.
+/// Assign an integral `value` to the lvalue `target` under the assignment
+/// rules — what a system task does with an output argument.
+pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal) Error!void {
+    const p = (try place(self, a, target)) orelse return;
+    const tt = try targetType(self, target);
+    const converted = if (tt.real) try realLiteral(a, realOfInt(value)) else try normalize(a, value, .{ .width = tt.width, .signed = value.signed });
+    try write(self, a, p, converted);
+}
+
+/// `assign` of an integer.
+pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) Error!void {
+    const lit = try filled(a, 64, true, .zero);
+    lit.values()[0] = @bitCast(v);
+    try assign(self, a, target, lit);
+}
+
 pub fn write(self: *Run, a: std.mem.Allocator, p: Place, value: Int.Literal) Error!void {
     const sel = p.sel orelse return store(self, p.slot, value.planes);
     const cur = self.values[p.slot];
@@ -579,9 +595,10 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                 v.values()[0] = @bitCast(try evalReal(self, a, ex.args(e)[0]));
                 return normalize(a, v, ty);
             },
-            .time, .stime, .clog2, .test_plusargs, .value_plusargs => |f| {
+            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full => |f| {
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
+                    .q_full => @intCast(try @import("system.zig").queueFull(self, a, ex.args(e))),
                     .time, .stime => blk: {
                         const units = self.scale.?.unitsAt(self.scheduler.now);
                         break :blk if (f == .stime) units & 0xffff_ffff else units;
@@ -1155,6 +1172,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         };
                     },
                     .readmem => |radix| try display.readMemory(self, scratch, s.args, radix),
+                    .queue => |op| try @import("system.zig").queueTask(self, scratch, op, s.args),
+                    .pla => |p| try @import("system.zig").pla(self, scratch, p, s.args),
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest
                         // report is the reading that loses nothing.
@@ -1296,6 +1315,13 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 }
                 for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });
                 return;
+            },
+            // §17.5 an asynchronous PLA: its own process, which evaluates and
+            // waits on its inputs and personality, forever.
+            .pla_start => |loop| {
+                _ = try enqueue(self, .{ .run_process = loop }, null, false);
+                pc += 1;
+                continue;
             },
             .call => |s| {
                 _ = try callSync(self, scratch, s.sub, s.args);
