@@ -868,6 +868,9 @@ pub const GateInst = struct {
     kind: GateKind,
     out: ExprId,
     ins: []const ExprId,
+    /// IEEE 1364-2005 §7.1.5 an array of instances, `name [ range ]`: one
+    /// gate per index, vector terminals split among them (§7.1.6).
+    range: ?Dim = null,
     strength0: Strength = .strong,
     strength1: Strength = .strong,
     delay: Delay3 = .{},

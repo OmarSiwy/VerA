@@ -764,18 +764,26 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     for (m.gates) |g| {
         const target = try r.scalarSlot(g.out);
         const net = r.net_of.get(target) orelse return r.fail(g.main_tok, "a gate's output terminal must be a net", .{});
-        // §7.8.5's tables are one bit wide. A vector terminal would be A.3.1's
-        // `net_lvalue`, whose per-bit expansion nothing here asks for.
-        if (e.nets.items[net].resolved.width != 1) return r.fail(g.main_tok, "only scalar gate terminals are implemented", .{});
-        try e.wires.append(arena, .{
-            .net = net,
-            .scope = scope,
-            .gate = .{ .kind = g.kind, .ins = g.ins },
-            .s0 = g.strength0,
-            .s1 = g.strength1,
-            .delay = g.delay,
-            .tok = g.main_tok,
-        });
+        const width = e.nets.items[net].resolved.width;
+        // IEEE 1364-2005 §7.1.5/§7.1.6: an instance array is one gate per
+        // index, and a terminal as wide as the array gives each gate one bit
+        // — the leftmost index the most significant — while a scalar one is
+        // shared by all of them.
+        const lanes: u32 = if (g.range) |rg| try r.declaredWidth(rg, g.main_tok) else 1;
+        // §7.8.5's tables are one bit wide, so a plain gate's output is too.
+        if (width != 1 and width != lanes) return r.fail(g.main_tok, "a gate's output terminal is one bit, or one per instance of an array", .{});
+        for (0..lanes) |j| {
+            const lane: ?u32 = if (g.range == null) null else @intCast(lanes - 1 - j);
+            try e.wires.append(arena, .{
+                .net = net,
+                .scope = scope,
+                .gate = .{ .kind = g.kind, .ins = g.ins, .lane = lane, .lanes = lanes, .out_bit = if (width == 1) null else lane },
+                .s0 = g.strength0,
+                .s1 = g.strength1,
+                .delay = g.delay,
+                .tok = g.main_tok,
+            });
+        }
     }
     // IEEE 1364-2005 §7.8 a pullup/pulldown "shall place a logic value 1 [0]
     // on the nets connected", at pull strength unless one is written: a
@@ -1255,7 +1263,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             // continuous assignment does on any operand change.
             for (g.ins) |in| {
                 try compile.checkExpr(&r, in);
-                if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar gate terminals are implemented");
+                const w = compile.typeOf(&r, in).width;
+                if (w != 1 and !(g.lane != null and w == g.lanes)) return r.exprFail(in, "a gate's input terminal is one bit, or one per instance of an array");
                 try compile.sensitivity(&r, in, &watched);
             }
         } else if (a.udp) |u| {

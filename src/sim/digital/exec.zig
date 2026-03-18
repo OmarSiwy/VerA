@@ -805,7 +805,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
 /// H/L when a gate's control is unknown.
 fn contribution(dr: @import("net.zig").Driver, at: u32) Signal {
     const b = dr.current.bit(at);
-    return if (dr.or_z) .orZ(b, dr.s0, dr.s1) else .of(b, dr.s0, dr.s1);
+    return if (dr.or_z and b != .z) .orZ(b, dr.s0, dr.s1) else .of(b, dr.s0, dr.s1);
 }
 
 /// §6.1.3's inertial rule, shared by a driver's delay and a net's: "if the
@@ -861,15 +861,18 @@ fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
 
 /// What a gate driver contributes: §7.8.5's one output bit, and whether it is
 /// §7.10.2's H/L.
-fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, or_z: *bool) Error!Int.Literal {
+fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or_z: *bool) Error!Int.Literal {
     // One scratch list per evaluation, which `execute` resets each
     // instruction — the point is to keep `gateBit` a pure function of the
     // input bits, where §7.8.5's tables can be read straight off.
     var bits: std.ArrayList(Int.Bit) = .empty;
-    for (g.ins) |in| try bits.append(scratch, (try eval(self, scratch, in, 1)).bit(0));
-    const out = try filled(scratch, 1, false, .z);
+    for (g.ins) |in| {
+        const v = try eval(self, scratch, in, 1);
+        try bits.append(scratch, v.bit(if (v.width > 1) g.lane.? else 0));
+    }
+    const out = try filled(scratch, width, false, .z);
     const o = gateBit(g.kind, bits.items);
-    setBit(out, 0, o.bit);
+    setBit(out, g.out_bit orelse 0, o.bit);
     or_z.* = o.or_z;
     return out;
 }
@@ -1308,7 +1311,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const value = if (d.bridge) |b|
                     try window(self, scratch, b, d.current.width)
                 else if (d.gate) |g|
-                    try gateValue(self, scratch, g, &or_z)
+                    try gateValue(self, scratch, g, d.current.width, &or_z)
                 else if (d.udp) |u|
                     try udpValue(self, scratch, u)
                 else if (d.pull) |b|
@@ -1335,7 +1338,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         const delay = if (d.gate == null and d.bridge == null and d.pull == null and d.udp == null)
                             d.delay.continuous(d.current, st.target)
                         else
-                            d.delay.to(st.target.bit(0));
+                            d.delay.to(st.target.bit(if (d.gate) |g| g.out_bit orelse 0 else 0));
                         st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }
                 } else {
