@@ -254,7 +254,7 @@ fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
             if (width < 64) planes[0] &= (@as(u64, 1) << @intCast(width)) - 1;
             break :blk .{ .width = width, .signed = n.signed, .sized = n.width != 0, .planes = planes };
         },
-        else => unreachable, // preflight checkExpr
+        else => unreachable, // else: evalContext sends only these leaves
     };
 }
 
@@ -462,7 +462,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                         .plus => value,
                         .minus => value.negate(a),
                         .bit_not => value.bitwiseNot(a),
-                        else => unreachable,
+                        else => unreachable, // else: the enclosing arm is these three
                     };
                 },
                 .logical_not => return scalarContext(a, switch (try truthOf(self, a, ex.lhs(e))) {
@@ -470,7 +470,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                     .zero => .one,
                     .x, .z => .x,
                 }, ty),
-                else => {
+                .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => {
                     const value = try eval(self, a, ex.lhs(e), 0);
                     const bit = value.reduce(switch (op) {
                         .reduce_and => .and_bits,
@@ -479,7 +479,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                         .reduce_nor => .nor_bits,
                         .reduce_xor => .xor_bits,
                         .reduce_xnor => .xnor_bits,
-                        else => unreachable,
+                        else => unreachable, // else: the enclosing arm is the six reductions
                     });
                     return scalarContext(a, bit, ty);
                 },
@@ -511,13 +511,13 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                             .eq => .equal,
                             .neq => .not_equal,
                             .case_eq => .case_equal,
-                            else => .case_not_equal,
+                            else => .case_not_equal, // else: `!==`, the fourth equality operator
                         }, rhs),
-                        else => lhs.relational(switch (op) {
+                        else => lhs.relational(switch (op) { // else: the four relational operators
                             .lt => .less,
                             .le => .less_equal,
                             .gt => .greater,
-                            else => .greater_equal,
+                            else => .greater_equal, // else: `>=`, the fourth relational operator
                         }, rhs),
                     };
                     return scalarContext(a, bit, ty);
@@ -538,10 +538,10 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                         .shl => .left,
                         .shr => .right,
                         .ashl => .arithmetic_left,
-                        else => .arithmetic_right,
+                        else => .arithmetic_right, // else: `>>>`, the fourth shift
                     }, rhs);
                 },
-                else => {},
+                .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => {},
             }
             const lhs = try evalContext(self, a, ex.lhs(e), ty);
             const rhs = try evalContext(self, a, ex.rhs(e), ty);
@@ -551,15 +551,15 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                     .sub => .subtract,
                     .mul => .multiply,
                     .div => .divide,
-                    else => .remainder,
+                    else => .remainder, // else: `%`, the fifth arithmetic operator
                 }, rhs),
                 .bit_and, .bit_or, .bit_xor, .bit_xnor => lhs.bitwise(a, switch (op) {
                     .bit_and => .and_bits,
                     .bit_or => .or_bits,
                     .bit_xor => .xor_bits,
-                    else => .xnor_bits,
+                    else => .xnor_bits, // else: `~^`, the fourth bitwise operator
                 }, rhs),
-                else => unreachable,
+                else => unreachable, // else: every other operator returned above
             };
         },
         .ternary => {
@@ -657,7 +657,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
             };
             return normalize(a, repeated, ty);
         },
-        else => unreachable, // infer rejects unsupported forms before execution
+        else => unreachable, // else: infer rejects every other form before execution
     }
 }
 
@@ -1010,7 +1010,7 @@ fn suspendOn(self: *Run, e: Ast.ExprId, resume_pc: u32) Error!void {
         },
         .event_posedge => .posedge,
         .event_negedge => .negedge,
-        else => .any,
+        else => .any, // else: a plain name, the one other term checkEvent admits
     };
     const watched = if (edge == .any) e else ex.lhs(e);
     try self.waiters.append(self.arena, .{ .slot = try self.slot(watched), .edge = edge, .pc = resume_pc });

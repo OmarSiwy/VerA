@@ -384,7 +384,8 @@ pub fn netPull(kind: Ast.NetKind) Signal {
         .supply1 => .of(.one, .highz, .supply),
         .tri0 => .of(.zero, .pull, .highz),
         .tri1 => .of(.one, .highz, .pull),
-        else => .{},
+        // No pull of its own; a wreal resolves as a real and never gets here.
+        .wire, .tri, .triand, .trior, .trireg, .wand, .wor, .uwire, .wreal => .{},
     };
 }
 
@@ -394,7 +395,7 @@ pub fn netPull(kind: Ast.NetKind) Signal {
 pub fn wiredLogic(kind: Ast.NetKind) bool {
     return switch (kind) {
         .wand, .triand, .wor, .trior => true,
-        else => false,
+        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => false,
     };
 }
 
@@ -421,8 +422,8 @@ pub fn wired(kind: Ast.NetKind, acc: Int.Bit, b: Int.Bit) Int.Bit {
     return switch (kind) {
         .wand, .triand => if (acc == .zero or b == .zero) .zero else if (acc == .one and b == .one) .one else .x,
         .wor, .trior => if (acc == .one or b == .one) .one else if (acc == .zero and b == .zero) .zero else .x,
-        // wire/tri/uwire/tri0/tri1/trireg/supply*: agreement, else conflict.
-        else => if (acc == b) acc else .x,
+        // Agreement, else conflict.
+        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => if (acc == b) acc else .x,
     };
 }
 
@@ -434,7 +435,8 @@ pub fn undriven(kind: Ast.NetKind) Int.Bit {
         .supply0, .tri0 => .zero,
         .supply1, .tri1 => .one,
         .trireg => .x,
-        else => .z,
+        // A wreal reads 0.0 undriven, which `mintNet` gives it directly.
+        .wire, .tri, .triand, .trior, .wand, .wor, .uwire, .wreal => .z,
     };
 }
 
