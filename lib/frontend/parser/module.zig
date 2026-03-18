@@ -97,6 +97,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .gates = b.gates.items,
         .pulls = b.pulls.items,
         .tasks = b.tasks.items,
+        .switches = b.switches.items,
         // §2.9 — every attr_spec seen since the last module. Attributes
         // BEFORE the `module` keyword (Syntax 2-7 puts a slot there) were
         // collected by `parseSource` and belong to this module too, which is
@@ -373,6 +374,7 @@ pub const Body = struct {
     gates: std.ArrayList(Ast.GateInst) = .empty, // A.3.1
     pulls: std.ArrayList(Ast.PullInst) = .empty, // A.3.1, §7.8
     tasks: std.ArrayList(Ast.Subroutine) = .empty, // IEEE 1364-2005 §10
+    switches: std.ArrayList(Ast.SwitchInst) = .empty, // A.3.1, §7.6
     /// §6.6.1/§6.6.2 every named generate block of the module, with the
     /// generate construct it belongs to. NOT part of `ModuleDecl`: the name
     /// is a declaration of a scope nothing downstream can reach yet
@@ -785,7 +787,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         // pass_switch_instance { , pass_switch_instance } ;` — the two
         // A.3.4 switch spellings with tags of their own. The other eight
         // reach `parseSwitch` through the `.kw_reserved` arm below.
-        .kw_tran, .kw_rtran => try parse_specify.parseSwitch(self),
+        .kw_tran, .kw_rtran => try parse_specify.parseSwitch(self, b),
         // A.3.1 `gate_instantiation` — the twelve A.3.4 gate types that
         // compute a logic value.
         .kw_and, .kw_nand, .kw_or, .kw_nor, .kw_xor, .kw_xnor, .kw_buf, .kw_not, .kw_bufif0, .kw_bufif1, .kw_notif0, .kw_notif1 => try parse_specify.parseGates(self, b),
@@ -887,7 +889,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // because `Ast.GateKind` has nothing to put them in. See
             // `parseSwitch` for what refuses them and why it is no longer
             // E0205.
-            if (parse_specify.switch_arms.has(w)) return parse_specify.parseSwitch(self);
+            if (parse_specify.switch_arms.has(w)) return parse_specify.parseSwitch(self, b);
             // A.2.1.3's two `wreal` arms — §3.7's real net, which the
             // annex gives arms of its own rather than a `net_type`.
             if (std.mem.eql(u8, w, "wreal")) return parseWrealDecl(self, b);

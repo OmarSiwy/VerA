@@ -39,6 +39,9 @@ const Net = @import("net.zig").Net;
 const Gate = @import("net.zig").Gate;
 const Udp = @import("net.zig").Udp;
 const Slice = @import("net.zig").Slice;
+const Mos = @import("net.zig").Mos;
+const Tran = @import("net.zig").Tran;
+const Signal = @import("net.zig").Signal;
 const Driver = @import("net.zig").Driver;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
@@ -171,6 +174,8 @@ pub const Run = struct {
     net_of: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     nets: []Net = &.{},
     drivers: []Driver = &.{},
+    /// §7.6 every pass switch.
+    trans: []Tran = &.{},
     /// Keyed by the base slot of an unpacked array (§3.9).
     arrays: std.AutoHashMapUnmanaged(u32, Array) = .empty,
     /// The slots that are §5.10.4 named events. They occupy a slot only so that
@@ -523,6 +528,7 @@ const Wire = struct {
     pull: ?Int.Bit = null,
     /// The driven net is bits [lo, lo+width) of `value` read `total` wide.
     slice: ?Slice = null,
+    mos: ?Mos = null,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
     delay: Ast.Delay3 = .{},
@@ -557,6 +563,8 @@ const Elab = struct {
     wires: std.ArrayList(Wire) = .empty,
     /// One row per elaborated instance: the definition and its name scope.
     insts: std.ArrayList(struct { module: *const Ast.ModuleDecl, scope: u32 }) = .empty,
+    /// §7.6 pass switches, with the instance scope their control is read in.
+    trans: std.ArrayList(struct { tran: Tran, scope: u32, tok: u32 }) = .empty,
 };
 
 /// §6.2.2: the root of the design is the description nothing instantiates.
@@ -785,6 +793,55 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             });
         }
     }
+    // IEEE 1364-2005 §7.6/§7.7 switches. A MOS switch drives its output net
+    // with what it passes, as a gate does; a CMOS switch is an n-type and a
+    // p-type sharing data and output. A pass switch joins its two nets into
+    // one resolution while it conducts.
+    // ponytail: scalar terminals, no delay on a pass switch, and a resistive
+    // pass switch does not reduce what it carries.
+    for (m.switches) |sw| {
+        const resistive = switch (sw.kind) {
+            .rcmos, .rnmos, .rpmos, .rtran, .rtranif0, .rtranif1 => true,
+            .cmos, .nmos, .pmos, .tran, .tranif0, .tranif1 => false,
+        };
+        var nets: [2]u32 = undefined;
+        const outs: usize = switch (sw.kind) {
+            .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => 2,
+            .cmos, .rcmos, .nmos, .pmos, .rnmos, .rpmos => 1,
+        };
+        for (sw.terms[0..outs], nets[0..outs]) |t, *n| {
+            n.* = r.net_of.get(try r.scalarSlot(t)) orelse return r.fail(sw.main_tok, "a switch's output and inout terminals are nets", .{});
+            if (e.nets.items[n.*].resolved.width != 1) return r.fail(sw.main_tok, "only scalar switch terminals are implemented", .{});
+        }
+        switch (sw.kind) {
+            .nmos, .pmos, .rnmos, .rpmos, .cmos, .rcmos => {
+                const cmos = sw.kind == .cmos or sw.kind == .rcmos;
+                const n_type = sw.kind == .nmos or sw.kind == .rnmos;
+                for (0..@as(usize, if (cmos) 2 else 1)) |half| try e.wires.append(arena, .{
+                    .net = nets[0],
+                    .scope = scope,
+                    .mos = .{ .data = sw.terms[1], .gate = sw.terms[2 + half], .n_type = if (cmos) half == 0 else n_type, .resistive = resistive },
+                    .delay = sw.delay,
+                    .tok = sw.main_tok,
+                });
+            },
+            .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => {
+                if (sw.delay.any()) return r.fail(sw.main_tok, "a pass switch delay is not implemented", .{});
+                const gated = sw.kind != .tran and sw.kind != .rtran;
+                try e.trans.append(arena, .{
+                    .tran = .{
+                        .a = nets[0],
+                        .b = nets[1],
+                        .ctrl = if (gated) sw.terms[2] else .none,
+                        .on = if (sw.kind == .tranif0 or sw.kind == .rtranif0) .zero else .one,
+                        .state = if (gated) .unknown else .on,
+                    },
+                    .scope = scope,
+                    .tok = sw.main_tok,
+                });
+            },
+        }
+    }
     // IEEE 1364-2005 §7.8 a pullup/pulldown "shall place a logic value 1 [0]
     // on the nets connected", at pull strength unless one is written: a
     // constant driver, the same row `unconnected_drive` contributes.
@@ -1004,7 +1061,9 @@ fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, name:
     const wreal = kind == .wreal;
     try e.values.append(r.arena, try filled(r.arena, if (wreal) 64 else width, signed or wreal, if (wreal) .zero else undriven(kind)));
     if (wreal) try r.reals.put(r.arena, slot, {});
-    try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, if (wreal) 64 else width, false, .z), .tok = tok });
+    const signal = try r.arena.alloc(Signal, width);
+    @memset(signal, .{});
+    try e.nets.append(r.arena, .{ .kind = kind, .slot = slot, .resolved = try filled(r.arena, if (wreal) 64 else width, false, .z), .signal = signal, .tok = tok });
     try r.net_of.put(r.arena, slot, at);
     return at;
 }
@@ -1267,6 +1326,12 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
                 if (w != 1 and !(g.lane != null and w == g.lanes)) return r.exprFail(in, "a gate's input terminal is one bit, or one per instance of an array");
                 try compile.sensitivity(&r, in, &watched);
             }
+        } else if (a.mos) |mo| {
+            for ([_]Ast.ExprId{ mo.data, mo.gate }) |in| {
+                try compile.checkExpr(&r, in);
+                if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar switch terminals are implemented");
+                try compile.sensitivity(&r, in, &watched);
+            }
         } else if (a.udp) |u| {
             for (u.ins) |in| {
                 try compile.checkExpr(&r, in);
@@ -1286,6 +1351,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             .udp = a.udp,
             .pull = a.pull,
             .slice = a.slice,
+            .mos = a.mos,
             .sensitivity = watched.items,
             // A sequential UDP's output is its state from the start (§8.5).
             .current = try filled(arena, r.nets[a.net].resolved.width, false, if (a.udp) |u| (if (u.sequential) u.state else .z) else .z),
@@ -1296,6 +1362,23 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         try grouped[a.net].append(arena, @intCast(i));
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .continuous = @intCast(i) }) }, null, false);
     }
+    // §7.6: each net knows the pass switches on it, and a controlled one is
+    // a process that re-resolves both sides whenever its control changes.
+    r.trans = try arena.alloc(Tran, e.trans.items.len);
+    const on_net = try arena.alloc(std.ArrayList(u32), e.nets.items.len);
+    @memset(on_net, .empty);
+    for (e.trans.items, r.trans, 0..) |t, *dst, i| {
+        dst.* = t.tran;
+        try on_net[t.tran.a].append(arena, @intCast(i));
+        try on_net[t.tran.b].append(arena, @intCast(i));
+        if (t.tran.ctrl == .none) continue;
+        r.scope = t.scope;
+        try compile.checkExpr(&r, t.tran.ctrl);
+        var watched: std.ArrayList(u32) = .empty;
+        try compile.sensitivity(&r, t.tran.ctrl, &watched);
+        _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .switch_ctrl = .{ .tran = @intCast(i), .slots = watched.items } }) }, null, false);
+    }
+    for (r.nets, on_net) |*n, t| n.trans = t.items;
     for (r.nets, grouped) |*n, g| {
         // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
         // resolution question there, it is an error.

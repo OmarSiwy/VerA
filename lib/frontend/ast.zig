@@ -889,6 +889,21 @@ pub const PullInst = struct {
     main_tok: u32 = 0,
 };
 
+/// A.3.4's switch types (IEEE 1364-2005 §7.6/§7.7): the MOS and CMOS switches
+/// pass their input one way, the pass switches conduct both ways; an `r`
+/// prefix is the resistive variant (§7.12's strength reduction).
+pub const SwitchKind = enum(u8) { cmos, rcmos, nmos, pmos, rnmos, rpmos, tran, rtran, tranif0, tranif1, rtranif0, rtranif1 };
+
+/// A.3.1 one switch instance: its terminals in source order — output, input,
+/// control(s) for a MOS/CMOS switch; the two inout terminals, then the
+/// enable, for a pass switch. Only a digital parse records one.
+pub const SwitchInst = struct {
+    kind: SwitchKind,
+    terms: []const ExprId,
+    delay: Delay3 = .{},
+    main_tok: u32 = 0,
+};
+
 /// One port connection of a module instance. LRM §6.2.2 (A.4.1
 /// ordered_port_connection / named_port_connection).
 ///
@@ -1004,6 +1019,8 @@ pub const ModuleDecl = struct {
     /// IEEE 1364-2005 §10 tasks and digital functions, filled by a digital
     /// parse only (see `Subroutine`).
     tasks: []const Subroutine = &.{},
+    /// A.3.1 switch instances (§7.6), filled by a digital parse only.
+    switches: []const SwitchInst = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value

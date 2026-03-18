@@ -346,6 +346,8 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     // Only a digital parse (`vera --run`) fills it, and that engine elaborates
     // its own hierarchy; an analog compile's list is always empty.
     .tasks = .top,
+    // The same for switches: an analog parse warns W0250 and records none.
+    .switches = .top,
     .attrs = .merged,
     // `pickTop` never picks a connect module and `walkInstances` refuses
     // inlining one (E0913), so this is always the top's `false`.
