@@ -280,7 +280,7 @@ fn spell(g: *Gen, args: []const Mir.Value) []const u8 {
 }
 
 fn uName(g: *const Gen, u: u32) []const u8 {
-    return if (u == none_u32) "0" else g.u_names[u];
+    return if (u == none_u32) "0" else g.names.u_names[u];
 }
 
 /// §4.4 `V(a,b)` lowers to `fsub` of two probes and `V(a)` to a bare probe
@@ -365,7 +365,7 @@ pub fn liveSets(g: *const Gen) Live {
     var lv: Live = .{};
     // A core re-entry is seeded from EVERY entry of `cur` (`emit`'s `xr` loop),
     // and n_u > 64 has no room in the mask — both answer "all of them".
-    if (usesCore(g) or g.n_u > 64) lv.reads = ~@as(u64, 0);
+    if (usesCore(g) or g.names.n_u > 64) lv.reads = ~@as(u64, 0);
     for (g.limits, 0..) |lc, i| switch (lc.alg) {
         .fetlimds => {
             const lad = ladderOf(g, i).?;
@@ -954,9 +954,9 @@ fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     // which is also ngspice's frame (vbe state hangs off the emitter side).
     const w_lo = writable(g, lc.lo);
     if (w_lo) {
-        try g.w("        x[@intFromEnum(U.{s})] -= vl - vn;\n", .{g.u_names[lc.lo]});
+        try g.w("        x[@intFromEnum(U.{s})] -= vl - vn;\n", .{g.names.u_names[lc.lo]});
     } else {
-        try g.w("        x[@intFromEnum(U.{s})] += vl - vn;\n", .{g.u_names[lc.hi]});
+        try g.w("        x[@intFromEnum(U.{s})] += vl - vn;\n", .{g.names.u_names[lc.hi]});
     }
     // ngspice reports `icheck` from `DEVpnjlim` alone, and sets it exactly on
     // the paths where it moved `vnew` — so "the value changed" IS the flag,
@@ -987,9 +987,9 @@ fn emitLadder(g: *Gen, lad: Ladder) Error!void {
     const gs = g.limits[lad.gs];
     const gd = g.limits[lad.gd];
     const ds = g.limits[lad.ds];
-    const ng = g.u_names[gs.hi]; // shared gate
-    const nd = g.u_names[gd.lo]; // drain-side channel node (the limvds hi)
-    const ns = g.u_names[gs.lo]; // source-side channel node (the limvds lo)
+    const ng = g.names.u_names[gs.hi]; // shared gate
+    const nd = g.names.u_names[gd.lo]; // drain-side channel node (the limvds hi)
+    const ns = g.names.u_names[gs.lo]; // source-side channel node (the limvds lo)
     try g.w("    {{ // \"fetlimds\" mode ladder (ngspice mos1load.c): fetlim V({s},{s}) | V({s},{s})\n", .{ ng, ns, ng, nd });
     try g.w("        // by the sign of OLD V({s},{s}), then limvds, then derive the other leg.\n", .{ nd, ns });
     try g.w("        const vdso = old[@intFromEnum(U.{s})] - old[@intFromEnum(U.{s})];\n", .{ nd, ns });
@@ -1005,8 +1005,8 @@ fn emitLadder(g: *Gen, lad: Ladder) Error!void {
 /// the other leg's probe is untouched), then limvds the channel V(nd,ns)
 /// against the old vds, writing the node the fetlim left alone.
 fn emitLeg(g: *Gen, leg: LimitCall, nd: []const u8, ns: []const u8, inv: bool) Error!void {
-    const ngate = g.u_names[leg.hi];
-    const nw = g.u_names[leg.lo];
+    const ngate = g.names.u_names[leg.hi];
+    const nw = g.names.u_names[leg.lo];
     try g.w("            const vn = x[@intFromEnum(U.{s})] - x[@intFromEnum(U.{s})];\n", .{ ngate, nw });
     try g.w("            const vo = old[@intFromEnum(U.{s})] - old[@intFromEnum(U.{s})];\n", .{ ngate, nw });
     if (leg.sign == .f_zero) {
@@ -1036,8 +1036,8 @@ fn writeSign(g: *Gen, name: []const u8, v: Mir.Value) Error!void {
 }
 
 fn writeProbe(g: *Gen, lc: LimitCall, arr: []const u8) Error!void {
-    try g.w("{s}[@intFromEnum(U.{s})]", .{ arr, g.u_names[lc.hi] });
-    if (lc.lo != none_u32) try g.w(" - {s}[@intFromEnum(U.{s})]", .{ arr, g.u_names[lc.lo] });
+    try g.w("{s}[@intFromEnum(U.{s})]", .{ arr, g.names.u_names[lc.hi] });
+    if (lc.lo != none_u32) try g.w(" - {s}[@intFromEnum(U.{s})]", .{ arr, g.names.u_names[lc.lo] });
 }
 
 fn writeArg(g: *Gen, v: Mir.Value) Error!void {
@@ -1104,17 +1104,17 @@ fn emitSeed(g: *Gen) Error!void {
         // NEGATIVE probe voltage when the sign argument is negative.
         const on_lo = writable(g, lc.lo);
         if (lc.sign != .f_zero) {
-            try g.w("    s[@intFromEnum(U.{s})] = if (", .{g.u_names[if (on_lo) lc.lo else lc.hi]});
+            try g.w("    s[@intFromEnum(U.{s})] = if (", .{g.names.u_names[if (on_lo) lc.lo else lc.hi]});
             try writeArg(g, lc.sign);
             try g.w(" < 0) {s}", .{if (on_lo) "" else "-"});
             try writeArg(g, lc.argv[1]);
             try g.w(" else {s}", .{if (on_lo) "-" else ""});
             try writeArg(g, lc.argv[1]);
         } else if (on_lo) {
-            try g.w("    s[@intFromEnum(U.{s})] = -", .{g.u_names[lc.lo]});
+            try g.w("    s[@intFromEnum(U.{s})] = -", .{g.names.u_names[lc.lo]});
             try writeArg(g, lc.argv[1]);
         } else {
-            try g.w("    s[@intFromEnum(U.{s})] = ", .{g.u_names[lc.hi]});
+            try g.w("    s[@intFromEnum(U.{s})] = ", .{g.names.u_names[lc.hi]});
             try writeArg(g, lc.argv[1]);
         }
         try g.w("; // V({s},{s}) = {s}vcrit\n", .{

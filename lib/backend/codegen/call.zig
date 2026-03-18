@@ -99,7 +99,7 @@ pub fn strConst(self: *Gen, v0: Mir.Value) Error!?[]const u8 {
         .param_ref => |p| {
             if (Analysis.tyOfParam(self.lowered.params.items[p].ty) != .str) return null;
             self.uses_model = true;
-            return try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]});
+            return try std.fmt.allocPrint(self.arena, "model.{s}", .{self.names.p_names[p]});
         },
         .undef, .float_const, .int_const, .block_param, .inst_result => return null,
     }
@@ -115,8 +115,8 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
             if (Analysis.tyOfParam(self.lowered.params.items[p].ty) == .str) return null;
             self.uses_model = true;
             return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
-                .int => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]}),
-                .real => try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round(model.{s}))", .{self.p_names[p]}),
+                .int => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.names.p_names[p]}),
+                .real => try std.fmt.allocPrint(self.arena, "std.math.lossyCast(i64, @round(model.{s}))", .{self.names.p_names[p]}),
                 .str => unreachable,
             };
         },
@@ -348,8 +348,8 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         .param_ref => |p| {
             self.uses_model = true;
             return switch (Analysis.tyOfParam(self.lowered.params.items[p].ty)) {
-                .real => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.p_names[p]}),
-                .int => try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(model.{s}))", .{self.p_names[p]}),
+                .real => try std.fmt.allocPrint(self.arena, "model.{s}", .{self.names.p_names[p]}),
+                .int => try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt(model.{s}))", .{self.names.p_names[p]}),
                 .str => "0.0",
             };
         },
@@ -607,7 +607,7 @@ pub fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const 
 pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
     const c = self.an.foldConst(if (args.len != 0) args[0] else .zero, 0, false) orelse return 0;
     const i: usize = @intFromFloat(c.f);
-    return @min(i, self.held_names.len -| 1);
+    return @min(i, self.names.held_names.len -| 1);
 }
 
 /// Does this call, as `emitCall` renders it, read an `Instance` field the HOST
@@ -882,7 +882,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // `Instance` default and after it the last accepted value.
         .@"$held_real", .@"$held_int" => {
             self.uses_inst = true;
-            const f = self.held_names[heldIdx(self, args)];
+            const f = self.names.held_names[heldIdx(self, args)];
             return if (c == .@"$held_int")
                 self.b("inst.{s}", .{f})
             else
@@ -960,7 +960,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const def = if (args.len > 0) self.mir.valueDef(self.an.rv(args[0])) else Mir.Def.undef;
             if (def == .param_ref) {
                 self.uses_model = true;
-                return self.b("@as(i64, @intFromBool(model.{s}__given))", .{self.p_names[def.param_ref]});
+                return self.b("@as(i64, @intFromBool(model.{s}__given))", .{self.names.p_names[def.param_ref]});
             }
             return self.b("@as(i64, 0)", .{});
         },
@@ -1318,7 +1318,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
     const unit = gen_unit.unitOfInst(self, inst);
     if (unit == none_u32) return self.b("S.con(0.0)", .{});
-    const n = self.unit_names[unit];
+    const n = self.names.unit_names[unit];
     // Only the operators whose kernel needs the CURRENT input read it; the
     // pure-history ones answer from `Instance` alone. Rendering the input
     // for one of those would set `uses_x`/`uses_model` for text that is

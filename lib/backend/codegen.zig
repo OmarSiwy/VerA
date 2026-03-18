@@ -50,6 +50,8 @@ const Lowered = @import("ir").Lowered;
 const proof = @import("ir").proof;
 const diag = @import("diag");
 const naming = @import("naming.zig");
+/// The pure planners: inputs in, a plan value out, no writer — codegen/plan/.
+const plan_names = @import("codegen/plan/names.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
@@ -329,8 +331,8 @@ pub const Gen = struct {
     // Ceiling: it is only ever read on the E0515 path, which refuses the unit.
     ctrl_tok: u32 = Mir.no_tok,
 
-    units: []naming.Unit = &.{},
-    unit_names: [][]const u8 = &.{},
+    /// Every declared identifier and the unknowns behind them — `plan/names.zig`.
+    names: plan_names.Names = .{},
     /// One entry per emitted top-level unit declaration — see `Output`. Arena
     /// lists, appended by `recordUnitFile`; two `u32`s per unit is the whole
     /// cost of the per-file split on this side.
@@ -460,10 +462,6 @@ pub const Gen = struct {
     /// when `display == .drop`). Set by `buildJobs`, which is also where the job
     /// that renders it is queued.
     display_name: []const u8 = "",
-    /// Extra solver unknowns codegen appends after `Lowered.nodes`: one
-    /// branch current per §5.6 potential contribution that lowering did not
-    /// already give a `flow(a,b)` slot. Values are `nodes`-space indices.
-    branch_u: []u32 = &.{},
     /// §5.4.2.1/§5.6.6 — the branch-flow unknowns NO branch row defines, in
     /// slot order. See `FreeFlow` and `emitStamps`.
     free_flows: []const gen_state.FreeFlow = &.{},
@@ -471,7 +469,6 @@ pub const Gen = struct {
     /// Cached because `emitSwitchRow` needs the membership test and the list
     /// is built once, before any residual is emitted.
     cpairs: []const gen_state.CollapsePair = &.{},
-    n_u: u32 = 0,
     /// Structural Jacobian columns per residual ROW: `pat[react][ru]` has bit
     /// `cu` set when `∂res[ru]/∂x[cu]` can be nonzero. `emitStamps` fills it as
     /// it writes each row, so a row shape cannot be added without stating its
@@ -515,22 +512,9 @@ pub const Gen = struct {
     /// `deriv_reads` leave as `jac_const`; inside, the lane carries them.
     /// Empty above 64 unknowns, where neither decl is emitted.
     lin: [2][]f64 = .{ &.{}, &.{} },
-    /// Sanitized U-enum member name per unknown.
-    u_names: [][]const u8 = &.{},
-    /// Sanitized Model field name per `Lowered.params` entry.
-    p_names: [][]const u8 = &.{},
-    /// Sanitized Model field name per `Lowered.aliases` entry (§3.4.7).
-    a_names: [][]const u8 = &.{},
-    /// §5.10 `Instance` field name per `Lowered.held_vars` entry.
-    held_names: [][]const u8 = &.{},
     /// Core field index holding each held variable's end-of-block value, or
     /// `none_u32` when it folded to `.f_zero`. Filled by `planCommon`.
     held_idx: []u32 = &.{},
-    /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
-    p_given: []bool = &.{},
-    /// Does the module read §9.15 `$simparam("tnom")`? Its Model then carries
-    /// the host-written `Lower.simparamHostField("tnom")` field.
-    uses_nom_temp: bool = false,
     /// §4.5.15 the `$limit` call sites this device honours, in source order,
     /// and one line per site it does not. Filled by `cg_limit.collect` before
     /// `buildJobs`, which queues their algorithm arguments into the core.
@@ -619,9 +603,8 @@ pub const Gen = struct {
         // `nv` and `nb` — a typing pass allocating eight scheduling tables was
         // the kind of side job the split exists to make visible.
         self.plan = try UnitPlan.init(self.arena, self.mir, self.an, self.display);
-        try self.buildUnits();
-        try self.buildNames();
-        // After `buildNames`, which fills `branch_u` — the claim `freeFlows`
+        self.names = try plan_names.plan(self.arena, self.mir, self.an, self.lowered, self.verdict.unit_modes.len);
+        // After `plan_names.plan`, which fills `branch_u` — the claim `freeFlows`
         // subtracts.
         self.free_flows = try gen_state.freeFlows(self);
         try cg_filters.planAll(self);
@@ -659,155 +642,6 @@ pub const Gen = struct {
 
     // --------------------------------------------------------------- units ----
 
-    fn buildUnits(self: *Gen) Error!void {
-        const a = self.arena;
-        self.units = naming.enumerateUnits(a, self.mir, self.lowered) catch |e| switch (e) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.NoSpaceLeft => return error.NameTooLong,
-        };
-        // The contract `unitMode` below depends on, checked once where all
-        // three tables are in hand for the only time.
-        naming.assertCanonicalOrder(self.units, self.lowered, self.verdict.unit_modes.len);
-        self.unit_names = try a.alloc([]const u8, self.units.len);
-        var buf: [naming.max_name_len]u8 = undefined;
-        for (self.units, 0..) |u, i| {
-            const n = naming.unitName(&buf, self.mir.name, u) catch return error.NameTooLong;
-            self.unit_names[i] = try a.dupe(u8, n);
-        }
-    }
-
-    /// Is unknown `u` already the current of a source from a contribution
-    /// before `i`? Two sources in one branch need two currents.
-    fn uIsDriven(self: *const Gen, u: u32, i: usize) bool {
-        // ponytail: stdlib scans the same bounded prefix; no membership table needed.
-        return std.mem.indexOfScalar(u32, self.branch_u[0..i], u) != null;
-    }
-
-    /// `nm`, or `nm#k` for the first `k` that no unknown claims yet. `sanitize`
-    /// escapes `#`, so the emitted U member stays a legal, injective name.
-    fn freshUName(self: *const Gen, nm: []const u8, extra: []const []const u8) Error![]const u8 {
-        var name = nm;
-        var k: u32 = 1;
-        while (self.uNameTaken(name, extra)) : (k += 1) {
-            name = try std.fmt.allocPrint(self.arena, "{s}#{d}", .{ nm, k });
-        }
-        return name;
-    }
-
-    fn uNameTaken(self: *const Gen, nm: []const u8, extra: []const []const u8) bool {
-        for (self.lowered.nodes.items(.name)) |n| {
-            if (std.mem.eql(u8, n, nm)) return true;
-        }
-        for (extra) |n| {
-            if (std.mem.eql(u8, n, nm)) return true;
-        }
-        return false;
-    }
-
-    fn buildNames(self: *Gen) Error!void {
-        const a = self.arena;
-        var buf: [naming.max_name_len]u8 = undefined;
-
-        // §5.6 potential contributions need a branch-current unknown. Lowering
-        // allocates a `flow(a,b)` slot only where the model PROBES I(a,b), so
-        // codegen appends the missing ones after `nodes` — every existing
-        // block_param index keeps its meaning.
-        const base: u32 = @intCast(self.lowered.nodes.len);
-        self.branch_u = try a.alloc(u32, self.lowered.contributions.items.len);
-        @memset(self.branch_u, none_u32);
-        // Raw names of the unknowns appended after `nodes`, in append order.
-        var extra: std.ArrayList([]const u8) = .empty;
-        for (self.lowered.contributions.items, 0..) |c, i| {
-            // A §5.6 potential source and a §5.6.7 indirect (nullor) source are
-            // the same topology: a source in the branch whose current is its
-            // own unknown.
-            if (c.access != .potential and c.kind != .indirect) continue;
-            // Reuse the §5.4.2 slot lowering already allocated because the model
-            // PROBES I(a,b) — unless an earlier contribution is already driving
-            // it. §5.6.7.1 permits several indirect contributions to one branch,
-            // and each is a separate source with a separate current.
-            //
-            // Asked for by the NODE PAIR, which is the identity §5.4.1 gives the
-            // branch. This used to format `flow(hi,lo)` and scan `nodes`
-            // for a string match, which made it the fourth place that re-derived
-            // structure from a spelling — and the one that survived the key
-            // split in lowering: §1.3.1.1's reference node prints `gnd`, so on a
-            // module with a plain net called `gnd` the branches (a, reference)
-            // and (a, gnd) matched each other's slot and V(a) and V(a,gnd) drove
-            // one current.
-            var found: u32 = if (self.lowered.flow_unknowns.get(.{ .hi = c.hi, .lo = c.lo })) |u| u else none_u32;
-            if (found != none_u32 and self.uIsDriven(found, i)) found = none_u32;
-            if (found == none_u32) {
-                const nm = try std.fmt.allocPrint(a, "flow({s},{s})", .{
-                    self.lowered.nodeName(c.hi), self.lowered.nodeName(c.lo),
-                });
-                found = base + @as(u32, @intCast(extra.items.len));
-                try extra.append(a, try self.freshUName(nm, extra.items));
-            }
-            self.branch_u[i] = found;
-        }
-        self.n_u = base + @as(u32, @intCast(extra.items.len));
-
-        self.u_names = try a.alloc([]const u8, self.n_u);
-        for (self.lowered.nodes.items(.name), 0..) |n, i| {
-            self.u_names[i] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
-        }
-        for (extra.items, 0..) |n, k| {
-            self.u_names[base + k] = try a.dupe(u8, naming.sanitize(&buf, n) catch return error.OutOfMemory);
-        }
-
-        self.p_names = try a.alloc([]const u8, self.lowered.params.items.len);
-        for (self.lowered.params.items, 0..) |p, i| {
-            self.p_names[i] = try a.dupe(u8, naming.sanitize(&buf, p.name) catch return error.OutOfMemory);
-        }
-        self.a_names = try a.alloc([]const u8, self.lowered.aliases.items.len);
-        for (self.lowered.aliases.items, 0..) |al, i| {
-            self.a_names[i] = try a.dupe(u8, naming.sanitize(&buf, al.name) catch return error.OutOfMemory);
-        }
-
-        // §5.10 held variables. Same `<module>__<role>__<target>` grammar
-        // `naming.unitName` builds, with `held` where a role word would go:
-        // `naming.Role` is a closed set that this is deliberately not a member
-        // of (a held variable is not an emitted source unit), and no enumerated
-        // unit can spell that segment, so the two name spaces cannot meet. The
-        // target is one `sanitize`d leaf, which is injective — and a module
-        // variable's name is unique in its scope, so the whole key is.
-        self.held_names = try a.alloc([]const u8, self.lowered.held_vars.items.len);
-        if (self.held_names.len != 0) {
-            var mod_buf: [naming.max_name_len]u8 = undefined;
-            const mod = naming.sanitize(&mod_buf, self.mir.name) catch return error.NameTooLong;
-            for (self.lowered.held_vars.items, 0..) |h, i| {
-                const leaf = naming.sanitize(&buf, h.name) catch return error.NameTooLong;
-                self.held_names[i] = try std.fmt.allocPrint(a, "{s}__held__{s}", .{ mod, leaf });
-            }
-        }
-        self.p_given = try a.alloc(bool, self.lowered.params.items.len);
-        @memset(self.p_given, false);
-        // A non-local parameter whose default reads another parameter is a
-        // `derive()` target, and its guard (`if (!model.X__given)`) needs the
-        // flag whether or not the model ever queries §9.19 — same fold
-        // condition `emitDerive` selects assignments on.
-        for (self.lowered.params.items, 0..) |p, i| {
-            if (p.is_local or Analysis.tyOfParam(p.ty) == .str) continue;
-            if (self.an.foldConst(p.default, 0, false) == null) self.p_given[i] = true;
-        }
-        // §9.15's host-published `$simparam` is recorded at the CALL, not by
-        // this walk: a parameter default is lowered outside the block stream,
-        // and `parameter real tnom = $simparam("tnom")` is the whole point.
-        self.uses_nom_temp = self.lowered.uses.contains(.host_simparam);
-        // §9.19 $param_given(p): the flag lives in Model, but only for the
-        // parameters actually asked about.
-        for (0..self.an.nb) |bi| {
-            for (self.an.blockInstsFlat(@intCast(bi))) |inst| {
-                if (self.mir.instOp(inst) != .call) continue;
-                const d = self.mir.instData(inst).call;
-                if (d.callee != .@"$param_given") continue;
-                if (d.args.len == 0) continue;
-                const def = self.mir.valueDef(self.an.rv(d.args[0]));
-                if (def == .param_ref) self.p_given[def.param_ref] = true;
-            }
-        }
-    }
     // File assembly: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`, §4.5 `Instance`) — codegen/file.zig
     const gen_file = @import("codegen/file.zig");
     pub const emitFile = gen_file.emitFile;
@@ -1063,6 +897,7 @@ const gen_kernel_text = @import("codegen/kernel_text.zig");
 const gen_test = @import("codegen/test.zig");
 
 test {
+    _ = plan_names;
     _ = Gen.gen_common;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;

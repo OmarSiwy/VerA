@@ -46,7 +46,7 @@ const Accept = struct {
 
 fn scanAccept(self: *Gen) Error!Accept {
     var a: Accept = .{};
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
         const k = u.op;
         a.uses_dt = a.uses_dt or opdb.get(k).needs_dt;
@@ -216,10 +216,10 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
         \\    for (&inst.rng_auto) |*rs| rs.* = @intFromFloat(zRngNext(rs.*));
         \\
     , .{});
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         const k = u.op;
         if (u.role != .analog_op or !opHasState(k)) continue;
-        const n = self.unit_names[i];
+        const n = self.names.unit_names[i];
         const inst = gen_unit.opInstOf(self, @intCast(i)) orelse continue;
         self.ctrl_tok = self.mir.instTok(inst); // E0515's fallback span
         const args = self.mir.instData(inst).call.args;
@@ -401,7 +401,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
     // Newton iterate that the solver goes on to throw away.
     for (self.lowered.held_vars.items, 0..) |h, i| {
         const k = self.held_idx[i];
-        const n = self.held_names[i];
+        const n = self.names.held_names[i];
         if (k == none_u32) {
             // The value folded away entirely (never assigned outside the
             // §5.10 body on any reachable path, and the body's value is a
@@ -522,7 +522,7 @@ pub fn freeFlows(self: *Gen) Error![]const FreeFlow {
     while (it.next()) |e| {
         const u: u32 = e.value_ptr.*;
         // A potential/indirect source already pins this current.
-        if (std.mem.indexOfScalar(u32, self.branch_u, u) != null) continue;
+        if (std.mem.indexOfScalar(u32, self.names.branch_u, u) != null) continue;
         var sourced = false;
         var signal_flow = false;
         for (self.lowered.contributions.items) |c| {
@@ -676,7 +676,7 @@ pub fn collapsePairs(self: *Gen) Error![]CollapsePair {
         if (!buildFree(self, ret.runtime, 0)) continue;
         if (!zeroOnEveryPath(self, c.resist_val, 0)) continue;
         if (!zeroOnEveryPath(self, c.react_val, 0)) continue;
-        const fu = self.branch_u[i];
+        const fu = self.names.branch_u[i];
         if (fu == none_u32) continue;
         // §5.4.2 a flow probe of the branch reads I_b, which `collapse` turns
         // into the far node's VOLTAGE: the model would read that, not its
@@ -763,7 +763,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
             try self.w("    const a{d} = (m.f{d}.v != 0.0);", .{ pi, k });
         try self.w(" // 0 V arm retained: dead short\n", .{});
         try self.w("    if (a{d}) zCollapseUnion(&parent, @intFromEnum(U.{s}), @intFromEnum(U.{s}));\n", .{
-            pi, self.u_names[p.victim], self.u_names[p.target],
+            pi, self.names.u_names[p.victim], self.names.u_names[p.target],
         });
     }
     try self.w(
@@ -783,7 +783,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
     // RETAINED parasitic, for a row the physics never writes.
     for (pairs) |p| {
         try self.w("    out[@intFromEnum(U.{s})] = zCollapseRoot(&parent, @intFromEnum(U.{s}));\n", .{
-            self.u_names[p.flow_u], self.u_names[p.target],
+            self.names.u_names[p.flow_u], self.names.u_names[p.target],
         });
     }
     try self.w("    return out;\n}}\n\n", .{});
@@ -838,7 +838,7 @@ pub fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
     , .{});
     for (pairs) |p| {
         try self.w("    zCollapseUnion(&parent, @intFromEnum(U.{s}), @intFromEnum(U.{s}));\n", .{
-            self.u_names[p.victim], self.u_names[p.target],
+            self.names.u_names[p.victim], self.names.u_names[p.target],
         });
     }
     try self.w(
@@ -851,7 +851,7 @@ pub fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
     , .{});
     for (pairs) |p| {
         try self.w("    out[@intFromEnum(U.{s})] = zCollapseRoot(&parent, @intFromEnum(U.{s}));\n", .{
-            self.u_names[p.flow_u], self.u_names[p.target],
+            self.names.u_names[p.flow_u], self.names.u_names[p.target],
         });
     }
     try self.w("    break :blk out;\n}};\n\n", .{});
@@ -870,7 +870,7 @@ pub fn emitDelays(self: *Gen) Error!void {
     defer self.uses_model = saved;
     self.uses_model = false;
     var tds: std.ArrayList([]const u8) = .empty;
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .absdelay) continue;
         const inst = gen_unit.opInstOf(self, @intCast(i)) orelse continue;
         const args = self.mir.instData(inst).call.args;
@@ -900,7 +900,7 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
     self.uses_model = false;
 
     var timers: std.ArrayList([3]?[]const u8) = .empty;
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op or u.op != .timer) continue;
         const inst = gen_unit.opInstOf(self, @intCast(i)) orelse return;
         const args = self.mir.instData(inst).call.args;

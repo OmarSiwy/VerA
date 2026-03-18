@@ -269,14 +269,14 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 /// emits together.
 pub fn hasStatefulOps(self: *const Gen) bool {
     if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter) or self.lowered.uses.contains(.reject_iteration)) return true;
-    for (self.units) |u| {
+    for (self.names.units) |u| {
         if (u.role == .analog_op and opHasState(u.op)) return true;
     }
     return false;
 }
 
 pub fn usesOp(self: *const Gen, k: OpKind) bool {
-    for (self.units) |u| {
+    for (self.names.units) |u| {
         if (u.role == .analog_op and u.op == k) return true;
     }
     return false;
@@ -296,20 +296,20 @@ pub fn emitTopology(self: *Gen) Error!void {
     // (tools/contract.zig) requires the `u8` tag, so the tag type and that
     // predicate move together, and every host that already links a device
     // recompiles. Registered in TODO.md §3 under the device contract.
-    if (self.u_names.len > 256) {
+    if (self.names.u_names.len > 256) {
         if (self.diags) |bag| try bag.add(
             .codegen,
             .E1003,
             .{},
             "this module needs {d} solver unknowns; the emitted `U` is an enum(u8) and holds 256",
-            .{self.u_names.len},
+            .{self.names.u_names.len},
         );
         return error.TooManyUnknowns;
     }
     try self.w("/// Solver unknowns: §6.5 ports first, then §3.6.3 internal nets,\n", .{});
     try self.w("/// then §5.4.2 branch-flow unknowns.\n", .{});
     try self.w("pub const U = enum(u8) {{\n", .{});
-    for (self.u_names, 0..) |n, i| {
+    for (self.names.u_names, 0..) |n, i| {
         const kindc: []const u8 = if (i < self.lowered.num_ports) "port" else if (isFlowUnknown(self, @intCast(i))) "branch flow" else "internal";
         try self.w("    {s}, // {s}\n", .{ n, kindc });
     }
@@ -333,12 +333,12 @@ pub fn emitTopology(self: *Gen) Error!void {
     , .{});
 
     var any_current = false;
-    for (0..self.n_u) |i| {
+    for (0..self.names.n_u) |i| {
         if (isFlowUnknown(self, @intCast(i))) any_current = true;
     }
     if (any_current) {
         try self.w("pub const u_kinds = [n_u]contract.UnknownKind{{\n", .{});
-        for (0..self.n_u) |i| {
+        for (0..self.names.n_u) |i| {
             try self.w("    .{s},\n", .{if (isFlowUnknown(self, @intCast(i))) "current" else "voltage"});
         }
         try self.w("}};\n\n", .{});
@@ -353,7 +353,7 @@ pub fn emitTopology(self: *Gen) Error!void {
     try self.w("/// §3.6.1.2 `abstol` per unknown: the largest value of this\n", .{});
     try self.w("/// quantity a host may treat as zero, after any §3.6.2.3 override.\n", .{});
     try self.w("pub const u_abstol = [n_u]f64{{\n", .{});
-    for (0..self.n_u) |i| {
+    for (0..self.names.n_u) |i| {
         try self.w("    {d},\n", .{abstolOf(self, @intCast(i))});
     }
     try self.w("}};\n\n", .{});
@@ -387,7 +387,7 @@ pub fn emitNodesets(self: *Gen) Error!void {
     try self.w("/// unknown's potential. A HINT to the solver — not an initial\n", .{});
     try self.w("/// condition and not a clamp; the solved answer is unchanged by it.\n", .{});
     try self.w("pub const u_nodeset = [n_u]?f64{{\n", .{});
-    for (0..self.n_u) |i| {
+    for (0..self.names.n_u) |i| {
         // §3.6.3.2: "If different nets of a node have conflicting
         // initializers ... it is a race condition for which the initializer
         // wins." Two declarations of one net inside one module are the
@@ -499,9 +499,9 @@ pub fn emitModel(self: *Gen) Error!void {
             .str => "[]const u8",
         };
         try checkParamDefault(self, p);
-        try self.w("    {s}: {s} = {s},\n", .{ self.p_names[i], ty, try paramDefault(self, p, Analysis.tyOfParam(p.ty)) });
-        if (self.p_given[i]) {
-            try self.w("    {s}__given: bool = false, // §9.19 $param_given\n", .{self.p_names[i]});
+        try self.w("    {s}: {s} = {s},\n", .{ self.names.p_names[i], ty, try paramDefault(self, p, Analysis.tyOfParam(p.ty)) });
+        if (self.names.p_given[i]) {
+            try self.w("    {s}__given: bool = false, // §9.19 $param_given\n", .{self.names.p_names[i]});
         }
     }
     // §3.4.7 aliasparam. "The aliasparam declaration creates an alternate
@@ -521,7 +521,7 @@ pub fn emitModel(self: *Gen) Error!void {
         const p = self.lowered.params.items[al.param];
         const ty = Analysis.tyOfParam(p.ty);
         try self.w("    {s}: {s} = {s}, // §3.4.7 alias of `{s}`\n", .{
-            self.a_names[i],
+            self.names.a_names[i],
             switch (ty) {
                 .real => "f64",
                 .int => "i64",
@@ -530,7 +530,7 @@ pub fn emitModel(self: *Gen) Error!void {
             try paramDefault(self, p, ty),
             p.name,
         });
-        try self.w("    {s}__given: bool = false,\n", .{self.a_names[i]});
+        try self.w("    {s}__given: bool = false,\n", .{self.names.a_names[i]});
     }
     // §9.15 the host-published nominal temperature this module reads.
     // Model, not Instance: `.options tnom` is one number per RUN, so an
@@ -538,11 +538,11 @@ pub fn emitModel(self: *Gen) Error!void {
     // every batch for a value `derive()` reads once at build. The
     // initializer is Table 9-27's default, so `Model{}` is unchanged for a
     // host that never writes it.
-    if (self.uses_nom_temp) try self.w(
+    if (self.lowered.uses.contains(.host_simparam)) try self.w(
         "    {s}: f64 = {s}, // §9.15 $simparam(\"tnom\"), degC — host-written\n",
         .{ Lower.simparamHostField("tnom").?, try fmtF64(self, self.lowered.simparamValue("tnom").?) },
     );
-    if (self.lowered.params.items.len == 0 and !self.uses_nom_temp) {
+    if (self.lowered.params.items.len == 0 and !self.lowered.uses.contains(.host_simparam)) {
         try self.w("    // (the module declares no parameters)\n    _unused: u8 = 0,\n", .{});
     }
     try self.w("}};\n\n", .{});
@@ -589,7 +589,7 @@ pub fn emitDerive(self: *Gen) Error!void {
     // the alias and everything over `dtemp` derives from the default.
     for (self.lowered.aliases.items, 0..) |al, i| {
         try self.w("    if (model.{s}__given) model.{s} = model.{s};\n", .{
-            self.a_names[i], self.p_names[al.param], self.a_names[i],
+            self.names.a_names[i], self.names.p_names[al.param], self.names.a_names[i],
         });
     }
     for (self.lowered.params.items, 0..) |p, i| {
@@ -615,15 +615,15 @@ pub fn emitDerive(self: *Gen) Error!void {
         // every card VTH0 back to VTHO's default. `initGiven` raised the
         // `__given` companion for every non-local derived parameter.
         if (!p.is_local)
-            try self.w("    if (!model.{s}__given) ", .{self.p_names[i]})
+            try self.w("    if (!model.{s}__given) ", .{self.names.p_names[i]})
         else
             try self.w("    ", .{});
         switch (ty) {
-            .real => try self.w("model.{s} = {s};\n", .{ self.p_names[i], e }),
+            .real => try self.w("model.{s} = {s};\n", .{ self.names.p_names[i], e }),
             .int => if (p.integer32)
-                try self.w("model.{s} = @as(i32, @truncate({s}));\n", .{ self.p_names[i], e })
+                try self.w("model.{s} = @as(i32, @truncate({s}));\n", .{ self.names.p_names[i], e })
             else
-                try self.w("model.{s} = {s};\n", .{ self.p_names[i], e }),
+                try self.w("model.{s} = {s};\n", .{ self.names.p_names[i], e }),
             .str => unreachable,
         }
     }
@@ -828,9 +828,9 @@ pub fn emitInstance(self: *Gen) Error!void {
         });
         try self.w("}},\n", .{});
     }
-    for (self.units, 0..) |u, i| {
+    for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
-        const n = self.unit_names[i];
+        const n = self.names.unit_names[i];
         // The nine operators whose Instance shape is FIXED are a table
         // read — the per-operator prose that used to live in these arms is
         // now beside the row it explains, in ir/op.zig.
@@ -919,11 +919,11 @@ pub fn emitInstance(self: *Gen) Error!void {
             try self.w("    {s}: i64 = {d}, // §5.10 held across evaluations\n", .{
                 // Saturating like every other fold-side real→int cast —
                 // an initializer of `1e300` must not panic the compiler.
-                self.held_names[i], std.math.lossyCast(i64, @round(v)),
+                self.names.held_names[i], std.math.lossyCast(i64, @round(v)),
             });
         } else {
             try self.w("    {s}: f64 = {s}, // §5.10 held across evaluations\n", .{
-                self.held_names[i], try fmtF64(self, v),
+                self.names.held_names[i], try fmtF64(self, v),
             });
         }
     }
@@ -937,20 +937,20 @@ pub fn emitInstance(self: *Gen) Error!void {
             const v: f64 = if (init) |c| c.f else 0.0;
             if (h.ty == .integer) {
                 try self.w("    {s}__acc: i64 = {d}, // stateCtl accepted copy\n", .{
-                    self.held_names[i], std.math.lossyCast(i64, @round(v)),
+                    self.names.held_names[i], std.math.lossyCast(i64, @round(v)),
                 });
             } else {
                 try self.w("    {s}__acc: f64 = {s}, // stateCtl accepted copy\n", .{
-                    self.held_names[i], try fmtF64(self, v),
+                    self.names.held_names[i], try fmtF64(self, v),
                 });
             }
         }
-        for (self.units, 0..) |u, i| {
+        for (self.names.units, 0..) |u, i| {
             if (u.role != .analog_op) continue;
             switch (u.op) {
                 .cross, .above => try self.w(
                     "    {s}__prev__acc: f64 = 0.0, // stateCtl accepted copy\n",
-                    .{self.unit_names[i]},
+                    .{self.names.unit_names[i]},
                 ),
                 .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
             }
@@ -1115,7 +1115,7 @@ pub fn emitPrecompute(self: *Gen) Error!void {
 /// everywhere else).
 pub fn fsmStateCtl(self: *const Gen) bool {
     if (self.lowered.held_vars.items.len == 0) return false;
-    for (self.units) |u| {
+    for (self.names.units) |u| {
         if (u.role != .analog_op) continue;
         switch (u.op) {
             .cross, .above => return true,
@@ -1160,7 +1160,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         \\        return
     , .{if (self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter)) "state" else "_"});
     var first = true;
-    for (self.held_names) |n| {
+    for (self.names.held_names) |n| {
         if (!fsm) break;
         try self.w("{s}(inst.{s} != inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n });
         first = false;
@@ -1182,12 +1182,12 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     );
     for (0..self.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
     for (0..self.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
-    if (fsm) for (self.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
-    for (self.units, 0..) |u, i| {
+    if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
+    for (self.names.units, 0..) |u, i| {
         if (!fsm) break;
         if (u.role != .analog_op) continue;
         switch (u.op) {
-            .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.unit_names[i], self.unit_names[i] }),
+            .cross, .above => try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
             .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
@@ -1200,12 +1200,12 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         "        inst.newton_iteration = state.newton_iteration;\n",
         .{},
     );
-    if (fsm) for (self.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
-    for (self.units, 0..) |u, i| {
+    if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
+    for (self.names.units, 0..) |u, i| {
         if (!fsm) break;
         if (u.role != .analog_op) continue;
         switch (u.op) {
-            .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.unit_names[i], self.unit_names[i] }),
+            .cross, .above => try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ self.names.unit_names[i], self.names.unit_names[i] }),
             .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
         }
     }
