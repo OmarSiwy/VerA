@@ -1342,6 +1342,10 @@ pub const SeqBlock = struct {
     params: []const ParamDecl = &.{},
     vars: []const VarDecl = &.{},
     body: []const StmtId = &.{},
+    /// A generate block's module instances (§6.6: the block "brings ...
+    /// module instances within the block into existence"). Only a digital
+    /// parse keeps them here; an analog one refuses them (E0235).
+    instances: []const Instance = &.{},
 };
 
 // ---------------------------------------------------------------------------

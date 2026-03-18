@@ -574,11 +574,16 @@ fn pickTop(r: *Run, modules: []const Ast.ModuleDecl) Error!*const Ast.ModuleDecl
     // the top-level cells, whatever else the source leaves uninstantiated.
     if (r.file.config_cells.len > 1) return r.fail(0, "digital execution requires exactly one top-level module", .{});
     if (r.file.config_cells.len == 1) return findModule(r, r.file.config_cells[0], 0);
+    // §12.1.1: "an instantiated module is not a top" — wherever it is
+    // instantiated, a generate arm the scheme does not select included.
+    var generated: std.ArrayList(Ast.StrId) = .empty;
+    for (modules) |other| for (other.analog) |ab| try generatedModules(r.file, ab.body, &generated, r.arena);
     outer: for (modules) |*candidate| {
         if (candidate.is_connect) continue;
         for (modules) |other| for (other.instances) |inst| {
             if (inst.module == candidate.name) continue :outer;
         };
+        if (std.mem.indexOfScalar(Ast.StrId, generated.items, candidate.name) != null) continue;
         if (top != null) return r.fail(candidate.main_tok, "digital execution requires exactly one top-level module", .{});
         top = candidate;
     }
@@ -600,8 +605,12 @@ fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
 fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, depth: u16) Error!void {
     const arena = r.arena;
     if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
-    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.analog.len != 0 or m.attrs.len != 0))
+    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.attrs.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
+    // A digital parse makes each generate construct an `analog` block over
+    // an `if`; anything else there is a genuine analog block.
+    if (!r.mixed) for (m.analog) |ab| if (!isGenerateIf(r.file, ab.body))
+        return r.fail(ab.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     r.scope = scope;
     try e.insts.append(arena, .{ .module = m, .scope = scope });
     // IEEE 1364-2005 §12.2 module parameters, in declaration order so a
@@ -849,13 +858,65 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         const net = r.net_of.get(try r.scalarSlot(p.out)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
         try e.wires.append(arena, .{ .net = net, .scope = scope, .pull = if (p.one) .one else .zero, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
     }
-    for (m.instances) |inst| {
+    for (m.instances) |*inst| try instantiate(r, e, scope, inst, depth);
+    if (!r.mixed) for (m.analog) |ab| try generate(r, e, scope, ab.body, depth);
+}
+
+/// IEEE 1364-2005 §12.4.2 a conditional generate construct as a digital parse
+/// leaves it: an `if` whose arms are blocks (or further `if`s).
+fn isGenerateIf(file: *const Ast.SourceFile, s: Ast.StmtId) bool {
+    return switch (file.stmt(s)) {
+        .if_stmt => |i| i.is_generate,
+        else => false, // else: every other analog-block body is analog behaviour
+    };
+}
+
+/// §12.4.2: the scheme's constant condition selects at most one arm, and only
+/// the selected block's instances come into existence (§12.1.1: an instance
+/// in an unselected arm still makes its module no top-level one).
+/// ponytail: `if`/`else` schemes with instances; a block's other items are
+/// refused by the parser, and loop and case generates are refused here.
+fn generate(r: *Run, e: *Elab, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
+    if (s == .none) return;
+    switch (r.file.stmt(s)) {
+        .empty => {},
+        .if_stmt => |i| {
+            r.scope = scope;
+            const cond = (try r.constant(i.cond, r.file.stmtTok(s))).truth();
+            try generate(r, e, scope, if (cond == .one) i.then_s else i.else_s, depth);
+        },
+        .block => |b| {
+            for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
+            for (b.body) |inner| try generate(r, e, scope, inner, depth);
+        },
+        else => return r.fail(r.file.stmtTok(s), "only conditional generate constructs are implemented by digital execution", .{}), // else: loop and case generates, and analog behaviour inside a generate block
+    }
+}
+
+/// Every module a generate construct instantiates, in either arm.
+fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayList(Ast.StrId), a: std.mem.Allocator) std.mem.Allocator.Error!void {
+    if (s == .none) return;
+    switch (file.stmt(s)) {
+        .if_stmt => |i| {
+            try generatedModules(file, i.then_s, out, a);
+            try generatedModules(file, i.else_s, out, a);
+        },
+        .block => |b| {
+            for (b.instances) |inst| try out.append(a, inst.module);
+            for (b.body) |inner| try generatedModules(file, inner, out, a);
+        },
+        else => {}, // else: no other statement holds an instance
+    }
+}
+
+/// §6.2.2 one module or UDP instance, declared in `scope`.
+fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
+    const arena = r.arena;
+    r.scope = scope;
+    {
         if (inst.range != null or inst.params.len != 0)
             return r.fail(inst.main_tok, "instance arrays and parameter overrides are not implemented by digital execution", .{});
-        if (findUdp(r.file, inst.module)) |u| {
-            try declareUdp(r, e, scope, &inst, u);
-            continue;
-        }
+        if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
         const child = try findModule(r, inst.module, inst.main_tok);
         const binds_out = try arena.alloc(PortBind, child.ports.len);
         @memset(binds_out, .open);
@@ -1663,6 +1724,18 @@ test "§12.2 parameters fold into bounds, delays and expressions" {
         \\end
         \\endmodule
     , "1111 7 -4 0001 z 1\n1\n");
+}
+
+// §12.4.2: only the selected arm's instance exists, and §12.1.1 keeps the
+// module of the unselected one from becoming a second top.
+test "§12.4.2 a conditional generate instantiates only its selected arm" {
+    try expectRun(
+        \\module a; initial $display("a"); endmodule
+        \\module b; initial $display("b"); endmodule
+        \\module m #(parameter P = 1) ();
+        \\generate if (P == 0) begin : g0 a u(); end else if (P == 1) begin : g1 b u(); end endgenerate
+        \\endmodule
+    , "b\n");
 }
 
 // §12.3.2/§12.3.6: a named header port whose expression concatenates internal
