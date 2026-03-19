@@ -9,6 +9,7 @@
 //! directly, `gen_unit.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const plan_topo = @import("plan/topology.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
@@ -97,60 +98,6 @@ pub fn unitMode(self: *const Gen, i: usize) proof.FloatMode {
     // it takes the safe side.
     if (i >= self.verdict.unit_modes.len) return .strict;
     return self.verdict.unit_modes[i];
-}
-
-/// §5.6.1.3 what is known STATICALLY about a `.direct` contribution's
-/// retention this cycle, read off `Lower.Contribution.wrote_val`.
-pub const Retention = union(enum) {
-    /// The flag folded to 1.0: a value is retained on every path. Today's
-    /// static row, byte-identical — the common unconditional case.
-    on,
-    /// Folded to 0.0: discarded on every path (§5.6.1.3's unconditional
-    /// replacement). The accumulators folded to `.f_zero` with it, so no
-    /// row is emitted — exactly as before the flag existed.
-    off,
-    /// A phi: which quantity the branch retains is a property of the
-    /// CYCLE'S EXECUTION PATH, so the branch row's CONTENT is selected at
-    /// run time on this flag (carried as a core field).
-    runtime: Mir.Value,
-};
-
-pub fn retention(self: *const Gen, c: Lower.Contribution) Retention {
-    const v = self.an.rv(c.wrote_val);
-    return switch (self.mir.valueDef(v)) {
-        .float_const => |x| if (x != 0.0) Retention.on else Retention.off,
-        .int_const => |x| if (x != 0) Retention.on else Retention.off,
-        .undef, .str_const, .param_ref, .block_param, .inst_result => .{ .runtime = v },
-    };
-}
-
-/// The §5.6.5 switch-branch partner of potential contribution `pi`: the one
-/// `.flow` direct entry over the same (hi, lo, branch), or null.
-/// `contribIndex` dedupes per (access, pair, branch), so there is at most
-/// one. ponytail: O(n) scan per potential entry; contributions per module
-/// are tens, same order as `uIsDriven`'s existing scan.
-pub fn switchFlowOf(self: *const Gen, pi: usize) ?usize {
-    const p = self.lowered.contributions.items[pi];
-    for (self.lowered.contributions.items, 0..) |c, j| {
-        if (j == pi or c.kind != .direct or c.access != .flow) continue;
-        if (c.hi == p.hi and c.lo == p.lo and c.br == p.br) return j;
-    }
-    return null;
-}
-
-/// Is flow entry `j` consumed by a RUNTIME-selected potential row over the
-/// same branch? Then its retained value reaches KCL through the branch
-/// unknown (row `I_b − value`, stamps ±I_b), and stamping it here as well
-/// would inject the current twice.
-pub fn flowIsMerged(self: *const Gen, j: usize) bool {
-    const f = self.lowered.contributions.items[j];
-    if (f.kind != .direct or f.access != .flow) return false;
-    for (self.lowered.contributions.items) |c| {
-        if (c.kind != .direct or c.access != .potential) continue;
-        if (c.hi != f.hi or c.lo != f.lo or c.br != f.br) continue;
-        return retention(self, c) == .runtime;
-    }
-    return false;
 }
 
 /// One row of `noise_gens` AND of the `noisePsd` result — the two tables
@@ -514,7 +461,7 @@ pub fn buildJobs(self: *Gen) Error!void {
     // NOTHING here, so its core fields do not move.
     for (self.lowered.contributions.items, 0..) |c, i| {
         if (c.kind != .direct or c.access != .potential) continue;
-        const ret = retention(self, c);
+        const ret = plan_topo.retention(self.input(), c);
         if (ret != .runtime) continue;
         try jobs.append(self.arena, .{
             .kind = .retained,
@@ -522,8 +469,8 @@ pub fn buildJobs(self: *Gen) Error!void {
             .mode = unitMode(self, i),
             .comment = "§5.6.1.3 retention flag",
         });
-        if (switchFlowOf(self, i)) |j| {
-            const fret = retention(self, self.lowered.contributions.items[j]);
+        if (plan_topo.switchFlowOf(self.input(), i)) |j| {
+            const fret = plan_topo.retention(self.input(), self.lowered.contributions.items[j]);
             if (fret == .runtime) try jobs.append(self.arena, .{
                 .kind = .retained,
                 .target = fret.runtime,

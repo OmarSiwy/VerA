@@ -51,7 +51,9 @@ const proof = @import("ir").proof;
 const diag = @import("diag");
 const naming = @import("naming.zig");
 /// The pure planners: inputs in, a plan value out, no writer — codegen/plan/.
+const plan_input = @import("codegen/plan/input.zig");
 const plan_names = @import("codegen/plan/names.zig");
+const plan_topo = @import("codegen/plan/topology.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
@@ -462,13 +464,8 @@ pub const Gen = struct {
     /// when `display == .drop`). Set by `buildJobs`, which is also where the job
     /// that renders it is queued.
     display_name: []const u8 = "",
-    /// §5.4.2.1/§5.6.6 — the branch-flow unknowns NO branch row defines, in
-    /// slot order. See `FreeFlow` and `emitStamps`.
-    free_flows: []const gen_state.FreeFlow = &.{},
-    /// The §5.6.5 switch branches `collapse` aliases away (`collapsePairs`).
-    /// Cached because `emitSwitchRow` needs the membership test and the list
-    /// is built once, before any residual is emitted.
-    cpairs: []const gen_state.CollapsePair = &.{},
+    /// Free branch flows and collapsible switch branches — `plan/topology.zig`.
+    topo: plan_topo.Topology = .{},
     /// Structural Jacobian columns per residual ROW: `pat[react][ru]` has bit
     /// `cu` set when `∂res[ru]/∂x[cu]` can be nonzero. `emitStamps` fills it as
     /// it writes each row, so a row shape cannot be added without stating its
@@ -571,6 +568,11 @@ pub const Gen = struct {
     /// snapshots it as the prefix region's size.
     stmt_count: u32 = 0,
 
+    /// What a `plan/` function reads — see `plan/input.zig`.
+    pub fn input(self: *const Gen) plan_input.Input {
+        return .{ .arena = self.arena, .mir = self.mir, .an = self.an, .lowered = self.lowered };
+    }
+
     // ---- the writer: every emitted byte goes through these three ----
 
     pub fn w(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
@@ -603,10 +605,10 @@ pub const Gen = struct {
         // `nv` and `nb` — a typing pass allocating eight scheduling tables was
         // the kind of side job the split exists to make visible.
         self.plan = try UnitPlan.init(self.arena, self.mir, self.an, self.display);
-        self.names = try plan_names.plan(self.arena, self.mir, self.an, self.lowered, self.verdict.unit_modes.len);
+        self.names = try plan_names.plan(self.input(), self.verdict.unit_modes.len);
         // After `plan_names.plan`, which fills `branch_u` — the claim `freeFlows`
         // subtracts.
-        self.free_flows = try gen_state.freeFlows(self);
+        self.topo = try plan_topo.plan(self.input(), self.names.branch_u);
         try cg_filters.planAll(self);
         // Before `buildJobs`: §4.5.15 the algorithm arguments of every honoured
         // `$limit` become core live-outs, and `buildJobs` is what queues them.
@@ -645,7 +647,6 @@ pub const Gen = struct {
     // File assembly: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`, §4.5 `Instance`) — codegen/file.zig
     const gen_file = @import("codegen/file.zig");
     pub const emitFile = gen_file.emitFile;
-    pub const isFlowUnknown = gen_file.isFlowUnknown;
     pub const fmtF64 = gen_file.fmtF64;
 
     // Units: one function per source unit, and the body each one computes — codegen/unit.zig
@@ -898,6 +899,7 @@ const gen_test = @import("codegen/test.zig");
 
 test {
     _ = plan_names;
+    _ = plan_topo;
     _ = Gen.gen_common;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;

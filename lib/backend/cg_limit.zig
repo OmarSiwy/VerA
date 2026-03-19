@@ -38,6 +38,7 @@
 //! Zig cannot extend a struct across files.
 
 const std = @import("std");
+const plan_topo = @import("codegen/plan/topology.zig");
 const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
@@ -304,7 +305,7 @@ fn probePair(g: *const Gen, args: []const Mir.Value) ?[2]u32 {
     // §5.4.2 a branch-flow unknown is an ampere. These limiters are voltage
     // clamps; writing one back as if it were a potential is nonsense.
     for (pair) |u| {
-        if (u != none_u32 and g.isFlowUnknown(u)) return null;
+        if (u != none_u32 and plan_topo.isFlowUnknown(g.input(), u)) return null;
     }
     return pair;
 }

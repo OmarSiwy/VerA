@@ -9,6 +9,7 @@
 //! directly, `gen_dispatch.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const plan_topo = @import("plan/topology.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
@@ -201,13 +202,13 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         // consumed BY that row (`I_b − value`); its KCL current is the ±I_b
         // the potential entry already stamps. Stamping the value here too
         // would inject it twice — once through the unknown, once directly.
-        if (c.kind == .direct and c.access == .flow and gen_unit.flowIsMerged(self, i)) continue;
+        if (c.kind == .direct and c.access == .flow and plan_topo.flowIsMerged(self.input(), i)) continue;
         // §5.6.1.3's three-way rule is decided per cycle. `.on`/`.off` fold
         // to today's static behaviour; `.runtime` keeps the row alive in
         // EVERY case, because the open-circuit form (`res[u] = I_b`) is
         // what pins the branch current when nothing is retained.
-        const run_pot: ?gen_unit.Retention = if (c.kind == .direct and c.access == .potential) ret: {
-            const r = gen_unit.retention(self, c);
+        const run_pot: ?plan_topo.Retention = if (c.kind == .direct and c.access == .potential) ret: {
+            const r = plan_topo.retention(self.input(), c);
             break :ret if (r == .runtime) r else null;
         } else null;
         // A zero half normally contributes nothing, and §5.6.1.3's
@@ -228,7 +229,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         // A runtime-selected row's q half is live only when SOME selectable
         // form has a flux: its own react, or the switch partner's.
         const partner_react: Mir.Value = if (run_pot != null) blk: {
-            const j = gen_unit.switchFlowOf(self, i) orelse break :blk .f_zero;
+            const j = plan_topo.switchFlowOf(self.input(), i) orelse break :blk .f_zero;
             break :blk self.an.rv(self.lowered.contributions.items[j].react_val);
         } else .f_zero;
         const live = if (react)
@@ -288,7 +289,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
             continue;
         }
         switch (c.access) {
-            .flow => if (gen_file.flowOnlySignalFlowNet(self, c)) |n| {
+            .flow => if (plan_topo.flowOnlySignalFlowNet(self.input(), c)) |n| {
                 // §1.3.4.2 a flow signal-flow net has no potential, so its
                 // one unknown IS its flow and the contribution is that
                 // unknown's defining equation. Stamping KCL here instead
@@ -316,7 +317,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 // what it IS — `x[u] − Σ contributions`. Accumulated here
                 // (several contributions to one branch are one sum, §5.6.1)
                 // and closed with the `+ x[u]` term after the loop.
-                if (gen_state.freeFlowOf(self, c.hi, c.lo)) |f| {
+                if (self.topo.freeFlowOf(c.hi, c.lo)) |f| {
                     assert(f.sourced);
                     try stamp(self, 2, @intCast(f.u), "sub", "c", self.an.unknownDeps(val), null);
                 }
@@ -360,7 +361,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     // RESISTIVE: a §5.6.6 implicit sum's reactive half is already on this
     // row as `−Σ q` (the `sub` above ran for both halves), and a §5.4.2.1
     // probe is a short, which stores no charge.
-    if (!react) for (self.free_flows) |f| {
+    if (!react) for (self.topo.free_flows) |f| {
         self.uses_x = true;
         stamps += 1;
         if (f.sourced) {
@@ -536,7 +537,7 @@ pub fn emitFused(self: *Gen) Error!void {
 ///     an unswitched `.flow` contribution — `switchOpen` is that value.
 pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, react: bool) Error!void {
     const u = self.names.branch_u[i];
-    const partner = gen_unit.switchFlowOf(self, i);
+    const partner = plan_topo.switchFlowOf(self.input(), i);
     const split = collapsible(self, i);
     // Every coefficient on this row, and ib's in KCL, is picked per cycle by
     // a runtime flag — and on a collapsible branch by the host's S as well.
@@ -603,7 +604,7 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
 pub fn collapsible(self: *const Gen, i: usize) bool {
     const u = self.names.branch_u[i];
     if (u == none_u32) return false;
-    for (self.cpairs) |p| if (p.flow_u == u) return true;
+    for (self.topo.cpairs) |p| if (p.flow_u == u) return true;
     return false;
 }
 
@@ -616,7 +617,7 @@ pub fn switchOpen(self: *Gen, partner: ?usize, react: bool) Error!void {
     const j = partner orelse return self.b("S.con(0.0)", .{});
     const f = self.lowered.contributions.items[j];
     const fv = self.an.rv(if (react) f.react_val else f.resist_val);
-    switch (gen_unit.retention(self, f)) {
+    switch (plan_topo.retention(self.input(), f)) {
         .off => try self.b("S.con(0.0)", .{}),
         .on => try coreRef(self, fv),
         .runtime => |fw| {
@@ -637,7 +638,7 @@ pub fn switchElse(self: *Gen, partner: ?usize, react: bool) Error!void {
     const j = partner orelse return self.b("{s}", .{open});
     const f = self.lowered.contributions.items[j];
     const fv = self.an.rv(if (react) f.react_val else f.resist_val);
-    switch (gen_unit.retention(self, f)) {
+    switch (plan_topo.retention(self.input(), f)) {
         // Discarded on every path: the partner entry is dead and the else
         // case is §5.6.1.3's open circuit.
         .off => try self.b("{s}", .{open}),
@@ -817,7 +818,7 @@ pub fn patOf(self: *const Gen, u: u32) u64 {
 pub fn switchRowDeps(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) u64 {
     var acc = uBit(self.names.branch_u[i]) |
         self.an.unknownDeps(if (react) c.react_val else c.resist_val);
-    if (gen_unit.switchFlowOf(self, i)) |j| {
+    if (plan_topo.switchFlowOf(self.input(), i)) |j| {
         const f = self.lowered.contributions.items[j];
         acc |= self.an.unknownDeps(if (react) f.react_val else f.resist_val);
     }
