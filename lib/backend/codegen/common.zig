@@ -89,7 +89,7 @@ pub fn planCommon(self: *Gen) Error!void {
 
     var vals: std.ArrayList(Mir.Value) = .empty;
     var mode: proof.FloatMode = .optimized;
-    for (self.jobs) |job| {
+    for (self.jobs.list) |job| {
         // §9.4 the display root stays OUT: the core runs once per `eval`,
         // and printing once per Newton iteration is exactly what
         // `emitDisplay` exists to prevent. It keeps its own declaration and

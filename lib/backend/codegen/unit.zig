@@ -27,322 +27,10 @@ const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
-const dynCtrlArgs = codegen.dynCtrlArgs;
-const unitComment = codegen.unitComment;
 
 // =======================================================================
 // Units
 // =======================================================================
-
-/// One emitted unit function, resolved BEFORE anything is written.
-///
-/// `planCommon` has to know the exact set of units and their targets in
-/// order to count how many of them share a value, and `emitUnits` has to
-/// emit exactly that set — a disagreement between the two would leave a
-/// value rendered as a cache read in a unit whose slice was never counted.
-/// One list, built once, walked twice.
-pub const Job = struct {
-    kind: Kind,
-    /// The declaration name. Only the §9.4 display job is emitted as a
-    /// declaration of its own (`emitUnits`); every other job exists to put
-    /// its target in the core, so it has none.
-    name: []const u8 = "",
-    target: Mir.Value,
-    mode: proof.FloatMode,
-    comment: []const u8,
-    /// §3.6.2.2 refusal seeded from the unit's DECLARATION (`Gen.pre_fatal`).
-    pre_fatal: ?[]const u8 = null,
-    /// Index into `units` for an analog-operator job whose §4.5.11/§4.5.12
-    /// coefficient reader is emitted right after it; `none_u32` otherwise.
-    sec_of: u32 = none_u32,
-
-    /// Why the target is in the core. `buildJobs` queues the kinds in this
-    /// order, which is the insert-tolerance order of the core's fields.
-    pub const Kind = enum {
-        /// §5.6 a contribution's resistive target.
-        resist,
-        /// §5.6.1.2 a contribution's reactive target.
-        react,
-        /// §4.5 an analog operator's input, or a §9.17 request.
-        op_input,
-        /// §4.5 Table 4-20 a dynamic operator control argument.
-        ctrl,
-        /// §5.10 a held variable's end-of-block value.
-        held,
-        /// §4.5.15 a `$limit` algorithm argument.
-        limit_arg,
-        /// §9.17.3 a next-iteration limiter value.
-        limit_old,
-        /// §9.17.1 the iteration-rejection request.
-        reject_iteration,
-        /// §5.6.1.3 a runtime retention flag.
-        retained,
-        /// §4.6.4 a noise PSD, exponent or coefficient.
-        noise,
-        /// §4.6.3 a solve-computed AC stimulus magnitude or phase.
-        ac_stim,
-        /// §5.10.3.3 a timer's latest period.
-        timer_period,
-        /// §9.21.1/§9.13 table captures and distribution checks.
-        table_effect,
-        /// §9.4: the one job that is NOT folded into the core, because its
-        /// body has side effects the residual must not trigger. See
-        /// `planCommon`.
-        display,
-    };
-};
-
-pub fn unitMode(self: *const Gen, i: usize) proof.FloatMode {
-    // proof.zig rates the CONTRIBUTION units only (proof.unitCount ==
-    // lower.contributions.len); an analog-operator unit is not covered, so
-    // it takes the safe side.
-    if (i >= self.verdict.unit_modes.len) return .strict;
-    return self.verdict.unit_modes[i];
-}
-
-pub fn buildJobs(self: *Gen) Error!void {
-    var jobs: std.ArrayList(Job) = .empty;
-    for (self.lowered.contributions.items, 0..) |c, i| {
-        const mode = unitMode(self, i);
-        const resist = self.an.rv(c.resist_val);
-        const react = self.an.rv(c.react_val);
-        if (resist != .f_zero) try jobs.append(self.arena, .{
-            .kind = .resist,
-            .target = resist,
-            .mode = mode,
-            .comment = unitComment(c, false),
-        });
-        if (react != .f_zero) try jobs.append(self.arena, .{
-            .kind = .react,
-            .target = react,
-            .mode = mode,
-            .comment = unitComment(c, true),
-        });
-    }
-    for (self.names.units, 0..) |u, i| {
-        if (u.role != .analog_op) continue;
-        const inst = opInstOf(self, @intCast(i)) orelse continue;
-        const args = self.mir.instData(inst).call.args;
-        const k = u.op;
-        try jobs.append(self.arena, .{
-            .kind = .op_input,
-            .target = if (args.len == 0) Mir.Value.f_zero else self.an.rv(args[0]),
-            .mode = unitMode(self, i),
-            .comment = switch (k) {
-                .bound_step, .discontinuity => "§9.17 analog kernel control request",
-                .none, .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .cross, .above, .timer => "§4.5 analog operator input",
-            },
-            .sec_of = if (k == .laplace or k == .zi) @intCast(i) else none_u32,
-        });
-    }
-    // §4.5 Table 4-20's DYNAMIC control arguments, on exactly the terms the
-    // `$limit` arguments below are queued on: `updateState` has only ONE
-    // core sweep, so an argument it must read on the accepted solution has
-    // to be a field of it. The table is normative — for `absdelay` the
-    // dynamic arguments are `expr, td`, for `idt` they are `expr, ic,
-    // assert`, for `idtmod` `expr, ic, modulus, offset` — and VerA used to
-    // refuse every one of them with E0515, which is the opposite of what
-    // the table says.
-    //
-    // ONLY the arguments that do not fold are queued. A literal or a model
-    // parameter still renders over Model and puts nothing in the core, so
-    // every device that exists today is byte-identical.
-    for (self.names.units, 0..) |u, i| {
-        if (u.role != .analog_op) continue;
-        const inst = opInstOf(self, @intCast(i)) orelse continue;
-        const args = self.mir.instData(inst).call.args;
-        for (dynCtrlArgs(u.op)) |ai| {
-            if (ai >= args.len) continue;
-            const v = self.an.rv(args[ai]);
-            if (v == .f_zero) continue;
-            if (!try gen_call.ctrlIsDynamic(self, args[ai])) continue;
-            try jobs.append(self.arena, .{
-                .kind = .ctrl,
-                .target = v,
-                .mode = unitMode(self, i),
-                .comment = "§4.5 Table 4-20 dynamic operator control argument",
-            });
-        }
-    }
-    // §5.10 the end-of-block value of every held variable, so `updateState`
-    // can store it back. Queued AFTER the operator inputs and before the
-    // §9.4 display job for the same insert-tolerance reason: a model that
-    // gains a held variable appends a core field, it renumbers none.
-    //
-    // `.strict` unconditionally: proof.zig rates contributions only.
-    for (self.lowered.held_vars.items) |h| {
-        try jobs.append(self.arena, .{
-            .kind = .held,
-            .target = self.an.rv(h.final),
-            .mode = .strict,
-            .comment = "§5.10 event-assigned variable, held across evaluations",
-        });
-    }
-    // §4.5.15 the arguments of every honoured `$limit`, so `limit` can read
-    // them out of the core instead of re-deriving the temperature prelude.
-    // Queued after the held variables and before the §9.4 display job for
-    // the same insert-tolerance reason: a model that gains a `$limit`
-    // appends core fields, it renumbers none.
-    for (self.limits.calls) |lc| {
-        for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v| {
-            if (v == .f_zero) continue;
-            try jobs.append(self.arena, .{
-                .kind = .limit_arg,
-                .target = v,
-                .mode = .strict,
-                .comment = "§4.5.15 $limit algorithm argument",
-            });
-        }
-    }
-    for (self.lowered.limit_slots.items) |slot| try jobs.append(self.arena, .{
-        .kind = .limit_old,
-        .target = self.an.rv(slot.final),
-        .mode = .strict,
-        .comment = "§9.17.3 next-iteration limiter value",
-    });
-    if (self.lowered.uses.contains(.reject_iteration)) try jobs.append(self.arena, .{
-        .kind = .reject_iteration,
-        .target = self.an.rv(self.lowered.reject_iteration),
-        .mode = .strict,
-        .comment = "§9.17.1 iteration rejection",
-    });
-    // §5.6.1.3 the retention flags of every runtime-selected branch row
-    // (see `Retention.runtime`), so `emitResidual` can read them as core
-    // fields. Queued after the limit arguments and before the §9.4 display
-    // job for the same insert-tolerance reason as both neighbours — and a
-    // module whose every potential contribution is unconditional queues
-    // NOTHING here, so its core fields do not move.
-    for (self.lowered.contributions.items, 0..) |c, i| {
-        if (c.kind != .direct or c.access != .potential) continue;
-        const ret = plan_topo.retention(self.input(), c);
-        if (ret != .runtime) continue;
-        try jobs.append(self.arena, .{
-            .kind = .retained,
-            .target = ret.runtime,
-            .mode = unitMode(self, i),
-            .comment = "§5.6.1.3 retention flag",
-        });
-        if (plan_topo.switchFlowOf(self.input(), i)) |j| {
-            const fret = plan_topo.retention(self.input(), self.lowered.contributions.items[j]);
-            if (fret == .runtime) try jobs.append(self.arena, .{
-                .kind = .retained,
-                .target = fret.runtime,
-                .mode = unitMode(self, j),
-                .comment = "§5.6.1.3 retention flag",
-            });
-        }
-    }
-    // §4.6.4 the PSD argument of every noise generator, so `noisePsd` can
-    // read the model's OWN expression out of the core instead of a host
-    // guessing it back off the Jacobian. Queued after the retention flags
-    // and before the §9.4 display job for the same insert-tolerance reason
-    // as every neighbour.
-    //
-    // The POWER is always routed through the core, even when it folds to a
-    // model constant, because §4.6.4's generators are CONDITIONAL: every
-    // series resistance in the tree spells `if (r > 0) I(a,b) <+
-    // white_noise(4kT/r)`, and a generator whose statement did not execute
-    // has to read back zero. A core live-out does exactly that (`h[k]` is
-    // seeded `S.con(0)` at entry and assigned only inside the branch);
-    // anything rendered outside the core evaluates unconditionally, and
-    // `4kT/0` is not zero, it is an infinity that reaches the host as a
-    // NaN the moment the collapsed branch gives it a zero adjoint gain.
-    // `planPrecompute` declines these targets for the same reason.
-    //
-    // The EXPONENT is exempt: a constant renders inline, because it is only
-    // ever read on a row whose power is non-zero — i.e. one that executed.
-    // §4.6.4.6's coefficient joins them on the exponent's terms: a constant
-    // factor renders inline, and one that depends on the bias
-    // (`I(a,b) <+ V(a,b)*white_noise(p)`) is a core live-out like the power.
-    for (self.noise.rows) |nr| {
-        for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }, 0..) |v, k| {
-            if (v == .f_zero) continue;
-            if (k != 0 and gen_dispatch.psdConst(self, v) != null) continue;
-            try jobs.append(self.arena, .{
-                .kind = .noise,
-                .target = v,
-                .mode = .strict,
-                .comment = "§4.6.4 noise PSD",
-            });
-        }
-    }
-    // §4.6.3 the same, for an `ac_stim` magnitude or phase the SOLVE
-    // computes. A.8.2 makes both `analog_expression`, so `acStim` has to
-    // answer at a state vector exactly as `noisePsd` does, and the only
-    // way it reads one is out of the core sweep.
-    //
-    // ONLY the arguments that do not fold, on the terms Table 4-20's
-    // dynamic arguments are queued on above: a literal or a model
-    // parameter renders over `Model` and puts nothing here, so every
-    // device with a constant stimulus keeps the fields it had.
-    for (self.noise.ac_rows) |nr| {
-        for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
-            if (v == .f_zero) continue;
-            if (!try gen_call.ctrlIsDynamic(self, v)) continue;
-            try jobs.append(self.arena, .{
-                .kind = .ac_stim,
-                .target = v,
-                .mode = .strict,
-                .comment = "§4.6.3 AC stimulus magnitude or phase",
-            });
-        }
-    }
-    // §5.10.3.3: "If the start_time or period expressions change value
-    // during the evaluation of the analog block, the next event will be
-    // scheduled based on the LATEST value of the start_time and period."
-    // The start_time is already the operator's input, so it rides the core;
-    // the period was only ever read through `f64Expr`, which is a HOST-side
-    // spelling and answered a solve-computed period with E0515 — the clause
-    // says clause-5 event arguments are `analog_expression`s, and §4.5.14's
-    // constant-or-parameter rule is about the clause-4 operators. Queued
-    // here, after the noise PSDs and before the §9.4 display job, for the
-    // same insert-tolerance reason as every neighbour: a model that gains a
-    // dynamic period appends a core field and renumbers none.
-    for (self.names.units, 0..) |u, i| {
-        if (u.role != .analog_op or u.op != .timer) continue;
-        const args = opArgs(self, i);
-        if (args.len < 2) continue;
-        if (self.an.foldConst(args[1], 0, false) != null) continue; // renders inline
-        const v = self.an.rv(args[1]);
-        if (v == .f_zero) continue;
-        try jobs.append(self.arena, .{
-            .kind = .timer_period,
-            .target = v,
-            .mode = .strict,
-            .comment = "§5.10.3.3 the latest period, read by the schedule",
-        });
-    }
-    if (self.lowered.table_effect != .f_zero) try jobs.append(self.arena, .{
-        .kind = .table_effect,
-        .target = self.an.rv(self.lowered.table_effect),
-        .mode = .strict,
-        .comment = "§9.21.1 table captures and §9.13 distribution checks in source order",
-    });
-    // §9.4 the display tasks, as ONE unit. Queued last, so no existing job —
-    // and therefore no existing declaration name — moves when a model gains
-    // or loses a `$strobe`.
-    //
-    // `.strict` unconditionally: proof.zig rates contributions only, a print
-    // is not on the residual path, so there is nothing here for `.optimized`
-    // to speed up and no verdict that would justify claiming it.
-    const root = self.an.rv(self.lowered.display_root);
-    if (self.display == .emit and root != .f_zero) {
-        var buf: [naming.max_name_len]u8 = undefined;
-        const n = naming.unitName(&buf, self.mir.name, .{
-            .role = .display,
-            .target = "tasks",
-        }) catch return error.NameTooLong;
-        self.display_name = try self.arena.dupe(u8, n);
-        try jobs.append(self.arena, .{
-            .kind = .display,
-            .name = self.display_name,
-            .target = root,
-            .mode = .strict,
-            .comment = "§9.4 display tasks, in source order",
-        });
-    }
-    self.jobs = jobs.items;
-}
 
 pub fn emitUnits(self: *Gen) Error!void {
     try self.w("// ---- the model, in one declaration ----\n\n", .{});
@@ -362,7 +50,7 @@ pub fn emitUnits(self: *Gen) Error!void {
         if (u.role != .analog_op) continue;
         const k = u.op;
         if (k != .laplace and k != .zi) continue;
-        if (opInstOf(self, @intCast(i)) == null) continue;
+        if (self.names.opInstOf(@intCast(i)) == null) continue;
         const p = cg_filters.planOf(self, i);
         if (p.err != null) continue;
         const lo = self.out.items.len;
@@ -370,7 +58,7 @@ pub fn emitUnits(self: *Gen) Error!void {
         const at = try cg_filters.emitFilterSections(self, self.names.unit_names[i], p, k == .zi);
         try gen_file.recordUnitFile(self, nm, lo, at);
     }
-    for (self.jobs) |job| {
+    for (self.jobs.list) |job| {
         if (job.kind != .display) continue;
         self.pre_fatal = job.pre_fatal;
         // §9.5 the one unit where a descriptor operation may actually happen.
@@ -406,7 +94,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     // contribution, so a `@compileError` in any single unit already failed
     // the whole device.
     self.fatal = null;
-    for (self.jobs) |job| {
+    for (self.jobs.list) |job| {
         if (job.kind == .display) continue;
         if (job.pre_fatal) |m| {
             self.fatal = m;
@@ -435,7 +123,7 @@ pub fn emitCommon(self: *Gen) Error!void {
         \\/// updateState, noisePsd, collapse, limit, seed — share ONE
         \\/// out-of-line instantiation instead of each inlining the model.
         \\
-    , .{ self.jobs.len, self.jobs.len });
+    , .{ self.jobs.list.len, self.jobs.list.len });
     const at_fn = self.out.items.len;
     try self.w("fn {s}(comptime S: type, ", .{self.common_name});
     const at_x = self.out.items.len;
@@ -486,12 +174,6 @@ pub fn emitCommon(self: *Gen) Error!void {
     try gen_file.recordUnitFile(self, self.common_name, lo, at_fn);
 }
 
-/// The operator `call` unit `unit` was enumerated from — `naming` records it.
-pub fn opInstOf(self: *const Gen, unit: u32) ?Mir.Inst {
-    const inst = self.names.units[unit].inst;
-    return if (inst == .none) null else inst;
-}
-
 /// The unit enumerated from operator `call` `inst`, or `none_u32`.
 // ponytail: a scan over the unit list (tens of entries), once per rendered
 // operator; an nv-sized reverse map is what this replaced.
@@ -502,17 +184,11 @@ pub fn unitOfInst(self: *const Gen, inst: Mir.Inst) u32 {
     return none_u32;
 }
 
-/// Call arguments of the operator that owns unit `i` (empty if it has none).
-pub fn opArgs(self: *const Gen, i: usize) []const Mir.Value {
-    const inst = opInstOf(self, @intCast(i)) orelse return &.{};
-    return self.mir.instData(inst).call.args;
-}
-
 /// Which field of the core holds analog-operator unit `i`'s §4.5 input, or
 /// `none_u32` for an operator called with no argument (its input is the
 /// literal zero and never reaches the core).
 pub fn opInputIdx(self: *const Gen, i: u32) u32 {
-    const args = opArgs(self, i);
+    const args = self.names.opArgs(self.mir, i);
     if (args.len == 0) return none_u32;
     return self.lo_idx[@intFromEnum(self.an.rv(args[0]))];
 }

@@ -800,7 +800,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                 // only for a SIGNAL-valued td — a constant or parameter one
                 // is already its own first value, so the common site keeps
                 // exactly the fields it had.
-                if (try gen_call.absdelayFreezes(self, gen_unit.opArgs(self, i))) try self.w(
+                if (try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i))) try self.w(
                     "    {s}__td: f64 = 0.0, // §4.5.7 td, frozen at the first evaluation\n",
                     .{n},
                 );
@@ -811,7 +811,7 @@ pub fn emitInstance(self: *Gen) Error!void {
             // is what keeps it a codegen-time constant even though every
             // coefficient VALUE is a runtime read of Model.
             .laplace, .zi => {
-                if (gen_unit.opInstOf(self, @intCast(i)) == null) continue;
+                if (self.names.opInstOf(@intCast(i)) == null) continue;
                 const p = cg_filters.planOf(self, i);
                 if (p.err != null) continue;
                 try self.w("    {s}__u: [{d}]f64 = @splat(0.0), // §4.5.{s}\n", .{

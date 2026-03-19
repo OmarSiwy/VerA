@@ -39,6 +39,18 @@ pub const Names = struct {
     held_names: [][]const u8 = &.{},
     /// Parameters queried by §9.19 `$param_given` (they gain a `__given` flag).
     p_given: []bool = &.{},
+
+    /// The operator `call` unit `unit` was enumerated from — `naming` records it.
+    pub fn opInstOf(self: *const Names, unit: u32) ?Mir.Inst {
+        const inst = self.units[unit].inst;
+        return if (inst == .none) null else inst;
+    }
+
+    /// Call arguments of the operator that owns unit `i` (empty if it has none).
+    pub fn opArgs(self: *const Names, mir: *const Mir, i: usize) []const Mir.Value {
+        const inst = self.opInstOf(@intCast(i)) orelse return &.{};
+        return mir.instData(inst).call.args;
+    }
 };
 
 /// `n_unit_modes` is `Verdict.unit_modes.len`: the canonical-order contract
