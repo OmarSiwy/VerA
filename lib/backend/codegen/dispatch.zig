@@ -870,7 +870,7 @@ pub fn nodeVoltage(self: *Gen, node: u16) Error!void {
 /// the whole `noise_gens` decl with it, rather than leaving a table that is
 /// quietly missing a generator. See `refuseNoise`.
 pub fn emitNoiseTable(self: *Gen) Error!void {
-    if (self.noise_fatal) |msg| {
+    if (self.noise.fatal) |msg| {
         // A `@compileError` VALUE, not a statement: the decl exists, so a
         // host that never touches noise still builds, and `contract.validate`
         // — which reads `noise_gens` — reports this message instead of a
@@ -879,16 +879,16 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
         try self.w("pub const noise_gens = @compileError(\"{s}\");\n\n", .{msg});
         return;
     }
-    if (self.noise_rows.len == 0) return;
-    if (self.noise_tabs.len != 0) {
+    if (self.noise.rows.len == 0) return;
+    if (self.noise.tabs.len != 0) {
         try self.w(
             \\/// §4.6.4.3/.4 the tabulated PSDs, ascending in frequency (the
             \\/// clause's own sort, done here so the host never repeats it).
             \\pub const noise_tables = [_]contract.NoiseTable{{
             \\
         , .{});
-        for (self.noise_tabs, 0..) |pts, k| {
-            const log = for (self.noise_rows) |nr| {
+        for (self.noise.tabs, 0..) |pts, k| {
+            const log = for (self.noise.rows) |nr| {
                 if (nr.table == @as(u16, @intCast(k))) break nr.kind == .table_log;
             } else false;
             try self.w("    .{{ .interp = .{s}, .points = &.{{", .{if (log) "log" else "linear"});
@@ -905,7 +905,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
         try emitNoiseTablePoints(self);
     }
     try self.w("/// §4.6.4 noise sources declared by the model.\npub const noise_gens = [_]contract.NoiseGen(Self){{\n", .{});
-    for (self.noise_rows) |nr| {
+    for (self.noise.rows) |nr| {
         try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .kind = .{s}, .source = {d}", .{
             self.names.u_names[nr.row], self.names.u_names[nr.col], contractNoiseKind(nr.kind), nr.source,
         });
@@ -932,7 +932,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
     try self.w("inst: *const Instance) [noise_gens.len]contract.PsdTerm {{\n", .{});
-    const uses_core = for (self.noise_rows) |nr| {
+    const uses_core = for (self.noise.rows) |nr| {
         if (coreIdx(self, nr.pwr) != null or coreIdx(self, nr.exp) != null or coreIdx(self, nr.coeff) != null) break true;
     } else false;
     if (uses_core) {
@@ -945,7 +945,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
         gen_unit.patchParam(self, at_inst, "inst".len);
     }
     try self.w("    return .{{\n", .{});
-    for (self.noise_rows) |nr| {
+    for (self.noise.rows) |nr| {
         // §4.6.4.6's per-use factor. It rides beside the PSD rather than
         // being folded into it: a §4.6.4.3 table row's spectrum is comptime
         // data that cannot absorb a bias-dependent factor, and the cross
@@ -960,7 +960,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
                 try psdRef(self, nr.pwr, false), try psdRef(self, nr.exp, true), coeff,
             }),
             .thermal => try self.w("        .{{ .white = {s}, .coeff = {s} }},\n", .{ try psdRef(self, nr.pwr, false), coeff }),
-            // Split off by `planNoise`; a stimulus never reaches this table.
+            // Split off by `plan/noise.zig`; a stimulus never reaches this table.
             .ac_stim => unreachable,
         }
     }
@@ -994,10 +994,10 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
 /// than in a precondition nobody can check.
 pub fn emitNoiseTablePoints(self: *Gen) Error!void {
     var any = false;
-    for (self.noise_tab_vals) |mvs| any = any or mvs.len != 0;
+    for (self.noise.tab_vals) |mvs| any = any or mvs.len != 0;
     if (!any) return;
     var total: usize = 0;
-    for (self.noise_tabs) |pts| total += pts.len;
+    for (self.noise.tabs) |pts| total += pts.len;
     try self.w(
         \\/// §4.6.4.3 every tabulated knot AT THIS CARD, in `noise_tables`
         \\/// order and ascending in frequency within each table. Table k is
@@ -1012,8 +1012,8 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
     self.uses_model = false;
     var body: std.ArrayList(u8) = .empty;
     var at: usize = 0;
-    for (self.noise_tabs, 0..) |pts, k| {
-        const mvs = if (k < self.noise_tab_vals.len) self.noise_tab_vals[k] else &.{};
+    for (self.noise.tabs, 0..) |pts, k| {
+        const mvs = if (k < self.noise.tab_vals.len) self.noise.tab_vals[k] else &.{};
         for (pts, 0..) |p, i| {
             const pair: [2][]const u8 = if (i < mvs.len) .{
                 (try gen_call.f64Const(self, mvs[i][0], 0, false)) orelse try gen_file.fmtF64(self, p[0]),
@@ -1030,7 +1030,7 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
     try self.w("{s}", .{body.items});
     try self.w("    }};\n", .{});
     at = 0;
-    for (self.noise_tabs) |pts| {
+    for (self.noise.tabs) |pts| {
         try self.w("    contract.sortNoiseTable(pts[{d}..{d}]);\n", .{ at, at + pts.len });
         at += pts.len;
     }
@@ -1063,7 +1063,7 @@ pub fn emitNoiseTablePoints(self: *Gen) Error!void {
 /// core, which is what keeps a constant-magnitude device's body what it
 /// always was.
 pub fn emitAcTable(self: *Gen) Error!void {
-    if (self.ac_rows.len == 0) return;
+    if (self.noise.ac_rows.len == 0) return;
 
     // Rendered BEFORE anything is written, so the `x`/`model`/`inst`
     // parameters can be patched to `_` when nothing reached them — same
@@ -1073,10 +1073,10 @@ pub fn emitAcTable(self: *Gen) Error!void {
     const saved_inst = self.uses_inst;
     self.uses_model = false;
     self.uses_inst = false;
-    const vals = try self.arena.alloc([2][]const u8, self.ac_rows.len);
+    const vals = try self.arena.alloc([2][]const u8, self.noise.ac_rows.len);
     var all_stated = true;
     var uses_core = false;
-    for (self.ac_rows, vals) |nr, *v| {
+    for (self.noise.ac_rows, vals) |nr, *v| {
         // §4.6.4.6's per-use coefficient, FOLDED into the magnitude rather
         // than exported beside it. A phasor is scaled by a real factor
         // exactly — `c·m·e^(jφ)` — including the sign, which rides as a
@@ -1103,7 +1103,7 @@ pub fn emitAcTable(self: *Gen) Error!void {
     if (!all_stated) return refuseAc(self);
 
     try self.w("/// §4.6.3 AC stimulus sources declared by the model.\npub const ac_gens = [_]contract.AcGen(Self){{\n", .{});
-    for (self.ac_rows) |nr| {
+    for (self.noise.ac_rows) |nr| {
         try self.w("    .{{ .row = @intFromEnum(U.{s}), .col = @intFromEnum(U.{s}), .name = \"{f}\" }},\n", .{
             self.names.u_names[nr.row], self.names.u_names[nr.col], std.zig.fmtString(nr.name),
         });
@@ -1139,7 +1139,7 @@ pub fn emitAcTable(self: *Gen) Error!void {
 /// is declared far earlier in the file — same question `noise_rows.len != 0`
 /// answers for `noisePsd`, which always sweeps.
 pub fn acUsesCore(self: *Gen) Error!bool {
-    for (self.ac_rows) |nr| {
+    for (self.noise.ac_rows) |nr| {
         for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
             if (v == .f_zero) continue;
             if (try gen_call.ctrlIsDynamic(self, v)) return true;

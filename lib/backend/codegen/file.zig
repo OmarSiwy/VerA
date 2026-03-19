@@ -124,7 +124,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // (`plan/topology.zig`) before any residual is emitted.
     const cpairs = self.topo.cpairs;
     if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or pathLatches(self) or
-        self.hp_vals.len != 0 or self.noise_rows.len != 0 or try gen_dispatch.acUsesCore(self))
+        self.hp_vals.len != 0 or self.noise.rows.len != 0 or try gen_dispatch.acUsesCore(self))
     {
         try self.out.appendSlice(self.gpa, rscalar_txt);
         // Pinned to the contract's primitive list, same as tb.zig's

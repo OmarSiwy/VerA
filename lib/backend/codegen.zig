@@ -55,6 +55,7 @@ const plan_input = @import("codegen/plan/input.zig");
 const plan_names = @import("codegen/plan/names.zig");
 const plan_topo = @import("codegen/plan/topology.zig");
 const plan_limit = @import("codegen/plan/limit.zig");
+const plan_noise = @import("codegen/plan/noise.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
@@ -349,26 +350,8 @@ pub const Gen = struct {
     helpers: []const u8 = "",
 
     // ---- the shared core ("WHY THIS EXISTS", further down this struct) ----
-    /// §4.6.4 `noise_gens` and `noisePsd`, one row each, built by `planNoise`.
-    noise_rows: []gen_unit.NoiseRow = &.{},
-    /// §4.6.4.3/.4 `noise_tables`, one entry per tabulated generator, folded
-    /// and sorted by `planNoise`. Position k is `noise_rows[j].table == k`.
-    noise_tabs: []const []const [2]f64 = &.{},
-    /// The same knots as `noise_tabs`, in the same order, still as MIR values —
-    /// and only for a table A.8.2's `parameter_identifier` spelling made
-    /// MODEL-DEPENDENT, so `noise_tabs` holds its declared defaults and only
-    /// this can state the card's. An empty slice is a table of literals, which
-    /// needs nothing beyond the comptime export. See `emitNoiseTablePoints`.
-    noise_tab_vals: []const []const [2]Mir.Value = &.{},
-    /// §4.6.3 `ac_gens` and `acStim`, one row each. Same walk as `noise_rows`
-    /// and separated from it by `kind`: a stimulus is not a generator and must
-    /// never reach `noise_gens`, but it reaches codegen through the same
-    /// `Contribution.noise_srcs` set.
-    ac_rows: []gen_unit.NoiseRow = &.{},
-    /// Set by `refuseNoise`: the §4.6.4 export VerA will not write, as the
-    /// message the generated `@compileError` carries. First one wins — a device
-    /// is refused once, and the diagnostics carry the rest.
-    noise_fatal: ?[]const u8 = null,
+    /// §4.6.3/§4.6.4 the small-signal source rows and tables — `plan/noise.zig`.
+    noise: plan_noise.Noise = .{},
     /// Every unit function to emit, resolved before any of them is written.
     jobs: []gen_unit.Job = &.{},
     /// Position of this Value in the core's returned struct, or `none_u32`.
@@ -613,7 +596,11 @@ pub const Gen = struct {
         self.limits = try plan_limit.plan(self.input(), self.names.u_names);
         // Before `buildJobs`: §4.6.4 the PSD arguments become core live-outs
         // too, and `buildJobs` is what queues them.
-        try gen_unit.planNoise(self);
+        self.noise = try plan_noise.plan(self.input());
+        for (self.noise.refusals.items) |r| {
+            if (self.diags) |bag| try bag.add(.codegen, r.code, self.lowered.tokenSpan(r.tok), "{s}", .{r.msg});
+            self.any_fatal = true;
+        }
         try gen_unit.buildJobs(self);
         try gen_common.planCommon(self);
         try gen_hoist.planPrecompute(self);
@@ -899,6 +886,7 @@ test {
     _ = plan_names;
     _ = plan_topo;
     _ = plan_limit;
+    _ = plan_noise;
     _ = Gen.gen_common;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;
