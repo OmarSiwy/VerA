@@ -54,6 +54,7 @@ const naming = @import("naming.zig");
 const plan_input = @import("codegen/plan/input.zig");
 const plan_names = @import("codegen/plan/names.zig");
 const plan_topo = @import("codegen/plan/topology.zig");
+const plan_limit = @import("codegen/plan/limit.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
@@ -512,11 +513,8 @@ pub const Gen = struct {
     /// Core field index holding each held variable's end-of-block value, or
     /// `none_u32` when it folded to `.f_zero`. Filled by `planCommon`.
     held_idx: []u32 = &.{},
-    /// §4.5.15 the `$limit` call sites this device honours, in source order,
-    /// and one line per site it does not. Filled by `cg_limit.collect` before
-    /// `buildJobs`, which queues their algorithm arguments into the core.
-    limits: []cg_limit.LimitCall = &.{},
-    limits_declined: [][]const u8 = &.{},
+    /// §4.5.15 the honoured and declined `$limit` sites — `plan/limit.zig`.
+    limits: plan_limit.Limits = .{},
     /// §4.5.11/§4.5.12 each filter operator's plan, by unit index (`null` for
     /// every other unit). Filled once by `cg_filters.planAll`.
     filters: []?cg_filters.FilterPlan = &.{},
@@ -612,7 +610,7 @@ pub const Gen = struct {
         try cg_filters.planAll(self);
         // Before `buildJobs`: §4.5.15 the algorithm arguments of every honoured
         // `$limit` become core live-outs, and `buildJobs` is what queues them.
-        try cg_limit.collect(self);
+        self.limits = try plan_limit.plan(self.input(), self.names.u_names);
         // Before `buildJobs`: §4.6.4 the PSD arguments become core live-outs
         // too, and `buildJobs` is what queues them.
         try gen_unit.planNoise(self);
@@ -900,6 +898,7 @@ const gen_test = @import("codegen/test.zig");
 test {
     _ = plan_names;
     _ = plan_topo;
+    _ = plan_limit;
     _ = Gen.gen_common;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;
