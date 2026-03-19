@@ -55,7 +55,7 @@ fn scanAccept(self: *Gen) Error!Accept {
         if (!opHasState(k)) continue;
         a.uses_core = a.uses_core or gen_unit.opInputIdx(self, @intCast(i)) != none_u32;
     }
-    for (self.held_idx) |k| a.uses_core = a.uses_core or k != none_u32;
+    for (self.core.held_idx) |k| a.uses_core = a.uses_core or k != none_u32;
     a.uses_core = a.uses_core or gen_file.pathLatches(self);
     a.reads_t_prev = a.reads_t_prev or a.uses_dt;
     return a;
@@ -192,10 +192,10 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
     // committed base ONLY at stateCtl(.commit): a rejected attempt leaves
     // pb/pq untouched, so the retry reopens on the accepted charge with a
     // zero α·Δq residual.
-    for (self.prev_lo, 0..) |lo, k| {
+    for (self.core.prev_lo, 0..) |lo, k| {
         try self.w("    inst.wb__{d} = m.f{d}{s}; // path_prev staging\n", .{ k, lo, val });
     }
-    for (self.acc_lo, 0..) |lo, k| {
+    for (self.core.acc_lo, 0..) |lo, k| {
         try self.w("    inst.wq__{d} = m.f{d}{s}; // path_acc staging\n", .{ k, lo, val });
     }
     if (uses_dt) try self.w("    const dt = inst.abstime - state.t_prev;\n", .{});
@@ -401,7 +401,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
     // the operator history above — writing it from `eval` would latch a
     // Newton iterate that the solver goes on to throw away.
     for (self.lowered.held_vars.items, 0..) |h, i| {
-        const k = self.held_idx[i];
+        const k = self.core.held_idx[i];
         const n = self.names.held_names[i];
         if (k == none_u32) {
             // The value folded away entirely (never assigned outside the
@@ -543,7 +543,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
     });
     for (pairs, 0..) |p, pi| {
         const fi = @intFromEnum(self.an.rv(p.flag));
-        const k = self.lo_idx[fi];
+        const k = self.core.lo_idx[fi];
         assert(k != none_u32); // `buildJobs` queues every runtime retention flag
         if (self.an.vty[fi] == .int)
             try self.w("    const a{d} = (m.f{d} != 0);", .{ pi, k })

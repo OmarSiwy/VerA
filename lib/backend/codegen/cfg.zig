@@ -38,7 +38,7 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     // the whole body after them, so the region ends before it.
     self.hp_dirty = true;
     try self.b("return .{{\n", .{});
-    for (self.lo_vals, 0..) |v, k| {
+    for (self.core.lo_vals, 0..) |v, k| {
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{k});
         try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
@@ -48,7 +48,7 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     // way `precompute` can see them (`planHoistPrefix`).
     for (self.hp_vals, 0..) |v, j| {
         try self.ind(depth + 1);
-        try self.b(".f{d} = ", .{self.lo_vals.len + j});
+        try self.b(".f{d} = ", .{self.core.lo_vals.len + j});
         try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
         try self.b(",\n", .{});
     }

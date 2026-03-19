@@ -321,7 +321,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                 return try std.fmt.allocPrint(self.arena, "inst.pc__{d}", .{self.pc_idx[i]});
             }
             if (i < self.an.nv and self.plan.cached(v))
-                return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.lo_idx[i]});
+                return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.core.lo_idx[i]});
             if (i < self.an.nv and self.plan.slot[i] != none_u32) {
                 gen_unit.probeUse(self, self.plan.slot[i]);
                 return try std.fmt.allocPrint(self.arena, "{s}.val()", .{try gen_unit.slotRefStr(self, i)});
@@ -507,7 +507,7 @@ pub fn absdelayFreezes(self: *Gen, args: []const Mir.Value) Error!bool {
 pub fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8) Error![]const u8 {
     if (i >= args.len) return dflt;
     if (try f64Const(self, args[i], 0, false)) |s| return s;
-    const k = self.lo_idx[@intFromEnum(self.an.rv(args[i]))];
+    const k = self.core.lo_idx[@intFromEnum(self.an.rv(args[i]))];
     if (k == none_u32) return f64Expr(self, args[i]);
     return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
 }
@@ -538,7 +538,7 @@ pub fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8)
 pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
     if (args.len < 2) return "0.0";
     if (self.an.foldConst(args[1], 0, false) == null) {
-        const lo = self.lo_idx[@intFromEnum(self.an.rv(args[1]))];
+        const lo = self.core.lo_idx[@intFromEnum(self.an.rv(args[1]))];
         if (lo != none_u32) return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{lo});
     }
     return argF64(self, args, 1, "0.0");
@@ -1326,7 +1326,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     // nothing references — which Zig rejects.
     const needs_in = opNeedsInput(k);
     // The input is a `Mir.Value` of the body being rendered, not a call to a
-    // declaration of its own: `planCommon` makes every operator input a
+    // declaration of its own: `plan_core.plan` makes every operator input a
     // field of the core, so inside the core it is the local that already
     // holds it and inside the §9.4 `display` unit it is a cache read.
     // `callArgIsValue` still returns false for an operator argument — the

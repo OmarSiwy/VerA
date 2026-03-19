@@ -380,7 +380,7 @@ pub fn emitPrep(g: *Gen) Error!void {
     , .{});
     for (g.lp_vals, 0..) |v, k| {
         const i = @intFromEnum(v);
-        const f = g.lo_idx[i];
+        const f = g.core.lo_idx[i];
         std.debug.assert(f != none_u32); // `buildJobs` queues every argv and sign
         // An integer core field (a `parameter integer` polarity) is a bare i64.
         // It is read ONLY through `< 0` sign tests (`emitClamp`'s `sg`,
@@ -444,7 +444,7 @@ fn emitPrepTest(g: *Gen) Error!void {
     , .{});
     for (g.lp_vals, 0..) |v, k| {
         const i = @intFromEnum(v);
-        const f = g.lo_idx[i];
+        const f = g.core.lo_idx[i];
         if (g.an.vty[i] == .int)
             try g.w("        try expectPrepBits(inst.lp__{d}, @floatFromInt(m.f{d}));\n", .{ k, f })
         else
@@ -767,7 +767,7 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
     // Hoisted: `precompute` latched it off ONE core evaluation at x = 0, which
     // `solveConst` proved is this value at every iterate. See `planPrep`.
     if (g.lp_idx[i] != none_u32) return g.w("inst.lp__{d}", .{g.lp_idx[i]});
-    const k = g.lo_idx[i];
+    const k = g.core.lo_idx[i];
     std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
     // An integer core field (a `parameter integer` sign) is a bare i64, not
     // a Dual — no `.v` to read.

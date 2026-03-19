@@ -128,7 +128,7 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
     }
     // Hoisted: computed once by the common declaration, read here out of the
     // cache the body opened with — see "the shared core" in `Plan`.
-    if (i < self.an.nv and self.plan.cached(v)) return self.b("c.f{d}", .{self.lo_idx[i]});
+    if (i < self.an.nv and self.plan.cached(v)) return self.b("c.f{d}", .{self.core.lo_idx[i]});
     if (i < self.an.nv and self.plan.slot[i] != none_u32) {
         gen_unit.probeUse(self, self.plan.slot[i]);
         try gen_unit.writeSlotRef(self, i);
@@ -530,10 +530,10 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         // committed point (AC reads the pure capacitance form there).
         .path_prev, .path_acc => {
             const v = self.an.rv(a);
-            const fam = if (op == .path_prev) self.prev_vals else self.acc_vals;
+            const fam = if (op == .path_prev) self.core.prev_vals else self.core.acc_vals;
             const k = for (fam, 0..) |fv, fk| {
                 if (fv == v) break fk;
-            } else unreachable; // planCommon queued every site
+            } else unreachable; // plan_core.plan queued every site
             self.uses_inst = true; // the latch read keeps `inst` in the signature
             try self.b("S.con(inst.{s}__{d})", .{ @as([]const u8, if (op == .path_prev) "pb" else "pq"), k });
         },

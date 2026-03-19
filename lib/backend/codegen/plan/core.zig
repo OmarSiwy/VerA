@@ -1,21 +1,55 @@
 //! The shared core: values several units read, computed once per eval.
 //!
-//! In: every unit's backward slice. Out: the core's live-out set and its emission order
-//! (the part of eval/q all units share).
+//! In: the job list. Out: the core's live-out set, its field order, the
+//! §5.6.1.2 path latches and §5.10 held values that read it, its name, and the
+//! float mode it compiles in (the part of eval/q all units share).
 //!
-//! LRM clauses this file's code cites: §4.5, §5.9, §5.10, §9.4.
+//! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and the jobs and
+//! returns a `Core`. No `*Gen`, no writer.
 //!
-//! Cut verbatim from `codegen.zig`. Functions take `self: *Gen` and are called
-//! directly, `gen_common.f(self, ...)`; `codegen.zig` aliases only what other modules call.
+//! LRM clauses this file's code cites: §4.3, §4.5, §5.6.1.2, §5.9, §5.10, §9.4.
+//!
+//! Was `codegen/common.zig` (`planCommon`); only the receiver changed.
 
 const std = @import("std");
-const codegen = @import("../codegen.zig");
-const Gen = codegen.Gen;
 const Mir = @import("ir").Mir;
 const proof = @import("ir").proof;
-const naming = @import("../naming.zig");
-const Error = codegen.Error;
-const none_u32 = codegen.none_u32;
+const naming = @import("../../naming.zig");
+const Input = @import("input.zig").Input;
+const Job = @import("jobs.zig").Job;
+
+pub const Error = std.mem.Allocator.Error || error{NameTooLong};
+const none_u32 = std.math.maxInt(u32);
+
+pub const Core = struct {
+    /// Position of this Value in the core's returned struct, or `none_u32`.
+    /// Only the unit TARGETS cross the declaration boundary; every one of the
+    /// ~22 000 subexpressions behind them stays a local of the core.
+    lo_idx: []u32 = &.{},
+    /// The returned values, in job order — `lo_idx` is the index into this.
+    lo_vals: []Mir.Value = &.{},
+    /// §5.6.1.2 path-integrated reactive latches: rv-resolved operand of
+    /// every `path_prev`/`path_acc`, each family deduplicated (CSE-shared
+    /// sites share a latch — same committed value). `*_lo[k]` is the
+    /// operand's slot in `lo_vals`. `path_prev` renders `S.con(inst.pb__k)`
+    /// (operand at the last accepted solve), `path_acc` renders
+    /// `S.con(inst.pq__k)` (sum of committed operands — the charge base).
+    /// `updateState` STAGES both operands into `wb__/wq__` once per Newton
+    /// iterate; `stateCtl(.commit)` — operating-point exit and transient
+    /// accepted step — latches `pb = wb`, `pq += wq` and zeroes `wq` so a
+    /// stray double commit adds 0, not a doubled increment.
+    prev_vals: []Mir.Value = &.{},
+    prev_lo: []u32 = &.{},
+    acc_vals: []Mir.Value = &.{},
+    acc_lo: []u32 = &.{},
+    /// Core field index holding each held variable's end-of-block value, or
+    /// `none_u32` when it folded to `.f_zero`.
+    held_idx: []u32 = &.{},
+    /// `<module>__common__core`, or empty for a model with no targets at all.
+    name: []const u8 = "",
+    /// §4.3 the STRICTEST mode of every job the core serves — see `plan`.
+    mode: proof.FloatMode = .optimized,
+};
 
 // ---------------------------------------------------- the shared core ----
 //
@@ -69,7 +103,7 @@ const none_u32 = codegen.none_u32;
 //   CORPUS: `vbic13_4t` is the public VBIC 1.3 four-terminal reference
 //   Verilog-A, from the same 38-model set — likewise not vendored here.
 //
-// WHAT IS LOST. The per-unit `@setFloatMode` — see `common_mode`. Nothing
+// WHAT IS LOST. The per-unit `@setFloatMode` — see `Core.mode`. Nothing
 // else: `contract.zig` exposes only `eval`/`q`, and engine.zig (:511, :534,
 // :1216) always evaluates the whole residual, so a unit was never
 // independently callable in the first place.
@@ -82,21 +116,22 @@ const none_u32 = codegen.none_u32;
 /// sense `naming.zig` makes declaration names insert-tolerant: adding a
 /// contribution at the end of a module appends fields, it does not renumber
 /// them.
-pub fn planCommon(self: *Gen) Error!void {
-    const a = self.arena;
-    self.lo_idx = try a.alloc(u32, self.an.nv);
+pub fn plan(in: Input, jobs: []const Job) Error!Core {
+    const a = in.arena;
+    var self: Core = .{};
+    self.lo_idx = try a.alloc(u32, in.an.nv);
     @memset(self.lo_idx, none_u32);
 
     var vals: std.ArrayList(Mir.Value) = .empty;
     var mode: proof.FloatMode = .optimized;
-    for (self.jobs.list) |job| {
+    for (jobs) |job| {
         // §9.4 the display root stays OUT: the core runs once per `eval`,
         // and printing once per Newton iteration is exactly what
         // `emitDisplay` exists to prevent. It keeps its own declaration and
         // reads the core like the units used to.
         if (job.kind == .display) continue;
         mode = .strictest(mode, job.mode);
-        const v = self.an.rv(job.target);
+        const v = in.an.rv(job.target);
         if (v == .f_zero) continue; // an operator with no input; rendered inline
         if (self.lo_idx[@intFromEnum(v)] != none_u32) continue;
         self.lo_idx[@intFromEnum(v)] = @intCast(vals.items.len);
@@ -109,12 +144,12 @@ pub fn planCommon(self: *Gen) Error!void {
         var pl: std.ArrayList(u32) = .empty;
         var qv: std.ArrayList(Mir.Value) = .empty;
         var ql: std.ArrayList(u32) = .empty;
-        for (0..self.mir.insts.len) |ii| {
-            const row = self.mir.insts.get(ii);
+        for (0..in.mir.insts.len) |ii| {
+            const row = in.mir.insts.get(ii);
             if (row.op != .path_prev and row.op != .path_acc) continue;
             const fam_v = if (row.op == .path_prev) &pv else &qv;
             const fam_l = if (row.op == .path_prev) &pl else &ql;
-            const v = self.an.rv(@enumFromInt(row.a));
+            const v = in.an.rv(@enumFromInt(row.a));
             // ponytail: keep first-seen order with the stdlib membership scan.
             if (std.mem.indexOfScalar(Mir.Value, fam_v.items, v) != null) continue;
             if (self.lo_idx[@intFromEnum(v)] == none_u32) {
@@ -129,25 +164,54 @@ pub fn planCommon(self: *Gen) Error!void {
         self.acc_vals = qv.items;
         self.acc_lo = ql.items;
     }
-    self.common_mode = mode;
+    self.mode = mode;
     self.lo_vals = vals.items;
     // §5.10 which core field each held variable's write-back reads. Done
     // here rather than by scanning `jobs` in `emitStateMachine`, because
     // `lo_idx` is only meaningful once every job has been folded in.
-    self.held_idx = try a.alloc(u32, self.lowered.held_vars.items.len);
-    for (self.lowered.held_vars.items, 0..) |h, i| {
-        const v = self.an.rv(h.final);
+    self.held_idx = try a.alloc(u32, in.lowered.held_vars.items.len);
+    for (in.lowered.held_vars.items, 0..) |h, i| {
+        const v = in.an.rv(h.final);
         self.held_idx[i] = if (v == .f_zero) none_u32 else self.lo_idx[@intFromEnum(v)];
     }
-    if (self.lo_vals.len == 0) return;
+    if (self.lo_vals.len == 0) return self;
 
     var buf: [naming.max_name_len]u8 = undefined;
-    const n = naming.unitName(&buf, self.mir.name, .{
+    const n = naming.unitName(&buf, in.mir.name, .{
         .role = .common,
         // A single declaration, so the target is a fixed word rather than a
         // key: naming.zig's insert-tolerance is about the NAME not moving,
         // and this one cannot.
         .target = "core",
     }) catch return error.NameTooLong;
-    self.common_name = try a.dupe(u8, n);
+    self.name = try a.dupe(u8, n);
+    return self;
+}
+
+const Fixture = @import("fixture.zig").Fixture;
+
+test "live-outs are deduplicated in job order; display stays out; held values index them" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "a", "b" });
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const vb = try f.probe(1);
+    try f.lowered.held_vars.append(a, .{ .name = "h", .ty = .real, .init = .f_zero, .seed = .f_zero, .final = vb });
+    const an = try f.analysis();
+    const jobs = [_]Job{
+        .{ .kind = .resist, .target = vb, .mode = .optimized, .comment = "" },
+        .{ .kind = .react, .target = va, .mode = .optimized, .comment = "" },
+        .{ .kind = .held, .target = vb, .mode = .strict, .comment = "" }, // shared with job 0
+        .{ .kind = .display, .target = va, .mode = .strict, .comment = "" },
+    };
+
+    const c = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &jobs);
+    try std.testing.expectEqualSlices(Mir.Value, &.{ vb, va }, c.lo_vals);
+    try std.testing.expectEqual(@as(u32, 0), c.lo_idx[@intFromEnum(vb)]);
+    try std.testing.expectEqualSlices(u32, &.{0}, c.held_idx);
+    // One `.strict` consumer makes the shared body strict (§4.3); the display
+    // job is not a consumer.
+    try std.testing.expectEqual(proof.FloatMode.strict, c.mode);
+    try std.testing.expectEqualStrings("mymod__common__core", c.name);
 }

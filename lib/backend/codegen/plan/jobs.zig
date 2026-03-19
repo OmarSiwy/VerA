@@ -50,7 +50,7 @@ pub const From = struct {
 
 /// One emitted unit function, resolved BEFORE anything is written.
 ///
-/// `planCommon` has to know the exact set of units and their targets in
+/// `plan_core.plan` has to know the exact set of units and their targets in
 /// order to count how many of them share a value, and `emitUnits` has to
 /// emit exactly that set — a disagreement between the two would leave a
 /// value rendered as a cache read in a unit whose slice was never counted.
@@ -101,7 +101,7 @@ pub const Job = struct {
         table_effect,
         /// §9.4: the one job that is NOT folded into the core, because its
         /// body has side effects the residual must not trigger. See
-        /// `planCommon`.
+        /// `plan_core.plan`.
         display,
     };
 };

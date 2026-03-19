@@ -291,7 +291,7 @@ test "codegen: two contributions sharing a subexpression evaluate it ONCE" {
     try std.testing.expect(std.mem.indexOf(u8, src, "fn sh__common__core(comptime S: type,") != null);
     // ONE call for the whole residual, not one per contribution. This is the
     // runtime half of the merge: LLVM does not CSE repeated calls to a body of
-    // this size (measured — see `planCommon`), so the count here IS the number
+    // this size (measured — see `plan_core.plan`), so the count here IS the number
     // of times the model runs per Newton iteration.
     try std.testing.expectEqual(
         @as(usize, 1),
@@ -417,7 +417,7 @@ test "codegen: adding a contribution appends to the core, it does not renumber" 
     const a = try h1.gen(std.testing.allocator);
     const b2 = try h2.gen(std.testing.allocator);
     // The first contribution is still `f0` and `eval` still stamps it from
-    // `m.f0`. That is what `planCommon`'s job-order numbering buys: the field
+    // `m.f0`. That is what `plan_core.plan`'s job-order numbering buys: the field
     // index of an existing target is insert-tolerant in the same sense
     // naming.zig makes a declaration name insert-tolerant, so `zig`'s
     // `TrackedInst` for the dispatcher does not churn on an unrelated edit.
@@ -1342,7 +1342,7 @@ test "codegen: the `U` block is the SPELLING contract — all four name kinds, v
 
 test "codegen: §5.9 a loop the unit re-runs is not read out of the shared core" {
     var h: Harness = undefined;
-    // Two units both slice the loop, so `planCommon` wants to hoist it — but
+    // Two units both slice the loop, so `plan_core.plan` wants to hoist it — but
     // each also has private values inside it, so each re-materializes the loop.
     // Reading the hoisted counter and exit condition there is reading their
     // FINAL values, and the re-materialized loop then runs zero times.
