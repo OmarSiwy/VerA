@@ -74,11 +74,10 @@ const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
 const Lower = @import("ir").Lower;
-// The emitter owns these: `Display` is its §9.4 mode, and the two `op*`/`call*`
-// helpers classify a call the same way for the plan and for the text. Mutual
-// import with codegen.zig is fine here — nothing in the cycle is a comptime
-// dependency of the other's types.
-const cg = @import("codegen.zig");
+// Shared with the emitter: `Display` is the §9.4 mode, and the `op*`/`call*`
+// helpers classify a call the same way for the plan and for the text. They
+// live in `args.zig` so this file imports no emitter.
+const cg = @import("args.zig");
 const Display = cg.Display;
 
 pub const UnitPlan = @This();
@@ -766,4 +765,36 @@ pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         };
     }
     return null;
+}
+
+const Fixture = @import("fixture.zig").Fixture;
+
+test "a unit's slice stops at a value the core carries" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    const va = try f.probe(0);
+    const sq = try f.mir.emit(a, .entry, .fmul, &.{ va, va }); // V(a)^2
+    const two = try f.mir.addFloatConst(a, 2.0);
+    const t = try f.mir.emit(a, .entry, .fadd, &.{ sq, two }); // V(a)^2 + 2
+    const an = try f.analysis();
+
+    // `prepare` always wires the core's index; here the core carries nothing.
+    const lo_idx = try a.alloc(u32, an.nv);
+    @memset(lo_idx, none_u32);
+    var p = try UnitPlan.init(a, &f.mir, &an, .drop);
+    p.lo_idx = lo_idx;
+    try p.analyze(t, false);
+    try std.testing.expect(p.straight);
+    try std.testing.expect(p.needed[@intFromEnum(sq)] and p.needed[@intFromEnum(va)]);
+    try std.testing.expect(!p.uses_cache);
+
+    // Now the core returns `sq`: the unit reads it as a leaf, so `V(a)` is
+    // no longer part of its slice.
+    lo_idx[@intFromEnum(sq)] = 0;
+    p.lo_vals = &.{sq};
+    try p.analyze(t, false);
+    try std.testing.expect(p.cached(sq) and p.uses_cache);
+    try std.testing.expect(p.needed[@intFromEnum(sq)] and !p.needed[@intFromEnum(va)]);
 }

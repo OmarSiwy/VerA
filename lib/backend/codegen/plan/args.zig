@@ -230,6 +230,44 @@ pub fn strArg(in: Input, args: []const Mir.Value, i: usize) ?[]const u8 {
     return if (def == .str_const) def.str_const else null;
 }
 
+/// §9.5 the descriptor family — `Lower.isFileCall` over the callee, held equal
+/// to it for every tag by the test below.
+pub fn isFileCall(c: Mir.Callee) bool {
+    return switch (c) {
+        .@"$fopen",
+        .@"$fclose",
+        .@"$fflush",
+        .@"$fdisplay",
+        .@"$fwrite",
+        .@"$fstrobe",
+        .@"$fmonitor",
+        .@"$fdebug",
+        .@"$fgets",
+        .@"$fscanf",
+        .@"$ftell",
+        .@"$fseek",
+        .@"$rewind",
+        .@"$ferror",
+        .@"$feof",
+        .@"$fgets$str",
+        .@"$ferror$str",
+        .@"$fscanf$int",
+        .@"$fscanf$real",
+        .@"$fscanf$str",
+        => true,
+        else => false, // else: `Lower.isFileCall` is this set; the test holds them equal over every tag
+    };
+}
+
+/// Does this operator's kernel read the CURRENT input? The pure-history ones
+/// answer from `Instance` alone, and rendering an input they never emit would
+/// leave the unit claiming a parameter (or a cache) nothing references.
+/// `emitOperator` renders `in` exactly for these; `planSlots` has to agree,
+/// which is why the set lives in the table and not in either of them.
+pub fn opNeedsInput(k: OpKind) bool {
+    return opdb.get(k).needs_input;
+}
+
 test "callArgIsValue: the display-gated prongs are lowering's printing and §9.5 sets" {
     // Only the §9.4.1/§9.7.3 printing tasks and the §9.5 family answer
     // differently under `.emit` and `.drop`; that is how `emitCall` gates them.
@@ -237,5 +275,12 @@ test "callArgIsValue: the display-gated prongs are lowering's printing and §9.5
         const n = @tagName(c);
         const want = c != .systf and (Lower.isDisplayTask(n) or Lower.isFileCall(n));
         try std.testing.expectEqual(want, callArgIsValue(c, 5, .emit) and !callArgIsValue(c, 5, .drop));
+    }
+}
+
+test "isFileCall is Lower.isFileCall over every callee" {
+    for (std.meta.tags(Mir.Callee)) |c| {
+        const want = c != .systf and Lower.isFileCall(@tagName(c));
+        try std.testing.expectEqual(want, isFileCall(c));
     }
 }
