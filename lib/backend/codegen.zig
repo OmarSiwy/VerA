@@ -60,6 +60,7 @@ const plan_jobs = @import("codegen/plan/jobs.zig");
 const plan_core = @import("codegen/plan/core.zig");
 const plan_args = @import("codegen/plan/args.zig");
 const plan_hoist = @import("codegen/plan/hoist.zig");
+const plan_jac = @import("codegen/plan/jac.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
 pub const assert = std.debug.assert;
@@ -725,6 +726,7 @@ test {
     _ = plan_core;
     _ = plan_args;
     _ = plan_hoist;
+    _ = plan_jac;
     _ = Gen.gen_hoist;
     _ = Gen.gen_file;
     _ = Gen.gen_unit;
