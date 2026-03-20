@@ -9,6 +9,7 @@
 //! directly, `gen_call.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const plan_args = @import("plan/args.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_dispatch = @import("dispatch.zig");
@@ -318,7 +319,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
             // A precompute field IS the plain f64 — no `.val()` needed.
             if (i < self.an.nv and self.plan.pcHoisted(v)) {
                 self.uses_inst = true;
-                return try std.fmt.allocPrint(self.arena, "inst.pc__{d}", .{self.pc_idx[i]});
+                return try std.fmt.allocPrint(self.arena, "inst.pc__{d}", .{self.pc.idx[i]});
             }
             if (i < self.an.nv and self.plan.cached(v))
                 return try std.fmt.allocPrint(self.arena, "c.f{d}.val()", .{self.core.lo_idx[i]});
@@ -1306,9 +1307,7 @@ pub fn emitFileCallDropped(self: *Gen, c: Mir.Callee, args: []const Mir.Value, s
 }
 
 pub fn strArg(self: *const Gen, args: []const Mir.Value, i: usize) ?[]const u8 {
-    if (i >= args.len) return null;
-    const def = self.mir.valueDef(self.an.rv(args[i]));
-    return if (def == .str_const) def.str_const else null;
+    return plan_args.strArg(self.input(), args, i);
 }
 
 /// §4.5 stateful analog operators. The operator's INPUT is a named unit of

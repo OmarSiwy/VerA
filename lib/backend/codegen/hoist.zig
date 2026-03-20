@@ -1,7 +1,9 @@
-//! Hoisting: the temperature hoist and the hoisted core prefix.
+//! Hoisting: the hoisted core PREFIX (and `libmClass`, the libm-cost column).
 //!
-//! In: the shared core. Out: the values that depend only on the model card and temperature,
-//! moved out of eval into a once-per-instance prefix cache.
+//! In: the shared core. Out: the prefix of its body that depends only on the
+//! model card and temperature, latched once per instance. NOT a pure plan: the
+//! region is found by a dry run of the emitter (`probeBody`), so it lives with
+//! the emitter. The temperature hoist it complements is `plan/hoist.zig`.
 //!
 //! LRM clauses this file's code cites: §4.4, §4.6.4, §5.6.1.2, §9.19.
 //!
@@ -9,6 +11,7 @@
 //! directly, `gen_hoist.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const plan_hoist = @import("plan/hoist.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_render = @import("render.zig");
@@ -23,198 +26,13 @@ const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 const callArgIsValue = codegen.callArgIsValue;
 
-// ------------------------------------------- the temperature hoist ----
-//
-// MEASURED MOTIVE (ARPice callgrind, tran/fourbitadder): log 8.2% +
-// pow 6.4% + exp 5.1% + ldexp/frexp ~3% of TOTAL instructions sit inside
-// BJT eval — `pow(t/tnom, xti)`-class factors recomputed per instance per
-// Newton iteration. ngspice computes them once (bjttemp.c) at setup/.temp;
-// the host already has the hook (`precompute` runs at finalize and on
-// every reprep — parameter writes and setTemp both route through it).
-//
-// A value is HOISTABLE when its transitive inputs are only parameters,
-// literals and `$temperature` — no §4.4 probe, no `$abstime`, no stateful
-// operator, no phi (a loop-carried value is not one value) — AND every op
-// on the way down is one the precompute body can re-spell with the exact
-// VALUE semantics the in-eval rendering had (see `pscalar_txt`). A
-// hoist ROOT is such a value, containing at least one libm-class op
-// (anything cheaper is not the measured cost), read at least once from
-// OUTSIDE the hoistable region. Roots become `Instance.pc__<k>` fields.
-
-/// Three-state memo for `pcClass` — `unknown` doubles as the visit mark.
-pub const PcCls = enum(u8) { unknown, no, yes };
-
-/// Is `v0` computable from parameters/literals/`$temperature` alone,
-/// through ops the precompute body can mirror bit-exactly? Fills the memo
-/// at the rv-RESOLVED index. Recursion depth is the expression depth;
-/// the cap is a sound fail-safe (false never hoists).
-pub fn pcClass(self: *Gen, cls: []PcCls, v0: Mir.Value, depth: u32) bool {
-    const v = self.an.rv(v0);
-    const i = @intFromEnum(v);
-    switch (cls[i]) {
-        .yes => return true,
-        .no => return false,
-        .unknown => {},
-    }
-    if (depth > 2048) return false;
-    const ok: bool = switch (self.mir.valueDef(v)) {
-        .undef, .float_const, .int_const => true,
-        .str_const, .block_param => false,
-        .param_ref => |p| Analysis.tyOfParam(self.lowered.params.items[p].ty) != .str,
-        .inst_result => |inst| blk: {
-            const row = self.mir.instRow(inst);
-            switch (row.op) {
-                .call => {
-                    const d = self.mir.instData(inst).call;
-                    // §9.19's two queries answer from the model card alone:
-                    // `renderSysCall` spells `$param_given` as the Model
-                    // field `<p>__given` and `$port_connected` as the
-                    // literal 1, so both are as parameter-only as a
-                    // `param_ref` and precompute can re-spell them
-                    // character for character. Excluding them cost the
-                    // whole `<dev>temp` phase of every machine-converted
-                    // SPICE model: `if ($param_given(tox)) cox = …` guards
-                    // the ladder, an unhoistable condition makes the
-                    // select unhoistable, and one unhoistable select
-                    // strands every value downstream of it in the core.
-                    break :blk paramOnlyCall(self, d);
-                },
-                // A phi is not one value; the path latches read Instance
-                // state `updateState`/commit have not written yet at
-                // precompute time.
-                .phi, .branch, .jump, .path_prev, .path_acc => break :blk false,
-                .select => {
-                    const d = self.mir.instData(inst).ternary;
-                    break :blk pcClass(self, cls, d.cond, depth + 1) and
-                        pcClass(self, cls, d.then_val, depth + 1) and
-                        pcClass(self, cls, d.else_val, depth + 1);
-                },
-                else => switch (Mir.opClass(row.op)) { // else: every other opcode is a pure op, decided by its operands
-                    .unary => break :blk pcClass(self, cls, @enumFromInt(row.a), depth + 1),
-                    .binary => break :blk pcClass(self, cls, @enumFromInt(row.a), depth + 1) and
-                        pcClass(self, cls, @enumFromInt(row.b), depth + 1),
-                    .ternary, .phi, .branch, .jump, .call => break :blk false,
-                },
-            }
-        },
-    };
-    cls[i] = if (ok) .yes else .no;
-    return ok;
-}
-
-/// §9.15 `$simparam` with a literal name other than `iteration` (Table 9-27):
-/// `call.zig` renders it as a Model field (`tnom`, which the host writes with
-/// the card) or a constant (the rest, including the homotopy knobs VerA folds
-/// today), so it is as parameter-only as a `param_ref`. `iteration` reads
-/// `inst.newton_iteration`, which moves every Newton step. A fallback argument
-/// renders through `f64Expr`, which reads Model alone.
-fn simparamFixed(self: *const Gen, d: anytype) bool {
-    const nm = self.strArg(d.args, 0) orelse return false;
-    return !Lower.simparamIsRuntime(nm);
-}
-
-/// A call as parameter-only as a `param_ref` — `pcClass`'s and `hpPureInst`'s
-/// one answer. §9.10 `$temperature` and the argument-free `$vt` read the
-/// temperature the host sets with the card; §9.19's two queries and a
-/// non-iteration `$simparam` are above.
-fn paramOnlyCall(self: *const Gen, d: anytype) bool {
-    return switch (d.callee) {
-        .@"$temperature", .@"$param_given", .@"$port_connected" => true,
-        .@"$vt" => d.args.len == 0,
-        .@"$simparam" => simparamFixed(self, d),
-        else => false, // else: an ALLOWLIST — every other callee reads the solve, the time or state the host moves, until shown otherwise
-    };
-}
-
 pub fn libmClass(op: Mir.Opcode) bool {
     return opcode_zig.get(op).libm;
 }
 
-/// One use of `o` from outside the hoistable region: make it a root if it
-/// qualifies. Ascending value order later turns `root` into `pc_idx`.
-pub fn pcConsider(self: *Gen, cls: []PcCls, root: []bool, o: Mir.Value) void {
-    const v = self.an.rv(o);
-    const i = @intFromEnum(v);
-    if (cls[i] != .yes) return;
-    if (root[i]) return;
-    if (self.an.vty[i] != .real) return;
-    // A tree that folds to a literal costs nothing per eval already.
-    if (self.an.foldConst(v, 0, false) != null) return;
-    // ponytail: every non-folding instruction qualifies, so a libm-cost
-    // walk cannot change the answer. Add a cost model only if this policy changes.
-    if (self.mir.valueDef(v) != .inst_result) return;
-    root[i] = true;
-}
-
-pub fn planPrecompute(self: *Gen) Error!void {
-    const a = self.arena;
-    const nv = self.an.nv;
-    self.pc_idx = try a.alloc(u32, nv);
-    @memset(self.pc_idx, none_u32);
-
-    const cls = try a.alloc(PcCls, nv);
-    @memset(cls, .unknown);
-    for (0..nv) |i| _ = pcClass(self, cls, @enumFromInt(@as(u32, @intCast(i))), 0);
-
-    const root = try a.alloc(bool, nv);
-    @memset(root, false);
-
-    // Every use from a consumer that is NOT itself hoistable marks a root:
-    // instruction operands (a branch/call/phi result is never hoistable, so
-    // conditions, operator inputs and phi copies are covered by the same
-    // rule), plus the unit targets the residual returns.
-    for (0..self.mir.insts.len) |ii| {
-        const inst: Mir.Inst = @enumFromInt(@as(u32, @intCast(ii)));
-        const res = self.mir.instResult(inst);
-        if (res != .undef and cls[@intFromEnum(self.an.rv(res))] == .yes) continue;
-        switch (self.mir.instData(inst)) {
-            .unary => |d| pcConsider(self, cls, root, d.operand),
-            .binary => |d| {
-                pcConsider(self, cls, root, d.lhs);
-                pcConsider(self, cls, root, d.rhs);
-            },
-            .ternary => |d| {
-                pcConsider(self, cls, root, d.cond);
-                pcConsider(self, cls, root, d.then_val);
-                pcConsider(self, cls, root, d.else_val);
-            },
-            .branch => |d| pcConsider(self, cls, root, d.cond),
-            .call => |d| for (d.args, 0..) |arg, k| {
-                // Control arguments render host-side through `f64Expr`
-                // (never a pc read), so a field for one would go unread.
-                if (callArgIsValue(d.callee, k, self.display))
-                    pcConsider(self, cls, root, arg);
-            },
-            .phi => |d| {
-                var k: u32 = 0;
-                while (k < d.count) : (k += 1)
-                    pcConsider(self, cls, root, self.mir.phiPair(inst, k).value);
-            },
-            .jump => {},
-        }
-    }
-    for (self.jobs.list) |job| {
-        // §4.6.4 EXCEPT the noise PSDs. Hoisting one moves it out of the
-        // `if (r > 0)` that declared it and evaluates it unconditionally —
-        // `4kT/0` — where staying a core live-out gives it the zero seed
-        // that is the right answer for a generator this bias does not have.
-        // See `buildJobs`'s `$noise` queue.
-        if (job.kind == .noise) continue;
-        pcConsider(self, cls, root, job.target);
-    }
-
-    var vals: std.ArrayList(Mir.Value) = .empty;
-    for (0..nv) |i| {
-        if (!root[i]) continue;
-        self.pc_idx[i] = @intCast(vals.items.len);
-        try vals.append(a, @enumFromInt(@as(u32, @intCast(i))));
-    }
-    self.pc_vals = vals.items;
-}
-
 // ------------------------------------------ the hoisted core PREFIX ----
 //
-// `planPrecompute` above hoists a value by RE-SPELLING it in a flat
+// `plan/hoist.zig` hoists a value by RE-SPELLING it in a flat
 // `precompute` body, which is why `pcClass` refuses a phi: a value assigned
 // inside an `if` is not one expression, and precompute has no control flow
 // to put it back in. That refusal is expensive far beyond the phi itself —
@@ -282,7 +100,7 @@ pub fn hpPureInst(self: *Gen, inst: Mir.Inst, depth: u32) bool {
     switch (row.op) {
         .call => {
             const d = self.mir.instData(inst).call;
-            return paramOnlyCall(self, d);
+            return plan_hoist.paramOnlyCall(self.input(), d);
         },
         // `path_prev`/`path_acc` read the §5.6.1.2 latches, which move on
         // every accepted step — the one class of Instance state that looks

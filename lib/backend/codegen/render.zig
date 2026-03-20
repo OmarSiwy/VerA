@@ -124,7 +124,7 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
     // the model card / temperature last changed.
     if (i < self.an.nv and self.plan.pcHoisted(v)) {
         self.uses_inst = true;
-        return self.b("S.con(inst.pc__{d})", .{self.pc_idx[i]});
+        return self.b("S.con(inst.pc__{d})", .{self.pc.idx[i]});
     }
     // Hoisted: computed once by the common declaration, read here out of the
     // cache the body opened with — see "the shared core" in `Plan`.
