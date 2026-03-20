@@ -144,7 +144,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     // §4.3: the STRICTEST mode of every consumer — `proof.FloatMode.strictest`
     // explains why the join has to absorb `.strict`.
     try self.w("    @setFloatMode(.{t});\n", .{self.core.mode});
-    self.cur_strict = self.core.mode == .strict;
+    self.float.strict = self.core.mode == .strict;
 
     // Off the slice, not the text: every call the core computes is in
     // `plan.live`, and `gen_call.readsSimState` is the one list of which of
@@ -232,7 +232,7 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     const at_inst = self.out.items.len;
     try self.w("inst: InstancePtr) S {{\n", .{});
     try self.w("    @setFloatMode(.{s});\n", .{mode});
-    self.cur_strict = std.mem.eql(u8, mode, "strict");
+    self.float.strict = std.mem.eql(u8, mode, "strict");
 
     const body_start = self.out.items.len;
     try emitUnitBody(self, target);

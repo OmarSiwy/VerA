@@ -214,13 +214,13 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
         if (job.kind != .display and job.pre_fatal != null) return;
     }
     const save_common = self.emitting_common;
-    const save_strict = self.cur_strict;
+    const save_strict = self.float.strict;
     defer {
         self.emitting_common = save_common;
-        self.cur_strict = save_strict;
+        self.float.strict = save_strict;
     }
     self.emitting_common = true;
-    self.cur_strict = self.core.mode == .strict;
+    self.float.strict = self.core.mode == .strict;
     self.plan.display_unit = false;
     try self.plan.analyze(.undef, true);
     // Straight-line: no phi to strand, so `pc__` already took everything

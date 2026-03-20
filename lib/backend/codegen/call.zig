@@ -9,6 +9,7 @@
 //! directly, `gen_call.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const float_lanes = @import("float/lanes.zig");
 const plan_args = @import("plan/args.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
@@ -457,12 +458,12 @@ pub fn ctrlEval(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8)
     if (try f64Const(self, args[i], 0, false)) |s| return s;
     // `.val()` is a COLLAPSE: on the batch scalar it reads lane 0, so an
     // x-dependent control argument gives every lane the operating point of
-    // the first one. That is exactly what `lane_pinned` records — and the
+    // the first one. That is exactly what `Float.pinned` records — and the
     // collapse itself is right, not a bug to route around: a control
     // argument is a number the operator is configured WITH, and §4.6.3's
     // stimulus magnitude is an independent source's amplitude at the
     // operating point, so neither belongs in the Jacobian.
-    gen_render.pinLanes(self, self.an.rv(args[i]));
+    float_lanes.pinLanes(self, self.an.rv(args[i]));
     return std.fmt.allocPrint(self.arena, "({s}).val()", .{
         try gen_render.renderToArena(self, args[i], .real),
     });
@@ -702,7 +703,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     // collapses it (delays), so it pins.
     switch (k) {
         .none, .ddt, .idt, .laplace, .zi, .bound_step, .discontinuity => {},
-        .idtmod, .absdelay, .transition, .slew, .last_crossing, .cross, .above, .timer => for (args) |arg| gen_render.pinLanes(self, arg),
+        .idtmod, .absdelay, .transition, .slew, .last_crossing, .cross, .above, .timer => for (args) |arg| float_lanes.pinLanes(self, arg),
     }
     switch (c) {
         .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
@@ -713,7 +714,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // §4.5.13 limexp — user-invoked only; the engine never inserts it.
         // Pins: zLimexp branches on its argument's `.val()`.
         .limexp => {
-            if (args.len > 0) gen_render.pinLanes(self, args[0]);
+            if (args.len > 0) float_lanes.pinLanes(self, args[0]);
             return gen_render.helper1(self, "zLimexp", if (args.len > 0) args[0] else .f_zero);
         },
 
@@ -721,7 +722,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // Pins: `.ddxAt` reads one scalar partial, which a value-form batch S
         // does not carry.
         .ddx => {
-            if (args.len > 0) gen_render.pinLanes(self, args[0]);
+            if (args.len > 0) float_lanes.pinLanes(self, args[0]);
             const u = if (args.len > 1) self.an.foldConst(args[1], 0, true) else null;
             const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
             // The VALUE reads a lane, so that lane must exist in a narrow S —
@@ -1005,8 +1006,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             if (args.len != 2) return emitUnregistered(self, inst, name, args);
             // `.val()` on two x-dependent carriers: a vector S would collapse
             // per lane, so this pins them for the same reason `zPow` does.
-            gen_render.pinLanes(self, args[0]);
-            gen_render.pinLanes(self, args[1]);
+            float_lanes.pinLanes(self, args[0]);
+            float_lanes.pinLanes(self, args[1]);
             return gen_render.helper2(self, "zLimitUf", args[0], args[1]);
         },
         .@"$limit$old" => {
@@ -1019,7 +1020,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // ours — the clause is silent on overflow and `@intFromFloat` is UB in
         // the ReleaseFast artifact a host actually links.
         .@"$rtoi" => {
-            if (args.len > 0) gen_render.pinLanes(self, args[0]); // scalar collapse
+            if (args.len > 0) float_lanes.pinLanes(self, args[0]); // scalar collapse
             try self.b("std.math.lossyCast(i64, @trunc((", .{});
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
             return self.b(").val()))", .{});
@@ -1033,7 +1034,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // the real, verbatim. Exactly representable in the i64 that lowering
         // gives integers, so this is the spec function, not an approximation.
         .@"$realtobits" => {
-            if (args.len > 0) gen_render.pinLanes(self, args[0]); // scalar collapse
+            if (args.len > 0) float_lanes.pinLanes(self, args[0]); // scalar collapse
             try self.b("@as(i64, @bitCast((", .{});
             try gen_render.renderVal(self, if (args.len > 0) args[0] else .f_zero, .real);
             return self.b(").val()))", .{});
@@ -1154,7 +1155,7 @@ fn emitUnregistered(self: *Gen, inst: Mir.Inst, name: []const u8, args: []const 
     // A systf crosses to the host through concrete f64s (`.val()` per
     // argument, partials written back) — a per-lane crossing does not
     // exist, so it pins regardless of what the host computes.
-    self.lane_pinned = self.lane_pinned or !self.emitting_display;
+    float_lanes.pinCrossing(self);
     return emitSystfCall(self, name, args);
 }
 

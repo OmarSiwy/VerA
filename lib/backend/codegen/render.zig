@@ -9,6 +9,7 @@
 //! directly, `gen_render.f(self, ...)`; `codegen.zig` aliases only what other modules call.
 
 const std = @import("std");
+const float_lanes = @import("float/lanes.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
@@ -103,7 +104,7 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
                 // Not a literal, so §3.3 leaves it with no numeric value.
                 .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => self.b("@as(i64, 0)", .{}),
             };
-            pinLanes(self, v); // a real→int collapse is a scalar decision
+            float_lanes.pinLanes(self, v); // a real→int collapse is a scalar decision
             // Saturating (§4.2.1.1 only defines the rounding): the device
             // is built ReleaseFast by real hosts, where `@intFromFloat` of
             // an out-of-range or NaN value is UB, not a trap.
@@ -158,77 +159,6 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
     }
 }
 
-/// May `v`'s inline-rendered subtree run UNCONDITIONALLY in a `.strict`
-/// unit? True for anything already materialized (slots/cache/phi vars are
-/// computed before the select either way), leaves, and trees of ops that
-/// are total on all of R under IEEE semantics: no call, and
-/// `proof.domainOf == .all` — which excludes ln/sqrt/pow/… and the
-/// hard-UB idiv/imod/fmod. Mirrors `foldHidesSlot`'s stop condition, so
-/// "inline" here is exactly what `renderVal` would inline.
-/// Would evaluating this arm eagerly run a libm call that the branch would
-/// have skipped? `eagerSafe` answers whether both arms MAY be evaluated;
-/// this answers whether they SHOULD.
-///
-/// Branchless is the right default because the arms are a few FP ops and a
-/// mispredict costs more than both. A transcendental inverts that: `exp` is
-/// ~50 instructions, so a `sel` over it pays for the arm that is thrown
-/// away every single time. mos1 measured 2.00 `exp` per instance-eval
-/// against ngspice's 1.45 for exactly this reason — the b-s junction kept
-/// its `if` (a multi-use domain op blocked if-conversion) while the
-/// identical b-d junction was flattened, so both of ITS arms run forever.
-///
-/// The cost of saying no is a data-dependent branch and a lane pin. That
-/// was the argument for keeping these eager — a lane-parallel S has no
-/// single `.val()` to steer on. It does not survive measurement: an
-/// instance-parallel S would have to take BOTH junction arms anyway, which
-/// is what collapses that design's kernel speedup from 3.6x to 1.67x, and
-/// the sparse stamp it cannot vectorize at all (195 Ir/instance at W=1,
-/// 196 at W=4) caps the whole idea at 1.17x end-to-end. Not a lever worth
-/// protecting with a real per-iterate cost.
-///
-/// Only the INLINE tree counts: a `materialized` value is a statement that
-/// already ran, so hoisting it into a select changes nothing.
-pub fn eagerCostly(self: *Gen, v0: Mir.Value, depth: u32) bool {
-    if (depth > 64) return false;
-    const v = self.an.rv(v0);
-    if (materialized(self, v)) return false;
-    const def = self.mir.valueDef(v);
-    if (def != .inst_result) return false;
-    const row = self.mir.instRow(def.inst_result);
-    if (gen_hoist.libmClass(row.op)) return true;
-    return switch (Mir.opClass(row.op)) {
-        .unary => eagerCostly(self, @enumFromInt(row.a), depth + 1),
-        .binary => eagerCostly(self, @enumFromInt(row.a), depth + 1) or
-            eagerCostly(self, @enumFromInt(row.b), depth + 1),
-        .ternary => eagerCostly(self, @enumFromInt(row.a), depth + 1) or
-            eagerCostly(self, @enumFromInt(row.b), depth + 1) or
-            eagerCostly(self, @enumFromInt(row.c), depth + 1),
-        .phi, .branch, .jump, .call => false,
-    };
-}
-
-pub fn eagerSafe(self: *Gen, v0: Mir.Value, depth: u32) bool {
-    if (depth > 64) return false;
-    const v = self.an.rv(v0);
-    if (materialized(self, v)) return true;
-    const def = self.mir.valueDef(v);
-    if (def != .inst_result) return true; // const / param / probe
-    const inst = def.inst_result;
-    const row = self.mir.instRow(inst);
-    if (row.op == .call) return false;
-    if (proof.domainOf(row.op) != .all) return false;
-    return switch (Mir.opClass(row.op)) {
-        .phi => true, // function-scope var, assigned on edges before here
-        .unary => eagerSafe(self, @enumFromInt(row.a), depth + 1),
-        .binary => eagerSafe(self, @enumFromInt(row.a), depth + 1) and
-            eagerSafe(self, @enumFromInt(row.b), depth + 1),
-        .ternary => eagerSafe(self, @enumFromInt(row.a), depth + 1) and
-            eagerSafe(self, @enumFromInt(row.b), depth + 1) and
-            eagerSafe(self, @enumFromInt(row.c), depth + 1),
-        .branch, .jump, .call => false,
-    };
-}
-
 /// Already computed as a statement (slot), a cache field, or a precompute
 /// field — rendering it is a name, not an expression. The stop condition
 /// `eagerSafe`, `maskCmp` and `foldHidesSlot` share.
@@ -236,15 +166,6 @@ pub fn materialized(self: *const Gen, v: Mir.Value) bool {
     const i = @intFromEnum(v);
     return i < self.an.nv and
         (self.plan.pcHoisted(v) or self.plan.cached(v) or self.plan.slot[i] != none_u32);
-}
-
-/// An x-dependent value is about to be collapsed to one scalar decision —
-/// record that lanes are pinned. dFree values are lane-uniform (params,
-/// temperature, time), so collapsing them steers nothing.
-pub fn pinLanes(self: *Gen, v: Mir.Value) void {
-    if (self.emitting_display) return;
-    if (self.an.dFree(v)) return;
-    self.lane_pinned = true;
 }
 
 /// The select cond as an INLINE real comparison — unslotted, so rendering
@@ -298,9 +219,9 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     // lane-parallel S needs — `.val()` has no single answer across lanes.
     if (op == .select) {
         const want = self.an.vty[@intFromEnum(self.mir.instResult(inst))];
-        if (want == .real and self.cur_strict and
-            eagerSafe(self, b2, 0) and eagerSafe(self, c, 0) and
-            !eagerCostly(self, b2, 0) and !eagerCostly(self, c, 0))
+        if (want == .real and self.float.strict and
+            float_lanes.eagerSafe(self, b2, 0) and float_lanes.eagerSafe(self, c, 0) and
+            !float_lanes.eagerCostly(self, b2, 0) and !float_lanes.eagerCostly(self, c, 0))
         {
             // Best mask first: an inline real comparison renders in S
             // space (`lt`/`le`/`eq`) and is TRUE PER LANE on a vector S.
@@ -330,7 +251,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
                 try renderVal(self, if (swap_ops) d.lhs else d.rhs, .real);
                 try self.b(")).sel(", .{});
             } else if (self.an.tyOf(self.an.rv(a)) == .int) {
-                pinLanes(self, a);
+                float_lanes.pinLanes(self, a);
                 try self.b("(S.con(@floatFromInt(", .{});
                 try renderVal(self, a, .int);
                 try self.b("))).sel(", .{});
@@ -438,8 +359,8 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             const r = comptime opcode_zig.get(o);
             const binary = comptime Mir.opClass(o) == .binary;
             if (r.pins_lanes) {
-                pinLanes(self, a);
-                if (binary) pinLanes(self, b2);
+                float_lanes.pinLanes(self, a);
+                if (binary) float_lanes.pinLanes(self, b2);
             }
             switch (r.s) {
                 .method => |m| if (binary) try method2(self, a, m, b2) else try method1(self, a, m),
@@ -489,8 +410,8 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
                 // (§4.3.1's negative-base/integer-y steering included),
                 // so either being x-dependent pins lanes — the batch
                 // gate's fixture-158 catch.
-                pinLanes(self, a);
-                pinLanes(self, b2);
+                float_lanes.pinLanes(self, a);
+                float_lanes.pinLanes(self, b2);
                 // ∂/∂y is dropped when the exponent cannot move with the
                 // solve — `b.addC(-y)` is then value-0 and derivative-0, so
                 // the term it scales contributes nothing and the `ln` that
@@ -515,7 +436,7 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             // artifact's UB under ReleaseFast — `lossyCast` (saturate,
             // NaN→0) is the defined answer, and `Analysis.asI64` folds
             // with the identical rule.
-            pinLanes(self, a); // a real→int collapse is a scalar decision
+            float_lanes.pinLanes(self, a); // a real→int collapse is a scalar decision
             try self.b("std.math.lossyCast(i64, @round((", .{});
             try renderVal(self, a, .real);
             try self.b(").val()))", .{});
@@ -764,7 +685,7 @@ pub fn emitScan(self: *Gen, fn_name: []const u8, args: []const Mir.Value, want: 
 pub fn emitRng(self: *Gen, c: Mir.Callee, args: []const Mir.Value) Error!void {
     // A draw is one scalar per CALL, not per lane: a batch eval draws once
     // where N scalar evals draw N times. Pins unconditionally.
-    self.lane_pinned = self.lane_pinned or !self.emitting_display;
+    float_lanes.pinCrossing(self);
     switch (c) {
         .@"$rng$auto" => {
             // §9.13.1's "internal seed", which "gets updated every time the call
@@ -829,7 +750,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
     // §9.21 zTable brackets on `.val()` — the cell choice is one scalar
     // decision, so a lane off the chosen cell would read a linear
     // extrapolation. Pins.
-    for (args) |arg| pinLanes(self, arg);
+    for (args) |arg| float_lanes.pinLanes(self, arg);
     const nd = intArg(self, args, 0) orelse 0;
     const np = intArg(self, args, 1) orelse 0;
     const ncol = intArg(self, args, 2) orelse 0;
@@ -843,7 +764,7 @@ pub fn emitTable(self: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!void
         return gen_call.abort(self, "malformed `$table_model` call reached codegen", .{});
     if (site != 0) {
         self.uses_inst = true;
-        self.lane_pinned = true;
+        self.float.pinned = true;
         try self.b("tbl_{d}: {{ _ = S.val(", .{@intFromEnum(inst)});
         try renderVal(self, args[6], .real);
         try self.b("); if (!inst.table_ready[{d}]) {{ inst.table_{d} = [_]f64{{", .{ site - 1, site - 1 });
@@ -887,7 +808,7 @@ pub fn emitIdx(self: *Gen, args: []const Mir.Value, want: VTy) Error!void {
     // The dispatch is on one integer, so the CHOICE is lane-uniform — the
     // same reason `emitTable` pins: a lane wanting a different element has
     // no spelling here.
-    pinLanes(self, args[1]);
+    float_lanes.pinLanes(self, args[1]);
     const lo: i64 = blk: {
         const def = self.mir.valueDef(self.an.rv(args[0]));
         break :blk if (def == .int_const) def.int_const else 0;
@@ -960,8 +881,8 @@ pub fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
 }
 
 pub fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
-    pinLanes(self, a);
-    pinLanes(self, b2);
+    float_lanes.pinLanes(self, a);
+    float_lanes.pinLanes(self, b2);
     try self.b("@as(i64, @intFromBool((", .{});
     try renderVal(self, a, .real);
     try self.b(").val() {s} (", .{opx});
