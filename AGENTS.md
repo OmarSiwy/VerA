@@ -48,7 +48,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 | `docs/ROADMAP.md` | v0.0.1 → v1.0.0 release ladder | which release your work belongs to, and its gate |
 | `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.sh`; absent until the next release) | where the project actually stands |
 | `docs/PLAN.md` | the work plan, newest measurements | what is left and what parallelises |
-| `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. Phases 0–3, 6, 8 have landed; 4–5 are in progress |
+| `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4–5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `tests/fixtures/MANIFEST.md` | per-row defect register, 1036 lines | the diagnosis for a specific failing row |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
 | `docs/*.html`, `docs/VAMS-LRM-2023.pdf` | the LRM — 20 chapter and annex files | the normative text. Cite by clause number |
@@ -194,8 +194,9 @@ re-triage measured the lexer/preprocessor scans again: nothing else pays.
 **SIMD-first applies to the emitted device.** The generated `eval` runs millions
 of times inside a host Newton loop; that is the hot loop this project exists to
 make fast. The lane decisions — `pinLanes`, `lane_pinned`, `lane_clean`,
-`jac_f32`, `cur_strict` — are what `ARCHITECTURE.md §6` phase 5 gathers into
-`codegen/float/`.
+`jac_f32`, `cur_strict` — live in `lib/backend/codegen/float/` (`mode.zig`,
+`lanes.zig`), whose header says what makes a lane dirty and what `lane_clean`
+promises.
 
 **The hardware knobs stay.** `--unknown-bound=`, `jac_f32` and the `abstol`
 table are physical-world tuning. Do not simplify them away. (`--outline-chunk`
