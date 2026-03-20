@@ -36,7 +36,7 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     }
     // An exit inside the prefix guard would skip the else arm's reloads and
     // the whole body after them, so the region ends before it.
-    self.hp_dirty = true;
+    self.hp.dirty = true;
     try self.b("return .{{\n", .{});
     for (self.core.lo_vals, 0..) |v, k| {
         try self.ind(depth + 1);
@@ -46,7 +46,7 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     }
     // The prefix's live-outs ride out as ordinary fields — that is the only
     // way `precompute` can see them (`planHoistPrefix`).
-    for (self.hp_vals, 0..) |v, j| {
+    for (self.hp.vals, 0..) |v, j| {
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{self.core.lo_vals.len + j});
         try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
@@ -63,7 +63,7 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
         if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
         if (depth == 1) try gen_hoist.hpBoundary(self);
         gen_hoist.hpMarkInst(self, inst);
-        self.stmt_count += 1;
+        self.hp.stmts += 1;
         gen_unit.probeDef(self, self.plan.slot[i], true);
         // `or` short-circuits, so the straight-line path (`decl`, which runs
         // without a probe) never touches `place`.
@@ -247,7 +247,7 @@ pub fn emitPhiCopies(self: *Gen, from: u32, to: u32, depth: u32) Error!void {
         // A phi is transparent to `hpPure` because THIS is where its value
         // enters — one incoming copy per edge, each checked as it is written.
         gen_hoist.hpMark(self, self.an.phiIn(inst, from));
-        self.stmt_count += 1;
+        self.hp.stmts += 1;
         try self.ind(d2);
         if (par) {
             try self.b("const c{d}: {s} = ", .{ k, gen_unit.zigTy(self.an.vty[i]) });

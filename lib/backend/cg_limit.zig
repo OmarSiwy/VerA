@@ -115,6 +115,18 @@ pub fn liveSets(g: *const Gen) Live {
 
 // ------------------------------------------------------------- the prep
 
+/// §4.5.15 the prep's output, one `Gen` field (`Gen.lp`) — replaced whole by
+/// the setup split.
+pub const Prep = struct {
+    /// §4.5.15 the solve-independent `$limit`/`seed` arguments, hoisted out of
+    /// the per-iterate clamp: value → `Instance.lp__<k>` field index or
+    /// `none_u32`, and the mapped values in field order. Filled by
+    /// `cg_limit.planPrep`; `precompute`'s tail writes them off ONE core
+    /// evaluation at x = 0, and `limit`/`seed` read them as leaves.
+    idx: []u32 = &.{},
+    vals: []Mir.Value = &.{},
+};
+
 /// Memo for `scValue`/`scBlock`.
 ///
 /// FOUR states and not three. `pcClass` gets away with three because it refuses
@@ -331,8 +343,8 @@ fn scBlock(sc: *Sc, b: u32, depth: u32) bool {
 /// same insert-tolerance rule the `pc__` and held-variable blocks follow: a
 /// model that gains a `$limit` appends fields, it renumbers none.
 pub fn planPrep(g: *Gen) Error!void {
-    g.lp_idx = try g.arena.alloc(u32, g.an.nv);
-    @memset(g.lp_idx, none_u32);
+    g.lp.idx = try g.arena.alloc(u32, g.an.nv);
+    @memset(g.lp.idx, none_u32);
     if (g.lowered.table_samples.items.len != 0) return;
     if (g.limits.calls.len == 0) return;
 
@@ -351,13 +363,13 @@ pub fn planPrep(g: *Gen) Error!void {
             if (v0 == .f_zero) continue;
             const v = g.an.rv(v0);
             const i = @intFromEnum(v);
-            if (g.lp_idx[i] != none_u32) continue;
+            if (g.lp.idx[i] != none_u32) continue;
             if (!scValue(&sc, v, 0)) continue;
-            g.lp_idx[i] = @intCast(vals.items.len);
+            g.lp.idx[i] = @intCast(vals.items.len);
             try vals.append(g.arena, v);
         }
     }
-    g.lp_vals = vals.items;
+    g.lp.vals = vals.items;
 }
 
 /// The prep body, appended to `precompute` AFTER the `pc__` writes — the core
@@ -368,7 +380,7 @@ pub fn planPrep(g: *Gen) Error!void {
 /// generalised: the core at x = 0 is not an approximation of these values, it
 /// IS them (`solveConst`).
 pub fn emitPrep(g: *Gen) Error!void {
-    if (g.lp_vals.len == 0) return;
+    if (g.lp.vals.len == 0) return;
     try g.w(
         \\    // §4.5.15 the clamp arguments, hoisted out of the per-iterate
         \\    // `limit`: every one is solve- and time-independent, so the core's
@@ -378,7 +390,7 @@ pub fn emitPrep(g: *Gen) Error!void {
         \\    const m = core(R, xr, model, inst);
         \\
     , .{});
-    for (g.lp_vals, 0..) |v, k| {
+    for (g.lp.vals, 0..) |v, k| {
         const i = @intFromEnum(v);
         const f = g.core.lo_idx[i];
         std.debug.assert(f != none_u32); // `buildJobs` queues every argv and sign
@@ -421,7 +433,7 @@ pub fn emitPrep(g: *Gen) Error!void {
 /// a variable — or a comment — naming it fails that test from three functions
 /// away.
 fn emitPrepTest(g: *Gen) Error!void {
-    if (g.lp_vals.len == 0) return;
+    if (g.lp.vals.len == 0) return;
     try g.w(
         \\test "§4.5.15 `$limit` prep ≡ the live core at a non-zero iterate" {{
         \\    var model: Model = .{{}};
@@ -442,7 +454,7 @@ fn emitPrepTest(g: *Gen) Error!void {
         \\        const m = core(R, xr, &model, &inst);
         \\
     , .{});
-    for (g.lp_vals, 0..) |v, k| {
+    for (g.lp.vals, 0..) |v, k| {
         const i = @intFromEnum(v);
         const f = g.core.lo_idx[i];
         if (g.an.vty[i] == .int)
@@ -493,7 +505,7 @@ fn seedUsesCore(g: *const Gen) bool {
 /// One argument: is it still a core live-out read, rather than a prep field?
 fn needsCore(g: *const Gen, v0: Mir.Value) bool {
     if (v0 == .f_zero) return false;
-    return g.lp_idx[@intFromEnum(g.an.rv(v0))] == none_u32;
+    return g.lp.idx[@intFromEnum(g.an.rv(v0))] == none_u32;
 }
 
 /// Does the `$limit` family evaluate the core ANYWHERE — so the file needs `R`?
@@ -501,7 +513,7 @@ fn needsCore(g: *const Gen, v0: Mir.Value) bool {
 /// because that is a core evaluation too (one per reprep, not one per iterate,
 /// which is the whole point).
 pub fn needsR(g: *const Gen) bool {
-    return usesCore(g) or g.lp_vals.len != 0;
+    return usesCore(g) or g.lp.vals.len != 0;
 }
 
 pub fn emit(g: *Gen) Error!void {
@@ -516,7 +528,7 @@ pub fn emit(g: *Gen) Error!void {
     const needs_core = usesCore(g);
     // A prep field is an `inst.lp__k` read, so `inst` stays named even when the
     // core call is gone. `model` goes with the core.
-    const reads_inst = needs_core or g.lp_vals.len != 0;
+    const reads_inst = needs_core or g.lp.vals.len != 0;
     try g.w(
         \\/// §4.5.15 `$limit`: SPICE voltage limiting, applied by the host between
         \\/// the linear solve and the next `eval`.
@@ -621,7 +633,7 @@ fn signKey(g: *const Gen, v: Mir.Value) u32 {
 fn emitClamp(g: *Gen, lc: LimitCall) Error!void {
     const signed = lc.sign != .f_zero;
     try g.w("    {{ // $limit(V({s},{s}), \"{t}\"){s}\n", .{
-        plan_limit.uName(g.names.u_names, lc.hi),                                          plan_limit.uName(g.names.u_names, lc.lo), lc.alg,
+        plan_limit.uName(g.names.u_names, lc.hi),                 plan_limit.uName(g.names.u_names, lc.lo), lc.alg,
         if (signed) " in the frame of its sign argument" else "",
     });
     try g.w("        const vn = ", .{});
@@ -766,7 +778,7 @@ fn writeArg(g: *Gen, v: Mir.Value) Error!void {
     const i = @intFromEnum(g.an.rv(v));
     // Hoisted: `precompute` latched it off ONE core evaluation at x = 0, which
     // `solveConst` proved is this value at every iterate. See `planPrep`.
-    if (g.lp_idx[i] != none_u32) return g.w("inst.lp__{d}", .{g.lp_idx[i]});
+    if (g.lp.idx[i] != none_u32) return g.w("inst.lp__{d}", .{g.lp.idx[i]});
     const k = g.core.lo_idx[i];
     std.debug.assert(k != none_u32); // `buildJobs` queues every `argv`
     // An integer core field (a `parameter integer` sign) is a bare i64, not
@@ -792,7 +804,7 @@ fn emitSeed(g: *Gen) Error!void {
     }
     if (!any) return;
     const needs_core = seedUsesCore(g);
-    const reads_inst = needs_core or g.lp_vals.len != 0;
+    const reads_inst = needs_core or g.lp.vals.len != 0;
     try g.w(
         \\/// SPICE `MODEINITJCT`: start every pnjlim-limited junction at its own
         \\/// `vcrit` rather than at 0 V, where the junction is invisible to Newton.

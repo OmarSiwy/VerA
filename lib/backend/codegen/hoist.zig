@@ -26,6 +26,37 @@ const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 const callArgIsValue = codegen.callArgIsValue;
 
+/// The prefix cache's state: the region `planHoistPrefix` found (`on`, `vals`,
+/// `real`, `cut`, `insts`) and the counters the walk keeps while finding and
+/// emitting it (`bnd`, `off`, `dirty`, `stmts`). One struct so the setup split,
+/// which replaces the whole mechanism, removes one `Gen` field.
+pub const Prefix = struct {
+    /// This body is a prefix-cache candidate: the common core, tree-shaped,
+    /// no fatal. Cleared again if planning finds no region.
+    on: bool = false,
+    /// Values the cached region defines and the rest of the core reads —
+    /// reals first, so `vals[j]` is `Instance.hp[j]` while `j < real`
+    /// and `Instance.hpi[j - real]` after. They are ALSO core live-outs,
+    /// in fields `f{lo_vals.len + j}`, which is how `precompute` fills them.
+    vals: []Mir.Value = &.{},
+    real: u32 = 0,
+    /// Top-level statement boundary the region ends at (0 = no region), and
+    /// the running boundary counter of the body being emitted.
+    cut: u32 = 0,
+    bnd: u32 = 0,
+    /// Probe-text offset of the candidate cut, and "something the cache
+    /// cannot hold has been emitted, so the cut may not advance past here".
+    off: u32 = 0,
+    dirty: bool = false,
+    /// Statements the region holds, for the "is skipping it worth a field"
+    /// test in `planHoistPrefix`.
+    insts: u32 = 0,
+
+    /// Statements emitted so far in the body being walked; `hpBoundary`
+    /// snapshots it as the prefix region's size.
+    stmts: u32 = 0,
+};
+
 pub fn libmClass(op: Mir.Opcode) bool {
     return opcode_zig.get(op).libm;
 }
@@ -124,13 +155,13 @@ pub fn hpPureInst(self: *Gen, inst: Mir.Inst, depth: u32) bool {
 /// One emitted item's verdict. Once dirty, dirty for the rest of the body:
 /// the region is a text PREFIX, so the first thing it cannot hold ends it.
 pub fn hpMark(self: *Gen, v: Mir.Value) void {
-    if (!self.hp_on or self.hp_dirty) return;
-    if (!hpPure(self, v, 0)) self.hp_dirty = true;
+    if (!self.hp.on or self.hp.dirty) return;
+    if (!hpPure(self, v, 0)) self.hp.dirty = true;
 }
 
 pub fn hpMarkInst(self: *Gen, inst: Mir.Inst) void {
-    if (!self.hp_on or self.hp_dirty) return;
-    if (!hpPureInst(self, inst, 0)) self.hp_dirty = true;
+    if (!self.hp.on or self.hp.dirty) return;
+    if (!hpPureInst(self, inst, 0)) self.hp.dirty = true;
 }
 
 /// A top-level statement boundary — `emitBlockInsts`/`emitTree` at depth 1, which are
@@ -138,35 +169,35 @@ pub fn hpMarkInst(self: *Gen, inst: Mir.Inst) void {
 /// loop or arm is open. Probing: remember the last clean one. Emitting: open
 /// the guard at the top of the body, close it at the remembered boundary.
 pub fn hpBoundary(self: *Gen) Error!void {
-    if (!self.hp_on or !self.emitting_common) return;
+    if (!self.hp.on or !self.emitting_common) return;
     if (self.probing) {
-        if (!self.hp_dirty) {
-            self.hp_cut = self.hp_bnd;
-            self.hp_off = @intCast(self.out.items.len);
-            self.hp_insts = self.stmt_count;
+        if (!self.hp.dirty) {
+            self.hp.cut = self.hp.bnd;
+            self.hp.off = @intCast(self.out.items.len);
+            self.hp.insts = self.hp.stmts;
         }
-    } else if (self.hp_bnd == 0) {
+    } else if (self.hp.bnd == 0) {
         self.uses_inst = true;
         try self.ind(1);
         try self.b("if (inst.hp_ok == 0) {{\n", .{});
         self.ind_base += 1;
-    } else if (self.hp_bnd == self.hp_cut) {
+    } else if (self.hp.bnd == self.hp.cut) {
         self.ind_base -= 1;
         try self.ind(1);
         try self.b("}} else {{\n", .{});
-        for (self.hp_vals, 0..) |v, j| {
+        for (self.hp.vals, 0..) |v, j| {
             const i = @intFromEnum(v);
             try self.ind(2);
             try gen_unit.writeSlotRef(self, i);
             if (self.an.vty[i] == .int)
-                try self.b(" = inst.hpi[{d}];\n", .{j - self.hp_real})
+                try self.b(" = inst.hpi[{d}];\n", .{j - self.hp.real})
             else
                 try self.b(" = S.con(inst.hp[{d}]);\n", .{j});
         }
         try self.ind(1);
         try self.b("}}\n", .{});
     }
-    self.hp_bnd += 1;
+    self.hp.bnd += 1;
 }
 
 /// Find the region, once, before `emitInstance` needs its width. Runs the
@@ -174,9 +205,9 @@ pub fn hpBoundary(self: *Gen) Error!void {
 /// under the same plan and float mode, so the boundary count it lands on is
 /// the one the real walk will reach.
 pub fn planHoistPrefix(self: *Gen) Error!void {
-    self.hp_on = false;
-    self.hp_vals = &.{};
-    self.hp_real = 0;
+    self.hp.on = false;
+    self.hp.vals = &.{};
+    self.hp.real = 0;
     // No shared core to cut.
     if (self.core.lo_vals.len == 0) return;
     for (self.jobs.list) |job| {
@@ -196,12 +227,12 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
     // this could take, and a prefix guard would only add a branch.
     if (self.plan.straight) return;
 
-    self.hp_on = true;
+    self.hp.on = true;
     self.hoist_idx.clearRetainingCapacity();
     try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
     try gen_unit.probeBody(self, .undef);
-    if (self.hp_cut == 0) {
-        self.hp_on = false;
+    if (self.hp.cut == 0) {
+        self.hp.on = false;
         return;
     }
     // Live-out of the region: assigned inside it, read after it. `place`
@@ -231,11 +262,11 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
             const s = self.plan.slot[i];
             if (s == none_u32) continue;
             const p = self.place.items[s];
-            if (p.defs == 0 or p.def_off >= self.hp_off or p.max_use <= self.hp_off) continue;
+            if (p.defs == 0 or p.def_off >= self.hp.off or p.max_use <= self.hp.off) continue;
             // Written on BOTH sides of the cut: no field can hold two
             // values, and cutting earlier is a search this does not run.
-            if (p.max_def > self.hp_off) {
-                self.hp_on = false;
+            if (p.max_def > self.hp.off) {
+                self.hp.on = false;
                 return;
             }
             try vals.append(self.arena, lv);
@@ -248,8 +279,8 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
         const i = @intFromEnum(lv);
         if (self.an.vty[i] != .str or self.plan.slot[i] == none_u32) continue;
         const p = self.place.items[self.plan.slot[i]];
-        if (p.defs != 0 and p.def_off < self.hp_off and p.max_use > self.hp_off) {
-            self.hp_on = false;
+        if (p.defs != 0 and p.def_off < self.hp.off and p.max_use > self.hp.off) {
+            self.hp.on = false;
             return;
         }
     }
@@ -260,12 +291,12 @@ pub fn planHoistPrefix(self: *Gen) Error!void {
     // `pcConsider`'s, one level up. Zero values is the degenerate case:
     // nothing the region computed outlives it, so skipping it saves
     // nothing and the guard would be pure cost.
-    if (vals.items.len == 0 or vals.items.len * 2 >= self.hp_insts) {
-        self.hp_on = false;
+    if (vals.items.len == 0 or vals.items.len * 2 >= self.hp.insts) {
+        self.hp.on = false;
         return;
     }
-    self.hp_vals = vals.items;
-    self.hp_real = n_real;
+    self.hp.vals = vals.items;
+    self.hp.real = n_real;
 }
 
 /// Auxiliary core sweeps must not initialize first-call state at a trial bias.

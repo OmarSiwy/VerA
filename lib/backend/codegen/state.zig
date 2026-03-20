@@ -533,13 +533,13 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         // local copy's `hp_ok` is 0, the region runs, and the answer is the
         // same — but `precompute` is what makes the flags agree with the
         // batch's, and it is the only writer of `hp_*`.
-        if (self.pc.vals.len != 0 or self.hp_vals.len != 0)
+        if (self.pc.vals.len != 0 or self.hp.vals.len != 0)
             "    var pin = inst.*;\n    precompute(&pin, model);\n"
         else if (self.lowered.table_samples.items.len != 0)
             "    var pin = inst.*;\n"
         else
             "",
-        if (self.pc.vals.len != 0 or self.hp_vals.len != 0 or self.lowered.table_samples.items.len != 0) "&pin" else "inst",
+        if (self.pc.vals.len != 0 or self.hp.vals.len != 0 or self.lowered.table_samples.items.len != 0) "&pin" else "inst",
     });
     for (pairs, 0..) |p, pi| {
         const fi = @intFromEnum(self.an.rv(p.flag));

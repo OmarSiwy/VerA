@@ -353,13 +353,8 @@ pub const Gen = struct {
     core: plan_core.Core = .{},
     /// The temperature/parameter-only hoist (`Instance.pc__<k>`) — `plan/hoist.zig`.
     pc: plan_hoist.Precompute = .{},
-    /// §4.5.15 the solve-independent `$limit`/`seed` arguments, hoisted out of
-    /// the per-iterate clamp: value → `Instance.lp__<k>` field index or
-    /// `none_u32`, and the mapped values in field order. Filled by
-    /// `cg_limit.planPrep`; `precompute`'s tail writes them off ONE core
-    /// evaluation at x = 0, and `limit`/`seed` read them as leaves.
-    lp_idx: []u32 = &.{},
-    lp_vals: []Mir.Value = &.{},
+    /// §4.5.15 the solve-independent `$limit`/`seed` arguments — `cg_limit.Prep`.
+    lp: cg_limit.Prep = .{},
     /// Set while the core is being emitted. It slices from every target at once
     /// and returns all of them, computing each value rather than reading it out
     /// of a struct that does not exist yet; the §9.4 display unit — the only
@@ -485,31 +480,9 @@ pub const Gen = struct {
     sc_open: std.ArrayList(u32) = .empty,
     probing: bool = false,
 
-    // ---- the core's hoisted PREFIX (see `planHoistPrefix`) ----------------
-    /// This body is a prefix-cache candidate: the common core, tree-shaped,
-    /// no fatal. Cleared again if planning finds no region.
-    hp_on: bool = false,
-    /// Values the cached region defines and the rest of the core reads —
-    /// reals first, so `hp_vals[j]` is `Instance.hp[j]` while `j < hp_real`
-    /// and `Instance.hpi[j - hp_real]` after. They are ALSO core live-outs,
-    /// in fields `f{lo_vals.len + j}`, which is how `precompute` fills them.
-    hp_vals: []Mir.Value = &.{},
-    hp_real: u32 = 0,
-    /// Top-level statement boundary the region ends at (0 = no region), and
-    /// the running boundary counter of the body being emitted.
-    hp_cut: u32 = 0,
-    hp_bnd: u32 = 0,
-    /// Probe-text offset of the candidate cut, and "something the cache
-    /// cannot hold has been emitted, so the cut may not advance past here".
-    hp_off: u32 = 0,
-    hp_dirty: bool = false,
-    /// Statements the region holds, for the "is skipping it worth a field"
-    /// test in `planHoistPrefix`.
-    hp_insts: u32 = 0,
-
-    /// Statements emitted so far in the body being walked; `hpBoundary`
-    /// snapshots it as the prefix region's size.
-    stmt_count: u32 = 0,
+    /// The core's hoisted PREFIX: its region and the walk that finds it —
+    /// `codegen/hoist.zig`.
+    hp: gen_hoist.Prefix = .{},
 
     /// The one fact `plan_jobs` needs from the renderer: does a §4.5 control
     /// argument (or §4.6.3 stimulus) render host-side, or only off the core?
