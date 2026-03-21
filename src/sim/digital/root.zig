@@ -157,6 +157,12 @@ pub const Run = struct {
     in_function: bool = false,
     /// The saved storage of the automatic activations in progress.
     saved_planes: std.ArrayList(u64) = .empty,
+    /// §10.2.3 the activations of recursive timed tasks: the one the
+    /// executing process is in (0 for none), every one in progress, and the
+    /// rows free for reuse.
+    ctx: u32 = 0,
+    acts: std.ArrayList(exec.Act) = .empty,
+    free_acts: std.ArrayList(u32) = .empty,
     /// The instruction a system task is running from, so `%m` can name the
     /// §5.3.2 named blocks around it.
     pc: u32 = 0,
@@ -323,7 +329,15 @@ pub const Run = struct {
             }
             const item = r.pending.items[event.payload].item;
             switch (item) {
-                .run_process => |start| try exec.execute(r, &scratch, start),
+                .run_process => |start| {
+                    r.ctx = 0;
+                    try exec.execute(r, &scratch, start);
+                },
+                .@"resume" => |x| {
+                    r.ctx = x.ctx;
+                    try exec.makeResident(r, x.ctx);
+                    try exec.execute(r, &scratch, x.pc);
+                },
                 .write => |w| try exec.write(r, scratch.allocator(), .{ .slot = w.target, .sel = w.sel }, w.value),
                 .strobe => |s| {
                     r.scope = s.scope;
@@ -1182,6 +1196,11 @@ pub const Sub = struct {
     active: u32 = 0,
     /// Being inlined right now, which a timed task reaching itself would be.
     inlining: bool = false,
+    /// A timed task that reaches itself: its body compiled once out of line,
+    /// over a frame of its own, entered by `.call_timed` (§10.2.3). The
+    /// activation whose storage the frame holds is `resident`.
+    body: ?struct { entry: u32, frame: Frame } = null,
+    resident: u32 = 0,
     ranges: std.ArrayList(struct { start: u32, end: u32 }) = .empty,
 };
 
@@ -1820,6 +1839,25 @@ test "§10 tasks and functions: copy in/out, lifetimes, recursion, disable" {
         \\end
         \\endmodule
     , "55 1b 2 1c 0 2\n");
+}
+
+// §10.2.3: each activation of an automatic task that suspends and reaches
+// itself has its own storage, even while another caller's activations are
+// alive; and an actual that is the callee's own formal is read before the
+// new activation's frame is initialized.
+test "§10.2.3 recursive timed automatic tasks and a formal passed to itself" {
+    try expectRun(
+        \\`timescale 1ns/1ns
+        \\module m;
+        \\integer ra, rb;
+        \\task automatic sum(input integer n, input integer d, output integer t);
+        \\  integer b; begin if (n == 0) t = 0; else begin #d sum(n - 1, d, b); t = b + n; end end
+        \\endtask
+        \\function automatic integer f(input integer n, input integer k); f = k == 0 ? n : f(n, k - 1); endfunction
+        \\initial begin sum(2, 2, ra); $display("%0d ra=%0d", $time, ra); end
+        \\initial begin sum(3, 3, rb); $display("%0d rb=%0d f=%0d", $time, rb, f(7, 3)); end
+        \\endmodule
+    , "4 ra=3\n9 rb=6 f=7\n");
 }
 
 // §6.2.1: the initializer is an initial-block assignment at time 0 — so a
