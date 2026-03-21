@@ -1289,6 +1289,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     .queue => |op| try @import("system.zig").queueTask(self, scratch, op, s.args),
                     .pla => |p| try @import("system.zig").pla(self, scratch, p, s.args),
                     .fclose => try @import("system.zig").fclose(self, scratch, s.args),
+                    .fshow => |sh| try @import("system.zig").fdisplay(self, scratch, s.args, sh),
                     .dump => |op| try @import("vcd.zig").task(self, scratch, op, s.args, s.tok),
                     .finish => {
                         // An x/z level has no verbosity to select; the fullest

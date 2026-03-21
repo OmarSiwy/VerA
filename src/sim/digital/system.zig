@@ -130,14 +130,18 @@ pub fn queueFull(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Err
 
 // ---- §17.2 file input -------------------------------------------------------
 
-/// One file opened for reading (§17.2.1): its whole text, the read position,
-/// the characters `$ungetc` pushed back (read first, last pushed first), and
-/// the end-of-file indicator a read past the end sets (§17.2.8).
+/// One open file (§17.2.1). Read: its whole text, the read position, the
+/// characters `$ungetc` pushed back (read first, last pushed first), and the
+/// end-of-file indicator a read past the end sets (§17.2.8). Written: the
+/// host file and the offset the next write lands at, every write going
+/// straight through.
 pub const File = struct {
-    data: []const u8,
+    data: []const u8 = "",
     pos: usize = 0,
     pushed: std.ArrayList(u8) = .empty,
     eof: bool = false,
+    out: ?std.Io.File = null,
+    wpos: u64 = 0,
 };
 
 /// §17.2.1: a file descriptor has its most significant bit set, and the three
@@ -167,8 +171,14 @@ pub fn text(a: std.mem.Allocator, v: Int.Literal) Error!?[]const u8 {
     return out.items;
 }
 
+/// A descriptor is "a 32-bit value" (§17.2.1): its low 32 bits, however the
+/// variable holding it is signed — `integer fd` is the clause's own example.
+fn descriptor(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?i64 {
+    return ((try int(self, a, e)) orelse return null) & 0xffff_ffff;
+}
+
 fn file(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?*File {
-    const fd = (try int(self, a, e)) orelse return null;
+    const fd = (try descriptor(self, a, e)) orelse return null;
     if (fd < first_fd or fd >= first_fd + self.files.items.len) return null;
     return if (self.files.items[@intCast(fd - first_fd)]) |*f| f else null;
 }
@@ -177,17 +187,36 @@ fn file(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?*File {
 pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.ExprId, tok: u32) Error!i64 {
     const eof: i64 = -1;
     switch (f) {
-        // §17.2.1: 0 when the file cannot be opened.
+        // §17.2.1: no type opens for writing and returns a multichannel
+        // descriptor, one bit above bit 0; a Table 17-7 type returns a file
+        // descriptor. 0 when the file cannot be opened. "The $fopen function
+        // shall reuse channels that have been closed."
         .fopen => {
             const name = (try text(a, try exec.eval(self, a, args[0], 0))) orelse return 0;
-            const mode = if (args.len > 1) (try text(a, try exec.eval(self, a, args[1], 0))) orelse return 0 else "w";
-            // ponytail: files are read; writing one needs an output stream
-            // per descriptor, which no fixture asks for yet.
-            if (mode.len == 0 or mode[0] != 'r' or std.mem.indexOfScalar(u8, mode, '+') != null)
-                return self.fail(tok, "$fopen for writing is not implemented; only read modes are", .{});
-            const data = @import("display.zig").readSideFile(self, self.arena, name) catch return 0;
-            try self.files.append(self.arena, .{ .data = data });
-            return first_fd + @as(i64, @intCast(self.files.items.len - 1));
+            const mcd = args.len == 1;
+            const mode = if (mcd) "w" else (try text(a, try exec.eval(self, a, args[1], 0))) orelse return 0;
+            const types = [_][]const u8{ "r", "rb", "w", "wb", "a", "ab" };
+            for (types) |t| {
+                if (std.mem.eql(u8, t, mode)) break;
+            } else {
+                // ponytail: the three update types ("r+" and the rest) need
+                // one position shared by reads and writes; not implemented.
+                if (std.mem.indexOfScalar(u8, mode, '+') != null) return self.fail(tok, "$fopen for update (\"{s}\") is not implemented", .{mode});
+                return 0;
+            }
+            const k = for (self.files.items, 0..) |open, i| {
+                if (open == null) break i;
+            } else self.files.items.len;
+            if (mcd and k >= 30) return 0; // bit 31 "shall always be cleared"
+            const opened: File = if (mode[0] == 'r') .{
+                .data = @import("display.zig").readSideFile(self, self.arena, name) catch return 0,
+            } else blk: {
+                const io = self.io orelse return 0;
+                const out = std.Io.Dir.cwd().createFile(io, name, .{ .truncate = mode[0] == 'w' }) catch return 0;
+                break :blk .{ .out = out, .wpos = if (mode[0] == 'a') out.length(io) catch 0 else 0 };
+            };
+            if (k == self.files.items.len) try self.files.append(self.arena, opened) else self.files.items[k] = opened;
+            return if (mcd) @as(i64, 1) << @intCast(k + 1) else first_fd + @as(i64, @intCast(k));
         },
         // §17.2.4.1 / §17.2.5 / §17.2.8, C's semantics: a pushed-back
         // character is read first and moves the position back one.
@@ -244,10 +273,65 @@ pub fn fileCall(self: *Run, a: std.mem.Allocator, f: FileFn, args: []const Ast.E
     }
 }
 
-/// §17.2.7 `$fclose`.
+/// §17.2.7 `$fclose` of a file descriptor, or of every file a multichannel
+/// descriptor's bits name.
 pub fn fclose(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!void {
-    const fd = (try int(self, a, args[0])) orelse return;
-    if (fd >= first_fd and fd < first_fd + self.files.items.len) self.files.items[@intCast(fd - first_fd)] = null;
+    const d = (try descriptor(self, a, args[0])) orelse return;
+    var it = channels(self, d);
+    while (it.next()) |k| {
+        if (self.files.items[k]) |f| if (f.out) |out| out.close(self.io.?);
+        self.files.items[k] = null;
+    }
+}
+
+/// The open files a descriptor names: one for an fd, one per set bit above
+/// bit 0 for an mcd. The standard streams are not in the table.
+const Channels = struct {
+    files: []const ?File,
+    d: i64,
+    bit: u6 = 1,
+    fn next(c: *Channels) ?usize {
+        if (c.d & (@as(i64, 1) << 31) != 0) {
+            const k = (c.d & 0x7fff_ffff) - 3;
+            c.d = 0;
+            return if (k >= 0 and k < c.files.len and c.files[@intCast(k)] != null) @intCast(k) else null;
+        }
+        while (c.bit < 31) {
+            const b = c.bit;
+            c.bit += 1;
+            if (c.d & (@as(i64, 1) << b) != 0 and b - 1 < c.files.len and c.files[b - 1] != null) return b - 1;
+        }
+        return null;
+    }
+};
+
+fn channels(self: *Run, d: i64) Channels {
+    return .{ .files = self.files.items, .d = d };
+}
+
+/// §17.2.2 `$fdisplay`/`$fwrite` and their radix forms: the `$display` text
+/// of the arguments after the descriptor, to every channel it names. Bit 0
+/// of an mcd and fd 1 (STDOUT) are the transcript; fd 2 is STDERR.
+/// ponytail: `$fstrobe` and `$fmonitor` are not implemented.
+pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
+    const d = (try descriptor(self, a, args[0])) orelse return;
+    var buf: std.Io.Writer.Allocating = .init(a);
+    const saved = self.out;
+    self.out = &buf.writer;
+    defer self.out = saved;
+    try @import("display.zig").display(self, args[1..], a, show);
+    self.out = saved;
+    const bytes = buf.written();
+    const fd = d & (@as(i64, 1) << 31) != 0;
+    if ((fd and d & 0x7fff_ffff == 1) or (!fd and d & 1 != 0)) try self.out.writeAll(bytes);
+    if (fd and d & 0x7fff_ffff == 2) if (self.io) |io| std.Io.File.stderr().writeStreamingAll(io, bytes) catch {};
+    var it = channels(self, d);
+    while (it.next()) |k| {
+        const f = &(self.files.items[k].?);
+        const out = f.out orelse continue; // a file opened for reading takes no output
+        out.writePositionalAll(self.io.?, bytes, f.wpos) catch return self.fail(0, "writing a $fopen file failed", .{});
+        f.wpos += bytes.len;
+    }
 }
 
 /// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters

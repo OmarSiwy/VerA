@@ -1082,6 +1082,17 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
         for (cases) |c| gpa.free(c);
         gpa.free(cases);
     }
+    // A case that writes a file (§17.2.1 `$fopen` for writing, §18's dump)
+    // writes it relative to the working directory, which must not be the
+    // repository: every case runs in the suite's scratch tree instead. The
+    // fixture paths are absolute already; the executable is made so.
+    const exe = try Io.Dir.cwd().realPathFileAlloc(io, vera_exe, gpa);
+    defer gpa.free(exe);
+    const scratch = options.work_root ++ "/devices";
+    try Io.Dir.cwd().createDirPath(io, scratch);
+    var scratch_dir = try Io.Dir.cwd().openDir(io, scratch, .{});
+    defer scratch_dir.close(io);
+    try std.process.setCurrentDir(io, scratch_dir);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1089,7 +1100,7 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args) !u8 {
         if (filter) |f| if (std.mem.indexOf(u8, case, f) == null) continue;
         _ = arena_state.reset(.retain_capacity);
         ran += 1;
-        if (!try digitalCase(arena_state.allocator(), io, vera_exe, case, w)) failed += 1;
+        if (!try digitalCase(arena_state.allocator(), io, exe, case, w)) failed += 1;
     }
     if (ran == 0) {
         try w.print("devices: nothing matched `{s}`\n", .{filter orelse ""});

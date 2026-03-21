@@ -272,6 +272,8 @@ pub const Task = union(enum) {
     pla: system.Pla,
     /// §17.2.7 `$fclose`.
     fclose,
+    /// §17.2.2 `$fdisplay`/`$fwrite`: `show` to a descriptor.
+    fshow: Show,
     /// §18.1 the value change dump tasks.
     dump: @import("vcd.zig").Op,
 };
@@ -310,6 +312,14 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$q_remove", Task{ .queue = .remove } },
     .{ "$q_exam", Task{ .queue = .exam } },
     .{ "$fclose", .fclose },
+    .{ "$fdisplay", Task{ .fshow = showAs(.decimal, true) } },
+    .{ "$fdisplayb", Task{ .fshow = showAs(.binary, true) } },
+    .{ "$fdisplayo", Task{ .fshow = showAs(.octal, true) } },
+    .{ "$fdisplayh", Task{ .fshow = showAs(.hex, true) } },
+    .{ "$fwrite", Task{ .fshow = showAs(.decimal, false) } },
+    .{ "$fwriteb", Task{ .fshow = showAs(.binary, false) } },
+    .{ "$fwriteo", Task{ .fshow = showAs(.octal, false) } },
+    .{ "$fwriteh", Task{ .fshow = showAs(.hex, false) } },
     .{ "$dumpfile", Task{ .dump = .file } },
     .{ "$dumpvars", Task{ .dump = .vars } },
     .{ "$dumpoff", Task{ .dump = .off } },
