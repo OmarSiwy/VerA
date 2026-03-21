@@ -509,7 +509,10 @@ fn emitScope(self: *Run) Error!void {
     }
     while (depth != 0) {
         depth -= 1;
-        try self.out.writeAll(self.file.str(self.scope_info.items[chain[depth]].name));
+        const info = self.scope_info.items[chain[depth]];
+        try self.out.writeAll(self.file.str(info.name));
+        // §12.4.1 one iteration of a loop generate is `name[value]`.
+        if (info.index) |i| try self.out.print("[{d}]", .{i});
         if (depth != 0) try self.out.writeByte('.');
     }
     // The named blocks enclosing `pc` in this scope nest, so sorting them by

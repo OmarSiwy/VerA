@@ -612,11 +612,11 @@ fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
 fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, depth: u16) Error!void {
     const arena = r.arena;
     if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
-    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.genvars.len != 0 or m.functions.len != 0 or m.attrs.len != 0))
+    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.functions.len != 0 or m.attrs.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     // A digital parse makes each generate construct an `analog` block over
     // an `if`; anything else there is a genuine analog block.
-    if (!r.mixed) for (m.analog) |ab| if (!isGenerateIf(r.file, ab.body))
+    if (!r.mixed) for (m.analog) |ab| if (!isGenerate(r.file, m, ab.body))
         return r.fail(ab.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     r.scope = scope;
     try e.insts.append(arena, .{ .module = m, .scope = scope });
@@ -869,35 +869,124 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     if (!r.mixed) for (m.analog) |ab| try generate(r, e, scope, ab.body, depth);
 }
 
-/// IEEE 1364-2005 §12.4.2 a conditional generate construct as a digital parse
-/// leaves it: an `if` whose arms are blocks (or further `if`s).
-fn isGenerateIf(file: *const Ast.SourceFile, s: Ast.StmtId) bool {
+/// IEEE 1364-2005 §12.4 a generate construct as a digital parse leaves it:
+/// an `if` or `case` whose arms are blocks, or a `for` over a genvar (§12.4.1:
+/// what tells a loop generate from a loop statement is its genvar).
+fn isGenerate(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, s: Ast.StmtId) bool {
     return switch (file.stmt(s)) {
         .if_stmt => |i| i.is_generate,
+        .case_stmt => |c| c.is_generate,
+        .for_stmt => |f| genvarOf(file, m, f) != null,
         else => false, // else: every other analog-block body is analog behaviour
     };
 }
 
-/// §12.4.2: the scheme's constant condition selects at most one arm, and only
-/// the selected block's instances come into existence (§12.1.1: an instance
-/// in an unselected arm still makes its module no top-level one).
-/// ponytail: `if`/`else` schemes with instances; a block's other items are
-/// refused by the parser, and loop and case generates are refused here.
+/// §12.4.1 the genvar a loop generate's `genvar_initialization` assigns, or
+/// null when the loop's index is no genvar of `m`.
+fn genvarOf(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, f: anytype) ?Ast.StrId {
+    if (f.init == .none) return null;
+    const init = switch (file.stmt(f.init)) {
+        .assign => |a| a,
+        else => return null, // else: A.4.2 genvar_initialization is an assignment
+    };
+    if (file.exprs.tag(init.target) != .ident) return null;
+    const name = file.exprs.strOf(init.target);
+    return if (std.mem.indexOfScalar(Ast.StrId, m.genvars, name) != null) name else null;
+}
+
+/// §12.4: the scheme's constant expressions select at most one arm of an
+/// `if` or `case` (§12.4.2) and unroll a `for` once per genvar value
+/// (§12.4.1), and only the selected blocks' instances come into existence
+/// (§12.1.1: an instance in an unselected arm still makes its module no
+/// top-level one).
+/// ponytail: instances only; a block's other items are refused by the
+/// parser. A part-select bound written with a genvar is folded once, with
+/// the first iteration's value; a bit-select is read per iteration.
 fn generate(r: *Run, e: *Elab, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
     if (s == .none) return;
+    const tok = r.file.stmtTok(s);
     switch (r.file.stmt(s)) {
         .empty => {},
         .if_stmt => |i| {
             r.scope = scope;
-            const cond = (try r.constant(i.cond, r.file.stmtTok(s))).truth();
+            const cond = (try r.constant(i.cond, tok)).truth();
             try generate(r, e, scope, if (cond == .one) i.then_s else i.else_s, depth);
+        },
+        // §12.4.2: "the case_generate_item selected is the one whose
+        // expression matches the case expression", the default otherwise.
+        .case_stmt => |c| {
+            r.scope = scope;
+            const value = try r.constant(c.scrutinee, tok);
+            var chosen: ?Ast.StmtId = null;
+            var fallback: Ast.StmtId = .none;
+            for (c.arms) |arm| {
+                if (arm.labels.len == 0) fallback = arm.body;
+                for (arm.labels) |label| {
+                    if (chosen != null) break;
+                    const l = try r.constant(label, tok);
+                    const ty: Type = .{ .width = @max(l.width, value.width), .signed = l.signed and value.signed };
+                    if ((try exec.convert(r.arena, value, ty)).equality(.case_equal, try exec.convert(r.arena, l, ty)) == .one) chosen = arm.body;
+                }
+            }
+            try generate(r, e, scope, chosen orelse fallback, depth);
+        },
+        // §12.4.1: the genvar steps through its values in the module's scope,
+        // and each iteration's block is a scope of its own, `name[value]`, in
+        // which the genvar is a local parameter holding that value.
+        .for_stmt => |f| {
+            const m = findModule(r, r.scope_info.items[r.instanceOf(scope)].module, tok) catch unreachable; // the instance was minted from it
+            const gv = genvarOf(r.file, m, f) orelse return r.fail(tok, "§12.4.1: a loop generate's index is a genvar", .{});
+            const step = switch (r.file.stmt(f.step)) {
+                .assign => |a| a,
+                else => return r.fail(tok, "§12.4.1: a loop generate's iteration assigns its genvar", .{}), // else: A.4.2 genvar_iteration is an assignment
+            };
+            if (r.file.exprs.tag(step.target) != .ident or r.file.exprs.strOf(step.target) != gv)
+                return r.fail(tok, "§12.4.1: a loop generate's iteration assigns its genvar", .{});
+            r.scope = scope;
+            if (r.scope_info.items[scope].index != null and r.names.contains(.{ .scope = scope, .str = gv }))
+                return r.fail(tok, "§12.4.1: two nested loop generate constructs cannot use the same genvar", .{});
+            const at = r.names.get(.{ .scope = scope, .str = gv }) orelse try genvarSlot(r, e, gv, tok);
+            try setGenvar(r, e, at, try r.constant(r.file.stmt(f.init).assign.value, tok));
+            const name: Ast.StrId = switch (r.file.stmt(f.body)) {
+                .block => |b| b.name,
+                else => .none, // else: a lone item is an unnamed generate block
+            };
+            var seen: std.ArrayList(i64) = .empty;
+            while ((try r.constant(f.cond, tok)).truth() == .one) {
+                if (seen.items.len == 65536) return r.fail(tok, "§12.4.1: this loop generate does not terminate within 65536 iterations", .{});
+                const value = e.values.items[at].asInt() orelse return r.fail(tok, "§12.4.1: a genvar shall not be x or z", .{});
+                if (std.mem.indexOfScalar(i64, seen.items, value) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated", .{});
+                try seen.append(r.arena, value);
+                const iter = try newScope(r, tok);
+                try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .module = m.name, .lexical = true, .index = value });
+                r.scope = iter;
+                try setGenvar(r, e, try genvarSlot(r, e, gv, tok), e.values.items[at]);
+                try generate(r, e, iter, f.body, depth);
+                r.scope = scope;
+                try setGenvar(r, e, at, try r.constant(step.value, tok));
+            }
         },
         .block => |b| {
             for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
             for (b.body) |inner| try generate(r, e, scope, inner, depth);
         },
-        else => return r.fail(r.file.stmtTok(s), "only conditional generate constructs are implemented by digital execution", .{}), // else: loop and case generates, and analog behaviour inside a generate block
+        else => return r.fail(tok, "only generate constructs of instances are implemented by digital execution", .{}), // else: analog behaviour inside a generate block
     }
+}
+
+/// A genvar's storage in the current scope: a 32-bit signed constant
+/// (§3.5 "an integer"), which `constant` folds like any parameter.
+fn genvarSlot(r: *Run, e: *Elab, name: Ast.StrId, tok: u32) Error!u32 {
+    const at: u32 = @intCast(e.values.items.len);
+    try r.bind(name, at, tok);
+    try e.values.append(r.arena, try filled(r.arena, 32, true, .x));
+    r.values = e.values.items;
+    try r.params.put(r.arena, at, {});
+    return at;
+}
+
+fn setGenvar(r: *Run, e: *Elab, at: u32, value: Int.Literal) Error!void {
+    @memcpy(e.values.items[at].planes, (try exec.convert(r.arena, value, .{ .width = 32, .signed = true })).planes);
 }
 
 /// Every module a generate construct instantiates, in either arm.
@@ -908,6 +997,8 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
             try generatedModules(file, i.then_s, out, a);
             try generatedModules(file, i.else_s, out, a);
         },
+        .case_stmt => |c| for (c.arms) |arm| try generatedModules(file, arm.body, out, a),
+        .for_stmt => |f| try generatedModules(file, f.body, out, a),
         .block => |b| {
             for (b.instances) |inst| try out.append(a, inst.module);
             for (b.body) |inner| try generatedModules(file, inner, out, a);
@@ -1744,6 +1835,21 @@ test "§12.4.2 a conditional generate instantiates only its selected arm" {
         \\generate if (P == 0) begin : g0 a u(); end else if (P == 1) begin : g1 b u(); end endgenerate
         \\endmodule
     , "b\n");
+}
+
+// §12.4.1: one block per genvar value, each a scope `g[i]` holding i as a
+// local parameter; §12.4.2: only the matching case arm exists.
+test "§12.4.1/§12.4.2 a loop generate unrolls and a case generate selects" {
+    try expectRun(
+        \\module c(input [3:0] v); initial #1 $display("%m %0d", v); endmodule
+        \\module d; initial #2 $display("d"); endmodule
+        \\module m;
+        \\genvar i;
+        \\for (i = 3; i > 0; i = i - 2) begin : g c u(i + 1); end
+        \\generate case (2'b1x) 2'b10: begin : e c u(0); end 2'b1x: begin : f d u(); end endcase endgenerate
+        \\endmodule
+    , "m.g[3].u 4\nm.g[1].u 2\nd\n");
+    try expectRejected("module c; endmodule\nmodule m; genvar i; for (i = 0; i < 2; i = i) begin : g c u(); end endmodule", "genvar value is repeated");
 }
 
 // §12.3.2/§12.3.6: a named header port whose expression concatenates internal
