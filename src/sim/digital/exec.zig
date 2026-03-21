@@ -53,6 +53,8 @@ pub const Pending = union(enum) {
     /// that change during each time increment": one per timestep, coalesced
     /// by `Vcd.pending`.
     vcd_tick,
+    /// §7.6 a delayed pass switch reaching its `target` state now.
+    tran_switch: u32,
     /// A.6.1's `[ delay3 ]` on a continuous assignment: this driver's
     /// `transition.target` arrives now. §6.1.3's inertial cancel is the
     /// scheduler's — see `Inertial`.
@@ -819,50 +821,106 @@ pub fn resolve(self: *Run, net: u32) Error!void {
 
 /// IEEE 1364-2005 §7.6/§8.5.3.5 "switch processing shall consider all the
 /// devices in a bidirectional switch-connected net before it can determine
-/// the appropriate value for any node": the nets joined through conducting
-/// pass switches resolve as one, from every driver of every one of them.
-/// Across a switch of unknown conduction a driver may or may not arrive, so
-/// what it asserts there is widened to include high impedance (§7.10.2).
-/// ponytail: scalar nets, and no trireg charge or net delay inside a joined
+/// the appropriate value for any node": the net bits joined through
+/// conducting pass switches resolve as one, from every driver of every one of
+/// them. A signal crossing a switch loses supply strength (§7.11) and one
+/// Table 7-8 step per resistive switch on the strongest path (§7.12). Across
+/// a switch of unknown conduction a driver may or may not arrive, so what it
+/// asserts there is widened to include high impedance (§7.10.2).
+/// ponytail: no trireg charge, wired logic or net delay inside a joined
 /// group; the group is found afresh on every resolution, which is fine for
 /// the handful of switches a digital fixture wires up.
 fn resolveJoined(self: *Run, start: u32) Error!void {
     var scratch = std.heap.ArenaAllocator.init(self.arena);
     defer scratch.deinit();
     const a = scratch.allocator();
-    const group = try reach(self, a, start, true);
-    for (group) |y| {
-        const sure = try reach(self, a, y, false);
-        var acc: Signal = .{};
-        for (group) |z| {
-            const definite = std.mem.indexOfScalar(u32, sure, z) != null;
-            const n = self.nets[z];
-            var own = netPull(n.kind);
-            for (n.drivers) |d| own = own.combine(contribution(self.drivers[d], 0));
-            acc = acc.combine(if (definite or own.none()) own else .{ .lo = @min(own.lo, 0), .hi = @max(own.hi, 0) });
+    var touched: std.ArrayList(u32) = .empty;
+    try touched.append(a, start);
+    for (0..self.nets[start].resolved.width) |i| {
+        const group = try reach(self, a, .{ .net = start, .bit = @intCast(i) });
+        for (group) |y| {
+            const paths = try switchPaths(self, a, y, group);
+            var acc: Signal = .{};
+            for (group, paths) |z, p| {
+                const n = self.nets[z.net];
+                var own = netPull(n.kind);
+                for (n.drivers) |d| own = own.combine(contribution(self.drivers[d], z.bit));
+                own = @import("net.zig").reduceSignal(own, @intFromBool(!std.meta.eql(z, y)), p.res);
+                acc = acc.combine(if (p.sure or own.none()) own else .{ .lo = @min(own.lo, 0), .hi = @max(own.hi, 0) });
+            }
+            const n = self.nets[y.net];
+            n.signal[y.bit] = acc;
+            setBit(n.resolved, y.bit, acc.collapse());
+            if (std.mem.indexOfScalar(u32, touched.items, y.net) == null) try touched.append(a, y.net);
         }
-        const n = self.nets[y];
-        n.signal[0] = acc;
-        setBit(n.resolved, 0, acc.collapse());
-        try store(self, n.slot, n.resolved.planes);
     }
+    for (touched.items) |t| try store(self, self.nets[t].slot, self.nets[t].resolved.planes);
 }
 
-/// The nets joined to `from` through pass switches that conduct — or, with
-/// `maybe`, that may conduct.
-fn reach(self: *Run, a: std.mem.Allocator, from: u32, maybe: bool) Error![]const u32 {
-    var seen: std.ArrayList(u32) = .empty;
+/// One bit of one net, as a pass switch terminal sees it.
+const Node = struct { net: u32, bit: u32 };
+
+/// The terminal of `t` across from `u`, or null when `u` is neither.
+fn across(t: @import("net.zig").Tran, u: Node) ?Node {
+    if (t.a == u.net and t.a_bit == u.bit) return .{ .net = t.b, .bit = t.b_bit };
+    if (t.b == u.net and t.b_bit == u.bit) return .{ .net = t.a, .bit = t.a_bit };
+    return null;
+}
+
+/// The net bits joined to `from` through pass switches that may conduct.
+fn reach(self: *Run, a: std.mem.Allocator, from: Node) Error![]const Node {
+    var seen: std.ArrayList(Node) = .empty;
     try seen.append(a, from);
     var i: usize = 0;
     while (i < seen.items.len) : (i += 1) {
-        for (self.nets[seen.items[i]].trans) |ti| {
+        const u = seen.items[i];
+        for (self.nets[u.net].trans) |ti| {
             const t = self.trans[ti];
-            if (t.state == .off or (t.state == .unknown and !maybe)) continue;
-            const other = if (t.a == seen.items[i]) t.b else t.a;
-            if (std.mem.indexOfScalar(u32, seen.items, other) == null) try seen.append(a, other);
+            if (t.state == .off) continue;
+            const v = across(t, u) orelse continue;
+            for (seen.items) |w| {
+                if (std.meta.eql(w, v)) break;
+            } else try seen.append(a, v);
         }
     }
     return seen.items;
+}
+
+/// From each member of `group` to `y`: the fewest resistive switches on a
+/// path that may conduct, and whether some path surely does.
+const SwitchPath = struct { res: u32, sure: bool };
+
+fn switchPaths(self: *Run, a: std.mem.Allocator, y: Node, group: []const Node) Error![]const SwitchPath {
+    const p = try a.alloc(SwitchPath, group.len);
+    @memset(p, .{ .res = std.math.maxInt(u32), .sure = false });
+    for (group, p) |u, *q| if (std.meta.eql(u, y)) {
+        q.* = .{ .res = 0, .sure = true };
+    };
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (group, 0..) |u, iu| {
+            if (p[iu].res == std.math.maxInt(u32)) continue;
+            for (self.nets[u.net].trans) |ti| {
+                const t = self.trans[ti];
+                if (t.state == .off) continue;
+                const v = across(t, u) orelse continue;
+                const iv = for (group, 0..) |w, k| {
+                    if (std.meta.eql(w, v)) break k;
+                } else continue;
+                const res = p[iu].res + @intFromBool(t.resistive);
+                if (res < p[iv].res) {
+                    p[iv].res = res;
+                    changed = true;
+                }
+                if (p[iu].sure and t.state == .on and !p[iv].sure) {
+                    p[iv].sure = true;
+                    changed = true;
+                }
+            }
+        }
+    }
+    return p;
 }
 
 /// §7.6 what a MOS switch drives: its data's value, at the data's strength
@@ -917,6 +975,25 @@ fn schedule(self: *Run, from: Int.Literal, from_or_z: bool, to: Int.Literal, to_
     st.target.signed = to.signed;
     st.or_z = to_or_z;
     return true;
+}
+
+/// §7.6 a controlled pass switch with a delay: it turns on after the first
+/// delay, off after the second, and to unknown conduction after the smaller.
+/// A control that returns before its change lands cancels it (§7.14's
+/// inertial reading, as a gate's).
+fn switchAfter(self: *Run, at: u32, next: @import("net.zig").Tran.State) Error!void {
+    const t = &self.trans[at];
+    const settled = if (t.pending != null) t.target else t.state;
+    if (settled == next) return;
+    if (t.pending) |h| try cancel(self, h);
+    t.pending = null;
+    if (next == t.state) return;
+    t.target = next;
+    t.pending = try enqueue(self, .{ .tran_switch = at }, t.delay.to(switch (next) {
+        .on => .one,
+        .off => .zero,
+        .unknown => .x,
+    }), false);
 }
 
 /// Cancel one queued event and give its row back.
@@ -1054,7 +1131,7 @@ fn claim(self: *Run, item: Pending) Error!u32 {
             @memcpy(planes, w.value.planes);
             row.item.write.value.planes = planes;
         },
-        .run_process, .strobe, .monitor_tick, .vcd_tick, .drive, .net_update, .decay => {},
+        .run_process, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay => {},
     }
     return at;
 }
@@ -1102,7 +1179,7 @@ fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
             try cancel(self, row.handle);
             hit = true;
         },
-        .write, .strobe, .monitor_tick, .vcd_tick, .drive, .net_update, .decay => {},
+        .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay => {},
     };
     return hit;
 }
@@ -1447,9 +1524,12 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .switch_ctrl => |s| {
                 const t = &self.trans[s.tran];
                 const c = (try eval(self, scratch, t.ctrl, 1)).bit(0);
-                t.state = if (c == t.on) .on else if (c == .zero or c == .one) .off else .unknown;
-                try resolve(self, t.a);
-                try resolve(self, t.b);
+                const next: @import("net.zig").Tran.State = if (c == t.on) .on else if (c == .zero or c == .one) .off else .unknown;
+                if (t.delay.present) try switchAfter(self, s.tran, next) else {
+                    t.state = next;
+                    try resolve(self, t.a);
+                    try resolve(self, t.b);
+                }
                 for (s.slots) |slot| try self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = pc });
                 return;
             },

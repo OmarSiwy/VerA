@@ -129,16 +129,43 @@ pub const Net = struct {
 /// for an n-type, 0 for a p-type), and is off otherwise.
 pub const Mos = struct { data: Ast.ExprId, gate: Ast.ExprId, n_type: bool, resistive: bool };
 
-/// §7.6 one pass switch between nets `a` and `b`: always on (`tran`), or on
-/// while `ctrl` equals `on` (`tranif1`: 1, `tranif0`: 0) and of unknown
-/// conduction while it is x or z.
+/// §7.6 one pass switch between bit `a_bit` of net `a` and bit `b_bit` of
+/// net `b` ("scalar nets or bit-selects of vector nets"): always on (`tran`),
+/// or on while `ctrl` equals `on` (`tranif1`: 1, `tranif0`: 0) and of
+/// unknown conduction while it is x or z. A resistive one reduces what it
+/// passes by §7.12. `delay` is the turn-on (`rise`) and turn-off (`fall`)
+/// delay of a controlled one; `target` is the state in flight.
 pub const Tran = struct {
     a: u32,
     b: u32,
+    a_bit: u32 = 0,
+    b_bit: u32 = 0,
     ctrl: Ast.ExprId = .none,
     on: Int.Bit = .one,
-    state: enum { on, off, unknown } = .on,
+    state: State = .on,
+    resistive: bool = false,
+    delay: Delay = .{},
+    target: State = .on,
+    pending: ?Handle = null,
+
+    pub const State = enum { on, off, unknown };
 };
+
+/// §7.11/§7.12 a signal that crossed `hops` pass switches, `resistive` of
+/// them resistive: supply becomes strong at the first switch, and each
+/// resistive one reduces by Table 7-8.
+pub fn reduceSignal(sig: Signal, hops: u32, resistive: u32) Signal {
+    if (hops == 0) return sig;
+    const one = struct {
+        fn side(v: i8, k: u32) i8 {
+            var s = reduce(@enumFromInt(@abs(v)), false);
+            for (0..k) |_| s = reduce(s, true);
+            const m: i8 = @intCast(@intFromEnum(s));
+            return if (v < 0) -m else m;
+        }
+    };
+    return .{ .lo = one.side(sig.lo, resistive), .hi = one.side(sig.hi, resistive) };
+}
 
 /// IEEE 1364-2005 §7.12 Table 7-8: what a resistive switch makes of the
 /// strength it passes; a non-resistive one only turns supply into strong.
