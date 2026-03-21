@@ -102,7 +102,9 @@ pub const VecRange = struct { msb: i64, lsb: i64 };
 /// macro-process event (see `watchAnalog`).
 /// `vpi` is VAMS §12.31.1's cbValueChange: an application watches the slot,
 /// and a change calls `Run.vpi_change` (see `store`).
-pub const Watcher = enum { monitor, analog, vpi };
+/// `vcd` is IEEE 1364-2005 §18's value change dump: the slot is dumped, so a
+/// change asks for the end-of-step section (`vcd.zig`).
+pub const Watcher = enum { monitor, analog, vpi, vcd };
 
 /// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
 /// active, explicit D2A, inactive and nonblocking event of the current tick has
@@ -135,7 +137,9 @@ pub const Run = struct {
     /// `lexical` marks a scope nested INSIDE its parent's module — a task or
     /// function (§12.7) — whose unresolved names are searched for in the
     /// parent; an instance is a hierarchy boundary and is searched no further.
-    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, module: Ast.StrId, lexical: bool = false }) = .empty,
+    /// `index` marks one iteration of a §12.4.1 loop generate, the `[i]` of
+    /// its block name.
+    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, module: Ast.StrId, lexical: bool = false, index: ?i64 = null }) = .empty,
     /// IEEE 1364-2005 §10 the tasks and functions of every instance.
     subs: std.ArrayList(Sub) = .empty,
     /// A subroutine by its name in the instance that declares it.
@@ -255,8 +259,8 @@ pub const Run = struct {
     monitor_slots: std.ArrayList(u32) = .empty,
     /// Per slot, who is told when its value changes. `store` tests this on
     /// every change and nothing else: it is the one value-change hook, whose
-    /// first watcher is §17.1.3's monitor. §18's VCD value changes and VAMS
-    /// §8.5's implicit D2A are the same event and would each add a member.
+    /// first watcher is §17.1.3's monitor; §18's value change dump and VAMS
+    /// §8.5's implicit D2A are the same event, each a member of its own.
     watch: []std.EnumSet(Watcher) = &.{},
     /// One region-3b event per tick however many analog-read values moved,
     /// the same coalescing `monitor_pending` does for region 4.
@@ -292,6 +296,8 @@ pub const Run = struct {
     files: std.ArrayList(?@import("system.zig").File) = .empty,
     /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
     part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
+    /// §18 the value change dump.
+    vcd: @import("vcd.zig").Vcd = .{},
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -328,6 +334,7 @@ pub const Run = struct {
                     r.monitor_pending = false;
                     try display.monitorPrint(r, scratch.allocator());
                 },
+                .vcd_tick => try @import("vcd.zig").tick(r, scratch.allocator()),
                 // §6.1.3: a cancelled transition never gets here — the scheduler
                 // dropped it — so what arrives is the one still in flight.
                 .drive => |at| {
@@ -1504,6 +1511,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
 
 test {
     _ = @import("system.zig");
+    _ = @import("vcd.zig");
 }
 
 pub fn expectRun(source: []const u8, expected: []const u8) !void {

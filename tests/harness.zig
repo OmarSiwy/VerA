@@ -849,8 +849,7 @@ fn sectionLessThan(a: []const u8, b: []const u8) bool {
 ///      plus two `//! expect vcd`. **These were read by nothing at all**, which
 ///      is what this function exists to fix. The ten are ordinary accept/reject
 ///      fixtures and the verdict algebra already handles them; the two VCD ones
-///      assert nothing any runner understands and are therefore honestly
-///      `unasserted` until §18 lands (`ROADMAP.md` v0.8.1).
+///      are judged by `judgeVcd`, which runs them and compares the dump file.
 ///   3. `p02_design.v`, `p02_systf.v`, `p02_scales.v` — VPI support material
 ///      with no directives at all. A design a test loads is not a fixture, and
 ///      counting one as `unasserted` would be dishonest in the other direction.
@@ -955,6 +954,119 @@ pub fn digitalWarningsMatch(source: []const u8, stderr: []const u8) bool {
         if (!found) return false;
     }
     return true;
+}
+
+/// The `vera` executable, for the one fixture no in-process runner can judge:
+/// a `//! expect vcd` digital run, whose evidence is a FILE the run writes.
+/// Set once by `tests/bench.zig`, which is handed the path; read-only after.
+pub var vera_exe: ?[]const u8 = null;
+
+/// `//! expect vcd <produced> == <golden>`: `vera --run` of the `.v` writes
+/// `<produced>` (relative to the run's working directory), which must equal
+/// `<golden>` (relative to the fixture) once both are normalised (`vcdTokens`).
+/// Null when the fixture says no such thing — or says it malformed, which then
+/// reaches `tb.parse` and fails there as the unknown directive it is.
+pub const VcdExpect = struct { produced: []const u8, golden: []const u8 };
+
+pub fn vcdExpectation(source: []const u8) ?VcdExpect {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (!std.mem.startsWith(u8, line, "//!")) continue;
+        var f = std.mem.tokenizeAny(u8, line[3..], " \t\r");
+        if (!std.mem.eql(u8, f.next() orelse continue, "expect")) continue;
+        if (!std.mem.eql(u8, f.next() orelse return null, "vcd")) continue;
+        const produced = f.next() orelse return null;
+        if (!std.mem.eql(u8, f.next() orelse return null, "==")) return null;
+        const golden = f.next() orelse return null;
+        if (f.next() != null) return null;
+        return .{ .produced = produced, .golden = golden };
+    }
+    return null;
+}
+
+/// IEEE 1364-2005 §18.2: "The dump file is structured in a free format. White
+/// space is used to separate commands", so a VCD is compared as TOKENS. The
+/// `$date` (§18.2.3.2) and `$version` (§18.2.3.8) sections are the writer's
+/// own and `$comment` (§18.2.3.1) is free text, so all three are dropped; the
+/// `$timescale` body is joined, so `1 ns` and `1ns` are one token.
+pub fn vcdTokens(arena: std.mem.Allocator, text: []const u8) ![]const []const u8 {
+    var out: std.ArrayList([]const u8) = .empty;
+    var it = std.mem.tokenizeAny(u8, text, " \t\r\n");
+    while (it.next()) |tok| {
+        const drop = std.mem.eql(u8, tok, "$date") or std.mem.eql(u8, tok, "$version") or std.mem.eql(u8, tok, "$comment");
+        const join = std.mem.eql(u8, tok, "$timescale");
+        if (!drop and !join) {
+            try out.append(arena, tok);
+            continue;
+        }
+        var body: std.ArrayList(u8) = .empty;
+        while (it.next()) |t| {
+            if (std.mem.eql(u8, t, "$end")) break;
+            try body.appendSlice(arena, t);
+        }
+        if (join) try out.appendSlice(arena, &.{ tok, body.items, "$end" });
+    }
+    return out.items;
+}
+
+/// Run the fixture in a scratch directory of its own and compare the file it
+/// wrote against the golden. Only a runner that RUNS a design is asked: for an
+/// accept/reject-only one the fixture asserts nothing it could meet.
+fn judgeVcd(arena: std.mem.Allocator, io: Io, compiler: Compiler, f: Fixture, want: VcdExpect, w: *Io.Writer) !Verdict {
+    if (!compiler.runs) return .unasserted;
+    const given = vera_exe orelse {
+        try w.print("FAIL {s}: `//! expect vcd` needs the vera executable, and none was given\n", .{f.path});
+        return .fail;
+    };
+    // Absolute, because the run's working directory is not this one.
+    const exe = try Io.Dir.cwd().realPathFileAlloc(io, given, arena);
+    const dir = try std.fs.path.join(arena, &.{ options.work_root, "vcd", f.slug });
+    try Io.Dir.cwd().createDirPath(io, dir);
+    const produced = try std.fs.path.join(arena, &.{ dir, want.produced });
+    Io.Dir.cwd().deleteFile(io, produced) catch {};
+    const r = try std.process.run(arena, io, .{
+        .argv = &.{ exe, "--run", "-I", f.root, "-I", f.dir, f.path },
+        .cwd = .{ .path = dir },
+    });
+    if (r.term != .exited or r.term.exited != 0) {
+        try w.print("FAIL {s}: vera --run did not succeed ({any})\n{s}", .{ f.path, r.term, r.stderr });
+        return .fail;
+    }
+    const got_text = Io.Dir.cwd().readFileAlloc(io, produced, arena, .limited(1 << 24)) catch {
+        try w.print("FAIL {s}: the run wrote no `{s}`\n", .{ f.path, want.produced });
+        return .fail;
+    };
+    const golden = try std.fs.path.join(arena, &.{ f.dir, want.golden });
+    const want_text = Io.Dir.cwd().readFileAlloc(io, golden, arena, .limited(1 << 24)) catch {
+        try w.print("FAIL {s}: no golden VCD at {s}\n", .{ f.path, golden });
+        return .fail;
+    };
+    const got = try vcdTokens(arena, got_text);
+    const expected = try vcdTokens(arena, want_text);
+    for (0..@max(got.len, expected.len)) |i| {
+        const g = if (i < got.len) got[i] else "<end of file>";
+        const e = if (i < expected.len) expected[i] else "<end of file>";
+        if (std.mem.eql(u8, g, e)) continue;
+        try w.print("FAIL {s}: VCD token {d} is `{s}`, the golden has `{s}`\n--- produced\n{s}\n", .{ f.path, i, g, e, got_text });
+        return .fail;
+    }
+    return .pass;
+}
+
+test "VCD comparison drops the writer's own sections and joins the timescale" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    const got = try vcdTokens(a, "$date today $end $version VerA 1.0\n$end\n$timescale 1 ns $end\n$comment x $end #0 0! b1 \" ");
+    const want = [_][]const u8{ "$timescale", "1ns", "$end", "#0", "0!", "b1", "\"" };
+    try std.testing.expectEqual(want.len, got.len);
+    for (want, got) |x, y| try std.testing.expectEqualStrings(x, y);
+    const e = vcdExpectation("// prose\n//! expect vcd a.vcd == ../g/a.vcd\n").?;
+    try std.testing.expectEqualStrings("a.vcd", e.produced);
+    try std.testing.expectEqualStrings("../g/a.vcd", e.golden);
+    try std.testing.expect(vcdExpectation("//! expect vcd a.vcd ../g/a.vcd\n") == null);
+    try std.testing.expect(vcdExpectation("//! lrm 9.1\n") == null);
 }
 
 test "digital positive warning obligations inspect diagnostic headers" {
@@ -1113,6 +1225,10 @@ pub fn judge(
     w: *Io.Writer,
 ) !Verdict {
     const source = try Io.Dir.cwd().readFileAlloc(io, f.path, arena, .limited(1 << 20));
+
+    // A §18 dump fixture's evidence is the file its run writes, which no
+    // `tb` directive describes; it is judged before `tb.parse` for that reason.
+    if (vcdExpectation(source)) |want| return judgeVcd(arena, io, compiler, f, want, w);
 
     // The `//!` lines are read from the RAW source: the preprocessor deletes
     // comments (§2.4), so after compilation they are gone.

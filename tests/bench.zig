@@ -471,6 +471,7 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
     // `harness.takeArg` owns every knob the SUITE has, and takes them first, so
     // that a filter word cannot shadow one. What is left is this step's own.
     var cfg: harness.Config = .init();
+    harness.vera_exe = vera_exe; // `//! expect vcd` runs it
     var against_openvaf = false;
     var do_sweep = false;
     var a = first;
