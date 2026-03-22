@@ -146,13 +146,33 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         try owned.append(self.arena, t);
     }
     for (module.discrete) |blk| try collectWrites(self, blk.body, &owned);
+    // What a digital event term in an analog event control may watch (§7.3.4):
+    // a digital-owned value, or a named event the digital context triggers
+    // (§5.10.4 / §5.10.5).
+    var digital: std.StringHashMapUnmanaged(void) = .empty;
+    for (owned.items) |t| try digital.put(self.arena, self.file.str(ex.strOf(t)), {});
+    var trig: EventRefs = .{ .l = self, .module = module, .triggers_only = true };
+    for (module.discrete) |blk| try trig.stmt(blk.body);
+    for (trig.names.keys()) |name| try digital.put(self.arena, name, {});
     // Only what the analog block READS crosses: an owned value it never names
     // is the digital engine's alone, and must not make a solve fail on an x
     // (§7.3.2) that nothing analog ever sees.
-    var reads: Reads = .{ .l = self };
+    var reads: Reads = .{ .l = self, .digital = &digital };
     for (module.analog) |blk| try reads.stmt(blk.body);
+    // §8.5 each explicit D2A term is a host-set flag.
+    for (reads.sites.items, 0..) |site, k| {
+        const param = try std.fmt.allocPrint(self.arena, "__d2a{d}", .{k});
+        try self.out.discrete_events.put(self.arena, site.term, .{ .name = site.name, .edge = site.edge, .param = param });
+        try lower_param.addParam(self, param, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(site.term));
+    }
     for (owned.items) |t| {
         const name = self.file.str(ex.strOf(t));
+        if (reads.guarded.contains(name) and !self.out.discrete_snaps.contains(name)) {
+            // §8.5.3.6: the guarded read's region-1b snapshot, typed as below.
+            try self.out.discrete_snaps.put(self.arena, name, ex.mainTok(t));
+            const snap = try std.fmt.allocPrint(self.arena, "{s}__1b", .{name});
+            try lower_param.addParam(self, snap, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
+        }
         if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
         const ty: Ast.Type = for (module.vars) |v| {
             if (v.name == ex.strOf(t)) break v.ty;
@@ -198,17 +218,54 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
     }
 }
 
-/// Every identifier an analog statement tree reads.
+/// Every identifier an analog statement tree reads, split by §8.4.3.2: a read
+/// inside a statement guarded by an explicit D2A event (`guarded`) does not
+/// make the block implicitly sensitive, and §8.5.3.6 gives it the region-1b
+/// value; every other read (`names`) is a live, implicitly sensitive input.
 const Reads = struct {
     l: *Lower,
+    /// Digital-owned values and digitally triggered named events.
+    digital: *const std.StringHashMapUnmanaged(void),
     names: std.StringHashMapUnmanaged(void) = .empty,
+    guarded: std.StringHashMapUnmanaged(void) = .empty,
+    sites: std.ArrayList(Site) = .empty,
+    in_d2a: bool = false,
+    const Site = struct { term: Ast.ExprId, name: []const u8, edge: Edge };
+
     pub fn stmt(w: *Reads, s: Ast.StmtId) Oom!void {
-        if (s != .none) try w.l.file.stmtEdges(s, w);
+        if (s == .none) return;
+        switch (w.l.file.stmt(s)) {
+            .event_control => |c| if (c.kind == .event and c.event != .none) {
+                const before = w.sites.items.len;
+                try w.eventTerms(c.event);
+                const prev = w.in_d2a;
+                defer w.in_d2a = prev;
+                if (w.sites.items.len != before) w.in_d2a = true;
+                return w.stmt(c.body);
+            },
+            else => {}, // else: every other statement is read edge by edge
+        }
+        try w.l.file.stmtEdges(s, w);
     }
+
+    /// §7.3.4 Syntax 7-2: an `or` list's digital terms are explicit D2A sites;
+    /// the rest (cross, timer, an analog named event) are read as expressions.
+    fn eventTerms(w: *Reads, e: Ast.ExprId) Oom!void {
+        const ex = &w.l.file.exprs;
+        if (ex.tag(e) == .event_or) {
+            try w.eventTerms(ex.lhs(e));
+            return w.eventTerms(ex.rhs(e));
+        }
+        if (d2aTerm(w.l.file, e, w.digital)) |t|
+            return w.sites.append(w.l.arena, .{ .term = e, .name = t.name, .edge = t.edge });
+        // A bare name that is not digital is an analog named event, not a read.
+        if (ex.tag(e) != .ident) try w.expr(e, .read);
+    }
+
     pub fn expr(w: *Reads, e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
         if (e == .none) return;
         const ex = &w.l.file.exprs;
-        if (ex.tag(e) == .ident) try w.names.put(w.l.arena, w.l.file.str(ex.strOf(e)), {});
+        if (ex.tag(e) == .ident) try (if (w.in_d2a) &w.guarded else &w.names).put(w.l.arena, w.l.file.str(ex.strOf(e)), {});
         var buf: [3]Ast.ExprId = undefined;
         for (ex.children(e, &buf)) |c| {
             // §4.4: a bare name in `V(d)` is the net the access function is
@@ -221,6 +278,28 @@ const Reads = struct {
         }
     }
 };
+
+const Edge = @FieldType(Lower.Lowered.DiscreteEvent, "edge");
+
+/// §7.3.4 a digital event term over one name: `posedge d`, `negedge d`, or a
+/// bare `d` (a change of a digital value, or a digitally triggered named
+/// event). Null for anything else, which stays an analog event.
+pub fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.StringHashMapUnmanaged(void)) ?struct { name: []const u8, edge: Edge } {
+    const ex = &file.exprs;
+    const tag = ex.tag(e);
+    const operand = switch (tag) {
+        .event_posedge, .event_negedge => ex.lhs(e),
+        else => e, // else: a bare term; only a name qualifies, checked below
+    };
+    if (operand == .none or ex.tag(operand) != .ident) return null;
+    const name = file.str(ex.strOf(operand));
+    if (!digital.contains(name)) return null;
+    return .{ .name = name, .edge = switch (tag) {
+        .event_posedge => .posedge,
+        .event_negedge => .negedge,
+        else => .any, // else: the bare-name term
+    } };
+}
 
 /// The net `name` declares in `module`, of any discipline, or null (a
 /// variable, or undeclared). Its domain is the caller's question.
@@ -255,6 +334,8 @@ const EventRefs = struct {
     l: *Lower,
     module: *const Ast.ModuleDecl,
     names: std.StringArrayHashMapUnmanaged(u32) = .empty,
+    /// Only `-> e`, not `@(e)`.
+    triggers_only: bool = false,
     fn isEvent(w: *const EventRefs, s: Ast.StrId) bool {
         for (w.module.events) |ev| if (ev == s) return true;
         return false;
@@ -268,7 +349,7 @@ const EventRefs = struct {
         try w.l.file.stmtEdges(s, w);
     }
     pub fn expr(w: *EventRefs, e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
-        if (e == .none) return;
+        if (e == .none or w.triggers_only) return;
         const ex = &w.l.file.exprs;
         if (ex.tag(e) == .ident and w.isEvent(ex.strOf(e))) try w.names.put(w.l.arena, w.l.file.str(ex.strOf(e)), ex.mainTok(e));
         var buf: [3]Ast.ExprId = undefined;
@@ -278,17 +359,19 @@ const EventRefs = struct {
 
 pub fn checkDiscreteContext(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     if (module.discrete.len == 0) return;
-    // §7.3.6.1/§7.3.6.2: a named event triggered in one context and waited on
-    // in the other crosses the A/D boundary — an A2D or an explicit D2A event,
-    // neither of which the mixed-signal kernel carries yet. Refused rather than
-    // lowered as two unrelated events that never meet.
+    // §7.3.6.1: a named event TRIGGERED in the analog context and named in the
+    // digital one crosses the A/D boundary as an A2D event, which the
+    // mixed-signal kernel does not carry yet. Refused rather than lowered as
+    // two unrelated events that never meet. The other direction, a digital
+    // trigger the analog block waits on, is §7.3.6.2's explicit D2A
+    // (`Lowered.discrete_events`).
     if (self.out.mixed_signal and module.events.len != 0) {
         var dig: EventRefs = .{ .l = self, .module = module };
         for (module.discrete) |blk| try dig.stmt(blk.body);
-        var ana: EventRefs = .{ .l = self, .module = module };
+        var ana: EventRefs = .{ .l = self, .module = module, .triggers_only = true };
         for (module.analog) |blk| try ana.stmt(blk.body);
         for (ana.names.keys(), ana.names.values()) |name, tok| if (dig.names.contains(name))
-            try self.err(tok, .E0437, "named event `{s}` is used in both contexts, and the kernel carries no event across the A/D boundary yet (§7.3.6.1, §7.3.6.2)", .{name});
+            try self.err(tok, .E0437, "named event `{s}` is triggered by the analog block and named by a digital process, and the kernel carries no A2D event yet (§7.3.6.1)", .{name});
     }
 
     var ctx: DiscreteCtx = .{ .mixed = self.out.mixed_signal };

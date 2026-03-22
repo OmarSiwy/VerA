@@ -228,6 +228,11 @@ pub const Mixed = struct {
     precision: ?f64,
     /// Digital-owned names the analog block reads, each a `Model` field.
     inputs: []const []const u8,
+    /// §8.5.3.6 digital names read under an explicit D2A event, each a
+    /// `<name>__1b` `Model` field.
+    snaps: []const []const u8 = &.{},
+    /// §8.5 the explicit D2A terms, in site order.
+    events: []const @import("ir").Lowered.DiscreteEvent = &.{},
 };
 
 /// One `//! noise` line, split into the part that names the ROW and the parts

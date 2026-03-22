@@ -9,6 +9,7 @@
 const std = @import("std");
 const tb = @import("../tb.zig");
 const tb_runner_text = @import("runner_text.zig");
+const naming = @import("../naming.zig");
 const Lowered = @import("ir").Lowered;
 const Mir = @import("ir").Mir;
 const Io = tb.Io;
@@ -311,6 +312,8 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .unit = if (ts) |t| t.unit else null,
         .precision = if (ts) |t| t.precision else null,
         .inputs = lowered.discrete_inputs.keys(),
+        .snaps = lowered.discrete_snaps.keys(),
+        .events = lowered.discrete_events.values(),
     };
 }
 
@@ -358,20 +361,28 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    state: *State,
         \\    dout: *std.Io.Writer.Allocating,
         \\    n: *usize,
-        \\    slots: [input_names.len]u32,
+        \\    slots: [input_ports.len]u32,
+        \\    snap_slots: [snap_ports.len]u32,
+        \\    /// §8.5.3.6 the region-1b values of the last explicit D2A event.
+        \\    snaps: [snap_ports.len]i64 = @splat(0),
         \\    t: f64 = 0.0,
         \\    solved: bool = false,
         \\
         \\    /// §7.3.6.5 / Table 7-1: every input as the integer the digital
-        \\    /// engine holds for the latest tick. The fields are parameters to
-        \\    /// the device, so its parameter-only prep is redone after them.
-        \\    pub fn setInputs(a: *Analog, dig: *sim.digital.Run) !void {
+        \\    /// engine holds for the latest tick, the guarded reads' snapshot, and
+        \\    /// the explicit D2A terms delivered to this solve. The fields are
+        \\    /// parameters to the device, so its parameter-only prep is redone.
+        \\    pub fn setInputs(a: *Analog, dig: *sim.digital.Run, fired: u64) !void {
         \\        a.flush();
-        \\        inline for (input_names, 0..) |name, i| {
-        \\            const v = mixedInput(dig, a.slots[i], name);
-        \\            @field(a.model, name) = std.math.lossyCast(@TypeOf(@field(a.model, name)), v);
-        \\        }
+        \\        inline for (input_ports, 0..) |p, i|
+        \\            setField(a.model, p.field, mixedInput(dig, a.slots[i], p.name));
+        \\        inline for (snap_ports, 0..) |p, i| setField(a.model, p.field, a.snaps[i]);
+        \\        inline for (event_ports, 0..) |p, k| setField(a.model, p.field, @intFromBool(fired >> k & 1 != 0));
         \\        if (comptime @hasDecl(D, "precompute")) D.precompute(a.inst, a.model);
+        \\    }
+        \\
+        \\    pub fn snapshot(a: *Analog, dig: *sim.digital.Run) !void {
+        \\        inline for (snap_ports, 0..) |p, i| a.snaps[i] = mixedInput(dig, a.snap_slots[i], p.name);
         \\    }
         \\
         \\    pub fn solveAt(a: *Analog, t: f64, dt: f64, first: bool, last: bool) !void {
@@ -406,8 +417,17 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\
         \\
     );
-    try out.appendSlice(arena, "const input_names = [_][]const u8{");
-    for (mx.inputs, 0..) |name, i| try print(&out, arena, "{s}\"{f}\"", .{ if (i == 0) " " else ", ", std.zig.fmtString(name) });
+    // Each digital name beside the `Model` field codegen spelled for it.
+    var buf: [256]u8 = undefined;
+    try out.appendSlice(arena, "const input_ports = [_]Port{");
+    for (mx.inputs) |name| try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), naming.sanitize(&buf, name) catch return error.OutOfMemory });
+    try out.appendSlice(arena, " };\nconst snap_ports = [_]Port{");
+    for (mx.snaps) |name| {
+        const field = naming.sanitize(&buf, try std.fmt.allocPrint(arena, "{s}__1b", .{name})) catch return error.OutOfMemory;
+        try print(&out, arena, " .{{ .name = \"{f}\", .field = \"{s}\" }},", .{ std.zig.fmtString(name), field });
+    }
+    try out.appendSlice(arena, " };\nconst event_ports = [_]EventPort{");
+    for (mx.events) |ev| try print(&out, arena, " .{{ .name = \"{f}\", .edge = .{t}, .field = \"{s}\" }},", .{ std.zig.fmtString(ev.name), ev.edge, naming.sanitize(&buf, ev.param) catch return error.OutOfMemory });
     try out.appendSlice(arena, " };\n\n");
 
     // --- main ---------------------------------------------------------------

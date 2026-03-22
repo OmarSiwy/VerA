@@ -803,6 +803,22 @@ pub const mixed_body =
     \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
     \\}
     \\
+    \\/// A digital name the device reads, and the `Model` field it arrives in.
+    \\const Port = struct { name: []const u8, field: []const u8 };
+    \\/// §8.5 an explicit D2A term: the event it waits on, and its `Model` flag.
+    \\const EventPort = struct { name: []const u8, edge: @FieldType(sim.digital.D2aSite, "edge"), field: []const u8 };
+    \\
+    \\fn setField(model: *D.Model, comptime field: []const u8, v: anytype) void {
+    \\    @field(model, field) = std.math.lossyCast(@TypeOf(@field(model, field)), v);
+    \\}
+    \\
+    \\fn mixedSlot(dig: *sim.digital.Run, name: []const u8) u32 {
+    \\    return dig.slotOf(name) orelse {
+    \\        std.debug.print("{s}: FAIL the digital half holds no `{s}` for the analog block to read\n", .{ title, name });
+    \\        std.process.exit(1);
+    \\    };
+    \\}
+    \\
     \\fn mixedFail(bag: *diag.Bag, e: anyerror) noreturn {
     \\    var buf = std.Io.Writer.Allocating.init(std.heap.page_allocator);
     \\    diag.render(bag, &buf.writer, .{ .explain_hint = false, .summary = false }) catch {};
@@ -820,14 +836,14 @@ pub const mixed_body =
     \\    bag.setSingleFile(title, mixed_source, 0) catch {};
     \\    var dout = std.Io.Writer.Allocating.init(arena);
     \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
-    \\    var a: Analog = .{ .model = model, .inst = inst, .x = x, .forced = forced, .state = state, .dout = &dout, .n = n, .slots = undefined };
-    \\    inline for (input_names, 0..) |name, i| {
-    \\        a.slots[i] = dig.slotOf(name) orelse {
-    \\            std.debug.print("{s}: FAIL the digital half holds no `{s}` for the analog block to read\n", .{ title, name });
-    \\            std.process.exit(1);
-    \\        };
+    \\    var a: Analog = .{ .model = model, .inst = inst, .x = x, .forced = forced, .state = state, .dout = &dout, .n = n, .slots = undefined, .snap_slots = undefined };
+    \\    // §8.4.3.2: an unguarded read makes the block implicitly sensitive.
+    \\    inline for (input_ports, 0..) |p, i| {
+    \\        a.slots[i] = mixedSlot(&dig, p.name);
     \\        dig.watchAnalog(a.slots[i]);
     \\    }
+    \\    inline for (snap_ports, 0..) |p, i| a.snap_slots[i] = mixedSlot(&dig, p.name);
+    \\    inline for (event_ports, 0..) |p, k| dig.watchEvent(mixedSlot(&dig, p.name), p.edge, k) catch |e| mixedFail(&bag, e);
     \\    const tick = if (mixed_timescale) |ts| ts.precision else 1.0;
     \\    sim.mixed.run(Analog, &a, &dig, .{ .times = &times, .tick = tick }) catch |e| mixedFail(&bag, e);
     \\    a.flush();

@@ -20,6 +20,17 @@ const lower_sysfunc = @import("sysfunc.zig");
 
 pub const Lowered = @This();
 
+/// One explicit D2A event term (`discrete_events`): §7.3.4's `posedge`,
+/// `negedge` or bare `expression` over a digital name, or §5.10.4's named event
+/// triggered by the digital context.
+pub const DiscreteEvent = struct {
+    /// The digital variable, net or named event the term watches.
+    name: []const u8,
+    edge: enum { any, posedge, negedge },
+    /// The `Model` field the host sets for the solve the event is delivered to.
+    param: []const u8,
+};
+
 /// One row of `nodes`.
 pub const Node = struct {
     /// The unknown's unique spelling (codegen's `U` member).
@@ -199,6 +210,15 @@ uses: std.EnumSet(Kernel) = .initEmpty(),
 /// §7.3.6.5/§8.5 a mixed module's digital-owned values the analog block may
 /// read, name → declaring token, in first-write order.
 discrete_inputs: std.StringArrayHashMapUnmanaged(u32) = .empty,
+/// §8.5 / §8.5.3.6 explicit D2A: every digital event term of an analog event
+/// control, keyed by the term's expression. Each is a host-written `Model`
+/// flag (`DiscreteEvent.param`), nonzero for the solve at the digital tick the
+/// event occurred in.
+discrete_events: std.AutoArrayHashMapUnmanaged(Ast.ExprId, DiscreteEvent) = .empty,
+/// §8.5.3.6 the digital values read INSIDE a statement guarded by an explicit
+/// D2A event: each is read from a `<name>__1b` `Model` field holding the value
+/// after region 1 of the event's tick, not the live one region 3b sees.
+discrete_snaps: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// The module's discrete half needs the event queue (`lower_context.isMixed`).
 mixed_signal: bool = false,
 

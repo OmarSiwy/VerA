@@ -4267,9 +4267,11 @@ fn infoOf(c: Code) Info {
             .title = "posedge/negedge is digital-only",
             .lrm = "5.10.1",
             .explain =
-            \\Edge events observe a discrete signal changing value. The analog
-            \\equivalent is `cross`, which detects a continuous expression
-            \\passing through zero in a stated direction:
+            \\Edge events observe a discrete signal changing value. In an analog
+            \\event control (§7.3.4) the operand must be a digital variable or
+            \\net: one a discrete process or continuous assignment writes. The
+            \\analog equivalent for a continuous signal is `cross`, which detects
+            \\a continuous expression passing through zero in a stated direction:
             \\
             \\    @(cross(V(clk) - vth, +1)) ...    // rising
             ,

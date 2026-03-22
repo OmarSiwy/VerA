@@ -80,7 +80,7 @@ pub const Row = struct { item: Pending, handle: Handle = undefined, buf: []u64 =
 
 // §5.10.1: an edge is a change toward 1 (posedge) or away from 1 (negedge),
 // with x and z as the intermediate value on either side of the transition.
-const Edge = enum(u2) {
+pub const Edge = enum(u2) {
     any,
     posedge,
     negedge,
@@ -700,6 +700,7 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     if (self.watch[target].contains(.monitor)) try requestMonitor(self);
     if (self.watch[target].contains(.analog)) try requestAnalog(self);
     if (self.watch[target].contains(.vcd)) try requestVcd(self);
+    if (self.watch[target].contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
     try wake(self, target, before, dest.bit(0));
     if (self.watch[target].contains(.vpi)) if (self.vpi_change) |f| f(self, target);
 }
@@ -708,10 +709,23 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
 /// which an analog block is implicitly sensitive changes value". §8.5.3.7 then
 /// processes the macro-process in region 3b, after every region-1..3 event of
 /// the tick, and once however many inputs moved.
-fn requestAnalog(self: *Run) Error!void {
+pub fn requestAnalog(self: *Run) Error!void {
     if (self.analog_pending) return;
     self.analog_pending = true;
     _ = self.scheduler.schedule(.analog, @import("root.zig").analog_payload) catch |e|
+        return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
+}
+
+/// VAMS §8.5: an event an analog event control waits on occurred. Every term
+/// it matches is marked, and ONE region-1b event reports them all once region
+/// 1 of the tick is done (§8.5.3.6).
+fn requestD2a(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
+    for (self.d2a_sites.items) |s| if (s.slot == target and s.edge.matches(before, after)) {
+        self.d2a_fired |= @as(u64, 1) << s.site;
+    };
+    if (self.d2a_fired == 0 or self.d2a_pending) return;
+    self.d2a_pending = true;
+    _ = self.scheduler.schedule(.explicit_d2a, @import("root.zig").analog_payload) catch |e|
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e});
 }
 
@@ -1579,6 +1593,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // are scheduled in the active region of this same timestep, and
             // execution of the triggering process continues meanwhile.
             .trigger => |at| {
+                if (self.watch[at].contains(.d2a)) try requestD2a(self, at, .x, .x);
                 try wake(self, at, .x, .x);
                 pc += 1;
                 continue;

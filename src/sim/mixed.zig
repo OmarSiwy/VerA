@@ -53,9 +53,14 @@ pub fn tickAtOrBefore(t: f64, tick: f64) Tick {
 
 /// Run one analysis over `opts.times`.
 ///
-/// `A` provides three methods, each fallible:
-///   setInputs(a, dig)             copy the discrete inputs the analog block reads
-///                                 out of `dig` (§7.3.1 Table 7-1 conversion is A's)
+/// `A` provides four methods, each fallible:
+///   setInputs(a, dig, fired)      copy the discrete inputs the analog block reads
+///                                 out of `dig` (§7.3.1 Table 7-1 conversion is A's),
+///                                 and raise the explicit D2A terms in `fired`
+///                                 (bit = `digital.D2aSite.site`) for this solve
+///   snapshot(a, dig)              region 1b (§8.5.3.6): keep, for the next
+///                                 setInputs, the values the statements guarded
+///                                 by an explicit D2A event read
 ///   solveAt(a, t, dt, first, last) a TENTATIVE solution at `t`; `first` opens the
 ///                                 analysis (dt = 0), `last` is its final point
 ///   finish(a)                     the last tentative solution is final: report it
@@ -71,7 +76,20 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         // tick k is solved at k's own time and not at the next declared point.
         while (dig.scheduler.peekTime()) |k| {
             if (k > horizon) break;
-            while (try dig.runUntil(k) == .analog) {
+            while (true) {
+                switch (try dig.runUntil(k)) {
+                    .idle => break,
+                    // §8.5.3.6: the guarded reads take region 1b's values; the
+                    // tick's region-3b stop, which the engine has already
+                    // queued, solves with the fired terms.
+                    .explicit_d2a => {
+                        s.pending |= dig.d2a_fired;
+                        dig.d2a_fired = 0;
+                        try a.snapshot(dig);
+                        continue;
+                    },
+                    .analog => {},
+                }
                 const tk = @as(f64, @floatFromInt(k)) * opts.tick;
                 const t = if (k == horizon and @abs(tk - target) <= 1e-9 * @max(opts.tick, target)) target else tk;
                 // §8.4.2: activity before the first analog time is settled
@@ -96,13 +114,22 @@ fn State(comptime A: type) type {
         acc: ?f64 = null,
         /// Time of the last finished solution: the base of `dt`.
         prev: ?f64 = null,
+        /// Explicit D2A terms (bit = site) that occurred since the last solve,
+        /// and those delivered to the tentative solution at `acc`. A term is
+        /// delivered to exactly one finished solution: a re-solve at the same
+        /// time keeps it, the next time point drops it.
+        pending: u64 = 0,
+        fired: u64 = 0,
 
         fn accept(s: *@This(), t: f64) !void {
             if (s.acc) |ta| if (ta != t) {
                 try s.a.finish();
                 s.prev = ta;
+                s.fired = 0;
             };
-            try s.a.setInputs(s.dig);
+            s.fired |= s.pending;
+            s.pending = 0;
+            try s.a.setInputs(s.dig, s.fired);
             try s.a.solveAt(t, if (s.prev) |p| t - p else 0.0, s.prev == null, t == s.final);
             s.acc = t;
         }
@@ -118,16 +145,22 @@ const diag = @import("diag");
 const Fake = struct {
     slot: u32,
     input: i64 = -1,
+    fired: u64 = 0,
+    snap: i64 = -1,
     solves: std.ArrayList(Point) = .empty,
     points: std.ArrayList(Point) = .empty,
     gpa: std.mem.Allocator,
-    const Point = struct { t: f64, dt: f64, v: i64, first: bool, last: bool };
+    const Point = struct { t: f64, dt: f64, v: i64, first: bool, last: bool, fired: u64 = 0, snap: i64 = -1 };
 
-    pub fn setInputs(f: *Fake, dig: *digital.Run) !void {
+    pub fn setInputs(f: *Fake, dig: *digital.Run, fired: u64) !void {
         f.input = dig.values[f.slot].asInt() orelse -1;
+        f.fired = fired;
+    }
+    pub fn snapshot(f: *Fake, dig: *digital.Run) !void {
+        f.snap = dig.values[f.slot].asInt() orelse -1;
     }
     pub fn solveAt(f: *Fake, t: f64, dt: f64, first: bool, last: bool) !void {
-        try f.solves.append(f.gpa, .{ .t = t, .dt = dt, .v = f.input, .first = first, .last = last });
+        try f.solves.append(f.gpa, .{ .t = t, .dt = dt, .v = f.input, .first = first, .last = last, .fired = f.fired, .snap = f.snap });
     }
     pub fn finish(f: *Fake) !void {
         try f.points.append(f.gpa, f.solves.items[f.solves.items.len - 1]);
@@ -227,4 +260,34 @@ test "digital activity before the first analog time folds into the DC point" {
         \\endmodule
     , "v", &.{ 5e-9, 20e-9 });
     try expectPoints(f, &.{ .{ 5e-9, 2 }, .{ 12e-9, 3 }, .{ 20e-9, 3 } });
+}
+
+test "§8.5.3.6 an explicit D2A reads region 1b's values and forces a solution at its tick" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\`timescale 1ns/1ns
+        \\module m; reg clk; integer da;
+        \\initial begin clk = 0; da = 0; #4 clk = 1; end
+        \\always @(posedge clk) begin da = 3; da <= 9; end
+        \\endmodule
+    , .{}, &bag, &out.writer);
+    // The analog block waits on `posedge clk` (site 0) and reads `da` only
+    // under it: `da` is snapshotted, not watched.
+    try dig.watchEvent(dig.slotOf("clk").?, .posedge, 0);
+    var f: Fake = .{ .slot = dig.slotOf("da").?, .gpa = arena };
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 2e-9, 6e-9 }, .tick = 1e-9 });
+    // 4 ns is a solution of its own (§8.4.7), carrying the event and da = 3
+    // (after region 1, before the region-3 `da <= 9`); the next point does not
+    // carry the event again.
+    try testing.expectEqual(@as(usize, 4), f.points.items.len);
+    const p = f.points.items[2];
+    try testing.expectApproxEqAbs(@as(f64, 4e-9), p.t, 1e-18);
+    try testing.expectEqual(@as(u64, 1), p.fired);
+    try testing.expectEqual(@as(i64, 3), p.snap);
+    try testing.expectEqual(@as(u64, 0), f.points.items[1].fired);
+    try testing.expectEqual(@as(u64, 0), f.points.items[3].fired);
 }
