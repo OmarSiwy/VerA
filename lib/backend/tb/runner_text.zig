@@ -804,7 +804,7 @@ pub const mixed_body =
     \\}
     \\
     \\/// A digital name the device reads, and the `Model` field it arrives in.
-    \\const Port = struct { name: []const u8, field: []const u8 };
+    \\const Port = struct { name: []const u8, field: []const u8, xz: ?[]const u8 = null };
     \\/// §8.5 an explicit D2A term: the event it waits on, and its `Model` flag.
     \\const EventPort = struct { name: []const u8, edge: @FieldType(sim.digital.D2aSite, "edge"), field: []const u8 };
     \\

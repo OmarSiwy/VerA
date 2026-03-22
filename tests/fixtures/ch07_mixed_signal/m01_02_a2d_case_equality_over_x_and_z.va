@@ -32,16 +32,18 @@
 //     tool reads 5.0 at t = 50n instead of 2.5;
 //   - a tool that read the net as 0 for both unknown states reads 0.0 twice.
 //
-// WHAT FAILS TODAY, in the order the compiler reaches it: `error[E0209]:
-// expected an expression: found `#`` — a `.va` file is parsed with `digital =
-// false` (lib/frontend/parser.zig:2324 gates `#` on it), so the discrete
-// stimulus cannot be written at all. With the delays removed the next wall is
-// `error[E0130]: x/z digit in a number literal`, then `error[E0315]: net must
-// be read through an access function`. (A fourth, E0323 on the `===` operator
-// itself, is gone: two-state `===` lowers as `==`.)
+// WHAT FAILS TODAY: only the x arm. The §7.3.2 comparison itself is green —
+// `xz_four_state_input_compared.va` asserts it with a value on every arm — and
+// the run reads 5.0 at t = 0, 10n and 2.5 from 40n. At 20n and 30n it reads
+// 0.0: `avar = avar` reads the variable at the start of THIS evaluation, and
+// VerA keeps an analog variable across evaluations only when an event
+// statement writes it (lib/ir/lower/param.zig `scanHeld`). §3.2 initializes a
+// real "at the start of a simulation", not at every evaluation, so the hold
+// is the clause's and VerA's retention is the gap.
 //
 //! lrm 7.3.2
 //! lrm 7.3.1
+//! xfail §3.2 retention — VerA holds an analog variable across evaluations only when an event statement writes it (param.zig scanHeld), so the x arm's `avar = avar` reads 0.0, not the held 5.0; the §7.3.2 comparison is green in xz_four_state_input_compared.va
 //! analysis tran
 //! time 0, 10n, 30n, 50n
 `timescale 1ns/1ns
