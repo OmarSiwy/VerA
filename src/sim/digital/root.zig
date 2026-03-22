@@ -349,14 +349,14 @@ pub const Run = struct {
         try r.d2a_sites.append(r.arena, .{ .slot = at, .edge = edge, .site = site });
     }
 
-    /// VAMS §7.3.5: `cross`/`above` as a term of a digital event control.
+    /// VAMS §7.3.5: `cross`/`above`/`absdelta` as a term of a digital event control.
     /// The process waits on a slot no variable owns (counted down from the
     /// top of the slot space), which `deliverA2d` wakes.
     pub fn registerMonitor(r: *Run, e: Ast.ExprId) Error!void {
         const ex = &r.file.exprs;
         const name = r.file.str(ex.strOf(e));
-        if (!r.mixed or !(std.mem.eql(u8, name, "cross") or std.mem.eql(u8, name, "above")))
-            return r.exprFail(e, "only cross() and above() are monitored in a digital event control");
+        if (!r.mixed or !(std.mem.eql(u8, name, "cross") or std.mem.eql(u8, name, "above") or std.mem.eql(u8, name, "absdelta")))
+            return r.exprFail(e, "only cross(), above() and absdelta() are monitored in a digital event control");
         const scope = r.instanceOf(r.scope);
         if (r.monitorSlot(e, scope) != null) return;
         try r.addMonitor(e, std.math.maxInt(u32) - 1 - @as(u32, @intCast(r.monitors.items.len)));

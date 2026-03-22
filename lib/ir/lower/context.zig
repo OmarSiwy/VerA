@@ -698,10 +698,10 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
         if (ctx.mixed) switch (tag) {
             .event_function => {
                 const name = self.file.str(ex.strOf(e));
-                if (!std.mem.eql(u8, name, "cross") and !std.mem.eql(u8, name, "above"))
-                    try self.err(ex.mainTok(e), .E0437, "`{s}` in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross() and above()", .{ name, ctx.where });
+                if (!std.mem.eql(u8, name, "cross") and !std.mem.eql(u8, name, "above") and !std.mem.eql(u8, name, "absdelta"))
+                    try self.err(ex.mainTok(e), .E0437, "`{s}` in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross(), above() and absdelta()", .{ name, ctx.where });
             },
-            .event_initial_step, .event_final_step => try self.err(ex.mainTok(e), .E0437, "a §5.10.2 analog event in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross() and above()", .{ctx.where}),
+            .event_initial_step, .event_final_step => try self.err(ex.mainTok(e), .E0437, "a §5.10.2 analog event in {s} is §7.3.6.1's A2D event, and the kernel monitors only cross(), above() and absdelta()", .{ctx.where}),
             .branch_access => if (!std.mem.eql(u8, self.file.str(ex.strOf(e)), "V") or ex.tag(ex.lhs(e)) != .ident or
                 (ex.rhs(e) != .none and ex.tag(ex.rhs(e)) != .ident))
                 try self.err(ex.mainTok(e), .E0437, "an analog probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net) and V(net, net)", .{ctx.where}),

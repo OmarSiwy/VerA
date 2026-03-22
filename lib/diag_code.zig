@@ -3736,15 +3736,21 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0513 => .{
-            .title = "absdelta() is not implemented",
-            .lrm = "4.5.14",
+            .title = "absdelta() is only allowed in an initial or always block",
+            .lrm = "5.10.3.4",
             .explain =
-            \\`absdelta` requests timestep control from the simulator based on
-            \\an expression's change. A compiled device artifact reports
-            \\residuals and charges; it does not drive the timestep controller.
+            \\LRM 5.10.3.4: "This function is only allowed in an initial or
+            \\always block of a Verilog-AMS module." It samples an analog
+            \\signal for DIGITAL code: each change of more than `delta` is an
+            \\A2D event scheduled in the digital queue (8.4.6), which an
+            \\analog event control has no use for.
             \\
-            \\`$bound_step` (LRM 9.17.2) is the supported way to ask for a
-            \\maximum timestep.
+            \\Move the sampler into a digital process:
+            \\
+            \\    always @(absdelta(V(in), 0.1)) sampled = V(in);
+            \\
+            \\In the analog block, `cross` or `above` detect a threshold, and
+            \\`$bound_step` (LRM 9.17.2) bounds the timestep.
             ,
         },
         .E0514 => .{
