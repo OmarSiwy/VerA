@@ -357,12 +357,53 @@ pub const Run = struct {
         const name = r.file.str(ex.strOf(e));
         if (!r.mixed or !(std.mem.eql(u8, name, "cross") or std.mem.eql(u8, name, "above")))
             return r.exprFail(e, "only cross() and above() are monitored in a digital event control");
-        const args = ex.args(e);
-        if (args.len == 0 or args[0] == .none) return r.exprFail(e, "an analog event needs its expression");
-        for (args) |arg| if (arg != .none) try compile.checkExpr(r, arg);
         const scope = r.instanceOf(r.scope);
         if (r.monitorSlot(e, scope) != null) return;
-        try r.monitors.append(r.arena, .{ .expr = e, .scope = scope, .slot = std.math.maxInt(u32) - 1 - @as(u32, @intCast(r.monitors.items.len)) });
+        try r.addMonitor(e, std.math.maxInt(u32) - 1 - @as(u32, @intCast(r.monitors.items.len)));
+    }
+
+    /// A monitor of analog event `e` whose occurrence wakes `slot`'s waiters.
+    fn addMonitor(r: *Run, e: Ast.ExprId, wakes: u32) Error!void {
+        const args = r.file.exprs.args(e);
+        if (args.len == 0 or args[0] == .none) return r.exprFail(e, "an analog event needs its expression");
+        for (args) |arg| if (arg != .none) try compile.checkExpr(r, arg);
+        try r.monitors.append(r.arena, .{ .expr = e, .scope = r.instanceOf(r.scope), .slot = wakes });
+    }
+
+    /// VAMS §5.10.4 / §7.3.6.1: `@(timer(..)) -> ev;` (or `cross`/`above`) in
+    /// the analog block, with `ev` named by a digital process. The statement
+    /// runs exactly when its analog event occurs, so that event, monitored,
+    /// IS the A2D: its delivery wakes `ev`'s digital waiters. Only a trigger
+    /// that is the event statement itself, or a top-level statement of its
+    /// block, is carried (lowering refuses the rest, E0437).
+    fn analogTriggers(r: *Run, m: *const Ast.ModuleDecl, named: *const std.AutoHashMapUnmanaged(Ast.StrId, void)) Error!void {
+        const W = struct {
+            r: *Run,
+            named: *const std.AutoHashMapUnmanaged(Ast.StrId, void),
+            pub fn expr(_: @This(), _: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {}
+            pub fn stmt(w: @This(), s: Ast.StmtId) Error!void {
+                if (s == .none) return;
+                const f = w.r.file;
+                switch (f.stmt(s)) {
+                    .event_control => |c| if (c.event != .none and f.exprs.tag(c.event) == .event_function) {
+                        const body: []const Ast.StmtId = switch (f.stmt(c.body)) {
+                            .block => |b| b.body,
+                            else => &.{c.body}, // else: a single statement is its own body
+                        };
+                        for (body) |t| switch (f.stmt(t)) {
+                            .event_trigger => |tr| if (w.named.contains(tr.name)) {
+                                const at = w.r.lookup(w.r.scope, tr.name) orelse continue;
+                                if (w.r.events.contains(at)) try w.r.addMonitor(c.event, at);
+                            },
+                            else => {}, // else: only a trigger crosses to the digital context
+                        };
+                    },
+                    else => {}, // else: other statements are searched through their children
+                }
+                try f.stmtEdges(s, w);
+            }
+        };
+        for (m.analog) |ab| try (W{ .r = r, .named = named }).stmt(ab.body);
     }
 
     pub fn monitorSlot(r: *const Run, e: Ast.ExprId, scope: u32) ?u32 {
@@ -1721,6 +1762,26 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             _ = try compile.append(&r, .stop);
             _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
         };
+        if (r.mixed) {
+            // The names the digital processes mention, for `analogTriggers`.
+            var named: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+            const N = struct {
+                f: *const Ast.SourceFile,
+                out: *std.AutoHashMapUnmanaged(Ast.StrId, void),
+                a: std.mem.Allocator,
+                pub fn expr(w: @This(), x: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {
+                    if (x == .none) return;
+                    if (w.f.exprs.tag(x) == .ident) try w.out.put(w.a, w.f.exprs.strOf(x), {});
+                    var buf: [3]Ast.ExprId = undefined;
+                    for (w.f.exprs.children(x, &buf)) |c| try w.expr(c, .read);
+                }
+                pub fn stmt(w: @This(), st: Ast.StmtId) Error!void {
+                    if (st != .none) try w.f.stmtEdges(st, w);
+                }
+            };
+            for (inst.module.discrete) |process| try (N{ .f = r.file, .out = &named, .a = arena }).stmt(process.body);
+            try r.analogTriggers(inst.module, &named);
+        }
         for (inst.module.discrete) |process| {
             const start: u32 = @intCast(r.code.items.len);
             try compile.compileStmt(&r, process.body, 0);

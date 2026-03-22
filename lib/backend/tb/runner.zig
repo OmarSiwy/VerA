@@ -389,6 +389,11 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\        if (comptime @hasDecl(D, "precompute")) D.precompute(a.inst, a.model);
         \\    }
         \\
+        \\    /// §5.10.3.3 the device's next timer instant after `t`, if it has one.
+        \\    pub fn breakpoint(a: *Analog, t: f64) ?f64 {
+        \\        return if (comptime @hasDecl(D, "nextBreakpoint")) D.nextBreakpoint(a.model, t) else null;
+        \\    }
+        \\
         \\    pub fn snapshot(a: *Analog, dig: *sim.digital.Run) !void {
         \\        inline for (snap_ports, 0..) |p, i| a.snaps[i] = mixedInput(dig, a.snap_slots[i], p.name);
         \\    }
