@@ -68,6 +68,9 @@ pub const Pending = union(enum) {
     /// A.2.1.3's third `delay3` value on a `trireg`: the charge that has now
     /// been held long enough to be worth nothing.
     decay: u32,
+    /// VAMS §7.3.6.1 an A2D event: wake the processes waiting on this
+    /// monitor slot (`Run.deliverA2d`).
+    a2d: u32,
 };
 
 /// One payload row. Rows are recycled: a row is live exactly while the
@@ -411,6 +414,12 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
                 else => unreachable, // else: the integral system functions are not real-typed
             };
         },
+        // VAMS §7.3.6.3 the analog solution at the promoted digital time.
+        .branch_access => blk: {
+            const probe = self.probe orelse return self.exprFail(e, "an analog probe needs the mixed-signal kernel");
+            const b = ex.rhs(e);
+            break :blk try probe(self.probe_ctx, self.file.str(ex.strOf(ex.lhs(e))), if (b == .none) null else self.file.str(ex.strOf(b)));
+        },
         else => unreachable, // else: infer types no other form real
     };
 }
@@ -744,6 +753,12 @@ pub fn requestVcd(self: *Run) Error!void {
     if (self.vcd.pending) return;
     self.vcd.pending = true;
     try enqueueMonitor(self, .vcd_tick);
+}
+
+/// VAMS §8.5.1: "A2D events ... are scheduled just like other event controlled
+/// statements": the waiters of a monitor slot resume in the active region.
+pub fn wakeA2d(self: *Run, slot: u32) Error!void {
+    return wake(self, slot, .x, .x);
 }
 
 /// Resume every process suspended on `target` whose edge matches. Split out
@@ -1119,6 +1134,10 @@ fn suspendOn(self: *Run, e: Ast.ExprId, resume_pc: u32) Error!void {
         },
         .event_posedge => .posedge,
         .event_negedge => .negedge,
+        .event_function => {
+            const slot = self.monitorSlot(e, self.instanceOf(self.scope)).?; // registered by checkEvent
+            return self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = resume_pc, .ctx = self.ctx });
+        },
         else => .any, // else: a plain name, the one other term checkEvent admits
     };
     const watched = if (edge == .any) e else ex.lhs(e);
@@ -1151,7 +1170,7 @@ fn claim(self: *Run, item: Pending) Error!u32 {
             @memcpy(planes, w.value.planes);
             row.item.write.value.planes = planes;
         },
-        .run_process, .@"resume", .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay => {},
+        .run_process, .@"resume", .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d => {},
     }
     return at;
 }
@@ -1203,7 +1222,7 @@ fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
             try cancel(self, row.handle);
             hit = true;
         },
-        .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay => {},
+        .write, .strobe, .monitor_tick, .vcd_tick, .tran_switch, .drive, .net_update, .decay, .a2d => {},
     };
     return hit;
 }

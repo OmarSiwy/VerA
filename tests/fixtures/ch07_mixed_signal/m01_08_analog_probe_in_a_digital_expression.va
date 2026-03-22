@@ -39,7 +39,7 @@
 // on both edges reads 2.0 at t = 25n and a tool that sampled on negedge only
 // reads 2.0 at t = 25n and t = 35n. Neither can pass by accident.
 //
-// WHAT FAILS TODAY, RE-CAPTURED AFTER REVIEW. This block used to record
+// WHAT USED TO FAIL (green since ch07 steps 5/7), RE-CAPTURED AFTER REVIEW. This block used to record
 // `error[E0205]: unsupported module item: found `always`` as the first
 // diagnostic. It is not — the clock stimulus dies first, on the `#`:
 //

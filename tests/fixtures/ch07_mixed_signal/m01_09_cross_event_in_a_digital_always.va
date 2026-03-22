@@ -71,7 +71,7 @@
 // comes back to the analog block through Table 7-1's `integer` row. The 1 mA
 // scale on the contribution keeps the residual readable and is not asserted.
 //
-// WHAT FAILS TODAY. `error[E0205]: unsupported module item: found `always``.
+// WHAT USED TO FAIL (green since ch07 steps 5/7). `error[E0205]: unsupported module item: found `always``.
 // The event expression itself parses — `tests/fixtures/ch07_mixed_signal/
 // digital_cross_unsupported.va` is this shape — but the enclosing block is
 // refused as an item, so §7.3.5 has no behavioral coverage anywhere.

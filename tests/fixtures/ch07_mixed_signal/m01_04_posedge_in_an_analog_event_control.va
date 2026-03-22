@@ -32,7 +32,7 @@
 // on. A tool that fired on ANY change would also read 1.0 here, which is what
 // fixture 05 separates out.
 //
-// WHAT FAILS TODAY. `error[E0704]: posedge/negedge is digital-only`, whose own
+// WHAT USED TO FAIL (green since ch07 steps 5/7). `error[E0704]: posedge/negedge is digital-only`, whose own
 // note cites §5.10.1. The token parses — that much was fixed — but lowering
 // refuses it on a Verilog-A subset rule (annex C.7) that Verilog-AMS does not
 // have. Before that, `error[E0209]: expected an expression: found `#`` on the

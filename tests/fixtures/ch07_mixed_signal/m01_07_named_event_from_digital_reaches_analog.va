@@ -39,7 +39,7 @@
 // t = 25n (one lasting trigger). One that never delivered reads 0 throughout.
 // One that re-delivered on every analog step reads far more than 2.
 //
-// WHAT FAILS TODAY. `error[E0209]: expected an expression: found `#`` — the
+// WHAT USED TO FAIL (green since ch07 steps 5/7). `error[E0209]: expected an expression: found `#`` — the
 // `.va` dialect has no `#` delay, so a digital process cannot be made to do
 // anything AT a time. With the delay removed, `@(dig_event)` itself lowers
 // (the named-event machinery exists), but the trigger can then only happen

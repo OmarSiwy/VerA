@@ -365,9 +365,12 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    slots: [input_ports.len]u32,
         \\    snap_slots: [snap_ports.len]u32,
         \\    /// §8.5.3.6 the region-1b values of the last explicit D2A event.
-        \\    snaps: [snap_ports.len]i64 = @splat(0),
+        \\    snaps: [snap_ports.len]f64 = @splat(0),
         \\    t: f64 = 0.0,
         \\    solved: bool = false,
+        \\    /// The last finished solution, for §7.3.6.3's interpolation.
+        \\    x_prev: [n_u]f64 = @splat(0.0),
+        \\    t_prev: ?f64 = null,
         \\
         \\    /// §7.3.6.5 / Table 7-1: every input as the integer the digital
         \\    /// engine holds for the latest tick, the guarded reads' snapshot, and
@@ -410,6 +413,22 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\        point(a.n.*, a.x, a.t, a.model, a.inst);
         \\        stepPost(a.model, a.inst, a.x, a.state, a.solved);
         \\        a.n.* += 1;
+        \\        a.x_prev = a.x.*;
+        \\        a.t_prev = a.t;
+        \\    }
+        \\
+        \\    /// VAMS §7.3.6.3 `V(n1)` / `V(n1, n2)` for a digital expression: the
+        \\    /// tentative solution (`t` null), or the value "calculated for the
+        \\    /// time corresponding to a real promotion of the digital time",
+        \\    /// linear between the last finished solution and the tentative one.
+        \\    pub fn probe(a: *Analog, t: ?f64, n1: []const u8, n2: ?[]const u8) !f64 {
+        \\        const now = try potential(a.x, n1, n2);
+        \\        const tq = t orelse return now;
+        \\        const tp = a.t_prev orelse return now;
+        \\        if (tq >= a.t or a.t <= tp) return now;
+        \\        const before = try potential(&a.x_prev, n1, n2);
+        \\        if (tq <= tp) return before;
+        \\        return before + (now - before) * (tq - tp) / (a.t - tp);
         \\    }
         \\
         \\    /// The digital half's own §17 output, in time order with the analog

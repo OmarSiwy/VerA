@@ -39,7 +39,7 @@
 // One that fired on every analog timestep instead of on d's changes reads 0.5
 // at t = 5n. One that never fired reads 0.0 throughout.
 //
-// WHAT FAILS TODAY, RE-CAPTURED AFTER REVIEW. This block used to record
+// WHAT USED TO FAIL (green since ch07 steps 5/7), RE-CAPTURED AFTER REVIEW. This block used to record
 // `error[E0705]: not a declared named event: `d`` as the first diagnostic. It is
 // not; it is the second. What the compiler actually reports first is the `#` in
 // the stimulus:
