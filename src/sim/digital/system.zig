@@ -53,7 +53,7 @@ fn int(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?i64 {
 
 /// The simulation time in the module's unit, which §17.6's statistics are in.
 fn now(self: *Run) u64 {
-    return self.scale.?.unitsAt(self.scheduler.now);
+    return self.timeOf(self.scope).scale.unitsAt(self.scheduler.now);
 }
 
 /// One queue task (§17.6.1-§17.6.3, §17.6.5): the status is the last

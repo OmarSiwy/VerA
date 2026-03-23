@@ -387,7 +387,7 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
             const f = self.sys_calls[@intFromEnum(e)].?;
             const args = ex.args(e);
             break :blk switch (f) {
-                .realtime => self.scale.?.realAt(self.scheduler.now),
+                .realtime => self.timeOf(self.scope).scale.realAt(self.scheduler.now),
                 .itor => realOfInt(try eval(self, a, args[0], 0)),
                 .bitstoreal => @bitCast((try eval(self, a, args[0], 64)).values()[0]),
                 .ln => @log(try evalReal(self, a, args[0])),
@@ -632,7 +632,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                     }, ex.args(e), ex.mainTok(e))),
                     .q_full => @intCast(try @import("system.zig").queueFull(self, a, ex.args(e))),
                     .time, .stime => blk: {
-                        const units = self.scale.?.unitsAt(self.scheduler.now);
+                        const units = self.timeOf(self.scope).scale.unitsAt(self.scheduler.now);
                         break :blk if (f == .stime) units & 0xffff_ffff else units;
                     },
                     .clog2 => blk: {
@@ -1143,7 +1143,7 @@ fn window(self: *Run, scratch: std.mem.Allocator, b: Bridge, width: u32) Error!I
 /// The run-time counterpart of `checkDelay`, in the module's precision.
 fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Error!u64 {
     if (compile.typeOf(self, e).real) {
-        return self.scale.?.realDelay(try evalReal(self, scratch, e)) catch |err|
+        return self.timeOf(self.scope).scale.realDelay(try evalReal(self, scratch, e)) catch |err|
             return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
     }
     const value = try eval(self, scratch, e, 0);
@@ -1151,7 +1151,8 @@ fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Erro
     // the process running rather than losing it.
     if (value.hasUnknown()) return 0;
     if (value.width > 64) return self.exprFail(e, "delay values wider than 64 bits are not implemented");
-    return (if (value.signed) self.scale.?.signedDelay(value.asInt().?) else self.scale.?.unsignedDelay(value.values()[0])) catch |err|
+    const scale = self.timeOf(self.scope).scale;
+    return (if (value.signed) scale.signedDelay(value.asInt().?) else scale.unsignedDelay(value.values()[0])) catch |err|
         return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
 }
 

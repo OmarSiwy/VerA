@@ -333,7 +333,6 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 /// NOT here, each for a reason outside the routine it exercises:
 ///   p02_10  a $systf call in digital code — the engine has no user-systf call
 ///   p02_11  an analog $systf — needs an analog solver in this process
-///   p02_13  p02_scales.v — the engine refuses a second `timescale
 ///   p03_*   analog callbacks and values — needs an analog solver here
 ///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
 ///           as p02_10
@@ -404,6 +403,11 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ieee_pli/audit_array_object_kinds.v",
         .stdout = "",
         .stderr = "pli-array-kinds reg-words=2 real-selects=2\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_13_get_time_scaling.c",
+        .design = "tests/fixtures/digital/p02_scales.v",
+        .stdout = "p02: 13_get_time_scaling checks=15\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/audit_module_array.c",
