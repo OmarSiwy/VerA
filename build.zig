@@ -331,8 +331,6 @@ fn vpiApp(
 const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, stderr: ?[]const u8 = null };
 
 /// NOT here, each for a reason outside the routine it exercises:
-///   p02_04  force/release — the engine forces now, but src/vpi's
-///           vpi_put_value still refuses vpiForceFlag (NOFORCE)
 ///   p02_10  a $systf call in digital code — the engine has no user-systf call
 ///   p02_11  an analog $systf — needs an analog solver in this process
 ///   p02_13  p02_scales.v — the engine refuses a second `timescale
@@ -384,6 +382,11 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ch11_vpi/p02_03_put_value_delays.c",
         .design = "tests/fixtures/digital/p02_design.v",
         .stdout = "p02: 03_put_value_delays checks=64\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p02_04_force_release.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "p02: 04_force_release checks=39\np02_design: t=20 reached\n",
     },
     .{
         .c = "tests/fixtures/ch11_vpi/p02_05_cb_time_regions.c",

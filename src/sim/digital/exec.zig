@@ -714,6 +714,36 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     if (self.watch[target].contains(.vpi)) if (self.vpi_change) |f| f(self, target);
 }
 
+/// §9.3 `deassign` (`force` false) or `release` (`force` true) of `slot`.
+/// Releasing what is not held is a no-op.
+pub fn release(self: *Run, slot: u32, force: bool) Error!void {
+    const layers = self.overrides.getPtr(slot) orelse return;
+    const layer = if (force) &layers.force else &layers.assign;
+    if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
+    layer.* = null;
+    const held = layers.assign;
+    if (layers.force == null and layers.assign == null) _ = self.overrides.remove(slot);
+    // §9.3.2: a released net is its drivers' again; a released
+    // variable keeps its value, unless an assign holds it.
+    if (force) {
+        if (self.net_of.get(slot)) |net| try resolve(self, net) else if (held) |a| _ = try enqueue(self, .{ .run_process = a.start }, null, false);
+    }
+}
+
+/// VPI §12.30 vpiForceFlag: force `slot` to a constant, "same as the
+/// procedural force" (§9.3.2) but with no expression to keep re-evaluating,
+/// so the force layer holds an empty process range.
+pub fn forceValue(self: *Run, slot: u32, planes: []const u64) Error!void {
+    const entry = try self.overrides.getOrPut(self.arena, slot);
+    if (!entry.found_existing) entry.value_ptr.* = .{};
+    if (entry.value_ptr.force) |old| _ = try stopRange(self, old.start, old.end);
+    entry.value_ptr.force = .{ .start = 0, .end = 0 };
+    const was = self.overriding;
+    self.overriding = true;
+    defer self.overriding = was;
+    try store(self, slot, planes);
+}
+
 /// VAMS §8.5: "the implicit D2A event ... is created when a digital variable to
 /// which an analog block is implicitly sensitive changes value". §8.5.3.7 then
 /// processes the macro-process in region 3b, after every region-1..3 event of
@@ -1708,18 +1738,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 continue;
             },
             .override_off => |o| {
-                if (self.overrides.getPtr(o.slot)) |layers| {
-                    const layer = if (o.force) &layers.force else &layers.assign;
-                    if (layer.*) |old| _ = try stopRange(self, old.start, old.end);
-                    layer.* = null;
-                    const held = layers.assign;
-                    if (layers.force == null and layers.assign == null) _ = self.overrides.remove(o.slot);
-                    // §9.3.2: a released net is its drivers' again; a released
-                    // variable keeps its value, unless an assign holds it.
-                    if (o.force) {
-                        if (self.net_of.get(o.slot)) |net| try resolve(self, net) else if (held) |a| _ = try enqueue(self, .{ .run_process = a.start }, null, false);
-                    }
-                }
+                try release(self, o.slot, o.force);
                 pc += 1;
                 continue;
             },

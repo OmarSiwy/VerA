@@ -302,10 +302,11 @@ fn sweep() void {
 /// the registered object itself.
 fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) void {
     var t: Time = std.mem.zeroes(Time);
+    const override = cb.reason == cbForce or cb.reason == cbRelease;
     var data: CbData = .{
         .reason = cb.reason,
         .cb_rtn = cb.rtn,
-        .obj = cb.obj,
+        .obj = if (override) @ptrCast(@constCast(from.?)) else cb.obj,
         .time = null,
         .value = null,
         .index = index,
@@ -317,7 +318,7 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) void {
         data.time = &t;
     }
     var v: Value = std.mem.zeroes(Value);
-    if (cb.reason == cbValueChange and cb.value_format != vpiSuppressVal) {
+    if ((cb.reason == cbValueChange or override) and cb.value_format != vpiSuppressVal) {
         v.format = cb.value_format;
         value.read(from orelse root.asObj(cb.obj).?, &v, &value.cb_store);
         data.value = &v;
@@ -424,6 +425,25 @@ pub fn fireSlot(slot: u32) void {
             if (word.slot != slot) continue;
             call(cb, @intCast(d.objects[word.index.?].value.?.int), word);
         }
+    }
+    sweep();
+}
+
+/// §12.31.1 cbForce/cbRelease after `o` was forced or released: every
+/// callback registered on `o`, and every one registered with a NULL obj.
+/// "the object returned in the obj field shall be a handle to the force,
+/// release ... statement"; a vpi_put_value force has no statement, so obj is
+/// the object it forced. The value is `o`'s, after the force or release.
+/// ponytail: only vpi_put_value's forces fire this. A procedural `force`
+/// statement has no §11.6 statement object here for obj to name; hook the
+/// engine's `.override_on`/`.override_off` when one exists.
+pub fn fireOverride(reason: c_int, o: *root.Obj) void {
+    const n = cbs.items.len;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (cb.dead or cb.reason != reason) continue;
+        if (cb.obj != null and root.asObj(cb.obj) != o) continue;
+        call(cb, cb.index, o);
     }
     sweep();
 }
