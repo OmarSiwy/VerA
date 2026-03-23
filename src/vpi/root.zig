@@ -915,8 +915,8 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
                 try (if (is_reg) &s.reg_arrays else if (real) &s.reals else &s.integers).append(gpa, arr);
                 continue;
             }
-            const kind: Kind = if (v.storage == .reg) .reg else if (v.ty == .integer) .integer else continue;
-            const list = if (kind == .reg) &s.regs else &s.integers;
+            const kind: Kind = if (v.storage == .reg) .reg else if (v.ty == .integer) .integer else if (v.ty == .real) .real_var else continue;
+            const list = if (kind == .reg) &s.regs else if (kind == .real_var) &s.reals else &s.integers;
             try list.append(gpa, @intCast(objects.items.len));
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at));
             objects.items[objects.items.len - 1].is_signed = v.is_signed or kind == .integer;

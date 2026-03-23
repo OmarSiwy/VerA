@@ -120,6 +120,8 @@ fn source(o: *const Obj) ?Source {
     if (o.slot) |at| {
         const r = run.attached() orelse return null;
         const lit = r.values[at];
+        // The engine holds a real as its IEEE 754 bits in the value plane.
+        if (r.reals.contains(at)) return .{ .real = @bitCast(lit.planes[0]) };
         return .{ .bits = .{ .width = lit.width, .val = lit.values(), .unk = lit.unknowns(), .signed = lit.signed } };
     }
     if (o.value) |c| return switch (c) {
@@ -540,6 +542,13 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         if (e == error.OutOfMemory) return oom();
         return null;
     };
+    // A real holds IEEE 754 bits: a vpiRealVal as given, any other format as
+    // the signed integer it wrote (IEEE 1364 §4.8.2 integer-to-real).
+    if (r.reals.contains(at)) {
+        const f: f64 = if (v.format == vpiRealVal) v.value.real else @floatFromInt(@as(i64, @bitCast(put_buf.items[0])));
+        @memset(put_buf.items, 0);
+        put_buf.items[0] = @bitCast(f);
+    }
     const lit: Int.Literal = .{ .width = dest.width, .sized = true, .signed = dest.signed, .planes = put_buf.items };
 
     switch (mode) {

@@ -408,6 +408,11 @@ const vpi_runs = [_]VpiRun{
         .stderr = "pli-array-kinds reg-words=2 real-selects=2\n",
     },
     .{
+        .c = "tests/fixtures/ieee_pli/audit_vpi_value_formats.c",
+        .design = "tests/fixtures/ieee_pli/audit_vpi_value_formats.v",
+        .stdout = "vpi-value-formats=ok\n",
+    },
+    .{
         .c = "tests/fixtures/ieee_pli/audit_vpi_event_handles.c",
         .design = "tests/fixtures/ieee_pli/audit_vpi_event_handles.v",
         .stdout = "vpi-event-handles=ok\n",
