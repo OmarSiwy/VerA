@@ -11,10 +11,10 @@ static PLI_INT32 check_values(p_cb_data cb) {
     s_vpi_value value = {0};
     s_vpi_vecval words[2] = {{12,6},{5,0}};
     vpiHandle wide = vpi_handle_by_name("audit_vpi_value_formats.wide",NULL);
-    vpiHandle small = vpi_handle_by_name("audit_vpi_value_formats.small",NULL);
+    vpiHandle nibble = vpi_handle_by_name("audit_vpi_value_formats.nibble",NULL);
     vpiHandle realvar = vpi_handle_by_name("audit_vpi_value_formats.realvar",NULL);
     (void)cb;
-    REQUIRE(wide && small && realvar);
+    REQUIRE(wide && nibble && realvar);
     /* Low nibble 1xz0: aval=1100, bval=0110; upper three bits 101. */
     value.format=vpiVectorVal; value.value.vector=words;
     REQUIRE(vpi_put_value(wide,&value,NULL,vpiNoDelay)==NULL);
@@ -26,14 +26,14 @@ static PLI_INT32 check_values(p_cb_data cb) {
     REQUIRE(((uint32_t)value.value.vector[1].aval & 7)==5);
     REQUIRE(((uint32_t)value.value.vector[1].bval & 7)==0);
     value.format=vpiVectorVal; value.value.vector=words;
-    vpi_put_value(small,&value,NULL,vpiNoDelay);
-    value.format=vpiIntVal; vpi_get_value(small,&value);
+    vpi_put_value(nibble,&value,NULL,vpiNoDelay);
+    value.format=vpiIntVal; vpi_get_value(nibble,&value);
     REQUIRE(value.value.integer==8); /* x/z map to zero, not unknown. */
-    value.format=vpiBinStrVal; vpi_get_value(small,&value);
+    value.format=vpiBinStrVal; vpi_get_value(nibble,&value);
     REQUIRE(strcmp(value.value.str,"1xz0")==0);
     {
         const char *saved=value.value.str;
-        REQUIRE(strcmp(vpi_get_str(vpiName,small),"small")==0);
+        REQUIRE(strcmp(vpi_get_str(vpiName,nibble),"nibble")==0);
         REQUIRE(strcmp(saved,"1xz0")==0); /* Separate routine buffers. */
     }
     value.format=vpiRealVal; value.value.real=-2.5;
