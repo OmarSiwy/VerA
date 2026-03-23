@@ -165,6 +165,9 @@ pub const Callee = enum(u8) {
     @"$sscanf$int",
     @"$sscanf$real",
     @"$sscanf$str",
+    // §9.12 / IEEE 1364 §17.10.2 `Lower.lowerValuePlusargs`: the first
+    // matching plusarg, which `$sscanf$<ty>` then converts.
+    @"$plusarg$str",
     // §9.13 Table 9-10, as `Lower.lowerRandom` rewrites it: one kernel per
     // distribution, its `_next` seed write-back twin, and the seed latches.
     @"$rng$auto",
@@ -247,6 +250,7 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$simparam$str" = .{ .ty = .str },
     .@"$sformat" = .{ .ty = .str },
     .@"$sscanf$str" = .{ .ty = .str },
+    .@"$plusarg$str" = .{ .ty = .str },
     .@"$idx$str" = .{ .ty = .str },
     .@"$fgets$str" = .{ .ty = .str },
     .@"$fscanf$str" = .{ .ty = .str },
@@ -297,7 +301,7 @@ pub fn opKind(c: Callee) op.OpKind {
         .@"$sscanf", .@"$limit", .@"$table_model", .@"$held_int", .@"$held_real", .@"$limit$old",
         .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width", .@"$monitor$arm",
         .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real", .@"$fscanf$str",
-        .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$rng$auto", .@"$rng$check",
+        .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$plusarg$str", .@"$rng$auto", .@"$rng$check",
         .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform", .@"$rng$i_uniform_next",
         .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal", .@"$rng$normal_next",
         .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson", .@"$rng$poisson_next",

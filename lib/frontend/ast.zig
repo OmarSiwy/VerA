@@ -1719,6 +1719,8 @@ pub const SourceFile = struct {
             std.mem.startsWith(u8, name, "$dist_") or std.mem.startsWith(u8, name, "$rdist_")) return first;
         if (eq(u8, name, "$sscanf") or eq(u8, name, "$fscanf")) return args[@min(2, args.len)..];
         if (eq(u8, name, "$ferror")) return args[@min(1, args.len)..];
+        // IEEE 1364 §17.10.2 `$value$plusargs(user_string, variable)`.
+        if (eq(u8, name, "$value$plusargs")) return args[@min(1, args.len)..@min(2, args.len)];
         if (eq(u8, name, "$fgets") or eq(u8, name, "$swrite") or eq(u8, name, "$sformat")) return first;
         return &.{};
     }

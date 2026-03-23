@@ -54,6 +54,14 @@ pub const runner_body =
     \\}
     \\var no_vpi_app: contract.SystfHost = .{ .ctx = undefined, .call = noVpiApp };
     \\
+    \\/// §9.12 / IEEE 1364 §17.10: this binary's own command line is the
+    \\/// invocation `Instance.plusargs` carries; the harness passes a
+    \\/// fixture's `//! plusargs` there.
+    \\fn plusargs(init: std.process.Init.Minimal) []const [:0]const u8 {
+    \\    const argv = init.args.toSlice(std.heap.page_allocator) catch return &.{};
+    \\    return argv[@min(1, argv.len)..];
+    \\}
+    \\
     \\/// What `contract.validateHost` checks this host by. The testbench is not
     \\/// exempt from it: an exemption for the tool's own host is how a seam stops
     \\/// being tested, and this is the host that runs against every device the

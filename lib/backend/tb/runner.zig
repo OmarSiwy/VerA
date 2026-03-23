@@ -40,7 +40,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
 
     // --- main -------------------------------------------------------------
     try out.appendSlice(arena,
-        \\pub fn main() void {
+        \\pub fn main(init: std.process.Init.Minimal) void {
         \\    var model: D.Model = .{};
         \\
     );
@@ -82,6 +82,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // exercises every device VerA emits.
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
+        \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
         \\    // Temperature/parameter-only prep: after the card and the
         \\    // temperature write, before the first evaluation — the same
         \\    // ordering the ARPice host keeps (finalize/reprep).
@@ -468,7 +469,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
 
     // --- main ---------------------------------------------------------------
     try out.appendSlice(arena,
-        \\pub fn main() void {
+        \\pub fn main(init: std.process.Init.Minimal) void {
         \\    var model: D.Model = .{};
         \\
     );
@@ -489,6 +490,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     try print(&out, arena, "    inst.analysis_kind = .{t};\n", .{d.analysis});
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
+        \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
         \\    if (comptime @hasDecl(D, "precompute")) D.precompute(&inst, &model);
         \\    std.debug.print("=== {s} ===\n", .{title});
         \\    var n: usize = 0;

@@ -231,6 +231,12 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // SOURCE (arrays, or a file) and a control string, neither of which is a
     // value. `lowerTableModel` rewrites the call into one that is.
     if (std.mem.eql(u8, name, "$table_model")) return lower_table_model.lowerTableModel(self, e);
+    // §9.12 / IEEE 1364 §17.10: both search the host's `Instance.plusargs`, and
+    // `$value$plusargs` writes its variable on a match — `lowerValuePlusargs`.
+    if (std.mem.eql(u8, name, "$test$plusargs") or std.mem.eql(u8, name, "$value$plusargs"))
+        self.out.uses.insert(.plusargs);
+    if (std.mem.eql(u8, name, "$value$plusargs") and sys_args.len == 2 and sys_args[0] != .none and sys_args[1] != .none)
+        return .{ .v = try lower_event.lowerValuePlusargs(self, sys_args), .ty = .integer };
     // §9.5.4.2 `$sscanf` writes through its arguments, which a `call` cannot do
     // — `lowerScan` turns the one source call into the assignments it means.
     if (std.mem.eql(u8, name, "$sscanf"))

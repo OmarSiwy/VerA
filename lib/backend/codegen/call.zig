@@ -656,7 +656,7 @@ pub fn readsSimState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$feof", .@"$sformat", .@"$sscanf", .@"$limit", .@"$table_model", .@"$held_int",
         .@"$held_real", .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width",
         .@"$monitor$arm", .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real",
-        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$rng$auto",
+        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$plusarg$str", .@"$rng$auto",
         .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
         .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
         .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
@@ -982,8 +982,17 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // sees one of these callees; were one to arrive, it is what it was
         // before it had a tag — an unregistered `$name` (below).
         .@"$analog_node_alias", .@"$analog_port_alias" => return emitUnregistered(self, inst, name, args),
-        // §9.12 command-line plusargs: absent.
-        .@"$test$plusargs", .@"$value$plusargs" => return self.b("@as(i64, 0)", .{}),
+        // §9.12 / IEEE 1364 §17.10: a search of the plusargs the HOST wrote
+        // into `inst.plusargs` (contract `sim_state_fields`), in supplied
+        // order. `$value$plusargs` matches on the plusarg_string before its
+        // format; `$plusarg$str` is the matched plusarg `$sscanf$<ty>` converts.
+        .@"$test$plusargs", .@"$value$plusargs", .@"$plusarg$str" => {
+            self.uses_inst = true;
+            const str = c == .@"$plusarg$str";
+            try self.b("{s}zPlusarg(inst.plusargs, ", .{if (str) "(" else "@as(i64, @intFromBool("});
+            try gen_render.renderVal(self, if (args.len > 0) args[0] else .undef, .str);
+            return self.b(", {}){s}", .{ c != .@"$test$plusargs", if (str) " orelse \"\")" else " != null))" });
+        },
         // §9.22/§9.23 driver & receiver access do NOT appear here. They used to,
         // answering the constant 0 (and -1.0 for $driver_delay's no-pending-value
         // sentinel) on the argument that a flat analog device has no digital
