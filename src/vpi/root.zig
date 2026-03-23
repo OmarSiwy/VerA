@@ -908,8 +908,11 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             if (r.arrays.get(at)) |a| {
                 const is_reg = v.storage == .reg;
                 const local = try arena.dupe(u8, file.str(v.name));
-                const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), .integer, a.low, a.high, r.values[at].width, at);
-                try (if (is_reg) &s.reg_arrays else &s.integers).append(gpa, arr);
+                // §26.6.7: a `real` array is a vpiRealVar with vpiArray set,
+                // one of the scope's reals — as the analog model builds it.
+                const real = !is_reg and v.ty == .real;
+                const arr = try addArray(gpa, arena, &objects, if (is_reg) .reg_array else .var_array, scope, local, try joinPath(arena, top_name, try joinPath(arena, s.path, local)), if (real) .real else .integer, a.low, a.high, r.values[at].width, at);
+                try (if (is_reg) &s.reg_arrays else if (real) &s.reals else &s.integers).append(gpa, arr);
                 continue;
             }
             const kind: Kind = if (v.storage == .reg) .reg else if (v.ty == .integer) .integer else continue;
@@ -2241,6 +2244,7 @@ test "a digital memory is a vpiRegArray of vpiReg words, each bound to its engin
         \\module m;
         \\  reg [7:0] mem [0:3];
         \\  integer counts [2:1];
+        \\  real samples [1:0];
         \\  initial begin mem[2] = 8'h7e; counts[1] = 5; end
         \\endmodule
     );
@@ -2277,6 +2281,12 @@ test "a digital memory is a vpiRegArray of vpiReg words, each bound to its engin
     try std.testing.expectEqual(vpiVarSelect, vpi_get(vpiType, c1));
     value.vpi_get_value(c1, &v);
     try std.testing.expectEqual(@as(c_int, 5), v.value.integer);
+
+    // A real array is a real variable with vpiArray set (§26.6.7).
+    const samples = vpi_handle_by_name("m.samples", null);
+    try std.testing.expectEqual(vpiRealVar, vpi_get(vpiType, samples));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiArray, samples));
+    try std.testing.expectEqual(@as(c_int, 2), vpi_get(vpiSize, samples));
 }
 
 test "an analog real array and real variable are §11.6.10's classes" {

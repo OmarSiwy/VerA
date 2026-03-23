@@ -337,8 +337,6 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 ///   p03_*   analog callbacks and values — needs an analog solver here
 ///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
 ///           as p02_10
-///   audit_array_object_kinds — the engine holds its `real` array; the VPI
-///           reports the array's variable type wrong
 ///   audit_module_array, audit_vpi_value_formats — the engine refuses their
 ///           .v (an instance array, `small` as a name)
 const vpi_runs = [_]VpiRun{
@@ -402,6 +400,12 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ch11_vpi/p02_08_cb_action_sim_control.c",
         .design = "tests/fixtures/digital/p02_design.v",
         .stdout = "p02: 08_cb_action_sim_control checks=24\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/audit_array_object_kinds.c",
+        .design = "tests/fixtures/ieee_pli/audit_array_object_kinds.v",
+        .stdout = "",
+        .stderr = "pli-array-kinds reg-words=2 real-selects=2\n",
     },
     .{
         .c = "tests/fixtures/ieee_pli/audit_vpi_event_handles.c",
