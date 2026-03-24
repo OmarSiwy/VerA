@@ -1,0 +1,33 @@
+// §6.4.1: "Restrictions on statements in a paramset are similar to those for
+// analog functions. Specifically, a paramset: ... Shall not use named blocks."
+//
+// `begin : blk ... end` is a named block around an otherwise legal paramset
+// variable assignment. The same statement without the block label compiles.
+//
+// VerA accepts this file.
+//
+//! lrm 6.4.1
+//! reject named block
+//! xfail VerA accepts a named block `begin : blk ... end` among a paramset's statements; §6.4.1 says a paramset "Shall not use named blocks"
+`include "disciplines.vams"
+module ch6_ps_block_res(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1.0;
+  analog I(p, n) <+ V(p, n) / r;
+endmodule
+
+paramset ch6_ps_block ch6_ps_block_res;
+  parameter real rr = 2.0;
+  real t;
+  begin : blk                 // illegal: a named block in a paramset
+    t = rr;
+  end
+  .r = rr;
+endparamset
+
+module top_ps_block(p, n);
+  inout p, n;
+  electrical p, n;
+  ch6_ps_block #(.rr(3.0)) x1(p, n);
+endmodule

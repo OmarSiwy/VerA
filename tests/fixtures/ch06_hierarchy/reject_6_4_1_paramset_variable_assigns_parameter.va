@@ -1,0 +1,38 @@
+// §6.4.1: "Paramset statements may assign values to variables declared in the
+// paramset; the values need not be constant expressions. However, these
+// variables shall not be used to assign values to the module's parameters."
+//
+// `t` is a paramset variable, legally assigned `rr * 2.0`, and then used on
+// the right of `.r = t;`. The module-parameter assignment must be a
+// paramset_constant_expression of numbers, parameters and out-of-module
+// localparam references; `.r = rr * 2.0;` is the legal form.
+//
+// VerA reports E0314 "unknown identifier: `t`" at `.r = t`. The wording is
+// VerA's scoping of the rule rather than a quote of it: the right-hand side of
+// a `.param =` statement is resolved against the paramset's parameters only,
+// so a paramset variable is not visible there, which is exactly the set of
+// names §6.4.1 permits. (`t` itself is a declared, assigned variable — the
+// same paramset with `.r = rr;` compiles.)
+//
+//! lrm 6.4.1
+//! reject E0314
+`include "disciplines.vams"
+module ch6_ps_var_res(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter real r = 1.0;
+  analog I(p, n) <+ V(p, n) / r;
+endmodule
+
+paramset ch6_ps_var ch6_ps_var_res;
+  parameter real rr = 2.0;
+  real t;
+  t = rr * 2.0;
+  .r = t;                     // illegal: a paramset variable sets a parameter
+endparamset
+
+module top_ps_var(p, n);
+  inout p, n;
+  electrical p, n;
+  ch6_ps_var #(.rr(3.0)) x1(p, n);
+endmodule

@@ -1,0 +1,35 @@
+// §3.6.2.5: "A discipline can override the value of the bound nature for the
+// pre-defined attributes (except as restricted by 3.6.1.2) ... To do so from a
+// discipline declaration, the bound nature and attribute needs to be defined".
+//
+// `pot_only` binds a potential nature and NO flow nature, then overrides
+// `flow.abstol`. There is no bound flow nature whose abstol could be
+// overridden, so the requirement that "the bound nature ... needs to be
+// defined" is not met and the discipline is in error.
+//
+// Everything else is legal: the same discipline without the `flow.abstol`
+// line compiles, and the override itself compiles when a flow nature IS bound
+// (both probed). `x` is an internal net so no port-direction rule for a
+// signal-flow discipline is involved.
+//
+// VerA accepts this file; the override of an unbound nature is silently
+// ignored.
+//
+//! lrm 3.6.2.5
+//! reject bound nature
+//! xfail VerA accepts `flow.abstol = 1n` in a discipline that binds no flow nature and silently drops it; §3.6.2.5 says "To do so from a discipline declaration, the bound nature and attribute needs to be defined"
+nature ch3_ovr_volt;
+  units = "V";
+  access = V;
+  abstol = 1u;
+endnature
+
+discipline ch3_ovr_pot_only;
+  potential ch3_ovr_volt;
+  flow.abstol = 1n;        // illegal: no flow nature is bound
+enddiscipline
+
+module ch3_flow_override_without_flow();
+  ch3_ovr_pot_only x;
+  analog V(x) <+ 1.0;
+endmodule
