@@ -1,0 +1,40 @@
+// §3.7 "The wreal, or real net data type, represents a real-valued physical
+// connection between structural entities. A wreal net shall not store its
+// value. A wreal net can be used for real-valued nets which are driven by a
+// single driver, such as a continuous assignment. If no driver is connected to
+// a wreal net, its value shall be zero (0.0). Unlike other digital nets which
+// have an initial value of 'z', wreal nets shall have an initial value of
+// zero."
+//
+// The clause's own example reads a wreal from an analog block
+// (`V(out) <+ in;` with `wreal in`), so a wreal is an operand of an analog
+// expression. Two nets:
+//
+//   w_open    no driver at all          -> 0.0   ("its value shall be zero")
+//   w_drv     `assign w_drv = 1.25;`    -> 1.25  (a single continuous driver)
+//
+// Both are exact in binary64. The contribution I(p,n) <+ V(p,n) + w_open keeps
+// the device well-formed and reads the undriven net a second time.
+//
+// This is the FULL Verilog-AMS rule. annex_c_analog_subset/08_wreal_rejected.va
+// pins the Verilog-A SUBSET's removal of wreal (Annex C.4); it is not evidence
+// against this file, and docs/conformance-wreal.md WR-007 says its §3.7 cite
+// must not stand in for this one.
+//
+//! lrm 3.7
+//! bias V(p) = 0.75, V(n) = 0.25
+//! xfail VerA refuses every `wreal` declaration in a .va source (E0205 "unsupported module item: found wreal", the Annex C.4 subset rule); §3.7 makes wreal a Verilog-AMS net type readable from the analog block
+`include "check.vh"
+module ch03_wreal_net_undriven_zero_and_driven(p, n);
+  inout p, n;
+  electrical p, n;
+  wreal w_open;
+  wreal w_drv;
+  assign w_drv = 1.25;
+
+  analog begin
+    `CHECKX("§3.7 an undriven wreal net reads zero", w_open, 0.0);
+    `CHECKX("§3.7 a wreal net reads its single continuous driver", w_drv, 1.25);
+    I(p, n) <+ V(p, n) + w_open;
+  end
+endmodule
