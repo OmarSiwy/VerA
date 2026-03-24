@@ -1,0 +1,33 @@
+// A.5.4:
+//
+//     udp_instantiation ::= udp_identifier [ drive_strength ] [ delay2 ]
+//             udp_instance { , udp_instance } ;
+//
+// and A.2.2.3's delay2 is `# delay_value | # ( mintypmax_expression [ ,
+// mintypmax_expression ] )`: at most two values. `#(1, 2, 3)` has three.
+// `#(1, 2)` is the legal form.
+//
+// VerA refuses this file for a different reason: it reports E0904 "instance
+// names no module: `annex_a_udp_inv`" for EVERY instance of a user-defined
+// primitive, the legal `#(1, 2)` and undelayed forms included (probed). The
+// refusal therefore says nothing about delay2, and the fixture is xfail until
+// UDP instances resolve.
+//
+//! lrm A.5.4
+//! reject delay
+//! xfail VerA refuses every UDP instance with E0904 "instance names no module" (the legal #(1, 2) form included), so the three-value delay is never examined; A.5.4 allows only a delay2 of at most two values
+primitive annex_a_udp_inv(o, a);
+  output o;
+  input a;
+  table
+    0 : 1;
+    1 : 0;
+  endtable
+endprimitive
+
+module annex_a_udp_three_delays(o, a);
+  output o;
+  input a;
+  wire o, a;
+  annex_a_udp_inv #(1, 2, 3) u(o, a);   // illegal: delay2 has at most two values
+endmodule

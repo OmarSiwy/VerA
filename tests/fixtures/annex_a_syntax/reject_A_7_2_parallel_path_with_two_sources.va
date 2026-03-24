@@ -1,0 +1,28 @@
+// A.7.2:
+//
+//     parallel_path_description ::=
+//             ( specify_input_terminal_descriptor [ polarity_operator ]
+//               => specify_output_terminal_descriptor )
+//     full_path_description ::=
+//             ( list_of_path_inputs [ polarity_operator ] *> list_of_path_outputs )
+//
+// A parallel (`=>`) path connects ONE source to ONE destination; lists belong
+// to the full (`*>`) form. `(a, b => o)` puts a list before `=>`, which neither
+// alternative derives. `(a, b *> o) = 1;` is the legal form and is accepted
+// (probed).
+//
+// VerA accepts this file (W0251: the specify block is read and nothing in it
+// is modelled).
+//
+//! lrm A.7.2
+//! reject parallel
+//! xfail VerA accepts the parallel path `(a, b => o) = 1;` with two sources; A.7.2's parallel_path_description has a single specify_input_terminal_descriptor before `=>` — a list requires `*>`
+module annex_a_parallel_two_sources(o, a, b);
+  output o;
+  input a, b;
+  wire o, a, b;
+  and g1(o, a, b);
+  specify
+    (a, b => o) = 1;         // illegal: a parallel path has one source
+  endspecify
+endmodule

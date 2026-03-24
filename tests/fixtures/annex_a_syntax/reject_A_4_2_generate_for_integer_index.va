@@ -1,0 +1,32 @@
+// A.4.2:
+//
+//     loop_generate_construct ::=
+//             for ( genvar_initialization ; genvar_expression ; genvar_iteration )
+//                 generate_block
+//     genvar_initialization ::= genvar_identifier = constant_expression
+//
+//     genvar_declaration ::= genvar list_of_genvar_identifiers ;
+//
+// The loop index of a generate for is a genvar_identifier, the name a
+// genvar_declaration introduces. Here `i` is declared `integer`, so the loop
+// is not a loop_generate_construct.
+// Declaring `genvar i;` instead makes the file legal, and VerA compiles that
+// form (probed).
+//
+// VerA accepts this file.
+//
+//! lrm A.4.2
+//! reject genvar
+//! xfail VerA accepts a generate-for loop whose index `i` is declared `integer`; A.4.2's genvar_initialization ::= genvar_identifier = constant_expression requires a genvar
+`include "disciplines.vams"
+module annex_a_generate_integer_index(p, n);
+  inout p, n;
+  electrical p, n;
+  integer i;
+  generate
+    for (i = 0; i < 2; i = i + 1) begin : g     // illegal: i is not a genvar
+      electrical x;
+    end
+  endgenerate
+  analog I(p, n) <+ V(p, n);
+endmodule

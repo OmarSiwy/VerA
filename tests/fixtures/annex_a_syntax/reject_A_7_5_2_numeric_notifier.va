@@ -1,0 +1,25 @@
+// A.7.5.2:
+//
+//     notifier ::= variable_identifier
+//
+// and A.7.5.1 gives $setup its optional fourth argument as that notifier:
+// `$setup ( data_event , reference_event , timing_check_limit [ , [ notifier ] ] )`.
+// A notifier is a reg the timing check toggles on a violation, so it must name
+// a variable; the constant `5` does not. `$setup(a, posedge clk, 1, ntfr)` with
+// `reg ntfr;` is accepted (probed).
+//
+// VerA accepts this file (W0251: the specify block is read and nothing in it
+// is modelled).
+//
+//! lrm A.7.5.2
+//! reject notifier
+//! xfail VerA accepts `$setup(a, posedge clk, 1, 5)` with a constant notifier; A.7.5.2 says "notifier ::= variable_identifier"
+module annex_a_numeric_notifier(o, a, clk);
+  output o;
+  input a, clk;
+  wire o, a, clk;
+  buf g1(o, a);
+  specify
+    $setup(a, posedge clk, 1, 5);   // illegal: the notifier is not a variable
+  endspecify
+endmodule
