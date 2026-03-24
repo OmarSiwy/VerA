@@ -21,7 +21,6 @@
 //! lrm 9.5.3
 //! print none
 //! checks 5
-//! xfail FMT-WIDTH-001: analog integer formatting omits inherited automatic fields
 `include "check.vh"
 module audit_integer_default_fields(p, n);
   inout p, n; electrical p, n;
