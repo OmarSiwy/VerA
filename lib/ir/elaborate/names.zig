@@ -193,6 +193,32 @@ pub fn checkPortDiscipline(self: *Flatten, module: *const Ast.ModuleDecl, inst: 
     }
 }
 
+/// E.3.2's first source for one port of a primitive instance: the
+/// `port_discipline` on its connection, else the one on the instance ("It
+/// shall only apply to either the analog primitive itself or the port to which
+/// it is attached"; E.3.2.1's `motor1` example overrides the instance's per
+/// port). Null when neither carries a valid one — `checkPortDiscipline` has
+/// already said why an invalid one is not.
+pub fn portDisciplineAttr(self: *Flatten, module: *const Ast.ModuleDecl, inst: *const Ast.Instance, conn: Ast.PortConn) ?Ast.StrId {
+    var on_inst: ?Ast.StrId = null;
+    for (module.attrs) |a| {
+        if (!std.mem.eql(u8, self.ctx.file.str(a.name), "port_discipline")) continue;
+        const t = decoratedTok(self, a.main_tok);
+        if (!decorates(self, t, inst)) continue;
+        if (a.value == .none) continue;
+        const c = constfold.fold(self.ctx.file, a.value, ParamEnv{ .self = self, .local = true }) orelse continue;
+        if (c != .str) continue;
+        const name = self.ctx.file.strings.find(c.str) orelse continue;
+        const d = discipline.declOf(self.ctx.file, name) orelse continue;
+        if (discipline.domainOf(d) != .continuous) continue;
+        if (t == conn.main_tok) return name;
+        for (inst.ports) |p| {
+            if (p.main_tok == t) break;
+        } else on_inst = name;
+    }
+    return on_inst;
+}
+
 /// The source text of token `t`.
 fn tokText(self: *Flatten, t: u32) []const u8 {
     const sp = Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, t);
@@ -236,16 +262,16 @@ fn decorates(self: *Flatten, t: u32, inst: *const Ast.Instance) bool {
 /// this port pair" and its I is "the flow", and the concrete spelling is the
 /// access function (§3.6.1.4) of whatever discipline the port resolved to.
 ///
-/// The discipline itself is NOT read from the `port_discipline` attribute.
+/// The discipline itself is read from the NET, not from the attribute here.
 /// E.3.2 orders the three sources — the attribute, "the resolution of the
-/// discipline", then electrical — and after the flatten a connected port IS
-/// the parent's net (Ruling E), so the resolution has already happened and its
-/// answer is that net's declared discipline. An attribute asking for a
-/// discipline the connected net does not have would be a §3.11 error either
-/// way, which is why every E.3.2.1 example declares the two together. The
+/// discipline", then electrical — and `walkInstances` binds them to the net
+/// in that order (`portDisciplineAttr` first, the primitive's `electrical`
+/// last, `prim_ports`), because after the flatten a connected port IS the
+/// parent's net (Ruling E). An attribute asking for a discipline a declared
+/// net does not have is the §3.11 error (E0355) at that binding. The
 /// ceiling: an UNCONNECTED port of a primitive carrying the attribute keeps
-/// the prelude's `electrical`, since nothing resolved it and the attribute is
-/// the only remaining source.
+/// the prelude's `electrical`, and a primitive cloned before a LATER level
+/// resolves its net keeps V/I.
 ///
 /// Applies to the prelude's bodies only (`Unit.primitive`). A user module's
 /// `V` is a request for V, and getting Theta instead would be a compiler

@@ -31,23 +31,14 @@
 // error is not a reading: nothing here is ambiguous, and §3.11's error is for
 // disciplines that are incompatible, which these are not.
 //
-// WHY THIS IS AN XFAIL AND NOT A RUN. VerA gives an undeclared net §3.8's
-// `default_discipline` — `electrical` — during elaboration, before any primitive
-// discipline is resolved, so E.3.2.2's scan never runs and the access function
-// below has no meaning on the net. The two lines an implementation must make
-// true are already written: `Theta` is Annex D's Angle accessor, and the bias
-// sets the effort of `s1` to 2.0 and `s2` to 0.0, so the pair differs by 2.0 in
-// whichever accessor the segment ends up with. Measured 2026-09-20:
-//
-//     error[E0501]: unknown access function: `Theta` is not an access function
-//       of `s1`
-//       = note: LRM 3.6.1.4
-//       = note: `s1` is of discipline `electrical`, whose potential nature
-//         declares `access = V`
-//
-// — the electrical default, reached without the clause being consulted. When the
-// scan lands, this file compiles, `Theta` resolves to rotational, and the
-// assertions below are the evidence.
+// WHAT USED TO FAIL. VerA gave an undeclared net the primitive's own
+// `electrical` as it bound the port, before any attribute was consulted, so
+// E.3.2.2's scan never ran (E0501: `Theta` is not an access function of `s1`,
+// measured 2026-09-20). Elaboration now binds every attributed primitive port
+// of a level first and a primitive's `electrical` only to a net nothing else
+// resolved (2026-09-24). The bias sets the effort of `s1` to 2.0 and `s2` to
+// 0.0, so the pair differs by 2.0 in whichever accessor the segment ends up
+// with, and `Theta` compiling at all is the scan's evidence.
 //
 //! lrm E.3.2.2
 //! lrm E.3.2
@@ -55,7 +46,6 @@
 //! lrm 3.8
 //! lrm 6.7.1
 //! bias s1 = 2.0, s2 = 0.0
-//! xfail no scan over the segment's other instances: an undeclared net takes the §3.8 electrical default first, so `Theta` is not an access function of `s1` (E0501)
 `include "check.vh"
 module annex_e_primitive_segment_scan;
   (* port_discipline="rotational" *) resistor #(.r(1k)) r1(s1, s2);
