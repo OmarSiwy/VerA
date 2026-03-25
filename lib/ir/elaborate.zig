@@ -533,6 +533,11 @@ pub const Flatten = struct {
         connected: std.AutoHashMapUnmanaged(Ast.StrId, bool) = .empty,
         /// §9.19 `$param_given`: local parameter name → was it overridden.
         given: std.AutoHashMapUnmanaged(Ast.StrId, bool) = .empty,
+        /// §4.4 the discipline a BOUND port was declared with in this unit,
+        /// local port name → discipline. The port is the parent's net after
+        /// the join, whose discipline may be another one; `localAccess` checks
+        /// this unit's access names against this, not against that.
+        port_disc: std.AutoHashMapUnmanaged(Ast.StrId, Ast.StrId) = .empty,
         /// Annex E — is the unit being cloned a SHIPPED Table E.1 primitive.
         /// The one thing that is true of the prelude's bodies and of no user
         /// module: their `V`/`I` is Table E.1's nature-neutral spelling of the
@@ -900,10 +905,14 @@ pub const Flatten = struct {
                 );
                 // E.3.2: a primitive's attribute was bound by `walkInstances`,
                 // and its declared `electrical` is the default, bound last.
-                if (unit.primitive)
-                    try self.prim_ports.append(self.ctx.arena, .{ .path = path, .port = p, .bound = bound })
-                else
+                // §4.4 otherwise the child's own declaration names its accesses.
+                if (unit.primitive) {
+                    try self.prim_ports.append(self.ctx.arena, .{ .path = path, .port = p, .bound = bound });
+                } else {
                     try elab_resolve.resolveDiscipline(self, path, p, bound, conn.?.main_tok);
+                    const local = (try elab_resolve.oocDiscipline(self, path, p.name)) orelse p.discipline;
+                    if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
+                }
             } else {
                 // §6.2.2 "a blank port connection shall represent the situation
                 // where the port is not to be connected", and an omitted named

@@ -293,7 +293,10 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
             // this unit; the terminals are `lhs`/`rhs`.
             n.lhs = try cloneExpr(self, x.lhs(e));
             n.rhs = try cloneExpr(self, x.rhs(e));
-            if (self.unit.primitive) n.str = elab_names.primitiveAccess(self, n.str, n.lhs);
+            n.str = if (self.unit.primitive)
+                elab_names.primitiveAccess(self, n.str, n.lhs)
+            else
+                try elab_names.localAccess(self, n.str, x.lhs(e), n.lhs, n.main_tok);
             // §6.3.6 rule 2: a flow PROBE inside a scaled instance reads the
             // branch's whole flow, which is $mfactor copies' worth, so the
             // per-copy value the equation was written against is that over

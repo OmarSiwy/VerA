@@ -2,7 +2,7 @@
 //!
 //! In: an instance path. Out: the flat, injective name the lowered design uses.
 //!
-//! LRM clauses this file's code cites: §3.6.1.4, §3.6.5, §3.11, §6.2.2, §6.3.6, §6.4, §6.4.2, §6.7, E.3.2.1.
+//! LRM clauses this file's code cites: §3.6.1.4, §3.6.5, §3.11, §4.4, §5.5.1, §6.2.2, §6.3.6, §6.4, §6.4.2, §6.5.8, §6.7, §7.4, E.3.2.1.
 //!
 //! Cut verbatim from `elaborate.zig`. Functions take `self: *Flatten` and are called
 //! directly, `elab_names.f(self, ...)`; `elaborate.zig` aliases only what other modules call.
@@ -287,6 +287,41 @@ pub fn primitiveAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId) Ast.S
     const disc = self.disc_of.get(name) orelse .none;
     if (disc == .none) return access; // §3.6.5 implicit, or resolved later
     return discipline.accessOf(self.ctx.file, disc, which) orelse access;
+}
+
+/// §4.4: "The access function name shall match the discipline declaration
+/// for the nets, ports, or branch given in the argument expression list." In a
+/// child, that declaration is the child's own: §7.4 resolves disciplines only
+/// for nets "whose discipline is undeclared", and §6.5.8 lets one node carry
+/// several continuous disciplines. So an access on a bound port is judged
+/// against the port's LOCAL discipline (`Unit.port_disc`) — E0501 here, since
+/// after the join lowering sees only the parent's net — and then respelled as
+/// the same half of the net it was joined to, the rewrite `primitiveAccess`
+/// makes for Table E.1's V and I. `net` is the terminal as the child wrote it,
+/// `flat_net` the same terminal cloned.
+///
+/// ponytail: the respelling uses the net's discipline as known at the join;
+/// a §7.7.2 `resolveto` re-decided after the walk (`resolveMultiCandidates`)
+/// is not seen, the same ceiling `primitiveAccess` and `mfactorScale` have.
+pub fn localAccess(self: *Flatten, access: Ast.StrId, net: Ast.ExprId, flat_net: Ast.ExprId, tok: u32) Error!Ast.StrId {
+    const file = self.ctx.file;
+    const local = self.unit.port_disc.get(netRefName(self, net) orelse return access) orelse return access;
+    const disc = self.disc_of.get(netRefName(self, flat_net) orelse return access) orelse return access;
+    if (disc == local) return access;
+    // §5.5.1 the generic spellings name a half on every discipline.
+    const a = file.str(access);
+    if (std.mem.eql(u8, a, "potential") or std.mem.eql(u8, a, "flow")) return access;
+    const half: Ast.PotentialOrFlow = if (discipline.accessOf(file, local, .potential) == access)
+        .potential
+    else if (discipline.accessOf(file, local, .flow) == access)
+        .flow
+    else {
+        try self.err(tok, .E0501, "`{s}` is not an access function of `{s}`, which this module declares `{s}`", .{
+            a, file.str(file.exprs.strOf(net)), file.str(local),
+        });
+        return access;
+    };
+    return discipline.accessOf(file, disc, half) orelse access;
 }
 
 /// §6.3.6's two automatic scaling rules, applied to one already-cloned
