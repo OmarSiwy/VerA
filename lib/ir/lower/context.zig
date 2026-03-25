@@ -72,8 +72,7 @@ pub const DiscreteCtx = struct {
 /// one too. Anything else is `collectInitialState`'s constant shape, which
 /// needs no kernel and keeps its fast path.
 ///
-/// Takes the FILE rather than the `Lower` so elaboration can ask it of the
-/// flattened module before lowering exists (`elaborate.Flatten.run`, E0920).
+/// Takes the FILE rather than the `Lower`: it is a question about the AST.
 pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     if (module.assigns.len != 0) return true;
     for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body)) return true;

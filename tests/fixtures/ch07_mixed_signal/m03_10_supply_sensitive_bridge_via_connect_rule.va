@@ -79,12 +79,20 @@
 // Every one of those misses BOTH checks. The 3.0 that used to be the first
 // check's want is now precisely the value that marks the feature as absent.
 //
+// WHY THE DRIVER WRITES AFTER #0. The bridge's `always @(cm)` only sees a
+// change of `cm` it is already waiting for, and `initial q = 1'b1` at time 0
+// would be a region-1 event beside that always block's first arrival at `@(cm)`
+// (and beside `initial lvl = 1'b0`). §8.5.1: region-1 events "can be processed
+// in any order", "an essential source of nondeterminism", so a conforming kernel
+// could leave lvl at 0 and read "the digital half reads 0". §8.5.1's "explicit
+// zero delay (#0)" makes the write an inactive event, after every process is at
+// its first event control; the derivation is unchanged.
+//
 //! lrm 7.8.6
 //! lrm 9.20
 //! lrm 7.7.3
 //! lrm 6.7.1
 //! solve
-//! xfail the §7.8 bridge is inserted, but its `initial lvl` is a child's discrete process in a design that needs the event kernel, which the flatten refuses (E0920)
 `include "check.vh"
 
 module m03_supply;
@@ -128,7 +136,7 @@ module m03_dsrc(q);
   output q;
   ddiscrete q;
   reg q;
-  initial q = 1'b1;
+  initial #0 q = 1'b1;
 endmodule
 
 module m03_top;

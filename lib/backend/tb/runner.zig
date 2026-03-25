@@ -316,6 +316,7 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
         .snaps = lowered.discrete_snaps.keys(),
         .xz = lowered.discrete_xz.keys(),
         .events = lowered.discrete_events.values(),
+        .inserts = lowered.inserts,
     };
 }
 
@@ -465,6 +466,16 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     }
     try out.appendSlice(arena, " };\nconst event_ports = [_]EventPort{");
     for (mx.events) |ev| try print(&out, arena, " .{{ .name = \"{f}\", .edge = .{t}, .field = \"{s}\" }},", .{ std.zig.fmtString(ev.name), ev.edge, naming.sanitize(&buf, ev.param) catch return error.OutOfMemory });
+    try out.appendSlice(arena, " };\n");
+    // VAMS §7.8.4 the inserted connect modules, which the source the digital
+    // half re-elaborates does not hold (`sim.digital.Insert`).
+    try out.appendSlice(arena, "const mixed_inserts = [_]sim.digital.Insert{");
+    for (mx.inserts) |row| {
+        try out.appendSlice(arena, " .{");
+        inline for (@typeInfo(@TypeOf(row)).@"struct".fields) |f|
+            try print(&out, arena, " .{s} = \"{f}\",", .{ f.name, std.zig.fmtString(@field(row, f.name)) });
+        try out.appendSlice(arena, " },");
+    }
     try out.appendSlice(arena, " };\n\n");
 
     // --- main ---------------------------------------------------------------

@@ -1016,6 +1016,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     });
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
+    self.out.inserts = design.inserts;
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
     // built on a mistyped instance terminal fails at the mistype instead of at

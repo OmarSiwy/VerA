@@ -22,19 +22,16 @@
 // POSITIVE SET: a refusal is not coverage of insertion. These two pin the only
 // two errors §7.8 states outright about the selection step itself.
 //
-// NOTE ON THE EXPECTATION TEXT: VerA has no diagnostic code for this rule yet —
-// §7.7.1's E0915 only checks that the named identifier is a declared
-// `connectmodule`. The `//! reject` substring below is therefore the RULE, to be
-// replaced with the allocated code when the check is implemented. It must not be
-// replaced with an incidental parse error: `m03_elec2` is a legally declared
-// discipline and the statement is grammatical, so the refusal has to come from
-// §7.8's domain requirement and nothing else.
+// NOTE ON THE EXPECTATION TEXT: the code is E0923, allocated for exactly this
+// rule. It must not be an incidental parse error: `m03_elec2` is a legally
+// declared discipline and the statement is grammatical, so the refusal has to
+// come from §7.8's domain requirement and nothing else — and E0923 is raised
+// only by that requirement (elaborate/resolve.zig `checkConnectRules`).
 //
 //! lrm 7.8
 //! lrm 7.7.1
 //! lrm 3.11.1
-//! reject one shall be discrete and the other continuous
-//! xfail VerA accepts a connect statement whose two port-override disciplines are both continuous; §7.8 says "When two disciplines are specified in a connect statement, one shall be discrete and the other continuous", and only §7.7.1's weaker check that the named identifier is a declared connectmodule (E0915) exists today
+//! reject E0923
 
 discipline m03_elec2;
   potential Voltage;

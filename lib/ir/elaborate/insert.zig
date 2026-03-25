@@ -139,6 +139,15 @@ pub fn plan(self: *Flatten, module: *const Ast.ModuleDecl, path: []const u8) Err
         const up_expr = conn.expr;
         const name = try segmentName(self, path, r, merged, lower_port, h, if (first) |g| g else h, out.items);
         conn.expr = try ident(self, name.segment, conn.main_tok);
+        try self.inserts.append(self.ctx.arena, .{
+            .path = path,
+            .inst = file.str(out.items[h.inst].name),
+            .port = file.str(h.port),
+            .module = file.str(r.module.name),
+            .name = file.str(name.instance),
+            .upper_port = file.str(upper_port),
+            .lower_port = file.str(lower_port),
+        });
         if (first != null) continue;
 
         try elab_resolve.addNet(self, .{ .name = name.segment, .discipline = h.bottom, .main_tok = conn.main_tok });
