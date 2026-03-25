@@ -1463,7 +1463,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
             const prev = self.restrict;
             self.restrict = "an analog initial block";
             self.in_analog_initial = true;
-            try lower_control.lowerBranchStmt(self, flag, blk.body, .none, false);
+            try lower_control.lowerBranchStmt(self, flag, blk.body, .none, false, .none);
             self.in_analog_initial = false;
             self.restrict = prev;
         } else {

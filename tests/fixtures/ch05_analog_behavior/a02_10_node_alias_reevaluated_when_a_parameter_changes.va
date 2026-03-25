@@ -49,7 +49,7 @@
 // resolve; a build that re-evaluated but lost the resolution would read 0 and
 // silently fall back to "a normal continuous node declared in the module".
 //
-// OBSERVED TODAY: `got=2 want=2 ok=1` at point 0 and `got=-1 want=2 ok=0` at
+// OBSERVED BEFORE THE FIX: `got=2 want=2 ok=1` at point 0 and `got=-1 want=2 ok=0` at
 // point 1 — V(n1) is still 2.0 there, so the folded expression reads 2 - 3 =
 // -1. The alias is resolved once, during elaboration, and the second sweep
 // point reuses the first point's binding. `status` reads 1 at both points, so
@@ -64,9 +64,11 @@
 // with the DEFAULT changed to `sel = 1` and no sweep at all still reads
 // V(n1) = 2.0 (got=-1 want=2). The alias condition is never evaluated, not even
 // against the declared default. `status` hides it because both arms resolve.
-// A real fix needs a probe and a contribution row that are selected by a
-// model-card value at run time. That is a device whose topology depends on
-// its card, and `U`/`jac_pattern` today are compile-time.
+// FIXED 2026-09-24: an alias call under a parameter condition is recorded with
+// the conditions that chose it, and a potential probe of the net is a select
+// over the candidates on those conditions, re-evaluated against the card
+// (`lower_hier_name.aliasProbe`). A contribution to such a net, a flow through
+// it or a `ddx` with respect to it is refused (E0812), not routed.
 //
 //! lrm 9.20
 //! lrm 5.2.1

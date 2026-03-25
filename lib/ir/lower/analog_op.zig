@@ -14,6 +14,7 @@ const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
+const lower_hier_name = @import("hier_name.zig");
 const lower_param = @import("param.zig");
 const lower_table_model = @import("table_model.zig");
 const Ast = @import("frontend").Ast;
@@ -108,6 +109,7 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             try self.err(self.file.exprs.mainTok(args[1]), .E0504, "a potential across two nets is not one unknown", .{});
             return poison;
         }
+        try lower_hier_name.refuseRuntime(self, self.file.exprs.mainTok(args[1]), t.hi, t.lo);
         const u: u16 = switch (t.access) {
             .potential => t.hi,
             // PEEK — never mint. §4.5.6's closing sentence: "If the expression

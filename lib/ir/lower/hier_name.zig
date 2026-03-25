@@ -3,7 +3,7 @@
 //! In: string-named instance/node references. Out: the flat unknown each one names,
 //! resolved at compile time (the device has no runtime hierarchy).
 //!
-//! LRM clauses this file's code cites: §1.3.1.1, §3.6.3.2, §3.11.1, §5.4.3, §6.2.1, §6.7, §9.16, §9.20.
+//! LRM clauses this file's code cites: §1.3.1.1, §3.6.3.2, §3.11.1, §5.2.1, §5.4.3, §5.8.3, §6.2.1, §6.7, §9.16, §9.20.
 //!
 //! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
 //! directly, `lower_hier_name.f(self, ...)`; `lower.zig` aliases only what other modules call.
@@ -14,9 +14,11 @@ const lower_constfold = @import("constfold.zig");
 const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
 const lower_limit = @import("limit.zig");
+const lower_node = @import("node.zig");
 const lower_sysfunc = @import("sysfunc.zig");
 const Ast = @import("frontend").Ast;
 const Elaborate = @import("../elaborate.zig");
+const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const ground = Lower.ground;
 const TypedValue = Lower.TypedValue;
@@ -41,7 +43,91 @@ pub const State = struct {
     /// IS one, and the SECOND call of the last-writer rule would be refused for
     /// something the source never wrote.
     alias_home: std.StringHashMapUnmanaged(u16) = .empty,
+    /// The conditions enclosing the analog-initial statement being lowered,
+    /// outermost first (`pushCond`). An alias call under any of them is chosen
+    /// by a parameter, so it goes to `runtime` instead of `node_voltages`.
+    conds: std.ArrayList(Cond) = .empty,
+    /// §9.20 + §5.2.1 the aliases a parameter chooses, keyed by the DECLARED
+    /// unknown of their analog_net_reference, which is what `node_voltages`
+    /// names while one exists and what `aliasProbe` dispatches on.
+    runtime: std.AutoHashMapUnmanaged(u16, Runtime) = .empty,
 };
+
+/// One enclosing `if`/`?:` condition (`labels` empty) or `case` arm (`e` the
+/// subject, `labels` the arm's), and whether the lowered arm is where it holds.
+pub const Cond = struct {
+    e: Ast.ExprId,
+    labels: []const Ast.ExprId = &.{},
+    pol: bool,
+    /// A.8.3 over literals, parameters and `analysis()` (`isAnalysisOrConst`):
+    /// the same value wherever it is lowered, so a probe may re-lower it.
+    pure: bool,
+};
+
+/// The alias binding of one net as a function of the model card: `base` (its
+/// declared unknown, or an unconditional alias before these), then each
+/// conditional call in source order, the last whose conditions hold winning.
+pub const Runtime = struct {
+    base: u16,
+    entries: std.ArrayList(struct { target: u16, conds: []const Cond }) = .empty,
+};
+
+/// Enter an arm of a conditional inside `analog initial` (a no-op elsewhere,
+/// where no alias call can be).
+pub fn pushCond(self: *Lower, c: Cond) Oom!void {
+    if (self.in_analog_initial) try self.hier_name_state.conds.append(self.arena, c);
+}
+
+pub fn popCond(self: *Lower) void {
+    if (self.in_analog_initial) _ = self.hier_name_state.conds.pop();
+}
+
+/// §9.20's net, read: "the analog_net_reference will be aliased to that
+/// hierarchical node and shall refer to the same circuit matrix position". For a
+/// net whose alias a parameter chooses, §9.20 has the call "re-evaluated each
+/// sweep point of a dc sweep as needed" and §5.2.1 re-executes the block when
+/// "a parameter ... referenced from an analog initial block is changed", so the
+/// position is a select over the candidates on the conditions that chose them —
+/// re-lowered here, which `Cond.pure` makes the same value as in the block.
+pub fn aliasProbe(self: *Lower, idx: u16) Oom!Mir.Value {
+    const set = self.hier_name_state.runtime.get(idx) orelse return lower_node.probe(self, idx);
+    var v = try lower_node.probe(self, set.base);
+    for (set.entries.items) |en| {
+        var c: ?Mir.Value = null;
+        for (en.conds) |t| {
+            const b = try condValue(self, t);
+            c = if (c) |p| try self.emit(.logand, &.{ p, b }) else b;
+        }
+        v = try self.emit(.select, &.{ c.?, try lower_node.probe(self, en.target), v });
+    }
+    return v;
+}
+
+fn condValue(self: *Lower, t: Cond) Oom!Mir.Value {
+    var b: ?Mir.Value = null;
+    if (t.labels.len == 0) {
+        b = try self.toBool(try lower_expr.lowerExpr(self, t.e));
+    } else {
+        // §5.8.3 an arm matches any one of its labels.
+        const sv = try lower_expr.lowerExpr(self, t.e);
+        for (t.labels) |l| {
+            const eq = try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l));
+            b = if (b) |p| try self.emit(.logor, &.{ p, eq }) else eq;
+        }
+    }
+    return if (t.pol) b.? else self.emit(.lognot, &.{b.?});
+}
+
+/// Everything but a potential probe of a parameter-aliased net: a contribution
+/// to it, a flow through it, `ddx` with respect to it. Each would need its row
+/// or column chosen by the card as well.
+/// ponytail: refused rather than routed; route them through the same select
+/// the day a model needs one.
+pub fn refuseRuntime(self: *Lower, tok: u32, hi: u16, lo: u16) Oom!void {
+    const rt = &self.hier_name_state.runtime;
+    const idx = if (rt.contains(hi)) hi else if (rt.contains(lo)) lo else return;
+    try self.err(tok, .E0812, "`{s}` is aliased under a parameter condition; VerA answers only a potential probe of it, not a contribution, a flow or a ddx", .{lower_node.nodeName(self, idx)});
+}
 
 /// §9.20 one resolved `hierarchical_reference_string`: the unknown it names,
 /// and whether the name was a node of the flat design itself (`direct`) rather
@@ -205,10 +291,13 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
 /// the same shape a declared-and-unused net already has here, and pruning it
 /// would renumber `U` — an ABI the host reads.
 ///
-/// ponytail: the resolution is COMPILE TIME, so §9.20's "shall be re-evaluated
-/// each sweep point of a dc sweep" is satisfied vacuously — the answer cannot
-/// change between sweep points, because the only inputs are the string and the
-/// elaborated design. The one input that CAN move is a string PARAMETER the host
+/// A call under a parameter CONDITION is the one case where §9.20's "shall be
+/// re-evaluated each sweep point of a dc sweep" can change the answer; it is
+/// recorded for `aliasProbe` to select at run time. Otherwise the resolution is
+/// COMPILE TIME and that sentence holds vacuously — the only inputs are the
+/// string and the elaborated design.
+///
+/// ponytail: the other input that CAN move is a string PARAMETER the host
 /// overrides on the model card: that is frozen at its declared default here,
 /// exactly as §3.6.3.2's nodeset is. Making it move needs a device whose
 /// topology is a function of its model card, which is not what `U` is; the
@@ -248,8 +337,26 @@ pub fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u
         // unknown, which is elaboration's to mint, not this function's.
         if (!hit.direct or hit.idx == ground or hit.idx >= self.out.num_ports) return .unresolved;
     }
+    // A call under a parameter condition: `aliasProbe` chooses at run time,
+    // since the model card may override the parameter the lowering sees only
+    // the default of. The net keeps naming its declared unknown meanwhile.
+    const st = &self.hier_name_state;
+    var pure = st.conds.items.len != 0;
+    for (st.conds.items) |c| pure = pure and c.pure;
+    if (pure) {
+        const gop = try st.runtime.getOrPut(self.arena, local);
+        if (!gop.found_existing) gop.value_ptr.* = .{ .base = self.node_voltages.get(ref_name) orelse local };
+        try gop.value_ptr.entries.append(self.arena, .{ .target = hit.idx, .conds = try self.arena.dupe(Cond, st.conds.items) });
+        try self.node_voltages.put(self.arena, ref_name, local);
+        return .bound;
+    }
     // The alias itself: from here the analog_net_reference names the resolved
     // node's unknown, so every later probe of it lands on that matrix position.
+    // An unconditional call is the last writer over every conditional one.
+    // ponytail: a condition that is static only as a VALUE (a variable holding
+    // a parameter, `isStaticValue`) cannot be re-lowered outside the block, so
+    // it still binds here, at the last arm lowered.
+    _ = st.runtime.remove(local);
     try self.node_voltages.put(self.arena, ref_name, hit.idx);
     return .bound;
 }

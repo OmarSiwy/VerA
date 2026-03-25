@@ -14,6 +14,7 @@ const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_control = @import("control.zig");
 const lower_func = @import("func.zig");
+const lower_hier_name = @import("hier_name.zig");
 const lower_node = @import("node.zig");
 const lower_param = @import("param.zig");
 const lower_stmt = @import("stmt.zig");
@@ -731,12 +732,17 @@ pub fn lowerTernary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const join = try self.mir.addBlock(self.arena);
     try self.branchTo(c, then_b, else_b, true);
 
+    const pure = lower_control.isAnalysisOrConst(self, cond);
     self.cur = then_b;
+    try lower_hier_name.pushCond(self, .{ .e = cond, .pol = true, .pure = pure });
     const t = try lowerExpr(self, ex.rhs(e));
+    lower_hier_name.popCond(self);
     const then_end = self.cur; // an arm may have branched on its own (`&&`, a nested `?:`)
 
     self.cur = else_b;
+    try lower_hier_name.pushCond(self, .{ .e = cond, .pol = false, .pure = pure });
     const f = try lowerExpr(self, ex.ternaryElse(e));
+    lower_hier_name.popCond(self);
     const else_end = self.cur;
 
     const ty = unify(t.ty, f.ty);
@@ -850,14 +856,16 @@ pub fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // instead of minting a second, independent one that nothing constrains.
     switch (t.access) {
         .potential => {
-            const hi = try lower_node.probe(self, t.hi);
+            // §9.20 through `aliasProbe`: a parameter may choose the node.
+            const hi = try lower_hier_name.aliasProbe(self, t.hi);
             if (t.lo == ground)
                 return .{ .v = if (t.neg) try self.emit(.fneg, &.{hi}) else hi, .ty = .real };
-            const lo = try lower_node.probe(self, t.lo);
+            const lo = try lower_hier_name.aliasProbe(self, t.lo);
             const d = if (t.neg) [2]Mir.Value{ lo, hi } else [2]Mir.Value{ hi, lo };
             return .{ .v = try self.emit(.fsub, &d), .ty = .real };
         },
         .flow => {
+            try lower_hier_name.refuseRuntime(self, self.file.exprs.mainTok(e), t.hi, t.lo);
             // §5.4.2.2 "Both the potential and the flow of a source branch are
             // accessible in expressions anywhere in the module." For a FLOW
             // source that access cannot be a solver unknown: a current source's
