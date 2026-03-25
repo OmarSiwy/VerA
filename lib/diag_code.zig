@@ -1792,9 +1792,11 @@ fn infoOf(c: Code) Info {
             \\... from a set of alternatives".
             \\
             \\VerA keeps the analog bodies of a generate block under its scheme,
-            \\but has no generate scope for a module instance, a defparam, an
-            \\initial/always block, a continuous assignment, a gate or a named
-            \\event. The first three used to be moved to the module and
+            \\and an if-generate's module instances too (each child's analog
+            \\blocks run under the scheme that brings it into existence), but
+            \\has no generate scope for a loop or case generate's instance, a
+            \\defparam, an initial/always block, a continuous assignment, a
+            \\gate or a named event. The first three used to be moved to the module and
             \\elaborated exactly once whatever the scheme said, and the last
             \\three were dropped without a word, so
             \\

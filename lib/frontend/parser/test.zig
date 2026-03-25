@@ -757,8 +757,10 @@ test "§6.6 generate: what does not nest, what may not be declared, what may sha
         .{ .src = head ++ "case (1) 1: ; endcase endmodule", .code = .E0205 },
         // §6.6: a generate block brings its module instances (and defparams,
         // and discrete blocks) into existence only when the scheme selects or
-        // repeats it. VerA has no generate scope for them: E0235, not a hoist.
-        .{ .src = head ++ "generate if (0) begin r u(p); end endgenerate endmodule", .code = .E0235 },
+        // repeats it. VerA has no generate scope for them: E0235, not a hoist —
+        // except a module instance, which the block keeps for elaboration to
+        // gate by the scheme (`Flatten.genInstances`).
+        .{ .src = head ++ "generate if (0) begin r u(p); end endgenerate endmodule", .code = null },
         .{ .src = head ++ "generate if (0) begin defparam u.x = 1.0; end endgenerate endmodule", .code = .E0235 },
         .{ .src = head ++ "generate if (0) begin initial begin end end endgenerate endmodule", .code = .E0235 },
         .{ .src = head ++ "generate if (0) begin event e; end endgenerate endmodule", .code = .E0235 },
