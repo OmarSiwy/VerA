@@ -829,6 +829,10 @@ pub fn emitInstance(self: *Gen) Error!void {
                     "    {s}__td: f64 = 0.0, // §4.5.7 td, frozen at the first evaluation\n",
                     .{n},
                 );
+                if (try gen_call.absdelayMaxdSampled(self, self.names.opArgs(self.mir, i))) try self.w(
+                    "    {s}__maxd: f64 = 0.0, // §4.5.14 maxdelay, sampled at the start of the analysis\n",
+                    .{n},
+                );
             },
             // §4.5.11/§4.5.12 direct-form-I history of the cascade: `deg`
             // past inputs and past outputs per section, newest first. The
