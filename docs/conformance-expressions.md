@@ -190,6 +190,11 @@ correct repair must preserve evaluation and width/context semantics together;
 merely special-casing the counter or changing the fixture expectation is invalid.
 No compiler change is made in this checkpoint.
 
+Closed 2026-09-24: `braceOperands` keeps a zero group over a non-literal as a
+`.multi_concat` that `foldBitConcat` gives no width, and `Lower.lowerConcat`
+evaluates its operands once before answering the folded value. The fixture's
+`//! xfail` is removed.
+
 `audit_replication_zero_width.va` separately passes one exact observation:
 placing the zero replication between a set prefix bit and suffix `0101`
 produces 21, whereas inserting an erroneous zero bit there produces 37.

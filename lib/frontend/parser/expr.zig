@@ -762,6 +762,18 @@ pub fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?As
                 try items.appendSlice(self.arena, inner.items);
                 return first;
             };
+            // §4.2.13 "When a replication expression is evaluated, the
+            // operands shall be evaluated exactly once, even if the
+            // replication constant is zero." A literal has nothing to
+            // evaluate, so only a zero group over something else is kept —
+            // as a `.multi_concat` `foldBitConcat` gives no width.
+            if (n == 0) for (inner.items) |it| switch (self.file.exprs.tag(it)) {
+                .int_literal, .real_literal, .str_literal, .logic_literal => {},
+                else => { // else: anything but a literal may have an effect to evaluate
+                    try items.appendSlice(self.arena, inner.items);
+                    return first;
+                },
+            };
             for (0..n) |_| try items.appendSlice(self.arena, inner.items);
             return null;
         }
@@ -857,8 +869,15 @@ pub fn foldBitConcat(self: *Parser, tok: u32, items: []const Ast.ExprId) Error!?
     if (self.digital) return null;
     const ex = &self.file.exprs;
     var any_sized = false;
+    var effects: std.ArrayList(Ast.ExprId) = .empty;
     for (items) |it| {
         if (ex.tag(it) == .logic_literal) return null;
+        // A zero group `braceOperands` kept for §4.2.13's "evaluated exactly
+        // once": "considered to have a size of zero and is ignored".
+        if (ex.tag(it) == .multi_concat and concatReplCount(self, ex.lhs(it)) == 0) {
+            try effects.append(self.arena, it);
+            continue;
+        }
         if (ex.tag(it) != .int_literal) continue;
         if (ex.intLiteral(it).width != 0) any_sized = true;
     }
@@ -867,6 +886,7 @@ pub fn foldBitConcat(self: *Parser, tok: u32, items: []const Ast.ExprId) Error!?
     var acc: u64 = 0;
     var total: u64 = 0;
     for (items) |it| {
+        if (std.mem.indexOfScalar(Ast.ExprId, effects.items, it) != null) continue;
         const lit: ?lexer.IntLiteral = if (ex.tag(it) == .int_literal and ex.intLiteral(it).width != 0)
             ex.intLiteral(it)
         else
@@ -884,7 +904,13 @@ pub fn foldBitConcat(self: *Parser, tok: u32, items: []const Ast.ExprId) Error!?
         const mask: u64 = (@as(u64, 1) << @intCast(l.width)) - 1;
         acc = (acc << @intCast(l.width)) | (@as(u64, @bitCast(l.value)) & mask);
     }
-    return try ex.addIntLiteral(self.arena, tok, .{ .value = @bitCast(acc), .width = @intCast(total), .signed = false });
+    const folded = try ex.addIntLiteral(self.arena, tok, .{ .value = @bitCast(acc), .width = @intCast(total), .signed = false });
+    if (effects.items.len == 0) return folded;
+    // The zero groups first, the value last: `Lower.lowerConcat` evaluates
+    // each group's operands once and answers the folded literal.
+    try effects.append(self.arena, folded);
+    const off = try ex.addExprList(self.arena, effects.items);
+    return try ex.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
 }
 
 /// §2.7 string literal contents, with escapes processed, then §3.3's
