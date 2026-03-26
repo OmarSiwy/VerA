@@ -229,6 +229,11 @@ discrete_snaps: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// or a `case` subject: their unknown plane arrives in a `<name>__xz` `Model`
 /// field beside the value plane, and an x or z there is not an error.
 discrete_xz: std.StringArrayHashMapUnmanaged(void) = .empty,
+/// §7.3.6.4 / §7.3.1 the other direction: module variables a digital
+/// expression reads and the discrete context does not assign — the analog
+/// block's — name → first reading token. The mixed runner copies each one's
+/// §5.10 held value into the digital engine after every accepted solution.
+discrete_reads: std.StringArrayHashMapUnmanaged(u32) = .empty,
 /// The module's discrete half needs the event queue (`lower_context.isMixed`).
 mixed_signal: bool = false,
 /// §7.8.4 the connect modules elaboration inserted — see `Elaborate.Design.inserts`.

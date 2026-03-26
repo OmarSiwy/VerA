@@ -238,6 +238,11 @@ pub const Mixed = struct {
     /// §7.8.4 the inserted connect modules, which the source hierarchy the
     /// digital half re-elaborates does not hold.
     inserts: []const @import("ir").Lowered.Inserted = &.{},
+    /// §7.3.6.4 analog variables a digital expression reads
+    /// (`Lowered.discrete_reads`), and the device's §5.10 held variables —
+    /// the `Instance` fields such a variable's value can be copied from.
+    reads: []const []const u8 = &.{},
+    held: []const @import("ir").Lower.HeldVar = &.{},
 };
 
 /// One `//! noise` line, split into the part that names the ROW and the parts

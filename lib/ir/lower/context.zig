@@ -169,6 +169,32 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     // (§7.3.2) that nothing analog ever sees.
     var reads: Reads = .{ .l = self, .digital = &digital };
     for (module.analog) |blk| try reads.stmt(blk.body);
+    // §7.3.6.4 / §7.3.1, A2D: "Read operations of nets and variables in both
+    // domains are allowed from both contexts", so a module variable a digital
+    // expression reads and no digital context assigns is the analog block's.
+    const DReads = struct {
+        l: *Lower,
+        module: *const Ast.ModuleDecl,
+        digital: *const std.StringHashMapUnmanaged(void),
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
+            if (e == .none) return;
+            const fx = &w.l.file.exprs;
+            if (fx.tag(e) == .ident) for (w.module.vars) |v| {
+                const name = w.l.file.str(v.name);
+                if (v.name != fx.strOf(e) or w.digital.contains(name)) continue;
+                if (!w.l.out.discrete_reads.contains(name)) try w.l.out.discrete_reads.put(w.l.arena, name, fx.mainTok(e));
+                break;
+            };
+            var buf: [3]Ast.ExprId = undefined;
+            for (fx.children(e, &buf)) |c| try w.expr(c, .read);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
+            if (s != .none) try w.l.file.stmtEdges(s, w);
+        }
+    };
+    const dreads: DReads = .{ .l = self, .module = module, .digital = &digital };
+    for (module.assigns) |a| try dreads.expr(a.value, .read);
+    for (module.discrete) |blk| try dreads.stmt(blk.body);
     // §8.5 each explicit D2A term is a host-set flag.
     for (reads.sites.items, 0..) |site, k| {
         const param = try std.fmt.allocPrint(self.arena, "__d2a{d}", .{k});

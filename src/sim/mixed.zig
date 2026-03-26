@@ -257,10 +257,25 @@ fn State(comptime A: type) type {
                 try s.a.finish();
                 s.prev = ta;
                 s.fired = 0;
+                try s.settleA2d(tickAtOrBefore(ta, s.opts.tick));
             };
             s.fired |= s.pending;
             s.pending = 0;
             try s.solve(t);
+        }
+
+        /// VAMS §7.3.6.4: `finish` wrote the analog variables a digital
+        /// expression reads (`digital.Run.a2dWrite`), each an A2D event at the
+        /// finished time. The digital engine runs them now, so the next solve
+        /// reads what they drive.
+        // ponytail: the finished point is not re-solved for an implicit D2A
+        // they cause (§8.4.3.2 "accept at wake-up time"); the next point is.
+        fn settleA2d(s: *Self, horizon: Tick) !void {
+            while (true) switch (try s.dig.runUntil(horizon)) {
+                .idle => break,
+                .explicit_d2a => try s.explicitD2a(),
+                .analog => {},
+            };
         }
 
         fn explicitD2a(s: *Self) !void {
