@@ -1,6 +1,6 @@
 //! IEEE 1364-2005 §17 system tasks that keep state of their own: §17.2's
-//! file input, §17.5's programmable logic arrays and §17.6's stochastic
-//! queues.
+//! file input (and §17.2.3's string output), §17.5's programmable logic
+//! arrays and §17.6's stochastic queues.
 //!
 //! In: a task's argument expressions and the `Run`. Out: values written to
 //! the task's output arguments, and (queues) `Run.queues`.
@@ -376,10 +376,7 @@ fn scan(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
             's' => {
                 const start = at;
                 while (at < input.len and !std.ascii.isWhitespace(input[at])) at += 1;
-                const word = input[start..at];
-                const v = try filled(a, @intCast(@max(1, word.len) * 8), false, .zero);
-                for (word, 0..) |ch, k| setBitsOfByte(v, @intCast((word.len - 1 - k) * 8), ch);
-                try exec.assign(self, a, args[next], v);
+                try exec.assign(self, a, args[next], try stringValue(a, input[start..at]));
             },
             'd', 'h', 'x', 'o', 'b' => {
                 const radix: u8 = switch (conv) {
@@ -400,6 +397,31 @@ fn scan(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
         assigned += 1;
     }
     return assigned;
+}
+
+/// IEEE 1364-2005 §4.2.3 a string as a value: 8 bits a character, the last
+/// character in the low byte. Assigning it pads or truncates on the left.
+fn stringValue(a: std.mem.Allocator, s: []const u8) Error!Int.Literal {
+    const v = try filled(a, @intCast(@max(1, s.len) * 8), false, .zero);
+    for (s, 0..) |ch, k| setBitsOfByte(v, @intCast((s.len - 1 - k) * 8), ch);
+    return v;
+}
+
+/// §17.2.3 `$swrite`/`$sformat`: `$fwrite`'s text of the arguments after the
+/// first, assigned to the first "using the string assignment to variable
+/// rules". `compile` has already required `$sformat`'s format to be a literal,
+/// which is the one argument `display` reads as a format there.
+/// ponytail: a string literal AFTER `$sformat`'s format is read as a further
+/// format, where §17.2.3 says "No other arguments are interpreted as format
+/// strings"; split the walk when a source needs that.
+pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
+    var buf: std.Io.Writer.Allocating = .init(a);
+    const saved = self.out;
+    self.out = &buf.writer;
+    defer self.out = saved;
+    try @import("display.zig").display(self, args[1..], a, show);
+    self.out = saved;
+    try exec.assign(self, a, args[0], try stringValue(a, buf.written()));
 }
 
 fn setBitsOfByte(v: Int.Literal, lo: u32, byte: u8) void {

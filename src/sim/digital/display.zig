@@ -6,7 +6,7 @@
 //!
 //! Clauses: §9.4.1 Table 9-1 display families, §9.4.3 Table 9-22 conversions;
 //! IEEE 1364-2005 §17.1.1.3/§17.1.1.4 sizing and unknown digits, §17.1.2
-//! `$strobe`, §17.1.3 `$monitor`, §17.3 `$timeformat`/`%t`, §17.7.2
+//! `$strobe`, §17.1.3 `$monitor`, §17.3 `$timeformat`/`%t`/`$printtimescale`, §17.7.2
 //! `$realtime`; IEEE 1364-2005 §17.2.9 `$readmemb`/`$readmemh`.
 const std = @import("std");
 const Front = @import("frontend");
@@ -274,6 +274,10 @@ pub const Task = union(enum) {
     fclose,
     /// §17.2.2 `$fdisplay`/`$fwrite`: `show` to a descriptor.
     fshow: Show,
+    /// §17.2.3 `$swrite`/`$sformat`: `show` into the first argument, a variable.
+    sshow: Show,
+    /// §17.3.1 `$printtimescale`.
+    printtimescale,
     /// §18.1 the value change dump tasks.
     dump: @import("vcd.zig").Op,
 };
@@ -320,6 +324,12 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$fwriteb", Task{ .fshow = showAs(.binary, false) } },
     .{ "$fwriteo", Task{ .fshow = showAs(.octal, false) } },
     .{ "$fwriteh", Task{ .fshow = showAs(.hex, false) } },
+    .{ "$swrite", Task{ .sshow = showAs(.decimal, false) } },
+    .{ "$swriteb", Task{ .sshow = showAs(.binary, false) } },
+    .{ "$swriteo", Task{ .sshow = showAs(.octal, false) } },
+    .{ "$swriteh", Task{ .sshow = showAs(.hex, false) } },
+    .{ "$sformat", Task{ .sshow = showAs(.decimal, false) } },
+    .{ "$printtimescale", .printtimescale },
     .{ "$dumpfile", Task{ .dump = .file } },
     .{ "$dumpvars", Task{ .dump = .vars } },
     .{ "$dumpoff", Task{ .dump = .off } },
@@ -568,6 +578,29 @@ fn emitTime(self: *Run, v: Int.Literal) Error!void {
     const text = w.buffered();
     if (text.len < f.width) try self.out.splatByteAll(' ', f.width - text.len);
     try self.out.writeAll(text);
+}
+
+/// IEEE 1364-2005 §17.3.1 `$printtimescale` with no argument: "the time unit
+/// and precision of the module that is the current scope", in the clause's
+/// format `Time scale of (module_name) is unit / precision`.
+/// ponytail: the no-argument form only; `compile` refuses a named module.
+pub fn printTimescale(self: *Run) Error!void {
+    const mt = self.timeOf(self.scope);
+    const prec_exp = mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)));
+    const name = self.file.str(self.scope_info.items[self.scope].module);
+    try self.out.print("Time scale of ({s}) is ", .{name});
+    try emitDecade(self, mt.unit_exp);
+    try self.out.writeAll(" / ");
+    try emitDecade(self, prec_exp);
+    try self.out.writeByte('\n');
+}
+
+/// 10^e seconds in §19.8's spelling: 1, 10 or 100 of s, ms, us, ns, ps, fs.
+fn emitDecade(self: *Run, e: i32) Error!void {
+    const k = @divFloor(e, 3);
+    const units = [_][]const u8{ "fs", "ps", "ns", "us", "ms", "s" };
+    const mantissa: u32 = std.math.pow(u32, 10, @intCast(e - 3 * k));
+    try self.out.print("{d}{s}", .{ mantissa, units[@intCast(k + 5)] });
 }
 
 /// One operand, in one radix, sized by IEEE 1364-2005 §17.1.1.3 unless the
@@ -873,6 +906,19 @@ test "§9.4.3 the radix conversions size themselves from the operand" {
         \\end endmodule
         \\
     , "wa5\n[ ]\nbare=165\n");
+}
+
+test "§17.2.3 $sformat/$swrite fill a reg with the text, §17.3.1 $printtimescale" {
+    try expectRun(
+        \\`timescale 10us/100ns
+        \\module m; reg [8*6:1] s; initial begin
+        \\  #3 $sformat(s, "t=%0d", $time); $display("[%s]", s);
+        \\  $swriteh(s, 8'hab, "!"); $display("[%s]", s);
+        \\  $sformat(s, "%s-long", "too"); $display("[%s]", s);
+        \\  $printtimescale;
+        \\end endmodule
+        \\
+    , "[t=3]\n[ab!]\n[o-long]\nTime scale of (m) is 10us / 100ns\n");
 }
 
 test "display retains escaped NUL bytes and unsized integer width" {

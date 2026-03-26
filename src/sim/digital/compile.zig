@@ -898,6 +898,18 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     try checkExpr(self, s.args[0]);
                     try display.display(self, s.args[1..], null, sh);
                 },
+                // §17.2.3: the variable, then `$fwrite`'s own arguments —
+                // for `$sformat`, a format first ("always interprets its
+                // second argument ... as a format string").
+                .sshow => |sh| {
+                    if (s.args.len == 0 or s.args[0] == .none) return self.fail(tok, "a §17.2.3 string output task's first argument is a variable", .{});
+                    try checkTarget(self, s.args[0]);
+                    if (std.mem.eql(u8, name, "$sformat") and (s.args.len < 2 or s.args[1] == .none or self.file.exprs.tag(s.args[1]) != .str_literal))
+                        return self.fail(tok, "$sformat with a format that is not a string literal is not implemented", .{});
+                    try display.display(self, s.args[1..], null, sh);
+                },
+                // §17.3.1 Syntax 17-9.
+                .printtimescale => if (s.args.len != 0) return self.fail(tok, "$printtimescale of a named module is not implemented", .{}),
                 .fclose => {
                     if (s.args.len != 1 or s.args[0] == .none) return self.fail(tok, "$fclose takes one descriptor", .{});
                     try checkExpr(self, s.args[0]);
