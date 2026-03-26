@@ -1,5 +1,5 @@
 //! Which call arguments are values, and the §9.4 mode that decides some of
-//! them — the facts the slice planners (`plan/hoist.zig`, `unit_plan.zig`) and
+//! them — the facts the slice planners (`plan/setup.zig`, `plan/unit.zig`) and
 //! the emitter share.
 //!
 //! PURE: callee in, answer out. Cut verbatim from `codegen.zig`.

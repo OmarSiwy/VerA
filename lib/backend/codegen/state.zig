@@ -15,7 +15,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
-const gen_hoist = @import("hoist.zig");
+const gen_setup = @import("setup.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
 const opdb = @import("ir").op;
@@ -104,7 +104,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     // the inputs are fields of the same struct, so the accepted-step sweep
     // costs exactly one model evaluation however many operators there are.
     // `model` is always live because that call reads it. `dt` is not.
-    if (uses_core) try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_hoist.probeInstance(self)});
+    if (uses_core) try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_setup.probeInstance(self)});
     try emitAcceptBody(self, acc, ".v");
     try self.w(
         \\    return .ok;
@@ -440,7 +440,7 @@ pub fn emitAdvanceIteration(self: *Gen) Error!void {
     });
     if (uses_core) try self.w(
         "    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n    const m = core(R, xr, model, {s});\n",
-        .{try gen_hoist.probeInstance(self)},
+        .{try gen_setup.probeInstance(self)},
     );
     for (self.lowered.limit_slots.items, 0..) |slot, k| {
         if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |lo|
@@ -452,7 +452,7 @@ pub fn emitAdvanceIteration(self: *Gen) Error!void {
     try self.w("}}\n\n", .{});
     if (self.lowered.uses.contains(.reject_iteration)) {
         try self.w("pub fn checkConvergence(model: *const Model, inst: *const Instance, x: [n_u]f64) bool {{\n", .{});
-        const probe_inst = try gen_hoist.probeInstance(self);
+        const probe_inst = try gen_setup.probeInstance(self);
         try self.w("    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n" ++
             "    return core(R, xr, model, {s}).f{d} == 0;\n}}\n\n", .{ probe_inst, gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
     }
@@ -522,31 +522,27 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         \\pub fn collapse(model: *const Model, inst: *const Instance) [n_u]?u8 {{
         \\    var xr: [n_u]R = undefined;
         \\    for (&xr) |*p| p.* = R.con(0.0);
-        \\    // SEEDS ITS OWN PRECOMPUTE, on a local copy. `collapse` decides
+        \\    // SEEDS ITS OWN SETUP, on a local copy. `collapse` decides
         \\    // TOPOLOGY, so a host must call it while building the matrix —
         \\    // before the batch exists and therefore before the batch runs
-        \\    // `precompute`. But it answers by evaluating `core` at x = 0, and
-        \\    // `core` reads `Instance.pc__*`: without this the retention flags
-        \\    // are read off unwritten zeros and a device collapses (or fails to)
-        \\    // on garbage. `precompute` is a pure function of (model, instance),
-        \\    // so computing it here is the same answer the batch will compute
-        \\    // later, and the copy keeps the caller's Instance untouched.
+        \\    // `setup`. But it answers by evaluating `core` at x = 0, and
+        \\    // `core` reads `Instance.su`: without this the retention flags
+        \\    // are read off unset fields and a device collapses (or fails to)
+        \\    // on garbage. `setup` is a pure function of (model, instance), so
+        \\    // computing it here is the answer the batch will compute later,
+        \\    // and the copy keeps the caller's Instance untouched.
         \\{s}    const m = core(R, xr, model, {s});
         \\    var parent: [n_u]u8 = undefined;
         \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
         \\
     , .{
-        // The hoisted core prefix rides the same seeding: without it the
-        // local copy's `hp_ok` is 0, the region runs, and the answer is the
-        // same — but `precompute` is what makes the flags agree with the
-        // batch's, and it is the only writer of `hp_*`.
-        if (self.pc.vals.len != 0 or self.hp.vals.len != 0)
-            "    var pin = inst.*;\n    precompute(&pin, model);\n"
+        if (self.su.vals.len != 0)
+            "    var pin = inst.*;\n    setup(R, model, &pin);\n"
         else if (self.lowered.table_samples.items.len != 0)
             "    var pin = inst.*;\n"
         else
             "",
-        if (self.pc.vals.len != 0 or self.hp.vals.len != 0 or self.lowered.table_samples.items.len != 0) "&pin" else "inst",
+        if (self.su.vals.len != 0 or self.lowered.table_samples.items.len != 0) "&pin" else "inst",
     });
     for (pairs, 0..) |p, pi| {
         const fi = @intFromEnum(self.an.rv(p.flag));

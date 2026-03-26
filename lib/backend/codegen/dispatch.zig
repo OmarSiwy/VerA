@@ -16,7 +16,7 @@ const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_file = @import("file.zig");
-const gen_hoist = @import("hoist.zig");
+const gen_setup = @import("setup.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
 const Mir = @import("ir").Mir;
@@ -934,7 +934,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
     if (uses_core) {
         try self.w("    var xr: [n_u]R = undefined;\n", .{});
         try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
-        try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_hoist.probeInstance(self)});
+        try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_setup.probeInstance(self)});
     } else {
         gen_unit.patchParam(self, at_x, "x".len);
         gen_unit.patchParam(self, at_model, "model".len);
@@ -1123,7 +1123,7 @@ pub fn emitAcTable(self: *Gen) Error!void {
     if (uses_core) {
         try self.w("    var xr: [n_u]R = undefined;\n", .{});
         try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
-        try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_hoist.probeInstance(self)});
+        try self.w("    const m = core(R, xr, model, {s});\n", .{try gen_setup.probeInstance(self)});
     }
     try self.w("    return .{{\n", .{});
     for (vals) |v| try self.w("        .{{ .mag = {s}, .phase = {s} }},\n", .{ v[0], v[1] });

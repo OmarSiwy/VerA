@@ -135,11 +135,6 @@ pub fn emitCommon(self: *Gen) Error!void {
     for (self.core.lo_vals, 0..) |v, k| {
         try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
     }
-    for (self.hp.vals, 0..) |v, j| {
-        try self.w("    f{d}: {s}, // hoisted prefix\n", .{
-            self.core.lo_vals.len + j, zigTy(self.an.vty[@intFromEnum(v)]),
-        });
-    }
     try self.w("}} {{\n", .{});
     // §4.3: the STRICTEST mode of every consumer — `proof.FloatMode.strictest`
     // explains why the join has to absorb `.strict`.
@@ -152,11 +147,17 @@ pub fn emitCommon(self: *Gen) Error!void {
     for (self.plan.live.items) |lv| {
         const def = self.mir.valueDef(lv);
         if (def != .inst_result or self.mir.instOp(def.inst_result) != .call) continue;
-        if (self.plan.pcHoisted(lv)) continue; // a field read, not a call
+        if (self.plan.isRoot(lv)) continue; // a field read, not a call
         if (gen_call.readsSimState(self, def.inst_result)) self.core_reads_simstate = true;
     }
 
     const body_start = self.out.items.len;
+    // `Setup` defaults its reals to NaN, which a missed `setup` call turns
+    // into a NaN residual; the integers have no NaN, so Debug asserts it.
+    if (self.su.vals.len != 0) {
+        self.uses_inst = true;
+        try self.w("    if (std.debug.runtime_safety) std.debug.assert(inst.su_ok);\n", .{});
+    }
     self.fatal = pre;
     try emitUnitBody(self, .undef);
     if (self.fatal) |msg| {
@@ -334,10 +335,6 @@ pub const Place = struct {
     defs: u32 = 0,
     uses: u32 = 0,
     def_off: u32 = 0,
-    /// Offset of the LAST def — a loop-carried slot's final write sits
-    /// textually after its last read, and the prefix planner
-    /// (`planHoistPrefix`) must see it.
-    max_def: u32 = 0,
     max_use: u32 = 0,
     scope: u32 = 0,
     /// Something disqualifies this slot from `const`-at-definition: a
@@ -372,7 +369,6 @@ pub fn probeDef(self: *Gen, slot: u32, movable: bool) void {
         p.def_off = @intCast(self.out.items.len);
         p.scope = self.sc_open.getLast();
     }
-    p.max_def = @intCast(self.out.items.len);
     p.defs += 1;
     if (p.defs > 1 or !movable) p.pinned = true;
 }
@@ -406,16 +402,10 @@ pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
 
     const at = self.out.items.len;
     self.probing = true;
-    self.hp.bnd = 0;
-    self.hp.cut = 0;
-    self.hp.off = 0;
-    self.hp.dirty = false;
-    self.hp.stmts = 0;
     try scopeOpen(self); // the function body itself
     try gen_cfg.emitTree(self, 0, 1, target);
     scopeClose(self, self.out.items.len);
     self.probing = false;
-    self.hp.bnd = 0; // the real walk counts the same boundaries from zero
     self.out.shrinkRetainingCapacity(at);
 
     for (self.place.items) |*p| {
@@ -423,13 +413,6 @@ pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
         // is legal Zig, but the same code as an unused `const` is not.
         p.at_def = !p.pinned and p.defs == 1 and p.uses != 0 and
             p.max_use < self.sc_end.items[p.scope];
-    }
-    // A value crossing the prefix guard has to be in a hoist ARRAY: the
-    // guard is a scope its `const` would not survive, and the else arm has
-    // to be able to assign it.
-    for (self.hp.vals) |v| {
-        const s = self.plan.slot[@intFromEnum(v)];
-        if (s != none_u32) self.place.items[s].at_def = false;
     }
 }
 
@@ -515,7 +498,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         const ty = @intFromEnum(self.an.vty[v]);
         self.hoist_idx.items[self.plan.slot[v]] = n_hoist[ty];
         n_hoist[ty] += 1;
-        const returned = if (self.emitting_common) self.core.lo_idx[v] != none_u32 else lv == ret;
+        const returned = if (self.emitting_common) self.plan.lo_idx[v] != none_u32 else lv == ret;
         if (returned) try seeded.append(self.arena, lv);
     }
     for ([_]VTy{ .real, .int, .str }) |ty| {
@@ -531,8 +514,4 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try self.b(" = {s};\n", .{zeroOf(self.an.vty[v])});
     }
     try gen_cfg.emitTree(self, 0, 1, target);
-    // The guard opened at boundary 0 is closed at boundary `hp_cut`;
-    // if the real walk never reached it the emitted brace is unbalanced,
-    // which is a generator bug and not something to ship.
-    assert(!self.hp.on or !self.emitting_common or self.hp.bnd > self.hp.cut);
 }

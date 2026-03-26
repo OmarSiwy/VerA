@@ -15,7 +15,7 @@ const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
-const gen_hoist = @import("hoist.zig");
+const gen_setup = @import("setup.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_unit = @import("unit.zig");
 const opcode_zig = codegen.opcode_zig;
@@ -121,11 +121,11 @@ pub fn renderVal(self: *Gen, v0: Mir.Value, want: VTy) Error!void {
 /// UNIT-LOCAL slot name (never `v{MIR index}` — naming.zig's ABSOLUTE RULE).
 pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
     const i = @intFromEnum(v);
-    // Hoisted out of the run entirely: `precompute` wrote the field when
-    // the model card / temperature last changed.
-    if (i < self.an.nv and self.plan.pcHoisted(v)) {
-        self.uses_inst = true;
-        return self.b("S.con(inst.pc__{d})", .{self.pc.idx[i]});
+    // Out of the run entirely: `setup` wrote the field when the model card,
+    // the instance or its temperature last changed.
+    if (i < self.an.nv and self.plan.isRoot(v)) {
+        const f = try gen_setup.rootRef(self, v, false);
+        return if (self.an.vty[i] == .int) self.b("{s}", .{f}) else self.b("S.con({s})", .{f});
     }
     // Hoisted: computed once by the common declaration, read here out of the
     // cache the body opened with — see "the shared core" in `Plan`.
@@ -159,13 +159,13 @@ pub fn renderValueRef(self: *Gen, v: Mir.Value) Error!void {
     }
 }
 
-/// Already computed as a statement (slot), a cache field, or a precompute
+/// Already computed as a statement (slot), a cache field, or a setup
 /// field — rendering it is a name, not an expression. The stop condition
 /// `eagerSafe`, `maskCmp` and `foldHidesSlot` share.
 pub fn materialized(self: *const Gen, v: Mir.Value) bool {
     const i = @intFromEnum(v);
     return i < self.an.nv and
-        (self.plan.pcHoisted(v) or self.plan.cached(v) or self.plan.slot[i] != none_u32);
+        (self.plan.isRoot(v) or self.plan.cached(v) or self.plan.slot[i] != none_u32);
 }
 
 /// The select cond as an INLINE real comparison — unslotted, so rendering

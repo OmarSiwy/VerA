@@ -736,61 +736,6 @@ pub const display_txt =
     \\
 ;
 
-pub const pscalar_txt =
-    \\/// Value-only scalar for `precompute`, mirroring the ARPice host Dual's
-    \\/// VALUE semantics op for op (gompute.math forwards to the builtins on
-    \\/// the host): div is a*(1/b), abs/min/max/minC/maxC branch, expm1/log1p
-    \\/// are the Kahan corrections over exp/log. R (plain a/b, device-routed
-    \\/// expm1) is deliberately NOT reused: updateState keeps R, so accepted-state
-    \\/// bits do not move; eval keeps the host's S, so a field read must
-    \\/// reproduce the host chain it replaced bit for bit.
-    \\const P = struct {
-    \\    v: f64,
-    \\    const T = @This();
-    \\    pub fn con(c: f64) T { return .{ .v = c }; }
-    \\    pub fn val(a: T) f64 { return a.v; }
-    \\    pub fn ddxAt(_: T, _: usize) f64 { return 0.0; }
-    \\    pub fn add(a: T, b: T) T { return .{ .v = a.v + b.v }; }
-    \\    pub fn sub(a: T, b: T) T { return .{ .v = a.v - b.v }; }
-    \\    pub fn neg(a: T) T { return .{ .v = -a.v }; }
-    \\    pub fn mul(a: T, b: T) T { return .{ .v = a.v * b.v }; }
-    \\    pub fn div(a: T, b: T) T { return .{ .v = a.v * (1.0 / b.v) }; }
-    \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * c }; }
-    \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + c }; }
-    \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
-    \\    pub fn log(a: T) T { return .{ .v = @log(a.v) }; }
-    \\    pub fn expm1(a: T) T {
-    \\        const u = @exp(a.v);
-    \\        if (u == 1.0) return .{ .v = a.v };
-    \\        if (u - 1.0 == -1.0) return .{ .v = -1.0 };
-    \\        return .{ .v = (u - 1.0) * a.v / @log(u) };
-    \\    }
-    \\    pub fn log1p(a: T) T {
-    \\        const u = 1.0 + a.v;
-    \\        return .{ .v = if (u == 1.0) a.v else @log(u) * (a.v / (u - 1.0)) };
-    \\    }
-    \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
-    \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
-    \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }
-    \\    pub fn tanh(a: T) T { return .{ .v = std.math.tanh(a.v) }; }
-    \\    pub fn sinh(a: T) T { return .{ .v = std.math.sinh(a.v) }; }
-    \\    pub fn cosh(a: T) T { return .{ .v = std.math.cosh(a.v) }; }
-    \\    pub fn atan(a: T) T { return .{ .v = std.math.atan(a.v) }; }
-    \\    pub fn abs(a: T) T { return if (a.v < 0) .{ .v = -a.v } else a; }
-    \\    pub fn minC(a: T, c: f64) T { return if (a.v > c) .{ .v = c } else a; }
-    \\    pub fn maxC(a: T, c: f64) T { return if (a.v < c) .{ .v = c } else a; }
-    \\    pub fn min(a: T, b: T) T { return if (a.v <= b.v) a else b; }
-    \\    pub fn max(a: T, b: T) T { return if (a.v >= b.v) a else b; }
-    \\    pub fn pow(a: T, c: f64) T { return .{ .v = std.math.pow(f64, a.v, c) }; }
-    \\    pub fn lt(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v < b.v)) }; }
-    \\    pub fn le(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v <= b.v)) }; }
-    \\    pub fn eq(a: T, b: T) T { return .{ .v = @floatFromInt(@intFromBool(a.v == b.v)) }; }
-    \\    pub fn sel(c: T, a: T, b: T) T { return if (c.v != 0.0) a else b; }
-    \\};
-    \\
-    \\
-;
-
 pub const rscalar_txt =
     \\/// Value-only scalar: `updateState` runs unit bodies on the accepted
     \\/// solution, where no derivative is wanted.

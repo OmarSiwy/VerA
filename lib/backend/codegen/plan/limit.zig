@@ -4,7 +4,7 @@
 //! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and the unknowns'
 //! names and returns a `Limits` — the honoured sites in source order and one
 //! line per declined site. `cg_limit.zig` is the emitter that reads it (`limit`,
-//! `seed`, the `precompute` prep); the questions both sides ask of the list
+//! `seed`); the questions both sides ask of the list
 //! (`ladderOf`, `limvdsClaimed`, `writable`) are methods here so the two can
 //! only ever agree.
 //!

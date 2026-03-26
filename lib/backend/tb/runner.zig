@@ -83,10 +83,11 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
-        \\    // Temperature/parameter-only prep: after the card and the
-        \\    // temperature write, before the first evaluation — the same
-        \\    // ordering the ARPice host keeps (finalize/reprep).
-        \\    if (comptime @hasDecl(D, "precompute")) D.precompute(&inst, &model);
+        \\    // The solve-invariant slice: after the card and the temperature
+        \\    // write, before the first evaluation — the ordering a host keeps.
+        \\    // With `Dual` itself as the value scalar, so every latched value is
+        \\    // the bits `eval` would have computed.
+        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model, &inst);
         \\
     );
     try out.appendSlice(arena,
@@ -196,7 +197,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             }
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
             // §6.3.4 again: the hoisted prep derives from the swept card too.
-            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"precompute\")) D.precompute(&inst, &pm);\n");
+            try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm, &inst);\n");
         }
         // `forced` is the other half of the operating point: which unknowns the
         // HOST drives, as opposed to which ones the device's own equations
@@ -388,7 +389,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\        } else setField(a.model, p.field, mixedInput(dig, a.slots[i], p.name));
         \\        inline for (snap_ports, 0..) |p, i| setField(a.model, p.field, a.snaps[i]);
         \\        inline for (event_ports, 0..) |p, k| setField(a.model, p.field, @intFromBool(fired >> k & 1 != 0));
-        \\        if (comptime @hasDecl(D, "precompute")) D.precompute(a.inst, a.model);
+        \\        if (comptime @hasDecl(D, "setup")) D.setup(Dual, a.model, a.inst);
         \\    }
         \\
         \\    /// §5.10.3.3 the device's next timer instant after `t`, if it has one.
@@ -502,7 +503,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "systf_calls")) inst.systf = &no_vpi_app;
         \\    if (comptime @hasField(D.Instance, "plusargs")) inst.plusargs = plusargs(init);
-        \\    if (comptime @hasDecl(D, "precompute")) D.precompute(&inst, &model);
+        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &model, &inst);
         \\    std.debug.print("=== {s} ===\n", .{title});
         \\    var n: usize = 0;
         \\

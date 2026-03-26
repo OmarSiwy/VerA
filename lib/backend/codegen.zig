@@ -62,7 +62,7 @@ const plan_noise = @import("codegen/plan/noise.zig");
 const plan_jobs = @import("codegen/plan/jobs.zig");
 const plan_core = @import("codegen/plan/core.zig");
 const plan_args = @import("codegen/plan/args.zig");
-const plan_hoist = @import("codegen/plan/hoist.zig");
+const plan_setup = @import("codegen/plan/setup.zig");
 const plan_jac = @import("codegen/plan/jac.zig");
 /// The backend half of the Opcode table: how each opcode is spelled in Zig.
 pub const opcode_zig = @import("codegen/opcode_zig.zig");
@@ -171,6 +171,10 @@ pub const Options = struct {
     /// pay for it. Only the second is an economic choice, which is the only
     /// reason it is a knob.
     jac_f32_host: bool = false,
+    /// Split the solve-invariant slice into `setup` (codegen/setup.zig).
+    /// `false` computes every value in `eval`, which is the bit-for-bit
+    /// oracle the split is checked against; nothing else should want it.
+    setup: bool = true,
     /// Where a codegen-stage diagnostic goes (E0515). Optional: the unit tests
     /// and any caller that only wants text pass none, and codegen then reports
     /// a refusal through `fatal_out` alone.
@@ -225,6 +229,7 @@ pub fn generate(
         .display = opts.display,
         .float = .{ .jac = .of(opts.jac_f32, opts.jac_f32_host) },
         .diags = opts.diags,
+        .su = .{ .on = opts.setup },
     };
     errdefer g.out.deinit(gpa);
     try g.prepare();
@@ -356,10 +361,10 @@ pub const Gen = struct {
     jobs: plan_jobs.Jobs = .{},
     /// The shared core's live-outs, latches, name and float mode — `plan/core.zig`.
     core: plan_core.Core = .{},
-    /// The temperature/parameter-only hoist (`Instance.pc__<k>`) — `plan/hoist.zig`.
-    pc: plan_hoist.Precompute = .{},
-    /// §4.5.15 the solve-independent `$limit`/`seed` arguments — `cg_limit.Prep`.
-    lp: cg_limit.Prep = .{},
+    /// Solve invariance, per value, block and loop — `plan/setup.zig`.
+    sinv: plan_setup.Sinv = .{},
+    /// The setup roots and `setup`'s emission state — `codegen/setup.zig`.
+    su: gen_setup.Setup = .{},
     /// Set while the core is being emitted. It slices from every target at once
     /// and returns all of them, computing each value rather than reading it out
     /// of a struct that does not exist yet; the §9.4 display unit — the only
@@ -467,10 +472,6 @@ pub const Gen = struct {
     sc_open: std.ArrayList(u32) = .empty,
     probing: bool = false,
 
-    /// The core's hoisted PREFIX: its region and the walk that finds it —
-    /// `codegen/hoist.zig`.
-    hp: gen_hoist.Prefix = .{},
-
     /// The one fact `plan_jobs` needs from the renderer: does a §4.5 control
     /// argument (or §4.6.3 stimulus) render host-side, or only off the core?
     const DynCtrl = struct {
@@ -540,26 +541,18 @@ pub const Gen = struct {
             .emit_display = self.display == .emit,
         }, DynCtrl{ .g = self });
         self.core = try plan_core.plan(self.input(), self.jobs.list);
-        self.pc = try plan_hoist.plan(self.input(), self.jobs.list, self.display);
-        // After the two planners, which are what fill them. Stable for the
-        // rest of the compilation; `cached`/`pcHoisted` read them per unit.
+        // After the core planner, which is what fills them. Stable for the
+        // rest of the compilation; `cached` reads them per unit.
         self.plan.lo_idx = self.core.lo_idx;
         self.plan.lo_vals = self.core.lo_vals;
-        self.plan.pc_idx = self.pc.idx;
-        self.plan.pc_on = self.pc.vals.len != 0;
-        // LAST: §4.5.15 the clamp-argument hoist needs `lo_idx` filled, to name
-        // the core field `emitPrep` reads each argument out of.
-        // These planners evaluate the whole core during parameter preparation.
-        // A first-call table must wait for the actual evaluation, not x = 0 prep.
-        try cg_limit.planPrep(self);
-        // After it, and before ANY emission: `emitInstance` and `emitPrecompute`
-        // are both written above the core and both need the region's width.
-        if (self.lowered.table_samples.items.len == 0) try gen_hoist.planHoistPrefix(self);
+        // LAST, and before ANY emission: the roots are what the core's slice
+        // reaches, and `emitInstance` sizes `Setup` from them.
+        try gen_setup.planSetup(self);
     }
 
-    // Hoisting: the temperature hoist and the hoisted core prefix — codegen/hoist.zig
-    const gen_hoist = @import("codegen/hoist.zig");
-    pub const probeInstance = gen_hoist.probeInstance;
+    // Setup: the solve-invariant slice, computed once per card — codegen/setup.zig
+    const gen_setup = @import("codegen/setup.zig");
+    pub const probeInstance = gen_setup.probeInstance;
 
     // --------------------------------------------------------------- units ----
 
@@ -685,12 +678,12 @@ test {
     _ = plan_jobs;
     _ = plan_core;
     _ = plan_args;
-    _ = plan_hoist;
+    _ = plan_setup;
     _ = plan_jac;
     _ = UnitPlan;
     _ = float_mode;
     _ = float_lanes;
-    _ = Gen.gen_hoist;
+    _ = Gen.gen_setup;
     _ = Gen.gen_file;
     _ = Gen.gen_unit;
     _ = Gen.gen_cfg;

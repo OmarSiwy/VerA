@@ -18,6 +18,7 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_render = @import("render.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
+const gen_setup = @import("setup.zig");
 const opdb = @import("ir").op;
 const Analysis = @import("ir").Analysis;
 const cg_filters = @import("../cg_filters.zig");
@@ -56,7 +57,6 @@ const prelude_rng_txt = gen_kernel_text.prelude_rng_txt;
 const prelude_file_txt = gen_kernel_text.prelude_file_txt;
 const prelude_str_txt = gen_kernel_text.prelude_str_txt;
 const display_txt = gen_kernel_text.display_txt;
-const pscalar_txt = gen_kernel_text.pscalar_txt;
 const rscalar_txt = gen_kernel_text.rscalar_txt;
 
 // =======================================================================
@@ -125,7 +125,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // (`plan/topology.zig`) before any residual is emitted.
     const cpairs = self.topo.cpairs;
     if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or pathLatches(self) or
-        self.hp.vals.len != 0 or self.noise.rows.len != 0 or try gen_dispatch.acUsesCore(self))
+        self.noise.rows.len != 0 or try gen_dispatch.acUsesCore(self))
     {
         try self.out.appendSlice(self.gpa, rscalar_txt);
         // Pinned to the contract's primitive list, same as tb.zig's
@@ -136,10 +136,11 @@ pub fn emitFile(self: *Gen) Error!void {
     try emitTopology(self);
     try emitModel(self);
     try emitDerive(self);
+    try gen_setup.emitSetupDecl(self);
     try emitInstance(self);
     try self.w("const InstancePtr = contract.InstancePtr(@This());\n", .{});
     if (self.lowered.table_samples.items.len != 0) try self.w("pub const mutable_eval = true;\n", .{});
-    try emitPrecompute(self);
+    try gen_setup.emitSetup(self);
     try gen_unit.emitUnits(self);
     try gen_dispatch.emitDispatchers(self);
     try gen_dispatch.emitNoiseTable(self);
@@ -930,151 +931,14 @@ pub fn emitInstance(self: *Gen) Error!void {
             }
         }
     }
-    // Temperature/parameter-only prep, hoisted out of the per-eval path:
-    // `precompute` writes these once per model-card/temperature write.
-    // LAST, for the same insert-tolerance reason as the held block above.
-    for (0..self.pc.vals.len) |k| {
-        try self.w("    pc__{d}: f64 = 0.0, // precompute\n", .{k});
-    }
-    // §4.5.15 the solve-independent clamp arguments, latched by
-    // `cg_limit.emitPrep` off the same `precompute` call. After `pc__`
-    // because `emitPrep`'s core evaluation READS those fields.
-    for (0..self.lp.vals.len) |k| {
-        try self.w("    lp__{d}: f64 = 0.0, // $limit prep\n", .{k});
-    }
-    // The core's hoisted PREFIX (`planHoistPrefix`): the solve-independent
-    // opening of the shared body, latched off the same `precompute` core
-    // call the `lp__` fields ride. `hp_ok` is what the core tests, so it is
-    // cleared on entry to `precompute` and set only once the values behind
-    // it belong to the model card now in force.
-    if (self.hp.real != 0) try self.w("    hp: [{d}]f64 = @splat(0.0), // core prefix cache\n", .{self.hp.real});
-    if (self.hp.vals.len != self.hp.real)
-        try self.w("    hpi: [{d}]i64 = @splat(0),\n", .{self.hp.vals.len - self.hp.real});
-    if (self.hp.vals.len != 0) try self.w("    hp_ok: i64 = 0,\n", .{});
-    try self.w("}};\n\n", .{});
-}
-
-/// The temperature hoist's writer: one flat body computing every `pc__<k>`
-/// field from `model` and `inst.temperature` alone (see planPrecompute).
-///
-/// Emitted through the SAME plan/renderInst pipeline as the core, with the
-/// pc roots standing in for the live-outs, so slot/inline decisions — and
-/// with them the exact f64-vs-S composition of every value — reproduce
-/// what the core used to emit inline. `P` supplies the S protocol with the
-/// ARPice host Dual's value semantics; bit-identity of eval before/after
-/// the hoist is the contract here (verified externally, /tmp/b4probe).
-///
-/// Flat on purpose (`plan.flat`): the slice admits only pure ops and the
-/// two environment calls, so ascending value order IS a topological order
-/// and no CFG needs reconstructing — a value guarded by an `if` in the
-/// source is loop-free and total to compute, and an untaken guard's field
-/// simply goes unread (same argument as the eager `sel`).
-pub fn emitPrecompute(self: *Gen) Error!void {
-    // §4.5.15's clamp-argument latch rides in this same function — it is the
-    // same "once per model-card/temperature write" phase — so a model with
-    // no `pc__` roots but a hoisted clamp argument still needs the body.
-    const has_pc = self.pc.vals.len != 0;
-    const has_lp = self.lp.vals.len != 0;
-    // …and so does the core's hoisted prefix, off the same core call.
-    const has_hp = self.hp.vals.len != 0;
-    if (!has_pc and !has_lp and !has_hp) return;
-    // `P`, not `R`, fills the hp latch below: eval reads those fields as
-    // `S.con(...)`, so they must carry the HOST's value chain (see pscalar_txt).
-    if (has_pc or has_hp) try self.out.appendSlice(self.gpa, pscalar_txt);
-
-    // Plan the pc slice through the common-mode path: targets = pc_vals.
-    // Skipped wholesale when there are none: `analyze` would clear the
-    // live set for an empty target list and the `defer` would hand the
-    // units back a `pc_on = true` that `planUnits` never set.
-    const save_idx = self.plan.lo_idx;
-    const save_vals = self.plan.lo_vals;
-    if (has_pc) {
-        self.plan.lo_idx = self.pc.idx;
-        self.plan.lo_vals = self.pc.vals;
-        self.plan.pc_on = false; // computing the fields, not reading them
-        self.plan.flat = true;
-        self.plan.display_unit = false;
-        try self.plan.analyze(.undef, true);
-    }
-    defer if (has_pc) {
-        self.plan.lo_idx = save_idx;
-        self.plan.lo_vals = save_vals;
-        self.plan.pc_on = true;
-        self.plan.flat = false;
-    };
-
-    self.uses_model = false;
-    self.uses_x = false;
-    try self.w(
-        \\/// Temperature/parameter-only prep (ngspice's `<dev>temp` phase, once
-        \\/// instead of per eval). The host calls it after every model-card or
-        \\/// temperature write, before the next solve.
+    // The setup roots (`Setup`), LAST for the same insert-tolerance reason as
+    // the held block above. `su_ok` exists only where it is asserted.
+    if (self.su.vals.len != 0) try self.w(
+        \\    su: Setup = .{{}},
+        \\    su_ok: if (std.debug.runtime_safety) bool else void = if (std.debug.runtime_safety) false else {{}},
         \\
     , .{});
-    try self.w("pub fn precompute(inst: *Instance, ", .{});
-    const at_model = self.out.items.len;
-    try self.w("model: *const Model) void {{\n", .{});
-    try self.w("    @setFloatMode(.{t});\n", .{self.core.mode});
-    if (has_pc) try self.w("    const S = P;\n", .{});
-    self.float.strict = self.core.mode == .strict;
-    // BEFORE the core call below, and not merely for tidiness: `precompute`
-    // runs again on every parameter write and every `setTemp`, and a stale
-    // `hp_ok` would make that call reload the OLD card's values and store
-    // them straight back.
-    if (has_hp) try self.w("    inst.hp_ok = 0;\n", .{});
-
-    if (has_pc) {
-        self.hoist_idx.clearRetainingCapacity();
-        try self.hoist_idx.appendNTimes(self.arena, none_u32, self.plan.n_slots);
-        // RPO blocks, statement order within — the def-before-use order the
-        // structured emitter walks. Ascending VALUE order is not one: ifconv
-        // and trivial-phi aliasing can point an operand at a later index.
-        for (self.an.rpo) |bi| {
-            for (self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]]) |inst| {
-                const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
-                if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
-                try self.w("    const t{d}: {s} = ", .{ self.plan.slot[i], gen_unit.zigTy(self.an.vty[i]) });
-                try gen_render.renderInst(self, inst);
-                try self.w(";\n", .{});
-            }
-        }
-        for (self.pc.vals, 0..) |v, k| {
-            const i = @intFromEnum(v);
-            assert(self.plan.slot[i] != none_u32); // a target is never inlined
-            try self.w("    inst.pc__{d} = t{d}.val();\n", .{ k, self.plan.slot[i] });
-        }
-    }
-    assert(!self.uses_x); // pcClass excludes every §4.4 probe
-    // §4.5.15 AFTER the `pc__` writes: `emitPrep`'s core call reads them.
-    // It names both `model` and `inst`, so the unused-parameter patch below
-    // must not fire once it has been emitted.
-    try cg_limit.emitPrep(self);
-    if (has_hp) {
-        // The ONE evaluation of the prefix per model card; `hp_ok` is still 0
-        // for it, which is what makes the region run rather than reload.
-        // Through `P`, not `emitPrep`'s `R`: eval reads these fields back as
-        // `S.con(...)`, so they must carry the host's value chain bit for bit
-        // (`R` divides as a/b and routes exp/log through zDev*; the host's S
-        // divides as a*(1/b)). The `$limit` latch stays on `R`: only `limit`,
-        // which evaluates with `R` itself, reads it.
-        try self.w(
-            \\    var xp: [n_u]P = undefined;
-            \\    for (&xp) |*p| p.* = P.con(0.0);
-            \\    const mh = core(P, xp, model, inst);
-            \\
-        , .{});
-        for (self.hp.vals, 0..) |v, j| {
-            const f = self.core.lo_vals.len + j;
-            if (self.an.vty[@intFromEnum(v)] == .int)
-                try self.w("    inst.hpi[{d}] = mh.f{d};\n", .{ j - self.hp.real, f })
-            else
-                try self.w("    inst.hp[{d}] = mh.f{d}.v;\n", .{ j, f });
-        }
-        try self.w("    inst.hp_ok = 1;\n", .{});
-    }
-    if (has_lp or has_hp) self.uses_model = true;
-    if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
-    try self.w("}}\n\n", .{});
+    try self.w("}};\n\n", .{});
 }
 
 /// A module whose §5.10 event-HELD state is fed by `cross`/`above` edges

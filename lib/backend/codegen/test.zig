@@ -736,7 +736,7 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     var h: Harness = undefined;
     // The shape EVERY series resistance in a real model card writes: the
     // generator lives inside `if (r > 0)`, and its power divides by that very
-    // `r`. Hoisting `4kT/r` to `precompute` evaluates it at r == 0 — an
+    // `r`. Computing `4kT/r` unconditionally evaluates it at r == 0 — an
     // infinity that becomes a NaN the instant the collapsed branch gives it a
     // zero adjoint gain. It has to stay a core live-out, which `probeBody`
     // seeds `S.con(0.0)` and only the taken branch assigns.
@@ -771,18 +771,23 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     const ret = std.mem.indexOf(u8, body, "return .{").?;
     try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "core(R, xr, model, inst)") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body[ret .. ret + 120], ".white = m.f"));
-    // The guarded power is a live-out seeded zero, never an `inst.pc__` read:
-    // a precompute field would have divided by rs == 0 unconditionally.
+    // Both powers are solve-invariant, so the core returns them as `setup`
+    // roots — and `setup` divides by rs only on the `rs > 0` arm, leaving the
+    // root at its zero seed otherwise: a guarded generator still reads zero.
     var k: usize = ret;
     while (std.mem.indexOfPos(u8, body, k, ".white = m.f")) |i| {
         const f = body[i + ".white = m.f".len ..];
         const end = std.mem.indexOfScalar(u8, f, '.').?;
-        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = h[", .{f[0..end]});
+        const decl = try std.fmt.allocPrint(std.testing.allocator, "    .f{s} = S.con(inst.su.r[", .{f[0..end]});
         defer std.testing.allocator.free(decl);
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
         k = i + 1;
         if (k > ret + 120) break;
     }
+    const su = src[std.mem.indexOf(u8, src, "pub fn setup(").?..];
+    const div = std.mem.indexOf(u8, su, "/ (model.rs)").?;
+    try std.testing.expect(std.mem.lastIndexOf(u8, su[0..div], "if (").? < div);
+    try std.testing.expect(std.mem.indexOf(u8, su[0..div], "} else {") == null);
 }
 
 test "codegen: §4.6.4.3/.4 a noise table is exported sorted, with its own interpolation" {
@@ -2998,10 +3003,11 @@ test "codegen: §3.6.3.2 a module with no net initializer exports no nodeset tab
     try std.testing.expect(std.mem.indexOf(u8, src, "u_nodeset") == null);
 }
 
-test "codegen: the hoisted prefix is latched through P, the host's value chain" {
-    // eval reads the latch back as `S.con(inst.hp[k])`, so it must hold what
-    // the host's S would have computed: `P`'s a*(1/b), not `R`'s a/b. Filled
-    // through R, mos3 had 2 of 512 residuals 1 ulp off the un-latched Dual.
+test "codegen: the setup split — invariant values are computed by setup and read by eval" {
+    // `$param_given(gain) ? gain : 0.0` depends on the card alone, so it is a
+    // setup root: `setup` computes it with the host's value scalar V, the core
+    // reads `inst.su` (asserting in Debug that setup ran), and there is no
+    // `precompute`, prefix latch or `P` scalar left.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module pg(p, n);
@@ -3012,7 +3018,69 @@ test "codegen: the hoisted prefix is latched through P, the host's value chain" 
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, src, "inst.hp_ok = 1;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "const mh = core(P, xp, model, inst);") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "const P = struct {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const Setup = struct {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn setup(comptime V: type, model: *const Model, inst: *Instance) void {") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "inst.su.r[0] = (") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".scale(inst.su.r[0])") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "std.debug.assert(inst.su_ok);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const setup_simparams = [_][]const u8{};") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "precompute") == null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "hp_ok") == null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "const P = struct {") == null);
+}
+
+test "codegen: the setup split keeps a probe-guarded value in eval, and lists its $simparams" {
+    // ln(r) runs only on the `V(p,n) > 0` arm, a branch on the solve: its
+    // block is not placeable, so `setup` must not compute it (it would be
+    // ln of a negative r when the arm is dead) and the core keeps it.
+    // `$simparam("gmin")` is a Table 9-27 name other than `iteration`, so it
+    // is invariant and `setup_simparams` names it.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module gd(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter real r = 2.0;
+        \\  real x;
+        \\  analog begin
+        \\    if (V(p, n) > 0.0) x = ln(r); else x = 0.0;
+        \\    I(p, n) <+ (x + $simparam("gmin") * r) * V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const su = src[std.mem.indexOf(u8, src, "pub fn setup(").?..];
+    const su_end = std.mem.indexOf(u8, su, "\n}\n").?;
+    try std.testing.expect(std.mem.indexOf(u8, su[0..su_end], "log") == null);
+    const core_at = std.mem.indexOf(u8, src, "__common__core(comptime S").?;
+    try std.testing.expect(std.mem.indexOf(u8, src[core_at..], "log") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const setup_simparams = [_][]const u8{ \"gmin\" };") != null);
+}
+
+test "codegen: §5.10.2 a held variable written only by @(initial_step) is computed once, by setup" {
+    // Every write of `g` is in an unqualified `@(initial_step)` with a
+    // card-only value, so `g` is initial-only (plan/setup.zig's header): its
+    // merge phi is a setup root and the core reads it with no initial-step
+    // test at all.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module istep(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter real r = 2.0;
+        \\  real g;
+        \\  analog begin
+        \\    @(initial_step) g = 1.0 / ln(r);
+        \\    I(p, n) <+ g * V(p, n);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    const su = src[std.mem.indexOf(u8, src, "pub fn setup(").?..];
+    try std.testing.expect(std.mem.indexOf(u8, su[0..std.mem.indexOf(u8, su, "\n}\n").?], ".log()") != null);
+    const core = src[std.mem.indexOf(u8, src, "__common__core(comptime S").?..];
+    const body = core[0..std.mem.indexOf(u8, core, "\n}\n").?];
+    try std.testing.expect(std.mem.indexOf(u8, body, ".scale(inst.su.r[0])") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "is_initial_step") == null);
+    try std.testing.expect(std.mem.indexOf(u8, body, "log") == null);
 }
