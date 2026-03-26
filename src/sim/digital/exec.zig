@@ -34,6 +34,7 @@ const wired = @import("net.zig").wired;
 const undriven = @import("net.zig").undriven;
 const Show = display.Show;
 const Overrides = @import("root.zig").Overrides;
+const driver = @import("driver.zig");
 
 // ---- scheduler rows and waiters (§6.1.3, §17.1.2, §17.1.3, §5.10.1) ---------
 
@@ -411,6 +412,7 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
                 .pow => std.math.pow(f64, try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
                 .atan2 => std.math.atan2(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
                 .hypot => std.math.hypot(try evalReal(self, a, args[0]), try evalReal(self, a, args[1])),
+                .driver_delay => try driver.evalReal(self, a, e),
                 else => unreachable, // else: the integral system functions are not real-typed
             };
         },
@@ -648,6 +650,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
                 const value: Int.Literal = .{ .width = natural.width, .signed = natural.signed, .sized = true, .planes = planes };
                 return normalize(a, value, ty);
             },
+            .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_next_state, .driver_next_strength, .driver_type => |f| return normalize(a, try driver.eval(self, a, e, driver.of(f).?), ty),
             else => unreachable, // else: the real-valued functions left through the real path above
         },
         .concat => {
@@ -704,7 +707,7 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // Not copied when unchanged — which also covers `planes` BEING
     // `dest.planes` (`a = a`), a copy @memcpy forbids.
     if (changed) @memcpy(dest.planes, planes);
-    if (!changed) return;
+    if (!changed) return driver.stored(self, target, false);
     // The value-change hook: every watcher of this slot hears it here.
     if (self.watch[target].contains(.monitor)) try requestMonitor(self);
     if (self.watch[target].contains(.analog)) try requestAnalog(self);
@@ -712,6 +715,9 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     if (self.watch[target].contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
     try wake(self, target, before, dest.bit(0));
     if (self.watch[target].contains(.vpi)) if (self.vpi_change) |f| f(self, target);
+    // After `wake`, so a `driver_update` process runs after the driver it
+    // watches has re-evaluated (both join the same active-region FIFO).
+    try driver.stored(self, target, true);
 }
 
 /// §9.3 `deassign` (`force` false) or `release` (`force` true) of `slot`.
@@ -794,7 +800,7 @@ pub fn wakeA2d(self: *Run, slot: u32) Error!void {
 /// Resume every process suspended on `target` whose edge matches. Split out
 /// of `store` because §5.10.4's `-> e` resumes without publishing anything:
 /// a named event has no value for a change to be detected in.
-fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
+pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
     if (self.waiters.items.len == 0) return;
     // ponytail: linear scan. The list holds only currently-suspended
     // processes, so it is bounded by the source's process count; index it
@@ -1169,6 +1175,8 @@ fn suspendOn(self: *Run, e: Ast.ExprId, resume_pc: u32) Error!void {
             const slot = self.monitorSlot(e, self.instanceOf(self.scope)).?; // registered by checkEvent
             return self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = resume_pc, .ctx = self.ctx });
         },
+        // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
+        .event_driver_update => return self.waiters.append(self.arena, .{ .slot = driver.key(try self.slot(ex.lhs(e))), .edge = .any, .pc = resume_pc, .ctx = self.ctx }),
         else => .any, // else: a plain name, the one other term checkEvent admits
     };
     const watched = if (edge == .any) e else ex.lhs(e);
@@ -1270,6 +1278,7 @@ pub fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!Handle {
     else
         self.scheduler.schedule(if (nba) .nba else .active, at) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail(0, "digital scheduling failure: {t}", .{e}));
     self.pending.items[at].handle = h;
+    if (item == .write) try driver.scheduled(self, item.write.target);
     return h;
 }
 

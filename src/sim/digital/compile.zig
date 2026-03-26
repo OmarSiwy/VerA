@@ -14,6 +14,7 @@ const Front = @import("frontend");
 const Ast = Front.Ast;
 const exec = @import("exec.zig");
 const display = @import("display.zig");
+const driver = @import("driver.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const expectRun = @import("root.zig").expectRun;
@@ -136,6 +137,15 @@ pub const SysFn = enum {
     value_plusargs,
     /// §17.6.5 `$q_full(q_id, status)`, which also writes its status.
     q_full,
+    /// VAMS §9.22/§9.23 connect-module driver access (`driver.zig`).
+    driver_count,
+    receiver_count,
+    driver_state,
+    driver_strength,
+    driver_delay,
+    driver_next_state,
+    driver_next_strength,
+    driver_type,
     /// §17.2 the file functions: open, the character reads, positioning,
     /// end-of-file, and §17.2.4.3's `$sscanf`.
     fopen,
@@ -184,6 +194,7 @@ pub const SysFn = enum {
     fn constant(self: SysFn) bool {
         return switch (self) {
             .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
+            .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => false,
             else => true, // else: a pure function of its arguments
         };
     }
@@ -208,6 +219,14 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$test$plusargs", .test_plusargs },
     .{ "$value$plusargs", .value_plusargs },
     .{ "$q_full", .q_full },
+    .{ "$driver_count", .driver_count },
+    .{ "$receiver_count", .receiver_count },
+    .{ "$driver_state", .driver_state },
+    .{ "$driver_strength", .driver_strength },
+    .{ "$driver_delay", .driver_delay },
+    .{ "$driver_next_state", .driver_next_state },
+    .{ "$driver_next_strength", .driver_next_strength },
+    .{ "$driver_type", .driver_type },
     .{ "$fopen", .fopen },
     .{ "$fgetc", .fgetc },
     .{ "$ungetc", .ungetc },
@@ -520,6 +539,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         }
                         break :blk .{ .width = 32, .signed = true };
                     },
+                    .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => break :blk try driver.infer(self, e, driver.of(f).?),
                     // §17.11.2: every argument is read as a real and the
                     // result is real.
                     else => {
@@ -1224,6 +1244,8 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         // VAMS §7.3.5 an analog event in a discrete event control: the
         // mixed-signal kernel monitors it and delivers an A2D event.
         .event_function => try self.registerMonitor(e),
+        // VAMS §9.22.5 `driver_update signal`.
+        .event_driver_update => try driver.checkUpdate(self, e),
         else => return self.exprFail(e, "only variable and posedge/negedge event terms are implemented"), // else: every other event term, refused out loud
     }
 }

@@ -27,6 +27,8 @@ pub const FutureKind = enum(u1) {
 const SlotId = enum(u32) { none = std.math.maxInt(u32), _ };
 pub const Handle = struct { slot: SlotId, generation: u32 };
 pub const Event = struct { time: Time, region: Region, payload: u32, handle: Handle };
+/// One live event as `Scheduler.pendingPayloads` reports it.
+pub const Live = struct { time: Time, payload: u32 };
 
 const State = enum(u2) { pending, cancelled, free, retired };
 // MultiArrayList separates queue traversal/cancellation from payload dispatch.
@@ -224,6 +226,25 @@ pub const Scheduler = struct {
         }
         for (self.future.items) |entry| {
             if (state[@intFromEnum(entry.slot)] == .pending) try out.append(a, entry.time);
+        }
+    }
+
+    /// `pendingTimes` with each event's payload: every live event as
+    /// (time, payload), in no particular order. Read-only. VAMS §9.23's
+    /// pending-driver queries are the reader (src/sim/digital/driver.zig).
+    pub fn pendingPayloads(self: *const Scheduler, a: std.mem.Allocator, out: *std.ArrayList(Live)) std.mem.Allocator.Error!void {
+        if (self.phase == .stopped) return;
+        const state = self.slots.items(.state);
+        const links = self.slots.items(.next);
+        const payloads = self.slots.items(.payload);
+        for (self.heads) |head| {
+            var cursor = head;
+            while (cursor != .none) : (cursor = links[@intFromEnum(cursor)]) {
+                if (state[@intFromEnum(cursor)] == .pending) try out.append(a, .{ .time = self.now, .payload = payloads[@intFromEnum(cursor)] });
+            }
+        }
+        for (self.future.items) |entry| {
+            if (state[@intFromEnum(entry.slot)] == .pending) try out.append(a, .{ .time = entry.time, .payload = payloads[@intFromEnum(entry.slot)] });
         }
     }
 

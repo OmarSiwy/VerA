@@ -14,6 +14,7 @@
 //!   exec.zig     the interpreter: evaluation, the write path, §7.9 resolution
 //!   net.zig      §7.9 resolution data: drivers, strengths, gate tables, delays
 //!   display.zig  IEEE 1364 §17 display, strobe, monitor, `%t`, `$readmem`
+//!   driver.zig   VAMS §9.22/§9.23 driver access, §9.22.6 segregation
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -29,6 +30,7 @@ const compile = @import("compile.zig");
 /// §12.30 put wakes waiters and value-change watchers like any other write.
 pub const exec = @import("exec.zig");
 const display = @import("display.zig");
+const driver = @import("driver.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
 const Row = exec.Row;
@@ -126,7 +128,7 @@ pub const VecRange = struct { msb: i64, lsb: i64 };
 /// change asks for the end-of-step section (`vcd.zig`).
 /// `d2a` is VAMS §8.5's explicit D2A: the slot is the operand of a digital
 /// event term in an analog event control (see `watchEvent`).
-pub const Watcher = enum { monitor, analog, vpi, vcd, d2a };
+pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update };
 
 /// Why `runUntil` returned. `analog` is a region-3b event (VAMS §8.5.1): every
 /// active, explicit D2A, inactive and nonblocking event of the current tick has
@@ -336,6 +338,8 @@ pub const Run = struct {
     /// (minted before pass one, while the expression tables can still grow).
     inserts: []const Insert = &.{},
     insert_segs: []const Ast.ExprId = &.{},
+    /// VAMS §9.22 driver access and §9.22.6 segregation (`driver.zig`).
+    drv: driver.State = .{},
     /// §3.3 the declared `[msb:lsb]` of every packed vector, by slot, so a
     /// bit-select can name its bit (IEEE 1364-2005 §5.2.1). A slot absent from
     /// here is `[width-1:0]`.
@@ -777,7 +781,7 @@ const PortBind = union(enum) {
 /// The split is load-bearing: a name lookup in pass two must not run against a
 /// slot space a later instance is still growing, and `Int.Literal` slices would
 /// move under it.
-const Elab = struct {
+pub const Elab = struct {
     values: std.ArrayList(Int.Literal) = .empty,
     nets: std.ArrayList(Net) = .empty,
     wires: std.ArrayList(Wire) = .empty,
@@ -1586,12 +1590,12 @@ fn promoteWreal(r: *Run, e: *Elab, net: u32) Error!void {
     try r.reals.put(r.arena, n.slot, {});
 }
 
-/// Allocate one net and its slot, and bind `name` to it in the current scope.
-fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, name: Ast.StrId, tok: u32) Error!u32 {
+/// Allocate one net and its slot, and bind `name` (unless `.none`) to it in the current scope.
+pub fn mintNet(r: *Run, e: *Elab, kind: Ast.NetKind, width: u32, signed: bool, name: Ast.StrId, tok: u32) Error!u32 {
     if (e.values.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
     const slot: u32 = @intCast(e.values.items.len);
     const at: u32 = @intCast(e.nets.items.len);
-    try r.bind(name, slot, tok);
+    if (name != .none) try r.bind(name, slot, tok);
     // §3.7: a net with no driver is Z, not X — except where the net type itself
     // supplies a value. That is the whole net/variable difference. VAMS §3.7:
     // a wreal carries a real and "shall have an initial value of zero".
@@ -1867,6 +1871,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     @memset(r.sys_calls, null);
     r.growing = &e.values;
     try declare(&r, &e, m, 0, &.{}, 0);
+    try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;
     // PASS TWO — drivers, then processes. §6.1 one continuous assignment is one
@@ -2024,6 +2029,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
     @memset(r.watch, .initEmpty());
+    try driver.arm(&r);
     return r;
 }
 
@@ -2032,6 +2038,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
 test {
     _ = @import("system.zig");
     _ = @import("vcd.zig");
+    _ = @import("driver.zig");
 }
 
 pub fn expectRun(source: []const u8, expected: []const u8) !void {
