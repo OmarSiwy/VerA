@@ -4,11 +4,10 @@
 // them is a procedural continuous assignment, so `force x = 1.0;` inside an
 // `analog` block derives from nothing.
 //
-// The suite's three existing force/release/deassign fixtures
-// (ch08_scheduling/procedural_*_unsupported.va) all wrap the construct in `reg`
-// + a digital `initial` block, so they are rejected for the `reg` or the
-// `initial` and say nothing about the analog position. This one puts the
-// construct where the grammar is the only thing that can refuse it.
+// In a digital `initial` block the same statements are legal and run
+// (ch08_scheduling/procedural_continuous_semantics.va and
+// procedural_assign_deassign_semantics.va). This one puts the construct where
+// the grammar is the only thing that can refuse it.
 //
 // One file, not four: release/assign/deassign take the same parser path and the
 // same code. Split them the day that path diverges.

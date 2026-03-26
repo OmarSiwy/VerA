@@ -753,7 +753,8 @@ pub const FuncArg = struct {
 /// A.2.7 `task_declaration`) as a DIGITAL parse records it — the 1364
 /// spellings VAMS §4.7 admits beside the analog function: packed port ranges,
 /// `reg`/`integer`/`time` formals, `automatic`, and tasks at all. An analog
-/// parse never fills `ModuleDecl.tasks`; its bare `function` is a `FuncDecl`.
+/// parse records its tasks here too (the mixed-signal kernel runs them) and
+/// no function: its bare `function` is a `FuncDecl`.
 ///
 /// Every formal, local and the function result is a `VarDecl`, because that
 /// is what §10.2.3/§10.4.1 make them: variables of the subroutine's scope.
@@ -1016,8 +1017,8 @@ pub const ModuleDecl = struct {
     gates: []const GateInst = &.{},
     /// A.3.1 pullup/pulldown sources (§7.8), in source order.
     pulls: []const PullInst = &.{},
-    /// IEEE 1364-2005 §10 tasks and digital functions, filled by a digital
-    /// parse only (see `Subroutine`).
+    /// IEEE 1364-2005 §10 tasks and digital functions (see `Subroutine`);
+    /// an analog parse fills the tasks only.
     tasks: []const Subroutine = &.{},
     /// A.3.1 switch instances (§7.6), filled by a digital parse only.
     switches: []const SwitchInst = &.{},

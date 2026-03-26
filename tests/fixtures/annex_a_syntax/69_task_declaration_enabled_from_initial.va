@@ -24,7 +24,6 @@
 //! lrm A.2.7
 //! lrm A.6.9
 //! bias V(p) = 0.5
-//! xfail VerA refuses every task declaration (E0205 "unsupported module item: found task"); A.2.7 makes both forms legal module items and A.6.9 lets a digital initial block enable them
 `include "check.vh"
 module annex_a_task_declaration_enabled_from_initial(p);
   inout p;

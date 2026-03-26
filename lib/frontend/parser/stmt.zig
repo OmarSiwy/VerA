@@ -39,11 +39,11 @@ pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
     return parseStmt(self);
 }
 
-/// One analog statement (A.6.4). Digital `initial`/`always`, `fork`/`join`,
-/// `wait` and the procedural continuous assignments are NOT dispatched
-/// here: they fall through to the expression statement and report "expected
-/// expression", which is the annex C answer — they are not analog
-/// statements. `casex`/`casez` ARE dispatched, to `parseCase`, so annex
+/// One analog statement (A.6.4). Outside the discrete context
+/// (`discreteGrammar`), `fork`/`join`, `wait`, a task enable and the
+/// procedural continuous assignments are NOT dispatched here: they fall
+/// through to the expression statement and report "expected expression" —
+/// they are not analog statements. `casex`/`casez` ARE dispatched, to `parseCase`, so annex
 /// C.7's own diagnostic (E0416) is what the source dies on.
 pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     try self.skipAttributes();
@@ -68,8 +68,9 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
         return self.file.addStmt(self.arena, .{ .event_control = .{ .event = cond, .body = body, .kind = .level } }, tok);
     }
     // A.6.2 `procedural_continuous_assignments` (IEEE 1364-2005 §9.3) —
-    // digital only: `assign`/`force lvalue = expr;`, `deassign`/`release lvalue;`.
-    if (self.digital) {
+    // digital statements only: `assign`/`force lvalue = expr;`,
+    // `deassign`/`release lvalue;`. §8.5.3.2 gives each its process.
+    if (self.discreteGrammar()) {
         const kind: ?Ast.ProcContinuous = if (self.peek() == .kw_assign) .assign else if (parse_module.reservedIs(self, self.pos, "force")) .force else if (parse_module.reservedIs(self, self.pos, "deassign")) .deassign else if (parse_module.reservedIs(self, self.pos, "release")) .release else null;
         if (kind) |k| {
             self.pos += 1;
@@ -400,9 +401,9 @@ pub fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
     }
     // A.6.4 `task_enable ::= hierarchical_task_identifier [ ( expression
     // { , expression } ) ] ;` (IEEE 1364-2005 §10.2.2). Recorded as a
-    // `sys_task` row whose name has no `$`: a digital parse only, where the
-    // engine tells the two apart by that first character.
-    if (self.digital and self.peek() == .semicolon) {
+    // `sys_task` row whose name has no `$`: a digital statement only, where
+    // the engine tells the two apart by that first character.
+    if (self.discreteGrammar() and self.peek() == .semicolon) {
         const ex = &self.file.exprs;
         if (ex.tag(lhs) == .ident or ex.tag(lhs) == .call) {
             self.pos += 1;

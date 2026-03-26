@@ -386,8 +386,10 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     .gates = .merged,
     // §7.8 pull sources, read by the digital engine only; merged like gates.
     .pulls = .merged,
-    // Only a digital parse (`vera --run`) fills it, and that engine elaborates
-    // its own hierarchy; an analog compile's list is always empty.
+    // The digital engine elaborates its own hierarchy from the source and runs
+    // every task; lowering reads the top's only (what its bodies write).
+    // ponytail: a child's task writes are not digital-owned to the analog side;
+    // merge them (renamed like `discrete`) when a child's task needs it.
     .tasks = .top,
     // The same for switches: an analog parse warns W0250 and records none.
     .switches = .top,

@@ -83,7 +83,12 @@ fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
     if (id == .none) return false;
     switch (file.stmt(id)) {
         .event_control => return true,
-        .assign => |a| if (a.nonblocking or a.timing != .none) return true,
+        // §8.5.3.2: a procedural continuous assignment "corresponds to a
+        // process that is sensitive to the source elements in the expression".
+        .assign => |a| if (a.nonblocking or a.timing != .none or a.continuous != .none) return true,
+        // A.6.4 `task_enable` (a `sys_task` row with no `$`): IEEE 1364 §10.2's
+        // task body is the kernel's to run, delays and all.
+        .sys_task => |s| if (file.str(s.name)[0] != '$') return true,
         else => {}, // else: a statement suspends only through its children
     }
     const Walk = struct {
@@ -145,6 +150,12 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         try owned.append(self.arena, t);
     }
     for (module.discrete) |blk| try collectWrites(self, blk.body, &owned);
+    // A task (A.2.7) is enabled only from the discrete context, so what its
+    // body writes is digital-owned too.
+    // ponytail: every task's body, enabled or not, and a formal or local that
+    // shadows a module variable counts as that variable; the output actuals
+    // of an enable are not collected. Follow the enables when a source needs it.
+    for (module.tasks) |t| try collectWrites(self, t.body, &owned);
     // What a digital event term in an analog event control may watch (§7.3.4):
     // a digital-owned value, or a named event the digital context triggers
     // (§5.10.4 / §5.10.5).
@@ -204,7 +215,8 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
 
 /// Marks, in `marks` (indexed by `Ast.ExprId`), every expression §7.2.2's
 /// discrete context owns in a MIXED module (`isMixed`): the bodies of its
-/// `initial`/`always` blocks and its continuous assignments. Those run on the
+/// `initial`/`always` blocks and its continuous assignments — and every
+/// module's task bodies. Those run on the
 /// mixed-signal kernel, which is four-state, so an x or z literal there is
 /// ordinary IEEE 1364 and not the analog backend's to refuse. A non-mixed
 /// module's `initial` is not marked: `collectInitialState` folds it into the
@@ -253,6 +265,9 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
     };
     const w: Mark = .{ .file = file, .marks = marks };
     for (file.modules) |*m| {
+        // A task (A.2.7) runs only on the kernel, in any module: the analog
+        // backend never executes its body.
+        for (m.tasks) |t| w.stmt(t.body) catch unreachable;
         if (!isMixed(file, m)) continue;
         for (m.analog) |blk| (Cmp{ .file = file, .marks = marks }).stmt(blk.body) catch unreachable;
         for (m.discrete) |blk| w.stmt(blk.body) catch unreachable;
