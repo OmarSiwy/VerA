@@ -4,7 +4,7 @@
 // wire type (wire, trireg, wor, wand, etc.)."
 //
 // The positive half, on the traditional-`wire` target (the wreal target is
-// continuous_assign_unsupported.va, which rejects it on Annex C grounds).
+// analog_event_variable_drives_wreal_assign.va, which carries the same xfail).
 // `level` is an analog variable written ONLY inside an analog event statement,
 // `@(initial_step)`, so it is exactly the variable the clause permits on the
 // right of an `assign`.

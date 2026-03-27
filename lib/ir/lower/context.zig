@@ -75,6 +75,9 @@ pub const DiscreteCtx = struct {
 /// Takes the FILE rather than the `Lower`: it is a question about the AST.
 pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     if (module.assigns.len != 0) return true;
+    // §3.7 a wreal is a digital net, and only the digital kernel holds its
+    // value — 0.0 undriven, or its single driver's.
+    for (module.nets) |n| if (n.kind == .wreal) return true;
     for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body)) return true;
     return false;
 }
@@ -156,11 +159,16 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
     // shadows a module variable counts as that variable; the output actuals
     // of an enable are not collected. Follow the enables when a source needs it.
     for (module.tasks) |t| try collectWrites(self, t.body, &owned);
+    var owned_names: std.ArrayList(struct { name: Ast.StrId, tok: u32 }) = .empty;
+    for (owned.items) |t| try owned_names.append(self.arena, .{ .name = ex.strOf(t), .tok = ex.mainTok(t) });
+    // §3.7 "If no driver is connected to a wreal net, its value shall be zero
+    // (0.0)": a wreal is digital-owned whether or not anything drives it.
+    for (module.nets) |n| if (n.kind == .wreal) try owned_names.append(self.arena, .{ .name = n.name, .tok = n.main_tok });
     // What a digital event term in an analog event control may watch (§7.3.4):
     // a digital-owned value, or a named event the digital context triggers
     // (§5.10.4 / §5.10.5).
     var digital: std.StringHashMapUnmanaged(void) = .empty;
-    for (owned.items) |t| try digital.put(self.arena, self.file.str(ex.strOf(t)), {});
+    for (owned_names.items) |t| try digital.put(self.arena, self.file.str(t.name), {});
     var trig: EventRefs = .{ .l = self, .module = module, .triggers_only = true };
     for (module.discrete) |blk| try trig.stmt(blk.body);
     for (trig.names.keys()) |name| try digital.put(self.arena, name, {});
@@ -201,19 +209,19 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         try self.out.discrete_events.put(self.arena, site.term, .{ .name = site.name, .edge = site.edge, .param = param });
         try lower_param.addParam(self, param, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(site.term));
     }
-    for (owned.items) |t| {
-        const name = self.file.str(ex.strOf(t));
+    for (owned_names.items) |t| {
+        const name = self.file.str(t.name);
         if (!reads.guarded.contains(name) and !reads.names.contains(name)) continue;
         const ty: Ast.Type = for (module.vars) |v| {
-            if (v.name == ex.strOf(t)) break v.ty;
-        } else if (netOf(module, ex.strOf(t)) != null) .integer else continue; // an undeclared name is §6.8's, reported elsewhere
+            if (v.name == t.name) break v.ty;
+        } else if (netOf(module, t.name)) |n| (if (n.kind == .wreal) .real else .integer) else continue; // an undeclared name is §6.8's, reported elsewhere
         // VAMS Table 7-1: a bit grouping, a net and an `integer` read as an
         // integer, a `real` "with no conversion".
         const real = switch (ty) {
             .integer => false,
             .real => true,
             else => { // else: Table 7-1 has no row for any other type
-                try self.err(ex.mainTok(t), .E0437, "`{s}` is a digital `{t}`, and Table 7-1 converts only integer, bit and real values", .{ name, ty });
+                try self.err(t.tok, .E0437, "`{s}` is a digital `{t}`, and Table 7-1 converts only integer, bit and real values", .{ name, ty });
                 continue;
             },
         };
@@ -221,20 +229,20 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         const folded: Lower.Const = if (real) .{ .real = 0 } else .{ .int = 0 };
         if (reads.guarded.contains(name) and !self.out.discrete_snaps.contains(name)) {
             // §8.5.3.6: the guarded read's region-1b snapshot.
-            try self.out.discrete_snaps.put(self.arena, name, ex.mainTok(t));
+            try self.out.discrete_snaps.put(self.arena, name, t.tok);
             const snap = try std.fmt.allocPrint(self.arena, "{s}__1b", .{name});
-            try lower_param.addParam(self, snap, ty, zero, folded, &.{}, false, ex.mainTok(t));
+            try lower_param.addParam(self, snap, ty, zero, folded, &.{}, false, t.tok);
         }
         if (self.out.discrete_inputs.contains(name) or !reads.names.contains(name)) continue;
-        try self.out.discrete_inputs.put(self.arena, name, ex.mainTok(t));
-        try lower_param.addParam(self, name, ty, zero, folded, &.{}, false, ex.mainTok(t));
+        try self.out.discrete_inputs.put(self.arena, name, t.tok);
+        try lower_param.addParam(self, name, ty, zero, folded, &.{}, false, t.tok);
         if (!real and reads.fourStateOnly(name)) {
             // §7.3.2 the unknown plane, for `===`/`!==`/`case` (`lower_expr.fourState`).
             // A name also read any other way keeps the x/z error at every
             // solve (the runner's `mixedInput`), and compares two-state.
             try self.out.discrete_xz.put(self.arena, name, {});
             const xz = try std.fmt.allocPrint(self.arena, "{s}__xz", .{name});
-            try lower_param.addParam(self, xz, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, ex.mainTok(t));
+            try lower_param.addParam(self, xz, .integer, try self.mir.addIntConst(self.arena, 0), .{ .int = 0 }, &.{}, false, t.tok);
         }
     }
 }

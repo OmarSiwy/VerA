@@ -434,7 +434,7 @@ test "A.1.8 connectrules: both item forms land in their typed slots" {
     try std.testing.expectEqual(diag.Code.E0207, bad.code(0));
 }
 
-test "§3.7 wreal: a net type in a `.v`, not a word in a `.va`" {
+test "§3.7 wreal: a net type in a `.v` and a `.va` alike" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -449,11 +449,11 @@ test "§3.7 wreal: a net type in a `.v`, not a word in a `.va`" {
         \\endmodule
     ;
 
-    // Annex C.4 bullet 2 / C.8: `wreal` is not in Verilog-A, so a `.va` sees a
-    // reserved word where the grammar wants a name. Three annex C fixtures
-    // pin the two codes; this is the parse under them.
+    // Annex C.4 bullet 2 / C.8 remove `wreal` from the Verilog-A SUBSET only;
+    // VerA compiles Verilog-AMS, where §3.7/§6.5.3 make it a net and port type.
     const va = try parseForTest(arena, src);
-    try std.testing.expectEqual(diag.Code.E0208, va.code(0)); // `input wreal a;`
+    try std.testing.expectEqual(@as(usize, 0), va.count());
+    try std.testing.expectEqual(Ast.NetKind.wreal, va.file.modules[0].ports[0].kind);
 
     // Under `--run` the same text is A.2.1.2 `[ net_type | wreal ]` and
     // A.2.1.3's two `wreal` arms. Both reach `NetKind.wreal`, cleanly: the
@@ -655,13 +655,13 @@ test "errors are collected with locations and parsing continues" {
         \\  inout p;
         \\  electrical p;
         \\  child u(p);
-        \\  wreal w;
+        \\  driver_update w;
         \\  analog I(p) <+ V(p);
         \\endmodule
     ;
     const res = try parseForTest(arena, src);
     // `child u(p);` is a §6.2.2 module_instantiation and parses now; only
-    // `wreal` is outside the grammar (annex C.4).
+    // `driver_update` (a reserved word) is not a module item.
     try std.testing.expectEqual(@as(usize, 1), res.count());
     try std.testing.expectEqual(diag.Code.E0205, res.code(0));
     try std.testing.expectEqual(@as(usize, 1), res.file.modules[0].instances.len);

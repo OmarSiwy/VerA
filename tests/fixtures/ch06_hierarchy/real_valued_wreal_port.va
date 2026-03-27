@@ -12,14 +12,13 @@
 // V(out) <+ in on a potential-only `voltage` output, so V(out) = 0.625 exactly,
 // and the child also reads `in` directly.
 //
-// The three annex_c_analog_subset/*_real_value_*_port_rejected.va fixtures pin
-// the Verilog-A SUBSET's refusal (Annex C); they are not evidence against this
-// full-AMS rule.
+// The three annex_c_analog_subset/*_real_value_*_port_accepted.va fixtures
+// (formerly `_rejected`, the Verilog-A SUBSET's C.8 refusal) carry the
+// one-declaration `input|output|inout wreal p;` spelling.
 //
 //! lrm 6.5.3
 //! lrm 3.7
 //! solve
-//! xfail VerA refuses every `wreal` declaration in a .va source (E0205 "unsupported module item: found wreal"); §6.5.3 makes a wreal port the Verilog-AMS way to pass a real value between modules
 `include "check.vh"
 module ch6_real_valued_wreal_port(out);
   output out;
