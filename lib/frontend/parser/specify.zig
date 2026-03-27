@@ -89,7 +89,7 @@ pub fn parseSpecifyItem(self: *Parser) Error!void {
                 // own; §14.2.6's examples write them, so one pair is taken
                 // if it is there.
                 const paren = self.eat(.lparen);
-                try parseSpecifyTerminalList(self);
+                _ = try parseSpecifyTerminalList(self);
                 if (paren) _ = try self.expect(.rparen);
                 _ = try self.expect(.semicolon);
                 return;
@@ -130,11 +130,14 @@ pub fn parseSpecifyTerminal(self: *Parser) Error!void {
 }
 
 /// A.7.2 `list_of_path_inputs` / `list_of_path_outputs` — the same
-/// comma-separated run of A.7.3 descriptors under two names.
-pub fn parseSpecifyTerminalList(self: *Parser) Error!void {
+/// comma-separated run of A.7.3 descriptors under two names. Returns how
+/// many it read, for the parallel path's one-to-one rule.
+pub fn parseSpecifyTerminalList(self: *Parser) Error!u32 {
+    var n: u32 = 0;
     while (true) {
         try parseSpecifyTerminal(self);
-        if (!self.eat(.comma)) return;
+        n += 1;
+        if (!self.eat(.comma)) return n;
     }
 }
 
@@ -160,7 +163,8 @@ pub fn parsePathDeclaration(self: *Parser) Error!void {
     // A.7.4 `edge_identifier ::= posedge | negedge`, present only on the
     // two edge-sensitive descriptions.
     _ = self.eat(.kw_posedge) or self.eat(.kw_negedge);
-    try parseSpecifyTerminalList(self);
+    const src_tok = self.pos;
+    const sources = try parseSpecifyTerminalList(self);
     // A.7.4 `polarity_operator ::= + | -`.
     _ = self.eat(.plus) or self.eat(.minus);
     const parallel = parse_module.eatSymbol(self, "=>");
@@ -170,15 +174,26 @@ pub fn parsePathDeclaration(self: *Parser) Error!void {
         "found {s}: a path description connects its terminals with `=>` or `*>`",
         .{self.found(self.pos)},
     );
-    if (self.eat(.lparen)) {
+    // A.7.2: both `=>` arms put ONE `specify_input_terminal_descriptor`
+    // before the arrow and one output descriptor after it; lists are the
+    // full path's (`*>`).
+    const dst_tok = self.pos;
+    const outputs = if (self.eat(.lparen)) edge: {
         // The edge-sensitive arms: the outputs, a polarity and the
         // `data_source_expression` the path's value comes from.
-        try parseSpecifyTerminalList(self);
+        const n = try parseSpecifyTerminalList(self);
         _ = self.eat(.plus) or self.eat(.minus);
         _ = try self.expect(.colon);
         _ = try parse_expr.parseExpr(self);
         _ = try self.expect(.rparen);
+        break :edge n;
     } else try parseSpecifyTerminalList(self);
+    if (parallel and (sources != 1 or outputs != 1)) return self.failAt(
+        if (sources != 1) src_tok else dst_tok,
+        .E0207,
+        "a parallel path (`=>`) connects one source to one destination, and this one lists {d} source(s) and {d} destination(s); lists need the full path `*>` (A.7.2)",
+        .{ sources, outputs },
+    );
     _ = try self.expect(.rparen);
     _ = try self.expect(.assign_eq);
     // A.7.4 `path_delay_value ::= list_of_path_delay_expressions
@@ -186,9 +201,23 @@ pub fn parsePathDeclaration(self: *Parser) Error!void {
     // and not by `parseExpr`, because `( tplh , tphl )` is a list of two
     // and a parenthesized expression is one.
     const bracketed = self.eat(.lparen);
+    const delay_tok = self.pos;
+    var delays: u32 = 0;
     while (true) {
         _ = try parse_expr.parseExpr(self);
+        delays += 1;
         if (!self.eat(.comma)) break;
+    }
+    // A.7.4 `list_of_path_delay_expressions` has five arms: one value,
+    // rise/fall, rise/fall/z, the six transition delays and the twelve.
+    switch (delays) {
+        1, 2, 3, 6, 12 => {},
+        else => return self.failAt(
+            delay_tok,
+            .E0207,
+            "a path delay lists 1, 2, 3, 6 or 12 values (A.7.4 list_of_path_delay_expressions), not {d}",
+            .{delays},
+        ),
     }
     if (bracketed) _ = try self.expect(.rparen);
     _ = try self.expect(.semicolon);
@@ -252,6 +281,14 @@ pub fn parseTimingCheck(self: *Parser) Error!void {
             "`{s}` timing check requires an event control (posedge, negedge or edge) on its reference event (A.7.5.3 controlled_timing_check_event)",
             .{parse_expr.tokenText(self, tok)},
         );
+        // A.7.5.2 `notifier ::= variable_identifier` — the reg a violation
+        // toggles. A.7.5.1 puts it first among the optional arguments of
+        // every command, except `$width`, whose optional `threshold` comes
+        // before it.
+        const notifier: u8 = if (std.mem.eql(u8, parse_expr.tokenText(self, tok), "$width")) 4 else arity[0] + 1;
+        if (n == notifier and self.pos != arg and
+            !(self.pos == arg + 1 and (self.tags[arg] == .identifier or self.tags[arg] == .escaped_identifier)))
+            return self.failAt(arg, .E0207, "found {s}: the notifier argument of `{s}` names a variable (A.7.5.2 notifier ::= variable_identifier)", .{ self.found(arg), parse_expr.tokenText(self, tok) });
         if (!self.eat(.comma)) break;
     };
     _ = try self.expect(.rparen);
@@ -528,6 +565,19 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
             if (!self.eat(.comma)) break;
         }
         _ = try self.expect(.rparen);
+        // A.3.3 `output_terminal ::= net_lvalue`: a gate drives its outputs,
+        // so each must be a net it can drive. buf/not lead with every
+        // terminal but the last as an output; every other gate with one.
+        const n_out = switch (kind) {
+            .g_buf, .g_not => terms.items.len -| 1,
+            .g_and, .g_nand, .g_or, .g_nor, .g_xor, .g_xnor, .g_bufif0, .g_bufif1, .g_notif0, .g_notif1 => @min(terms.items.len, 1),
+        };
+        for (terms.items[0..n_out]) |out| if (!isNetLvalue(self, out)) return self.failAt(
+            self.file.exprs.mainTok(out),
+            .E0207,
+            "found {s}: a gate's output terminal is a net_lvalue (A.3.3), a net the gate can drive",
+            .{self.found(self.file.exprs.mainTok(out))},
+        );
         switch (kind) {
             // A.3.1 `( output_terminal { , output_terminal } ,
             // input_terminal )` — buf/not are the only gates whose list
@@ -560,6 +610,21 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);
+}
+
+/// A.8.5 `net_lvalue`: a (hierarchical) net name with optional selects, or a
+/// concatenation of net_lvalues.
+fn isNetLvalue(self: *const Parser, e: Ast.ExprId) bool {
+    const x = &self.file.exprs;
+    return switch (x.tag(e)) {
+        .ident, .hier_ident => true,
+        .index => isNetLvalue(self, x.lhs(e)),
+        .concat => for (x.args(e)) |a| {
+            if (!isNetLvalue(self, a)) break false;
+        } else true,
+        // else: a literal, operator, call, access or pattern names no net, and a future tag is one of those or a name above
+        else => false,
+    };
 }
 
 /// W0252 for the primitive at the cursor, when the artifact being built is

@@ -11,12 +11,11 @@
 // alternative derives. `(a, b *> o) = 1;` is the legal form and is accepted
 // (probed).
 //
-// VerA accepts this file (W0251: the specify block is read and nothing in it
-// is modelled).
+// VerA refuses the path with E0207 "a parallel path (`=>`) connects one
+// source to one destination".
 //
 //! lrm A.7.2
 //! reject parallel
-//! xfail VerA accepts the parallel path `(a, b => o) = 1;` with two sources; A.7.2's parallel_path_description has a single specify_input_terminal_descriptor before `=>` — a list requires `*>`
 module annex_a_parallel_two_sources(o, a, b);
   output o;
   input a, b;

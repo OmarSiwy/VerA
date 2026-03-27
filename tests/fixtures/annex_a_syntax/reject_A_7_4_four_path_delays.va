@@ -11,12 +11,11 @@
 // alternative derives. The six-value form in the same position is accepted
 // (probed).
 //
-// VerA accepts this file (W0251: the specify block is read and nothing in it
-// is modelled).
+// VerA refuses the delay list with E0207 "a path delay lists 1, 2, 3, 6 or
+// 12 values".
 //
 //! lrm A.7.4
 //! reject path delay
-//! xfail VerA accepts the four-value path delay `(a => o) = (1, 2, 3, 4);`; A.7.4's list_of_path_delay_expressions allows 1, 2, 3, 6 or 12 values
 module annex_a_four_path_delays(o, a, b);
   output o;
   input a, b;
