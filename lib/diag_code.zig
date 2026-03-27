@@ -3183,16 +3183,13 @@ fn infoOf(c: Code) Info {
             .lrm = "5.6.7.2",
             .explain = "The mirror image of E0409 — see that code.",
         },
-        .E0416 => .{
-            .title = "casex/casez are not in the analog subset",
-            .lrm = "C.7",
-            .explain =
-            \\`casex` and `casez` treat x and z as wildcards, which needs the
-            \\four-state value system annex C removes from Verilog-A.
-            \\
-            \\Use `case`, or an if/else chain.
-            ,
-        },
+        .E0416 => retiredInfo(
+            \\"casex/casez are not in the analog subset". Retired: annex C.7's
+            \\removal is the Verilog-A SUBSET's rule, and VerA compiles
+            \\Verilog-AMS, where §7.3.2 lists "the case, casex, and casez
+            \\statements" among the analog context's four-state features. They
+            \\lower now (`lower_expr.caseMatch`). The number is not reused.
+        ),
         .E0417 => .{
             .title = "genvar loop bound is not a constant expression",
             .lrm = "6.6.1",

@@ -330,8 +330,9 @@ pub fn lowerBranchStmt(
 }
 
 /// §5.8.3 case — lowered as the equality chain the LRM defines it to be: the
-/// first matching arm wins, `default` is the final else. `casex`/`casez` have
-/// no meaning for a real scrutinee (annex C).
+/// first matching arm wins, `default` is the final else. `casex`/`casez`
+/// (§7.3.2) differ only in the don't-care bits a four-state side brings
+/// (`lower_expr.caseMatch`); annex C.7's removal of them is the subset's.
 pub fn lowerCase(
     self: *Lower,
     tok: u32,
@@ -339,12 +340,6 @@ pub fn lowerCase(
     scrutinee: Ast.ExprId,
     arms: []const Ast.CaseArm,
 ) Oom!void {
-    if (kind != .normal) {
-        var b = self.errWith(tok, .E0416);
-        b.help("use `case`", .{});
-        try b.emit();
-        return;
-    }
     const sv = try lower_expr.lowerExpr(self, scrutinee);
     var default_arm: Ast.StmtId = .none;
     var defaults: usize = 0;
@@ -372,7 +367,7 @@ pub fn lowerCase(
     for (arms) |a| for (a.labels) |l| if (ex.tag(l) == .logic_literal) {
         four = true;
     };
-    try lowerCaseChain(self, sv, scrutinee, if (four) scrutinee else null, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
+    try lowerCaseChain(self, sv, scrutinee, if (four) scrutinee else null, kind, arms, default_arm, isAnalysisOrConst(self, scrutinee) or try isStaticValue(self, sv.v));
 }
 
 pub fn lowerCaseChain(
@@ -381,19 +376,20 @@ pub fn lowerCaseChain(
     /// The source subject, for §9.20's parameter-chosen alias (`pushCond`).
     subject: Ast.ExprId,
     four_state: ?Ast.ExprId,
+    kind: Ast.CaseKind,
     arms: []const Ast.CaseArm,
     default_arm: Ast.StmtId,
     static: bool,
 ) Oom!void {
     if (arms.len == 0) return lower_stmt.lowerStmt(self, default_arm);
     const a = arms[0];
-    if (a.labels.len == 0) return lowerCaseChain(self, sv, subject, four_state, arms[1..], default_arm, static);
+    if (a.labels.len == 0) return lowerCaseChain(self, sv, subject, four_state, kind, arms[1..], default_arm, static);
 
     // §5.8.3 an arm with several labels matches any of them.
     var cond: ?Mir.Value = null;
     for (a.labels) |l| {
         const eq = if (four_state) |fs|
-            (try lower_expr.caseEquality(self, fs, l)) orelse try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l))
+            (try lower_expr.caseMatch(self, kind, fs, l)) orelse try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l))
         else
             try lower_expr.cmp(self, .eq, sv, try lower_expr.lowerExpr(self, l));
         cond = if (cond) |c| try self.emit(.logor, &.{ c, eq }) else eq;
@@ -415,7 +411,7 @@ pub fn lowerCaseChain(
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
     try lower_hier_name.pushCond(self, .{ .e = subject, .labels = a.labels, .pol = false, .pure = pure });
-    try lowerCaseChain(self, sv, subject, four_state, arms[1..], default_arm, static);
+    try lowerCaseChain(self, sv, subject, four_state, kind, arms[1..], default_arm, static);
     lower_hier_name.popCond(self);
     self.static_cond_depth -= @intFromBool(static);
     self.cond_depth -= 1;

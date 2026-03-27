@@ -78,8 +78,31 @@ pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool 
     // §3.7 a wreal is a digital net, and only the digital kernel holds its
     // value — 0.0 undriven, or its single driver's.
     for (module.nets) |n| if (n.kind == .wreal) return true;
-    for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body)) return true;
+    for (module.discrete) |blk| if (blk.is_always or suspends(file, blk.body) or writesFourState(file, blk.body)) return true;
     return false;
+}
+
+/// C.3/§7.3.2: an x or z a discrete block writes is a value only the
+/// four-state kernel can hold — `collectInitialState` folds into analog
+/// variables, where it has nowhere to live — so the block runs on the kernel.
+fn writesFourState(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
+    const Walk = struct {
+        file: *const Ast.SourceFile,
+        hit: *bool,
+        pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
+            if (e == .none) return;
+            const ex = &w.file.exprs;
+            if (ex.tag(e) == .logic_literal and ex.logicValue(e).hasUnknown()) w.hit.* = true;
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| try w.expr(c, .read);
+        }
+        pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
+            if (s != .none) try w.file.stmtEdges(s, w);
+        }
+    };
+    var hit = false;
+    (Walk{ .file = file, .hit = &hit }).stmt(id) catch unreachable;
+    return hit;
 }
 
 fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
@@ -270,7 +293,7 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
         }
     };
     // §7.3.2 in the analog block of a mixed module, an x/z literal compared by
-    // `===`/`!==` or as a `case` label is the four-state comparison the clause
+    // `===`/`!==` or as a `case`/`casex`/`casez` label is the four-state comparison the clause
     // provides (`lower_expr.caseEquality`); anywhere else it stays E0130.
     const Cmp = struct {
         file: *const Ast.SourceFile,
@@ -291,7 +314,7 @@ pub fn markDiscreteExprs(file: *const Ast.SourceFile, marks: []bool) void {
         pub fn stmt(w: @This(), s: Ast.StmtId) error{}!void {
             if (s == .none) return;
             switch (w.file.stmt(s)) {
-                .case_stmt => |c| if (c.kind == .normal) for (c.arms) |arm| for (arm.labels) |l| w.lit(l),
+                .case_stmt => |c| for (c.arms) |arm| for (arm.labels) |l| w.lit(l),
                 else => {}, // else: only a case statement has labels
             }
             try w.file.stmtEdges(s, w);

@@ -1,8 +1,8 @@
-// §7.3.2 accessing X and Z bits of a discrete net in a continuous context. The
-// chapter's `converter` example annotates this exact comparison as illegal:
-//
-//     if (dnet == 1'bx)     // error
-//        $display("Error to access x bit in continuous context");
+// §7.3.2 accessing X and Z bits of a discrete net in a continuous context.
+// (This header used to quote the `converter` example as `if (dnet == 1'bx)
+// // error`; the example prints `===` there, which docs/ch7-mixed-signal.html
+// records as an editorial discrepancy against the clause's own `a2d` example.
+// The verdict below does not rest on that annotation.)
 //
 // The ORDINARY equality operator is what makes it an error. §7.3.2 lists the
 // four features that may carry x and z through the analog context — `===`,

@@ -7,8 +7,7 @@
 // names them as supported, so a conforming AMS compiler must accept this module:
 // the verdict is inverted, as annex_c_analog_subset/10_case_equality_accepted.va
 // explains. The x/z halves of §7.3.2 (x/z digits, a four-state net read) are
-// still refused, and x_case_equality_unsupported.va and
-// z_case_inequality_unsupported.va pin those at E0130.
+// x_case_equality_compared.va and z_case_inequality_compared.va.
 //
 // THE VALUE, by hand. `state` is assigned 2, every bit two-state, so IEEE 1364
 // §5.1.8's `===`/`!==` are `==`/`!=`: `state === 1` is 0, `state !== 0` is 1,

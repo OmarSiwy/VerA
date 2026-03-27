@@ -43,8 +43,8 @@ pub fn parseStmtNoNull(self: *Parser) Error!Ast.StmtId {
 /// (`discreteGrammar`), `fork`/`join`, `wait`, a task enable and the
 /// procedural continuous assignments are NOT dispatched here: they fall
 /// through to the expression statement and report "expected expression" —
-/// they are not analog statements. `casex`/`casez` ARE dispatched, to `parseCase`, so annex
-/// C.7's own diagnostic (E0416) is what the source dies on.
+/// they are not analog statements. `casex`/`casez` ARE dispatched, to
+/// `parseCase`: §7.3.2 makes them analog statements in Verilog-AMS.
 pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     try self.skipAttributes();
     const tok = self.pos;
@@ -93,8 +93,8 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
         },
         .kw_begin => return parseSeqBlock(self),
         .kw_if => return parse_generate.parseIf(self, null, tok), // §5.8 / A.6.6
-        // §5.8.3 / A.6.7. `casex`/`casez` share the production and are
-        // refused in lowering by E0416, the code annex C.7 owns.
+        // §5.8.3 / A.6.7. `casex`/`casez` share the production; §7.3.2
+        // lists all three among the analog context's four-state features.
         .kw_case => return parseCase(self, .normal, null),
         .kw_casex => return parseCase(self, .casex, null),
         .kw_casez => return parseCase(self, .casez, null),

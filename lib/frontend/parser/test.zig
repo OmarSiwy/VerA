@@ -828,8 +828,8 @@ test "casex/casez and reduction xor PARSE, so lowering owns the annex C rule" {
     // Both used to die here — casex on E0209 "expected an expression" and `^b`
     // on E0215 "expected an operand". Those are recovery artifacts: they name
     // no rule, they fire for any token that cannot start an expression, and
-    // they made annex C.7's E0416 and §4.2.10's E0320 unreachable. The grammar
-    // is now accepted and the subset check happens where the meaning is known.
+    // they made §4.2.10's E0320 unreachable. The grammar is now accepted and
+    // the check happens where the meaning is known (casex/casez lower, §7.3.2).
     for ([_][]const u8{
         "module m; integer s; analog casex (s) 0: s = 1; endcase endmodule",
         "module m; integer s; analog casez (s) 0: s = 1; endcase endmodule",

@@ -26,15 +26,15 @@
 // second example labels `dnet === 1'bx` an error while its first example uses
 // it, and this fixture does not need to take a side.)
 //
-// The x_*/z_*/xz_* files in ch07_mixed_signal refuse this construct citing
-// Annex C.5 ("The case equality operators are not supported in Verilog-A"),
-// i.e. the Verilog-A SUBSET. This fixture is the full Verilog-AMS rule VerA
-// targets (see 13_digital_initial_accepted.va for the same scoping).
+// The x_*/z_*/xz_* files in ch07_mixed_signal used to refuse this construct
+// citing Annex C.5, the Verilog-A SUBSET; the four-state comparison ones are
+// now positive (`*_compared.va`). The initial block's `1'bz` is what makes
+// this module mixed: a constant-shaped `initial` would otherwise be folded into
+// analog variables, where a z has nowhere to live, so it runs on the kernel.
 //
 //! lrm C.3
 //! lrm 7.3.2
 //! bias V(p) = 0.5
-//! xfail VerA refuses the four-state literal 1'bz (E0130 "the analog backend cannot execute this 1-bit four-state literal") both in the digital `initial` and in the §7.3.2 mixed-signal comparison `d === 1'bz` that C.3 and §7.3.2 permit
 `include "check.vh"
 module annex_c_xz_in_the_mixed_signal_context(p);
   inout p;
