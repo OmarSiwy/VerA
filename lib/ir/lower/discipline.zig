@@ -91,6 +91,20 @@ pub fn collectDisciplines(self: *Lower) Oom!void {
         }
         // §3.6.2.3 discipline-level attribute overrides win over the nature's.
         for (d.overrides) |o| {
+            // §3.6.2.5 "To do so from a discipline declaration, the bound
+            // nature and attribute needs to be defined."
+            const bound = switch (o.which) {
+                .potential => d.potential,
+                .flow => d.flow,
+            };
+            if (bound == .none)
+                try self.err(o.attr.main_tok, .E0370, "`{s}.{s}` in `{s}`, which binds no {s} nature", .{
+                    @tagName(o.which), self.file.str(o.attr.name), self.file.str(d.name), @tagName(o.which),
+                })
+            else if (self.file.natureAttrExpr(bound, self.file.str(o.attr.name)) == null)
+                try self.err(o.attr.main_tok, .E0370, "`{s}.{s}` in `{s}`: the bound nature `{s}` does not define `{s}`", .{
+                    @tagName(o.which), self.file.str(o.attr.name), self.file.str(d.name), self.file.str(bound), self.file.str(o.attr.name),
+                });
             if (!std.mem.eql(u8, self.file.str(o.attr.name), "abstol")) continue;
             const v = lower_constfold.constEval(self, o.attr.value) orelse continue;
             switch (o.which) {
