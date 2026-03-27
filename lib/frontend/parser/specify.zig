@@ -469,26 +469,6 @@ pub fn unsupportedItem(self: *Parser) Error {
     return self.failAt(self.pos, .E0205, "found {s}", .{self.found(self.pos)});
 }
 
-/// A.4.1 `pass_switchtype pass_switch_instance { , pass_switch_instance } ;`
-/// with `pass_switchtype ::= tran | rtran` and `pass_switch_instance ::=
-/// [ name_of_gate_instance ] ( inout_terminal , inout_terminal )` — no
-/// strength and no delay, which is why this is the one gate family with a
-/// production here and not E0205.
-///
-/// ACCEPTED AND NOT MODELLED, OUT LOUD (W0250). §8.5.3.5 puts switch
-/// processing in the discrete simulation cycle: a pass switch propagates
-/// LOGIC values and strengths between its terminals, so there is no equation
-/// for a compiled analog device to stamp, and inventing one — a zero-volt
-/// source between the terminals, say — would pin a convention the LRM does
-/// not state instead of a requirement. Dropping it silently is the other
-/// wrong answer: a module whose two nets a switch was meant to tie stamps as
-/// if the switch were absent. So the instance is parsed, the terminals are
-/// checked to be net references, and the warning says the connection carries
-/// nothing. `--deny=W0250` turns it into a refusal for a model that cannot
-/// afford the omission.
-// ponytail: nothing is recorded, because nothing consumes it. The upgrade
-// path is the same one §7.6 insertion needs — a digital half in `Flatten` —
-// and until that exists an AST field would only be dead weight.
 /// A.3.1 `gate_instantiation` for A.3.4's computing gate types:
 ///
 ///     n_input_gatetype  [drive_strength] [delay2] n_input_gate_instance …
@@ -734,26 +714,19 @@ pub const switch_arms = std.StaticStringMap(SwitchArm).initComptime(.{
 /// arms. §1.1 ("Verilog-AMS HDL consists of the complete IEEE Std 1364
 /// Verilog specification") is what makes the grammar VerA's to read.
 ///
-/// Outside a digital run, W0250 — §8.5.3.5 puts switch processing in the
-/// discrete simulation cycle, so a switch propagates LOGIC values and
-/// strengths between its terminals and there is no equation for a compiled
-/// analog device to stamp. `--deny=W0250` is the refusal. Under `--run` each
-/// instance is recorded (`ModuleDecl.switches`) and the digital engine runs
-/// it — not as an `Ast.GateKind`: §7.12's strength REDUCTION and §7.6's
-/// bidirectional conduction are neither of them a function of input bits.
+/// Every instance is recorded (`ModuleDecl.switches`) — not as an
+/// `Ast.GateKind`: §7.12's strength REDUCTION and §7.6's bidirectional
+/// conduction are neither of them a function of input bits. §8.5.3.5 puts
+/// switch processing in the discrete simulation cycle, so the digital engine
+/// runs it (under `--run`, and as a mixed module's discrete half); a compiled
+/// analog device has no equation to stamp, and lowering says so (W0250) when
+/// the module has no discrete half to carry it.
 pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
     const main_tok = self.pos;
     const spelling = parse_expr.tokenText(self, main_tok);
     const arm = switch_arms.get(spelling).?; // the caller dispatched on exactly these
     const kind = std.meta.stringToEnum(Ast.SwitchKind, spelling).?;
     self.pos += 1;
-    if (!self.digital) try self.bag.add(
-        .parse,
-        .W0250,
-        lexer.tokenSpan(self.src, self.starts, main_tok),
-        "{s} switch primitive",
-        .{self.found(main_tok)},
-    );
     const delay: Ast.Delay3 = if (arm.delay and self.peek() == .hash) try parse_generate.parseDelay3(self) else .{};
     while (true) {
         const inst_tok = self.pos;
@@ -776,7 +749,7 @@ pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
             t.* = if (i < arm.lvalues) try parse_expr.parseNetRef(self) else try parse_expr.parseExpr(self);
         }
         _ = try self.expect(.rparen);
-        if (self.digital) try b.switches.append(self.arena, .{ .kind = kind, .terms = terms, .delay = delay, .main_tok = inst_tok });
+        try b.switches.append(self.arena, .{ .kind = kind, .terms = terms, .delay = delay, .main_tok = inst_tok });
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);

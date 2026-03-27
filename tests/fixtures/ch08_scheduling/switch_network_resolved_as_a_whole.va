@@ -21,6 +21,10 @@
 // processed t2 before t1 without considering the whole net would do the same.
 // Only whole-net processing, as the clause requires, makes c read 1.
 //
+// The switches make this module mixed (§7.2: "only digital blocks and
+// primitives can drive a discrete net"), so b and c are digital-owned and the
+// mixed kernel resolves the network.
+//
 // The analog block reads both discrete wires through §7.3.1 Table 7-1, where a
 // 1-bit 1 is the integer 1. Checked at t = 10n, well after time zero settles;
 // the t = 0 read is a scheduling question this fixture does not ask.
@@ -29,7 +33,6 @@
 //! analysis tran
 //! time 0, 10n
 //! print none
-//! xfail VerA accepts `tran` but stamps nothing (W0250), and resolves the switch-connected wires b and c as continuous nets, refusing their digital read with E0315 "net must be read through an access function"; §8.5.3.5 requires the switch network to carry a's value to every node
 `timescale 1ns/1ns
 `include "check.vh"
 module ch8_switch_network_resolved_as_a_whole(out);
