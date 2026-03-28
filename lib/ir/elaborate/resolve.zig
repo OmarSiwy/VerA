@@ -370,3 +370,25 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
         }
     }
 }
+
+/// A.2.1.3 `discipline_identifier list_of_net_identifiers ;` — the identifier
+/// names a declared discipline (§3.6.2). Judged over EVERY module, once per
+/// compilation, like `checkConnectRules`: a module that nothing instantiates
+/// is never lowered, and the common way to write this error — `child c1;`,
+/// an A.4.1 instance without its mandatory parentheses, which parses as a net
+/// `c1` of discipline `child` — is exactly the one that leaves `child` an
+/// uninstantiated root.
+// ponytail: nets declared inside a generate block are not visited; add them
+// when a fixture declares one with a bad discipline.
+pub fn checkNetDisciplines(self: *Flatten) Error!void {
+    const file = self.ctx.file;
+    for (file.userModules()) |*m| for (m.nets) |n| {
+        if (n.discipline == .none or discipline.declOf(file, n.discipline) != null) continue;
+        if (elab_names.findModule(self, n.discipline) != null)
+            try self.err(n.main_tok, .E0371, "`{s}` in the declaration of `{s}` is a module; an A.4.1 module_instance takes a parenthesised port list even when it is empty: `{s} {s}();`", .{
+                file.str(n.discipline), file.str(n.name), file.str(n.discipline), file.str(n.name),
+            })
+        else
+            try self.err(n.main_tok, .E0371, "`{s}` in the declaration of `{s}`", .{ file.str(n.discipline), file.str(n.name) });
+    };
+}

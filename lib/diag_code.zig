@@ -368,6 +368,9 @@ pub const Code = enum(u16) {
     /// §3.6.2.5 a discipline overrides an attribute of a half it binds no
     /// nature to, or one its bound nature does not define.
     E0370,
+    /// A.2.1.3 / §3.6.2 a net declaration whose discipline identifier names
+    /// no declared discipline.
+    E0371,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -3006,6 +3009,25 @@ fn infoOf(c: Code) Info {
             \\    enddiscipline
             \\
             \\The same holds for an attribute the bound nature does not define.
+            ,
+        },
+        .E0371 => .{
+            .title = "net declared with an undeclared discipline",
+            .lrm = "3.6.3",
+            .explain =
+            \\A.2.1.3's net declaration is `discipline_identifier
+            \\list_of_net_identifiers ;`, and the identifier names a discipline
+            \\declared with `discipline ... enddiscipline` (3.6.2) — annex D's
+            \\`electrical`, `logic` and the rest, or one of your own. A name no
+            \\discipline declares gives the net no domain and no natures, so
+            \\nothing downstream can say what it carries.
+            \\
+            \\The usual cause is a module instance without its parentheses:
+            \\
+            \\    child c1;      // parsed as a net `c1` of discipline `child`
+            \\    child c1();    // A.4.1 module_instance, even with no ports
+            \\
+            \\Otherwise declare the discipline, or `include "disciplines.vams"`.
             ,
         },
 
