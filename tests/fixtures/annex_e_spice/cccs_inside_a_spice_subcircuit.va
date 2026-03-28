@@ -37,7 +37,6 @@
 //! lrm E.2
 //! bias V(in) = 1.0, V(gnd) = 0.0
 //! solve
-//! xfail VerA's SPICE reader drops the F (cccs) card of a .SUBCKT body without a diagnostic (spice_cards.zig `device_cards` reads only R, C, L, V, I), so the mirror contributes nothing and V(out) reads 0 where E.3.1 says a cccs inside a subcircuit is instantiable
 //! spice .SUBCKT CMIRROR IN OUT GND
 //! spice VS IN SNS 0
 //! spice RS SNS GND 1K

@@ -271,6 +271,31 @@ const device_cards = [_]struct { letter: u8, prim: []const u8, param: []const u8
     .{ .letter = 'i', .prim = "isine", .param = "dc" },
 };
 
+/// E.3.1: "the following primitives are not supported: ccvs, cccs, and mutual
+/// inductors; however, these primitives can be instantiated inside a SPICE
+/// subcircuit". The four SPICE controlled-source letters, as the one
+/// contribution each is, in SPICE's own sign convention — the controlled
+/// quantity flows (or rises) from the card's first node to its second, which
+/// is what `I(a, b)`/`V(a, b)` mean in §5.6:
+///
+///     E n+ n- nc+ nc- gain    V(n+, n-) <+ gain * V(nc+, nc-);   vcvs
+///     G n+ n- nc+ nc- gm      I(n+, n-) <+ gm * V(nc+, nc-);     vccs
+///     F n+ n- vctl gain       I(n+, n-) <+ gain * I(vctl);       cccs
+///     H n+ n- vctl r          V(n+, n-) <+ r * I(vctl);          ccvs
+///
+/// `I(vctl)` is the current through the controlling V card, which SPICE takes
+/// entering its first node. A V card that controls something is therefore
+/// written as a NAMED BRANCH of this module (`branch (p, n) vctl;
+/// V(vctl) <+ dc;`) rather than a `vsine` child, so the controlled source reads
+/// the flow of a branch its own module declares — §5.4.2's flow probe of the
+/// source branch, and no cross-instance access.
+const controlled = [_]struct { letter: u8, lhs: []const u8, rhs: []const u8, by_current: bool }{
+    .{ .letter = 'e', .lhs = "V", .rhs = "V", .by_current = false },
+    .{ .letter = 'g', .lhs = "I", .rhs = "V", .by_current = false },
+    .{ .letter = 'f', .lhs = "I", .rhs = "I", .by_current = true },
+    .{ .letter = 'h', .lhs = "V", .rhs = "I", .by_current = true },
+};
+
 /// The instance lines a `.SUBCKT`'s device cards become — the equations that
 /// make E.2's "module definition" a circuit rather than two floating pins.
 ///
@@ -288,20 +313,58 @@ const device_cards = [_]struct { letter: u8, prim: []const u8, param: []const u8
 ///
 /// ponytail: two terminals and one positional value, which is every row of
 /// `device_cards`; a three-terminal or `k=v` card needs its own arity column.
+/// The `controlled` letters are the exception, and read their own shape.
 fn emitBody(
     arena: Allocator,
     out: *std.ArrayList(u8),
     body: []const []const u8,
 ) Allocator.Error!void {
+    // The V cards an F or H card reads the current of, by name.
+    var controls: std.ArrayList([]const u8) = .empty;
     for (body) |card| {
         var it = std.mem.tokenizeAny(u8, card, " \t(),");
         const inst = it.next() orelse continue;
+        if (inst[0] != 'f' and inst[0] != 'h') continue;
+        _ = it.next() orelse continue;
+        _ = it.next() orelse continue;
+        try controls.append(arena, it.next() orelse continue);
+    }
+    var analog: std.ArrayList(u8) = .empty;
+    for (body) |card| {
+        var it = std.mem.tokenizeAny(u8, card, " \t(),");
+        const inst = it.next() orelse continue;
+        if (for (controlled) |c| {
+            if (inst[0] == c.letter) break c;
+        } else null) |c| {
+            const p = try spell(arena, it.next() orelse continue);
+            const n = try spell(arena, it.next() orelse continue);
+            // The controlling quantity: a V card's branch, or a node pair.
+            const ctl = if (c.by_current) blk: {
+                const v = it.next() orelse continue;
+                if (v[0] != 'v' or !declares(body, v)) continue;
+                break :blk try spell(arena, v);
+            } else try std.fmt.allocPrint(arena, "{s}, {s}", .{
+                try spell(arena, it.next() orelse continue),
+                try spell(arena, it.next() orelse continue),
+            });
+            const gain = spiceNumber(it.next() orelse continue) orelse continue;
+            try analog.print(arena, "      {s}({s}, {s}) <+ {d} * {s}({s});\n", .{ c.lhs, p, n, gain, c.rhs, ctl });
+            continue;
+        }
         const row = for (device_cards) |d| {
             if (inst[0] == d.letter) break d;
         } else continue;
         const p = it.next() orelse continue;
         const n = it.next() orelse continue;
         const value = spiceNumber(it.next() orelse continue) orelse continue;
+        if (row.letter == 'v' and for (controls.items) |v| {
+            if (std.mem.eql(u8, v, inst)) break true;
+        } else false) {
+            const name = try spell(arena, inst);
+            try out.print(arena, "   branch ({s}, {s}) {s};\n", .{ try spell(arena, p), try spell(arena, n), name });
+            try analog.print(arena, "      V({s}) <+ {d};\n", .{ name, value });
+            continue;
+        }
         try out.print(arena, "   {s} #(.{s}({d})) {s}({s}, {s});\n", .{
             row.prim,
             row.param,
@@ -311,6 +374,18 @@ fn emitBody(
             try spell(arena, n),
         });
     }
+    if (analog.items.len != 0) try out.print(arena, "   analog begin\n{s}   end\n", .{analog.items});
+}
+
+/// Does `body` hold a card named `name`? An F/H card naming a V card the
+/// subcircuit does not declare reads nothing, and is skipped like any other
+/// unreadable card.
+fn declares(body: []const []const u8, name: []const u8) bool {
+    for (body) |card| {
+        var it = std.mem.tokenizeAny(u8, card, " \t(),");
+        if (std.mem.eql(u8, it.next() orelse continue, name)) return true;
+    }
+    return false;
 }
 
 /// The `parameter` declarations a model-derived module carries, and the argument
@@ -709,4 +784,33 @@ test "an unrecognised model type, a repeat and an empty netlist all contribute n
     const bare = try synthesize(arena, ".SUBCKT PAD\n.ENDS\n");
     try std.testing.expectEqual(@as(u32, 1), bare.modules);
     try std.testing.expect(std.mem.indexOf(u8, bare.text, "electrical") == null);
+}
+
+test "E.3.1 the four controlled sources inside a .SUBCKT, and the V card an F or H reads" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const s = try synthesize(arena,
+        \\.SUBCKT CTL A B C D
+        \\VS A X 0
+        \\E1 B 0 A X 2
+        \\G1 C 0 A X 3
+        \\F1 D 0 VS 4
+        \\H1 B C VS 5
+        \\F2 D 0 VNONE 6
+        \\.ENDS
+    );
+    for ([_][]const u8{
+        "branch (a, x) vs;",
+        "V(vs) <+ 0;",
+        "V(b, \\0 ) <+ 2 * V(a, x);",
+        "I(c, \\0 ) <+ 3 * V(a, x);",
+        "I(d, \\0 ) <+ 4 * I(vs);",
+        "V(b, c) <+ 5 * I(vs);",
+    }) |want| try std.testing.expect(std.mem.indexOf(u8, s.text, want) != null);
+    // A controlling V card the subcircuit does not declare reads nothing, and a
+    // controlling V card is a branch of this module, not a `vsine` child.
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "6 *") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s.text, "vsine") == null);
 }
