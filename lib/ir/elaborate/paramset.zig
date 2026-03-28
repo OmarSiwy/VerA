@@ -3,7 +3,7 @@
 //! In: an instance of a paramset name and its overrides. Out: the chosen module and the
 //! parameter values the paramset statements assign.
 //!
-//! LRM clauses this file's code cites: §2.6, §3.4, §3.4.2, §3.4.5, §3.4.6, §3.4.7, §6.3, §6.4, §6.4.2, §6.4.3, §9.18, §9.19.
+//! LRM clauses this file's code cites: §2.6, §3.4, §3.4.2, §3.4.5, §3.4.6, §3.4.7, §6.3, §6.4, §6.4.1, §6.4.2, §6.4.3, §9.18, §9.19.
 //!
 //! Cut verbatim from `elaborate.zig`. Functions take `self: *Flatten` and are called
 //! directly, `elab_paramset.f(self, ...)`; `elaborate.zig` aliases only what other modules call.
@@ -402,6 +402,15 @@ pub fn paramsetOverrides(
                     });
                     continue;
                 }
+                // §6.4.1 "these variables shall not be used to assign values
+                // to the module's parameters". Named here, where the paramset
+                // is still in hand: once cloned, `t` is only an unknown name.
+                if (readsVar(self.ctx.file, chain.items[i], o.value)) |v| {
+                    try self.err(self.ctx.file.exprs.mainTok(v), .E0237, "`.{s} = ...` reads the paramset variable `{s}`, and paramset variables shall not assign the module's parameters", .{
+                        self.ctx.file.str(o.name), self.ctx.file.str(self.ctx.file.exprs.strOf(v)),
+                    });
+                    continue;
+                }
                 try over.put(self.ctx.arena, o.name, try elab_clone.cloneExpr(self, o.value));
             },
             // §9.18 `.$mfactor = expr;` in a paramset is the same override the
@@ -433,4 +442,16 @@ pub fn paramsetOverrides(
     for (child.params) |p| try unit.given.put(self.ctx.arena, p.name, over.contains(p.name));
     for (child.aliasparams) |al| if (over.contains(al.target))
         try unit.given.put(self.ctx.arena, al.alias, true);
+}
+
+/// §6.4.1 the first identifier in `e` that names one of `ps`'s variables.
+fn readsVar(file: *const Ast.SourceFile, ps: *const Ast.ParamsetDecl, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const x = &file.exprs;
+    if (x.tag(e) == .ident) for (ps.vars) |v| {
+        if (v.name == x.strOf(e)) return e;
+    };
+    var buf: [3]Ast.ExprId = undefined;
+    for (x.children(e, &buf)) |c| if (readsVar(file, ps, c)) |hit| return hit;
+    return null;
 }

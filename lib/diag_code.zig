@@ -197,6 +197,9 @@ pub const Code = enum(u16) {
     E0235,
     /// IEEE 1364 §19.6: `resetall inside a module.
     E0236,
+    /// §6.4.1: an access function, contribution, event control or named
+    /// block among a paramset's statements.
+    E0237,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -1826,6 +1829,25 @@ fn infoOf(c: Code) Info {
             \\its default, and a module whose directives change halfway through
             \\has no single reading. 19.6 recommends placing it at the beginning
             \\of each source file; put it before the module.
+            ,
+        },
+        .E0237 => .{
+            .title = "a paramset statement uses what 6.4.1 forbids",
+            .lrm = "6.4.1",
+            .explain =
+            \\LRM 6.4.1: "Restrictions on statements in a paramset are similar
+            \\to those for analog functions. Specifically, a paramset: ...
+            \\Shall not use access functions. Shall not use contribution
+            \\statements or event control statements. Shall not use named
+            \\blocks."
+            \\
+            \\A paramset is a bundle of parameter values evaluated once per
+            \\instance at elaboration; it has no circuit to probe or drive and
+            \\no time to wait on. Compute what the statement needs from the
+            \\paramset's parameters, and drop the block's label:
+            \\
+            \\    begin : blk  t = rr; end     // illegal
+            \\    begin        t = rr; end     // legal
             ,
         },
         .E0234 => .{

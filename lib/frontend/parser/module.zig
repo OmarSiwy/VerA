@@ -3,7 +3,7 @@
 //! In: tokens from `module` to `endmodule`. Out: one `Ast.ModuleDecl`: ports, declarations,
 //! instances, analog and digital blocks.
 //!
-//! LRM clauses this file's code cites: §2.9, §3.4, §3.7, §5.10.4, §6.2, §6.3.1, §6.4, §6.4.3, §6.5, §6.6, §7.7.1, §9.18.
+//! LRM clauses this file's code cites: §2.9, §3.4, §3.7, §5.10.4, §6.2, §6.3.1, §6.4, §6.4.1, §6.4.3, §6.5, §6.6, §7.7.1, §9.18.
 //!
 //! Cut verbatim from `parser.zig`. Functions take `self: *Parser` and are called
 //! directly, `parse_module.f(self, ...)`; `parser.zig` aliases only what other modules call.
@@ -209,7 +209,7 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                     "found {s} in a paramset body",
                     .{self.found(self.pos)},
                 );
-                skipParamsetStatement(self);
+                try skipParamsetStatement(self);
             },
         }
     }
@@ -333,25 +333,41 @@ pub fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
 /// `if (c) begin ft = 1.0; end else ft = 2.0;` is ONE silent skip rather
 /// than a diagnostic per fragment. A statement that IS a block ends at its
 /// `end`/`endcase`, which carries no `;` of its own.
-pub fn skipParamsetStatement(self: *Parser) void {
+///
+/// The skip still refuses what §6.4.1 forbids a paramset outright — "Shall
+/// not use access functions. Shall not use contribution statements or event
+/// control statements. Shall not use named blocks." — because those are
+/// visible in the tokens, and dropping them silently would accept them.
+pub fn skipParamsetStatement(self: *Parser) Error!void {
     var depth: u32 = 0;
-    while (true) : (self.pos += 1) switch (self.peek()) {
-        .eof, .kw_endparamset => return,
-        .lparen, .kw_begin, .kw_case => depth += 1,
-        .rparen => depth -|= 1,
-        .kw_end, .kw_endcase => {
-            depth -|= 1;
-            if (depth == 0 and self.peekAt(1) != .kw_else) {
+    while (true) : (self.pos += 1) {
+        const what: ?[]const u8 = switch (self.peek()) {
+            .kw_potential, .kw_flow => if (self.peekAt(1) == .lparen) "an access function" else null,
+            .identifier => if (self.peekAt(1) == .lparen and self.access_names.contains(parse_expr.tokenText(self, self.pos))) "an access function" else null,
+            .kw_begin => if (self.peekAt(1) == .colon) "a named block" else null,
+            .contribute => "a contribution statement",
+            .at => "an event control",
+            else => null, // else: every other token is legal in a paramset statement
+        };
+        if (what) |w| try self.report(self.pos, .E0237, "{s}: found {s}", .{ w, self.found(self.pos) });
+        switch (self.peek()) {
+            .eof, .kw_endparamset => return,
+            .lparen, .kw_begin, .kw_case => depth += 1,
+            .rparen => depth -|= 1,
+            .kw_end, .kw_endcase => {
+                depth -|= 1;
+                if (depth == 0 and self.peekAt(1) != .kw_else) {
+                    self.pos += 1;
+                    return;
+                }
+            },
+            .semicolon => if (depth == 0 and self.peekAt(1) != .kw_else) {
                 self.pos += 1;
                 return;
-            }
-        },
-        .semicolon => if (depth == 0 and self.peekAt(1) != .kw_else) {
-            self.pos += 1;
-            return;
-        },
-        else => {}, // else: any other token is inside the statement being skipped
-    };
+            },
+            else => {}, // else: any other token is inside the statement being skipped
+        }
+    }
 }
 
 /// Accumulators for one module body. Arena-owned; `.items` becomes the
