@@ -13,11 +13,10 @@
 // Declaring `genvar i;` instead makes the file legal, and VerA compiles that
 // form (probed).
 //
-// VerA accepts this file.
+// VerA refuses it with E0238 "a loop generate's index is not a genvar".
 //
 //! lrm A.4.2
 //! reject genvar
-//! xfail VerA accepts a generate-for loop whose index `i` is declared `integer`; A.4.2's genvar_initialization ::= genvar_identifier = constant_expression requires a genvar
 `include "disciplines.vams"
 module annex_a_generate_integer_index(p, n);
   inout p, n;
