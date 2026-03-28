@@ -824,6 +824,22 @@ pub const Flatten = struct {
             // — one production, two things it can name, and §6.4 says a paramset
             // "can be instantiated exactly like a module". A module first: §6.4.2
             // selection only runs when there is nothing else the name could be.
+            //
+            // A.5.4 `udp_instantiation` arrives here too: a NAMED udp_instance
+            // is one token from a module_instance and the parser leaves it one
+            // (`parseUdpInst`), so its `#( … )` reads as a
+            // parameter_value_assignment. It is A.2.2.3's `delay2` — at most
+            // two values, positional — and, like the unnamed form, the
+            // instance reaches no analog device (W0252).
+            if (for (self.ctx.file.udps) |u| {
+                if (u.name == inst.module) break true;
+            } else false) {
+                if (inst.params.len > 2 or (inst.params.len != 0 and inst.params[0].name != .none))
+                    try self.err(inst.main_tok, .E0239, "`{s} #(…) {s}`: {d} value(s)", .{ self.ctx.file.str(inst.module), self.ctx.file.str(inst.name), inst.params.len })
+                else
+                    try self.ctx.bag.add(.lower, .W0252, Lexer.tokenSpan(self.ctx.src, self.ctx.tok_starts, inst.main_tok), "`{s}` primitive", .{self.ctx.file.str(inst.module)});
+                continue;
+            }
             var ps: ?*const Ast.ParamsetDecl = null;
             const child = elab_names.findModule(self, inst.module) orelse blk: {
                 ps = try elab_paramset.selectParamset(self, &inst) orelse continue;

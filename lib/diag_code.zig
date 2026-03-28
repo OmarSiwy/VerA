@@ -202,6 +202,10 @@ pub const Code = enum(u16) {
     E0237,
     /// A.4.2 / §6.6.1: a loop generate whose index is not a declared genvar.
     E0238,
+    /// A.5.4 / A.2.2.3: a UDP instance whose delay is not a `delay2`. Also
+    /// reported by elaboration, for the NAMED instance only it can tell from
+    /// a module instance.
+    E0239,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -1870,6 +1874,24 @@ fn infoOf(c: Code) Info {
             \\
             \\    genvar i;
             \\    for (i = 0; i < 2; i = i + 1) begin : g ... end
+            ,
+        },
+        .E0239 => .{
+            .title = "a UDP instance's delay is more than a delay2",
+            .lrm = "A.5.4",
+            .explain =
+            \\A.5.4: `udp_instantiation ::= udp_identifier [ drive_strength ]
+            \\[ delay2 ] udp_instance { , udp_instance } ;`, and A.2.2.3:
+            \\`delay2 ::= # delay_value | # ( mintypmax_expression [ ,
+            \\mintypmax_expression ] )`. A UDP has one output that is never
+            \\high impedance, so it takes a rise and a fall delay and no
+            \\turn-off delay: at most two values, written in order.
+            \\
+            \\    my_udp #(1, 2) u (o, a);      // rise 1, fall 2
+            \\    my_udp #(1, 2, 3) u (o, a);   // error: three values
+            \\
+            \\A named `.x(…)` override is not a delay at all: a UDP has no
+            \\parameters to override.
             ,
         },
         .E0234 => .{

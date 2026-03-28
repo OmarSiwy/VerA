@@ -33,8 +33,7 @@
 // THE OTHER HALF OF A.5.4 IS NOT CLAIMED HERE. A udp_instance WITH a name is
 // spelled identically to a module instance, and this parser leaves it a module
 // instantiation — elaboration resolves the name, which is the only stage that
-// can tell the two apart. So `annex_a_udp_pulse u1 (b, a);` is E0904 today, and
-// a fixture for that form would be a fixture about elaboration.
+// can tell the two apart. That form is udp_named_instance_delay2.va's.
 //
 // `b` and `a` are the output and input terminals of A.3.3's `output_terminal`/
 // `input_terminal`, reused by A.5.4 by reference. The `[ drive_strength ]` and

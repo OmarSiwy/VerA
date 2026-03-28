@@ -7,15 +7,13 @@
 // mintypmax_expression ] )`: at most two values. `#(1, 2, 3)` has three.
 // `#(1, 2)` is the legal form.
 //
-// VerA refuses this file for a different reason: it reports E0904 "instance
-// names no module: `annex_a_udp_inv`" for EVERY instance of a user-defined
-// primitive, the legal `#(1, 2)` and undelayed forms included (probed). The
-// refusal therefore says nothing about delay2, and the fixture is xfail until
-// UDP instances resolve.
+// VerA refuses it with E0239 "a UDP instance's delay is more than a delay2".
+// (It used to report E0904 "instance names no module" for EVERY named UDP
+// instance.) The legal twin, with the undelayed, `#(1)` and `#(1, 2)` forms,
+// is udp_named_instance_delay2.va.
 //
 //! lrm A.5.4
-//! reject delay
-//! xfail VerA refuses every UDP instance with E0904 "instance names no module" (the legal #(1, 2) form included), so the three-value delay is never examined; A.5.4 allows only a delay2 of at most two values
+//! reject E0239
 primitive annex_a_udp_inv(o, a);
   output o;
   input a;
