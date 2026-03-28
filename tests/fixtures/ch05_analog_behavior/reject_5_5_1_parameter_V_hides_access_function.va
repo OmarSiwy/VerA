@@ -12,12 +12,12 @@
 // With the parameter renamed (`parameter real R = 1.1;`) the same module
 // compiles (probed), so the only error is the use of the hidden name.
 //
-// VerA accepts this file and treats `V(p, n)` as the electrical potential
-// access, ignoring the parameter that shadows it.
+// VerA refuses the call with E0501 "`V` is not an access function here".
+// The legal twin, the declaration with `potential(p, n)`, is
+// parameter_V_with_generic_access.va.
 //
 //! lrm 5.5.1
 //! reject not an access function
-//! xfail VerA accepts `V(p, n)` in a module that declares `parameter real V`, reading it as the potential access; §5.5.1 says "V cannot be used as an access function because there is a parameter called V declared in the module"
 `include "disciplines.vams"
 module ch5_parameter_V_hides_access(p, n);
   inout p, n;
