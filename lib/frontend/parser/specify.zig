@@ -622,8 +622,7 @@ fn isNetLvalue(self: *const Parser, e: Ast.ExprId) bool {
         .concat => for (x.args(e)) |a| {
             if (!isNetLvalue(self, a)) break false;
         } else true,
-        // else: a literal, operator, call, access or pattern names no net, and a future tag is one of those or a name above
-        else => false,
+        else => false, // else: a literal, operator, call, access or pattern names no net; a new name form would be a new arm above
     };
 }
 
