@@ -569,31 +569,41 @@ fn buildValueTypes(self: *Analysis) Error!void {
             },
         };
     }
-    // Refine `select` and `phi` from their operands. Two sweeps in value
-    // order settle every acyclic chain; a loop-carried phi keeps `.real`,
-    // and a wrong guess only costs a redundant §4.2.1 conversion.
-    var round: u32 = 0;
-    while (round < 2) : (round += 1) {
+    // Refine `select` and `phi` from their operands, to a fixpoint as
+    // `buildDeps` does. A fixed two sweeps was not enough: SSA construction
+    // creates a chain of joins outer-first, so the outer phi precedes its
+    // operand in value order and each sweep settles one more link. Three
+    // nested `if`s left the outer phi at `.real` while the held integer it
+    // carried was declared `integer` (ARPice docs/vera-gaps.md, `heldint`).
+    //
+    // Terminates: every refined value copies exactly ONE other value's type,
+    // so the refined values form a functional graph. A chain settles one link
+    // per sweep; a cycle (a loop-carried phi whose first operand leads back to
+    // itself) is uniform after one sweep and then copies itself.
+    var changed = true;
+    while (changed) {
+        changed = false;
         v = Mir.Value.first_dynamic;
         while (v < self.nv) : (v += 1) {
             const val: Mir.Value = @enumFromInt(v);
             const def = self.mir.valueDef(val);
             if (def != .inst_result) continue;
             const inst = def.inst_result;
-            switch (Mir.opClass(self.mir.instOp(inst))) {
-                .ternary => { // `select`, the only ternary
-                    const d = self.mir.instData(inst).ternary;
-                    self.vty[v] = self.vty[@intFromEnum(self.rv(d.then_val))];
-                },
-                .phi => {
+            const src: Mir.Value = switch (Mir.opClass(self.mir.instOp(inst))) {
+                .ternary => self.rv(self.mir.instData(inst).ternary.then_val), // `select`, the only ternary
+                .phi => blk: {
                     const d = self.mir.instData(inst).phi;
                     if (d.count == 0) continue;
                     const first = self.rv(self.mir.phiPair(inst, 0).value);
                     if (first == .undef) continue;
-                    self.vty[v] = self.vty[@intFromEnum(first)];
+                    break :blk first;
                 },
-                .unary, .binary, .branch, .jump, .call, .anew, .load, .store => {},
-            }
+                .unary, .binary, .branch, .jump, .call, .anew, .load, .store => continue,
+            };
+            const t = self.vty[@intFromEnum(src)];
+            if (self.vty[v] == t) continue;
+            self.vty[v] = t;
+            changed = true;
         }
     }
 }
@@ -638,6 +648,30 @@ fn buildArrOf(self: *Analysis) Error!void {
 pub fn arrOf(self: *const Analysis, v: Mir.Value) ?u32 {
     const a = self.arr_of[@intFromEnum(self.rv(v))];
     return if (a == none_u32) null else a;
+}
+
+test "a chain of joins built outer-first types every phi from the integer at its root" {
+    // ARPice docs/vera-gaps.md `heldint`: three nested `if`s, each join's
+    // first operand the join inside it, created outer-first as SSA
+    // construction does. Two sweeps in value order left `p3` at `.real`.
+    const a = std.testing.allocator;
+    var mir: Mir = .{};
+    defer mir.deinit(a);
+    var file: Ast.SourceFile = .empty;
+    const lowered: Lowered = .{ .file = &file };
+    var b: [4]Mir.Block = undefined;
+    for (&b) |*x| x.* = try mir.addBlock(a);
+    for (0..3) |i| _ = try mir.emitJump(a, b[i], b[i + 1]);
+    const p3 = try mir.emitPhi(a, b[3], &.{});
+    const p2 = try mir.emitPhi(a, b[2], &.{});
+    const p1 = try mir.emitPhi(a, b[1], &.{.{ .block = b[0], .value = .one }});
+    try mir.setPhiPairs(a, mir.valueDef(p2).inst_result, &.{.{ .block = b[1], .value = p1 }});
+    try mir.setPhiPairs(a, mir.valueDef(p3).inst_result, &.{.{ .block = b[2], .value = p2 }});
+
+    var arena: std.heap.ArenaAllocator = .init(a);
+    defer arena.deinit();
+    const an = try build(arena.allocator(), &mir, &lowered);
+    for ([_]Mir.Value{ p1, p2, p3 }) |p| try std.testing.expectEqual(VTy.int, an.tyOf(p));
 }
 
 pub fn tyOf(self: *const Analysis, v: Mir.Value) VTy {
