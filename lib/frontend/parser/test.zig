@@ -661,9 +661,10 @@ test "errors are collected with locations and parsing continues" {
     ;
     const res = try parseForTest(arena, src);
     // `child u(p);` is a §6.2.2 module_instantiation and parses now; only
-    // `driver_update` (a reserved word) is not a module item.
+    // `driver_update` (a reserved word) is not a module item: A.1.4 derives
+    // nothing from it, so it is the syntax error E0240, not E0205.
     try std.testing.expectEqual(@as(usize, 1), res.count());
-    try std.testing.expectEqual(diag.Code.E0205, res.code(0));
+    try std.testing.expectEqual(diag.Code.E0240, res.code(0));
     try std.testing.expectEqual(@as(usize, 1), res.file.modules[0].instances.len);
 
     // The span still points at the offending token, on line 5.
