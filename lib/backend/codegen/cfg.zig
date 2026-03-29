@@ -40,7 +40,10 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
     for (self.core.lo_vals, 0..) |v, k| {
         try self.ind(depth + 1);
         try self.b(".f{d} = ", .{k});
-        try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
+        if (self.an.arrOf(v) != null)
+            try gen_render.renderArrayOut(self, v)
+        else
+            try gen_render.renderVal(self, v, self.an.vty[@intFromEnum(v)]);
         try self.b(",\n", .{});
     }
     try self.ind(depth);
@@ -51,7 +54,13 @@ pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Erro
     const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
     for (stmts) |inst| {
         const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
-        if (!self.plan.needed[i] or self.plan.slot[i] == none_u32) continue;
+        if (!self.plan.needed[i]) continue;
+        // §3.2.2 an `anew`/`store` is a statement on its storage, not a slot.
+        if (self.an.arr_of[i] != none_u32) {
+            if (!self.plan.cached(@enumFromInt(i))) try gen_render.emitArrayStmt(self, inst, depth);
+            continue;
+        }
+        if (self.plan.slot[i] == none_u32) continue;
         gen_unit.probeDef(self, self.plan.slot[i], true);
         // `or` short-circuits, so the straight-line path (`decl`, which runs
         // without a probe) never touches `place`.
@@ -187,7 +196,7 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
             try self.b("}}\n", .{});
         },
         // `an.term` is the block's branch or jump, found by opcode.
-        .unary, .binary, .ternary, .phi, .call => unreachable,
+        .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => unreachable,
     }
 }
 
@@ -290,7 +299,8 @@ fn readsPhiOf(self: *Gen, v0: Mir.Value, to: u32, depth: u32) bool {
         .call => |d| for (d.args) |a| {
             if (readsPhiOf(self, a, to, depth + 1)) break true;
         } else false,
-        .phi, .branch, .jump => true,
+        .load => |d| readsPhiOf(self, d.index, to, depth + 1),
+        .phi, .branch, .jump, .anew, .store => true,
     };
 }
 

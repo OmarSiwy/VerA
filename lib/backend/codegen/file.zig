@@ -45,11 +45,13 @@ const file_txt = gen_kernel_text.file_txt;
 const limit_txt = gen_kernel_text.limit_txt;
 const filt_txt = gen_kernel_text.filt_txt;
 const hist_txt = gen_kernel_text.hist_txt;
+const arr_txt = gen_kernel_text.arr_txt;
 const helpers_head_txt = gen_kernel_text.helpers_head_txt;
 const prelude_head_txt = gen_kernel_text.prelude_head_txt;
 const prelude_math_txt = gen_kernel_text.prelude_math_txt;
 const prelude_timer_txt = gen_kernel_text.prelude_timer_txt;
 const prelude_hist_txt = gen_kernel_text.prelude_hist_txt;
+const prelude_arr_txt = gen_kernel_text.prelude_arr_txt;
 const prelude_filt_txt = gen_kernel_text.prelude_filt_txt;
 const prelude_display_txt = gen_kernel_text.prelude_display_txt;
 const prelude_table_txt = gen_kernel_text.prelude_table_txt;
@@ -88,13 +90,16 @@ pub fn emitFile(self: *Gen) Error!void {
     // and not a convenience: it is the artifact whose host runs the per-point
     // side-effect phase these kernels have to be sequenced in.
     const files = self.display == .emit and self.lowered.uses.contains(.file_tasks);
-    try buildPrelude(self, stateful, hist, filt, timer, strs, tbl, rng, files);
+    // §3.2.2 set in lowering: a runtime-indexed array is one storage.
+    const arrs = self.lowered.mem_arrays.items.len != 0;
+    try buildPrelude(self, stateful, hist, filt, timer, strs, tbl, rng, files, arrs);
     try self.out.appendSlice(self.gpa, header_txt);
     try self.out.appendSlice(self.gpa, math_txt);
     try self.out.appendSlice(self.gpa, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
     try self.out.appendSlice(self.gpa, ops_txt);
     if (timer) try self.out.appendSlice(self.gpa, timer_txt);
     if (hist) try self.out.appendSlice(self.gpa, hist_txt);
+    if (arrs) try self.out.appendSlice(self.gpa, arr_txt);
     // §4.5.11/§4.5.12 the filter kernels are embedded from a real Zig file,
     // so they arrive already `pub` — which is right for `h.zig` and wrong
     // here: `contract.rejectStrayPubDecls` allows only contract-recognized
@@ -177,12 +182,13 @@ pub fn emitFile(self: *Gen) Error!void {
 /// `n_u` is RECOMPUTED (`contract.nU(dev)`) rather than aliased: it is
 /// private in device.zig and `contract.rejectStrayPubDecls` will not let it
 /// become public. It is the same comptime value either way.
-pub fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: bool, strs: bool, tbl: bool, rng: bool, files: bool) Error!void {
+pub fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: bool, strs: bool, tbl: bool, rng: bool, files: bool, arrs: bool) Error!void {
     var p: std.ArrayList(u8) = .empty;
     try p.appendSlice(self.arena, prelude_head_txt);
     try p.appendSlice(self.arena, prelude_math_txt);
     if (timer) try p.appendSlice(self.arena, prelude_timer_txt);
     if (hist) try p.appendSlice(self.arena, prelude_hist_txt);
+    if (arrs) try p.appendSlice(self.arena, prelude_arr_txt);
     if (filt) try p.appendSlice(self.arena, prelude_filt_txt);
     if (self.display == .emit or strs) try p.appendSlice(self.arena, prelude_display_txt);
     if (strs) try p.appendSlice(self.arena, prelude_str_txt);
@@ -211,6 +217,7 @@ pub fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: b
     try publish(self.arena, &hz, ops_txt);
     if (timer) try publish(self.arena, &hz, timer_txt);
     if (hist) try publish(self.arena, &hz, hist_txt);
+    if (arrs) try publish(self.arena, &hz, arr_txt);
     if (filt) try publish(self.arena, &hz, filt_txt);
     if (self.display == .emit or strs) try publish(self.arena, &hz, display_txt);
     if (strs) try publish(self.arena, &hz, str_txt);
@@ -930,6 +937,10 @@ pub fn emitInstance(self: *Gen) Error!void {
         // (`f64Expr`/`argF64`), because a struct field default is a comptime
         // value and a model card is not. Upgrade path: write it in
         // `initState`, which already takes a mutable `*Instance`.
+        if (h.array != none_u32) {
+            try emitHeldArrayField(self, h, self.names.held_names[i], "// §5.10 held across evaluations");
+            continue;
+        }
         const init = self.an.foldConst(self.an.rv(h.init), 0, true);
         const v: f64 = if (init) |c| c.f else 0.0;
         if (h.ty == .integer) {
@@ -950,6 +961,10 @@ pub fn emitInstance(self: *Gen) Error!void {
     // fields.
     if (fsmStateCtl(self)) {
         for (self.lowered.held_vars.items, 0..) |h, i| {
+            if (h.array != none_u32) {
+                try emitHeldArrayField(self, h, try std.fmt.allocPrint(self.arena, "{s}__acc", .{self.names.held_names[i]}), "// stateCtl accepted copy");
+                continue;
+            }
             const init = self.an.foldConst(self.an.rv(h.init), 0, true);
             const v: f64 = if (init) |c| c.f else 0.0;
             if (h.ty == .integer) {
@@ -981,6 +996,28 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\
     , .{});
     try self.w("}};\n\n", .{});
+}
+
+/// §3.2.2/§5.10 a held array's `Instance` field: its plain values, defaulting
+/// to the declared initializer element by element (§3.2's zero where the
+/// pattern is silent) — the SPEC default, as for a held scalar.
+fn emitHeldArrayField(self: *Gen, h: Lower.HeldVar, name: []const u8, comment: []const u8) Error!void {
+    const m = self.lowered.mem_arrays.items[h.array];
+    const ty: []const u8 = if (m.ty == .integer) "i64" else "f64";
+    var all_zero = true;
+    for (h.inits) |iv| {
+        const c = self.an.foldConst(self.an.rv(iv), 0, true) orelse continue;
+        if (c.f != 0.0) all_zero = false;
+    }
+    if (all_zero) return self.w("    {s}: [{d}]{s} = @splat(0), {s}\n", .{ name, m.len, ty, comment });
+    try self.w("    {s}: [{d}]{s} = .{{", .{ name, m.len, ty });
+    for (0..m.len) |k| {
+        const c = if (k < h.inits.len) self.an.foldConst(self.an.rv(h.inits[k]), 0, true) else null;
+        const v: f64 = if (c) |x| x.f else 0.0;
+        if (k != 0) try self.w(", ", .{});
+        if (m.ty == .integer) try self.w("{d}", .{std.math.lossyCast(i64, @round(v))}) else try self.w("{s}", .{try fmtF64(self, v)});
+    }
+    try self.w(" }}, {s}\n", .{comment});
 }
 
 /// A module whose §5.10 event-HELD state is fed by `cross`/`above` edges
@@ -1040,9 +1077,13 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         \\        return
     , .{if (self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter)) "state" else "_"});
     var first = true;
-    for (self.names.held_names) |n| {
+    for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
         if (!fsm) break;
-        try self.w("{s}(inst.{s} != inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n });
+        // §3.2.2 a held array compares element by element.
+        if (h.array != none_u32)
+            try self.w("{s}!std.meta.eql(inst.{s}, inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n })
+        else
+            try self.w("{s}(inst.{s} != inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n });
         first = false;
     }
     if (first) try self.w(" false", .{});

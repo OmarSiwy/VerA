@@ -436,6 +436,11 @@ pub const Gen = struct {
     /// the op around it), every `.ddxAt(u)`, and every dispatcher term whose
     /// coefficient is not a constant. See `emitDerivReads`.
     deriv_reads: u64 = 0,
+    /// §3.2.2 per `Lowered.mem_arrays` row: does some load read a version a
+    /// derivative-carrying store reached (`Analysis.dFree` of the version)?
+    /// Then the storage is `S`; otherwise plain `f64`, and a store keeps the
+    /// value alone — no load could see what it dropped. See `prepare`.
+    arr_s: []bool = &.{},
     /// The lanes a §4.5.14 `ddx` reads BY INDEX (`.ddxAt(u)`): the emitted
     /// `ddx_reads`, and a subset of `deriv_reads` by construction.
     ddx_reads: u64 = 0,
@@ -522,6 +527,13 @@ pub const Gen = struct {
         // `nv` and `nb` — a typing pass allocating eight scheduling tables was
         // the kind of side job the split exists to make visible.
         self.plan = try UnitPlan.init(self.arena, self.mir, self.an, self.display);
+        self.arr_s = try self.arena.alloc(bool, self.lowered.mem_arrays.items.len);
+        @memset(self.arr_s, false);
+        if (self.arr_s.len != 0) for (self.an.i_op, 0..) |op, ii| {
+            if (op != .fload) continue;
+            const arr: Mir.Value = @enumFromInt(self.mir.insts.items(.a)[ii]);
+            if (!self.an.dFree(arr)) self.arr_s[self.an.arrOf(arr).?] = true;
+        };
         self.names = try plan_names.plan(self.input(), self.verdict.unit_modes.len);
         // After `plan_names.plan`, which fills `branch_u` — the claim `freeFlows`
         // subtracts.

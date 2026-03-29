@@ -16,6 +16,7 @@ const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
+const gen_render = @import("render.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
@@ -133,7 +134,11 @@ pub fn emitCommon(self: *Gen) Error!void {
     const at_inst = self.out.items.len;
     try self.w("inst: InstancePtr) struct {{\n", .{});
     for (self.core.lo_vals, 0..) |v, k| {
-        try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
+        // §3.2.2 a held array's end-of-block version: its plain values.
+        if (self.an.arrOf(v)) |id| {
+            const m = self.lowered.mem_arrays.items[id];
+            try self.w("    f{d}: [{d}]{s},\n", .{ k, m.len, if (m.ty == .integer) "i64" else "f64" });
+        } else try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
     }
     try self.w("}} {{\n", .{});
     // §4.3: the STRICTEST mode of every consumer — `proof.FloatMode.strictest`
@@ -416,6 +421,24 @@ pub fn probeBody(self: *Gen, target: Mir.Value) Error!void {
     }
 }
 
+/// §3.2.2 one `var a<id>: [len]T` per memory-backed array this body writes
+/// or reads locally, in array order. Its first `anew` fills it.
+fn declareArrays(self: *Gen) Error!void {
+    const n = self.lowered.mem_arrays.items.len;
+    if (n == 0) return;
+    const seen = try self.arena.alloc(bool, n);
+    @memset(seen, false);
+    for (self.plan.live.items) |lv| {
+        const id = self.an.arrOf(lv) orelse continue;
+        if (!self.plan.cached(lv)) seen[id] = true;
+    }
+    for (seen, 0..) |s, id| {
+        if (!s) continue;
+        try self.ind(1);
+        try self.b("var a{d}: [{d}]{s} = undefined;\n", .{ id, self.lowered.mem_arrays.items[id].len, gen_render.arrElemTy(self, @intCast(id)) });
+    }
+}
+
 pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
     // FIRST, before anything can emit a slot name: slot numbering is
     // unit-local, so last unit's hoist indices would otherwise still be
@@ -436,6 +459,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         try self.ind(1);
         try self.b("const c = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
     }
+    try declareArrays(self);
     if (self.plan.straight) {
         try gen_cfg.emitBlockInsts(self, 0, 1, true);
         try gen_cfg.emitReturn(self, 1, target);

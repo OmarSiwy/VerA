@@ -252,7 +252,10 @@ fn constFree(self: Input, v0: Mir.Value, depth: u32, env: bool) bool {
         .inst_result => |inst| {
             const row = self.mir.instRow(inst);
             switch (Mir.opClass(row.op)) {
-                .branch, .jump => return false,
+                // §3.2.2 array storage is written per evaluation (and a held
+                // one carries the last accepted point): refused, like a call
+                // off the allowlist.
+                .branch, .jump, .anew, .load, .store => return false,
                 .unary => return constFree(self, @enumFromInt(row.a), depth + 1, env),
                 .binary => return constFree(self, @enumFromInt(row.a), depth + 1, env) and
                     constFree(self, @enumFromInt(row.b), depth + 1, env),

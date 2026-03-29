@@ -218,6 +218,9 @@ pub fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // writes use the same declared-order flattening and per-dimension bounds.
     const iv = try lower_stmt.runtimeArrayIndex(self, chain.subs, info.dims);
     const ty = info.ty;
+    // A memory-backed array reads one element of its storage; an invalid
+    // subscript (-1) reads the zero the `$idx` switch's default gives.
+    if (info.mem) |m| return .{ .v = try lower_param.loadElem(self, m, ty, iv), .ty = ty };
     var vals: std.ArrayList(Mir.Value) = .empty;
     defer vals.deinit(self.arena);
     try vals.append(self.arena, .zero);
@@ -336,6 +339,10 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// The Value of one scalarized element — a variable array (§3.2.2) or a
 /// parameter array (§3.4.4).
 pub fn arrayElemValue(self: *Lower, name: []const u8, idx: []const i64) Oom!?TypedValue {
+    if (self.arrays.get(name)) |info| if (info.mem) |m| return .{
+        .v = try lower_param.loadElem(self, m, info.ty, try self.mir.addIntConst(self.arena, lower_param.flatIndex(info.dims, idx))),
+        .ty = info.ty,
+    };
     var key_buf: [lower_param.elem_key_len]u8 = undefined;
     const key = try lower_param.elemKey(self, &key_buf, name, idx);
     if (self.vars.get(key)) |slot|

@@ -187,6 +187,7 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
     const op = row.op;
     if (op == .call) return gen_call.emitCall(self, inst);
     if (op == .phi) return self.b("S.con(0.0)", .{}); // materialised as a var
+    if (op == .fload or op == .iload) return renderLoad(self, inst);
 
     // A whole derivative-free subtree comes out as ONE `S.con` over plain
     // f64 arithmetic, which is contract.zig's rule for physics code:
@@ -276,6 +277,111 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
         return;
     }
     return renderOp(self, op, a, b2, self.an.vty[@intFromEnum(self.mir.instResult(inst))]);
+}
+
+// ---- §3.2.2 memory-backed arrays ------------------------------------------
+//
+// Every version of array `id` is ONE local `a<id>: [len]T`: `anew` fills it,
+// `store` writes one element, a phi joins nothing (the versions share the
+// storage), and a load reads one element where it stands — `plan/unit.zig`
+// never inlines a load past a later store. `T` is `S` only when some load
+// reads a derivative a store put there (`Gen.arr_s`); otherwise the storage
+// is plain `f64`/`i64` and a store keeps the value alone. A version read out
+// of the core's cache (the held final value) is the core's plain field.
+
+/// Is array `id`'s storage plain `f64`/`i64` rather than `S`?
+fn arrPlain(self: *const Gen, id: u32) bool {
+    return self.lowered.mem_arrays.items[id].ty == .integer or !self.arr_s[id];
+}
+
+/// The element type array `id` is stored as.
+pub fn arrElemTy(self: *const Gen, id: u32) []const u8 {
+    if (self.lowered.mem_arrays.items[id].ty == .integer) return "i64";
+    return if (self.arr_s[id]) "S" else "f64";
+}
+
+/// Write the storage array version `v` lives in; true when it holds plain
+/// values (a cached version always does).
+fn arrRef(self: *Gen, v0: Mir.Value) Error!bool {
+    const v = self.an.rv(v0);
+    if (self.plan.cached(v)) {
+        try self.b("c.f{d}", .{self.core.lo_idx[@intFromEnum(v)]});
+        return true;
+    }
+    const id = self.an.arrOf(v).?;
+    try self.b("a{d}", .{id});
+    return arrPlain(self, id);
+}
+
+/// `a[i]`, with §3.2.2's zero for an index outside the array (`zArrLd`).
+pub fn renderLoad(self: *Gen, inst: Mir.Inst) Error!void {
+    const d = self.mir.instData(inst).load;
+    if (d.op == .iload) {
+        try self.b("zArrLd(i64, &", .{});
+        _ = try arrRef(self, d.arr);
+        try self.b(", ", .{});
+        try renderVal(self, d.index, .int);
+        return self.b(", 0)", .{});
+    }
+    const at = self.out.items.len;
+    try self.b("zArrLd(S, &", .{});
+    if (try arrRef(self, d.arr)) {
+        // Plain storage: re-spell the head, the index follows either way.
+        const name = try self.arena.dupe(u8, self.out.items[at + "zArrLd(S, &".len ..]);
+        self.out.shrinkRetainingCapacity(at);
+        try self.b("S.con(zArrLd(f64, &{s}, ", .{name});
+        try renderVal(self, d.index, .int);
+        return self.b(", 0.0))", .{});
+    }
+    try self.b(", ", .{});
+    try renderVal(self, d.index, .int);
+    try self.b(", S.con(0.0))", .{});
+}
+
+/// The statement an `anew` or a `store` is, at its place in the block.
+pub fn emitArrayStmt(self: *Gen, inst: Mir.Inst, depth: u32) Error!void {
+    try self.ind(depth);
+    switch (self.mir.instData(inst)) {
+        .anew => |d| {
+            const m = self.lowered.mem_arrays.items[d.array];
+            const plain = arrPlain(self, d.array);
+            if (m.held == none_u32) {
+                const zero: []const u8 = if (m.ty == .integer) "0" else if (plain) "0.0" else "S.con(0.0)";
+                return self.b("@memset(&a{d}, {s});\n", .{ d.array, zero });
+            }
+            // §5.10 a held array starts from what the last accepted
+            // evaluation left in its `Instance` field.
+            self.uses_inst = true;
+            const f = self.names.held_names[m.held];
+            if (plain) return self.b("a{d} = inst.{s};\n", .{ d.array, f });
+            return self.b("for (&a{d}, inst.{s}) |*zd, zs| zd.* = S.con(zs);\n", .{ d.array, f });
+        },
+        .store => |d| {
+            const id = self.an.arrOf(d.arr).?;
+            try self.b("zArrSt({s}, &a{d}, ", .{ arrElemTy(self, id), id });
+            try renderVal(self, d.index, .int);
+            try self.b(", ", .{});
+            if (self.lowered.mem_arrays.items[id].ty == .integer) {
+                try renderVal(self, d.value, .int);
+            } else if (arrPlain(self, id)) {
+                // No load reads this element's derivative, so the value alone
+                // is kept — a scalar collapse of an x-dependent value.
+                float_lanes.pinLanes(self, d.value);
+                try self.b("(", .{});
+                try renderVal(self, d.value, .real);
+                try self.b(").val()", .{});
+            } else try renderVal(self, d.value, .real);
+            return self.b(");\n", .{});
+        },
+        .unary, .binary, .ternary, .phi, .branch, .jump, .call, .load => unreachable, // `emitBlockInsts` sends only array versions
+    }
+}
+
+/// A held array's end-of-block version as the core's plain `[len]f64`/`i64`.
+pub fn renderArrayOut(self: *Gen, v: Mir.Value) Error!void {
+    const id = self.an.arrOf(v).?;
+    if (arrPlain(self, id)) return self.b("a{d}", .{id});
+    try self.b("zArrVal(S, {d}, &a{d})", .{ self.lowered.mem_arrays.items[id].len, id });
 }
 
 /// One opcode, rendered. Shared with the `$`-prefixed spellings of the same
@@ -547,7 +653,8 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
         // against a WIDTH, and §3.2.1 fixes the Verilog-A `integer` at 32
         // bits — so `>>` is not `std.math.shr(i64, ...)`, which sign-fills.
         .shr => try shrLogical(self, a, b2),
-        .phi, .select, .call, .branch, .jump => unreachable,
+        // §3.2.2 array ops are rendered by `renderLoad`/`emitArrayStmt`.
+        .phi, .select, .call, .branch, .jump, .anew, .fload, .iload, .store => unreachable,
     }
 }
 
@@ -570,7 +677,7 @@ pub fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
         .unary => foldHidesSlot(self, @enumFromInt(row.a), depth + 1),
         .binary => foldHidesSlot(self, @enumFromInt(row.a), depth + 1) or
             foldHidesSlot(self, @enumFromInt(row.b), depth + 1),
-        .ternary, .phi, .branch, .jump, .call => true,
+        .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => true,
     };
 }
 

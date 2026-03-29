@@ -172,6 +172,23 @@ pub const Opcode = enum(u8) {
     path_acc,
     // --- value-form conditional §4.2.12 (`?:` that needs no CFG split) ---
     select,
+    // --- §3.2.2 memory-backed arrays (`Lowered.mem_arrays`) ---
+    /// A fresh version of array `a` (an index into `Lowered.mem_arrays`, NOT a
+    /// Value): every element zero, or — for a §5.10 held array — the values
+    /// the last accepted evaluation left in its `Instance` field.
+    anew,
+    /// Element `b` of array version `a`; real / integer by the array's type.
+    /// `b` is the flat element index, and any index outside `0..len` reads
+    /// the element type's zero (§3.2.2 names no element there; lowering's
+    /// `runtimeArrayIndex` encodes an invalid subscript as -1).
+    fload,
+    iload,
+    /// Array version `a` with element `b` set to `c`: a NEW version. An index
+    /// outside `0..len` writes nothing. Every version of one array shares one
+    /// storage, so a version is dead once a store has been made from it —
+    /// lowering never reads an older one, and no pass may make one live
+    /// again (if-conversion keeps any arm that stores).
+    store,
     // --- control §5.8/§5.9 ---
     phi,
     branch,
@@ -179,7 +196,7 @@ pub const Opcode = enum(u8) {
     call,
 };
 
-pub const OpClass = enum(u8) { unary, binary, ternary, phi, branch, jump, call };
+pub const OpClass = enum(u8) { unary, binary, ternary, phi, branch, jump, call, anew, load, store };
 
 /// Operand shape of an opcode. Drives `instData` decoding.
 pub fn opClass(op: Opcode) OpClass {
@@ -204,6 +221,9 @@ pub fn opIsInteger(op: Opcode) bool {
 ///   jump    a = target Block                                (§5.9)
 ///   call    a = Callee, b = extra start (the raw name's StrId, then the
 ///           args), c = arg count
+///   anew    a = array id (`Lowered.mem_arrays` index)                (§3.2.2)
+///   load    a = array version, b = flat index
+///   store   a = array version, b = flat index, c = value
 pub const InstRow = struct {
     op: Opcode,
     a: u32 = 0,
@@ -269,6 +289,9 @@ pub const InstData = union(OpClass) {
     /// `name` is the spelling the call was emitted with: `@tagName(callee)`,
     /// except for `.systf`, whose name only this carries.
     call: struct { callee: Callee, name: []const u8, args: []const Value },
+    anew: struct { array: u32 },
+    load: struct { op: Opcode, arr: Value, index: Value },
+    store: struct { arr: Value, index: Value, value: Value },
 };
 
 pub const PhiPair = struct { block: Block, value: Value };
@@ -554,7 +577,7 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
     while (term != .none) : (term = next[@intFromEnum(term)]) {
         switch (opClass(self.instOp(term))) {
             .branch, .jump => break,
-            .unary, .binary, .ternary, .phi, .call => prev = term,
+            .unary, .binary, .ternary, .phi, .call, .anew, .load, .store => prev = term,
         }
     } else return false;
     const tail = last[@intFromEnum(from)];
@@ -595,8 +618,9 @@ pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: [
     assert(switch (opClass(op)) {
         .unary => ops.len == 1,
         .binary => ops.len == 2,
-        .ternary => ops.len == 3,
-        .phi, .branch, .jump, .call => false, // dedicated builders
+        .ternary, .store => ops.len == 3,
+        .load => ops.len == 2,
+        .phi, .branch, .jump, .call, .anew => false, // dedicated builders
     });
     const result = try self.addValue(gpa, .inst_result, 0);
     const inst = try self.addInst(gpa, block, .{
@@ -606,6 +630,14 @@ pub fn emit(self: *Mir, gpa: std.mem.Allocator, block: Block, op: Opcode, ops: [
         .c = if (ops.len > 2) @intFromEnum(ops[2]) else 0,
         .result = result,
     });
+    self.defs.items(.payload)[@intFromEnum(result) - Value.first_dynamic] = @intFromEnum(inst);
+    return result;
+}
+
+/// §3.2.2 a fresh version of memory-backed array `array` (see `Opcode.anew`).
+pub fn emitAnew(self: *Mir, gpa: std.mem.Allocator, block: Block, array: u32) !Value {
+    const result = try self.addValue(gpa, .inst_result, 0);
+    const inst = try self.addInst(gpa, block, .{ .op = .anew, .a = array, .result = result });
     self.defs.items(.payload)[@intFromEnum(result) - Value.first_dynamic] = @intFromEnum(inst);
     return result;
 }
@@ -714,6 +746,13 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
             .name = self.strings.get(@enumFromInt(self.extra.items[row.b])),
             // Borrowed slice into the payload pool; invalidated by further appends.
             .args = @ptrCast(self.extra.items[row.b + 1 ..][0..row.c]),
+        } },
+        .anew => .{ .anew = .{ .array = row.a } },
+        .load => .{ .load = .{ .op = row.op, .arr = @enumFromInt(row.a), .index = @enumFromInt(row.b) } },
+        .store => .{ .store = .{
+            .arr = @enumFromInt(row.a),
+            .index = @enumFromInt(row.b),
+            .value = @enumFromInt(row.c),
         } },
     };
 }

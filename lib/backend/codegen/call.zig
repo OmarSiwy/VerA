@@ -251,6 +251,10 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .branch,
                 .jump,
                 .call,
+                .anew,
+                .fload,
+                .iload,
+                .store,
                 => unreachable,
             };
         },
@@ -392,8 +396,9 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
                         fix[0], a, fix[1], b2, fix[2],
                     });
                 },
-                // `select`/`phi` returned above; the rest are not values.
-                .ternary, .phi, .branch, .jump, .call => return null,
+                // `select`/`phi` returned above; the rest are not values, and
+                // a §3.2.2 array element is not one a model card can derive.
+                .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => return null,
             }
         },
         .undef, .float_const, .int_const, .str_const, .block_param => return null,

@@ -166,6 +166,12 @@ pub const table = std.EnumArray(Opcode, Info).init(.{
     .path_prev = .{ .class = .unary, .fold = .none },
     .path_acc = .{ .class = .unary, .fold = .none },
     .select = .{ .class = .ternary, .fold = .none },
+    // §3.2.2 memory-backed arrays: an element is not a value of the index's
+    // operands, so nothing folds; an `iload` is a §3.2 integer.
+    .anew = .{ .class = .anew, .fold = .none },
+    .fload = .{ .class = .load, .fold = .none },
+    .iload = .{ .class = .load, .int = true, .fold = .none },
+    .store = .{ .class = .store, .fold = .none },
     .phi = .{ .class = .phi, .fold = .none },
     .branch = .{ .class = .branch, .fold = .none },
     .jump = .{ .class = .jump, .fold = .none },

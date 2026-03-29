@@ -17,6 +17,7 @@ const lower_expr = @import("expr.zig");
 const lower_param = @import("param.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
+const Ssa = @import("../ssa.zig");
 const Elaborate = @import("../elaborate.zig");
 const diag = @import("diag");
 const Oom = Lower.Oom;
@@ -231,10 +232,9 @@ pub fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void
             for (elems, 0..) |elem, k| {
                 if (elem == .none) continue;
                 lower_param.shapeSubscripts(info.dims, k, idx);
-                const slot = self.vars.get(try lower_param.elemKey(self, &key_buf, name, idx)) orelse continue;
+                if (info.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, name, idx))) continue;
                 const tv = try lower_expr.lowerExpr(self, elem);
-                const v = try self.coerceTo(elem, slot.ty, tv);
-                try self.builder.writeVariable(slot.place, self.cur, v);
+                try lower_param.writeElem(self, name, info, idx, try self.coerceTo(elem, info.ty, tv));
             }
             return;
         }
@@ -265,13 +265,12 @@ pub fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void
     if (ex.tag(target) == .index) {
         if (try assignRuntimeIndex(self, target, value)) return;
     }
-    const slot = try resolveLvalue(self, target) orelse {
+    const lv = try resolveLvalue(self, target) orelse {
         _ = try lower_expr.lowerExpr(self, value); // keep collecting errors from the rhs
         return;
     };
     const tv = try lower_expr.lowerExpr(self, value);
-    const v = try self.coerceTo(value, slot.ty, tv);
-    try self.builder.writeVariable(slot.place, self.cur, v);
+    try writeLvalue(self, lv, try self.coerceTo(value, lv.ty, tv));
     // §4.6.4: remember that this name now carries a noise source, so a later
     // `I(a,b) <+ n;` still exports the generator. Recorded AFTER the rhs is
     // lowered so the walk below sees the same expression the value came from.
@@ -328,6 +327,12 @@ pub fn writeRuntimeIndex(self: *Lower, target: Ast.ExprId, at_e: Ast.ExprId, tv:
 
     const iv = try runtimeArrayIndex(self, chain.subs, info.dims);
     const new = try self.coerceTo(at_e, info.ty, tv);
+    // A memory-backed array stores one element; an invalid subscript (-1)
+    // stores nothing, as every masked write below leaves its cell.
+    if (info.mem) |m| {
+        try lower_param.storeElem(self, m.place, iv, new);
+        return true;
+    }
     var key_buf: [lower_param.elem_key_len]u8 = undefined;
     var sub: [lower_param.max_stack_dims]i64 = undefined;
     const at = try lower_param.subscriptBuf(self, &sub, info.dims.len);
@@ -436,10 +441,10 @@ pub fn copyWholeArray(
         lower_param.shapeSubscripts(dst.dims, k, di);
         lower_param.shapeSubscripts(src.dims, k, si);
         const v = (try lower_expr.arrayElemValue(self, src_name, si)) orelse continue;
-        const slot = self.vars.get(try lower_param.elemKey(self, &key_buf, dst_name, di)) orelse continue;
+        if (dst.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, dst_name, di))) continue;
         // The element types are already known equivalent, so there is no
         // conversion to make here — only the source's `Value` to re-bind.
-        try self.builder.writeVariable(slot.place, self.cur, v.v);
+        try lower_param.writeElem(self, dst_name, dst, di, v.v);
     }
     return true;
 }
@@ -550,6 +555,14 @@ pub fn readSliceCells(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, sd: []const
     // subscript outside its dimension, which `$idx` reads as the default 0 —
     // the rule `lowerIndex` already applies to an out-of-range scalar read.
     const iv = try runtimeArrayIndex(self, s.subs, pdims);
+    // Memory-backed: cell k of row `iv` is element `iv * cells + k`, and the
+    // invalid row -1 lands below 0, which reads the same zero.
+    if (s.info.mem) |m| {
+        const row = try self.emit(.imul, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(out.len)) });
+        for (out, 0..) |*v, k|
+            v.* = try lower_param.loadElem(self, m, s.info.ty, try self.emit(.iadd, &.{ row, try self.mir.addIntConst(self.arena, @intCast(k)) }));
+        return true;
+    }
     const callee: []const u8 = switch (s.info.ty) {
         .real => "$idx",
         .integer => "$idx$int",
@@ -582,12 +595,19 @@ pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []cons
         if (!known) return true;
         for (vals, 0..) |v, k| {
             lower_param.shapeSubscripts(dd, k, idx[d.subs.len..]);
-            const slot = self.vars.get(try lower_param.elemKey(self, &key_buf, d.name, idx)) orelse continue;
-            try self.builder.writeVariable(slot.place, self.cur, v);
+            if (d.info.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, d.name, idx))) continue;
+            try lower_param.writeElem(self, d.name, d.info, idx, v);
         }
         return true;
     }
     const iv = try runtimeArrayIndex(self, d.subs, pdims);
+    // Memory-backed: the `readSliceCells` addressing; row -1 writes nothing.
+    if (d.info.mem) |m| {
+        const row = try self.emit(.imul, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(vals.len)) });
+        for (vals, 0..) |v, k|
+            try lower_param.storeElem(self, m.place, try self.emit(.iadd, &.{ row, try self.mir.addIntConst(self.arena, @intCast(k)) }), v);
+        return true;
+    }
     for (0..lower_param.shapeCells(pdims)) |p| {
         lower_param.shapeSubscripts(pdims, p, idx[0..d.subs.len]);
         const hit = try self.emit(.ieq, &.{ iv, try self.mir.addIntConst(self.arena, @intCast(p)) });
@@ -619,14 +639,39 @@ pub fn constPrefix(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, out: []i64) Oo
     return true;
 }
 
+/// An assignable location (§5.7): a variable, or one element of an array. An
+/// element of a memory-backed array (§3.2.2) has no SSA place of its own, so
+/// the location is read and written through `readLvalue`/`writeLvalue` only.
+pub const Lvalue = struct {
+    ty: Lower.Ty,
+    at: union(enum) {
+        place: Ssa.Place,
+        elem: struct { place: Ssa.Place, index: Mir.Value },
+    },
+};
+
+pub fn readLvalue(self: *Lower, lv: Lvalue) Oom!Mir.Value {
+    return switch (lv.at) {
+        .place => |p| self.builder.readVariable(p, self.cur),
+        .elem => |el| self.emit(if (lv.ty == .integer) .iload else .fload, &.{ try self.builder.readVariable(el.place, self.cur), el.index }),
+    };
+}
+
+pub fn writeLvalue(self: *Lower, lv: Lvalue, v: Mir.Value) Oom!void {
+    switch (lv.at) {
+        .place => |p| try self.builder.writeVariable(p, self.cur, v),
+        .elem => |el| try lower_param.storeElem(self, el.place, el.index, v),
+    }
+}
+
 /// An assignable location: `x` or `x[<constant>]` (§3.2.2). Anything else is a
 /// diagnostic rather than a silent no-op.
-pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
+pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?Lvalue {
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .ident => {
             const name = self.file.str(ex.strOf(e));
-            if (self.vars.get(name)) |s| return s;
+            if (self.vars.get(name)) |s| return .{ .ty = s.ty, .at = .{ .place = s.place } };
             if (self.param_index.contains(name)) {
                 var b = self.errWith(self.file.exprs.mainTok(e), .E0312);
                 b.msg("`{s}`", .{name});
@@ -686,14 +731,19 @@ pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?VarSlot {
     }
 }
 
-pub fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oom!?VarSlot {
+pub fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oom!?Lvalue {
     const info = self.arrays.get(name) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0309, "`{s}`", .{name});
         return null;
     };
     if (!try checkSubscripts(self, e, name, info, idx)) return null;
+    if (info.mem) |m| return .{ .ty = info.ty, .at = .{ .elem = .{
+        .place = m.place,
+        .index = try self.mir.addIntConst(self.arena, lower_param.flatIndex(info.dims, idx)),
+    } } };
     var key_buf: [lower_param.elem_key_len]u8 = undefined;
-    return self.vars.get(try lower_param.elemKey(self, &key_buf, name, idx));
+    const s = self.vars.get(try lower_param.elemKey(self, &key_buf, name, idx)) orelse return null;
+    return .{ .ty = s.ty, .at = .{ .place = s.place } };
 }
 
 /// The base identifier and the subscripts of `name[i][j]…` (§3.2), outermost

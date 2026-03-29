@@ -46,6 +46,9 @@ pub const State = struct {
     /// nearest declaration of it — a module variable assigned from inside a block
     /// still keys bare, because the block does not declare it.
     held_frames: std.ArrayList(HeldFrame) = .empty,
+    /// §3.2.2 array names some subscript indexes at run time (`markMemArrays`):
+    /// `declareVarDecl` gives such an array one memory-backed storage.
+    mem_names: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty,
 };
 
 /// One enclosing §5.3.2 named block, as `scanHeld` sees it: the dotted prefix
@@ -779,6 +782,30 @@ pub fn declareVarDecl(self: *Lower, decl: *const Ast.VarDecl, scope: VarScope) O
 
     if (decl.dims.len != 0) {
         const dims = try dimsBounds(self, decl.dims, decl.main_tok, name) orelse return;
+        if (isMemArray(self, decl.name, ty)) {
+            const place = try declareMemArray(self, name, dims, ty, !hold);
+            const elems = try flattenPattern(self, decl.init, dims);
+            if (hold) {
+                // §5.10 the initializer is the `Instance` field's default and
+                // nothing else, exactly as for a held scalar: every evaluation
+                // starts from what the last accepted one left.
+                const inits = try self.arena.alloc(Mir.Value, elems.len);
+                for (elems, inits) |elem, *iv| iv.* = if (elem != .none)
+                    try self.coerceTo(elem, ty, try lower_expr.lowerExpr(self, elem))
+                else
+                    zeroOf(ty);
+                const id = self.arrays.get(name).?.mem.?.id;
+                try self.builder.writeVariable(place, self.cur, try holdArray(self, try qualifyHeld(self, prefix, name), ty, id, inits, place));
+                return;
+            }
+            // §3.2 an element the pattern does not reach keeps the zero start.
+            for (elems, 0..) |elem, k| {
+                if (elem == .none) continue;
+                const v = try self.coerceTo(elem, ty, try lower_expr.lowerExpr(self, elem));
+                try storeElem(self, place, try self.mir.addIntConst(self.arena, @intCast(k)), v);
+            }
+            return;
+        }
         try declareArray(self, name, .{ .dims = dims, .ty = ty });
         // §3.3's own example is `string names[1:3] = '{"first","middle","last"}`:
         // the declaration takes an initializer exactly like the §3.4.4 array
@@ -828,6 +855,17 @@ pub fn qualifyHeld(self: *Lower, prefix: []const u8, name: []const u8) Oom![]con
     return std.fmt.allocPrint(self.arena, "{s}{s}", .{ prefix, name });
 }
 
+/// Codegen makes one `Instance` field per `held_vars` entry out of its name, so
+/// the name has to be unique. It is — until a §6.6.1 unrolled `for` lowers the
+/// SAME named block twice, which is two executions of one source declaration
+/// and so, by §5.3.2, two locations that happen to share a path.
+fn uniqueHeld(self: *Lower, name: []const u8, idx: u32) Oom![]const u8 {
+    for (self.out.held_vars.items) |h| {
+        if (std.mem.eql(u8, h.name, name)) return std.fmt.allocPrint(self.arena, "{s}.{d}", .{ name, idx });
+    }
+    return name;
+}
+
 /// §5.10. Give one event-assigned variable its persistent `Instance` slot and
 /// return the Value that READS that slot.
 ///
@@ -849,25 +887,130 @@ pub fn holdSlot(self: *Lower, name: []const u8, ty: Ty, init_val: Mir.Value, pla
     // is that diamond's join. Either way it dominates every statement of the
     // module, which is all the seed has to do.
     const idx: i64 = @intCast(self.out.held_vars.items.len);
-    // Codegen makes one `Instance` field per entry out of `name`, so the name
-    // has to be unique. It is — until a §6.6.1 unrolled `for` lowers the SAME
-    // named block twice, which is two executions of one source declaration and
-    // so, by §5.3.2, two locations that happen to share a path.
-    var field = name;
-    for (self.out.held_vars.items) |h| {
-        if (!std.mem.eql(u8, h.name, name)) continue;
-        field = try std.fmt.allocPrint(self.arena, "{s}.{d}", .{ name, idx });
-        break;
-    }
     const seed = try self.call(if (ty == .integer) "$held_int" else "$held_real", &.{try self.mir.addIntConst(self.arena, idx)});
     try self.out.held_vars.append(self.arena, .{
-        .name = field,
+        .name = try uniqueHeld(self, name, @intCast(idx)),
         .ty = ty,
         .init = init_val,
         .seed = seed,
     });
     try self.held_places.append(self.arena, place);
     return seed;
+}
+
+/// §5.10 `holdSlot` for a memory-backed array: ONE held row whose seed is the
+/// array's `anew` (which codegen fills from the `Instance` field) and whose
+/// final value is the array version the block ends with.
+fn holdArray(self: *Lower, name: []const u8, ty: Ty, id: u32, inits: []const Mir.Value, place: Ssa.Place) Oom!Mir.Value {
+    const idx: u32 = @intCast(self.out.held_vars.items.len);
+    const seed = try self.mir.emitAnew(self.arena, self.cur, id);
+    self.out.mem_arrays.items[id].held = idx;
+    try self.out.held_vars.append(self.arena, .{
+        .name = try uniqueHeld(self, name, idx),
+        .ty = ty,
+        .init = zeroOf(ty),
+        .seed = seed,
+        .array = id,
+        .inits = inits,
+    });
+    try self.held_places.append(self.arena, place);
+    return seed;
+}
+
+/// §3.2.2 is `name` a memory-backed array? A string array never is: a string
+/// has no runtime storage (§3.3), so its runtime reads stay `$idx$str`.
+pub fn isMemArray(self: *const Lower, name: Ast.StrId, ty: Ty) bool {
+    return ty != .string and self.param_state.mem_names.contains(name);
+}
+
+/// §3.2.2 declare `name` as ONE storage of `shapeCells(dims)` elements and
+/// return the place that holds its current version — when `zero`, a fresh one
+/// with every element zero (§3.2); otherwise the caller writes the first.
+pub fn declareMemArray(self: *Lower, name: []const u8, dims: []const Bounds, ty: Ty, zero: bool) Oom!Ssa.Place {
+    const id: u32 = @intCast(self.out.mem_arrays.items.len);
+    try self.out.mem_arrays.append(self.arena, .{ .name = name, .len = @intCast(shapeCells(dims)), .ty = ty });
+    const place = self.builder.newPlace();
+    try declareArray(self, name, .{ .dims = dims, .ty = ty, .mem = .{ .place = place, .id = id } });
+    if (zero) try self.builder.writeVariable(place, self.cur, try self.mir.emitAnew(self.arena, self.cur, id));
+    return place;
+}
+
+/// §3.2.2 `a[index] = v` on a memory-backed array: the next version.
+pub fn storeElem(self: *Lower, place: Ssa.Place, index: Mir.Value, v: Mir.Value) Oom!void {
+    const cur = try self.builder.readVariable(place, self.cur);
+    try self.builder.writeVariable(place, self.cur, try self.emit(.store, &.{ cur, index, v }));
+}
+
+/// §3.2.2 element `index` of a memory-backed array's current version.
+pub fn loadElem(self: *Lower, mem: ArrayInfo.Mem, ty: Ty, index: Mir.Value) Oom!Mir.Value {
+    const cur = try self.builder.readVariable(mem.place, self.cur);
+    return self.emit(if (ty == .integer) .iload else .fload, &.{ cur, index });
+}
+
+/// The flat element index of an in-range subscript tuple: row-major, each
+/// dimension counted from its left bound — `shapeSubscripts`' inverse and
+/// `lower_stmt.runtimeArrayIndex`'s order.
+pub fn flatIndex(dims: []const Bounds, idx: []const i64) i64 {
+    var flat: i64 = 0;
+    for (dims, idx) |d, i| flat = flat * d.count() + (if (d.descending) d.hi - i else i - d.lo);
+    return flat;
+}
+
+/// §3.2.2 constant-subscript element write for either representation: the
+/// element's own place, or a store into the array's storage.
+pub fn writeElem(self: *Lower, name: []const u8, info: ArrayInfo, idx: []const i64, v: Mir.Value) Oom!void {
+    if (info.mem) |m| return storeElem(self, m.place, try self.mir.addIntConst(self.arena, flatIndex(info.dims, idx)), v);
+    var key_buf: [elem_key_len]u8 = undefined;
+    const slot = self.vars.get(try elemKey(self, &key_buf, name, idx)) orelse return;
+    try self.builder.writeVariable(slot.place, self.cur, v);
+}
+
+/// §3.2.2 which arrays does some subscript index at run time? Lowering decides
+/// that per reference (`lower_expr.lowerIndex`: a subscript `foldExpr(.., false)`
+/// cannot fold), after the declaration has already chosen a representation, so
+/// this answers it ahead of time, by NAME and over the whole source, with the
+/// same rule: a subscript reading a variable, a parameter (a model card can
+/// override it) or a call is runtime; a literal, a genvar (§3.5: an unrolled
+/// loop binds it) and a local constant are not.
+///
+/// The answer only picks a representation — both lower every access — so a
+/// wrong guess costs speed and never meaning. A runtime-indexed array kept
+/// scalar reads through a `$idx` switch over every element and writes one
+/// masked select per element; txl.va's 5 x 2048 histories were 26 MB of Zig.
+pub fn markMemArrays(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    var vars: std.AutoHashMapUnmanaged(Ast.StrId, void) = .empty;
+    defer vars.deinit(self.arena);
+    for (module.vars) |v| try vars.put(self.arena, v.name, {});
+    for (module.functions) |f| {
+        for (f.vars) |v| try vars.put(self.arena, v.name, {});
+        for (f.args) |a| try vars.put(self.arena, a.name, {});
+    }
+    for (self.file.stmts.items) |st| if (st == .block) for (st.block.vars) |v| try vars.put(self.arena, v.name, {});
+    const ex = &self.file.exprs;
+    for (0..ex.nodes.len) |i| {
+        const e: Ast.ExprId = @enumFromInt(@as(u32, @intCast(i)));
+        if (ex.tag(e) != .index or !runtimeSub(self, &vars, module.genvars, ex.rhs(e))) continue;
+        var base = ex.lhs(e);
+        while (ex.tag(base) == .index) base = ex.lhs(base);
+        if (ex.tag(base) == .ident) try self.param_state.mem_names.put(self.arena, ex.strOf(base), {});
+    }
+}
+
+fn runtimeSub(self: *const Lower, vars: *const std.AutoHashMapUnmanaged(Ast.StrId, void), genvars: []const Ast.StrId, e: Ast.ExprId) bool {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .ident => {
+            const n = ex.strOf(e);
+            if (std.mem.indexOfScalar(Ast.StrId, genvars, n) != null) return false;
+            return vars.contains(n) or self.param_index.contains(self.file.str(n));
+        },
+        .call, .sys_call, .hier_ident, .branch_access, .port_access, .filter_call, .noise_call => return true,
+        else => { // else: every other node is runtime exactly when an operand is
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(e, &buf)) |c| if (runtimeSub(self, vars, genvars, c)) return true;
+            return false;
+        },
+    }
 }
 
 /// §5.10. Collect the variables assigned inside an `@(<event>)` body, before
