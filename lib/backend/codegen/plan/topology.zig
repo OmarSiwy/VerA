@@ -157,7 +157,9 @@ pub fn isFlowUnknown(self: Input, i: u32) bool {
 /// retention flag, carried as a core field) is nonzero at build time,
 /// the host aliases unknown `victim` and the branch-flow unknown
 /// `flow_u` onto unknown `target`. Indices are `nodes`/U-enum space.
-pub const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: Mir.Value };
+/// `card`: the flag is a function of the model card ALONE (`cardOnly`), so
+/// `derive` can publish it as a `Model` field — the `jac_const` guard.
+pub const CollapsePair = struct { victim: u32, target: u32, flow_u: u32, flag: Mir.Value, card: bool = false };
 
 /// A §5.4.2 branch-flow unknown that no branch row defines.
 ///
@@ -231,6 +233,17 @@ pub fn freeFlows(self: Input, branch_u: []const u32) Error![]const FreeFlow {
 /// values, which recursion refuses. Loop-carried phis are refused
 /// outright.
 pub fn buildFree(self: Input, v0: Mir.Value, depth: u32) bool {
+    return constFree(self, v0, depth, true);
+}
+
+/// `buildFree` without the Instance: no §9.10 `$temperature`/`$vt`, no
+/// §6.3.6 `$mfactor`. What is left is a function of the model card, which
+/// `derive` — it has no Instance — can compute.
+pub fn cardOnly(self: Input, v0: Mir.Value) bool {
+    return constFree(self, v0, 0, false);
+}
+
+fn constFree(self: Input, v0: Mir.Value, depth: u32, env: bool) bool {
     if (depth > 64) return false;
     const v = self.an.rv(v0);
     switch (self.mir.valueDef(v)) {
@@ -240,20 +253,21 @@ pub fn buildFree(self: Input, v0: Mir.Value, depth: u32) bool {
             const row = self.mir.instRow(inst);
             switch (Mir.opClass(row.op)) {
                 .branch, .jump => return false,
-                .unary => return buildFree(self, @enumFromInt(row.a), depth + 1),
-                .binary => return buildFree(self, @enumFromInt(row.a), depth + 1) and
-                    buildFree(self, @enumFromInt(row.b), depth + 1),
-                .ternary => return buildFree(self, @enumFromInt(row.a), depth + 1) and
-                    buildFree(self, @enumFromInt(row.b), depth + 1) and
-                    buildFree(self, @enumFromInt(row.c), depth + 1),
+                .unary => return constFree(self, @enumFromInt(row.a), depth + 1, env),
+                .binary => return constFree(self, @enumFromInt(row.a), depth + 1, env) and
+                    constFree(self, @enumFromInt(row.b), depth + 1, env),
+                .ternary => return constFree(self, @enumFromInt(row.a), depth + 1, env) and
+                    constFree(self, @enumFromInt(row.b), depth + 1, env) and
+                    constFree(self, @enumFromInt(row.c), depth + 1, env),
                 .call => {
                     const d = self.mir.instData(inst).call;
                     switch (d.callee) {
-                        .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given" => {},
+                        .@"$param_given" => {},
+                        .@"$temperature", .@"$vt", .@"$mfactor" => if (!env) return false,
                         else => return false, // else: ALLOWLISTED (above) — a new callee is unsound here until shown otherwise
                     }
                     for (d.args) |arg| {
-                        if (!buildFree(self, arg, depth + 1)) return false;
+                        if (!constFree(self, arg, depth + 1, env)) return false;
                     }
                     return true;
                 },
@@ -266,10 +280,10 @@ pub fn buildFree(self: Input, v0: Mir.Value, depth: u32) bool {
                     if (ti == .none) return false;
                     const t = self.mir.instData(ti);
                     if (t != .branch) return false;
-                    if (!buildFree(self, t.branch.cond, depth + 1)) return false;
+                    if (!constFree(self, t.branch.cond, depth + 1, env)) return false;
                     const d = self.mir.instData(inst).phi;
                     for (0..d.count) |k| {
-                        if (!buildFree(self, self.mir.phiPair(inst, @intCast(k)).value, depth + 1)) return false;
+                        if (!constFree(self, self.mir.phiPair(inst, @intCast(k)).value, depth + 1, env)) return false;
                     }
                     return true;
                 },
@@ -355,7 +369,7 @@ pub fn collapsePairs(self: Input, branch_u: []const u32) Error![]CollapsePair {
         const target: u32 = if (hi_free and lo_free) @min(c.hi, c.lo) else if (hi_free) c.lo else c.hi;
         if (target == Lower.ground) continue;
         if (target >= victim or target >= fu) continue;
-        try out.append(self.arena, .{ .victim = victim, .target = target, .flow_u = fu, .flag = ret.runtime });
+        try out.append(self.arena, .{ .victim = victim, .target = target, .flow_u = fu, .flag = ret.runtime, .card = cardOnly(self, ret.runtime) });
     }
     return out.items;
 }

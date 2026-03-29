@@ -182,8 +182,10 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     // same rows, so the second pass ORs in bits the first already set.
     self.pat_react = react;
     // `lin` is a replay, not an accumulation: `evalQ` re-emits the same
-    // stamps, and adding them twice would double every coefficient.
+    // stamps, and adding them twice would double every coefficient. The
+    // guarded stamps are eval-only (`emitSwitchRow`), so eval resets them.
     @memset(self.lin[@intFromBool(react)], 0);
+    if (!react) self.guarded.clearRetainingCapacity();
     // ONE core evaluation per residual, not one per contribution. LLVM does
     // not recover this by itself — measured, see `plan_core.plan`'s header — so
     // the number of times the model runs is decided here, in the emitter.
@@ -412,7 +414,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         // Reads the FINISHED res[port], so this row's columns are that
         // row's — already accumulated by the contribution loop above.
         patRow(self, pp.u, patOf(self, pp.port) | (if (react) 0 else uBit(pp.u)));
-        linPortProbe(self, pp.u, pp.port, !react);
+        try linPortProbe(self, pp.u, pp.port, !react);
         if (react) {
             try self.b("res[@intFromEnum(U.{s})] = res[@intFromEnum(U.{s})].neg();\n", .{
                 self.names.u_names[pp.u], self.names.u_names[pp.port],
@@ -537,15 +539,33 @@ pub fn emitFused(self: *Gen) Error!void {
 ///   flag clear: I_b does not exist, so nothing can pin it. The branch is
 ///     a plain conductance and its flow reaches KCL directly, exactly like
 ///     an unswitched `.flow` contribution — `switchOpen` is that value.
+///
+/// THE GUARD (`contract.JacWhen`). On a collapsible branch whose flag is a
+/// function of the card alone (`CollapsePair.card`), the flag-set arm's
+/// coefficients ARE constants per (model card, host): ±1 for ib in the hi
+/// and lo rows, ±1 for V(hi) and V(lo) in the branch row, nothing in q. They
+/// leave as `jac_const` entries guarded by the published `Model` field, and
+/// ib keeps no lane — it is read nowhere else (`collapsePairs` refuses a
+/// probed flow). The flag-clear arm's `flow` is a core value whose lanes
+/// the core already marked. Any other runtime row keeps every lane.
 pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Value, react: bool) Error!void {
     const u = self.names.branch_u[i];
     const partner = plan_topo.switchFlowOf(self.input(), i);
     const split = collapsible(self, i);
+    const guard = guardOf(self, i);
     // Every coefficient on this row, and ib's in KCL, is picked per cycle by
     // a runtime flag — and on a collapsible branch by the host's S as well.
     // None is a constant, so every unknown it names keeps a lane, and so
-    // does whatever the row held before a conditional overwrite.
-    self.deriv_reads |= uBit(u) | nodeBit(c.hi) | nodeBit(c.lo);
+    // does whatever the row held before a conditional overwrite. Unless the
+    // guard above states them.
+    if (guard) |k| {
+        if (!react) {
+            try guardTerm(self, c.hi, u, 1, k);
+            try guardTerm(self, c.lo, u, -1, k);
+            try guardTerm(self, u, c.hi, 1, k);
+            try guardTerm(self, u, c.lo, -1, k);
+        }
+    } else self.deriv_reads |= uBit(u) | nodeBit(c.hi) | nodeBit(c.lo);
     linDynamic(self, u);
     const d: u32 = if (split) 4 else 2;
     if (split) {
@@ -562,8 +582,10 @@ pub fn emitSwitchRow(self: *Gen, i: usize, c: Lower.Contribution, flag: Mir.Valu
     if (!react) {
         try self.ind(d);
         try self.b("const ib = x[@intFromEnum(U.{s})];\n", .{self.names.u_names[u]});
-        try stamp(self, d, c.hi, "add", "ib", uBit(u), u);
-        try stamp(self, d, c.lo, "sub", "ib", uBit(u), u);
+        // Guarded: the constant is `guardTerm`'s, not an unconditional `lin`.
+        const col: ?u32 = if (guard == null) u else null;
+        try stamp(self, d, c.hi, "add", "ib", uBit(u), col);
+        try stamp(self, d, c.lo, "sub", "ib", uBit(u), col);
         try self.ind(d);
         patRow(self, @intCast(u), uBit(u) | nodeBit(c.hi) | nodeBit(c.lo) | switchRowDeps(self, i, c, react));
         try self.b("res[@intFromEnum(U.{s})] = S.sel(", .{self.names.u_names[u]});
@@ -608,6 +630,29 @@ pub fn collapsible(self: *const Gen, i: usize) bool {
     if (u == none_u32) return false;
     for (self.topo.cpairs) |p| if (p.flow_u == u) return true;
     return false;
+}
+
+/// The `cpairs` index whose card-only flag guards contribution `i`'s
+/// constants (`emitSwitchRow`), or null. Above 64 unknowns there is no
+/// table to put them in.
+fn guardOf(self: *const Gen, i: usize) ?u32 {
+    const u = self.names.branch_u[i];
+    if (u == none_u32 or self.names.n_u > 64) return null;
+    for (self.topo.cpairs, 0..) |p, k| if (p.flow_u == u) return if (p.card) @intCast(k) else null;
+    return null;
+}
+
+/// One guarded constant: `g` at (row, col) of eval, under pair `k`'s guard.
+/// Ground has no row and no column.
+fn guardTerm(self: *Gen, row: u32, col: u32, g: f64, k: u32) Error!void {
+    if (row == Lower.ground or col == Lower.ground) return;
+    try self.guarded.append(self.arena, .{ .row = row, .col = col, .g = g, .c = 0, .when = k });
+}
+
+/// `<flow unknown>__retained`: the `Model` field `derive` publishes pair
+/// `k`'s retention flag in, and the name a guarded `jac_const` entry cites.
+pub fn guardField(self: *const Gen, k: u32) Error![]const u8 {
+    return std.fmt.allocPrint(self.arena, "{s}__retained", .{self.names.u_names[self.topo.cpairs[k].flow_u]});
 }
 
 /// The value the branch row would have PINNED I_b to, for the arm where
@@ -719,6 +764,12 @@ fn linClear(self: *Gen, row: u32) void {
     const l = self.lin[@intFromBool(self.pat_react)];
     if (l.len == 0) return;
     @memset(l[row * self.names.n_u ..][0..self.names.n_u], 0);
+    // Its guarded constants go with the assignment too.
+    if (self.pat_react) return;
+    var k: usize = 0;
+    while (k < self.guarded.items.len) {
+        if (self.guarded.items[k].row == row) _ = self.guarded.orderedRemove(k) else k += 1;
+    }
 }
 
 /// Row `row` is assigned `V(hi) − V(lo) − <core value>`: §5.6's branch
@@ -731,12 +782,21 @@ fn linBranch(self: *Gen, row: u32, hi: u16, lo: u16) void {
 
 /// §5.4.3 `res[u] = x[u] − res[port]` (eval) or `−res[port]` (q): the row
 /// is the FINISHED port row negated, so its constants are too.
-fn linPortProbe(self: *Gen, u: u32, port: u32, with_x: bool) void {
+fn linPortProbe(self: *Gen, u: u32, port: u32, with_x: bool) Error!void {
     const l = self.lin[@intFromBool(self.pat_react)];
     if (l.len == 0) return;
     const n = self.names.n_u;
     for (0..n) |c| l[u * n + c] = -l[port * n + c];
     if (with_x) l[u * n + u] += 1;
+    // The port row's guarded constants are copied too, under the same guard
+    // (`emitSwitchRow`): they are eval-only, and each is appended once per row.
+    if (self.pat_react) return;
+    const k0 = self.guarded.items.len;
+    for (0..k0) |k| {
+        const e = self.guarded.items[k];
+        if (e.row != port) continue;
+        try self.guarded.append(self.arena, .{ .row = u, .col = e.col, .g = 0 - e.g, .c = 0 - e.c, .when = e.when });
+    }
 }
 
 /// Row `row` is about to be written under a runtime condition, so whatever
@@ -766,7 +826,7 @@ fn linDynamic(self: *Gen, row: u32) void {
 /// Omitted above 64 unknowns, like `jac_pattern`: the defaults — every lane,
 /// no table — are correct.
 pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
-    const jc = try plan_jac.plan(self.arena, self.names.n_u, self.deriv_reads, self.ddx_reads, limit_writes, .{ self.lin[0], self.lin[1] }) orelse return;
+    const jc = try plan_jac.plan(self.arena, self.names.n_u, self.deriv_reads, self.ddx_reads, limit_writes, .{ self.lin[0], self.lin[1] }, self.guarded.items) orelse return;
     try self.w(
         \\/// Unknowns whose derivative lane `eval`/`q` read. Every other
         \\/// column's partials are constants, listed in `jac_const`; see
@@ -783,9 +843,11 @@ pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
         \\
     , .{ jc.mask, self.ddx_reads });
     for (jc.entries) |e| {
-        try self.w("    .{{ .row = .{s}, .col = .{s}, .g = {s}, .c = {s} }},\n", .{
+        try self.w("    .{{ .row = .{s}, .col = .{s}, .g = {s}, .c = {s}", .{
             self.names.u_names[e.row], self.names.u_names[e.col], try gen_file.fmtF64(self, e.g), try gen_file.fmtF64(self, e.c),
         });
+        if (e.when) |k| try self.w(", .when = .{{ .flag = \"{s}\", .collapse_open = true }}", .{try guardField(self, k)});
+        try self.w(" }},\n", .{});
     }
     try self.w("}};\n\n", .{});
 }

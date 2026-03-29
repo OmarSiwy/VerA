@@ -109,7 +109,11 @@ pub const runner_body =
     \\/// Forward-mode dual: value plus one partial per solver unknown. This is
     \\/// the same scalar the engine instantiates for the Jacobian, written out
     \\/// here so the testbench has no dependency beyond the device itself.
-    \\const Dual = struct {
+    \\/// `collapsed` is the contract's `collapse_applied` trait: the testbench
+    \\/// evaluates with `false`, and `narrowCheck` with both.
+    \\const Dual = DualC(false);
+    \\fn DualC(comptime collapsed: bool) type { return struct {
+    \\    pub const collapse_applied = collapsed;
     \\    v: f64,
     \\    d: [n_u]f64 = @splat(0.0),
     \\    const T = @This();
@@ -166,7 +170,7 @@ pub const runner_body =
     \\    pub fn le(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v <= b.v))); }
     \\    pub fn eq(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v == b.v))); }
     \\    pub fn sel(c: T, a: T, b: T) T { return if (c.v != 0.0) a else b; }
-    \\};
+    \\}; }
     \\
     \\/// Value-form batch scalar: NL operating points per eval call, one per
     \\/// lane. Only instantiated for a device that declared `lane_clean` —
@@ -331,25 +335,36 @@ pub const runner_body =
     \\/// an absent entry is 0 by contract — while the wide Dual writes −0.0
     \\/// wherever a `neg` meets an empty lane. Every nonzero compares by bits.
     \\///
-    \\/// Always on, not behind a flag: it is two more evals of a fixture-sized
+    \\/// Run under BOTH collapse settings (`collapse_applied` false, then true),
+    \\/// stamping a guarded entry exactly when `contract.jacConstApplies` says a
+    \\/// host would: its `Model` flag set and the collapse state it names.
+    \\///
+    \\/// Always on, not behind a flag: it is four more evals of a fixture-sized
     \\/// device, and a gate that has to be asked for is one somebody forgets.
     \\fn narrowCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    const wide = seed(x);
-    \\    var narrow: [n_u]Dual = undefined;
+    \\    inline for (.{ false, true }) |collapsed| narrowCheckAs(collapsed, x, t, model, inst);
+    \\}
+    \\
+    \\fn narrowCheckAs(comptime collapsed: bool, x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    const Dl = DualC(collapsed);
+    \\    var wide: [n_u]Dl = undefined;
+    \\    var narrow: [n_u]Dl = undefined;
     \\    for (0..n_u) |i| {
+    \\        wide[i] = .{ .v = x[i] };
+    \\        wide[i].d[i] = 1.0;
     \\        narrow[i] = .{ .v = x[i] };
     \\        if (hasLane(i)) narrow[i].d[i] = 1.0;
     \\    }
-    \\    narrowAssert("res", false, &D.eval(Dual, wide, model, inst, t), &D.eval(Dual, narrow, model, inst, t));
+    \\    narrowAssert(Dl, "res", false, model, &D.eval(Dl, wide, model, inst, t), &D.eval(Dl, narrow, model, inst, t));
     \\    if (comptime @hasDecl(D, "q"))
-    \\        narrowAssert("q", true, &D.q(Dual, wide, model, inst, t), &D.q(Dual, narrow, model, inst, t));
+    \\        narrowAssert(Dl, "q", true, model, &D.q(Dl, wide, model, inst, t), &D.q(Dl, narrow, model, inst, t));
     \\}
     \\
     \\fn hasLane(u: usize) bool {
     \\    return u >= 64 or (contract.derivReads(D) >> @intCast(u)) & 1 != 0;
     \\}
     \\
-    \\fn narrowAssert(what: []const u8, react: bool, w: *const [n_u]Dual, nr: *const [n_u]Dual) void {
+    \\fn narrowAssert(comptime Dl: type, what: []const u8, react: bool, model: *const D.Model, w: *const [n_u]Dl, nr: *const [n_u]Dl) void {
     \\    for (0..n_u) |i| {
     \\        if (@as(u64, @bitCast(w[i].v)) != @as(u64, @bitCast(nr[i].v))) {
     \\            std.debug.print("narrow_check FAIL: {s}[{s}]: wide {e} vs narrow {e}\n", .{ what, u_names[i], w[i].v, nr[i].v });
@@ -359,14 +374,16 @@ pub const runner_body =
     \\            var k: f64 = nr[i].d[j];
     \\            if (!hasLane(j)) {
     \\                k = 0.0;
-    \\                for (contract.jacConst(D)) |e| {
-    \\                    if (@intFromEnum(e.row) == i and @intFromEnum(e.col) == j) k = if (react) e.c else e.g;
+    \\                inline for (comptime contract.jacConst(D)) |e| {
+    \\                    if (@intFromEnum(e.row) == i and @intFromEnum(e.col) == j and
+    \\                        contract.jacConstApplies(D, e, model, Dl.collapse_applied)) k = if (react) e.c else e.g;
     \\                }
     \\                if (k == 0.0 and w[i].d[j] == 0.0) continue;
     \\            }
     \\            if (@as(u64, @bitCast(w[i].d[j])) == @as(u64, @bitCast(k))) continue;
-    \\            std.debug.print("narrow_check FAIL: d{s}[{s}]/dx[{s}]: wide {e} vs narrow {e}{s}\n", .{
+    \\            std.debug.print("narrow_check FAIL: d{s}[{s}]/dx[{s}]: wide {e} vs narrow {e}{s}{s}\n", .{
     \\                what, u_names[i], u_names[j], w[i].d[j], k, if (hasLane(j)) "" else " (jac_const)",
+    \\                if (Dl.collapse_applied) " [collapse applied]" else "",
     \\            });
     \\            std.process.exit(1);
     \\        }

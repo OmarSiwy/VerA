@@ -1023,8 +1023,14 @@ pub fn limitWrites(comptime D: type) u64 {
 ///       so every unknown the limiter moves needs a live lane;
 ///   (c) `jac_const` is sorted by (row, col) with no duplicates, has no
 ///       entry whose `g` and `c` are both zero, and names no column inside
-///       the mask;
+///       the mask; a guarded entry's `when.flag` names a field of `Model`;
 ///   (d) `ddxReads ⊆ derivReads`, for the same reason as (b).
+///
+/// A GUARDED entry (`when != null`, see `JacWhen`) is a partial that is
+/// constant per (model card, host) rather than per device: a §5.6.5
+/// collapsible switch branch's ±1 KCL stamps exist only while the model
+/// retains the 0 V arm and the host has not collapsed it. Its column is
+/// still outside the mask; `jacConstApplies` says when to stamp it.
 pub fn derivReads(comptime D: type) u64 {
     return if (@hasDecl(D, "deriv_reads")) D.deriv_reads else ~@as(u64, 0);
 }
@@ -1050,7 +1056,33 @@ pub fn ddxReads(comptime D: type) u64 {
 /// An absent entry is exactly 0 in both halves, which is why an entry with
 /// `g == c == 0` is refused rather than tolerated — see `derivReads` (c).
 pub fn JacConst(comptime U: type) type {
-    return struct { row: U, col: U, g: f64, c: f64 };
+    return struct { row: U, col: U, g: f64, c: f64, when: ?JacWhen = null };
+}
+
+/// The guard on a `jac_const` entry. EXACT SEMANTICS: the entry applies iff
+///   `@field(model, flag)` is nonzero (true, for a `bool` field)
+///   AND `collapse_open` == !collapsed,
+/// where `collapsed` is the host's `collapse_applied` for the scalar it
+/// evaluates with — true when it applied this device's `collapse()` aliases
+/// to its gather/scatter maps. So `collapse_open = true` reads "applies while
+/// the branch is NOT collapsed" (the only form VerA emits: the branch's
+/// stamps it describes are compiled out under `collapse_applied`), and
+/// `collapse_open = false` reads "applies only once it IS collapsed".
+///
+/// `flag` is a Model FIELD NAME, not an index, so it survives field
+/// reordering and a host resolves it at comptime with `@field`. For a
+/// §5.6.1.3 retention flag VerA publishes a `<flow unknown>__retained`
+/// field that `derive` fills; a host that skips `derive` stamps garbage.
+pub const JacWhen = struct { flag: []const u8, collapse_open: bool };
+
+/// Does `jac_const` entry `e` apply to `model` under a host whose collapse
+/// state is `collapsed`? See `JacWhen` for the rule; an unguarded entry
+/// always applies.
+pub fn jacConstApplies(comptime D: type, comptime e: JacConst(D.U), model: *const D.Model, collapsed: bool) bool {
+    const w = e.when orelse return true;
+    if (w.collapse_open == collapsed) return false;
+    const v = @field(model, w.flag);
+    return if (@TypeOf(v) == bool) v else v != 0;
 }
 
 /// The device's `jac_const` as a slice, sorted by (row, col); empty when the
@@ -1816,6 +1848,8 @@ fn derivReadsError(comptime D: type, comptime n: usize) ?[]const u8 {
             return name ++ ".jac_const: column `" ++ @tagName(e.col) ++ "` is in deriv_reads, so its partials are not constant";
         if (e.g == 0 and e.c == 0)
             return name ++ ".jac_const: an all-zero entry — an absent entry already means exactly 0";
+        if (e.when) |w| if (!@hasField(D.Model, w.flag))
+            return name ++ ".jac_const: `when.flag` \"" ++ w.flag ++ "\" is not a field of Model";
         if (k == 0) continue;
         const pr: usize = @intFromEnum(t[k - 1].row);
         const pc: usize = @intFromEnum(t[k - 1].col);
@@ -2391,6 +2425,30 @@ test "deriv_reads: the four rules each refuse their own mistake" {
         };
         try testing.expect(comptime (derivReadsError(Bad, 3) != null));
     }
+    // A guard must name a real Model field.
+    const Guarded = struct {
+        pub const U = U3;
+        pub const Model = struct { br__retained: f64 = 1 };
+        pub const deriv_reads: u64 = 0;
+        pub const ddx_reads: u64 = 0;
+        pub const jac_const = [_]JacConst(U3){.{ .row = .p, .col = .br, .g = 1, .c = 0, .when = .{ .flag = "br__retained", .collapse_open = true } }};
+    };
+    try testing.expect(comptime (derivReadsError(Guarded, 3) == null));
+    const Misnamed = struct {
+        pub const U = U3;
+        pub const Model = struct { br__retained: f64 = 1 };
+        pub const deriv_reads: u64 = 0;
+        pub const ddx_reads: u64 = 0;
+        pub const jac_const = [_]JacConst(U3){.{ .row = .p, .col = .br, .g = 1, .c = 0, .when = .{ .flag = "nope", .collapse_open = true } }};
+    };
+    try testing.expect(comptime (derivReadsError(Misnamed, 3) != null));
+    // And it applies exactly when the flag is set and the host did not collapse.
+    const e = Guarded.jac_const[0];
+    var gmodel: Guarded.Model = .{};
+    try testing.expect(jacConstApplies(Guarded, e, &gmodel, false));
+    try testing.expect(!jacConstApplies(Guarded, e, &gmodel, true));
+    gmodel.br__retained = 0;
+    try testing.expect(!jacConstApplies(Guarded, e, &gmodel, false));
     // And the defaults: nothing declared is all lanes and no table.
     try testing.expectEqual(~@as(u64, 0), derivReads(MockR));
     try testing.expectEqual(@as(usize, 0), jacConst(MockR).len);
