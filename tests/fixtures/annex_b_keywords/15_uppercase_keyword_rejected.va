@@ -15,7 +15,7 @@
 //! lrm B
 //! lrm 2.8
 //! lrm 2.8.2
-//! reject E0205
+//! reject E0240
 //! reject ANALOG
 module annex_b_uppercase_keyword_rejected(p, n);
     inout p, n;

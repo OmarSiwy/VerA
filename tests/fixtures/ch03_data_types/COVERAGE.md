@@ -215,7 +215,7 @@ what it pins. The full ledger is below.
 | 3.12 Branches | `14_named_branches.va` (two-terminal, one-terminal-defaults-to-ground, two named branches plus the unnamed one over the same pair), `44_vector_branch_size_mismatch.va` (E0353), `33_vector_branches.va` (the LRM's own `[3:5]`/`[1:3]` pair, indexed from 0); `63_branch_incompatible_terminals.va` (E0355 — “the disciplines for the specified nets shall be compatible”) |
 | 3.12.1 Port Branches | `22_port_branch.va` — green: the declaration parses, `I(probe_p)` resolves to the same §5.4.3 port-flow unknown `I(<p>)` reads, and `//! solve` leaves that unknown to the testbench's Newton loop, so the 0.002 is the value KCL puts on the port and not one the fixture supplied |
 | 3.13 Namespace | parent heading |
-| 3.13.1 Nature and discipline | `39_nature_discipline_namespace_collision.va` (E0336), `69_nature_inside_module.va` (E0205); `67_duplicate_nature_name.va` and `67_duplicate_discipline_name.va` (green) |
+| 3.13.1 Nature and discipline | `39_nature_discipline_namespace_collision.va` (E0336), `69_nature_inside_module.va` (E0240); `67_duplicate_nature_name.va` and `67_duplicate_discipline_name.va` (green) |
 | 3.13.2 Access functions | `41_duplicate_access_name.va` (E0335); `40_access_name_shadow.va` — green: the shadowing declaration takes the name and §4.4's generic `potential()` still reaches the net |
 | 3.13.3 Net | `42_wrong_access_function.va` (E0501), `48_net_local_to_block.va`, `64_flow_on_potential_only_net.va`, `70_bare_net_name_not_a_value.va` (E0315) |
 | 3.13.4 Branch | `49_branch_local_to_block.va` |

@@ -19,7 +19,7 @@
 //
 //! lrm 3.13.1
 //! lrm 3.6.1
-//! reject E0205
+//! reject E0240
 module ch3_nature_inside_module(p);
     inout p;
     electrical p;

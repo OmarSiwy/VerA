@@ -19,7 +19,7 @@
 //! lrm B
 //! lrm 2.8.1
 //! lrm 2.8.2
-//! reject E0205
+//! reject E0240
 //! reject analog
 module annex_b_escaped_keyword_is_not_the_keyword(p, n);
     inout p, n;
