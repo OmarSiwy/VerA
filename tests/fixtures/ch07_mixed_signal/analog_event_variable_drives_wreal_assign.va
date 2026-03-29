@@ -22,7 +22,6 @@
 //! analysis tran
 //! time 0, 10n, 20n
 //! print none
-//! xfail the mixed-signal runner's digital half fails with E1100 "undeclared digital variable" on `assign lvl = level`: an analog variable is not visible to the digital engine, where §7.3.6.4 lets an event-assigned one drive a continuous assign (the same gap as analog_event_variable_drives_continuous_assign.va)
 `timescale 1ns/1ns
 `include "check.vh"
 module ch7_analog_event_variable_drives_wreal_assign(out);
