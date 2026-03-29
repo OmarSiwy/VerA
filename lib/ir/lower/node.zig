@@ -341,11 +341,15 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
         },
         .index => {
             const base = ex.lhs(e);
-            if (ex.tag(base) != .ident) {
-                try self.err(self.file.exprs.mainTok(e), .E0306, "", .{});
-                return ground;
-            }
-            const name = self.file.str(ex.strOf(base));
+            // `u.v[1]`: §6.7.1's hierarchical terminal, one element of it.
+            const name = switch (ex.tag(base)) {
+                .ident => self.file.str(ex.strOf(base)),
+                .hier_ident => try lower_expr.flatName(self, base),
+                else => { // else: a select of anything but a net name is no net reference: E0306
+                    try self.err(self.file.exprs.mainTok(e), .E0306, "", .{});
+                    return ground;
+                },
+            };
             const r = self.out.vectors.get(name) orelse {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` was not declared with a range", .{name});
                 return ground;
