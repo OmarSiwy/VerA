@@ -173,7 +173,10 @@ test "codegen: core_reads_simstate counts `analog initial` and the Newton iterat
         \\  electrical p, n;
         \\  real g;
         \\  analog initial g = 2.0;
-        \\  analog I(p, n) <+ g * V(p, n);
+        \\  analog begin
+        \\    I(p, n) <+ g * V(p, n);
+        \\    if (V(p, n) > 1.0) g = 1.0;
+        \\  end
         \\endmodule
         ,
         \\module it(p, n);
@@ -2754,6 +2757,58 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
     const s2 = try h2.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s2, "no complete mode ladder") != null);
     try std.testing.expect(std.mem.indexOf(u8, s2, "pub fn limit(") == null);
+}
+
+test "codegen: §3.2 a held slot only a card-varying write could need is dropped" {
+    // `pruneHeld`: under a parameter the write runs on every evaluation or on
+    // none, so the held value is never seen; under a probe it is.
+    const cases = [_]struct { cond: []const u8, held: usize }{
+        .{ .cond = "g > 0", .held = 0 },
+        .{ .cond = "V(p) > 0", .held = 1 },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module m(p);
+            \\  inout p; electrical p;
+            \\  parameter real g = 1.0;
+            \\  real x, y;
+            \\  analog begin
+            \\    if ({s}) x = 2.0;
+            \\    y = x;
+            \\    I(p) <+ y * V(p);
+            \\  end
+            \\endmodule
+        , .{c.cond});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        try std.testing.expectEqual(1, h.lowered.held_vars.items.len);
+        try codegen.pruneHeld(h.arena_state.allocator(), &h.mir, &h.lowered);
+        try std.testing.expectEqual(c.held, h.lowered.held_vars.items.len);
+        _ = try h.gen(std.testing.allocator); // and the device still generates
+    }
+}
+
+test "codegen: §5.2.1 an `analog initial` variable is a setup root, not a per-evaluation select" {
+    // §3.2 holds `g` (an `analog initial` write the main block reads), ifconv
+    // leaves the first-point branch alone, and setup's initial-only rule then
+    // computes `g` once: the core reads `su`, never the flag.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module ai(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  real g;
+        \\  analog initial g = 2.0;
+        \\  analog I(p, n) <+ g * V(p, n);
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    try std.testing.expectEqual(Lower.HeldVar.Why.retained, h.lowered.held_vars.items[0].why);
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "inst.su.r[0] = ") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "if (inst.is_analog_initial)") == null);
 }
 
 test "codegen: cross-fed held state emits stateCtl with accepted twins" {

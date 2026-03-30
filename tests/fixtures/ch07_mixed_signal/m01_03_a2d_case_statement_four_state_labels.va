@@ -35,7 +35,6 @@
 // is the clause's and VerA's retention is the gap.
 //
 //! lrm 7.3.2
-//! xfail §3.2 retention — VerA holds an analog variable across evaluations only when an event statement writes it (param.zig scanHeld), so the x arm's `avar = avar` reads 0.0, not the held 5.0; the §7.3.2 comparison is green in xz_four_state_input_compared.va
 //! analysis tran
 //! time 0, 10n, 30n, 50n
 `timescale 1ns/1ns

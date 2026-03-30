@@ -1031,7 +1031,9 @@ fn emitHeldArrayField(self: *Gen, h: Lower.HeldVar, name: []const u8, comment: [
 /// (devices/switch: one 0.8-of-full-scale sample against a 1e-11 match
 /// everywhere else).
 pub fn fsmStateCtl(self: *const Gen) bool {
-    if (self.lowered.held_vars.items.len == 0) return false;
+    for (self.lowered.held_vars.items) |h| {
+        if (h.why == .event) break;
+    } else return false;
     for (self.names.units) |u| {
         if (u.role != .analog_op) continue;
         switch (u.op) {
@@ -1079,6 +1081,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     var first = true;
     for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
         if (!fsm) break;
+        if (h.why != .event) continue;
         // §3.2.2 a held array compares element by element.
         if (h.array != none_u32)
             try self.w("{s}!std.meta.eql(inst.{s}, inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n })

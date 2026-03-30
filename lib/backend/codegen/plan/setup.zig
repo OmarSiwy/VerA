@@ -7,7 +7,7 @@
 //! (the setup ROOTS) and `pub fn setup` itself — is `codegen/setup.zig`, which
 //! needs the unit planner's slice and the writer.
 //!
-//! LRM clauses this file's code cites: §4.4, §5.2.1, §5.6.1.2, §5.10,
+//! LRM clauses this file's code cites: §3.2, §4.4, §5.2.1, §5.6.1.2, §5.10,
 //! §5.10.2, §9.10, §9.15, §9.19.
 //!
 //! WHY ONE CLASSIFIER. Three answered the question before this file: the
@@ -52,6 +52,8 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Lower = @import("ir").Lower;
+const Lowered = @import("ir").Lowered;
+const Analysis = @import("ir").Analysis;
 const Input = @import("input.zig").Input;
 const plan_args = @import("args.zig");
 
@@ -345,6 +347,16 @@ const Scan = struct {
 
 /// The fixpoint. See the header for the rules.
 pub fn plan(in: Input) Error!Sinv {
+    return solve(in, true);
+}
+
+/// `placing == false` drops the one rule that is about PLACEMENT rather than
+/// invariance — nothing a per-eval loop can reach is placeable — so a block
+/// after such a loop that depends only on invariant branches counts as fixed,
+/// and so does what it computes. `setup` cannot compute those values (it stops
+/// at the loop), but they are still the same at every evaluation of a card,
+/// which is all `pruneHeld` asks.
+fn solve(in: Input, placing: bool) Error!Sinv {
     const a = in.arena;
     const nb = in.an.nb;
     const nv = in.an.nv;
@@ -384,7 +396,7 @@ pub fn plan(in: Input) Error!Sinv {
         };
         // Placeable blocks, and the initial-step else arms.
         for (0..nb) |bi| {
-            var ok = !reach[bi];
+            var ok = !(placing and reach[bi]);
             var ie = false;
             for (cds.cd[cds.off[bi]..cds.off[bi + 1]]) |d| {
                 const c = branchCond(in, d.a).?;
@@ -441,6 +453,103 @@ pub fn candidate(in: Input, sinv: []const bool, v: Mir.Value) bool {
     const b = in.an.def_block[i];
     if (b == none_u32 or in.an.loop_of[b] != none_u32) return false;
     return in.an.foldConst(v, 0, false) == null;
+}
+
+/// §3.2 retention the card decides. A `.unless_invariant` held variable has no
+/// read that reaches a later write of the same evaluation (`lower_param.
+/// Exposed`), so its held value is observed only where it MERGES with a write:
+/// a phi, or a select, fed by the `$held_*` seed. When every such merge is
+/// solve-invariant — its block and every incoming edge depending only on
+/// invariant branches (`solve` without placement), a select's condition
+/// invariant — then for a fixed card the variable is either written
+/// before every read of every evaluation or never written, and a slot holding
+/// it can never differ from the declared initializer. So the slot is dropped:
+/// the seed becomes an alias of the initializer and leaves its block, and the
+/// remaining rows are renumbered.
+///
+/// A MIR rewrite between lowering and if-conversion (root.zig stage 4.4),
+/// because the question needs `plan`'s invariance, which is backend, and the
+/// answer changes what lowering produced. The plan runs with every candidate
+/// still held, so a condition over one reads as varying: conservative.
+pub fn pruneHeld(arena: std.mem.Allocator, mir: *Mir, lowered: *Lowered) Error!void {
+    const held = &lowered.held_vars;
+    for (held.items) |h| {
+        if (h.why == .unless_invariant) break;
+    } else return;
+    const an = try Analysis.build(arena, mir, lowered);
+    const in: Input = .{ .arena = arena, .mir = mir, .an = &an, .lowered = lowered };
+    const s = try solve(in, false);
+    var merges: std.ArrayList(Mir.Inst) = .empty;
+    for (0..an.nb) |bi| {
+        var it = mir.blockInsts(@enumFromInt(@as(u32, @intCast(bi))));
+        while (it.next()) |inst| switch (mir.instOp(inst)) {
+            .phi, .select => try merges.append(arena, inst),
+            else => {}, // else: only a phi or a select merges a held value with a write
+        };
+    }
+    const web = try arena.alloc(bool, an.nv);
+    var kept: usize = 0;
+    for (held.items) |h| {
+        if (h.why != .unless_invariant or try observed(in, s, merges.items, web, h.seed)) {
+            held.items[kept] = h;
+            kept += 1;
+            continue;
+        }
+        const seed = an.rv(h.seed);
+        const inst = mir.valueDef(seed).inst_result;
+        const b = an.def_block[@intFromEnum(seed)];
+        const next = mir.insts.items(.next);
+        var prev: Mir.Inst = .none;
+        var cur = mir.blocks.items(.first)[b];
+        while (cur != inst) : (cur = next[@intFromEnum(cur)]) prev = cur;
+        const after = next[@intFromEnum(inst)];
+        if (prev == .none) mir.blocks.items(.first)[b] = after else next[@intFromEnum(prev)] = after;
+        if (mir.blocks.items(.last)[b] == inst) mir.blocks.items(.last)[b] = prev;
+        next[@intFromEnum(inst)] = .none;
+        mir.setAlias(seed, h.init);
+    }
+    held.shrinkRetainingCapacity(kept);
+    // The seed's argument is its row (`gen_call.heldIdx`).
+    for (held.items, 0..) |h, i| {
+        const inst = mir.valueDef(an.rv(h.seed)).inst_result;
+        mir.extra.items[mir.insts.items(.b)[@intFromEnum(inst)] + 1] = @intFromEnum(try mir.addIntConst(arena, @intCast(i)));
+    }
+}
+
+/// Does a merge of `seed`'s forward web vary from one evaluation to the next?
+fn observed(in: Input, s: Sinv, merges: []const Mir.Inst, web: []bool, seed: Mir.Value) Error!bool {
+    const mir = in.mir;
+    const an = in.an;
+    @memset(web, false);
+    web[@intFromEnum(an.rv(seed))] = true;
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (merges) |m| {
+            const r = an.rv(mir.instResult(m));
+            if (web[@intFromEnum(r)]) continue;
+            const blk = an.def_block[@intFromEnum(r)];
+            var feeds = false;
+            var fixed = blk != none_u32 and s.blk[blk];
+            switch (mir.instData(m)) {
+                .phi => |d| for (0..d.count) |k| {
+                    const p = mir.phiPair(m, @intCast(k));
+                    feeds = feeds or web[@intFromEnum(an.rv(p.value))];
+                    fixed = fixed and s.blk[@intFromEnum(p.block)];
+                },
+                .ternary => |d| {
+                    feeds = web[@intFromEnum(an.rv(d.then_val))] or web[@intFromEnum(an.rv(d.else_val))];
+                    fixed = fixed and s.val[@intFromEnum(an.rv(d.cond))];
+                },
+                else => unreachable, // else: `merges` holds phis and selects only
+            }
+            if (!feeds) continue;
+            if (!fixed) return true;
+            web[@intFromEnum(r)] = true;
+            changed = true;
+        }
+    }
+    return false;
 }
 
 const Fixture = @import("fixture.zig").Fixture;

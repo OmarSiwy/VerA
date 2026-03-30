@@ -485,6 +485,11 @@ include_dirs: []const []const u8 = &.{},
 /// the call site is still "within an analog initial block", which is what the
 /// sentence constrains.
 in_analog_initial: bool = false,
+/// §9.4 the build drops the display family (`codegen.Options.display`), so a
+/// variable those tasks read is not read at all in the device. Set by
+/// root.zig; the default, false, counts those reads. Only `lower_param.Exposed`
+/// asks: a §3.2 hold that only a print could observe is no hold.
+displays_dropped: bool = false,
 /// `Ast.AnalogBlock.unit` of the block being lowered — the module instance that
 /// wrote it. Read by `discardOpposite` only; see `newContrib`.
 cur_unit: u32 = 0,
@@ -604,6 +609,22 @@ pub const HeldVar = struct {
     /// The array's declared initializer, one Value per element (`init` is
     /// the element type's zero). Empty: every element starts at zero.
     inits: []const Mir.Value = &.{},
+    /// Why the variable is held; see `Why`.
+    why: Why = .event,
+
+    pub const Why = enum {
+        /// §5.10 assigned under an `@(...)`: latch state `stateCtl` may
+        /// reject a step over.
+        event,
+        /// §3.2 retention (`lower_param.Exposed`) that some evaluation can
+        /// observe: an `analog initial` write, or a read that reaches a later
+        /// write of the same evaluation.
+        retained,
+        /// §3.2 retention that only a card-varying write could make
+        /// observable. `codegen.pruneHeld` drops it when every merge of the
+        /// held value is solve-invariant.
+        unless_invariant,
+    };
 };
 
 /// §3.2.2 one memory-backed array (`Lowered.mem_arrays`).

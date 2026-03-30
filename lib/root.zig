@@ -372,6 +372,7 @@ fn compileInArena(
         var lower = Lower.init(arena, mir, file, text, starts, bag);
         lower.directives = pp.directives;
         lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
+        lower.displays_dropped = opts.display == .drop; // §3.2 retention, see `Exposed`
         // SSA maps its matrix directly; the compilation arena cannot free it.
         defer {
             lower.builder.deinit();
@@ -387,6 +388,11 @@ fn compileInArena(
             error.DiagnosticsReported => return error.CompileFailed,
         };
     }
+
+    // --- stage 4.4: §3.2 drop the held slots no card can observe -----------
+    // Needs codegen's solve invariance, and ifconv's select must not yet hide
+    // the merges it reads. See `codegen.pruneHeld`.
+    try codegen.pruneHeld(arena, mir, lowered);
 
     // --- stage 4.5: if-convert pure diamonds to §4.2.12 select --------------
     // Before prove: a select's guard facts come from markSelectArms, so the
