@@ -435,6 +435,11 @@ fn arrayActualCells(self: *Lower, actual: Ast.ExprId) Oom!?usize {
     return switch (ex.tag(actual)) {
         .ident => if (self.arrays.get(self.file.str(ex.strOf(actual)))) |info| lower_param.shapeCells(info.dims) else null,
         .assign_pattern, .concat => (try lower_param.patternElems(self, actual)).len,
+        .index => blk: {
+            var buf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+            const s = (try lower_stmt.arrayRef(self, actual, &buf)) orelse break :blk null;
+            break :blk lower_param.shapeCells(s.info.dims[s.subs.len..]);
+        },
         else => null, // else: §4.7.2.3 admits no third shape
     };
 }
@@ -472,6 +477,25 @@ pub fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) O
             }
             return true;
         },
+        // §5.7 "a slice of an array variable" (`c[i]` of `real c[0:2][0:2]`)
+        // is an array for assignment, and §4.7.3 says "the argument
+        // expressions are assigned to the declared inputs": so a slice is an
+        // analog variable an array formal takes, copied in cell by cell the
+        // way `copyArraySlice` copies one — the same select chain for a
+        // subscript decided during the solve.
+        .index => {
+            var buf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+            const s = (try lower_stmt.arrayRef(self, actual, &buf)) orelse return false;
+            const sd = s.info.dims[s.subs.len..];
+            if (lower_param.shapeCells(sd) != out.len) return false;
+            // False only after E0310 on a folded subscript: that is the
+            // diagnostic, so the call is still well-shaped.
+            if (!try lower_stmt.readSliceCells(self, actual, s, sd, out)) @memset(out, lower_param.zeroOf(ty));
+            if (ty == .real) for (out) |*v| {
+                v.* = try self.toReal(.{ .v = v.*, .ty = s.info.ty });
+            };
+            return true;
+        },
         else => return false, // else: §4.7.2.3 admits no third shape; the caller reports E0511
     }
 }
@@ -500,6 +524,13 @@ pub fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) O
                 const slot = try lower_stmt.resolveLvalue(self, e) orelse continue;
                 try lower_stmt.writeLvalue(self, slot, v);
             }
+        },
+        // §5.7 "the array on the LHS of the assignment shall be an array
+        // variable, a slice of an array variable ...": the slice receives.
+        .index => {
+            var buf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
+            const s = (try lower_stmt.arrayRef(self, actual, &buf)) orelse return;
+            _ = try lower_stmt.writeSliceCells(self, actual, s, s.info.dims[s.subs.len..], vals);
         },
         else => unreachable, // else: the call refused any other shape (`arrayActualCells`, `funcArrayIn`)
     }
