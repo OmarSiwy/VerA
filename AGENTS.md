@@ -260,20 +260,33 @@ moved to.
 
 ## 7. Things that look done and are not
 
-- The mixed-signal path is PARTIAL. `src/sim/mixed.zig` drives the digital
-  engine (`runUntil` stops at the §8.5.1 analog region), and discrete inputs
-  reach the device as hidden `Model` fields. `.explicit_d2a`, x/z inputs, A2D
-  crossings with solver-inserted timepoints, named events across the boundary
-  and `absdelta` are ch07 steps 5–9 (`docs/PLAN.md`, the ch07 plan).
+- The mixed-signal path is PARTIAL, and less so than it was. ch07 steps 5–9
+  landed (x/z inputs, A2D crossings with inserted points, named events across
+  the boundary, `absdelta`), a flattened child's discrete processes reach the
+  runner, §7.8 connect modules run both halves, and §9.22 driver access lives
+  in `src/sim/digital/driver.zig`. What is not: an A2D write does not re-solve
+  the finished analog point (the next point sees it); drivers are scalar
+  (a vector reads bit 0); `driver_update` on a connect module's OWN driver is
+  a one-line switch (`cm_driver_updates`) waiting on `docs/ROADMAP.md §7`
+  item 1, which is why `m04_12` FAILs.
 - `lib/backend/tb/runner_text.zig`'s solver is still a source **template**
   emitted into each generated testbench, so `src/sim/` cannot call it; the
-  mixed runner reaches it through an adapter, not a call.
-- The analog testbench evaluator is still a **fixed grid** over the declared
-  `//! time` points until ch07 step 7 lands; fixture rationales that need an
-  inserted timepoint are wrong on today's grid.
-- VPI: all 34 `.c` fixtures compile against `src/vpi/vpi_user.h`, but force/
-  release, user `$systf` calls, interactive sim control and the analog routines
-  only COMPILE — nothing in-process can answer them.
+  mixed runner reaches it through an adapter, not a call. It steps fixed-step
+  Euler: there is NO truncation-error control, so an LTE rule cannot be
+  exercised by a fixture beyond checking what the device publishes.
+- The PURE analog testbench is still a **fixed grid** over the declared
+  `//! time` points. Only the mixed runner inserts solver-chosen points
+  (crossings, timers via the optional `pendingBreakpoint` hook). A fixture
+  whose rationale needs an inserted point must run on the mixed path or put
+  the event on a declared point.
+- VPI: all 34 `.c` fixtures compile against `src/vpi/vpi_user.h`, and
+  `vpi_put_value` force/release runs (17 of them run in-process). User
+  `$systf` calls, interactive sim control and the analog routines still only
+  COMPILE — nothing in-process can answer them.
+- Setup split (`codegen/plan/setup.zig`) computes solve-invariant values once.
+  Array operations are classified per evaluation, so an array filled once in
+  `analog initial` is still recomputed every eval. A per-timepoint "step"
+  tier was measured and NOT built: compact models gain 0–16 values each.
 
 ---
 
