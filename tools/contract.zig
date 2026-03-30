@@ -1518,6 +1518,9 @@ pub fn validate(comptime D: type) void {
     // Breakpoint scheduling for piecewise sources.
     if (@hasDecl(D, "nextBreakpoint"))
         expectFn(D, "nextBreakpoint", fn (*const D.Model, f64) ?f64);
+    // §5.10.3.3 the live timer schedule, re-armed start times included.
+    if (@hasDecl(D, "pendingBreakpoint"))
+        expectFn(D, "pendingBreakpoint", fn (*const D.Instance, f64) ?f64);
     // §4.5.7 transport delays (absdelay sites), model-frame like
     // nextBreakpoint: the host echoes wavefront breakpoints from these.
     if (@hasDecl(D, "delays")) {
@@ -1715,6 +1718,7 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "precompute", {} },
     .{ "constant", {} },
     .{ "nextBreakpoint", {} },
+    .{ "pendingBreakpoint", {} },
     .{ "delays", {} },
 });
 
@@ -2235,6 +2239,9 @@ const MockAll = struct {
     pub fn derive(_: *Model) void {}
     pub fn precompute(_: *Instance, _: *const Model) void {}
     pub fn nextBreakpoint(_: *const Model, _: f64) ?f64 {
+        return null;
+    }
+    pub fn pendingBreakpoint(_: *const Instance, _: f64) ?f64 {
         return null;
     }
     pub fn delays(_: *const Model) [1]f64 {

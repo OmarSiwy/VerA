@@ -232,7 +232,16 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .needs_input = true,
         .needs_dt = false,
         .enable_arg = 3, // timer(start, period, time_tol, enable)
-        .slots = &.{.{ .suffix = "next", .default = "0.0", .note = "§5.10.3" }},
+        // `start` is the start_time the pending `next` was scheduled from.
+        // §5.10.3.3 "If the start_time or period expressions change value
+        // during the evaluation of the analog block, the next event will be
+        // scheduled based on the latest value": a start_time that differs
+        // from it re-schedules, earlier as well as later. NaN = nothing
+        // scheduled yet, and it differs from every start_time.
+        .slots = &.{
+            .{ .suffix = "next", .default = "0.0", .note = "§5.10.3" },
+            .{ .suffix = "start", .default = "std.math.nan(f64)" },
+        },
     },
     .bound_step = .{
         .lrm = "§9.17.2",
