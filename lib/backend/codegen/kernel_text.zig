@@ -446,6 +446,11 @@ pub const ops_txt =
 pub const timer_txt =
     \\// ---- §5.10.5 timer breakpoints ----
     \\
+    \\/// One +inf for every `.timer` arm of `updateState`: `std.math.inf` is
+    \\/// comptime work per call site, and dozens of timers (a PWL source)
+    \\/// exhaust the 1000-branch comptime quota.
+    \\const z_inf: f64 = std.math.inf(f64);
+    \\
     \\/// The next time a `timer(start, period)` fires, STRICTLY after `t`.
     \\/// The only source in Verilog-A that means "put a timepoint here" — see
     \\/// `emitNextBreakpoint`. Must agree exactly with the `.timer` arm of
