@@ -77,6 +77,8 @@ const Ssa = @import("ir").Ssa;
 const Elaborate = @import("ir").Elaborate;
 const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
+/// §3.4 a `--param name=value` compile-time override (`Options.param_overrides`).
+pub const ParamOverride = Lower.ParamOverride;
 const ifconv = @import("ir").ifconv;
 const proof = @import("ir").proof;
 pub const diag = @import("diag");
@@ -123,6 +125,11 @@ pub const Options = struct {
     file_name: []const u8 = "<source>",
     /// Searched in order for `include, ahead of the built-in annex D files.
     include_dirs: []const []const u8 = &.{},
+    /// §3.4 compile-time values for the top module's parameters (`--param`).
+    /// A shape parameter (`Lower.ParamInfo.shape`) is compiled to this value
+    /// and its card may not move it; any other stays a run-time card value
+    /// whose default this replaces.
+    param_overrides: []const Lower.ParamOverride = &.{},
     /// Prepend annex D.2 constants.vams + annex D.1 disciplines.vams (§3.6.2).
     std_defs: bool = true,
     /// Receives every diagnostic of the run — errors AND warnings, so a
@@ -372,6 +379,7 @@ fn compileInArena(
         var lower = Lower.init(arena, mir, file, text, starts, bag);
         lower.directives = pp.directives;
         lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
+        lower.param_overrides = opts.param_overrides; // §3.4 `--param`
         lower.displays_dropped = opts.display == .drop; // §3.2 retention, see `Exposed`
         // SSA maps its matrix directly; the compilation arena cannot free it.
         defer {

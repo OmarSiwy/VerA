@@ -286,9 +286,10 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             .int_const => |n| .{ .int = n },
             .float_const => |f| .{ .real = f },
             // A constant expression the SSA left as arithmetic (`1.0 + 1.5`)
-            // still folds. Not through a parameter: the model card can
-            // override it, so its default is not the count.
-            .undef, .str_const, .param_ref, .block_param, .inst_result => lower_constfold.foldExpr(self, count, false),
+            // still folds, and so does one over parameters: the count sizes
+            // the result, so a parameter in it is a SHAPE parameter (§3.4 —
+            // fixed at compilation, `checkShape` refuses a card that moves it).
+            .undef, .str_const, .param_ref, .block_param, .inst_result => lower_constfold.shapeEval(self, count),
         };
         // A multiplier that survives to the residual has no width and no
         // string to repeat: §3.3's `{i{"Hi"}}` is legal because `i` is

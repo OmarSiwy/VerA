@@ -2,7 +2,7 @@
 //!
 //! In: the testbench plan and the device's exported tables. Out: the runner's Zig source.
 //!
-//! LRM clauses this file's code cites: §1, §2.8.3, §3.4.1, §3.4.5, §4.2.1.1, §4.6.3, §4.6.4, §4.6.4.1, §4.6.4.3, §4.6.4.6, §6.3.4, §9.19.
+//! LRM clauses this file's code cites: §1, §2.8.3, §3.4, §3.4.1, §3.4.5, §4.2.1.1, §4.6.3, §4.6.4, §4.6.4.1, §4.6.4.3, §4.6.4.6, §6.3.4, §9.19.
 //!
 //! Cut verbatim from `tb.zig`.
 
@@ -69,6 +69,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // point of `derive` is also that a localparam is not overridable.
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(&model);
+        \\    shapeCheck(&model);
         \\
         \\    var inst: D.Instance = .{};
         \\
@@ -196,6 +197,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
                 );
             }
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+            try out.appendSlice(arena, "        shapeCheck(&pm);\n");
             // §6.3.4 again: the hoisted prep derives from the swept card too.
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"setup\")) D.setup(Dual, &pm, &inst);\n");
         }
@@ -299,6 +301,20 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\const print_residual = false;
         \\
     );
+    return out.items;
+}
+
+/// §3.4 the card values of `d` that are compile-time values: the `//! param`
+/// lines naming a SHAPE parameter of `lowered` (`ParamInfo.shape`). The
+/// testbench is a host whose card is those lines, and a shape parameter cannot
+/// follow a card at run time, so a non-empty answer is the caller's cue to
+/// compile again with it as `Options.param_overrides` — as `--param` would.
+/// Every other card value stays a run-time write, as for any host.
+pub fn shapeOverrides(arena: Allocator, d: Directives, lowered: *const Lowered) Allocator.Error![]const @import("ir").Lower.ParamOverride {
+    var out: std.ArrayList(@import("ir").Lower.ParamOverride) = .empty;
+    for (d.params) |card| for (lowered.params.items) |p| {
+        if (p.shape and std.mem.eql(u8, p.name, card.name)) try out.append(arena, .{ .name = card.name, .value = card.value });
+    };
     return out.items;
 }
 
@@ -524,6 +540,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     }
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(&model);
+        \\    shapeCheck(&model);
         \\    var inst: D.Instance = .{};
         \\
     );
@@ -550,6 +567,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
                 try print(&out, arena, "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n", .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) });
             }
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(&pm);\n");
+            try out.appendSlice(arena, "        shapeCheck(&pm);\n");
         }
         try print(&out, arena,
             \\        var x: [n_u]f64 = @splat(0.0);

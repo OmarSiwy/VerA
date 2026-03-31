@@ -57,7 +57,17 @@ pub const ParamInfo = struct {
     /// through; this fold ran over the AST, before the diamond existed.
     /// `null` when the default is not a constant expression at all.
     folded: ?Const = null,
+    /// §3.2/§3.4 a SHAPE parameter: its value was folded into a storage shape
+    /// (an array or vector bound, a replication count), which the device fixes
+    /// at compile time. Codegen's `checkShape` refuses a card that moves it.
+    /// Set by `lower_constfold.shapeEval`.
+    shape: bool = false,
 };
+
+/// §3.4 "parameters can be modified at compilation time": the value a
+/// `--param name=value` gives the top module's parameter `name`, in place of
+/// its declaration value. A card is written in reals; `lowerParamDecl` converts.
+pub const ParamOverride = struct { name: []const u8, value: f64 };
 
 /// Class 4 — a branch (pair of nodes carrying a flow/potential). LRM §3.12.
 pub const BranchInfo = struct {
@@ -479,6 +489,8 @@ table_effect_place: ?Ssa.Place = null,
 /// directives above are: only the driver knows the search path. Empty means "the
 /// working directory only", which is what a bare `vera foo.va` gives.
 include_dirs: []const []const u8 = &.{},
+/// §3.4 compile-time overrides of the top module's parameters, set by root.zig.
+param_overrides: []const ParamOverride = &.{},
 /// True inside an `analog initial` block (§5.2.1), and ONLY that — `restrict`
 /// conflates it with an analog function, and §9.7.2's `$stop` rule keys on the
 /// narrower one. Deliberately not cleared when an analog function is inlined:

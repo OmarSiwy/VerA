@@ -435,11 +435,11 @@ pub fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
 /// is lowering's job and not the parser's. `null` means it did not fold and
 /// the diagnostic has been emitted.
 pub fn foldDim(self: *Lower, d: Ast.Dim, tok: u32) Oom!?VecRange {
-    const msb = lower_constfold.constEval(self, d.msb) orelse {
+    const msb = lower_constfold.shapeEval(self, d.msb) orelse {
         try self.err(tok, .E0352, "the msb of the range is not a constant expression", .{});
         return null;
     };
-    const lsb = lower_constfold.constEval(self, d.lsb) orelse {
+    const lsb = lower_constfold.shapeEval(self, d.lsb) orelse {
         try self.err(tok, .E0352, "the lsb of the range is not a constant expression", .{});
         return null;
     };

@@ -345,6 +345,7 @@ pub const parse = tb_directive.parse;
 const tb_runner = @import("tb/runner.zig");
 pub const renderRunner = tb_runner.renderRunner;
 pub const mixedPlan = tb_runner.mixedPlan;
+pub const shapeOverrides = tb_runner.shapeOverrides;
 
 // The runner's fixed text: the Newton solver and the `@Vector(NL, f64)` lanes it drives — tb/runner_text.zig
 const tb_runner_text = @import("tb/runner_text.zig");

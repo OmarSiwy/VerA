@@ -48,31 +48,23 @@
 //   b[0] must be 0.0 — the low end is unaffected by the override, which is the
 //   guard against "widen the array by shifting it".
 //
-// WHY IT FAILS TODAY, and how loudly. VerA scalarizes an array into one
-// variable per cell at COMPILE time, and folds the dimension bounds with the
-// parameter's DEFAULT, so the emitted device carries four cells:
+// HOW VERA MEETS IT — decided 2026-09-24 by the user. §3.4's own sentence is
+// the rule: parameters "can be modified at compilation time". A parameter that
+// determines a storage shape (this array bound; a replication count that sizes
+// a string) is a SHAPE parameter, and its override is applied BEFORE lowering,
+// so the device is compiled for that shape: here the `//! param N = 5` card is
+// the compile-time value (as `vera --param N=5` would give it), and the device
+// holds the six cells b[0] .. b[5]. §3.4.4's "the array size may be changed by
+// overriding the appropriate parameters" is then true of this device.
 //
-//   switch (...) { 0 => h[0], 1 => h[1], 2 => h[2], 3 => h[3],
-//                  else => S.con(0.0) }
-//
-// while the index arithmetic in the very same expression reads `model.N`, which
-// the card has set to 5. The two disagree by construction. Re-observed
-// 2026-09-23: `top` reads got=0 want=10 ok=0; `mid` (b[3], inside the default
-// shape) and b[0] pass. An earlier revision panicked on the out-of-range read;
-// it now takes the out-of-range answer 0, which is quieter and still wrong.
-// The writes to b[4] and b[5] are silently dropped first (the masked-write path
-// in `assignRuntimeIndex` treats an index past the folded bound as invalid).
-// This is the plan's "independently overridden structural dimensions" in one
-// file.
-//
-// WHY IT IS NOT REFUSED INSTEAD. Nothing in §3.2, §3.4 or §6.3 lets an
-// implementation reject an override of a parameter because a dimension reads
-// it, and §3.4.4 says outright that "the array size may be changed by
-// overriding the appropriate parameters". So the fixture is right. The fix is
-// an array whose extent is a function of the model card, which means storage
-// the device sizes at card time rather than cells scalarized at compile time.
-// An instance-line override (`#(.N(5))`) already works, because it is folded
-// at elaboration (ch06 h01_11). Only the host card is a runtime value.
+// A card is still written at RUN time, and a compiled device has one shape.
+// So the device refuses — through `checkShape`, which the host calls after
+// `derive` — any card that sets N to a value it was not compiled for, rather
+// than letting a folded shape and a card-read index silently disagree (which
+// is what this row observed before: `top` read got=0 want=10, the writes to
+// b[4] and b[5] were dropped by the masked-write path). A parameter that shapes
+// nothing stays a run-time card value exactly as before. An instance-line
+// override (`#(.N(5))`) was always folded at elaboration (ch06 h01_11).
 //
 //! lrm 3.2
 //! lrm 3.4

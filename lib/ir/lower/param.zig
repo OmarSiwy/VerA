@@ -99,7 +99,16 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
     if (decl.dims.len != 0) return lowerParamArray(self, decl, name);
 
-    const folded = if (lower_constfold.constEval(self, decl.default)) |c| parameterConst(decl.ty, c) else null;
+    const declared = if (lower_constfold.constEval(self, decl.default)) |c| parameterConst(decl.ty, c) else null;
+    // §3.4 "parameters can be modified at compilation time to have values
+    // which are different from those specified in the declaration assignment":
+    // a `--param` replaces the declaration value before anything reads it. In
+    // the declared type, or — §3.4.1's inference — the declared default's.
+    const over: ?Const = if (decl.is_local or decl.ty == .string) null else for (self.param_overrides) |o| {
+        if (std.mem.eql(u8, o.name, name))
+            break parameterConst(if (decl.ty == .unspecified and declared != null and declared.? == .int) .integer else decl.ty, .{ .real = o.value });
+    } else null;
+    const folded = over orelse declared;
     // §4.2.1.1 converts by "rounding the real number to the nearest integer",
     // and an infinity or a NaN has none: `parameterConst` leaves such a value
     // real, and it used to reach the card as i64's saturation value.
@@ -112,7 +121,7 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // assignment becomes this declaration's default. A module compiled on its own
     // has no instance, so its declared default is judged for its BOUNDS (E0347,
     // above) and not for itself.
-    if (decl.is_override) try checkParamRange(self, decl, name, folded);
+    if (decl.is_override or over != null) try checkParamRange(self, decl, name, folded);
     const ty: Ast.Type = if (decl.ty != .unspecified) decl.ty else switch (folded orelse Const{ .real = 0 }) {
         .int => .integer,
         .real => .real,
@@ -133,7 +142,11 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     // the fold that refuses to look through a parameter, so it is the "may this
     // be baked into the model card?" test; `folded` above cannot be, for the
     // §6.6.1 reason. Codegen turns the surviving expression into `derive()`.
-    const default = try parameterDefault(self, decl.default, decl.ty);
+    const default = if (over) |c| switch (c) {
+        .int => |n| try self.mir.addIntConst(self.arena, n),
+        .real => |n| try self.mir.addFloatConst(self.arena, n),
+        .str => unreachable, // a card value is a real
+    } else try parameterDefault(self, decl.default, decl.ty);
 
     try addParam(self, name, ty, default, folded, decl.ranges, decl.is_local, decl.main_tok);
     self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
@@ -545,7 +558,7 @@ pub fn patternElems(self: *Lower, e: Ast.ExprId) Oom![]const Ast.ExprId {
     if (elems.len != 1 or ex.tag(elems[0]) != .pattern_repl) return elems;
     const count = ex.lhs(elems[0]);
     const group = ex.args(ex.rhs(elems[0]));
-    const c = lower_constfold.constEval(self, count);
+    const c = lower_constfold.shapeEval(self, count);
     const n = if (c) |v| switch (v) {
         .int => |i| i,
         else => null,
@@ -585,11 +598,11 @@ pub fn dimsBounds(self: *Lower, dims: []const Ast.Dim, tok: u32, name: []const u
     }
     const out = try self.arena.alloc(Bounds, dims.len);
     for (dims, out) |d, *b| {
-        const a = lower_constfold.constEval(self, d.msb) orelse {
+        const a = lower_constfold.shapeEval(self, d.msb) orelse {
             try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
             return null;
         };
-        const c = lower_constfold.constEval(self, d.lsb) orelse {
+        const c = lower_constfold.shapeEval(self, d.lsb) orelse {
             try self.err(tok, .E0308, "in the bounds of `{s}`", .{name});
             return null;
         };

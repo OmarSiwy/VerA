@@ -28,6 +28,16 @@ pub fn constEval(self: *const Lower, e: Ast.ExprId) ?Const {
     return foldExpr(self, e, true);
 }
 
+/// `constEval` for a STORAGE SHAPE — an array or vector bound, a replication
+/// count. §3.4 fixes a parameter "at compilation time", and a shape is the one
+/// place the device cannot follow a card, so every parameter the fold reads is
+/// marked `ParamInfo.shape` and codegen's `checkShape` refuses a card that
+/// moves it (rather than the old silent disagreement between a folded shape
+/// and a card-read index).
+pub fn shapeEval(self: *Lower, e: Ast.ExprId) ?Const {
+    return constfold.fold(self.file, e, Env{ .self = self, .params = true, .shape = self });
+}
+
 /// With `params = false`, a procedural `if (p > 0)` must stay
 /// a runtime branch — `p` is overridable by the model card, so folding it to
 /// its default would silently compile the wrong arm (§3.4 vs §6.6.2).
@@ -41,6 +51,8 @@ pub fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
 const Env = struct {
     self: *const Lower,
     params: bool,
+    /// `shapeEval`'s: where a parameter read in a shape is marked.
+    shape: ?*Lower = null,
 
     pub fn leaf(env: Env, e: Ast.ExprId) ?Const {
         const self = env.self;
@@ -52,7 +64,10 @@ const Env = struct {
         // A function-local parameter is NOT overridable by a model card
         // (§4.7.2 — it never reaches the Model), so `foldExpr(..., false)`'s refusal
         // to look through a parameter does not apply to a shadowing local.
-        if (!env.params and self.param_index.contains(name) and !lower_expr.funcParamShadows(self, name)) return null;
+        if (self.param_index.get(name)) |i| if (!lower_expr.funcParamShadows(self, name)) {
+            if (!env.params) return null;
+            if (env.shape) |l| l.out.params.items[i].shape = true;
+        };
         return self.consts.get(name);
     }
     /// IEEE 1364-2005 §5.2 (VAMS §1.1): "the system functions allowed in
