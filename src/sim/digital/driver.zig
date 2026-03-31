@@ -22,11 +22,12 @@ const Driver = @import("net.zig").Driver;
 const Signal = @import("net.zig").Signal;
 const filled = @import("net.zig").filled;
 
-/// docs/ROADMAP.md §7 item 1, OPEN: does `driver_update` fire for a connect
-/// module's OWN driver of the signal (the `assign d = out;` of §9.22.6)? §9.22
-/// ¶3 says the driver access functions see "only drivers found in ordinary
-/// modules", and this reads `driver_update` the same way. `true` is the other
-/// reading, under which every `updates=` column of m04_12 shifts by one.
+/// docs/ROADMAP.md §7 item 1, settled 2026-09-24 by the user: `driver_update`
+/// does NOT fire for a connect module's OWN driver of the signal (the
+/// `assign d = out;` of §9.22.6). The reading is §9.22.6's separation of the
+/// two: that driver "will drive the receivers", apart from "the drivers of the
+/// connect module digital port", which are the ordinary drivers §9.22 ¶3's
+/// access functions see. m04_12 pins it: `true` shifts every `updates` by one.
 pub const cm_driver_updates = false;
 
 pub const State = struct {

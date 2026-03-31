@@ -875,6 +875,9 @@ the previous pass unchanged.
    in both rows' fixture 12 shifts by one and all four `ok=` read 0.
    Either settle it or move `out = 1'b0;` out of the counting window. M02's fixture 13 is immune
    (its `always @(driver_update d)` body is idempotent); fixture 12 is not.
+   **Settled 2026-09-24 by the user: no** — the fixtures' reading, on §9.22.6's separation of the
+   connect module's driver (it drives the receivers) from the drivers of its digital port
+   (`docs/ROADMAP.md §7` item 1). M04's fixture 12 now asserts it and passes.
 8. **A05 — can `";2"` carry a dependent selector with no interpolation control?**
    *Fixer:* yes — Syntax 9-16 writes `"[interp_control[;dependent_selector]]"` and "both halves are
    optional", so 07's `";2"` selects dependent column 2 and 06's leading-column rule does not apply.
