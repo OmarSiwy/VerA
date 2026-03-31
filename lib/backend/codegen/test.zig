@@ -2449,6 +2449,26 @@ test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
     // "The $fopen function shall reuse channels that have been closed."
     try std.testing.expectEqual(mcd, k.zFOpen(path, "", true));
     _ = k.zFClose(mcd);
+
+    // IEEE 1364-2005 §17.2.4.1/§17.2.4.2, the digital context's two reads on
+    // this same table (VAMS §9.5.1.2): `$ungetc` puts a character back without
+    // touching the file, the next `$fgetc` reads it, and `$rewind` drops it.
+    const gw = k.zFOpen(path, "w", false);
+    _ = k.zFPut(gw, "a");
+    _ = k.zFClose(gw);
+    const g = k.zFOpen(path, "r", false);
+    try std.testing.expectEqual(@as(i64, 'a'), k.zFGetc(g));
+    try std.testing.expectEqual(@as(i64, 0), k.zFUngetc('Z', g));
+    try std.testing.expectEqual(@as(i64, 0), k.zFTell(g));
+    try std.testing.expectEqual(@as(i64, 'Z'), k.zFGetc(g));
+    try std.testing.expectEqual(@as(i64, 0), k.zFUngetc('Z', g));
+    try std.testing.expectEqual(@as(i64, 0), k.zFSeek(g, 0, 0));
+    try std.testing.expectEqual(@as(i64, 'a'), k.zFGetc(g));
+    // §17.2.8: the read that finds no byte is EOF (-1) and sets the indicator.
+    try std.testing.expectEqual(@as(i64, 0), k.zFSeek(g, 0, 2));
+    try std.testing.expectEqual(@as(i64, -1), k.zFGetc(g));
+    try std.testing.expect(k.zFEof(g) != 0);
+    _ = k.zFClose(g);
 }
 
 test "codegen: §9.21 the emitted table interpolator is the one the fixtures assert" {

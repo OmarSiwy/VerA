@@ -23,10 +23,13 @@
 //
 // SCOPE. §9.5.1 $fopen/$fclose in both descriptor shapes, §9.5.2's five output
 // tasks, §9.5.4.1 $fgets, §9.5.4.2 $fscanf, §9.5.5 $ftell/$fseek/$rewind,
-// §9.5.6 $fflush, §9.5.7 $ferror, §9.5.8 $feof. NOT here, because §9.2 Table 9-2
-// marks every one of them analog-context "No" and `lower.isDigitalOnlySysFunc`
-// refuses the call: the b/h/o radix spellings, $fgetc/$ungetc/$fread,
-// $readmemb/$readmemh and $sdf_annotate.
+// §9.5.6 $fflush, §9.5.7 $ferror, §9.5.8 $feof — and IEEE 1364-2005 §17.2.4.1
+// $fgetc and §17.2.4.2 $ungetc, which §9.2 Table 9-2 marks analog-context "No"
+// but which the DIGITAL context of a mixed simulation calls on this same table
+// (§9.5.1.2, `contract.FileIo`). NOT here, because Table 9-2 marks them "No"
+// and no context calls them through the table: the b/h/o radix spellings (a
+// formatting question, answered before `zFPut`), $fread, $readmemb/$readmemh
+// and $sdf_annotate.
 
 // `std` is spelled `zfstd` HERE for the reason `str_kernels.zig` spells it
 // `zstd`: this text is embedded verbatim into device.zig, which already declares
@@ -63,6 +66,12 @@ const ZFSlot = struct {
     /// record — it silently splits it across two reads.
     line: [4096]u8 = undefined,
     line_len: usize = 0,
+    /// IEEE 1364-2005 §17.2.4.2 the characters `$ungetc` pushed back, read by
+    /// `zFGetc` before the file, the last pushed first.
+    // ponytail: a fixed stack; C promises one pushback and this holds 16. Only
+    // `zFGetc` reads it — `$fgets`/`$fscanf` after an `$ungetc` read the file.
+    back: [16]u8 = undefined,
+    nback: u8 = 0,
 };
 
 /// §9.5.1: "limiting an implementation to at most 31 files opened for output via
@@ -389,8 +398,44 @@ pub fn zFSeek(d: i64, off: i64, op: i64) i64 {
     // §9.5.5: a reposition clears the end-of-file condition, which is why the
     // clause bothers to say $fseek and $rewind "undo the effect of any $ungetc".
     s.eof = false;
+    s.nback = 0;
     s.err = 0;
     zf_last_err = 0;
+    return 0;
+}
+
+/// IEEE 1364-2005 §17.2.4.1 `c = $fgetc( fd )`: one byte, or EOF (-1) when
+/// none is left, which is also what sets §17.2.8's end-of-file indicator.
+pub fn zFGetc(d: i64) i64 {
+    const k = zfSlot(d) orelse return -1;
+    const s = &zf_slots[k];
+    if (s.nback != 0) {
+        s.nback -= 1;
+        s.pos += 1;
+        return s.back[s.nback];
+    }
+    var b: [1]u8 = undefined;
+    const got = if (s.can_read) s.f.readPositionalAll(zfIo(), &b, s.pos) catch 0 else 0;
+    if (got == 0) {
+        s.eof = true;
+        return -1;
+    }
+    s.pos += 1;
+    return b[0];
+}
+
+/// IEEE 1364-2005 §17.2.4.2 `code = $ungetc( c, fd )`: "inserts the character
+/// specified by c into the buffer specified by file descriptor fd", so the
+/// next `$fgetc` returns it, without changing the file; 0, or EOF when it
+/// cannot. It moves the position back one, as C's does, and so needs one.
+pub fn zFUngetc(c: i64, d: i64) i64 {
+    const k = zfSlot(d) orelse return -1;
+    const s = &zf_slots[k];
+    if (s.pos == 0 or s.nback == s.back.len) return -1;
+    s.back[s.nback] = @truncate(@as(u64, @bitCast(c)));
+    s.nback += 1;
+    s.pos -= 1;
+    s.eof = false;
     return 0;
 }
 

@@ -900,6 +900,35 @@ pub const SystfHost = struct {
     call: *const fn (ctx: *anyopaque, k: usize, args: []const f64, partials: []f64) f64,
 };
 
+/// VAMS §9.5.1.2 "The file I/O system functions and tasks in both the analog
+/// and digital contexts can use file descriptors opened in either context":
+/// the device's §9.5 descriptor table, for a host that runs a second context —
+/// a mixed simulation's digital half — which has to name the same files. ONE
+/// table per simulation: the host routes that context's file tasks through
+/// these, so a descriptor either context returns names the same channel in
+/// both, with §9.5.1's encodings (mcd bit 0 standard output, bit 31 clear; an
+/// fd bit 31 set, 0..2 the standard streams).
+///
+/// OPTIONAL, `fileIo`'s null by default: only a device that carries the table
+/// (a printing artifact that calls the §9.5 family) declares `file_io`, and a
+/// host with no second context never reads it. `put` writes text already
+/// formatted; standard output stays the host's own stream.
+pub const FileIo = struct {
+    open: *const fn (path: []const u8, ty: []const u8, mcd: bool) i64,
+    close: *const fn (d: i64) i64,
+    put: *const fn (d: i64, text: []const u8) i64,
+    getc: *const fn (d: i64) i64,
+    ungetc: *const fn (c: i64, d: i64) i64,
+    tell: *const fn (d: i64) i64,
+    seek: *const fn (d: i64, off: i64, op: i64) i64,
+    eof: *const fn (d: i64) i64,
+};
+
+/// The device's `file_io`, or null: it has no descriptor table to share.
+pub fn fileIo(comptime D: type) ?FileIo {
+    return if (@hasDecl(D, "file_io")) D.file_io else null;
+}
+
 /// §4.6.3 AC stimulus topology. Position k of `ac_gens` names one `ac_stim`
 /// call on the (row, col) branch, and position k of the `acStim(...)` result
 /// carries that call's phasor — exactly the `noise_gens`/`noisePsd` split, for
@@ -1205,6 +1234,8 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "display")) {
         if (genericFnError(D, "display", "void")) |m| @compileError(m);
     }
+    if (@hasDecl(D, "file_io") and @TypeOf(D.file_io) != FileIo)
+        @compileError(@typeName(D) ++ ".file_io must be a contract.FileIo");
 
     // Optional permission, not a shape: the WIDTH of S is the host's, and this
     // only says which widths this device's physics tolerates.
@@ -1690,6 +1721,9 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // This is NOT part of the Kernel ABI and must not become part of it: nothing
     // in `Instance` holds a descriptor, and `eval`/`q` cannot reach a file at all.
     .{ "display", {} },
+    // §9.5.1.2 the descriptor table that `display` sequences, for a host's
+    // second context to share (`FileIo`). Optional; see `validate`.
+    .{ "file_io", {} },
     .{ "attempt", {} },
     .{ "u_kinds", {} },
     .{ "u_abstol", {} },
@@ -2157,6 +2191,36 @@ const MockAll = struct {
     // pairing and `AcPhasor`'s polar shape are both somewhere `validate` sees.
     pub const ac_gens = [_]AcGen(Self){.{ .row = 0, .col = 1, .name = "ac" }};
     pub const systf_calls = [_]Systf{.{ .name = "$sampnhold" }};
+    // §9.5.1.2 a table that has nothing open: every operation answers "no".
+    pub const file_io: FileIo = .{
+        .open = struct {
+            fn f(_: []const u8, _: []const u8, _: bool) i64 {
+                return 0;
+            }
+        }.f,
+        .close = noFile,
+        .put = struct {
+            fn f(_: i64, _: []const u8) i64 {
+                return 0;
+            }
+        }.f,
+        .getc = noFile,
+        .ungetc = struct {
+            fn f(_: i64, _: i64) i64 {
+                return -1;
+            }
+        }.f,
+        .tell = noFile,
+        .seek = struct {
+            fn f(_: i64, _: i64, _: i64) i64 {
+                return -1;
+            }
+        }.f,
+        .eof = noFile,
+    };
+    fn noFile(_: i64) i64 {
+        return -1;
+    }
     // The over-approximate masks, plus their row-level companions. All-ones is
     // what a host must assume when a device omits them, so it is also the value
     // that cannot be wrong here — this guard is about the ALLOWLIST not
