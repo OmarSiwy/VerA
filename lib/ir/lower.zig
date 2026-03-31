@@ -57,9 +57,10 @@ pub const ParamInfo = struct {
     /// through; this fold ran over the AST, before the diamond existed.
     /// `null` when the default is not a constant expression at all.
     folded: ?Const = null,
-    /// §3.2/§3.4 a SHAPE parameter: its value was folded into a storage shape
-    /// (an array or vector bound, a replication count), which the device fixes
-    /// at compile time. Codegen's `checkShape` refuses a card that moves it.
+    /// §3.2/§3.4/§6.6 a SHAPE parameter: its value was folded into a shape —
+    /// an array or vector bound, a replication count, or the elaborated
+    /// structure (a genvar loop bound, a generate scheme) — which the device
+    /// fixes at compile time. Codegen's `checkShape` refuses a card that moves it.
     /// Set by `lower_constfold.shapeEval`.
     shape: bool = false,
 };

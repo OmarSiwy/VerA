@@ -1539,7 +1539,8 @@ pub fn validate(comptime D: type) void {
         expectFn(D, "derive", fn (*D.Model) void);
 
     // §3.4 SHAPE parameters: parameters "modified at compilation time", folded
-    // into an array bound or replication count, so the device holds one value
+    // into an array bound, a replication count or the generate structure (a
+    // genvar loop bound, a generate scheme), so the device holds one value
     // of each. `checkShape` names the first one a card (after `derive`) sets to
     // anything else, or null. Absent — the default — means no parameter shapes
     // this device and every card fits. `validateHost` makes calling it the

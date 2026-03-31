@@ -55,7 +55,8 @@ const usage_text =
     \\  -I DIR                  add an `include search directory
     \\  --param NAME=VALUE      compile with the top module's parameter NAME set
     \\                          to VALUE (LRM 3.4). A parameter that sizes an
-    \\                          array, vector or replication is fixed at VALUE and
+    \\                          array, vector or replication, or bounds a genvar
+    \\                          loop or selects a generate arm, is fixed at VALUE and
     \\                          the device refuses a card that moves it
     \\                          (`checkShape`); any other stays a card value
     \\  --spice PATH            read a SPICE netlist alongside the source; Annex
