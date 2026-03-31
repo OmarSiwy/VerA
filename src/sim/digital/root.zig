@@ -86,7 +86,13 @@ pub const Mixed = struct {
     /// expression reads. Each is declared here anyway, and the coordinator
     /// writes it (`a2dWrite`) after every accepted analog solution.
     reads: []const []const u8 = &.{},
+    /// VAMS §6.3 the root's parameters as the host's card set them — the
+    /// values the device's `Model` holds — so both halves read one value.
+    params: []const Param = &.{},
 };
+
+/// One root parameter value from the host's card (`Mixed.params`).
+pub const Param = struct { name: []const u8, value: f64 };
 
 /// One port VAMS §7.8.4 re-pointed at an inserted connect module, as the
 /// analog compile's flatten reports it (`ir` `Lowered.Inserted`, the same
@@ -361,6 +367,11 @@ pub const Run = struct {
     /// Pass one's slot space while it is still growing: the view `constant`
     /// evaluates a bound or a parameter against before `values` is final.
     growing: ?*std.ArrayList(Int.Literal) = null,
+    /// IEEE 1364-2005 §12.2.1 every `defparam`, by the instance that declares
+    /// it and its path relative to that instance (`paramValue`).
+    defparams: std.AutoHashMapUnmanaged(Name, Ast.Defparam) = .empty,
+    /// `Mixed.params`: the root's parameter values on the host's card.
+    card: []const Param = &.{},
     /// §12.2 parameter slots — constants an expression may fold, never a
     /// target.
     params: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -849,10 +860,10 @@ fn findModule(r: *Run, name: Ast.StrId, tok: u32) Error!*const Ast.ModuleDecl {
 /// driver rows its continuous assignments and port connections contribute.
 /// Recurses into child instances AFTER its own nets exist, so a port connection
 /// always resolves against a parent that is fully declared.
-fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, depth: u16) Error!void {
+fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []const PortBind, over: []const Ast.ParamOverride, depth: u16) Error!void {
     const arena = r.arena;
     if (depth == 64) return r.fail(m.main_tok, "digital instance hierarchies deeper than 64 levels are not implemented", .{});
-    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.defparams.len != 0 or m.functions.len != 0 or m.attrs.len != 0))
+    if (!r.mixed and (m.aliasparams.len != 0 or m.branches.len != 0 or m.functions.len != 0 or m.attrs.len != 0))
         return r.fail(m.main_tok, "digital execution currently requires a module with only variables, nets, events, instances and processes", .{});
     // A digital parse makes each generate construct an `analog` block over
     // an `if`; anything else there is a genuine analog block.
@@ -861,14 +872,19 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     r.scope = scope;
     try e.insts.append(arena, .{ .module = m, .scope = scope });
     // IEEE 1364-2005 §12.2 module parameters, in declaration order so a
-    // default may name an earlier one. A mixed module's parameters are the
-    // analog block's (real-valued, overridable by the analog compile).
-    // ponytail: no overrides — an instance's `#( … )` and `defparam` are
-    // refused above and below — so one value per declaration is exact.
-    if (!r.mixed) for (m.params) |p| {
-        if (p.dims.len != 0 or (p.ty != .unspecified and p.ty != .integer))
+    // default may name an earlier one. A mixed module's real, string and array
+    // parameters are the analog block's alone (VAMS §7.2.2): this engine holds
+    // no parameter of those kinds, and a digital read of one is undeclared.
+    for (m.defparams) |d| try r.defparams.put(arena, .{ .scope = scope, .str = d.path }, d);
+    var positional: usize = 0;
+    for (m.params) |p| {
+        const pos = positional;
+        if (!p.is_local) positional += 1;
+        if (p.dims.len != 0 or (p.ty != .unspecified and p.ty != .integer)) {
+            if (r.mixed) continue;
             return r.fail(p.main_tok, "only integral scalar parameters are implemented by digital execution", .{});
-        const value = try r.constant(p.default, p.main_tok);
+        }
+        const value = (try paramValue(r, p, scope, over, pos)) orelse continue;
         // §12.2: a range or a type converts the value like an assignment;
         // otherwise the parameter takes the type of its value.
         const ty: compile.Type = if (p.packed_range) |range|
@@ -884,7 +900,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         @memcpy(slot_value.planes, converted.planes);
         try e.values.append(arena, slot_value);
         try r.params.put(arena, at, {});
-    };
+    }
     // §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
     // point on the waiter list; the stored value is never read or written.
     for (m.events) |name| {
@@ -1359,15 +1375,55 @@ fn generatedModules(file: *const Ast.SourceFile, s: Ast.StmtId, out: *std.ArrayL
     }
 }
 
+/// IEEE 1364-2005 §12.2 the value parameter `p` of the instance `scope`
+/// takes, from the first of: a `defparam` naming it (§12.2.1, which "shall
+/// take precedence"), the instance's `#( … )` by name or position (§12.2.2),
+/// at a mixed design's root the host's card (the `Model` value the analog
+/// block reads), and its declared default. Each is a constant expression in
+/// the scope that wrote it. null: in a mixed design, a value this engine does
+/// not fold — a real, or one naming the analog block's — so the parameter is
+/// the analog block's alone.
+fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOverride, pos: usize) Error!?Int.Literal {
+    const Src = struct { e: Ast.ExprId, scope: u32 };
+    const src: Src = blk: {
+        // A defparam's path is relative to the instance that declares it, so
+        // each enclosing scope is asked for the path from it down to `p`.
+        // ponytail: downward paths only, the §12.2.1 form every fixture writes.
+        var at = scope;
+        var path: []const u8 = r.file.str(p.name);
+        while (true) {
+            if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d|
+                break :blk .{ .e = d.value, .scope = at };
+            if (at == 0) break;
+            path = try std.fmt.allocPrint(r.arena, "{s}.{s}", .{ r.file.str(r.scope_info.items[at].name), path });
+            at = r.scope_info.items[at].parent;
+        }
+        if (!p.is_local) for (over, 0..) |o, i| {
+            if (o.value != .none and (o.name == p.name or (o.name == .none and i == pos)))
+                break :blk .{ .e = o.value, .scope = r.scope_info.items[scope].parent };
+        };
+        break :blk .{ .e = p.default, .scope = scope };
+    };
+    r.scope = src.scope;
+    defer r.scope = scope;
+    if (r.mixed and !compile.constantExpression(r, src.e)) return null;
+    const value = try r.constant(src.e, p.main_tok);
+    if (r.mixed and compile.typeOf(r, src.e).real) return null;
+    if (scope == 0 and !p.is_local) for (r.card) |c| if (std.mem.eql(u8, c.name, r.file.str(p.name))) {
+        // VAMS §6.3: the card sets the root's parameter as a `#( … )` would;
+        // an integer one takes the value rounded, as the device's does.
+        const w = try filled(r.arena, 64, true, .zero);
+        w.values()[0] = @bitCast(std.math.lossyCast(i64, @round(c.value)));
+        return try exec.normalize(r.arena, w, .{ .width = 32, .signed = true });
+    };
+    return value;
+}
+
 /// §6.2.2 one module or UDP instance, declared in `scope` — or IEEE 1364
 /// §12.1.2's array of them, one instance per element from the lower index
 /// up, each a scope named `u[k]` (the same order the analog elaborator uses).
 fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
     r.scope = scope;
-    // A mixed module's parameters are the analog block's (`declare` mints
-    // none), so the digital half has nothing an override could set.
-    if (inst.params.len != 0 and !r.mixed)
-        return r.fail(inst.main_tok, "parameter overrides are not implemented by digital execution", .{});
     const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
     if (findUdp(r.file, inst.module) != null)
         return r.fail(inst.main_tok, "§12.1.2: arrays of UDP instances are not implemented by digital execution", .{});
@@ -1435,7 +1491,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         // to outlive the recursion that consumes it. An array element's path
         // carries its index, which that walk does not read: not registered.
         if (inst.name != .none and index == null) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
-        try declare(r, e, child, child_scope, binds_out, depth + 1);
+        try declare(r, e, child, child_scope, binds_out, inst.params, depth + 1);
         r.scope = scope;
     }
 }
@@ -1820,7 +1876,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try wrealRules(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
     } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
@@ -1900,7 +1956,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.sys_calls = try arena.alloc(?compile.SysFn, file.exprs.nodes.len);
     @memset(r.sys_calls, null);
     r.growing = &e.values;
-    try declare(&r, &e, m, 0, &.{}, 0);
+    try declare(&r, &e, m, 0, &.{}, &.{}, 0);
     try driver.segregate(&r, &e);
     r.values = e.values.items;
     r.nets = e.nets.items;
@@ -2364,6 +2420,41 @@ test "§12.2 parameters fold into bounds, delays and expressions" {
         \\end
         \\endmodule
     , "1111 7 -4 0001 z 1\n1\n");
+}
+
+test "§12.2 a parameter takes a defparam over a named or positional override over its default" {
+    // §12.2.2 `#(.n(v))` and `#(v)` are constant expressions in the
+    // instantiating module (`k` is the parent's); §12.2.1 a defparam wins.
+    try expectRun(
+        \\module c; parameter a = 1, b = 2; localparam l = a + b;
+        \\initial #1 $display("%m %0d %0d %0d", a, b, l);
+        \\endmodule
+        \\module top; parameter k = 5;
+        \\c #(.b(k * 2)) u1(); c #(7) u2(); c u3();
+        \\defparam u3.a = k + 1;
+        \\endmodule
+    , "top.u1 1 10 11\ntop.u2 7 2 9\ntop.u3 6 2 8\n");
+}
+
+test "VAMS §6.3 a mixed root reads the card's value and an instance its override; a real stays analog" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var output = std.Io.Writer.Allocating.init(arena.allocator());
+    var r = try elaborate(arena.allocator(),
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module h; parameter integer sel = 0; integer got; initial got = sel; endmodule
+        \\module top(p); inout p; electrical p;
+        \\  parameter integer n = 1; parameter real g = 2.0; integer seen;
+        \\  h #(.sel(3)) u();
+        \\  initial seen = n;
+        \\  analog V(p) <+ g;
+        \\endmodule
+    , .{ .mixed = .{ .top = "top", .timescale = .{ .unit = 1e-9, .precision = 1e-9 }, .params = &.{.{ .name = "n", .value = 4 }} } }, &bag, &output.writer);
+    _ = try r.runUntil(0);
+    try std.testing.expectEqual(@as(?i64, 4), r.values[r.slotOf("seen").?].asInt());
+    try std.testing.expectEqual(@as(?i64, 3), r.values[r.slotOf("u.got").?].asInt());
+    try std.testing.expectEqual(@as(?u32, null), r.slotOf("g"));
 }
 
 // §12.4.2: only the selected arm's instance exists, and §12.1.1 keeps the

@@ -873,7 +873,7 @@ pub const mixed_body =
     \\    var bag = diag.Bag.init(arena);
     \\    bag.setSingleFile(title, mixed_source, 0) catch {};
     \\    var dout = std.Io.Writer.Allocating.init(arena);
-    \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale, .inserts = &mixed_inserts, .reads = &mixed_reads } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
+    \\    var dig = sim.digital.elaborate(arena, mixed_source, .{ .mixed = .{ .top = mixed_top, .timescale = mixed_timescale, .inserts = &mixed_inserts, .reads = &mixed_reads, .params = &mixed_params } }, &bag, &dout.writer) catch |e| mixedFail(&bag, e);
     \\    var a: Analog = .{ .model = model, .inst = inst, .x = x, .forced = forced, .state = state, .dout = &dout, .n = n, .slots = undefined, .snap_slots = undefined, .dig = &dig, .a2d_slots = undefined };
     \\    inline for (a2d_ports, 0..) |p, i| a.a2d_slots[i] = mixedSlot(&dig, p.name);
     \\    // §8.4.3.2: an unguarded read makes the block implicitly sensitive.
