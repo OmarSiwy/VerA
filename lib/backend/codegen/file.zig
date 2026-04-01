@@ -654,7 +654,7 @@ fn deriveFlags(self: *Gen) Error!void {
         \\
     , .{});
     if (self.su.vals.len != 0) try self.w("    setup(R, model, &pin);\n", .{}) else try self.w("    _ = &pin;\n", .{});
-    try self.w("    const m = core(R, xr, model, &pin);\n", .{});
+    try self.w("    const m = core(R, xr, model, &pin{s});\n", .{self.heldArg(true)});
     for (self.topo.cpairs, 0..) |p, k| {
         if (!p.card) continue;
         const f = self.core.lo_idx[@intFromEnum(self.an.rv(p.flag))];

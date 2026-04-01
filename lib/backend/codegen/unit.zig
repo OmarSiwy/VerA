@@ -133,7 +133,13 @@ pub fn emitCommon(self: *Gen) Error!void {
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr) struct {{\n", .{});
+    try self.w("inst: InstancePtr", .{});
+    // §5.10 whether the caller keeps the held arrays' end-of-block values —
+    // see `Gen.heldArg`.
+    self.uses_held = false;
+    const at_held = self.out.items.len + ", comptime ".len;
+    if (self.core.held_only.len != 0) try self.w(", comptime held: bool", .{});
+    try self.w(") struct {{\n", .{});
     for (self.core.lo_vals, 0..) |v, k| {
         // §3.2.2 a held array's end-of-block version: its plain values.
         if (self.an.arrOf(v)) |id| {
@@ -172,11 +178,13 @@ pub fn emitCommon(self: *Gen) Error!void {
         self.uses_x = false;
         self.uses_model = false;
         self.uses_inst = false;
+        self.uses_held = false;
         try self.b("    @compileError(\"{s}\");\n", .{msg});
     }
     if (!self.uses_x) patchParam(self, at_x, "x".len);
     if (!self.uses_model) patchParam(self, at_model, "model".len);
     if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
+    if (self.core.held_only.len != 0 and !self.uses_held) patchParam(self, at_held, "held".len);
     try self.w("}}\n\n", .{});
     try gen_file.recordUnitFile(self, self.core.name, lo, at_fn);
 }
@@ -432,14 +440,28 @@ fn declareArrays(self: *Gen) Error!void {
     if (n == 0) return;
     const seen = try self.arena.alloc(bool, n);
     @memset(seen, false);
+    // §5.10 a copy-on-write array needs its local storage only if a store
+    // writes it; until one does, `p<id>` is the whole of it.
+    const stored = try self.arena.alloc(bool, n);
+    @memset(stored, false);
     for (self.plan.live.items) |lv| {
         const id = self.an.arrOf(lv) orelse continue;
-        if (!self.plan.cached(lv)) seen[id] = true;
+        if (self.plan.cached(lv)) continue;
+        seen[id] = true;
+        const def = self.mir.valueDef(lv);
+        if (def == .inst_result and self.mir.instOp(def.inst_result) == .store) stored[id] = true;
     }
-    for (seen, 0..) |s, id| {
+    for (seen, stored, 0..) |s, st, id| {
         if (!s) continue;
+        const len = self.lowered.mem_arrays.items[id].len;
+        const ty = gen_render.arrElemTy(self, @intCast(id));
+        if (gen_render.cow(self, @intCast(id))) {
+            try self.ind(1);
+            try self.b("var p{d}: *const [{d}]{s} = undefined;\n", .{ id, len, ty });
+            if (!st) continue;
+        }
         try self.ind(1);
-        try self.b("var a{d}: [{d}]{s} = undefined;\n", .{ id, self.lowered.mem_arrays.items[id].len, gen_render.arrElemTy(self, @intCast(id)) });
+        try self.b("var a{d}: [{d}]{s} = undefined;\n", .{ id, len, ty });
     }
 }
 
@@ -461,7 +483,7 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         self.uses_model = true;
         self.uses_inst = true;
         try self.ind(1);
-        try self.b("const c = @call(.always_inline, core, .{{ S, x, model, inst }});\n", .{});
+        try self.b("const c = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(true)});
     }
     try declareArrays(self);
     if (self.plan.straight) {
