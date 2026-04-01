@@ -26,6 +26,7 @@ const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_render = @import("render.zig");
 const gen_unit = @import("unit.zig");
+const gen_cfg = @import("cfg.zig");
 const plan_setup = @import("plan/setup.zig");
 const plan_args = @import("plan/args.zig");
 const Mir = @import("ir").Mir;
@@ -50,6 +51,20 @@ pub const Setup = struct {
     mode: bool = false,
     /// `setup` referenced its `zs_stop` flag (a per-eval branch or loop).
     stop: bool = false,
+    /// Emitting text only a false `zs_stop` reaches: a per-eval branch's
+    /// `else` arm, or the body of the loop a stop precedes. It never runs,
+    /// so its exits store nothing — on `hisimhv_va` each of 155 dead exits
+    /// repeated all 418 root stores, 5 of the file's 7 MB.
+    dead: bool = false,
+    /// Live exits `emitStores` reached in the last probe, the bytes their
+    /// stores took, and the lines of the probed body. When the repeated
+    /// stores outweigh re-indenting the body one level, `merge` is set: each
+    /// exit then leaves the `zs_done` block and the roots are stored once
+    /// after it (`emitRoot`) — on `hisimhv_va` 14 copies of 418 stores.
+    exits: u32 = 0,
+    store_bytes: usize = 0,
+    lines: usize = 0,
+    merge: bool = false,
 };
 
 /// Auxiliary core sweeps must not initialize first-call state at a trial bias.
@@ -222,6 +237,9 @@ pub fn emitSetup(self: *Gen) Error!void {
     try self.w("    @setFloatMode(.strict);\n    const S = V;\n", .{});
     self.float.strict = true;
     self.su.stop = false;
+    self.su.dead = false;
+    self.su.merge = false;
+    defer self.su.merge = false;
     const at_body = self.out.items.len;
     try gen_unit.emitUnitBody(self, .undef);
     try self.w("}}\n\n", .{});
@@ -258,8 +276,20 @@ fn namesS(text: []const u8) bool {
 
 /// `emitReturn` inside `setup`: store every root, from wherever the body
 /// holds it, and leave — unconditionally at an exit block, on the runtime
-/// `zs_stop` flag at a per-eval loop (`emitTree`).
+/// `zs_stop` flag at a per-eval loop (`emitTree`). In dead text (`dead`)
+/// only the leaving remains.
 pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
+    if (self.su.dead) {
+        try self.ind(depth);
+        return self.b("{s}return;\n", .{stop});
+    }
+    self.su.exits += 1;
+    if (self.su.merge) {
+        try self.ind(depth);
+        return self.b("{s}break :zs_done;\n", .{stop});
+    }
+    const at = self.out.items.len;
+    defer self.su.store_bytes += self.out.items.len - at;
     for (self.su.vals, 0..) |v, j| {
         const i = @intFromEnum(v);
         try self.ind(depth);
@@ -277,4 +307,29 @@ pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
     try self.b("if (std.debug.runtime_safety) inst.su_ok = true;\n", .{});
     try self.ind(depth);
     try self.b("{s}return;\n", .{stop});
+}
+
+/// After a probe without `merge`: would merging shrink `setup`? One copy of
+/// the stores stays; every body line gains four spaces.
+pub fn mergePays(self: *const Gen) bool {
+    const su = self.su;
+    return su.mode and su.exits > 1 and su.store_bytes - su.store_bytes / su.exits > 4 * su.lines;
+}
+
+/// The unit body's root tree. Under `merge`, `setup`'s exits leave one
+/// labelled block and the roots are stored once after it; a root read there
+/// that was defined in an inner scope is hoisted like any other slot read
+/// outside its block (`probeBody`), so every exit stores the same bits.
+pub fn emitRoot(self: *Gen, target: Mir.Value) Error!void {
+    if (!self.su.merge) return gen_cfg.emitTree(self, 0, 1, target);
+    try self.ind(1);
+    try self.b("zs_done: {{\n", .{});
+    try gen_unit.scopeOpen(self);
+    try gen_cfg.emitTree(self, 0, 2, target);
+    gen_unit.scopeClose(self, self.out.items.len);
+    try self.ind(1);
+    try self.b("}}\n", .{});
+    self.su.merge = false;
+    defer self.su.merge = true;
+    try emitStores(self, 1, "");
 }

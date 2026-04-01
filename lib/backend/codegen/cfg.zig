@@ -82,9 +82,12 @@ pub fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
         // `setup` ends at a loop with a per-eval branch: nothing it can reach
         // is placeable, and forcing its tests `then` could spin forever. The
         // stop is a runtime flag so the structure after it still compiles.
-        if (self.su.mode and self.sinv.loop_varying[bi]) {
+        const was_dead = self.su.dead;
+        defer self.su.dead = was_dead;
+        if (self.su.mode and self.sinv.loop_varying[bi] and !was_dead) {
             self.su.stop = true;
             try gen_setup.emitStores(self, depth, "if (zs_stop) ");
+            self.su.dead = true; // the loop runs only on a false `zs_stop`
         }
         try self.ind(depth);
         try self.b("L{d}: while (true) {{\n", .{bi});
@@ -173,6 +176,9 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
                 return emitEdge(self, bi, @intFromEnum(d.then_block), depth, target);
             try self.ind(depth);
             try self.b("if (", .{});
+            const was_dead = self.su.dead;
+            defer self.su.dead = was_dead;
+            var else_dead = was_dead;
             if (self.su.mode and !self.sinv.val[@intFromEnum(self.an.rv(d.cond))]) {
                 // `setup` takes a per-eval branch `then` without testing it:
                 // neither arm holds setup work, and a §5.10.2 initial-step
@@ -181,6 +187,7 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
                 // runtime flag, so every label and break stays where the
                 // relooper put it.
                 self.su.stop = true;
+                else_dead = true;
                 try self.b("zs_stop", .{});
             } else try renderCond(self, d.cond);
             try self.b(") {{\n", .{});
@@ -190,6 +197,7 @@ pub fn emitTerm(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {
             try self.ind(depth);
             try self.b("}} else {{\n", .{});
             try gen_unit.scopeOpen(self);
+            self.su.dead = else_dead;
             try emitEdge(self, bi, @intFromEnum(d.else_block), depth + 1, target);
             gen_unit.scopeClose(self, self.out.items.len);
             try self.ind(depth);
