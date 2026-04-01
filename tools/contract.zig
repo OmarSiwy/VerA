@@ -1134,6 +1134,100 @@ pub fn nU(comptime D: type) comptime_int {
 }
 
 // ============================================================================
+// §5.6.1.2 charge sites: `q` returns one charge per `ddt` site
+// ============================================================================
+//
+// THE LAYOUT. `q(S, x, model, inst, t)` returns `[n_q]S`: one CHARGE per
+// charge site (a `ddt` term of a contribution, after genvar unrolling and
+// flattening — static, because §4.5.15 bars analog operators from user
+// functions, runtime loops and runtime conditionals), not one per residual
+// row. `evalQ(...).q` and `acceptQ(...)` return the same `[n_q]S`. The rows are
+// recovered by `q_stamps`: row `r` of the reactive residual is
+//
+//     Σ over entries e with e.row == r:  e.sign · q[e.site]
+//
+// (`qRows`). A host differentiates — tapes, integrates, truncation-checks —
+// each SITE on its own and stamps the resulting current into the rows exactly
+// as it stamped the row charges before. The split is what lets it check
+// junction charges apart from the gate charges at the same pin (ngspice's
+// mos1trun.c) or reject a step on one charge a sum would dilute (bjttrunc.c).
+//
+// `q_lte[k]` says whether site k joins the local-truncation-error check. A
+// model leaves a site out with VerA's `vera_lte` attribute: `(* vera_lte = 0 *)`
+// before an analog statement covers every site inside it, and
+// `ddt (* vera_lte = 0 *) (q)` covers one; the innermost wins, and the default
+// is 1 (every site checked).
+//
+// A device that declares none of `n_q`/`q_stamps` has the old layout: `q`
+// returns `[n_u]S` rows, i.e. `n_q = |U|` and site k stamps row k with +1
+// (`nQ`, `qStamps`), every one checked (`qLte`).
+//
+// `jac_const`'s `c` and `q_pattern`/`q_rows` stay per ROW: they describe the
+// stamped reactive residual. `q_site_pattern[k]` is site k's own column set.
+
+/// One `q_stamps` entry: row `row` gains `sign · q[site]`.
+pub fn QStamp(comptime U: type) type {
+    return struct { site: u16, row: U, sign: f64 };
+}
+
+/// How many charges `q` returns: `n_q`, or |U| for the per-row layout.
+pub fn nQ(comptime D: type) comptime_int {
+    return if (@hasDecl(D, "n_q")) D.n_q else nU(D);
+}
+
+/// The row map, sorted by (row, site). The per-row layout's is the identity.
+pub fn qStamps(comptime D: type) []const QStamp(D.U) {
+    if (@hasDecl(D, "q_stamps")) return D.q_stamps[0..];
+    const n = nU(D);
+    const id = comptime blk: {
+        var t: [n]QStamp(D.U) = undefined;
+        for (&t, 0..) |*e, k| e.* = .{ .site = k, .row = @enumFromInt(k), .sign = 1 };
+        break :blk t;
+    };
+    return &id;
+}
+
+/// Does site k join the truncation-error check? All of them unless declared.
+pub fn qLte(comptime D: type) [nQ(D)]bool {
+    return if (@hasDecl(D, "q_lte")) D.q_lte else @splat(true);
+}
+
+/// The reactive residual's rows from the sites' charges: `Σ sign · q[site]`
+/// per row, in `q_stamps` order.
+pub fn qRows(comptime D: type, comptime S: type, sites: [nQ(D)]S) [nU(D)]S {
+    var rows = [_]S{S.con(0.0)} ** nU(D);
+    inline for (comptime qStamps(D)) |e| {
+        const r = @intFromEnum(e.row);
+        rows[r] = if (e.sign == 1) rows[r].add(sites[e.site]) else if (e.sign == -1) rows[r].sub(sites[e.site]) else rows[r].add(sites[e.site].scale(e.sign));
+    }
+    return rows;
+}
+
+/// `validate`'s charge-site rules, returned so each is testable: `n_q` and
+/// `q_stamps` come together; every entry names a site below `n_q` with a
+/// finite nonzero sign; entries are sorted by (row, site) with no repeat;
+/// `q_lte` is `[n_q]bool`; `q_site_pattern` is `[n_q]u64`.
+fn qSitesError(comptime D: type) ?[]const u8 {
+    const name = @typeName(D);
+    if (@hasDecl(D, "n_q") != @hasDecl(D, "q_stamps")) return name ++ ": n_q and q_stamps come together";
+    if (@hasDecl(D, "q_lte") and @TypeOf(D.q_lte) != [nQ(D)]bool) return name ++ ".q_lte must be [n_q]bool";
+    if (@hasDecl(D, "q_site_pattern") and @TypeOf(D.q_site_pattern) != [nQ(D)]u64) return name ++ ".q_site_pattern must be [n_q]u64";
+    if (!@hasDecl(D, "q_stamps")) return null;
+    if (@TypeOf(D.n_q) != usize and @TypeOf(D.n_q) != comptime_int) return name ++ ".n_q must be a usize";
+    const t = qStamps(D);
+    for (t, 0..) |e, k| {
+        if (e.site >= D.n_q) return name ++ ".q_stamps: a site at or past n_q";
+        if (e.sign == 0 or !std.math.isFinite(e.sign)) return name ++ ".q_stamps: a zero or non-finite sign";
+        if (k == 0) continue;
+        const p = t[k - 1];
+        const pr: usize = @intFromEnum(p.row);
+        const r: usize = @intFromEnum(e.row);
+        if (r < pr or (r == pr and e.site <= p.site)) return name ++ ".q_stamps must be sorted by (row, site) with no duplicates";
+    }
+    return null;
+}
+
+// ============================================================================
 // Validation
 // ============================================================================
 
@@ -1211,8 +1305,9 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "evalQ")) {
         if (!@hasDecl(D, "q"))
             @compileError(name ++ ".evalQ without q: the fused entry point needs a reactive half");
-        if (genericFnError(D, "evalQ", "struct { res: [n_u]S, q: [n_u]S }")) |m| @compileError(m);
+        if (genericFnError(D, "evalQ", "struct { res: [n_u]S, q: [n_q]S }")) |m| @compileError(m);
     }
+    if (qSitesError(D)) |m| @compileError(m);
 
     // §9.4/§9.5 display phase (the clause map lives on `allowed_pub_decls`).
     // Present only in a printing artifact; when present it must be callable
@@ -1361,7 +1456,7 @@ pub fn validate(comptime D: type) void {
             @compileError(name ++ ".acceptQ requires q and updateState");
         const info = @typeInfo(@TypeOf(D.acceptQ));
         if (info != .@"fn" or info.@"fn".params.len != 5 or info.@"fn".params[0].type != type)
-            @compileError(name ++ ".acceptQ: expected fn (comptime S: type, [n_u]S, *const Model, *Instance, *State) [n_u]S");
+            @compileError(name ++ ".acceptQ: expected fn (comptime S: type, [n_u]S, *const Model, *Instance, *State) [n_q]S");
     }
 
     if (@hasDecl(D, "beginSolve")) expectFn(D, "beginSolve", fn (*D.Instance) void);
@@ -1758,6 +1853,11 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // `checkRowMask` and its call site in `validate`.
     .{ "jac_rows", {} },
     .{ "q_rows", {} },
+    // §5.6.1.2 the charge-site layout of `q`: see `QStamp` and `qSitesError`.
+    .{ "n_q", {} },
+    .{ "q_stamps", {} },
+    .{ "q_lte", {} },
+    .{ "q_site_pattern", {} },
     .{ "noise_gens", {} },
     .{ "noisePsd", {} },
     .{ "noise_tables", {} },
@@ -2266,15 +2366,21 @@ const MockAll = struct {
     pub const deriv_reads: u64 = 0b11;
     pub const ddx_reads: u64 = 0b01;
     pub const jac_const = [_]JacConst(U){};
+    // §5.6.1.2 two charge sites, one per row; the second is left out of
+    // truncation, the way a junction charge is.
+    pub const n_q: usize = 2;
+    pub const q_stamps = [_]QStamp(U){ .{ .site = 0, .row = .p, .sign = 1 }, .{ .site = 1, .row = .n, .sign = 1 } };
+    pub const q_lte = [n_q]bool{ true, false };
+    pub const q_site_pattern = [n_q]u64{ 0b01, 0b10 };
 
     pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
         const i = x[0].sub(x[1]).scale(@as(f64, m.g));
         return .{ i, i.neg() };
     }
-    pub fn evalQ(comptime S: type, x: [n_u]S, m: *const Model, i: *const Instance, t: f64) struct { res: [n_u]S, q: [n_u]S } {
+    pub fn evalQ(comptime S: type, x: [n_u]S, m: *const Model, i: *const Instance, t: f64) struct { res: [n_u]S, q: [n_q]S } {
         return .{ .res = eval(S, x, m, i, t), .q = q(S, x, m, i, t) };
     }
-    pub fn q(comptime S: type, x: [n_u]S, _: *const Model, _: *const Instance, _: f64) [n_u]S {
+    pub fn q(comptime S: type, x: [n_u]S, _: *const Model, _: *const Instance, _: f64) [n_q]S {
         return .{ x[0].scale(1e-12), x[1].scale(-1e-12) };
     }
     pub fn limit(_: *const Model, _: *const Instance, cur: [n_u]f64, _: [n_u]f64) LimitResult(n_u) {
@@ -2295,7 +2401,7 @@ const MockAll = struct {
         return .ok;
     }
     pub const state_class: StateClass = .history;
-    pub fn acceptQ(comptime S: type, x: [n_u]S, m: *const Model, inst: *Instance, s: *State) [n_u]S {
+    pub fn acceptQ(comptime S: type, x: [n_u]S, m: *const Model, inst: *Instance, s: *State) [n_q]S {
         s.flips += 1;
         return q(S, x, m, inst, 0);
     }
@@ -2464,6 +2570,67 @@ test "deriv_reads/jac_const: a linear device needs no lane, and the table is its
         }
     }
 }
+
+test "q sites: rows are the signed sums of the stamps, and the table's rules refuse their mistakes" {
+    // Two charges at the gate row: a per-row host would see one sum, the
+    // per-site one sees both.
+    const U3 = enum(u8) { g, s, d };
+    const Two = struct {
+        pub const U = U3;
+        pub const n_q: usize = 2;
+        pub const q_stamps = [_]QStamp(U3){
+            .{ .site = 0, .row = .g, .sign = 1 },
+            .{ .site = 1, .row = .g, .sign = 1 },
+            .{ .site = 0, .row = .s, .sign = -1 },
+            .{ .site = 1, .row = .d, .sign = -1 },
+        };
+        pub const q_lte = [n_q]bool{ true, false };
+    };
+    try testing.expect(comptime (qSitesError(Two) == null));
+    const rows = qRows(Two, F2, .{ .{ .v = 2.0 }, .{ .v = 0.5 } });
+    try testing.expectEqual(@as(f64, 2.5), rows[0].v);
+    try testing.expectEqual(@as(f64, -2.0), rows[1].v);
+    try testing.expectEqual(@as(f64, -0.5), rows[2].v);
+    try testing.expectEqual([2]bool{ true, false }, qLte(Two));
+    // No declaration: the per-row layout, identity stamps, every site checked.
+    try testing.expectEqual(@as(usize, 3), qStamps(struct {
+        pub const U = U3;
+    }).len);
+    // Unsorted, a site past n_q, a zero sign, and n_q without q_stamps.
+    const Bad = struct {
+        fn of(comptime t: []const QStamp(U3)) type {
+            return struct {
+                pub const U = U3;
+                pub const n_q: usize = 2;
+                pub const q_stamps = t[0..t.len].*;
+            };
+        }
+    };
+    try testing.expect(comptime (qSitesError(Bad.of(&.{ .{ .site = 0, .row = .s, .sign = 1 }, .{ .site = 0, .row = .g, .sign = 1 } })) != null));
+    try testing.expect(comptime (qSitesError(Bad.of(&.{.{ .site = 2, .row = .g, .sign = 1 }})) != null));
+    try testing.expect(comptime (qSitesError(Bad.of(&.{.{ .site = 0, .row = .g, .sign = 0 }})) != null));
+    try testing.expect(comptime (qSitesError(struct {
+        pub const U = U3;
+        pub const n_q: usize = 1;
+    }) != null));
+}
+
+/// A value-only scalar with the four ops `qRows` uses.
+const F2 = struct {
+    v: f64,
+    fn con(c: f64) F2 {
+        return .{ .v = c };
+    }
+    fn add(a: F2, b: F2) F2 {
+        return .{ .v = a.v + b.v };
+    }
+    fn sub(a: F2, b: F2) F2 {
+        return .{ .v = a.v - b.v };
+    }
+    fn scale(a: F2, c: f64) F2 {
+        return .{ .v = a.v * c };
+    }
+};
 
 test "deriv_reads: the four rules each refuse their own mistake" {
     // (a) the mask is one u64.

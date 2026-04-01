@@ -61,6 +61,14 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
     const saved_tok = self.mir.cur_tok;
     defer self.mir.cur_tok = saved_tok;
     self.mir.cur_tok = tok;
+    // VerA's `vera_lte` statement attribute (A.6.4 prefix): every charge site
+    // inside this statement, nested ones included, unless a nearer one says
+    // otherwise (`lower_contrib.siteLte`).
+    const lte = self.file.stmtLte(id);
+    if (lte) |a| try self.lte_stack.append(self.arena, try lower_contrib.lteValue(self, a));
+    defer if (lte != null) {
+        _ = self.lte_stack.pop();
+    };
     switch (self.file.stmt(id)) {
         .empty => {},
         .block => |b| try lowerSeqBlock(self, b), // §5.3

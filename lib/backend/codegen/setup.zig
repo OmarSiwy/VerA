@@ -70,7 +70,8 @@ pub fn planSetup(self: *Gen) Error!void {
     @memset(self.su.idx, none_u32);
     self.su.vals = &.{};
     self.su.real = 0;
-    self.sinv = try plan_setup.plan(self.input());
+    // `self.sinv` was computed by `prepare`, before the jobs (`plan/qsite.zig`
+    // reads it too).
     if (!self.su.on) return;
     // Tables sample on the first ACTUAL evaluation, never at a trial point.
     if (self.lowered.table_samples.items.len != 0) return;

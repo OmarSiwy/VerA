@@ -493,6 +493,9 @@ pub const Code = enum(u16) {
     E0521,
     /// §4.6.4.2/Syntax 4-4 a `flicker_noise` call with no exponent.
     E0522,
+    /// §2.9 VerA's `vera_lte` attribute with a value that is not a constant
+    /// independent of the model card.
+    E0523,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -4144,6 +4147,24 @@ fn infoOf(c: Code) Info {
             \\spectrum is `white_noise(pwr)`; a 1/f source says so:
             \\
             \\    I(p, n) <+ flicker_noise(kf, 1.0);
+            ,
+        },
+        .E0523 => .{
+            .title = "vera_lte needs a constant value",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_lte = <value> *)` is VerA's attribute for leaving a
+            \\charge (a `ddt` site, 5.6.1.2) out of the host's local
+            \\truncation-error check, the way SPICE device truncation routines
+            \\leave junction charges out. 2.9 makes an attribute value a
+            \\constant_expression; VerA additionally needs it before the model
+            \\card exists, because the answer is a compile-time table
+            \\(`q_lte`). So it may not name a parameter:
+            \\
+            \\    (* vera_lte = 0 *) I(b, s) <+ ddt(qbs);   // excluded
+            \\    (* vera_lte *)     I(g, s) <+ ddt(qgs);   // 1: included
+            \\
+            \\The attribute is ignored and the site keeps the default (included).
             ,
         },
 

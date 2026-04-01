@@ -158,6 +158,9 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     // --- §4.6.3 the exported AC stimulus topology ---------------------------
     if (d.asserts_acstim) try emitAcTopology(arena, &out, d);
 
+    // --- §5.6.1.2 the exported charge sites ---------------------------------
+    if (d.asserts_qsite) try emitQSites(arena, &out, d);
+
     // --- one straight-line block per operating point ------------------------
     //
     // The SWEEP is the outer loop and TIME the inner one, and the §4.5 operator
@@ -348,14 +351,51 @@ pub fn mixedPlan(lowered: *const Lowered, mir: *const Mir) ?tb.Mixed {
 /// input names and the `//! wave` lines are. A `//! wave` is PIECEWISE LINEAR
 /// here: an inserted point falls between declared ones, and at every declared
 /// point the value is the one the fixed-grid runner's step-hold gives.
+/// `//! qsite` — see `tb.Directives.qsites`. Once, before the points: the
+/// layout is a comptime property of the device.
+fn emitQSites(arena: Allocator, out: *std.ArrayList(u8), d: Directives) Error!void {
+    try out.appendSlice(arena,
+        \\
+        \\    // §5.6.1.2 the charge sites a host tapes one by one: which rows
+        \\    // each stamps (`q_stamps`) and whether `q_lte` checks it.
+        \\    {
+        \\        const want = [_][]const u8{
+        \\
+    );
+    for (d.qsites) |e| try print(out, arena, "            \"{f}\",\n", .{std.zig.fmtString(e)});
+    try out.appendSlice(arena,
+        \\        };
+        \\        const nq = if (comptime @hasDecl(D, "q")) contract.nQ(D) else 0;
+        \\        std.debug.print("qsite count got={d} want={d} ok={d}\n", .{ nq, want.len, @intFromBool(nq == want.len) });
+        \\        if (comptime @hasDecl(D, "q")) {
+        \\            const lte = contract.qLte(D);
+        \\            inline for (0..nq) |k| {
+        \\                var buf: [256]u8 = undefined;
+        \\                var w: std.Io.Writer = .fixed(&buf);
+        \\                inline for (comptime contract.qStamps(D)) |e| if (e.site == k) {
+        \\                    if (e.sign == 1) w.print("{s}+ ", .{@tagName(e.row)}) catch {}
+        \\                    else if (e.sign == -1) w.print("{s}- ", .{@tagName(e.row)}) catch {}
+        \\                    else w.print("{s}*{d} ", .{ @tagName(e.row), e.sign }) catch {};
+        \\                };
+        \\                w.print("{s}", .{if (lte[k]) "lte" else "nolte"}) catch {};
+        \\                const got = w.buffered();
+        \\                const w_k: []const u8 = if (k < want.len) want[k] else "<none>";
+        \\                std.debug.print("qsite[{d}] got={s} want={s} ok={d}\n", .{ k, got, w_k, @intFromBool(std.mem.eql(u8, got, w_k)) });
+        \\            }
+        \\        }
+        \\    }
+        \\
+    );
+}
+
 pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
     try out.appendSlice(arena, tb_runner_text.runner_head);
     try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
     try out.appendSlice(arena, tb_runner_text.runner_body);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
-    if (d.asserts_noise or d.asserts_acstim)
-        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise and //! acstim are not read by the mixed-signal runner\"); }\n");
+    if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite)
+        try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim and //! qsite are not read by the mixed-signal runner\"); }\n");
 
     try print(&out, arena, "const mixed_source = \"{f}\";\n", .{std.zig.fmtString(mx.source)});
     try print(&out, arena, "const mixed_top = \"{f}\";\n", .{std.zig.fmtString(mx.top)});

@@ -44,8 +44,10 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     try emitResidual(self, false);
     const any_q = anyQ(self);
     if (any_q) {
-        try emitResidual(self, true);
+        qPattern(self);
+        try emitQ(self);
         try emitFused(self);
+        try emitQSites(self);
     }
     // AFTER the dispatchers: the pattern is what they emitted, accumulated
     // row by row as each was written. Zig has no declaration order, so the
@@ -54,12 +56,78 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     try emitDisplay(self);
 }
 
-/// Does any contribution have a reactive half — i.e. is `q` emitted?
+/// Does any charge site get a slot — i.e. is `q` emitted?
 pub fn anyQ(self: *const Gen) bool {
-    for (self.lowered.contributions.items) |c| {
-        if (self.an.rv(c.react_val) != .f_zero) return true;
+    return self.qs.sites.len != 0;
+}
+
+/// `q_pattern`/`q_rows` off the stamps: row `ru` is written when a site
+/// stamps it, and its columns are the union of those sites' dependences.
+fn qPattern(self: *Gen) void {
+    for (self.qs.stamps) |st| {
+        const k = self.qs.sites[st.slot];
+        const bits = self.an.unknownDeps(self.lowered.charge_sites.items[k].final);
+        if (self.pat[1].len != 0) self.pat[1][st.row] |= bits;
+        self.rows[1] |= uBit(st.row);
     }
-    return false;
+}
+
+/// The core field holding slot `j`'s charge.
+fn siteField(self: *const Gen, j: usize) u32 {
+    const k = self.qs.sites[j];
+    return self.core.lo_idx[@intFromEnum(self.an.rv(self.lowered.charge_sites.items[k].final))];
+}
+
+/// `[n_q]S{ m.f<a>, m.f<b>, ... }`: every site's charge, in slot order.
+pub fn writeSites(self: *Gen) Error!void {
+    try self.b("[n_q]S{{", .{});
+    for (0..self.qs.sites.len) |j| try self.b("{s}m.f{d}", .{ if (j == 0) " " else ", ", siteField(self, j) });
+    try self.b(" }}", .{});
+}
+
+/// §5.6.1.2 the reactive residual, ONE CHARGE PER SITE (`plan/qsite.zig`):
+/// `q_stamps` says which rows each enters, so a host tapes and truncation-
+/// checks each charge on its own and stamps the rows it always stamped.
+fn emitQ(self: *Gen) Error!void {
+    try self.w(
+        \\/// §5.6.1.2 the charges, one per `ddt` site (`n_q`, `q_stamps`, `q_lte`);
+        \\/// the host differentiates each and stamps it into its rows.
+        \\pub fn q(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_q]S {{
+        \\    const m = @call(.always_inline, core, .{{ S, x, model, inst }});
+        \\
+    , .{});
+    try self.w("    return ", .{});
+    try writeSites(self);
+    try self.w(";\n}}\n\n", .{});
+}
+
+/// `n_q`, `q_stamps`, `q_lte` and `q_site_pattern` — see `contract.QSites`.
+fn emitQSites(self: *Gen) Error!void {
+    try self.w(
+        \\/// §5.6.1.2 how many charge sites `q` returns.
+        \\pub const n_q: usize = {d};
+        \\
+        \\/// Row `row` of the reactive residual is `Σ sign · q[site]` over its
+        \\/// entries. Sorted by (row, site).
+        \\pub const q_stamps = [_]contract.QStamp(U){{
+        \\
+    , .{self.qs.sites.len});
+    for (self.qs.stamps) |st| try self.w("    .{{ .site = {d}, .row = .{s}, .sign = {s} }},\n", .{
+        st.slot, self.names.u_names[st.row], try gen_file.fmtF64(self, st.sign),
+    });
+    try self.w(
+        \\}};
+        \\
+        \\/// Which charge sites join the host's local-truncation-error check
+        \\/// (VerA's `vera_lte` attribute; all of them unless a model says so).
+        \\pub const q_lte = [n_q]bool{{
+    , .{});
+    for (self.qs.sites, 0..) |k, j| try self.w("{s}{}", .{ if (j == 0) " " else ", ", self.lowered.charge_sites.items[k].lte });
+    try self.w(" }};\n\n", .{});
+    if (self.names.n_u > 64) return;
+    try self.w("/// Bit `cu` of `q_site_pattern[k]` is set when `∂q[k]/∂x[cu]` can be nonzero.\npub const q_site_pattern = [n_q]u64{{\n", .{});
+    for (self.qs.sites) |k| try self.w("    0x{x:0>16},\n", .{self.an.unknownDeps(self.lowered.charge_sites.items[k].final)});
+    try self.w("}};\n\n", .{});
 }
 
 /// §5.6 structural Jacobian: which columns of each residual row can be
@@ -463,28 +531,33 @@ pub fn emitFused(self: *Gen) Error!void {
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr, _: f64) struct {{ res: [n_u]S, q: [n_u]S }} {{\n", .{});
+    try self.w("inst: InstancePtr, _: f64) struct {{ res: [n_u]S, q: [n_q]S }} {{\n", .{});
     // Reserved: the hoisted `core` line is INSERTED here afterwards, once
     // both halves have said whether either wants one. Every offset taken
     // above is before this point, so none of them move.
     const at_core = self.out.items.len;
 
-    for ([2]bool{ false, true }) |react| {
-        try self.ind(1);
-        try self.b("const {s} = blk: {{\n", .{if (react) "qq" else "rr"});
-        try self.ind(2);
-        const at_mut = self.out.items.len;
-        try self.b("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
-        self.ind_base = 1;
-        const stamps = try emitStamps(self, react);
-        self.ind_base = 0;
-        if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
-        try self.ind(2);
-        try self.b("break :blk res;\n", .{});
-        try self.ind(1);
-        try self.b("}};\n", .{});
-    }
-    try self.w("    return .{{ .res = rr, .q = qq }};\n}}\n\n", .{});
+    try self.ind(1);
+    try self.b("const rr = blk: {{\n", .{});
+    try self.ind(2);
+    const at_mut = self.out.items.len;
+    try self.b("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
+    self.ind_base = 1;
+    const stamps = try emitStamps(self, false);
+    self.ind_base = 0;
+    if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
+    try self.ind(2);
+    try self.b("break :blk res;\n", .{});
+    try self.ind(1);
+    try self.b("}};\n", .{});
+    // §5.6.1.2 the charges, one per site, off the same core.
+    self.uses_x = true;
+    self.uses_model = true;
+    self.uses_inst = true;
+    self.core_wanted = true;
+    try self.b("    return .{{ .res = rr, .q = ", .{});
+    try writeSites(self);
+    try self.b(" }};\n}}\n\n", .{});
 
     // `core_wanted` implies all three are used: `emitStamps` sets `uses_x`
     // for every live row and `uses_model`/`uses_inst` on the same branch

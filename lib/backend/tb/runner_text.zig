@@ -275,11 +275,11 @@ pub const runner_body =
     \\        }
     \\    }
     \\    if (comptime @hasDecl(D, "q")) {
-    \\        const qv = D.q(Vec, xv, model, inst, t);
+    \\        const qv = qRowsOf(Vec, xv, model, inst, t);
     \\        for (0..NL) |k| {
     \\            var xd: [n_u]Dual = undefined;
     \\            for (0..n_u) |i| xd[i] = .{ .v = xs[k][i] };
-    \\            const qs = D.q(Dual, xd, model, inst, t);
+    \\            const qs = qRowsOf(Dual, xd, model, inst, t);
     \\            for (0..n_u) |i| {
     \\                const lanes: [NL]f64 = qv[i].v;
     \\                laneAssert("q", i, k, lanes[k], qs[i].v);
@@ -301,11 +301,12 @@ pub const runner_body =
     \\    const qq = D.q(Dual, xd, model, inst, t);
     \\    for (0..n_u) |i| {
     \\        fusedAssert("res", i, both.res[i].v, res[i].v);
-    \\        fusedAssert("q", i, both.q[i].v, qq[i].v);
-    \\        for (0..n_u) |j| {
-    \\            fusedAssert("dres", i, both.res[i].d[j], res[i].d[j]);
-    \\            fusedAssert("dq", i, both.q[i].d[j], qq[i].d[j]);
-    \\        }
+    \\        for (0..n_u) |j| fusedAssert("dres", i, both.res[i].d[j], res[i].d[j]);
+    \\    }
+    \\    // §5.6.1.2 one charge per site (`contract.nQ`), compared as sites.
+    \\    for (0..n_q) |k| {
+    \\        fusedAssertSite("q", k, both.q[k].v, qq[k].v);
+    \\        for (0..n_u) |j| fusedAssertSite("dq", k, both.q[k].d[j], qq[k].d[j]);
     \\    }
     \\}
     \\
@@ -322,7 +323,7 @@ pub const runner_body =
     \\    if (comptime @hasDecl(D, "jac_pattern")) patAssert("res", D.jac_pattern, &r);
     \\    if (comptime @hasDecl(D, "jac_rows")) rowAssert("res", D.jac_rows, &r);
     \\    if (comptime @hasDecl(D, "q")) {
-    \\        const qr = D.q(Dual, xd, model, inst, t);
+    \\        const qr = qRowsOf(Dual, xd, model, inst, t);
     \\        if (comptime @hasDecl(D, "q_pattern")) patAssert("q", D.q_pattern, &qr);
     \\        if (comptime @hasDecl(D, "q_rows")) rowAssert("q", D.q_rows, &qr);
     \\    }
@@ -366,7 +367,7 @@ pub const runner_body =
     \\    }
     \\    narrowAssert(Dl, "res", false, model, &D.eval(Dl, wide, model, inst, t), &D.eval(Dl, narrow, model, inst, t));
     \\    if (comptime @hasDecl(D, "q"))
-    \\        narrowAssert(Dl, "q", true, model, &D.q(Dl, wide, model, inst, t), &D.q(Dl, narrow, model, inst, t));
+    \\        narrowAssert(Dl, "q", true, model, &qRowsOf(Dl, wide, model, inst, t), &qRowsOf(Dl, narrow, model, inst, t));
     \\}
     \\
     \\fn hasLane(u: usize) bool {
@@ -430,6 +431,21 @@ pub const runner_body =
     \\    std.process.exit(1);
     \\}
     \\
+    \\fn fusedAssertSite(what: []const u8, k: usize, a: f64, b: f64) void {
+    \\    if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) return;
+    \\    std.debug.print("fused_check FAIL: {s} site {d}: evalQ {e} vs split {e}\n", .{ what, k, a, b });
+    \\    std.process.exit(1);
+    \\}
+    \\
+    \\/// §5.6.1.2 how many charges `q` returns, and the rows they stamp: `q`
+    \\/// returns one per `ddt` site and `contract.qRows` sums them into the
+    \\/// reactive residual's rows through `q_stamps`.
+    \\const n_q = contract.nQ(D);
+    \\
+    \\fn qRowsOf(comptime Sc: type, x: [n_u]Sc, model: *const D.Model, inst: contract.InstancePtr(D), t: f64) [n_u]Sc {
+    \\    return contract.qRows(D, Sc, D.q(Sc, x, model, inst, t));
+    \\}
+    \\
     \\/// Bit equality is the expectation — the same IEEE ops run in the same
     \\/// order per lane — with a 1e-12 relative escape for a vectorizer that
     \\/// contracts differently than the scalar pipeline.
@@ -469,7 +485,7 @@ pub const runner_body =
     \\
     \\fn commitCharge(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64) void {
     \\    if (comptime !@hasDecl(D, "q")) return;
-    \\    const qq = D.q(Dual, seed(x), model, inst, inst.abstime);
+    \\    const qq = qRowsOf(Dual, seed(x), model, inst, inst.abstime);
     \\    for (0..n_u) |i| q_prev[i] = qq[i].v;
     \\}
     \\
@@ -483,10 +499,10 @@ pub const runner_body =
     \\    var ic = inst.*;
     \\    var sc = state.*;
     \\    const got = D.acceptQ(Dual, seed(x), model, &ic, &sc);
-    \\    for (0..n_u) |i| {
+    \\    for (0..n_q) |i| {
     \\        if (@as(u64, @bitCast(got[i].v)) == @as(u64, @bitCast(want[i].v)) and
     \\            std.mem.eql(u8, std.mem.asBytes(&got[i].d), std.mem.asBytes(&want[i].d))) continue;
-    \\        std.debug.print("acceptQ FAIL: q[{s}] {e} vs q() {e}\n", .{ u_names[i], got[i].v, want[i].v });
+    \\        std.debug.print("acceptQ FAIL: q site {d} {e} vs q() {e}\n", .{ i, got[i].v, want[i].v });
     \\        std.process.exit(1);
     \\    }
     \\}
@@ -566,7 +582,7 @@ pub const runner_body =
     \\    // §5.6.1.2 the reactive half, when the model has one. Its derivative is
     \\    // the capacitance/inductance matrix the host multiplies by d/dt.
     \\    if (@hasDecl(D, "q")) {
-    \\        const qq = D.q(Dual, xd, model, inst, t);
+    \\        const qq = qRowsOf(Dual, xd, model, inst, t);
     \\        for (0..n_u) |i| {
     \\            if (qq[i].v == 0.0 and allZero(qq[i].d)) continue;
     \\            std.debug.print("  q[{s}] = {e:.6}\n", .{ u_names[i], qq[i].v });
@@ -688,7 +704,7 @@ pub const runner_body =
     \\        // §5.6.1.2 backward Euler — see the header. Value and derivative
     \\        // both, so the capacitance matrix reaches the Jacobian too.
     \\        if (comptime @hasDecl(D, "q")) if (inst.dt > 0.0) {
-    \\            const qq = D.q(Dual, xd, model, inst, inst.abstime);
+    \\            const qq = qRowsOf(Dual, xd, model, inst, inst.abstime);
     \\            for (0..n_u) |i| {
     \\                r[i].v += (qq[i].v - q_prev[i]) / inst.dt;
     \\                for (0..n_u) |j| r[i].d[j] += qq[i].d[j] / inst.dt;

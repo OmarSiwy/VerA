@@ -166,6 +166,8 @@ params: std.ArrayList(Lower.ParamInfo) = .empty, // §3.4
 /// saying which is the alias.
 aliases: std.ArrayList(Lower.Alias) = .empty,
 contributions: std.ArrayList(Lower.Contribution) = .empty, // §5.6
+/// §5.6.1.2 every charge site, in source order (`Lower.ChargeSite`).
+charge_sites: std.ArrayList(Lower.ChargeSite) = .empty,
 
 // ---- instance state ----
 /// §5.10 module variables assigned inside an `@(<event>)` body, in declaration

@@ -500,11 +500,14 @@ test "codegen: evalQ fuses both residuals onto ONE core call" {
     // ...and it is hoisted ABOVE both blocks, not opened inside one of them.
     try std.testing.expect(std.mem.indexOf(u8, fused, "@call(.always_inline, core, .{ S, x, model, inst })").? <
         std.mem.indexOf(u8, fused, "blk:").?);
-    try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: [n_u]S, q: [n_u]S }") != null);
-    try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = rr, .q = qq };") != null);
-    // Both halves stamp; a fused function with an empty half is the bug where
-    // `emitStamps` wrote into the wrong block.
-    try std.testing.expect(std.mem.count(u8, fused, "var   res = [_]S{S.con(0.0)} ** n_u;") == 2);
+    try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: [n_u]S, q: [n_q]S }") != null);
+    // §5.6.1.2 the reactive half is the charge sites, read off the same core.
+    try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = rr, .q = [n_q]S{ m.f") != null);
+    try std.testing.expect(std.mem.count(u8, fused, "var   res = [_]S{S.con(0.0)} ** n_u;") == 1);
+    // The one `ddt` site stamps +p and −n (§1.3.1.2).
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const n_q: usize = 1;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, ".{ .site = 0, .row = .p, .sign = 1.0 },\n    .{ .site = 0, .row = .n, .sign = -1.0 },") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub const q_lte = [n_q]bool{ true };") != null);
 }
 
 test "codegen: a device with no reactive half gets no evalQ" {
@@ -1277,12 +1280,12 @@ test "codegen: §5.4.3 I(<p>) is a solver unknown pinned to the KCL sum at p" {
         src,
         "res[@intFromEnum(U.flowZ28Z3caZ3eZ29)] = x[@intFromEnum(U.flowZ28Z3caZ3eZ29)].sub(res[@intFromEnum(U.a)]);",
     ) != null);
-    // THE REACTIVE HALF: q() carries `−q_a` on the same row, so the total
-    // residual is x − (I_dc + d/dt q_a).
+    // THE REACTIVE HALF: the one charge site stamps `−q_a` on the same row,
+    // so the total residual is x − (I_dc + d/dt q_a).
     try std.testing.expect(std.mem.indexOf(
         u8,
         src,
-        "res[@intFromEnum(U.flowZ28Z3caZ3eZ29)] = res[@intFromEnum(U.a)].neg();",
+        ".{ .site = 0, .row = .flowZ28Z3caZ3eZ29, .sign = -1.0 },",
     ) != null);
     // The row is emitted AFTER the contribution stamps it reads.
     const stamp_at = std.mem.indexOf(u8, src, "res[@intFromEnum(U.a)].add(c)").?;

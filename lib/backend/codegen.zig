@@ -63,6 +63,7 @@ const plan_jobs = @import("codegen/plan/jobs.zig");
 const plan_core = @import("codegen/plan/core.zig");
 const plan_args = @import("codegen/plan/args.zig");
 const plan_setup = @import("codegen/plan/setup.zig");
+const plan_qsite = @import("codegen/plan/qsite.zig");
 /// §3.2: root.zig runs it between lowering and if-conversion.
 pub const pruneHeld = plan_setup.pruneHeld;
 const plan_jac = @import("codegen/plan/jac.zig");
@@ -365,6 +366,9 @@ pub const Gen = struct {
     core: plan_core.Core = .{},
     /// Solve invariance, per value, block and loop — `plan/setup.zig`.
     sinv: plan_setup.Sinv = .{},
+    /// §5.6.1.2 the charge sites `q` returns and the rows they stamp —
+    /// `plan/qsite.zig`.
+    qs: plan_qsite.QSites = .{},
     /// The setup roots and `setup`'s emission state — `codegen/setup.zig`.
     su: gen_setup.Setup = .{},
     /// Set while the core is being emitted. It slices from every target at once
@@ -551,12 +555,17 @@ pub const Gen = struct {
             if (self.diags) |bag| try bag.add(.codegen, r.code, self.lowered.tokenSpan(r.tok), "{s}", .{r.msg});
             self.any_fatal = true;
         }
+        // Solve invariance first: the charge-site plan reads it to leave the
+        // time-constant charges out of `q`, and the jobs queue what it keeps.
+        self.sinv = try plan_setup.plan(self.input());
+        self.qs = try plan_qsite.plan(self.input(), self.names.branch_u, self.topo, self.sinv.val);
         self.jobs = try plan_jobs.plan(self.input(), .{
             .names = &self.names,
             .unit_modes = self.verdict.unit_modes,
             .limits = self.limits.calls,
             .noise = &self.noise,
             .emit_display = self.display == .emit,
+            .q_sites = self.qs.sites,
         }, DynCtrl{ .g = self });
         self.core = try plan_core.plan(self.input(), self.jobs.list);
         // After the core planner, which is what fills them. Stable for the
@@ -697,6 +706,7 @@ test {
     _ = plan_core;
     _ = plan_args;
     _ = plan_setup;
+    _ = plan_qsite;
     _ = plan_jac;
     _ = UnitPlan;
     _ = float_mode;
