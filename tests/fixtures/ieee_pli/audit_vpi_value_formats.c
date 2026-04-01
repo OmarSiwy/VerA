@@ -1,6 +1,15 @@
 /* IEEE 1364-2005 27.14/27.32: runtime value conversion and independent
  * get_value/get_str buffers. Startup only registers a permitted callback.
  * No substitute header or local VPI declarations: missing API is real debt. */
+//! lrm 11.3.2
+//! lrm 12.2
+//! lrm 12.12
+//! lrm 12.16
+//! lrm 12.21
+//! lrm 12.30
+//! lrm 12.31.4
+//! lrm 12.33.2
+
 #include "vpi_user.h"
 #include <stdint.h>
 #include <stdio.h>

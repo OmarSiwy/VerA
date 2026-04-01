@@ -2,6 +2,14 @@
  * Full API access begins at cbEndOfCompile.26.3.2 requires both numeric and
  * string forms of vpiType. All outputs are observed after the legal boundary.
  */
+//! lrm 11.6.1
+//! lrm 12.2
+//! lrm 12.5
+//! lrm 12.12
+//! lrm 12.21
+//! lrm 12.31.4
+//! lrm 12.33.2
+
 #include "vpi_user.h"
 #include <stdio.h>
 #include <stdlib.h>

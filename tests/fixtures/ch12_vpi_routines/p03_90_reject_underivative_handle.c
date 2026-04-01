@@ -41,6 +41,11 @@
  *! expect   90_reject_underivative_handle.expected.txt
  */
 
+//! lrm 12.2
+//! lrm 12.22.1
+//! lrm-reject 12.22.1
+//! lrm-reject 12.30
+
 #include "p03_vpi_analog.h"
 
 static PLI_INT32 res_of[]  = { 1 };

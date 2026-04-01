@@ -117,6 +117,21 @@
  * reading. Only times strictly greater than the current one are asserted.
  */
 
+//! lrm 11.2.1
+//! lrm 11.2.3
+//! lrm 11.6.25
+//! lrm 12.2
+//! lrm 12.15
+//! lrm 12.16
+//! lrm 12.21
+//! lrm 12.23
+//! lrm 12.31
+//! lrm 12.31.2
+//! lrm-reject 12.31.2
+//! lrm 12.31.4
+//! lrm 12.33.2
+//! lrm 12.35
+
 #include "p02_check.h"
 
 static vpiHandle s, top;

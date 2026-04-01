@@ -50,6 +50,10 @@
  *! expect   09_ac_freq_and_imaginary.expected.txt
  */
 
+//! lrm 12.8
+//! lrm 12.10
+//! lrm 12.31.3
+
 #include "p03_vpi_analog.h"
 
 static int saw_dc, saw_ac;

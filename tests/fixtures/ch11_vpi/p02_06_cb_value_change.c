@@ -52,6 +52,15 @@
  * the tick and the nanosecond are the same number.
  */
 
+//! lrm 11.2.1
+//! lrm 12.3
+//! lrm 12.21
+//! lrm 12.31
+//! lrm 12.31.1
+//! lrm 12.31.2
+//! lrm 12.31.4
+//! lrm 12.33.2
+
 #include "p02_check.h"
 
 static vpiHandle n, mem;

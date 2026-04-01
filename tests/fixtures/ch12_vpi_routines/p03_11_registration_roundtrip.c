@@ -48,6 +48,12 @@
  *! expect   11_registration_roundtrip.expected.txt
  */
 
+//! lrm 12.6
+//! lrm 12.13
+//! lrm 12.31.3
+//! lrm 12.32
+//! lrm-reject 12.32
+
 #include "p03_vpi_analog.h"
 #include <string.h>
 

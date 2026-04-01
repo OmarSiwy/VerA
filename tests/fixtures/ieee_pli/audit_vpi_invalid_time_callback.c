@@ -1,5 +1,11 @@
 /* IEEE 1364-2005 27.33.2: time callbacks require a real/simulation time
  * format; suppress-time and NULL time are errors and create no callback. */
+//! lrm 11.2.3
+//! lrm 12.2
+//! lrm-reject 12.31.2
+//! lrm 12.31.4
+//! lrm 12.33.2
+
 #include "vpi_user.h"
 #include <stdio.h>
 #include <stdlib.h>

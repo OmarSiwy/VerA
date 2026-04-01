@@ -47,6 +47,15 @@
  * also reported as a force, or the single force was reported twice.
  */
 
+//! lrm 12.2
+//! lrm 12.16
+//! lrm 12.21
+//! lrm 12.30
+//! lrm 12.31
+//! lrm 12.31.1
+//! lrm 12.31.2
+//! lrm 12.33.2
+
 #include "p02_check.h"
 
 static vpiHandle w, a;

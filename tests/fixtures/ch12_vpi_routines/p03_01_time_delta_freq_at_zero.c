@@ -36,6 +36,11 @@
  *! expect   01_time_delta_freq_at_zero.expected.txt
  */
 
+//! lrm 12.7
+//! lrm 12.8
+//! lrm 12.9
+//! lrm 12.31.3
+
 #include "p03_vpi_analog.h"
 
 static int initial_count, final_count, later_count;

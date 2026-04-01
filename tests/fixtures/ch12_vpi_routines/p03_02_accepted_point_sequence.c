@@ -42,6 +42,10 @@
  *! expect   02_accepted_point_sequence.expected.txt
  */
 
+//! lrm 12.7
+//! lrm 12.9
+//! lrm 12.31.3
+
 #include "p03_vpi_analog.h"
 
 #define TSTOP 5.0e-3

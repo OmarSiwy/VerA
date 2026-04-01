@@ -45,6 +45,10 @@
  *! expect   04_remove_cb_during_dispatch.expected.txt
  */
 
+//! lrm 12.9
+//! lrm 12.31.3
+//! lrm 12.34
+
 #include "p03_vpi_analog.h"
 
 #define TOL 1e-12

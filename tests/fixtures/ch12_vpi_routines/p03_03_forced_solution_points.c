@@ -44,6 +44,10 @@
  *! expect   03_forced_solution_points.expected.txt
  */
 
+//! lrm 12.9
+//! lrm 12.10
+//! lrm 12.31.3
+
 #include "p03_vpi_analog.h"
 
 #define T_ABS  2.5e-3

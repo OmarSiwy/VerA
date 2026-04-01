@@ -2,6 +2,19 @@
  * variable arrays (including real) instead iterate var-select objects.
  * All traversal is deferred to the legal end-of-compile phase (26.2.4).
  */
+//! lrm 11.3.1
+//! lrm 11.6.11
+//! lrm 12.2
+//! lrm 12.3
+//! lrm 12.5
+//! lrm 12.16
+//! lrm 12.19
+//! lrm 12.21
+//! lrm 12.23
+//! lrm 12.31.4
+//! lrm 12.33.2
+//! lrm 12.35
+
 #include "vpi_user.h"
 #include <stdio.h>
 #include <stdlib.h>

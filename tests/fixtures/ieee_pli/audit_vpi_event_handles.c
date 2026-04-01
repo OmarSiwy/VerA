@@ -1,5 +1,15 @@
 /* IEEE 1364-2005 27.32: freeing a handle does not cancel its event;
  * cancellation does not undo previous inertial cancellation. No same-time race. */
+//! lrm 12.2
+//! lrm 12.4
+//! lrm 12.5
+//! lrm 12.16
+//! lrm 12.21
+//! lrm 12.30
+//! lrm 12.31.2
+//! lrm 12.31.4
+//! lrm 12.33.2
+
 #include "vpi_user.h"
 #include <stdio.h>
 #include <stdlib.h>

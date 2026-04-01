@@ -48,6 +48,13 @@
  * make a time assertion pass or fail for the wrong reason.
  */
 
+//! lrm 12.2
+//! lrm 12.15
+//! lrm 12.16
+//! lrm 12.21
+//! lrm 12.31.2
+//! lrm 12.33.2
+
 #include "p02_check.h"
 
 static double dabs(double x) { return x < 0.0 ? -x : x; }
