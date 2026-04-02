@@ -65,12 +65,14 @@ pub const run = @import("run.zig");
 pub const callback = @import("callback.zig");
 pub const value = @import("value.zig");
 pub const systf = @import("systf.zig");
+pub const code = @import("code.zig");
 comptime {
     _ = print;
     _ = run;
     _ = callback;
     _ = value;
     _ = systf;
+    _ = code;
 }
 test {
     _ = print;
@@ -78,8 +80,13 @@ test {
     _ = callback;
     _ = value;
     _ = systf;
+    _ = code;
 }
 const Lower = @import("ir").Lower;
+pub const Const = Lower.Const;
+
+/// "No object": an edge a diagram draws that this object does not have.
+pub const no_obj: u32 = std.math.maxInt(u32);
 const Lowered = @import("ir").Lowered;
 const Elaborate = @import("ir").Elaborate;
 
@@ -240,6 +247,11 @@ const Kind = enum(u8) {
     /// §11.6.6 a declared branch, and §11.6.7 the two quantities it carries.
     branch,
     quantity,
+    /// §11.6.3, §11.6.16–§11.6.24 the behavioural objects — processes,
+    /// statements, continuous assignments, tasks, named events, expressions —
+    /// typed by `vtype` and answered from their `edges`/`lists`/`props` rows
+    /// (code.zig).
+    code,
 };
 
 /// `vpi_get(vpiType, o)`.
@@ -262,11 +274,13 @@ fn typeOf(o: *const Obj) c_int {
         .node => vpiNode,
         .branch => vpiBranch,
         .quantity => vpiQuantity,
+        .code => o.vtype,
     };
 }
 
 /// §26.3.2's string form of a type: `vpi_get_str(vpiType, o)`.
 fn typeName(t: c_int) []const u8 {
+    if (code.typeName(t)) |n| return n;
     return switch (t) {
         vpiModule => "vpiModule",
         vpiPort => "vpiPort",
@@ -367,6 +381,20 @@ pub const Obj = struct {
     nets: []const u32 = &.{},
     children: []const u32 = &.{},
     users: []const u32 = &.{},
+    /// `.code` only: the object type and the diagram's edges, as data.
+    vtype: c_int = 0,
+    edges: []const code.Edge = &.{},
+    lists: []const code.List = &.{},
+    props: []const code.Prop = &.{},
+    /// A continuous assignment's literal delays, in its module's time unit
+    /// (IEEE 1364 §7.14: rise, fall, turn-off), for §12.11.
+    delays: []const f64 = &.{},
+    /// `.constant` only: §11.6.19's vpiConstType. 0 when the literal's base
+    /// is not one this model records.
+    const_type: c_int = vpiDecConst,
+    /// `.code` only: written by the analog model (a call in an `analog`
+    /// block names an analog systf, §12.32).
+    in_analog: bool = false,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -397,6 +425,8 @@ const Scope = struct {
     module_arrays: []const u32 = &.{},
     nodes: []const u32 = &.{},
     branches: []const u32 = &.{},
+    /// §11.6.1's behavioural double arrows (code.zig), as tagged rows.
+    lists: []const code.List = &.{},
 };
 
 /// §12.23's iterator. Individually allocated so that a pointer VerA did not
@@ -543,6 +573,7 @@ const Building = struct {
     module_arrays: std.ArrayList(u32) = .empty,
     nodes: std.ArrayList(u32) = .empty,
     branches: std.ArrayList(u32) = .empty,
+    code: code.ScopeLists = .{},
 
     fn deinit(s: *Building, gpa: std.mem.Allocator) void {
         s.children.deinit(gpa);
@@ -556,6 +587,7 @@ const Building = struct {
         s.module_arrays.deinit(gpa);
         s.nodes.deinit(gpa);
         s.branches.deinit(gpa);
+        s.code.deinit(gpa);
     }
 };
 
@@ -741,6 +773,7 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     }
     const analog = try addAnalog(gpa, arena, &objects, scopes.items, &by_path, lowered, top_name);
     try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
+    try addAnalogCode(gpa, arena, &objects, scopes.items, lowered, top_name);
 
     try freeze(&d, objects.items, scopes.items);
     d.disciplines = analog.disciplines;
@@ -938,6 +971,7 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
         .module_arrays = try arena.dupe(u32, s.module_arrays.items),
         .nodes = try arena.dupe(u32, s.nodes.items),
         .branches = try arena.dupe(u32, s.branches.items),
+        .lists = try s.code.freeze(arena),
     };
     d.top_modules = try arena.dupe(u32, &[_]u32{0});
     // A constant and a quantity have no name to be found by (§11.6.7 lists
@@ -946,6 +980,9 @@ fn freeze(d: *Design, objects: []const Obj, scopes: []const Building) Error!void
     // natures live in their own namespace (§3.6), not the hierarchy's.
     for (d.objects, 0..) |o, i| switch (o.kind) {
         .constant, .quantity, .node, .discipline, .nature => {},
+        // A named block, task, function or named event has a full name; a
+        // statement or expression does not.
+        .code => if (o.full.len != 0) try d.by_name.put(gpa, o.full, @intCast(i)),
         .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch => try d.by_name.put(gpa, o.full, @intCast(i)),
     };
 }
@@ -1192,8 +1229,58 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
         }
     }
     try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
+    // §11.6.3/§11.6.16–§11.6.24, over each instance's own definition: the
+    // engine ran these same bodies, one copy per instance.
+    var names = try nameTable(gpa, objects.items);
+    defer names.deinit(gpa);
+    for (scopes.items, 0..) |*s, i| {
+        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code };
+        try b.module(s.decl);
+    }
     try freeze(&d, objects.items, scopes.items);
     return d;
+}
+
+/// §6.7 full name -> object, for resolving the identifiers of the
+/// behavioural objects. Built in object order, so where a port and a net
+/// share a name (a port of the top is declared as a net too) the net wins,
+/// as it does in `by_name`.
+fn nameTable(gpa: std.mem.Allocator, objects: []const Obj) Error!std.StringHashMapUnmanaged(u32) {
+    var names: std.StringHashMapUnmanaged(u32) = .empty;
+    errdefer names.deinit(gpa);
+    for (objects, 0..) |o, i| switch (o.kind) {
+        .constant, .quantity, .node, .discipline, .nature => {},
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .branch, .code => if (o.full.len != 0) try names.put(gpa, o.full, @intCast(i)),
+    };
+    return names;
+}
+
+/// §11.6.20/§11.6.21 the analog model's behaviour: each flattened `analog`
+/// block, in the scope of the instance that wrote it, with its statements,
+/// contributions and expressions.
+fn addAnalogCode(
+    gpa: std.mem.Allocator,
+    arena: std.mem.Allocator,
+    objects: *std.ArrayList(Obj),
+    scopes: []Building,
+    lowered: *const Lowered,
+    top_name: []const u8,
+) Error!void {
+    const flat = lowered.module.?;
+    var an: code.Builder.Analog = .{};
+    defer an.branches.deinit(gpa);
+    defer an.flow_access.deinit(gpa);
+    for (objects.items, 0..) |o, i| switch (o.kind) {
+        .branch => try an.branches.put(gpa, o.full[top_name.len + 1 ..], @intCast(i)),
+        .discipline => if (lowered.disciplines.get(o.name)) |info| try an.flow_access.put(gpa, @intCast(i), info.flow_access),
+        .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .nature, .node, .quantity, .code => {},
+    };
+    var names = try nameTable(gpa, objects.items);
+    defer names.deinit(gpa);
+    for (scopes, 0..) |*s, i| {
+        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = objects, .file = lowered.file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .analog = &an };
+        try b.analogBlocks(flat.analog);
+    }
 }
 
 /// One declared name of `scope`, bound to the slot `at` that stores it.
@@ -1361,9 +1448,9 @@ pub fn clearError() void {
 /// text; an application being told it passed an invalid handle needs the code
 /// and the first clause far more than the last few words, and a heap allocation
 /// on the error path is a second thing that can fail while reporting a failure.
-pub fn fail(code: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
+pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
     err_level = vpiError;
-    err_code = code;
+    err_code = err;
     const written = std.fmt.bufPrint(err_buf[0 .. err_buf.len - 1], fmt, args) catch
         err_buf[0 .. err_buf.len - 1];
     err_len = written.len;
@@ -1463,6 +1550,19 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
     // §11.6.2/§11.6.5–§11.6.7's single arrows. Each edge is answered only
     // from the classes whose diagram draws it; from any other class it is
     // NOTRAVERSE, like every relationship a diagram does not draw.
+    // §11.6.3/§11.6.16–§11.6.24: a behavioural object's single arrows are
+    // its own `edges` rows (code.zig). A tag it does not carry falls through
+    // to the containing-scope edge, and past that is NOTRAVERSE.
+    if (o.kind == .code) for (o.edges) |e| if (e.tag == obj_type) {
+        if (e.to == no_obj) return null;
+        return handleOf(&d.objects[e.to]);
+    };
+    // §11.6.16: sys task/func call -> user systf, for a name some
+    // application registered (NOTE 3); NULL for a built-in one.
+    if (o.kind == .code and obj_type == systf.vpiUserSystf and (o.vtype == code.vpiSysTaskCall or o.vtype == code.vpiSysFuncCall)) {
+        const reg = systf.find(o.name, if (o.in_analog) .analog else .digital) orelse return null;
+        return @ptrCast(reg);
+    }
     if (analogEdge(o, obj_type)) |edge| {
         const at = edge orelse return null;
         return handleOf(&d.objects[at]);
@@ -1474,6 +1574,10 @@ pub export fn vpi_handle(obj_type: c_int, ref: vpiHandle) vpiHandle {
             switch (o.kind) {
                 .discipline, .nature, .quantity => return noEdge(obj_type, o),
                 .module, .port, .net, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .node, .branch => {},
+                // An expression is in no scope (§11.6.19 draws no scope
+                // arrow); a statement, process or declaration is (§11.6.21
+                // stmt -> scope).
+                .code => if (o.owner == null) return noEdge(obj_type, o),
             }
             const owner = o.owner orelse return null;
             return handleOf(&d.objects[owner]);
@@ -1543,7 +1647,7 @@ fn analogEdge(o: *const Obj, obj_type: c_int) ??u32 {
             vpiNode => o.node,
             else => null, // else: a port's other edges are the shared owner edge
         },
-        .module, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant => null,
+        .module, .reg, .parameter, .integer, .real_var, .reg_array, .var_array, .word, .var_select, .module_array, .constant, .code => null,
     };
 }
 
@@ -1694,6 +1798,14 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return newIter(d, d.top_modules);
     }
     const o = object("vpi_iterate", ref) orelse return null;
+    // A behavioural object's double arrows are its `lists` rows. An empty
+    // row is an empty set (NULL, no error — §11.6.23 NOTE 2's default case
+    // item among them); a tag it has no row for is no relationship.
+    if (o.kind == .code) {
+        for (o.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
+        fail("NOTRAVERSE", "vpi_iterate: a {s} is the reference object of no relationship {d}", .{ typeName(o.vtype), obj_type });
+        return null;
+    }
     // §11.6.11 (IEEE 1364 §26.6.7-9): an array's elements. A memory's words by
     // the legacy vpiMemoryWord tag or as vpiReg; a variable array's by
     // vpiVarSelect; an instance array's members by vpiModule.
@@ -1717,6 +1829,7 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         return null;
     }
     const s = &d.scopes[o.scope];
+    for (s.lists) |l| if (l.tag == obj_type) return if (l.items.len == 0) null else newIter(d, l.items);
     const items: []const u32 = switch (obj_type) {
         // §11.6.1 gives module a one-to-many to `scope` tagged vpiInternalScope
         // AND a separate one to `module`. In a design whose only named scopes
@@ -1850,6 +1963,7 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
     // §12.5's NULL-object case is about vpiTimeUnit/vpiTimePrecision, neither of
     // which VerA answers, so a NULL object is an invalid handle like any other.
     const o = object("vpi_get", obj) orelse return vpiUndefined;
+    if (o.kind == .code and prop != vpiType) return codeProp(o, prop);
     switch (prop) {
         vpiType => return typeOf(o),
         // IEEE 1364 §26.6.1/§26.6.7: "is item an array" — an array, or a
@@ -1917,7 +2031,13 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
         // is a `parameter p = <expr>;` whose type lowering derives from the
         // default — a question about a VALUE, which is P02's.
         vpiConstType => {
-            if (o.kind == .constant) return vpiDecConst;
+            if (o.kind == .constant) {
+                if (o.const_type == 0) {
+                    fail("NOTYPE", "vpi_get: this literal's base is not recorded", .{});
+                    return vpiUndefined;
+                }
+                return o.const_type;
+            }
             if (o.kind != .parameter) return propFail(prop, o);
             return switch (o.ty) {
                 .real => vpiRealConst,
@@ -1938,6 +2058,22 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             return vpiUndefined;
         },
     }
+}
+
+/// §11.6.16's two computed properties of a system call — whether the name is
+/// a registered user systf (NOTE 3) and, for a function, its sysfunctype —
+/// then the object's own `props` rows.
+fn codeProp(o: *const Obj, prop: c_int) c_int {
+    if (o.vtype == code.vpiSysTaskCall or o.vtype == code.vpiSysFuncCall) {
+        const reg = systf.find(o.name, if (o.in_analog) .analog else .digital);
+        if (prop == systf.vpiUserDefn) return @intFromBool(reg != null);
+        if (prop == systf.vpiSysFuncType and o.vtype == code.vpiSysFuncCall) {
+            const r = reg orelse return propFail(prop, o);
+            return if (r.domain == .digital) r.digital.sysfunctype else r.analog.sysfunctype;
+        }
+    }
+    for (o.props) |p| if (p.prop == prop) return p.value;
+    return propFail(prop, o);
 }
 
 fn propFail(prop: c_int, o: *const Obj) c_int {
@@ -1966,6 +2102,13 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
         // §11.6.7 lists no name for a quantity: it is reached from its
         // branch, and named only as `V(b)`/`I(b)` in source.
         vpiName, vpiFullName => blk: {
+            // A behavioural object has the names its diagram lists and no
+            // others: a named block both, a call its tf name only, a
+            // statement none.
+            if (o.kind == .code and (if (prop == vpiName) o.name else o.full).len == 0) {
+                fail("NOPROP", "vpi_get_str: a {s} has no name property {d}", .{ typeName(o.vtype), prop });
+                return null;
+            }
             if (o.kind == .quantity) {
                 fail("NOPROP", "vpi_get_str: a quantity has no name property {d}", .{prop});
                 return null;
@@ -2369,6 +2512,36 @@ test "§11.6.5–§11.6.7: nodes, a branch between them, and its two quantities"
     try std.testing.expect(vpi_get_str(vpiName, q) == null);
     try std.testing.expect(vpi_handle(vpiPosNode, mid) == null);
     try std.testing.expectEqual(vpiError, vpi_chk_error(null));
+}
+
+test "§11.6.20/§11.6.21: the analog process, its contribution and an identifier that IS its object" {
+    var res = try openSource(
+        \\module ct(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter real g = 2.0;
+        \\  branch (p, n) b;
+        \\  analog I(b) <+ g * V(b);
+        \\endmodule
+    );
+    defer res.deinit();
+    defer close();
+
+    const top = vpi_handle_by_name("ct", null);
+    const procs = vpi_iterate(code.vpiProcess, top);
+    const proc = vpi_scan(procs);
+    try std.testing.expect(vpi_scan(procs) == null);
+    try std.testing.expectEqual(code.vpiAnalog, vpi_get(vpiType, proc));
+    const c = vpi_handle(code.vpiStmt, proc);
+    try std.testing.expectEqual(code.vpiContrib, vpi_get(vpiType, c));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_get(vpiFlow, c));
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_handle(vpiBranch, c), vpi_handle_by_name("ct.b", null)));
+    const rhs = vpi_handle(code.vpiRhs, c);
+    try std.testing.expectEqual(code.vpiMultOp, vpi_get(code.vpiOpType, rhs));
+    // §11.6.18: the operand `g` is the parameter object itself.
+    const ops = vpi_iterate(code.vpiOperand, rhs);
+    try std.testing.expectEqual(@as(c_int, 1), vpi_compare_objects(vpi_scan(ops), vpi_handle_by_name("ct.g", null)));
+    try std.testing.expectEqual(code.vpiAccessFunc, vpi_get(vpiType, vpi_scan(ops)));
+    try std.testing.expect(vpi_scan(ops) == null);
 }
 
 test "a single-module design is a tree of one" {

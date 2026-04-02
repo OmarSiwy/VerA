@@ -126,6 +126,149 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiChild              732
 
 /* --------------------------------------------------------------------------
+ * The behavioural objects — §11.6.3, §11.6.10's named event, §11.6.16–
+ * §11.6.24 — Annex G numbering, plus four Verilog-AMS names VerA numbers.
+ *
+ *   vpi_iterate(vpiProcess | vpiContAssign | vpiTask | vpiFunction |
+ *               vpiNamedEvent, module)
+ *   process -> vpiStmt; begin/fork ->> vpiStmt; task/function -> vpiStmt,
+ *   ->> vpiIODecl; assignment -> vpiLhs, vpiRhs, vpiDelayControl,
+ *   vpiEventControl (NULL, no error, when absent); if -> vpiCondition,
+ *   vpiStmt (+ vpiElseStmt for vpiIfElse); case -> vpiCondition,
+ *   ->> vpiCaseItem; case item ->> vpiExpr (NULL for default), -> vpiStmt;
+ *   for -> vpiForInitStmt, vpiCondition, vpiForIncStmt, vpiStmt; while,
+ *   repeat, wait -> vpiCondition, vpiStmt; delay control -> vpiDelay,
+ *   vpiStmt; event control -> vpiCondition, vpiStmt; force/assign stmt ->
+ *   vpiLhs, vpiRhs; release/deassign -> vpiLhs; disable -> vpiScope;
+ *   event stmt -> vpiNamedEvent; task call -> vpiTask; func call ->
+ *   vpiFunction; tf call ->> vpiArgument, sys tf call -> vpiUserSystf
+ *   (NULL for a built-in name); operation ->> vpiOperand; part select ->
+ *   vpiParent, vpiLeftRange, vpiRightRange; net/reg bit -> vpiParent,
+ *   vpiIndex; contrib -> vpiBranch, vpiRhs (+ vpiLhs, indirect);
+ *   accessfunc -> vpiBranch, vpiDiscipline.
+ *
+ * An identifier in an expression IS the object it names (§11.6.18): the
+ * vpiLhs of `a = ...` is the reg a. Every relationship a diagram does not
+ * draw is an error; vpi_get_value() reads a constant, not an operation.
+ * -------------------------------------------------------------------------- */
+#define vpiAlways               1
+#define vpiAssignStmt           2
+#define vpiAssignment           3
+#define vpiBegin                4
+#define vpiCase                 5
+#define vpiCaseItem             6
+#define vpiContAssign           8
+#define vpiDeassign             9
+#define vpiDelayControl        11
+#define vpiDisable             12
+#define vpiEventControl        13
+#define vpiEventStmt           14
+#define vpiFor                 15
+#define vpiForce               16
+#define vpiForever             17
+#define vpiFork                18
+#define vpiFuncCall            19
+#define vpiFunction            20
+#define vpiIf                  22
+#define vpiIfElse              23
+#define vpiInitial             24
+#define vpiIODecl              28
+#define vpiNamedBegin          33
+#define vpiNamedEvent          34
+#define vpiNamedFork           35
+#define vpiNetBit              37
+#define vpiNullStmt            38
+#define vpiOperation           39
+#define vpiPartSelect          42
+#define vpiRegBit              49
+#define vpiRelease             50
+#define vpiRepeat              51
+#define vpiSysFuncCall         56
+#define vpiSysTaskCall         57
+#define vpiTask                59
+#define vpiTaskCall            60
+#define vpiWait                69
+#define vpiWhile               70
+#define vpiAnalog             733   /* §11.6.21 the analog process */
+#define vpiContrib            734   /* §11.6.20 a contribution */
+#define vpiDirect             735   /* bool: §11.6.20, `<+` rather than indirect */
+#define vpiAccessFunc         736   /* §11.6.19 an access function */
+
+#define vpiCondition           71
+#define vpiDelay               72
+#define vpiElseStmt            73
+#define vpiForIncStmt          74
+#define vpiForInitStmt         75
+#define vpiLhs                 77
+#define vpiLeftRange           79
+#define vpiRhs                 82
+#define vpiRightRange          83
+#define vpiOperand             97
+#define vpiProcess             99
+#define vpiExpr               102
+#define vpiStmt               104
+
+#define vpiOpType              39   /* int: §11.6.19, one of the values below */
+#define vpiBlocking            41   /* bool: §11.6.22 */
+#define vpiCaseType            42   /* int: §11.6.23 */
+#define vpiCaseExact            1
+#define vpiCaseX                2
+#define vpiCaseZ                3
+
+#define vpiMinusOp              1
+#define vpiPlusOp               2
+#define vpiNotOp                3
+#define vpiBitNegOp             4
+#define vpiUnaryAndOp           5
+#define vpiUnaryNandOp          6
+#define vpiUnaryOrOp            7
+#define vpiUnaryNorOp           8
+#define vpiUnaryXorOp           9
+#define vpiUnaryXNorOp         10
+#define vpiSubOp               11
+#define vpiDivOp               12
+#define vpiModOp               13
+#define vpiEqOp                14
+#define vpiNeqOp               15
+#define vpiCaseEqOp            16
+#define vpiCaseNeqOp           17
+#define vpiGtOp                18
+#define vpiGeOp                19
+#define vpiLtOp                20
+#define vpiLeOp                21
+#define vpiLShiftOp            22
+#define vpiRShiftOp            23
+#define vpiAddOp               24
+#define vpiMultOp              25
+#define vpiLogAndOp            26
+#define vpiLogOrOp             27
+#define vpiBitAndOp            28
+#define vpiBitOrOp             29
+#define vpiBitXorOp            30
+#define vpiBitXNorOp           31
+#define vpiConditionOp         32
+#define vpiConcatOp            33
+#define vpiMultiConcatOp       34
+#define vpiEventOrOp           35
+#define vpiPosedgeOp           39
+#define vpiNegedgeOp           40
+#define vpiArithLShiftOp       41
+#define vpiArithRShiftOp       42
+#define vpiPowerOp             43
+
+/* §12.11 Figure 12-4, with Annex G's PLI_INT32 flags. vpi_get_delays() reads
+ * a continuous assignment (1-3 delays: rise, fall, turn-off, IEEE 1364 §7.14
+ * deriving the ones not written) and a delay control (1). */
+typedef struct t_vpi_delay {
+  struct t_vpi_time *da;        /* user-allocated, Table 12-3's size */
+  PLI_INT32  no_of_delays;
+  PLI_INT32  time_type;         /* vpiScaledRealTime, vpiSimTime */
+  PLI_INT32  mtm_flag;
+  PLI_INT32  append_flag;
+  PLI_INT32  pulsere_flag;
+} s_vpi_delay, *p_vpi_delay;
+
+/* --------------------------------------------------------------------------
  * Relationships — the `type` argument of vpi_handle()/vpi_iterate() when what
  * is being traversed is an edge of a §11.6 diagram rather than an object class.
  * -------------------------------------------------------------------------- */
@@ -439,6 +582,8 @@ extern vpiHandle  vpi_put_value(vpiHandle object, p_vpi_value value_p,
  * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
  * is in the object's time unit, or in ticks when obj is NULL. */
 extern void       vpi_get_time(vpiHandle obj, p_vpi_time time_p);
+/* §12.11 the delays of a continuous assignment or delay control. */
+extern void       vpi_get_delays(vpiHandle obj, p_vpi_delay delay_p);
 /* --------------------------------------------------------------------------
  * §12.32/§12.33 user system tasks and functions.
  *

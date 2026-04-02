@@ -78,7 +78,18 @@ pub const AnalogSystfData = extern struct {
     user_data: [*c]u8,
 };
 
-const Domain = enum { digital, analog };
+pub const Domain = enum { digital, analog };
+
+/// §11.6.16's call properties. Annex G numbers vpiSysFuncType as vpiFuncType.
+pub const vpiUserDefn: c_int = 45;
+pub const vpiSysFuncType: c_int = 44;
+
+/// The registration of `name` in `domain`, if one was made: §11.6.16 NOTE 3's
+/// "corresponding systf object" of a call to a user-defined name.
+pub fn find(name: []const u8, domain: Domain) ?*Systf {
+    for (regs.items) |s| if (s.domain == domain and std.mem.eql(u8, s.name, name)) return s;
+    return null;
+}
 
 pub const Systf = struct {
     domain: Domain,
