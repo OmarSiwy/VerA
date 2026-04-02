@@ -1767,6 +1767,58 @@ pub export fn vpi_chk_error(error_info_p: ?*ErrorInfo) c_int {
 }
 
 // ---------------------------------------------------------------------------
+// §12.17 vpi_get_vlog_info
+// ---------------------------------------------------------------------------
+
+/// Figure 12-12 `s_vpi_vlog_info`, laid out for C.
+pub const VlogInfo = extern struct {
+    argc: c_int,
+    argv: [*c][*c]u8,
+    product: [*c]u8,
+    version: [*c]u8,
+};
+
+/// The product's invocation, as its `main` received it. Kept by pointer: the
+/// C runtime owns `argv` for the life of the process, which outlives any
+/// application's use of it.
+var inv_argc: c_int = 0;
+var inv_argv: [*c][*c]u8 = null;
+
+/// A host calls this once, from its `main`, before the startup routines run.
+/// A host that never does reports an invocation of no options.
+pub fn setInvocation(argc: c_int, argv: [*c][*c]u8) void {
+    inv_argc = argc;
+    inv_argv = argv;
+}
+
+/// Figure 12-12's `version`.
+///
+/// ponytail: written here rather than read from build.zig.zon, which a module
+/// under src/ cannot import. Upgrade path: pass the manifest's version to this
+/// module as a build option, as `suite_options` passes the fixture root.
+var version_str = "0.9.0".*;
+
+/// "shall obtain the following information about Verilog-AMS product
+/// execution: The number of invocation options (argc), Invocation option
+/// values (argv), Product and version strings ... The routine shall return
+/// TRUE on success and FALSE on failure." The one failure an application can
+/// cause is having no structure to fill.
+pub export fn vpi_get_vlog_info(vlog_info_p: ?*VlogInfo) c_int {
+    clearError();
+    const out = vlog_info_p orelse {
+        fail("BADINFO", "vpi_get_vlog_info: vlog_info_p is NULL", .{});
+        return 0;
+    };
+    out.* = .{
+        .argc = inv_argc,
+        .argv = inv_argv,
+        .product = @ptrCast(&product_name),
+        .version = @ptrCast(&version_str),
+    };
+    return 1;
+}
+
+// ---------------------------------------------------------------------------
 // Tests
 //
 // These check the MODEL: that the scope tree, the names and the sets come out

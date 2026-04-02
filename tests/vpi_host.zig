@@ -36,6 +36,8 @@ const Io = std.Io;
 /// into one executable per application: the application is the C half, and a
 /// Zig executable per fixture would recompile the whole engine per fixture.
 export fn main(argc: c_int, argv: [*]const [*:0]const u8) c_int {
+    // §12.17: the invocation a vpi_get_vlog_info() reports is this one.
+    vpi.setInvocation(argc, @ptrCast(@constCast(argv)));
     const code = host(if (argc > 1) std.mem.span(argv[1]) else null) catch |e| {
         std.debug.print("vpi_host: {t}\n", .{e});
         return 1;

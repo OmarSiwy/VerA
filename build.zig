@@ -451,6 +451,11 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
         .stdout = "p02: p04_04_callback_systf_refusals checks=83\n",
     },
+    .{
+        .c = "tests/fixtures/ch11_vpi/p04_05_vlog_info.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "p02: p04_05_vlog_info checks=29\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
