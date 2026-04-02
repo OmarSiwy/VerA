@@ -921,6 +921,19 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
             try objects.append(gpa, try digitalObj(r, arena, top_name, s.path, scope, v.name, kind, at));
             objects.items[objects.items.len - 1].is_signed = v.is_signed or kind == .integer;
         }
+        // §11.6.12 parameters. The engine folds each into a slot of its own
+        // (IEEE 1364 §12.2, `Run.params`), so NOTE 1's "final value of the
+        // parameter after all module instantiation overrides and defparams
+        // have been resolved" is that slot, read like any other value.
+        for (m.params) |p| {
+            const at = r.names.get(.{ .scope = scope, .str = p.name }) orelse continue;
+            if (!r.params.contains(at)) continue;
+            try s.params.append(gpa, @intCast(objects.items.len));
+            var o = try digitalObj(r, arena, top_name, s.path, scope, p.name, .parameter, at);
+            o.ty = p.ty;
+            o.is_local = p.is_local;
+            try objects.append(gpa, o);
+        }
     }
     try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
     try freeze(&d, objects.items, scopes.items);
