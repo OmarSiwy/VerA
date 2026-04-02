@@ -52,13 +52,27 @@
  *   12.3     comparing a valid handle with NULL                -> FALSE
  *   12.5     property 9999 is no property at all               -> vpiUndefined
  *
+ * Three of these refusals are also the diagram KEYS read backwards:
+ *   11.3    Figure 11-1 gives a net vpiName, vpiVector and vpiSize and
+ *           nothing else — vpiDirection is not among them.
+ *   11.5.2  "Integer and Boolean properties are accessed with the routine
+ *           vpi_get()", "String properties are accessed with routine
+ *           vpi_get_str()": vpiSize is an int, so vpi_get_str(vpiSize) has
+ *           no string to give.
+ *   11.5.3  "A single arrow indicates a one-to-one relationship accessed
+ *           with the routine vpi_handle()"; module -> port is a double arrow,
+ *           so vpi_handle(vpiPort, module) has no one object to give.
+ *
  * The application runs from cbReadWriteSynch at t=0 and NOT cbReadOnlySynch:
  * 12.31.2 forbids writing in the read-only region, so a put refused there
  * would be refused for that reason and would say nothing about parameters.
  */
 
 //! lrm-reject 11.2.3
+//! lrm-reject 11.3
 //! lrm-reject 11.3.1
+//! lrm-reject 11.5.2
+//! lrm-reject 11.5.3
 //! lrm-reject 11.6.1
 //! lrm-reject 11.6.4
 //! lrm-reject 11.6.8
