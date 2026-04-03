@@ -395,6 +395,9 @@ pub const Obj = struct {
     /// `.code` only: written by the analog model (a call in an `analog`
     /// block names an analog systf, §12.32).
     in_analog: bool = false,
+    /// `.code` only: §11.6.13/§11.6.14's vpiDefName of a primitive or UDP
+    /// definition.
+    def_name: []const u8 = "",
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
@@ -460,6 +463,8 @@ pub const Design = struct {
     /// digital design, which declares neither.
     disciplines: []const u32 = &.{},
     natures: []const u32 = &.{},
+    /// §11.6.14's circled arrow: `vpi_iterate(vpiUdpDefn, NULL)`.
+    udp_defns: []const u32 = &.{},
     /// §11.6 `vpiFullName` → object index. Every object has one and they are
     /// unique, which is what makes §12.21 a lookup rather than a tree walk.
     by_name: std.StringHashMapUnmanaged(u32),
@@ -1141,6 +1146,11 @@ fn digitalTop(file: *const Ast.SourceFile) Error!*const Ast.ModuleDecl {
     return error.NotElaborated;
 }
 
+fn isUdp(file: *const Ast.SourceFile, name: Ast.StrId) bool {
+    for (file.udps) |u| if (u.name == name) return true;
+    return false;
+}
+
 fn digitalModule(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.ModuleDecl {
     for (file.modules) |*m| if (m.name == name) return m;
     return null;
@@ -1231,13 +1241,17 @@ fn buildDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) Error!Design {
     try addModuleArrays(gpa, arena, &objects, scopes.items, top_name);
     // §11.6.3/§11.6.16–§11.6.24, over each instance's own definition: the
     // engine ran these same bodies, one copy per instance.
+    var udps: std.AutoHashMapUnmanaged(Ast.StrId, u32) = .empty;
+    defer udps.deinit(gpa);
+    const udp_defns = try code.udpDefns(gpa, arena, &objects, file, &udps);
     var names = try nameTable(gpa, objects.items);
     defer names.deinit(gpa);
     for (scopes.items, 0..) |*s, i| {
-        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code };
+        var b: code.Builder = .{ .gpa = gpa, .arena = arena, .objects = &objects, .file = file, .names = &names, .top_name = top_name, .scope = @intCast(i), .path = s.path, .lists = &s.code, .udps = &udps };
         try b.module(s.decl);
     }
     try freeze(&d, objects.items, scopes.items);
+    d.udp_defns = udp_defns;
     return d;
 }
 
@@ -1326,6 +1340,8 @@ fn walkDigital(
     });
     if (parent) |p| try scopes.items[p].children.append(gpa, at);
     for (m.instances) |inst| {
+        // A UDP instance is a primitive (§11.6.13), not a scope.
+        if (isUdp(file, inst.module)) continue;
         const child = digitalModule(file, inst.module) orelse return error.NotElaborated;
         const name = file.str(inst.name);
         if (inst.range == null) {
@@ -1787,8 +1803,8 @@ pub export fn vpi_iterate(obj_type: c_int, ref: vpiHandle) vpiHandle {
         }
         // §11.6.2's circled arrows: disciplines and natures are design-wide.
         // An empty set (a digital design) is NULL with no error (§12.23).
-        if (obj_type == vpiDiscipline or obj_type == vpiNature) {
-            const items = if (obj_type == vpiDiscipline) d.disciplines else d.natures;
+        if (obj_type == vpiDiscipline or obj_type == vpiNature or obj_type == code.vpiUdpDefn) {
+            const items = if (obj_type == vpiDiscipline) d.disciplines else if (obj_type == vpiNature) d.natures else d.udp_defns;
             return if (items.len == 0) null else newIter(d, items);
         }
         if (obj_type != vpiModule) {
@@ -2119,6 +2135,7 @@ pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
         // §11.6.1 — a module property and only a module's. A net has no
         // definition to name.
         vpiDefName => blk: {
+            if (o.kind == .code and o.def_name.len != 0) break :blk o.def_name;
             if (o.kind != .module) {
                 fail("NOPROP", "vpi_get_str: a {s} has no vpiDefName", .{@tagName(o.kind)});
                 return null;

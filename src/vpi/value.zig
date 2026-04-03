@@ -514,6 +514,12 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
     // words, system function calls, sequential UDPs, and schedule events" —
     // a parameter is none of those. §11.6.12 NOTE 1 makes its value the
     // elaborated constant, which a put cannot be allowed to rewrite.
+    // §11.6.13 NOTE 2: "For primitives, vpi_put_value() shall only be used
+    // with sequential UDP primitives." A gate is not one.
+    if (o.kind == .code and o.vtype == root.code.vpiGate) {
+        root.fail("NOPUT", "vpi_put_value: a gate is a primitive, and only a sequential UDP takes a put", .{});
+        return null;
+    }
     if (o.kind == .parameter) {
         root.fail("NOPUT", "vpi_put_value: `{s}` is a parameter, which vpi_put_value does not apply to", .{o.full});
         return null;
