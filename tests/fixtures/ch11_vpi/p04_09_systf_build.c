@@ -45,6 +45,13 @@
  * those two callbacks the call that invoked them is 11.6.16 NOTE 1's
  * vpi_handle(vpiSysTfCall, NULL): a vpiSysTaskCall named "$p04_tap" with two
  * arguments. Outside them there is no active call: NULL, and no error.
+ *
+ * 12.18: vpi_get_real() "is available to analog tasks and functions only.
+ * Should an error occur, vpi_get_real() shall return vpiUndefined." Asked
+ * from the startup routine and from cbEndOfCompile - neither an analog task
+ * nor function - it returns vpiUndefined with an error; asked inside
+ * $p04_tap's compiletf for property 9999, which is no real property at all,
+ * likewise.
  */
 
 //! lrm 12.32.1
@@ -55,6 +62,7 @@
 //! lrm 11.6.16
 //! lrm 12.13
 //! lrm 12.14
+//! lrm-reject 12.18
 //! lrm 12.31.4
 
 #include "p02_check.h"
@@ -76,7 +84,14 @@ static void check_active(p_cb_data d, const char *who)
   CHECK(d != NULL && d->user_data == tap_ud, "%s: user_data is passed back", who);
 }
 
-static PLI_INT32 tap_compiletf(p_cb_data d) { compiles++; check_active(d, "compiletf"); return 0; }
+static PLI_INT32 tap_compiletf(p_cb_data d)
+{
+  compiles++;
+  check_active(d, "compiletf");
+  CHECK(vpi_get_real(9999, NULL) == (double)vpiUndefined, "12.18: 9999 is no real property");
+  expect_error("vpi_get_real(9999) in compiletf");
+  return 0;
+}
 static PLI_INT32 tap_calltf(p_cb_data d) { (void)d; calls++; return 0; }
 
 static p_vpi_stf_partials tap_derivtf(p_cb_data d)
@@ -189,6 +204,8 @@ static PLI_INT32 end_of_compile(p_cb_data d)
   CHECK(calls == 0, "calltf has not run: nothing was simulated, got %d", calls);
   CHECK(vpi_handle(vpiSysTfCall, NULL) == NULL, "outside a callback there is no active call");
   expect_no_error("vpi_handle(vpiSysTfCall, NULL)");
+  CHECK(vpi_get_real(vpiEndTime, NULL) == (double)vpiUndefined, "12.18: cbEndOfCompile is no analog task");
+  expect_error("vpi_get_real in cbEndOfCompile");
   p02_done("p04_09_systf_build");
   return 0;
 }
@@ -196,6 +213,8 @@ static PLI_INT32 end_of_compile(p_cb_data d)
 static void startup(void)
 {
   static s_cb_data cb;
+  CHECK(vpi_get_real(vpiStartTime, NULL) == (double)vpiUndefined, "12.18: a startup routine is no analog task");
+  expect_error("vpi_get_real in startup");
   digital();
   analog();
   CHECK(compiles == 0 && derivs == 0, "nothing is built while the startup routines run");

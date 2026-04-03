@@ -2092,6 +2092,55 @@ fn codeProp(o: *const Obj, prop: c_int) c_int {
     return propFail(prop, o);
 }
 
+// ---------------------------------------------------------------------------
+// §12.18 vpi_get_real
+// ---------------------------------------------------------------------------
+
+// §12.18's analysis properties. Verilog-AMS names them and numbers none;
+// VerA's numbers, after the analog systf types.
+pub const vpiStartTime: c_int = 742;
+pub const vpiEndTime: c_int = 743;
+pub const vpiTransientMaxStep: c_int = 744;
+pub const vpiStartFrequency: c_int = 745;
+pub const vpiEndFrequency: c_int = 746;
+
+/// "shall return the value of object properties, for properties of type
+/// real ... This function is available to analog tasks and functions only.
+/// Should an error occur, vpi_get_real() shall return vpiUndefined."
+///
+/// So outside the callbacks of an analog system task or function — the only
+/// moment an application routine IS an analog task or function — the answer
+/// is the error. Inside one (the build-time compiletf/derivtf,
+/// `systf.buildCalls`), the five properties are the analysis's, asked of a
+/// NULL object; this process sets up no analysis, so each is still an error
+/// rather than an invented number.
+pub export fn vpi_get_real(prop: c_int, obj: vpiHandle) f64 {
+    clearError();
+    const undef: f64 = @floatFromInt(vpiUndefined);
+    const at = systf.active orelse {
+        fail("NOTANALOG", "vpi_get_real: available to analog tasks and functions only, and none is running", .{});
+        return undef;
+    };
+    if (!design.?.objects[at].in_analog) {
+        fail("NOTANALOG", "vpi_get_real: the running system task or function is a digital one", .{});
+        return undef;
+    }
+    switch (prop) {
+        vpiStartTime, vpiEndTime, vpiTransientMaxStep, vpiStartFrequency, vpiEndFrequency => {
+            if (obj != null) {
+                fail("BADHANDLE", "vpi_get_real: property {d} is the analysis's, asked of NULL", .{prop});
+                return undef;
+            }
+            fail("NOANALYSIS", "vpi_get_real: no analysis is set up in this process", .{});
+            return undef;
+        },
+        else => {
+            fail("NOPROP", "vpi_get_real: {d} is not a real property", .{prop});
+            return undef;
+        },
+    }
+}
+
 fn propFail(prop: c_int, o: *const Obj) c_int {
     fail("NOPROP", "vpi_get: a {s} has no property {d}", .{ @tagName(o.kind), prop });
     return vpiUndefined;
