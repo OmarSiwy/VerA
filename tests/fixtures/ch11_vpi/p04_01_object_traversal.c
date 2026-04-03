@@ -25,9 +25,14 @@
  *
  * 11.6.1 (module): the circled arrow into `module` is NOTE 1's
  * vpi_iterate(vpiModule, NULL), and the design has exactly one root. The
- * module -> module double arrow from the root yields exactly `u`, whose
- * vpiDefName is "p04_leaf" and whose vpiTopModule is FALSE; the root's is
- * TRUE.
+ * module -> module double arrow from the root yields `u` and then `v`, each
+ * with vpiDefName "p04_leaf" and vpiTopModule FALSE; the root's is TRUE.
+ *
+ * 11.2.2: "if a module m contains wire w and is instantiated twice as m1 and
+ * m2, then m1.w and m2.w are two distinct objects, each with its own set of
+ * related objects and properties." u and v are p04_leaf twice, so u.a and
+ * v.a are two objects (vpi_compare_objects FALSE), each with its own full
+ * name, each leading back to its own instance, each a vpiInput of 8 bits.
  *
  * 11.6.4 (ports): module ->> port on `u` yields the header's two ports in
  * order. NOTE 6: vpiPortIndex gives the order, so a is 0 and y is 1. `a` is
@@ -36,9 +41,9 @@
  * port -> module arrow leads back to `u` (vpi_compare_objects, 12.3, since a
  * C `==` does not answer that).
  *
- * 11.6.8 (nets): module ->> net on the root yields the two nets it declares,
- * in declaration order: `bus` (wire [7:0]: vpiSize 8, vector) and `lsb`
- * (scalar). net -> module leads back to the root. The value is read at t=0's
+ * 11.6.8 (nets): module ->> net on the root yields the three nets it
+ * declares, in declaration order: `bus` (wire [7:0]: vpiSize 8, vector),
+ * `lsb` (scalar) and `lsb2`. net -> module leads back to the root. The value is read at t=0's
  * read-only region (12.31.2), after every t=0 event: r = 9, so bus =
  * {4'b0000, r} = 8'h09 ("09" in vpiHexStrVal, Table 12-4), and lsb =
  * bus[0] through u.y = 1 (vpi1 in vpiScalarVal).
@@ -55,6 +60,7 @@
  * W and W - 1 = 7 for M. The arrow back to the scope is the root.
  */
 
+//! lrm 11.2.2
 //! lrm 11.3
 //! lrm 11.3.1
 //! lrm 11.5.2
@@ -119,8 +125,21 @@ static void module_and_11_3_1(void)
 
   /* module ->> module */
   n = scan_all(vpi_iterate(vpiModule, top), got, 4);
-  CHECK(n == 1, "the root instantiates one module, got %d", n);
+  CHECK(n == 2, "the root instantiates two modules, got %d", n);
   u = got[0];
+  check_name(got[1], "v", "p04_objects.v");
+  CHECK(strcmp(vpi_get_str(vpiDefName, got[1]), "p04_leaf") == 0, "v is an instance of p04_leaf too");
+  {
+    /* 11.2.2 */
+    vpiHandle ua = vpi_handle_by_name((PLI_BYTE8 *)"p04_objects.u.a", NULL);
+    vpiHandle va = vpi_handle_by_name((PLI_BYTE8 *)"p04_objects.v.a", NULL);
+    CHECK(ua != NULL && va != NULL, "11.2.2: both instances' a are accessible");
+    CHECK(!vpi_compare_objects(ua, va), "11.2.2: u.a and v.a are two distinct objects");
+    CHECK(vpi_compare_objects(vpi_handle(vpiModule, ua), u) && vpi_compare_objects(vpi_handle(vpiModule, va), got[1]),
+          "11.2.2: each with its own related objects");
+    CHECK(vpi_get(vpiDirection, ua) == vpiInput && vpi_get(vpiDirection, va) == vpiInput &&
+          vpi_get(vpiSize, ua) == 8 && vpi_get(vpiSize, va) == 8, "11.2.2: and its own properties");
+  }
   check_name(u, "u", "p04_objects.u");
   CHECK(strcmp(vpi_get_str(vpiDefName, u), "p04_leaf") == 0, "u is an instance of p04_leaf");
   CHECK(vpi_get(vpiTopModule, u) == 0, "u is not a top module");
@@ -160,7 +179,8 @@ static void nets(void)
   vpiHandle got[4];
   s_vpi_value v;
   int n = scan_all(vpi_iterate(vpiNet, top), got, 4);
-  CHECK(n == 2, "the root declares two nets, got %d", n);
+  check_name(got[2], "lsb2", "p04_objects.lsb2");
+  CHECK(n == 3, "the root declares three nets, got %d", n);
 
   check_name(got[0], "bus", "p04_objects.bus");
   CHECK(vpi_get(vpiType, got[0]) == vpiNet, "bus is a vpiNet");
