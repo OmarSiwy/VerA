@@ -89,6 +89,209 @@ typedef PLI_UINT32 *vpiHandle;
 #define vpiRegArray           116   /* §11.6.11 a reg array (memory) */
 
 /* --------------------------------------------------------------------------
+ * The analog classes — §11.6.2, §11.6.5–§11.6.7. Verilog-AMS names these and
+ * numbers none; the numbers are VerA's, and agree with the P03 draft header
+ * (tests/fixtures/ch12_vpi_routines/p03_vpi_analog.h) on every name the two
+ * share, so a plugin including both sees one value per name.
+ *
+ *   vpi_iterate(vpiDiscipline, NULL)          every discipline declared
+ *   vpi_iterate(vpiNature,     NULL)          every nature declared
+ *   vpi_handle(vpiFlowNature | vpiPotentialNature, discipline)
+ *   vpi_handle(vpiParent, nature)             a derived nature's parent;
+ *                                             NULL, no error, for a base one
+ *   vpi_iterate(vpiChild,      nature)        the natures derived from it
+ *   vpi_iterate(vpiDiscipline, nature)        the disciplines binding it
+ *   vpi_iterate(vpiNode,       module)        §11.6.5 one per continuous net
+ *   vpi_handle(vpiNode | vpiDiscipline, net)
+ *   vpi_iterate(vpiNet,        node)          the net the node is
+ *   vpi_iterate(vpiBranch,     module)        §11.6.6 declared branches
+ *   vpi_handle(vpiPosNode | vpiNegNode | vpiDiscipline, branch)
+ *   vpi_handle(vpiFlow | vpiPotential, branch) §11.6.7 its two quantities
+ *   vpi_handle(vpiBranch | vpiNature, quantity)
+ *
+ * A quantity has no name (§11.6.7 lists none). Values are not answered here:
+ * vpi_get_analog_value() needs an analysis this process does not run.
+ * -------------------------------------------------------------------------- */
+#define vpiQuantity           720
+#define vpiBranch             721
+#define vpiPotential          722
+#define vpiFlow               723
+#define vpiPosNode            724
+#define vpiNegNode            725
+#define vpiNode               726
+#define vpiDiscipline         727
+#define vpiNature             728
+#define vpiFlowNature         729
+#define vpiPotentialNature    731
+#define vpiChild              732
+
+/* --------------------------------------------------------------------------
+ * The behavioural objects — §11.6.3, §11.6.10's named event, §11.6.16–
+ * §11.6.24 — Annex G numbering, plus four Verilog-AMS names VerA numbers.
+ *
+ *   vpi_iterate(vpiProcess | vpiContAssign | vpiTask | vpiFunction |
+ *               vpiNamedEvent, module)
+ *   process -> vpiStmt; begin/fork ->> vpiStmt; task/function -> vpiStmt,
+ *   ->> vpiIODecl; assignment -> vpiLhs, vpiRhs, vpiDelayControl,
+ *   vpiEventControl (NULL, no error, when absent); if -> vpiCondition,
+ *   vpiStmt (+ vpiElseStmt for vpiIfElse); case -> vpiCondition,
+ *   ->> vpiCaseItem; case item ->> vpiExpr (NULL for default), -> vpiStmt;
+ *   for -> vpiForInitStmt, vpiCondition, vpiForIncStmt, vpiStmt; while,
+ *   repeat, wait -> vpiCondition, vpiStmt; delay control -> vpiDelay,
+ *   vpiStmt; event control -> vpiCondition, vpiStmt; force/assign stmt ->
+ *   vpiLhs, vpiRhs; release/deassign -> vpiLhs; disable -> vpiScope;
+ *   event stmt -> vpiNamedEvent; task call -> vpiTask; func call ->
+ *   vpiFunction; tf call ->> vpiArgument, sys tf call -> vpiUserSystf
+ *   (NULL for a built-in name); operation ->> vpiOperand; part select ->
+ *   vpiParent, vpiLeftRange, vpiRightRange; net/reg bit -> vpiParent,
+ *   vpiIndex; contrib -> vpiBranch, vpiRhs (+ vpiLhs, indirect);
+ *   accessfunc -> vpiBranch, vpiDiscipline.
+ *
+ * An identifier in an expression IS the object it names (§11.6.18): the
+ * vpiLhs of `a = ...` is the reg a. Every relationship a diagram does not
+ * draw is an error; vpi_get_value() reads a constant, not an operation.
+ * -------------------------------------------------------------------------- */
+#define vpiAlways               1
+#define vpiAssignStmt           2
+#define vpiAssignment           3
+#define vpiBegin                4
+#define vpiCase                 5
+#define vpiCaseItem             6
+#define vpiContAssign           8
+#define vpiDeassign             9
+#define vpiDelayControl        11
+#define vpiDisable             12
+#define vpiEventControl        13
+#define vpiEventStmt           14
+#define vpiFor                 15
+#define vpiForce               16
+#define vpiForever             17
+#define vpiFork                18
+#define vpiFuncCall            19
+#define vpiFunction            20
+#define vpiIf                  22
+#define vpiIfElse              23
+#define vpiInitial             24
+#define vpiIODecl              28
+#define vpiNamedBegin          33
+#define vpiNamedEvent          34
+#define vpiNamedFork           35
+#define vpiNetBit              37
+#define vpiNullStmt            38
+#define vpiOperation           39
+#define vpiPartSelect          42
+#define vpiRegBit              49
+#define vpiRelease             50
+#define vpiRepeat              51
+#define vpiSysFuncCall         56
+#define vpiSysTaskCall         57
+#define vpiTask                59
+#define vpiTaskCall            60
+#define vpiWait                69
+#define vpiWhile               70
+#define vpiGate                21   /* §11.6.13 a gate primitive */
+#define vpiPrimTerm            46   /* §11.6.13 a primitive's terminal */
+#define vpiTableEntry          58   /* §11.6.14 a UDP table entry */
+#define vpiUdp                 65   /* §11.6.13 a UDP instance */
+#define vpiUdpDefn             66   /* §11.6.14; vpi_iterate(vpiUdpDefn, NULL) */
+#define vpiPrimitive          103   /* module ->> primitive; term -> primitive */
+#define vpiPrimType            33   /* int: §11.6.13/§11.6.14, one of below */
+#define vpiTermIndex           30   /* int: §11.6.13, 0 for the output */
+#define vpiAndPrim              1
+#define vpiNandPrim             2
+#define vpiNorPrim              3
+#define vpiOrPrim               4
+#define vpiXorPrim              5
+#define vpiXnorPrim             6
+#define vpiBufPrim              7
+#define vpiNotPrim              8
+#define vpiBufif0Prim           9
+#define vpiBufif1Prim          10
+#define vpiNotif0Prim          11
+#define vpiNotif1Prim          12
+#define vpiSeqPrim             27
+#define vpiCombPrim            28
+#define vpiAnalog             733   /* §11.6.21 the analog process */
+#define vpiContrib            734   /* §11.6.20 a contribution */
+#define vpiDirect             735   /* bool: §11.6.20, `<+` rather than indirect */
+#define vpiAccessFunc         736   /* §11.6.19 an access function */
+
+#define vpiCondition           71
+#define vpiDelay               72
+#define vpiElseStmt            73
+#define vpiForIncStmt          74
+#define vpiForInitStmt         75
+#define vpiLhs                 77
+#define vpiLeftRange           79
+#define vpiRhs                 82
+#define vpiRightRange          83
+#define vpiOperand             97
+#define vpiProcess             99
+#define vpiExpr               102
+#define vpiStmt               104
+
+#define vpiOpType              39   /* int: §11.6.19, one of the values below */
+#define vpiBlocking            41   /* bool: §11.6.22 */
+#define vpiCaseType            42   /* int: §11.6.23 */
+#define vpiCaseExact            1
+#define vpiCaseX                2
+#define vpiCaseZ                3
+
+#define vpiMinusOp              1
+#define vpiPlusOp               2
+#define vpiNotOp                3
+#define vpiBitNegOp             4
+#define vpiUnaryAndOp           5
+#define vpiUnaryNandOp          6
+#define vpiUnaryOrOp            7
+#define vpiUnaryNorOp           8
+#define vpiUnaryXorOp           9
+#define vpiUnaryXNorOp         10
+#define vpiSubOp               11
+#define vpiDivOp               12
+#define vpiModOp               13
+#define vpiEqOp                14
+#define vpiNeqOp               15
+#define vpiCaseEqOp            16
+#define vpiCaseNeqOp           17
+#define vpiGtOp                18
+#define vpiGeOp                19
+#define vpiLtOp                20
+#define vpiLeOp                21
+#define vpiLShiftOp            22
+#define vpiRShiftOp            23
+#define vpiAddOp               24
+#define vpiMultOp              25
+#define vpiLogAndOp            26
+#define vpiLogOrOp             27
+#define vpiBitAndOp            28
+#define vpiBitOrOp             29
+#define vpiBitXorOp            30
+#define vpiBitXNorOp           31
+#define vpiConditionOp         32
+#define vpiConcatOp            33
+#define vpiMultiConcatOp       34
+#define vpiEventOrOp           35
+#define vpiPosedgeOp           39
+#define vpiNegedgeOp           40
+#define vpiArithLShiftOp       41
+#define vpiArithRShiftOp       42
+#define vpiPowerOp             43
+
+/* §12.11 Figure 12-4, with Annex G's PLI_INT32 flags. vpi_get_delays() reads
+ * a primitive (2 or 3 delays), a continuous assignment (1-3: rise, fall,
+ * turn-off, IEEE 1364 §7.14 deriving the ones not written) and a delay
+ * control (1). */
+typedef struct t_vpi_delay {
+  struct t_vpi_time *da;        /* user-allocated, Table 12-3's size */
+  PLI_INT32  no_of_delays;
+  PLI_INT32  time_type;         /* vpiScaledRealTime, vpiSimTime */
+  PLI_INT32  mtm_flag;
+  PLI_INT32  append_flag;
+  PLI_INT32  pulsere_flag;
+} s_vpi_delay, *p_vpi_delay;
+
+/* --------------------------------------------------------------------------
  * Relationships — the `type` argument of vpi_handle()/vpi_iterate() when what
  * is being traversed is an edge of a §11.6 diagram rather than an object class.
  * -------------------------------------------------------------------------- */
@@ -364,6 +567,18 @@ extern PLI_INT32  vpi_release_handle(vpiHandle obj);
 /* §12.2 the previous call's error, or FALSE. Pass NULL to test only. */
 extern PLI_INT32  vpi_chk_error(p_vpi_error_info error_info_p);
 
+/* §12.17 Figure 12-12. argc/argv are the product's own invocation (the
+ * host's `main`), product is "VerA"; the strings are VerA's, not the
+ * application's to free or modify. TRUE on success, FALSE for a NULL
+ * vlog_info_p. */
+typedef struct t_vpi_vlog_info {
+  PLI_INT32   argc;
+  PLI_BYTE8 **argv;
+  PLI_BYTE8  *product;
+  PLI_BYTE8  *version;
+} s_vpi_vlog_info, *p_vpi_vlog_info;
+extern PLI_INT32  vpi_get_vlog_info(p_vpi_vlog_info vlog_info_p);
+
 /* §12.24–§12.28 printing and multichannel descriptors. Channel N is bit N-1
  * of an mcd; channels 1 (stdout), 2 (stderr) and 3 (the product log) are
  * predefined and cannot be closed. VerA keeps no product log, so channel 3
@@ -390,6 +605,33 @@ extern vpiHandle  vpi_put_value(vpiHandle object, p_vpi_value value_p,
  * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
  * is in the object's time unit, or in ticks when obj is NULL. */
 extern void       vpi_get_time(vpiHandle obj, p_vpi_time time_p);
+/* §12.10 Figure 12-3. The two unions are separate storage: §12.10 says "the
+ * value for real and imaginary unions", so a complex small-signal value
+ * arrives whole. Table 12-2 spells the extra format "vpExpStrVal" in its
+ * Format column and "vpiExpStrVal" in the prose; the `vpi` spelling is taken.
+ * VerA's number. */
+#define vpiExpStrVal          710
+typedef struct t_vpi_analog_value {
+  PLI_INT32 format;             /* vpi[RealVal,ExpStrVal,DecStrVal,StringVal] */
+  union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } real;
+  union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } imaginary;
+} s_vpi_analog_value, *p_vpi_analog_value;
+/* §12.10 the value of a vpiFlow or vpiPotential quantity (§11.6.7). Anything
+ * else is refused. A quantity's value belongs to an analysis, which this
+ * process does not run: that is refused too, with its own error code. */
+extern void       vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p);
+/* §12.18 real properties: the analysis's, asked of NULL. "available to analog
+ * tasks and functions only" — outside an analog systf's callback the answer
+ * is vpiUndefined with vpiError; inside one this process has no analysis to
+ * report either, so it is the same. VerA's numbers. */
+#define vpiStartTime          742
+#define vpiEndTime            743
+#define vpiTransientMaxStep   744
+#define vpiStartFrequency     745
+#define vpiEndFrequency       746
+extern double     vpi_get_real(PLI_INT32 prop, vpiHandle obj);
+/* §12.11 the delays of a primitive, continuous assignment or delay control. */
+extern void       vpi_get_delays(vpiHandle obj, p_vpi_delay delay_p);
 /* --------------------------------------------------------------------------
  * §12.32/§12.33 user system tasks and functions.
  *

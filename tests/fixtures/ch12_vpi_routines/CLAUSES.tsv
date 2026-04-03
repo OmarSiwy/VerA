@@ -1,0 +1,5 @@
+# Clauses of LRM Clause 12 (docs/ch12-vpi-routines.html) classified rather
+# than given a rejection fixture, each with the text that makes it so.
+#
+# clause	kind	evidence
+12.33.2	no-prohibition	"A means of initializing system task/function callbacks and performing any other desired task just after the simulator is invoked shall be provided by placing routines in a NULL-terminated static array, vlog_startup_routines ... (Callbacks can also be registered or removed at any time during an application routine, not just at startup time)." — it grants a mechanism and states no invalid input to refuse. Positive: tests/fixtures/ch11_vpi/p04_05_vlog_info.c (runs from the table, in vpi_runs) and every other vpi_runs application.

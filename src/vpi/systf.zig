@@ -11,21 +11,25 @@
 //! analog" — and hands back a vpiUserSystf handle whose registration the info
 //! routines read back and `vpi_iterate(vpiUserSystf, NULL)` walks.
 //!
-//! WHAT IS NOT, and why, stated once: the compiletf/sizetf/derivtf/calltf
-//! INVOCATIONS. They happen at a call site of the registered name, and
+//! THE BUILD-TIME CALLBACKS run: at the end of the build (`buildCalls`,
+//! from cbEndOfCompile's dispatch) every call site of a registered name in
+//! the object model gets its compiletf, sizetf and derivtf, with that call
+//! as §11.6.16 NOTE 1's `vpi_handle(vpiSysTfCall, NULL)`.
+//!
+//! WHAT IS NOT, and why, stated once: CALLTF, the per-evaluation callback.
 //!   - the digital engine refuses a user `$name` call at elaboration (it has
 //!     no user-systf call form), so no digital call site ever exists; and
 //!   - an analog call site is evaluated inside a compiled device, which a
 //!     host binds through `contract.SystfHost` in its own process — not this
 //!     one.
-//! So there is never an active call: `vpi_handle(vpiSysTfCall, NULL)` is NULL
-//! (the ordinary "no such object" answer, not an error), and
-//! `vpi_handle_multi(vpiDerivative, …)` has no argument handles it could be
-//! given. Both are real answers for the process as it is.
+//! So outside the build there is no active call, and
+//! `vpi_handle_multi(vpiDerivative, …)` — whose handles "can be retrieved"
+//! during the call_tf phase (§12.32.2) — has none to give.
 
 const std = @import("std");
 const root = @import("root.zig");
 const callback = @import("callback.zig");
+const code = @import("code.zig");
 
 const vpiHandle = root.vpiHandle;
 
@@ -78,7 +82,18 @@ pub const AnalogSystfData = extern struct {
     user_data: [*c]u8,
 };
 
-const Domain = enum { digital, analog };
+pub const Domain = enum { digital, analog };
+
+/// §11.6.16's call properties. Annex G numbers vpiSysFuncType as vpiFuncType.
+pub const vpiUserDefn: c_int = 45;
+pub const vpiSysFuncType: c_int = 44;
+
+/// The registration of `name` in `domain`, if one was made: §11.6.16 NOTE 3's
+/// "corresponding systf object" of a call to a user-defined name.
+pub fn find(name: []const u8, domain: Domain) ?*Systf {
+    for (regs.items) |s| if (s.domain == domain and std.mem.eql(u8, s.name, name)) return s;
+    return null;
+}
 
 pub const Systf = struct {
     domain: Domain,
@@ -99,7 +114,51 @@ pub fn asSystf(h: vpiHandle) ?*Systf {
     return live.get(@intFromPtr(p));
 }
 
+/// The call site whose compiletf, sizetf or derivtf is running — §11.6.16
+/// NOTE 1's `vpi_handle(vpiSysTfCall, NULL)` — as an object index into the
+/// open design. Null outside one.
+pub var active: ?u32 = null;
+
+/// §12.32.1 / §12.33.1: "Callbacks to the applications pointed to by the
+/// compiletf and sizetf fields shall occur when the simulation data
+/// structure is compiled or built", and §12.32.2's derivtf "can be called
+/// during the build process (similar to sizetf)". A host calls this once,
+/// after the startup routines have registered what they will and before
+/// cbEndOfCompile: for each call site of a registered name, in source order,
+/// compiletf, then (a digital vpiSizedFunc only, §12.33.1) sizetf, then
+/// derivtf — each with the registration's user_data (§12.32.1 "shall be
+/// passed back to the compiletf, sizetf, derivtf, and calltf applications").
+///
+/// Only the analog model has call sites to visit: the digital engine
+/// refuses a user `$name` call at elaboration. calltf is NOT called here:
+/// it runs "each time the system task or function is invoked during
+/// simulation execution", and this process runs no analysis.
+pub fn buildCalls() void {
+    const d = &(root.design orelse return);
+    for (d.objects, 0..) |o, i| {
+        if (o.kind != .code or (o.vtype != code.vpiSysTaskCall and o.vtype != code.vpiSysFuncCall)) continue;
+        const reg = find(o.name, if (o.in_analog) .analog else .digital) orelse continue;
+        active = @intCast(i);
+        defer active = null;
+        switch (reg.domain) {
+            .digital => {
+                const ud = reg.digital.user_data;
+                if (reg.digital.compiletf) |f| _ = f(ud);
+                if (reg.digital.type == vpiSysFunc and reg.digital.sysfunctype == vpiSizedFunc) if (reg.digital.sizetf) |f| {
+                    _ = f(ud);
+                };
+            },
+            .analog => {
+                var cb: callback.CbData = .{ .reason = 0, .cb_rtn = null, .obj = @ptrCast(&d.objects[i]), .time = null, .value = null, .index = 0, .user_data = reg.analog.user_data };
+                if (reg.analog.compiletf) |f| _ = f(&cb);
+                if (reg.analog.derivtf) |f| _ = f(&cb);
+            },
+        }
+    }
+}
+
 pub fn reset() void {
+    active = null;
     for (regs.items) |s| {
         gpa.free(s.name);
         gpa.destroy(s);
