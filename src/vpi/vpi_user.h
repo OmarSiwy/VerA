@@ -605,6 +605,21 @@ extern vpiHandle  vpi_put_value(vpiHandle object, p_vpi_value value_p,
  * time. vpiSimTime is engine ticks (the global precision); vpiScaledRealTime
  * is in the object's time unit, or in ticks when obj is NULL. */
 extern void       vpi_get_time(vpiHandle obj, p_vpi_time time_p);
+/* §12.10 Figure 12-3. The two unions are separate storage: §12.10 says "the
+ * value for real and imaginary unions", so a complex small-signal value
+ * arrives whole. Table 12-2 spells the extra format "vpExpStrVal" in its
+ * Format column and "vpiExpStrVal" in the prose; the `vpi` spelling is taken.
+ * VerA's number. */
+#define vpiExpStrVal          710
+typedef struct t_vpi_analog_value {
+  PLI_INT32 format;             /* vpi[RealVal,ExpStrVal,DecStrVal,StringVal] */
+  union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } real;
+  union { PLI_BYTE8 *str; double real; PLI_BYTE8 *misc; } imaginary;
+} s_vpi_analog_value, *p_vpi_analog_value;
+/* §12.10 the value of a vpiFlow or vpiPotential quantity (§11.6.7). Anything
+ * else is refused. A quantity's value belongs to an analysis, which this
+ * process does not run: that is refused too, with its own error code. */
+extern void       vpi_get_analog_value(vpiHandle obj, p_vpi_analog_value value_p);
 /* §12.18 real properties: the analysis's, asked of NULL. "available to analog
  * tasks and functions only" — outside an analog systf's callback the answer
  * is vpiUndefined with vpiError; inside one this process has no analysis to

@@ -2093,6 +2093,39 @@ fn codeProp(o: *const Obj, prop: c_int) c_int {
 }
 
 // ---------------------------------------------------------------------------
+// §12.10 vpi_get_analog_value
+// ---------------------------------------------------------------------------
+
+/// Figure 12-3, laid out for C.
+pub const AnalogValue = extern struct {
+    format: c_int,
+    real: extern union { str: [*c]u8, real: f64, misc: [*c]u8 },
+    imaginary: extern union { str: [*c]u8, real: f64, misc: [*c]u8 },
+};
+
+/// "shall retrieve the simulation value of VPI analog vpiFlow or vpiPotential
+/// (node or branch) quantity objects. The value shall be placed in an
+/// s_vpi_analog_value structure, which has been allocated by the user."
+///
+/// So an object that is not a quantity has no analog value, and a NULL
+/// structure is not one the user allocated: both refused. A quantity's value
+/// is a solution's, and this process solves nothing — refused as well, with
+/// a code (NOANALYSIS) that says so instead of a number that would be made up.
+pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void {
+    _ = enter("vpi_get_analog_value") orelse return;
+    const o = object("vpi_get_analog_value", obj) orelse return;
+    if (o.kind != .quantity) {
+        fail("NOTQUANTITY", "vpi_get_analog_value: a {s} is not a vpiFlow or vpiPotential quantity", .{@tagName(o.kind)});
+        return;
+    }
+    _ = value_p orelse {
+        fail("BADVALUE", "vpi_get_analog_value: value_p is NULL", .{});
+        return;
+    };
+    fail("NOANALYSIS", "vpi_get_analog_value: no analysis has solved this quantity in this process", .{});
+}
+
+// ---------------------------------------------------------------------------
 // §12.18 vpi_get_real
 // ---------------------------------------------------------------------------
 
