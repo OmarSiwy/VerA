@@ -22,6 +22,11 @@
 // implemented, and the parent's own probe never executes at all — a permanent
 // XFAIL whose marker could never be deleted.
 //
+// `A.4` (Module instantiation and generate construct) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same positive side.
+//
+//! lrm A.4
 //! bias V(p) = 1.5
 //! bias V(n) = 0.5
 //! lrm A.4.1

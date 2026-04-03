@@ -9,6 +9,11 @@
 //
 // VerA reports E0210 "expected ')': found `,`" at the fourth value.
 //
+// `A.2.2` (Declaration data types) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same reject side.
+//
+//! lrm A.2.2
 //! lrm A.2.2.3
 //! reject E0210
 module annex_a_net_four_delays(o, a);

@@ -11,6 +11,11 @@
 //
 // VerA reports E0208 "expected an identifier: found `reg`".
 //
+// `A.2.1` (Declaration types) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same reject side.
+//
+//! lrm A.2.1
 //! lrm A.2.1.1
 //! reject E0208
 `include "disciplines.vams"

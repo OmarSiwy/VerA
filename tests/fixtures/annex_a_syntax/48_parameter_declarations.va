@@ -42,6 +42,11 @@
 // `amplification` names the SAME storage as `gain` (§3.4.7), so 3 is the only
 // answer that does not prove the alias is a copy.
 //
+// `A.2.1` (Declaration types) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same positive side.
+//
+//! lrm A.2.1
 //! lrm A.2.1.1
 //! lrm 3.4.6
 //! lrm 3.4.7
