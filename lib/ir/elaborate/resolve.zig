@@ -3,7 +3,7 @@
 //! In: the flattened nets with their declared and inherited disciplines. Out: one discipline
 //! per net, or a diagnostic for an incompatible connection.
 //!
-//! LRM clauses this file's code cites: §3.6.2.2, §3.10, §3.11, §7.2.2, §7.4, §7.4.4.1, §7.6, §7.7, §7.7.1, §7.7.2, §7.7.2.1, §7.7.3.
+//! LRM clauses this file's code cites: §3.6.2.2, §3.10, §3.11, §7.2.2, §7.4, §7.4.4.1, §7.6, §7.7, §7.7.1, §7.7.2, §7.7.2.1, §7.7.3, §7.8.
 //!
 //! Cut verbatim from `elaborate.zig`. Functions take `self: *Flatten` and are called
 //! directly, `elab_resolve.f(self, ...)`; `elaborate.zig` aliases only what other modules call.
@@ -12,6 +12,7 @@ const std = @import("std");
 const elaborate = @import("../elaborate.zig");
 const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
+const elab_insert = @import("insert.zig");
 const discipline = @import("../lower/discipline.zig");
 const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
@@ -332,7 +333,7 @@ pub fn matchResolution(self: *Flatten, cands: []const Ast.StrId) Error!?*const A
 /// the block.
 pub fn checkConnectRules(self: *Flatten) Error!void {
     for (self.ctx.file.connectrules) |cr| {
-        for (cr.insertions) |ins| {
+        for (cr.insertions) |*ins| {
             // §7.7.1 "connect connectmodule_identifier": the name must be
             // a §7.6 connect module — an ordinary module bridges nothing.
             const m = elab_names.findModule(self, ins.module) orelse {
@@ -354,9 +355,15 @@ pub fn checkConnectRules(self: *Flatten) Error!void {
                     continue;
                 }
             }
-            // The §7.7.1 overrides are otherwise judged where they are
-            // consumed, `elab_insert.ruleOf`; the §7.7.3 parameter names, as
-            // any instance's, when the inserted bridge is inlined (E0907).
+            // §7.7.1 "the specified disciplines shall be compatible for both
+            // the continuous and discrete disciplines of the given connect
+            // module" (E0915), §7.6 Table 7-2's direction pairs (E0982) and
+            // §7.7.3's parameter names (E0907) — judged here, once, for every
+            // statement: insertion (`elab_insert.plan`) reads the same rule
+            // quietly and only in a module whose ports reach one.
+            if (!m.is_connect) continue;
+            if (try elab_insert.ruleOf(self, ins, true)) |r| try elab_insert.checkDirections(self, r);
+            _ = try elab_insert.paramsDeclared(self, ins, m, true);
         }
         for (cr.resolutions) |r| {
             // §7.7.2 every identifier in a resolution statement is a

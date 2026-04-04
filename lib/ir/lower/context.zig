@@ -3,7 +3,7 @@
 //! In: the module AST. Out: per-net and per-statement access/context marks on `Lower`,
 //! and a diagnostic for every analog construct used in a discrete context.
 //!
-//! LRM clauses this file's code cites: §3.2.2, §4.5.15, §4.7.1, §4.7.3, §5.2.1, §7.2.2, §7.3, §7.3.1, §7.3.7, §8.5.
+//! LRM clauses this file's code cites: §3.2.2, §4.4, §4.5.15, §4.7.1, §4.7.3, §5.2.1, §5.10.3, §7.2.2, §7.3, §7.3.1, §7.3.3, §7.3.5, §7.3.7, §8.5.
 //!
 //! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
 //! directly, `lower_context.f(self, ...)`; `lower.zig` aliases only what other modules call.
@@ -14,6 +14,7 @@ const lower_constfold = @import("constfold.zig");
 const lower_param = @import("param.zig");
 const lower_discipline = @import("discipline.zig");
 const lower_event = @import("event.zig");
+const lower_contrib = @import("contrib.zig");
 const Ast = @import("frontend").Ast;
 const Oom = Lower.Oom;
 const init = Lower.init;
@@ -484,6 +485,47 @@ fn discreteNet(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: As
     return if (lower_discipline.isContinuous(file, n.discipline)) null else e;
 }
 
+/// Is `name` a NET of `module` — a declared net, or a port no variable
+/// declaration re-declares (an undeclared port is an implicit wire)? A name
+/// declared as both a discipline net and a `reg` (`ddiscrete cm; reg cm;`,
+/// §7.6's connect modules) is the variable. Undeclared names are §6.8's.
+fn isNetName(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
+    for (module.vars) |v| if (v.name == name) return false;
+    if (netOf(module, name) != null) return true;
+    for (module.ports) |p| if (p.name == name) return true;
+    return false;
+}
+
+/// `isNetName` by spelling, for the tables keyed by string.
+pub fn isNetSpelling(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, name: []const u8) bool {
+    for (module.vars) |v| if (std.mem.eql(u8, file.str(v.name), name)) return false;
+    for (module.nets) |n| if (std.mem.eql(u8, file.str(n.name), name)) return true;
+    for (module.ports) |p| if (std.mem.eql(u8, file.str(p.name), name)) return true;
+    return false;
+}
+
+/// A.3.3 `inout_terminal ::= net_lvalue` (both terminals of a pass switch)
+/// and `output_terminal ::= net_lvalue` (the first terminal of a MOS/CMOS
+/// switch): §8.5.3.5 resolves a switch as a driver of the nets it joins, so
+/// a variable in one of those slots is E0483.
+pub fn checkSwitchTerminals(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    const ex = &self.file.exprs;
+    for (module.switches) |sw| {
+        const nets: usize = switch (sw.kind) {
+            .tran, .rtran, .tranif0, .tranif1, .rtranif0, .rtranif1 => 2,
+            .cmos, .rcmos, .nmos, .pmos, .rnmos, .rpmos => 1,
+        };
+        for (sw.terms[0..@min(nets, sw.terms.len)]) |t| {
+            const base = self.file.lvalueBase(t);
+            if (base == .none or ex.tag(base) != .ident) continue;
+            for (module.vars) |v| if (v.name == ex.strOf(base)) {
+                try self.err(ex.mainTok(base), .E0483, "`{s}` is a variable, on a terminal of `{t}`", .{ self.file.str(v.name), sw.kind });
+                break;
+            };
+        }
+    }
+}
+
 /// The net `name` declares in `module`, of any discipline, or null (a
 /// variable, or undeclared). Its domain is the caller's question.
 fn netOf(module: *const Ast.ModuleDecl, name: Ast.StrId) ?*const Ast.NetDecl {
@@ -747,6 +789,20 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
             try scanContext(w.l, s, discrete, w.context, w.ctx);
         }
     };
+    // A.6.2: a blocking, nonblocking or procedural `assign`/`deassign` write
+    // is to a `variable_lvalue`; only `force`/`release` also take a net.
+    if (discrete and self.file.stmt(id) == .assign) {
+        const a = self.file.stmt(id).assign;
+        const t = self.file.lvalueBase(a.target);
+        if (a.continuous != .force and a.continuous != .release and t != .none) if (self.out.module) |m| {
+            if (isNetName(m, ex.strOf(t)))
+                try self.err(ex.mainTok(t), .E0482, "`{s}` is a net, and {s}", .{ self.file.str(ex.strOf(t)), switch (a.continuous) {
+                    .assign => "a procedural `assign` (§8.5.3.2) writes a variable",
+                    .deassign => "`deassign` (§8.5.3.2) releases a variable",
+                    .none, .force, .release => if (a.nonblocking) "a nonblocking assignment (§8.5.3.4) updates a variable" else "a blocking assignment (§8.5.3.3) updates a variable",
+                } });
+        };
+    }
     // §9.2's digital column: a task whose "Supported in digital context" cell
     // is No (§9.7: "$fatal, $error, $warning" are "in the analog context
     // only"). Named by the table's own words, not by what VerA can execute.
@@ -821,6 +877,29 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
             .port_access => try self.err(ex.mainTok(e), .E0437, "a port flow probe in {s} is §7.3.6.3's promoted-time read, and the kernel reads only V(net) and V(net, net)", .{ctx.where}),
             else => {}, // else: every other tag is executable or judged elsewhere
         };
+        // §7.3.5 "The arguments to these events are in the continuous
+        // context": a monitored event in a digital event control is the
+        // §5.10.3 function itself, so its argument rules hold here as they
+        // do in an analog block (E0517), and a call inside its arguments is
+        // a call FROM the continuous context — §7.3.7's first sentence
+        // (E0436) applies to a digital function there.
+        if (tag == .event_function) {
+            try lower_event.checkEventArgBounds(self, e, self.file.str(ex.strOf(e)));
+            for (ex.args(e)) |a| try digitalCallsIn(self, a);
+        }
+        // §7.3.3 "All probes which are legal in a continuous context of a
+        // module are also legal in the discrete context" — and the probe is
+        // one "using access functions": the access function has to belong to
+        // the net's discipline in either context (§4.4, E0501/E0337). Only a
+        // declared net that is an analog node is judged; a digital-owned
+        // name never became one (`declareDiscreteInputs`).
+        if (tag == .branch_access) if (self.access_kind.get(self.file.str(ex.strOf(e)))) |access| {
+            for ([_]Ast.ExprId{ ex.lhs(e), ex.rhs(e) }) |arg| {
+                if (arg == .none or ex.tag(arg) != .ident) continue;
+                const node = self.node_voltages.get(self.file.str(ex.strOf(arg))) orelse continue;
+                try lower_contrib.checkAccessMatch(self, e, self.file.str(ex.strOf(e)), access, node);
+            }
+        };
         if (tag == .call) {
             const name = self.file.str(ex.strOf(e));
             if (ctx.funcs.contains(name)) {
@@ -845,4 +924,24 @@ pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_
     }
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| try scanContextExpr(self, c, discrete, is_initial, ctx);
+}
+
+/// §7.3.7 "Digital functions cannot be called from within the analog
+/// context", for an expression the LRM puts in the continuous context while
+/// it is written inside a digital process: the arguments of a monitored
+/// event (§7.3.5). The same code and wording as `lower_func.lowerUserCall`'s
+/// call from an analog block.
+fn digitalCallsIn(self: *Lower, e: Ast.ExprId) Oom!void {
+    if (e == .none) return;
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .call) if (self.out.module) |m| for (m.functions) |*fd| {
+        if (fd.name != ex.strOf(e) or fd.is_analog) continue;
+        var b = self.errWith(ex.mainTok(e), .E0436);
+        b.msg("`{s}`, in the arguments of an analog event, which §7.3.5 puts in the continuous context", .{self.file.str(fd.name)});
+        b.label(self.tokenSpan(fd.main_tok), "`{s}` is declared here, without `analog`", .{self.file.str(fd.name)});
+        try b.emit();
+        break;
+    };
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| try digitalCallsIn(self, c);
 }
