@@ -209,6 +209,9 @@ pub const Code = enum(u16) {
     /// A.1.4: text that begins no `module_item` — a syntax error, where E0205
     /// is a derivable item VerA does not implement.
     E0240,
+    /// A.6.8 `loop_statement ::= forever statement`: a `forever` whose body
+    /// is a null statement. `statement`, not `statement_or_null`.
+    E0296,
     /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
     /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
     /// the parser is the only stage that ever sees a gate instantiation.
@@ -1918,6 +1921,27 @@ fn infoOf(c: Code) Info {
             \\module (both are descriptions of the file, A.1.2), text left over
             \\from a comment that was closed early, a statement written outside
             \\the analog block, or a keyword in upper case.
+            ,
+        },
+        .E0296 => .{
+            .title = "a forever loop needs a statement, not a null statement",
+            .lrm = "A.6.8",
+            .explain =
+            \\A.6.8 gives the digital loop exactly one body:
+            \\
+            \\    loop_statement ::= forever statement | ...
+            \\
+            \\and `statement` has no null alternative — the null lives in
+            \\`statement_or_null`, which A.6.8 does not name. So `forever ;` is
+            \\not derivable. It would also never end: a forever whose body
+            \\cannot suspend runs the process at one simulation time for ever.
+            \\
+            \\Give it a body with a timing control, e.g.
+            \\
+            \\    initial forever #5 clk = ~clk;
+            \\
+            \\The analog `forever` is a different error (E0209): annex G.2.1
+            \\retired it, and A.6.8's `analog_loop_statement` has no forever arm.
             ,
         },
         .E0234 => .{

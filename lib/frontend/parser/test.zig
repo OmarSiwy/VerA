@@ -666,6 +666,9 @@ test "A.6.8: `forever` is a digital loop_statement and not an analog_loop_statem
     // The analog forever is the one G.2.1 retired: still "expected an expression".
     const ana = try parseForTest(arena, "module m(p); inout p; electrical p; analog forever I(p) <+ V(p); endmodule");
     try std.testing.expectEqual(diag.Code.E0209, ana.code(0));
+    // `statement`, not `statement_or_null`: a null body is E0296.
+    const null_body = try parseForTest(arena, "module m(p); inout p; electrical p; initial forever ; analog I(p) <+ V(p); endmodule");
+    try std.testing.expectEqual(diag.Code.E0296, null_body.code(0));
 }
 
 test "A.3.4: a switch instance closed early is refused by its class" {
