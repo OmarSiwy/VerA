@@ -37,6 +37,11 @@
 // here: it needs two literals that differ only in a space, and the embedded-
 // space rule is A.10's, which 36_real_embedded_space_rejected.va owns.
 //
+// `A.9` (General) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same positive side.
+//
+//! lrm A.9
 //! lrm A.9.4
 //! lrm 2.3
 //! bias V(p) = 0.75, V(n) = 0.25

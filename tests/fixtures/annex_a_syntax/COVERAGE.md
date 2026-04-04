@@ -283,29 +283,56 @@ implementation and behavioral tests rather than a subset rejection.
 
 ## What is not covered
 
-Eleven headings have no fixture, and every one of them states no requirement a compiler
-can be held to — ten that carry an id, and the annex's own title line:
+**Superseded 2026-09-24: the parent headings are cited now, and this is what that
+citation does and does not claim.** Eleven headings used to have no fixture — the annex
+title line (`A`), `a-1`, `a-2-1`, `a-2-2`, `a-3`, `a-4`, `a-5`, `a-6`, `a-7`, `a-9` and the
+sub-heading `a-7-5` — and `a-2`/`a-8` were cited on the positive side only. The argument
+kept here until then was that citing a heading from a fixture that reaches its children is
+"a citation bought with nothing behind it". It is re-decided the other way for one reason:
+`--coverage` counts every heading as a clause, and the only honest evidence a heading with
+no production of its own can have is the evidence for its productions. So each heading is
+now cited from exactly the files that exercise one of its children, on the polarity that
+file already has, and each such file says so in a two-to-five-line note above its tags.
+The citation claims nothing beyond the child's; it is not a second obligation met.
 
-**The parent headings (ten).** `a-1` (A.1 Source text), `a-2-1` (A.2.1 Declaration
-types), `a-2-2` (A.2.2 Declaration data types), `a-3` (A.3 Primitive instances), `a-4`
-(A.4 Module instantiation and generate construct), `a-5` (A.5 UDP declaration and
-instantiation), `a-6` (A.6 Behavioral statements), `a-7` (A.7 Specify section) and `a-9`
-(A.9 General) — nine ids — plus the annex's own `<h1>`, which carries no `id` at all.
-Each is the title line above a numbered section of productions; the productions are what a
-fixture can exercise, and every one of them has a fixture. Writing a file to "cover"
-`a-6`, say, would mean citing it from a fixture that
-reaches `a-6-4`, which is a citation bought with nothing behind it — the thing this
-document's own rule forbids.
+| Heading | Positive (runs and asserts) | Reject |
+|---|---|---|
+| `A` (the annex: "The syntax of Verilog-AMS HDL source is derived from the starting symbol source_text") | `01_source_text.va` | `reject_A_1_4_statement_as_module_item.va` (E0240) — a module body no path from `source_text` derives |
+| `a-1` A.1 | `01_source_text.va` | `reject_A_1_4_statement_as_module_item.va` |
+| `a-2` A.2 | `03_declarations.va` | `reject_A_2_3_empty_entry_in_net_list.va` |
+| `a-2-1` A.2.1 | `48_parameter_declarations.va` | `reject_A_2_1_1_parameter_of_reg_type.va` |
+| `a-2-2` A.2.2 | `52_net_and_variable_types.va` | `reject_A_2_2_3_net_with_four_delays.va` |
+| `a-3` A.3 | `56_gate_instantiation_unsupported.va` — grammar only, W0252; behaviour is `digital/d08_*` | `reject_A_3_4_gate_type_fixes_the_terminal_count.va` |
+| `a-4` A.4 | `11_module_instantiation.va` | `reject_A_4_1_instance_without_port_list.va` |
+| `a-5` A.5 | `58_udp_declaration_unsupported.va` — grammar only, W0252; behaviour is `digital/d08_udp_*` | `reject_A_5_1_udp_without_table.va` |
+| `a-6` A.6 | `05_behavioral_statements.va` | `reject_A_6_6_if_without_parentheses.va` |
+| `a-7` A.7 | `63_specify_block_unsupported.va` — grammar only, W0251; nothing runs timing | `reject_A_7_1_gate_inside_specify.va` |
+| `a-7-5` A.7.5 | `64_timing_checks_unsupported.va` — grammar only, W0251 | `reject_A_7_5_2_numeric_notifier.va` |
+| `a-8` A.8 | `07_expressions.va` | `reject_A_8_8_string_spans_lines.va` (E0138) |
+| `a-9` A.9 | `68_white_space.va` | `reject_A_9_4_vertical_tab_is_not_white_space.va` (E0208) |
 
-**The sub-headings (one).** `a-7-5` (A.7.5 System timing checks) is a bare `<h4>` between
-`a-7-4` and `a-7-5-1`, the same case one level down; `64_timing_checks_unsupported.va`
-cites its three children.
+Four heading rows are marked "grammar only" because the construct under them is accepted
+and reaches no analog device (W0251/W0252): the file proves the text derives and the module
+around it runs, not the construct's behaviour. The discrete engine runs gates and UDPs in
+`tests/fixtures/digital/`; nothing runs specify-block timing.
 
-Three more ids carry no production either and are cited anyway, as context, by fixtures
-that reach the construct through a subsection: `a-2` (cited by `03_declarations.va`),
-`a-8` (`07_expressions.va`) and `a-10` (`35`, `36`). They are counted as covered because
-those citations are honest — a file that exercises `a-2-3` does exercise A.2 — but the
-distinction is worth keeping: being cited is not the same as being pinned.
+**New leaf rejects written with the headings (2026-09-24).** A.1.4, A.3.4, A.8.8 and A.9.4
+were cited on the positive side only:
+
+- `reject_A_1_4_statement_as_module_item.va` — `x = 1;` at module scope. No arm of
+  `module_or_generate_item` begins with a statement. E0240 "not a module item".
+- `reject_A_3_4_gate_type_fixes_the_terminal_count.va` — `bufif0` with two terminals,
+  `cmos` with three, `tranif1` with two. Each count is legal for SOME A.3.4 class (buf,
+  nmos, tran), so the refusal depends on the classification. The two switch arms used to
+  reach a bare "unexpected `)`"; `parseSwitch` now names the class (E0209, `SwitchArm.shape`).
+- `reject_A_8_8_string_spans_lines.va` — §2.7 "contained on a single line". E0138.
+- `reject_A_9_4_vertical_tab_is_not_white_space.va` — a raw 0x0B between `integer` and its
+  name. Neither A.9.4 nor §2.3 lists it. E0208 "found invalid token".
+
+**Open, recorded rather than fixed.** A.8.8's `Any_ASCII_Characters` excludes bytes above
+0x7F, and VerA accepts a UTF-8 byte inside a string literal without comment. Refusing it
+would be the letter of the production and would also refuse `"°C"`-style unit strings in
+real models; that trade is a policy decision this row does not make.
 
 **Every other row in this table is backed by a file**, here or elsewhere in the suite: the
 one row this directory writes nothing for is `a-6-1`, and `annex_c_analog_subset/23_

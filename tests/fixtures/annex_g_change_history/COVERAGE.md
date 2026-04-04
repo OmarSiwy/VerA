@@ -223,3 +223,25 @@ explicit `//! analysis dc` (`15`, because the null event body is only observable
 the event does not fire). The other eighteen are the default operating point, and
 thirteen of those are `//! reject` fixtures that never reach a solve at all — leaving
 five that actually run and check a number: `02`, `03`, `05`, `14` and `22`.
+
+
+## 2026-09-24: the positive side of each G.2 removal
+
+G.2.1, G.2.3 and G.2.4 were cited by their refusals only. Annex G is informative (so
+nothing here is an obligation of G's), but each removal was of ONE production, and the
+construct that took its place is current normative language. A fixture per removal now
+runs that replacement, so a tool that over-applied the removal fails:
+
+- `24_forever_is_a_digital_loop.va` — G.2.1 removed the ANALOG forever; A.6.8's digital
+  `loop_statement ::= forever statement` stays. A mixed module's `initial` block counts
+  1 ns ticks forever and the analog block reads floor(t/1ns) between ticks. VerA refused
+  this before (E0209 in the discrete grammar too — `forever` parsed nowhere); the parser
+  now reads it as `while (1)` in the discrete context only, and `04` still refuses the
+  analog one.
+- `25_generate_replaced_by_analog_for.va` — Figure G-1's own ADC, rewritten with §5.9.3's
+  genvar `for`, which "can contain analog operators" as the old generate could: 0.7 of full
+  scale converts to 1011 and each `transition` output reads its bit.
+- `26_analog_function_keyword.va` — G.2.4's directive let a function omit `analog`; §4.7.1
+  now requires the keywords `analog function`. Typed and untyped analog functions run.
+
+`G` and `G.2` are classified in `CLAUSES.tsv` (non-normative, with the quotes).

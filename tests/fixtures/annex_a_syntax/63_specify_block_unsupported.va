@@ -61,6 +61,13 @@
 // one for the full-AMS target and not an analog-subset question. Annex C.16 does
 // not exempt it either: `specify` is not among the nine keywords C.16 lists.
 //
+// `A.7` (Specify section) is cited as well: it is the heading over the
+// subclauses this file exercises and states no production of its own. What
+// this file proves for it is the GRAMMAR — the specify block parses and the file runs its
+// analog assertion — not a behaviour: the specify block reaches no device (W0251). No fixture runs its
+// timing behaviour; this is grammar coverage only.
+//
+//! lrm A.7
 //! lrm A.7.1
 //! lrm A.7.2
 //! lrm A.7.3

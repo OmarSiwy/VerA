@@ -11,6 +11,11 @@
 // VerA reports E0207 "unexpected token: found V"; the E0209 at `else` is the
 // parser recovering.
 //
+// `A.6` (Behavioral statements) is cited as well: it is the heading over the
+// subclause this file exercises and states no production of its own, so this
+// file is evidence for it on the same reject side.
+//
+//! lrm A.6
 //! lrm A.6.6
 //! reject E0207
 `include "disciplines.vams"

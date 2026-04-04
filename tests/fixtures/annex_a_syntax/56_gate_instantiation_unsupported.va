@@ -56,6 +56,13 @@
 // W0250's arrangement for A.4.1's pass switches and the reason this one is
 // shaped like it.
 //
+// `A.3` (Primitive instances) is cited as well: it is the heading over the
+// subclauses this file exercises and states no production of its own. What
+// this file proves for it is the GRAMMAR — the gate parses and the file runs its
+// analog assertion — not a behaviour: the gate reaches no device (W0252). The behaviour is
+// run under the discrete engine by tests/fixtures/digital/d08_gates_ninput.v.
+//
+//! lrm A.3
 //! lrm A.3.1
 //! lrm A.3.3
 //! lrm A.3.4
