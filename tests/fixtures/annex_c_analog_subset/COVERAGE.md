@@ -142,3 +142,55 @@ recorded in that file's header and is not tested, because this compiler does not
 implement the subset. The C.17 "silently ignore" half is likewise unpinned: the file it
 used to point at, `annex_d_standard_definitions/discrete_disciplines.va`, is a
 `//! reject E0501` fixture and pins §3.6.3 instead.
+
+
+## 2026-09-24: the inclusion clauses taken two ways, and `CLAUSES.tsv`
+
+Several rows above said "none, and none is owed" for C.11, C.12, C.17 and C.18, and C.5/C.6
+had only a positive side. That reading treated an inclusion ("Clause N applies to both")
+as having nothing to test. It has two sides: Clause N's permissions must work in a
+Verilog-A module, and Clause N's prohibitions must still be refused there. Each file below
+is otherwise plain Verilog-A (analog-only, one discipline), so the only rule that can
+decide it is the included clause's. Each names the fixture that pins the same rule from
+its home chapter; these are the same rules under the clause that carries them into the
+subset, not new rules.
+
+| Clause | Positive (runs and asserts) | Reject |
+|---|---|---|
+| C.5 | `10_case_equality_accepted.va`, `17_case_inequality.va` | `33_real_operand_bitwise_rejected.va` — §4.2.1, `|` and `>>` on a real, E0322 |
+| C.6 | `01_analog_only_device.va` | `34_port_access_contribution_rejected.va` — §5.4.3 "shall not be used on the left side of a contribution operator", E0407 |
+| C.11 | `35_analog_context_system_functions.va` — Table 9-7 `$abstime`, Table 9-8 `$rtoi` (truncation, -2.75 → -2), `$itor`, `$realtobits`/`$bitstoreal` round trip | `36_time_in_analog_rejected.va` — Table 9-7 `$time`, analog: No, E0806 |
+| C.12 | `37_compiler_directives.va` — §10.5 `__VAMS_ENABLE__`, §10.4 `define with a formal, `undef | `38_define_vams_macro_text_rejected.va` — §10.4 "macro text shall not begin with __VAMS_", E0139 |
+| C.17 | `39_standard_definitions.va` — D.1 `electrical`/`thermal` access functions, D.2 `P_K_NIST2018`/`P_Q_NIST2018`/`M_PI` | `40_signal_flow_flow_access_rejected.va` — D.1 `voltage` has no flow nature, §4.4, E0501 |
+| C.18 | `41_spice_primitive.va` — Table E.1 `resistor`, `r` bound and I = V/r | `42_spice_parameter_name_rejected.va` — `rsh` is not on the row, §6.3.3, E0907 |
+
+The clauses that cannot be taken two ways are in `CLAUSES.tsv`, each with the LRM sentence
+that decides it: `C` (optional — the subset itself, CLAUSE-AUDIT §5.2), `C.1`, `C.15`,
+`C.19`, `C.20` (non-normative), `C.2` and `C.10` (no-prohibition, with the positive fixtures
+named). C.13 and C.14 are left OPEN there, not classified: they include the VPI clauses,
+which carry `shall`s, and their evidence is an in-process `.c` fixture for analog VPI
+behaviour, which AGENTS.md §7 records does not exist yet.
+
+**CLAUSE-AUDIT §7.3 item 5, checked 2026-09-24.** The item asks to rename the
+`_rejected.va` files here whose constructs are legal AMS. Of the seven §6.3 names, `08`,
+`14` and `23` were already settled by earlier work (`08`/`23` renamed `_accepted`, `14`
+withdrawn to `ch07_mixed_signal/m02_10`). The remaining `_rejected` files were read against
+the LRM, not their titles, and each construct AS WRITTEN is illegal in full Verilog-AMS, so
+none is renamed:
+
+- `06_xz_rejected.va` — `integer = 4'b0x1z;` in an analog block. §7.3.2's `converter`
+  example marks exactly `var1 = 1'bx; // error`.
+- `16`, `30`, `31` — reserved words as identifiers (Annex B, C.16's NOTE).
+- `18_no_discipline_rejected.va` — a net with no discipline read by `V()`; E0337, a
+  §3.6.2.4 rule of Verilog-AMS too.
+- `22_nonblocking_assign_rejected.va` — `<=` inside `analog`; A.6.4's `analog_statement`
+  has no nonblocking assignment. (`<=` in `always` is legal and runs: `ch07_mixed_signal/
+  m02_10`.)
+- `25_digital_procedural_rejected.va` — `fork`/`join`/`wait` inside `analog`; not
+  `analog_statement` alternatives.
+- `27_disable_rejected.va` — a bare `disable` in `analog`; see its header.
+- `21_digital_event_control_rejected.va` is the one that is not clean-cut. Syntax 5-13's
+  `analog_event_expression` does derive `posedge expression`, and §5.10.5 describes
+  digital edges; the operand here is `V(p)`, a continuous signal, and no sentence of §5.10
+  gives an edge of one a meaning. VerA's E0704 reads "posedge/negedge is digital-only". The
+  file is left as it is, and the question is recorded here rather than settled by a rename.
