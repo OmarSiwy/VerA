@@ -28,6 +28,11 @@
 //
 // 2.0 is exact in binary and both operands are, so the tolerance is CHECKX's.
 //
+// §8.4, the parent, is cited too: it opens the mixed-signal cycle with "the
+// semantics of the initialization", and what this fixture asserts — both
+// initial blocks complete before the solve reads them — is that initialization.
+//
+//! lrm 8.4
 //! lrm 8.4.1
 //! lrm 5.2.1
 //! lrm C.7

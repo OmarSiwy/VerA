@@ -295,7 +295,14 @@ pub fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
                     else => .unspecified, // else: no direction keyword
                 };
                 if (a_dir != .unspecified) self.pos += 1;
+                const a_tok = self.pos;
                 const a = try self.expectIdent();
+                // §7.8.3 connect_mode "can be one of two predefined values,
+                // split or merged": a lone word in its slot, with no second
+                // discipline after it, is a mode that is neither — not an
+                // override that lost its comma.
+                if (a_dir == .unspecified and self.peek() == .semicolon)
+                    return self.failAt(a_tok, .E0207, "found {s}: a connect_mode is `merged` or `split`", .{self.found(a_tok)});
                 _ = try self.expect(.comma);
                 const b_dir: Ast.Direction = switch (a_dir) {
                     .unspecified => .unspecified,
