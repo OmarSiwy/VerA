@@ -307,6 +307,18 @@ pub fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
     return if (c == .str) null else c.asReal();
 }
 
+/// §9.18 Table 9-29 "Allowed Values": `$mfactor > 0`. The resolved value is a
+/// PRODUCT down the hierarchy, so one specified factor out of range puts every
+/// value below it out of range. Only a factor that folds over literals is
+/// judged (`constReal`); one over the parent's parameters is the host's to
+/// supply. `true` when refused.
+pub fn checkMfactor(self: *Flatten, tok: u32, e: Ast.ExprId) Error!bool {
+    const v = constReal(self, e) orelse return false;
+    if (v > 0) return false;
+    try self.err(tok, .E0890, "`$mfactor` is {d}, and Table 9-29 allows only $mfactor > 0", .{v});
+    return true;
+}
+
 /// §6.4 the parameter values a paramset instance gives the module.
 ///
 /// Two levels, and the order between them is the whole clause: the INSTANCE
@@ -422,6 +434,7 @@ pub fn paramsetOverrides(
                     });
                     continue;
                 }
+                if (try checkMfactor(self, o.main_tok, o.value)) continue;
                 const v = try elab_clone.cloneExpr(self, o.value);
                 mfactor = if (mfactor == .none) v else try self.ctx.file.exprs.add(self.ctx.arena, .{
                     .tag = .binary,
