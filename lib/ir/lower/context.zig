@@ -751,8 +751,17 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
     // is No (§9.7: "$fatal, $error, $warning" are "in the analog context
     // only"). Named by the table's own words, not by what VerA can execute.
     if (discrete) if (self.file.stmt(id) == .sys_task) {
-        const n = self.file.str(self.file.stmt(id).sys_task.name);
-        if (lower_event.isAnalogOnlySysFunc(n)) try self.err(self.file.stmtTok(id), .E0821, "`{s}` in {s}", .{ n, ctx.where });
+        const st = self.file.stmt(id).sys_task;
+        const n = self.file.str(st.name);
+        if (lower_event.isAnalogOnlySysFunc(n)) try self.err(self.file.stmtTok(id), .E0821, "`{s}` in {s}", .{ n, ctx.where })
+        // §9.4.3's pairing rule — "For each % character (except %m, %% and
+        // %l) that appears in a string, a corresponding expression argument
+        // shall be supplied" — is a property of the format TEXT, so it holds in
+        // the digital context too, where §9.4.7 adds %r to the letters it
+        // counts. Judged here, before the digital kernel would meet the gap at
+        // run time.
+        else if (lower_event.isDisplayTask(n) or lower_event.isFileOutTask(n))
+            try lower_event.checkFormatPairing(self, self.file.stmtTok(id), st.args);
     };
     switch (self.file.stmt(id)) {
         // The target is a write, collected above; only the value is read.
