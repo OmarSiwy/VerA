@@ -91,6 +91,45 @@ var zf_slots: [zf_max]ZFSlot = @splat(.{});
 /// since the fd is 0, so the cause lands here and `$ferror(0, str)` reports it.
 var zf_last_err: i64 = 0;
 
+/// §9.5.1.1: "If a file is opened in a write mode in the first analysis and
+/// reopened in that write mode in following analysis, then content written from
+/// the following analyses shall be appended to the content written during the
+/// previous analyses." So a write-mode open truncates only what THIS analysis
+/// wrote: each path opened "w"/"w+" remembers the analysis that last opened it
+/// and the length the earlier analyses left (`base`). The runner advances
+/// `zf_analysis` at the first point of every analysis after the first
+/// (`zFNewAnalysis`); a host that never calls it runs one analysis, and then
+/// `base` is 0 and "w" is C's truncate, exactly as before.
+// ponytail: 64 remembered paths, by hash — a model that opens more distinct
+// files for writing than that across a run forgets the oldest and truncates it.
+const ZFWritten = struct { hash: u64, analysis: u32, base: u64 };
+var zf_written: [64]ZFWritten = @splat(.{ .hash = 0, .analysis = 0, .base = 0 });
+var zf_nwritten: usize = 0;
+var zf_wnext: usize = 0;
+var zf_analysis: u32 = 0;
+
+/// §9.5.1.1 a new analysis of the same simulation process begins.
+pub fn zFNewAnalysis() void {
+    zf_analysis += 1;
+}
+
+/// The length a write-mode open of `path` truncates to: 0 the first time, the
+/// earlier analyses' content after that (§9.5.1.1).
+fn zfWriteBase(io: zfstd.Io, path: []const u8) u64 {
+    const h = zfstd.hash.Wyhash.hash(0, path);
+    for (zf_written[0..zf_nwritten]) |*w| if (w.hash == h) {
+        if (w.analysis != zf_analysis) {
+            const st = zfstd.Io.Dir.cwd().statFile(io, path, .{}) catch return 0;
+            w.* = .{ .hash = h, .analysis = zf_analysis, .base = st.size };
+        }
+        return w.base;
+    };
+    zf_written[zf_wnext] = .{ .hash = h, .analysis = zf_analysis, .base = 0 };
+    zf_wnext = (zf_wnext + 1) % zf_written.len;
+    zf_nwritten = @min(zf_nwritten + 1, zf_written.len);
+    return 0;
+}
+
 fn zfIo() zfstd.Io {
     return zfstd.Io.Threaded.global_single_threaded.io();
 }
@@ -127,7 +166,21 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
             zf_last_err = zfErrno(e);
             return 0;
         },
-        else => cwd.createFile(io, path, .{ .read = plus, .truncate = mode != 'a' }) catch |e| {
+        'w' => w: {
+            // §9.5.1.1: truncate to what the earlier analyses wrote, not to 0.
+            const base = zfWriteBase(io, path);
+            const f = cwd.createFile(io, path, .{ .read = plus, .truncate = base == 0 }) catch |e| {
+                zf_last_err = zfErrno(e);
+                return 0;
+            };
+            if (base != 0) f.setLength(io, base) catch |e| {
+                f.close(io);
+                zf_last_err = zfErrno(e);
+                return 0;
+            };
+            break :w f;
+        },
+        else => cwd.createFile(io, path, .{ .read = plus, .truncate = false }) catch |e| {
             zf_last_err = zfErrno(e);
             return 0;
         },
@@ -138,8 +191,9 @@ pub fn zFOpen(path: []const u8, ty: []const u8, mcd: bool) i64 {
         .can_read = mode == 'r' or plus,
         .can_write = mode != 'r' or plus,
     };
-    // "at end of file" is a POSITION, and the position is ours to keep.
-    if (mode == 'a') zf_slots[k].pos = f.length(io) catch 0;
+    // "at end of file" is a POSITION, and the position is ours to keep. A "w"
+    // open's end is 0, or §9.5.1.1's earlier-analysis content (`zfWriteBase`).
+    if (mode != 'r') zf_slots[k].pos = f.length(io) catch 0;
     zf_last_err = 0;
     return if (mcd)
         @as(i64, 1) << @intCast(k + 1) // bit 0 is standard output
