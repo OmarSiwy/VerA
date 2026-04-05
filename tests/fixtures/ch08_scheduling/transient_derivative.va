@@ -27,6 +27,11 @@
 // really is at 0.75 V on every row -- and the 1p scaling is the contribution as
 // the nodal equation of 8.3.1 sees it, dq/dt with q = C*v.
 //
+// §8.3, the parent, is cited too: "Through transient analysis, the value and
+// flow equations are solved incrementally with respect to time" — the four
+// time points here are that increment, and each is asserted.
+//
+//! lrm 8.3
 //! lrm 8.3.2
 //! lrm 4.5.3
 //! analysis tran

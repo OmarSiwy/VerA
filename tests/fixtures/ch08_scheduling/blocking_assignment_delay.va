@@ -41,6 +41,10 @@
 // The xfail this row used to carry (E1100, no default time unit for `#5`) went
 // stale when the delay started compiling; what then stopped it was the x above.
 //
+// §8.5.3, the parent, is cited too: "Assignments are translated into processes
+// and events as follows" — this is its blocking-assignment row, run.
+//
+//! lrm 8.5.3
 //! lrm 8.5.3.3
 //! analysis tran
 //! time 0, 25
