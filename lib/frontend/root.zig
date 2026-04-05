@@ -27,6 +27,10 @@ pub const constfold = @import("constfold.zig");
 /// synthesize without running the preprocessor.
 pub const spice_cards = @import("spice_cards.zig");
 
+/// §3.7/§6.5.3 structural `wreal` rules, shared by the elaborator and the
+/// digital runner.
+pub const wreal = @import("wreal.zig");
+
 test {
     _ = Integer;
     _ = token;
@@ -36,4 +40,5 @@ test {
     _ = Parser;
     _ = constfold;
     _ = spice_cards;
+    _ = wreal;
 }

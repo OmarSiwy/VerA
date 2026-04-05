@@ -496,6 +496,21 @@ fn isNetName(module: *const Ast.ModuleDecl, name: Ast.StrId) bool {
     return false;
 }
 
+/// The first branch or port probe in event expression `e` that no analog
+/// event function (`cross`, `above`, `timer`, `absdelta`) encloses, or null.
+fn probeOutsideEventFn(file: *const Ast.SourceFile, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const ex = &file.exprs;
+    switch (ex.tag(e)) {
+        .event_function => return null,
+        .branch_access, .port_access => return e,
+        else => {}, // else: every other node is searched through its children
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (probeOutsideEventFn(file, c)) |p| return p;
+    return null;
+}
+
 /// `isNetName` by spelling, for the tables keyed by string.
 pub fn isNetSpelling(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, name: []const u8) bool {
     for (module.vars) |v| if (std.mem.eql(u8, file.str(v.name), name)) return false;
@@ -789,6 +804,16 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
             try scanContext(w.l, s, discrete, w.context, w.ctx);
         }
     };
+    // §8.5.1 "Note that A2D events must be analog event controlled statements
+    // (e.g., @cross, @timer)": a digital event control that waits on a
+    // probe's value (`@(V(a))`, `@(posedge V(a) > 1)`) would be an A2D event
+    // no analog event function monitors — §7.3.5's cross/above/absdelta are
+    // how the discrete context sees a continuous value change.
+    if (discrete and self.file.stmt(id) == .event_control) {
+        const c = self.file.stmt(id).event_control;
+        if (c.kind == .event and c.event != .none) if (probeOutsideEventFn(self.file, c.event)) |p|
+            try self.err(ex.mainTok(p), .E0484, "`{s}(...)` in the event control of {s}", .{ self.file.str(ex.strOf(p)), ctx.where });
+    }
     // A.6.2: a blocking, nonblocking or procedural `assign`/`deassign` write
     // is to a `variable_lvalue`; only `force`/`release` also take a net.
     if (discrete and self.file.stmt(id) == .assign) {
