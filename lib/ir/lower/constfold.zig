@@ -76,7 +76,7 @@ const Env = struct {
     /// and the mathematical system functions listed in 17.11"; VAMS §9.11
     /// admits the conversions to the analog context. §17.8: `$rtoi` converts
     /// "by truncating", `$itor` "integers to real values".
-    // ponytail: $rtoi/$itor only. $realtobits/$bitstoreal need a 64-bit
+    // ponytail: $rtoi/$itor and $clog2 only. $realtobits/$bitstoreal need a 64-bit
     // pattern `Const.int` would carry signed; add them when a default uses one.
     fn conversion(env: Env, e: Ast.ExprId) ?Const {
         const self = env.self;
@@ -94,6 +94,18 @@ const Env = struct {
             return .{ .int = @intFromFloat(t) };
         }
         if (std.mem.eql(u8, name, "$itor")) return .{ .real = @floatFromInt(a.asIntExact() orelse return null) };
+        // §9.14 / IEEE 1364-2005 §17.11.1, one of the "mathematical system
+        // functions listed in 17.11": "the ceiling of the log base 2 of the
+        // argument (the log rounded up to an integer value)". An integer
+        // argument only, and a non-negative one — 0 and 1 both give 0; the
+        // unsigned reading of a negative argument stays a run-time question.
+        if (std.mem.eql(u8, name, "$clog2")) {
+            const n = a.asIntExact() orelse return null;
+            if (n < 0) return null;
+            if (n <= 1) return .{ .int = 0 };
+            const u: u64 = @intCast(n - 1);
+            return .{ .int = 64 - @as(i64, @clz(u)) };
+        }
         return null;
     }
     pub fn refuse(env: Env, e: Ast.ExprId) bool {
