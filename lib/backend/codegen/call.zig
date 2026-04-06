@@ -676,7 +676,7 @@ pub fn readsSimState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$feof", .@"$sformat", .@"$sscanf", .@"$limit", .@"$table_model", .@"$held_int",
         .@"$held_real", .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width",
         .@"$monitor$arm", .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real",
-        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$plusarg$str", .@"$rng$auto",
+        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$plusarg$str", .@"$str$cat", .@"$str$repeat", .@"$rng$auto",
         .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
         .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
         .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
@@ -1078,6 +1078,23 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // because lowering made this call the right-hand side of an assignment to
         // it. The text goes into this call site's own scratch row.
         .@"$sformat" => return cg_display.emitStringFormat(self, args, @intFromEnum(inst)),
+        // §3.3 Table 3-3 a string built while the device runs, into this call
+        // site's own scratch row, keyed like `$sformat`'s.
+        .@"$str$cat" => {
+            try self.b("zStrCat(zSBuf({d}), &.{{", .{@intFromEnum(inst)});
+            for (args, 0..) |a, i| {
+                if (i != 0) try self.b(", ", .{});
+                try gen_render.renderVal(self, a, .str);
+            }
+            return self.b("}})", .{});
+        },
+        .@"$str$repeat" => {
+            try self.b("zStrRepeat(zSBuf({d}), ", .{@intFromEnum(inst)});
+            try gen_render.renderVal(self, args[0], .int);
+            try self.b(", ", .{});
+            try gen_render.renderVal(self, args[1], .str);
+            return self.b(")", .{});
+        },
         .@"$table_model" => return gen_render.emitTable(self, inst, args), // §9.21
         // §§3.2/5.7 runtime array index — one switch, see `emitIdx`. The
         // element type is the callee's own (`Mir.callee.ty`).
