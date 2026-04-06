@@ -186,6 +186,10 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
     for (points) |pt| {
         try out.appendSlice(arena, "    {\n");
+        // §9.5.1.1 a block after the first is a FOLLOWING analysis of the same
+        // process, and a file it reopens "w" keeps what the earlier ones wrote.
+        if (per_block and n != 0)
+            try out.appendSlice(arena, "        if (comptime contract.fileIo(D)) |f| if (f.new_analysis) |g| g();\n");
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
@@ -598,8 +602,11 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     // fresh `State`, exactly as the fixed-grid runner restarts its time walk.
     const points = try expand(arena, d);
     const mdl = if (d.psweeps.len == 0) "model" else "pm";
-    for (points) |pt| {
+    for (points, 0..) |pt, pi| {
         try out.appendSlice(arena, "    {\n");
+        // §9.5.1.1, as in the fixed-grid runner: every point here is an analysis.
+        if (pi != 0)
+            try out.appendSlice(arena, "        if (comptime contract.fileIo(D)) |f| if (f.new_analysis) |g| g();\n");
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
             for (d.psweeps, pt[d.sweeps.len..]) |s, v| {

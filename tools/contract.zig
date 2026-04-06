@@ -922,6 +922,11 @@ pub const FileIo = struct {
     tell: *const fn (d: i64) i64,
     seek: *const fn (d: i64, off: i64, op: i64) i64,
     eof: *const fn (d: i64) i64,
+    /// §9.5.1.1: a host running several analyses in one process calls this
+    /// at the first point of each analysis after the first, so a file one
+    /// analysis opened "w" and a later one reopens "w" is appended to rather
+    /// than truncated. Optional: a one-analysis host never calls it.
+    new_analysis: ?*const fn () void = null,
 };
 
 /// The device's `file_io`, or null: it has no descriptor table to share.
