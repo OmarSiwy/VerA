@@ -54,6 +54,56 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     // constant reading last in the file is the one written last.
     try emitPattern(self, any_q);
     try emitDisplay(self);
+    if (self.vpi_contribs) try emitVpiContribs(self);
+}
+
+/// `Options.vpi_contribs`: each §5.6 contribution row's resistive and
+/// reactive value at `x`, by `Lowered.contributions` index, beside the rows'
+/// shape — access, the `U` of each terminal (-1 for ground, §1.3.1.1) and of
+/// the branch-flow unknown a potential source carries (-1 for none).
+///
+/// A §11.6.7 quantity's value is one of these: the flow of a potential
+/// source IS its unknown, and the flow of a flow source is its row's value
+/// plus the time derivative of the reactive half — which the host forms,
+/// because only the host knows the step. Reads `core` exactly as `eval` and
+/// `q` do, so the numbers are the residual's own.
+fn emitVpiContribs(self: *Gen) Error!void {
+    const cs = self.lowered.contributions.items;
+    try self.w("/// Clause 12 (`Options.vpi_contribs`): the §5.6 contribution rows.\n", .{});
+    try self.w("pub const vpi_contrib_access = [_]u8{{", .{});
+    for (cs) |c| try self.w(" {d},", .{@intFromEnum(c.access)});
+    try self.w(" }};\npub const vpi_contrib_hi = [_]i32{{", .{});
+    for (cs) |c| try self.w(" {d},", .{nodeCol(c.hi)});
+    try self.w(" }};\npub const vpi_contrib_lo = [_]i32{{", .{});
+    for (cs) |c| try self.w(" {d},", .{nodeCol(c.lo)});
+    try self.w(" }};\npub const vpi_contrib_flow_u = [_]i32{{", .{});
+    for (self.names.branch_u) |u| try self.w(" {d},", .{if (u == none_u32) @as(i64, -1) else u});
+    try self.w(" }};\n", .{});
+    try self.w("pub fn vpiContribs(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr) [{d}][2]f64 {{\n", .{cs.len});
+    const uses_core = for (cs) |c| {
+        if (coreIdx(self, self.an.rv(c.resist_val)) != null or coreIdx(self, self.an.rv(c.react_val)) != null) break true;
+    } else false;
+    if (uses_core)
+        try self.w("    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)})
+    else
+        try self.w("    _ = x;\n    _ = model;\n    _ = inst;\n", .{});
+    try self.w("    return .{{\n", .{});
+    for (cs) |c| {
+        try self.w("        .{{ ", .{});
+        for ([_]Mir.Value{ c.resist_val, c.react_val }, 0..) |v, k| {
+            if (k != 0) try self.w(", ", .{});
+            if (coreIdx(self, self.an.rv(v))) |f|
+                try self.w("m.f{d}.val()", .{f})
+            else
+                try self.w("0.0", .{});
+        }
+        try self.w(" }},\n", .{});
+    }
+    try self.w("    }};\n}}\n\n", .{});
+}
+
+fn nodeCol(n: u16) i64 {
+    return if (n == Lower.ground) -1 else n;
 }
 
 /// Does any charge site get a slot — i.e. is `q` emitted?
