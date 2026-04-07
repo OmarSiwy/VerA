@@ -289,6 +289,26 @@ pub fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
 /// punctuation and a `#` with a `u32` after it.
 pub const spelling_buf_len = 2 * 1024 + 32;
 
+/// §3.12.1 "A port branch ... is a branch between the upper and lower
+/// connections of the port", Syntax 3-9 `branch ( < port_identifier > )`.
+/// Checked per SOURCE module: after flattening, a child's port is an internal
+/// node of the device whenever its parent joins it to an internal net, and
+/// that branch is legal — the rule is about the module that declares it.
+pub fn checkPortBranchDecls(self: *Lower) Oom!void {
+    const ex = &self.file.exprs;
+    for (self.file.modules[self.file.builtin_modules..]) |*m| for (m.branches) |b| {
+        if (!b.is_port_branch) continue;
+        const t = if (ex.tag(b.hi) == .index) ex.lhs(b.hi) else b.hi;
+        if (ex.tag(t) != .ident) continue; // nodeOf reports a malformed terminal
+        const name = ex.strOf(t);
+        for (m.ports) |p| {
+            if (p.name == name) break;
+        } else try self.err(b.main_tok, .E0372, "`{s}` is declared over `{s}`, which is not a port of `{s}`", .{
+            self.file.str(b.name), self.file.str(name), self.file.str(m.name),
+        });
+    };
+}
+
 /// Resolve a net reference — `n` or `n[i]` — to a `nodes` row.
 ///
 /// The element case is a plain `internNode` of the scalarised name, so a
