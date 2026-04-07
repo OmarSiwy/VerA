@@ -498,6 +498,14 @@ pub const Code = enum(u16) {
     /// §2.9 VerA's `vera_lte` attribute with a value that is not a constant
     /// independent of the model card.
     E0523,
+    /// §4.5.1 a Laplace or Z-transform coefficient argument that is a scalar,
+    /// not an array identifier or an assignment pattern.
+    E0572,
+    /// §4.6.4/Syntax 4-4 a noise function's label argument that is not a
+    /// constant string.
+    E0573,
+    /// §4.6.1/A.8.2 an `analysis()` call with no argument or a non-literal one.
+    E0574,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -4174,6 +4182,53 @@ fn infoOf(c: Code) Info {
             \\    (* vera_lte *)     I(g, s) <+ ddt(qgs);   // 1: included
             \\
             \\The attribute is ignored and the site keeps the default (included).
+            ,
+        },
+        .E0572 => .{
+            .title = "filter coefficient argument is not an array",
+            .lrm = "4.5.1",
+            .explain =
+            \\LRM 4.5.1: "Certain analog operators require arrays or vectors to
+            \\be passed as arguments: Laplace filters, Z-transform filters ...
+            \\An array can either be passed as an array_identifier (e.g. an
+            \\array parameter or an array variable) or an array assignment
+            \\pattern (see 4.2.14)." The two vector slots of laplace_* and zi_*
+            \\(zeros or numerator, poles or denominator) take one of those, even
+            \\for a single coefficient:
+            \\
+            \\    laplace_nd(V(in), 2.0, '{1, 1})      // no: 2.0 is a scalar
+            \\    laplace_nd(V(in), '{2.0}, '{1, 1})   // yes
+            ,
+        },
+        .E0573 => .{
+            .title = "noise source label is not a string",
+            .lrm = "4.6.4",
+            .explain =
+            \\Syntax 4-4 gives every noise function one optional trailing
+            \\argument, typed `string`:
+            \\
+            \\    white_noise ( analog_expression [ , string ] )
+            \\    flicker_noise ( analog_expression , analog_expression [ , string ] )
+            \\    noise_table ( noise_table_input_arg [ , string ] )
+            \\
+            \\LRM 4.6.4.1: "The optional name argument acts as a label for the
+            \\noise source used when the simulator outputs the individual
+            \\contribution of each noise source". A number in that slot is not
+            \\a label, and there is no second power for it to be.
+            ,
+        },
+        .E0574 => .{
+            .title = "analysis() argument is not a quoted analysis name",
+            .lrm = "4.6.1",
+            .explain =
+            \\LRM 4.6.1: "The analysis() function takes one or more string
+            \\arguments and returns one (1) if any argument matches the current
+            \\analysis type." A.8.2 writes the quotation marks into the grammar:
+            \\
+            \\    analysis ( " analysis_identifier " { , " analysis_identifier " } )
+            \\
+            \\so `analysis()` with no name, or with a number or a variable, has
+            \\nothing Table 4-21 could match.
             ,
         },
 
