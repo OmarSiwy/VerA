@@ -246,16 +246,20 @@ pub fn lowerIndex(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
 /// `{Str1,...,Strn}`, "concatenation of Str1,…,Strn" — the LRM's own example is
 /// `{ "hello", " ", "world" }` == `"hello world"`.
 ///
-/// ponytail: constant operands only. A string Value is a `str_const` (there is
-/// no runtime string in the emitted device), so a non-constant operand has
-/// nothing to concatenate and is rejected rather than substituted.
+/// Constant operands fold to one `str_const`. Table 3-3 lets an operand be "of
+/// type string", so one known only while the device runs is legal: each run
+/// of constant operands still folds, and the pieces are joined by the
+/// synthetic `$str$cat`, which builds the string in its call site's scratch
+/// (`str_kernels.zStrCat`) exactly as `$sformat` does.
 ///
 /// A `.multi_concat` arrives here for one reason: §3.3 Table 3-3's Replication
 /// row says the "multiplier must be of integral type and can be nonconstant.
 /// If multiplier is nonconstant or Str is of type string, the result is a
 /// string containing N concatenated copies", and the parser unrolls only a
 /// literal count (see `replCount`). So every replication left standing is a
-/// string one, and N is whatever the folder can make of the multiplier.
+/// string one. A multiplier the folder can make a number of is unrolled
+/// here; one it cannot is the row's nonconstant case, and `$str$repeat`
+/// makes the N copies while the device runs (`str_kernels.zStrRepeat`).
 pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const repl = ex.tag(e) == .multi_concat;
@@ -279,7 +283,9 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         }
     }
     var copies: i64 = 1;
-    if (repl) {
+    // §3.3 Table 3-3's nonconstant multiplier, as its integer Value.
+    var runtime_count: ?Mir.Value = null;
+    if (repl) count: {
         const count = ex.lhs(e);
         const c = try lowerExpr(self, count);
         const k: ?Const = switch (self.mir.valueDef(c.v)) {
@@ -291,13 +297,17 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             // fixed at compilation, `checkShape` refuses a card that moves it).
             .undef, .str_const, .param_ref, .block_param, .inst_result => lower_constfold.shapeEval(self, count),
         };
-        // A multiplier that survives to the residual has no width and no
-        // string to repeat: §3.3's `{i{"Hi"}}` is legal because `i` is
-        // knowable, not because the device could build a string at runtime.
         const v = k orelse Const{ .str = "" };
         if (v == .str) {
-            try self.err(self.file.exprs.mainTok(count), .E0328, "", .{});
-            return poison;
+            // A multiplier that survives to the residual is the row's
+            // nonconstant case, which "must be of integral type": the §4.2.1
+            // real-to-integer conversion below is a constant's.
+            if (c.ty != .integer) {
+                try self.err(self.file.exprs.mainTok(count), .E0327, "a nonconstant replication multiplier shall be of integral type, got {s}", .{@tagName(c.ty)});
+                return poison;
+            }
+            runtime_count = c.v;
+            break :count;
         }
         // §4.2.1: a real replication factor "will first be converted to an
         // integer value using the rules described in 4.2.1.1". A real with no
@@ -313,7 +323,10 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             return poison;
         }
     }
+    // `out` is the current run of constant operands; `parts` holds the
+    // run-time operands and the folded runs between them, in source order.
     var out: std.ArrayList(u8) = .empty;
+    var parts: std.ArrayList(Mir.Value) = .empty;
     for (elems) |el| {
         const tv = try lowerExpr(self, el);
         if (tv.ty != .string) {
@@ -323,10 +336,20 @@ pub fn lowerConcat(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         switch (self.mir.valueDef(tv.v)) {
             .str_const => |s| try out.appendSlice(self.arena, s),
             .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => {
-                try self.err(self.file.exprs.mainTok(e), .E0328, "", .{});
-                return poison;
+                if (out.items.len != 0)
+                    try parts.append(self.arena, try self.mir.addStrConst(self.arena, try out.toOwnedSlice(self.arena)));
+                try parts.append(self.arena, tv.v);
             },
         }
+    }
+    if (parts.items.len != 0 or runtime_count != null) {
+        self.out.uses.insert(.str_tasks);
+        if (out.items.len != 0 or parts.items.len == 0)
+            try parts.append(self.arena, try self.mir.addStrConst(self.arena, try out.toOwnedSlice(self.arena)));
+        const str = if (parts.items.len == 1) parts.items[0] else try self.call("$str$cat", parts.items);
+        const n = runtime_count orelse
+            if (copies == 1) return .{ .v = str, .ty = .string } else try self.mir.addIntConst(self.arena, copies);
+        return .{ .v = try self.call("$str$repeat", &.{ n, str }), .ty = .string };
     }
     if (repl) {
         const one = try self.arena.dupe(u8, out.items);

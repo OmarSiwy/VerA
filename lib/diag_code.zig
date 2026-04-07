@@ -383,6 +383,8 @@ pub const Code = enum(u16) {
     /// A.2.1.3 / §3.6.2 a net declaration whose discipline identifier names
     /// no declared discipline.
     E0371,
+    /// §3.12.1 a port branch `branch (<x>)` whose x is not a port.
+    E0372,
 
     // ---------------------------------------------------------------- class 4
     // Behavioral semantics: statements and contributions — lower.zig.
@@ -499,6 +501,14 @@ pub const Code = enum(u16) {
     /// §2.9 VerA's `vera_lte` attribute with a value that is not a constant
     /// independent of the model card.
     E0523,
+    /// §4.5.1 a Laplace or Z-transform coefficient argument that is a scalar,
+    /// not an array identifier or an assignment pattern.
+    E0572,
+    /// §4.6.4/Syntax 4-4 a noise function's label argument that is not a
+    /// constant string.
+    E0573,
+    /// §4.6.1/A.8.2 an `analysis()` call with no argument or a non-literal one.
+    E0574,
 
     // ---------------------------------------------------------------- class 6
     // Numerical safety / finiteness — proof.zig.
@@ -2398,21 +2408,14 @@ fn infoOf(c: Code) Info {
             \\non-x and non-z constant expression".
             ,
         },
-        .E0328 => .{
-            .title = "string concatenation with a run-time operand is not supported",
-            .lrm = "3.3",
-            .explain =
-            \\A concatenation or replication of strings is folded at compile time
-            \\into one string literal, so each operand and the multiplier must be
-            \\known then. There is no run-time string buffer in a compiled device.
-            \\
-            \\This is VerA's limit, not the LRM's: 3.3 Table 3-3 says a
-            \\replication multiplier "can be nonconstant", and the result is then
-            \\a string of N copies built while the model runs. A multiplier
-            \\whose value lowering can still see (`integer i = 1;`) is folded and
-            \\accepted.
-            ,
-        },
+        .E0328 => retiredInfo(
+            \\"string concatenation with a run-time operand is not supported".
+            \\Retired: 3.3 Table 3-3 makes both a string-typed concatenation
+            \\operand and a nonconstant replication multiplier legal, and the
+            \\device now builds such a string while it runs (`$str$cat`,
+            \\`$str$repeat`, str_kernels.zig). A nonconstant multiplier that is
+            \\not of integral type is E0327. The number is not reused.
+        ),
         .E0329 => .{
             .title = "part selects are not supported",
             .lrm = "4.2.13",
@@ -3141,6 +3144,20 @@ fn infoOf(c: Code) Info {
             \\    child c1();    // A.4.1 module_instance, even with no ports
             \\
             \\Otherwise declare the discipline, or `include "disciplines.vams"`.
+            ,
+        },
+        .E0372 => .{
+            .title = "port branch names a net that is not a port",
+            .lrm = "3.12.1",
+            .explain =
+            \\LRM 3.12.1: "A port branch is a special type of branch used to
+            \\access the flow into a port of a module (see 5.4.3). It is a branch
+            \\between the upper and lower connections of the port." Syntax 3-9
+            \\spells it `branch ( < port_identifier > )`. An internal net has
+            \\no upper connection — nothing outside the module is joined to it
+            \\— so there is no branch between the two for the declaration to
+            \\name. Declare the net as a port, or use an ordinary branch
+            \\`branch (x, y) b;`.
             ,
         },
 
@@ -4211,6 +4228,53 @@ fn infoOf(c: Code) Info {
             \\    (* vera_lte *)     I(g, s) <+ ddt(qgs);   // 1: included
             \\
             \\The attribute is ignored and the site keeps the default (included).
+            ,
+        },
+        .E0572 => .{
+            .title = "filter coefficient argument is not an array",
+            .lrm = "4.5.1",
+            .explain =
+            \\LRM 4.5.1: "Certain analog operators require arrays or vectors to
+            \\be passed as arguments: Laplace filters, Z-transform filters ...
+            \\An array can either be passed as an array_identifier (e.g. an
+            \\array parameter or an array variable) or an array assignment
+            \\pattern (see 4.2.14)." The two vector slots of laplace_* and zi_*
+            \\(zeros or numerator, poles or denominator) take one of those, even
+            \\for a single coefficient:
+            \\
+            \\    laplace_nd(V(in), 2.0, '{1, 1})      // no: 2.0 is a scalar
+            \\    laplace_nd(V(in), '{2.0}, '{1, 1})   // yes
+            ,
+        },
+        .E0573 => .{
+            .title = "noise source label is not a string",
+            .lrm = "4.6.4",
+            .explain =
+            \\Syntax 4-4 gives every noise function one optional trailing
+            \\argument, typed `string`:
+            \\
+            \\    white_noise ( analog_expression [ , string ] )
+            \\    flicker_noise ( analog_expression , analog_expression [ , string ] )
+            \\    noise_table ( noise_table_input_arg [ , string ] )
+            \\
+            \\LRM 4.6.4.1: "The optional name argument acts as a label for the
+            \\noise source used when the simulator outputs the individual
+            \\contribution of each noise source". A number in that slot is not
+            \\a label, and there is no second power for it to be.
+            ,
+        },
+        .E0574 => .{
+            .title = "analysis() argument is not a quoted analysis name",
+            .lrm = "4.6.1",
+            .explain =
+            \\LRM 4.6.1: "The analysis() function takes one or more string
+            \\arguments and returns one (1) if any argument matches the current
+            \\analysis type." A.8.2 writes the quotation marks into the grammar:
+            \\
+            \\    analysis ( " analysis_identifier " { , " analysis_identifier " } )
+            \\
+            \\so `analysis()` with no name, or with a number or a variable, has
+            \\nothing Table 4-21 could match.
             ,
         },
 

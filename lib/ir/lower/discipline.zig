@@ -255,6 +255,24 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
             try self.err(b.main_tok, .E0342, "discipline `{s}` is already declared", .{self.file.str(b.name)});
         }
     }
+
+    // §3.6.2.7 "LIKE NATURES, a discipline can specify user-defined
+    // attributes ... (see 3.6.1.3)", so §3.6.1.3's rule holds in the
+    // discipline being defined: the name "shall be unique" and the value
+    // "shall be constant". Same two codes as the nature half above.
+    for (self.file.disciplines) |*d| for (d.attrs, 0..) |a, ai| {
+        for (d.attrs[0..ai]) |prev| {
+            if (prev.name != a.name) continue;
+            try self.err(a.main_tok, .E0343, "`{s}` is already an attribute of discipline `{s}`", .{
+                self.file.str(a.name), self.file.str(d.name),
+            });
+            break;
+        }
+        if (lower_constfold.constEval(self, a.value) == null)
+            try self.err(a.main_tok, .E0340, "`{s}` of discipline `{s}` is not a constant expression", .{
+                self.file.str(a.name), self.file.str(d.name),
+            });
+    };
 }
 
 /// §3.6.1.2/§3.6.1.3 — the FORM each attribute's value has to take. The LRM

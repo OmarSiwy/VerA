@@ -132,6 +132,8 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$rng$erlang_next",
         => true,
         .@"$idx", .@"$idx$int", .@"$idx$str" => i > 0, // index and selectable cells
+        // §3.3 Table 3-3: every piece, and the count.
+        .@"$str$cat", .@"$str$repeat" => true,
         .@"$limit$uf" => i < 2,
         // §9.15's param_name may be "a string variable", so `emitCall` renders
         // it and the unit has to compute it.
