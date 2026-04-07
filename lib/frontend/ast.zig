@@ -119,6 +119,13 @@ pub const BinaryOp = enum(u8) {
 /// Column usage per tag is documented on each arm; `main_tok` is always the
 /// token the node is reported at (needed by the class-6 finiteness proof, whose
 /// failures are compile errors and must name a source location).
+/// `.branch_access` `extra` value for A.8.9's hierarchical_unnamed_branch_reference
+/// (`V(drv.branch(x, y))`): the child's EXISTING unnamed branch (§5.6.8.2), as
+/// against `V(drv.x, drv.y)`, which creates a new one in the writer (§5.6.8.1).
+/// The parser rewrites both to the same terminal pair, so this is the only
+/// record of which one was written.
+pub const branch_ref_hier_unnamed: u32 = 1;
+
 pub const ExprTag = enum(u8) {
     // ---- literals & names — §2.6, §2.7, §2.8, A.8.7 ----
     /// `extra` = index into `ExprStore.ints`. LRM §2.6.1.
@@ -173,6 +180,8 @@ pub const ExprTag = enum(u8) {
     /// §4.4.1 branch probe: `V(a)`, `V(a,b)`, `I(br)`. `str` = access
     /// identifier (`V`/`I`/nature access name, §3.6.1.4), `lhs` = first
     /// net-or-branch reference, `rhs` = second net reference or `.none`.
+    /// `extra` = `branch_ref_hier_unnamed` for §5.6.8.2's
+    /// `inst.branch(x, y)` spelling, 0 otherwise.
     branch_access,
     /// §4.4.2 / §5.4.3 port branch probe `I(<p>)` (A.8.2
     /// port_probe_function_call). `str` = access identifier, `lhs` = port ref.
