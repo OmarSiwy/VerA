@@ -1,0 +1,78 @@
+// §6.9.2 Elaboration and paramsets:
+//
+//   "If a generate construct contains an instantiation of an overloaded
+//    paramset, PARAMSET SELECTION IS PERFORMED AFTER THE GENERATE CONSTRUCT HAS
+//    BEEN EVALUATED. The evaluation of the generate construct may influence the
+//    values and connections of the paramset instance, and hence the selection of
+//    matching paramset and module."
+//
+// `ps_sel` is overloaded (§6.4.2): one member admits w in [5, inf) and sets the
+// module's gain to 2.0, the other admits w in (-inf, 5) and sets 3.0. Each of
+// the two conditional generate constructs below has an instance of `ps_sel` in
+// BOTH arms, with a different `w` in each arm, so which paramset an instance
+// gets is decided by which arm the generate scheme selects:
+//
+//   big = 1:  g1 takes its then-arm   -> u1, w = 10.0 -> gain 2.0
+//             g2 takes its else-arm   -> u4, w =  1.0 -> gain 3.0
+//
+// Each instance carries the gain the arm expects in `want`, and the module
+// asserts gain == want. Exactly two instances exist after the generate schemes
+// are evaluated, so exactly two checks run (`//! checks 2`): a selection made
+// before evaluation — over every arm's instance, or on the paramset name alone —
+// either runs four checks or gets a gain from the wrong member.
+//
+// All values are exact in binary.
+//
+// (The four instances have distinct names because VerA flattens an instance in
+// a generate block under its own name rather than under `g1.`/`g2.`; two
+// same-named instances in different generate blocks currently collide. That is
+// §6.7's naming, not this clause's selection order, and it is kept out of this
+// file's way.)
+//
+//! lrm 6.9.2
+//! lrm 6.4.2
+//! checks 2
+//! bias V(p) = 0.75, V(n) = 0.25
+`include "check.vh"
+paramset ch6_psg_sel ch6_psg_leaf;
+  parameter real w = 10.0 from [5.0:inf);
+  parameter real want = 0.0;
+  .w = w;
+  .want = want;
+  .gain = 2.0;
+endparamset
+
+paramset ch6_psg_sel ch6_psg_leaf;
+  parameter real w = 1.0 from (-inf:5.0);
+  parameter real want = 0.0;
+  .w = w;
+  .want = want;
+  .gain = 3.0;
+endparamset
+
+module ch6_psg_leaf(a, b);
+  inout a, b;
+  electrical a, b;
+  parameter real gain = 1.0, w = 0.0, want = 0.0;
+  analog begin
+    `CHECKX("the paramset member matches the w its generate arm supplied", gain, want);
+    I(a, b) <+ gain * V(a, b);
+  end
+endmodule
+
+module ch6_psg_top(p, n);
+  inout p, n;
+  electrical p, n;
+  parameter integer big = 1;
+  if (big) begin : g1
+    ch6_psg_sel #(.w(10.0), .want(2.0)) u1(p, n);
+  end else begin : g1
+    ch6_psg_sel #(.w(1.0), .want(3.0)) u2(p, n);
+  end
+  if (!big) begin : g2
+    ch6_psg_sel #(.w(10.0), .want(2.0)) u3(p, n);
+  end else begin : g2
+    ch6_psg_sel #(.w(1.0), .want(3.0)) u4(p, n);
+  end
+  analog I(p, n) <+ 0.0;
+endmodule
