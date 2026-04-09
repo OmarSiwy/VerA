@@ -186,3 +186,8 @@ half is instead exercised by naming the flow nature's access in a contribution, 
 the thing D.1 actually fixes. The two arithmetic checks that are not exact —
 ``$temperature - `P_CELSIUS0`` and its thermal twin — use `CHECK` with 1e-12, because 273.15
 is not representable in binary64 and the subtraction loses 2.8e-14.
+
+## 2026-09-24 — classification
+
+`D`, `D.2` and `D.3` state no rule an input can break (the annex publishes three
+files); they are classified in `CLAUSES.tsv` with the positive fixtures above.

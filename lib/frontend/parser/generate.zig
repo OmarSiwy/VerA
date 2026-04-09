@@ -49,6 +49,7 @@ const found = Parser.found;
 /// a new one.
 pub fn parseGenerate(self: *Parser, b: *parse_module.Body, comptime kind: token.Tag) Error!void {
     if (self.gen_construct_depth == 0) self.gen_construct += 1;
+    b.gen_count += 1; // §6.6.3 this construct's number in its scope
     self.gen_construct_depth += 1;
     self.gen_depth += 1;
     defer {
@@ -90,6 +91,7 @@ pub inline fn parseFor(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
     _ = try self.expect(.semicolon);
     const step = try parse_stmt.parseAssignNoSemi(self);
     _ = try self.expect(.rparen);
+    if (@TypeOf(gen) != @TypeOf(null)) self.gen_loop_body = true;
     const body = if (@TypeOf(gen) == @TypeOf(null)) try parse_stmt.parseStmt(self) else try parseGenerateBlock(self, gen);
     return self.file.addStmt(self.arena, .{ .for_stmt = .{
         .init = init_s,
@@ -150,6 +152,8 @@ pub inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
 /// is known, not here where it is not.
 pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId {
     const tok = self.pos;
+    const loop_body = self.gen_loop_body;
+    self.gen_loop_body = false;
     // A.4.2 has no null generate_block, but `if (c) ;` is what a model
     // writes for a deliberately empty arm and refusing it would only move
     // the error off the rule the source actually breaks.
@@ -157,6 +161,11 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
 
     var blk: Ast.SeqBlock = .{};
     var gb: parse_module.Body = .{};
+    // §6.6.2 direct nesting (IEEE 1364-2005 §12.4.2): a generate block that is
+    // one conditional generate construct with no begin/end "is not treated as a
+    // separate scope", and its construct's blocks are named as the enclosing
+    // construct's (§6.6.3) — so the inner construct takes the outer number.
+    var direct = false;
     if (self.eat(.kw_begin)) {
         if (self.eat(.colon)) {
             const name_tok = self.pos;
@@ -184,6 +193,8 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
         _ = try self.expect(.kw_end);
     } else {
         try self.skipAttributes();
+        direct = !loop_body and (self.peek() == .kw_if or self.peek() == .kw_case);
+        if (direct) gb.gen_count = b.gen_count - 1;
         try parse_module.parseModuleItem(self, &gb);
     }
 
@@ -243,7 +254,50 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // construct each came from.
     try b.gen_blocks.appendSlice(self.arena, gb.gen_blocks.items);
     try b.gen_loops.appendSlice(self.arena, gb.gen_loops.items);
-    return self.file.addStmt(self.arena, .{ .block = blk }, tok);
+    if (direct) {
+        // Not a scope: the inner construct's blocks are named in OURS.
+        try b.gen_auto.appendSlice(self.arena, gb.gen_auto.items);
+    } else {
+        try nameGenBlocks(self, &gb);
+        blk.gen_name = blk.name;
+    }
+    const id = try self.file.addStmt(self.arena, .{ .block = blk }, tok);
+    if (!direct and blk.name == .none) try b.gen_auto.append(self.arena, .{ .stmt = id, .n = b.gen_count });
+    return id;
+}
+
+/// §6.6.3 External names for unnamed generate blocks: "All unnamed generate
+/// blocks are given the name genblk<n> where <n> is the assigned number. If such
+/// a name would conflict with an explicitly declared name, leading zeroes are
+/// added until the name does not conflict." Run when `b`'s scope is complete,
+/// so a declaration written after the construct still counts.
+pub fn nameGenBlocks(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!void {
+    for (b.gen_auto.items) |g| {
+        var zeros: usize = 0;
+        const name = while (true) : (zeros += 1) {
+            const text = try std.fmt.allocPrint(self.arena, "genblk{s}{d}", .{ ("00000000")[0..@min(zeros, 8)], g.n });
+            const id = try self.file.intern(self.arena, text);
+            if (zeros >= 8 or !declaredIn(b, id)) break id;
+        };
+        self.file.stmts.items[@intFromEnum(g.stmt)].block.gen_name = name;
+    }
+    b.gen_auto.clearRetainingCapacity();
+}
+
+/// Is `name` explicitly declared in the scope `b` collected? The declaration
+/// spaces `checkGenBlockNames` reads, plus instances and named events.
+fn declaredIn(b: *const parse_module.Body, name: Ast.StrId) bool {
+    for (b.gen_blocks.items) |g| if (g.name == name) return true;
+    for (b.instances.items) |i| if (i.name == name) return true;
+    for (b.aliasparams.items) |a| if (a.alias == name) return true;
+    return nameIn(Ast.Port, b.ports.items, name) or
+        nameIn(Ast.ParamDecl, b.params.items, name) or
+        nameIn(Ast.VarDecl, b.vars.items, name) or
+        nameIn(Ast.NetDecl, b.nets.items, name) or
+        nameIn(Ast.BranchDecl, b.branches.items, name) or
+        nameIn(Ast.FuncDecl, b.functions.items, name) or
+        std.mem.indexOfScalar(Ast.StrId, b.genvars.items, name) != null or
+        std.mem.indexOfScalar(Ast.StrId, b.events.items, name) != null;
 }
 
 /// §6.6.1/§6.6.2/§6.8: a named generate block's name is a DECLARATION in

@@ -559,6 +559,9 @@ pub fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: As
             break;
         };
         if (!c.isTrue()) break;
+        // §6.6.1 a loop generate's block is `name[i]` in §9.15's "path".
+        if (body != .none and self.file.stmt(body) == .block and self.file.stmt(body).block.gen_name != .none)
+            self.gen_iter = if (self.consts.get(gv)) |v| v.asInt() else null;
         try lower_stmt.lowerStmt(self, body);
         const next = lower_constfold.shapeEval(self, assignValueOf(self, step) orelse .none) orelse {
             try self.err(self.file.exprs.mainTok(cond), .E0419, "", .{});

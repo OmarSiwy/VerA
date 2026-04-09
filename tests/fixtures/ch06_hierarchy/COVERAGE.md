@@ -161,3 +161,37 @@ and they are not counted against any row above:
 
 - `parameter_default.va` (`3.4`) — the un-overridden declared default, the baseline the 6.3 override fixtures are measured against.
 - `mfactor_flow_noise.va`, `mfactor_potential_noise.va` (`9.18`, `4.6.4`) — they assert Table 9-29's top-level `$mfactor` = 1.0 and that `white_noise` returns 0 outside a noise analysis. The `$mfactor`-scales-noise rule of 6.3.6 needs a noise analysis *and* a non-unit multiplicity, and neither exists here.
+
+## 2026-09-24 — two-way evidence pass (measure C)
+
+Newer than the rows above where they disagree. Clauses with no rule an input
+can break are in `CLAUSES.tsv` with the quoted sentence and a positive fixture.
+
+| LRM section | New fixtures |
+|---|---|
+| 6.1 | `hierarchy_overview_instances_and_overrides.va` (run: ordered, named and defparam overrides, a vector port); `nested_module_definition_rejected.va` (E0240) |
+| 6.2.1 | `root_path_names_no_top_level_instance_rejected.va` (E0901: `$root.u` where `u` is only local) |
+| 6.3 | `defparam_precedence_over_instance_override.va` (run: the defparam wins the conflict, observed in the stamp); `override_of_a_child_variable_rejected.va` (E0907) |
+| 6.3.5 | `param_given_of_a_variable_rejected.va` (E0822) |
+| 6.5 | `port_actual_is_a_variable_rejected.va` (E0906 — compiler fix: the variable used to become a fresh node) |
+| 6.5.1 | `port_expression_literal_in_concatenation_rejected.va` |
+| 6.5.3 | `wreal_net_with_two_drivers_rejected.va` (E0918 — compiler fix: a mixed `.va` used to fail only when its digital half ran) |
+| 6.5.6 | `port_connected_of_an_internal_net_rejected.va` (E0822) |
+| 6.6.3 | `unnamed_generate_block_external_names.va` (run: §6.6.3's own `module top`, every external name read back through §9.15's `$simparam$str("path")` — compiler feature) |
+| 6.9.2 | `paramset_selected_after_generate.va` (run) |
+| 6.9.3 | `connect_insertion_follows_paramset_selection.va` (run — compiler fix: insertion skipped paramset instances) |
+| 6.5.7.2, 6.6.2.1, 6.9, 6.9.1, 6.9.2, 6.9.3 | classified in `CLAUSES.tsv` |
+
+**6.4.3**: `paramset_hidden_output_variable_takes_the_fallback.va` (run) and
+`paramset_variable_hides_module_output_variable_rejected.va` (E0817) — compiler
+fix: the parser now records which paramset variables carry `(* desc *)`, and an
+undescribed one hides the module's variable of the same name from `$simprobe`.
+Still missing under 6.4.3: the paramset's OWN output-variable values (`ft =
+3.0 * .gm;` statements are still dropped by the parser), so a described paramset
+variable is not yet what a probe reports. Also found and NOT fixed (outside this
+pass): an instance inside a generate block is flattened under its own name, so
+`g1.u` and `g2.u` collide (see `paramset_selected_after_generate.va`), a
+module instance inside an if-generate gets no connect module (`elab_insert.plan`
+reads `module.instances` only), and a paramset instance in a generate block whose
+override reads a localparam of that block is refused with E0914 (§6.9.2: the
+selection cannot see the block's localparam).

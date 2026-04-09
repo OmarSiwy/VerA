@@ -181,10 +181,28 @@ fn suspends(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
 // That is exact for the testbench (one instance) and wrong for a host that
 // instantiates one mixed device twice; the right home is an `Instance` field,
 // which is codegen's to emit.
+/// §6.5.3 "There can be a maximum of one driver of a real-valued net." A
+/// continuous assignment is a driver, and so is a net_decl_assignment
+/// (`wreal w = a;`). The digital runner makes the same check for a `.v`
+/// design (`src/sim/digital`); this is the analog compile's copy, so a mixed
+/// `.va` is refused before a device is built rather than when its digital
+/// half first runs.
+fn checkWrealDrivers(self: *Lower, module: *const Ast.ModuleDecl, name: Ast.StrId, declared: bool) Oom!void {
+    const ex = &self.file.exprs;
+    var count: u32 = @intFromBool(declared);
+    for (module.assigns) |a| {
+        if (a.target == .none or ex.tag(a.target) != .ident or ex.strOf(a.target) != name) continue;
+        count += 1;
+        if (count == 2) try self.err(a.main_tok, .E0918, "`{s}` is already driven", .{self.file.str(name)});
+    }
+}
+
 pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     if (!isMixed(self.file, module)) return;
     self.out.mixed_signal = true;
     const ex = &self.file.exprs;
+    for (module.nets) |n| if (n.kind == .wreal) try checkWrealDrivers(self, module, n.name, n.init != .none);
+    for (module.ports) |p| if (p.kind == .wreal) try checkWrealDrivers(self, module, p.name, false);
     var owned: std.ArrayList(Ast.ExprId) = .empty;
     for (module.assigns) |a| {
         const t = self.file.lvalueBase(a.target);

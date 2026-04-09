@@ -471,7 +471,12 @@ pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // The sibling's block was lowered before this one (elaboration appends
         // instances in tree order), so the value read here is the one that
         // instance computed for this evaluation.
-        if (self.vars.get(path)) |slot|
+        // §6.4.3 unless the instance's paramset hides it: "the module output
+        // variable shall not be available for instances using the paramset".
+        const hidden = for (self.ps_hidden) |h| {
+            if (std.mem.eql(u8, h, path)) break true;
+        } else false;
+        if (!hidden) if (self.vars.get(path)) |slot|
             return .{ .v = try self.builder.readVariable(slot.place, self.cur), .ty = slot.ty };
     }
     // Unresolved. §9.16's own two outcomes, in the clause's order.

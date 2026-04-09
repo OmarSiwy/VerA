@@ -378,6 +378,12 @@ accum: std.ArrayList(Accum) = .empty,
 /// come after the read — so the rule is a sweep over this at the end, not a
 /// test at the read. Reads only: the left of a `<+` is a contribution.
 branch_reads: std.ArrayList(BranchRead) = .empty,
+/// §5.6.8.1 every potential `<+` spelled with hierarchical NET references
+/// (`V(drv.x)`, not §5.6.8.2's `V(drv.branch(x))`): each creates a NEW unnamed
+/// branch in the writing instance, which `contribIndex` nonetheless merges
+/// with the pair's accumulator. Kept so `lower_contrib.checkHierParallel` can
+/// see the second branch the merge hides.
+hier_potentials: std.ArrayList(lower_contrib.HierPotential) = .empty,
 /// Preprocessed source and the lexer's `.start` column, kept ONLY so a token
 /// index can become a `diag.Span`. proof.zig reaches them through
 /// `tokenSpan` too — it holds a `*const Lower` already, so this is the whole
@@ -589,6 +595,18 @@ active_genvars: std.ArrayList([]const u8) = .empty,
 /// scope, "lo." inside `begin : lo`). The lowering-side half of `held_names`'
 /// key; see `declareVarDecl`.
 block_path: []const u8 = "",
+/// §9.15 Table 9-28 "path": the scopes between the instance and the call —
+/// named blocks and (§6.6.3) generate blocks under their external names —
+/// joined by §6.7's period, "" at the top of the instance. Unlike `block_path`
+/// it is never a storage key.
+scope_path: []const u8 = "",
+/// §6.6.1 the genvar value of the loop-generate iteration whose block is about
+/// to be lowered: `tryUnrollFor` sets it, `lowerSeqBlock` takes it, so the
+/// block's scope is `name[i]`.
+gen_iter: ?i64 = null,
+/// §6.4.3 `Elaborate.Design.ps_hidden`: module output variables a paramset
+/// makes unavailable, by flat name. Read by `lowerSimprobe`.
+ps_hidden: []const []const u8 = &.{},
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected BEFORE the module's
 /// variables are declared, for the same reason `held_names` is: the value a
@@ -1113,6 +1131,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     });
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
+    self.ps_hidden = design.ps_hidden; // §6.4.3
     self.out.inserts = design.inserts;
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
@@ -1601,6 +1620,8 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
         c.react_val = try self.builder.readVariable(acc.react, self.cur);
         c.wrote_val = try self.builder.readVariable(acc.wrote, self.cur);
     }
+    // §5.6.8.1 needs the final retention flags just read.
+    try lower_contrib.checkSourceLoops(self);
     // §5.10 the same, for every held variable. Reads only — no `call` — so the
     // unit enumeration below is untouched.
     for (self.out.held_vars.items, self.held_places.items) |*h, p| h.final = try self.builder.readVariable(p, self.cur);

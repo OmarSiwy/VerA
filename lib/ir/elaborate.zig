@@ -168,6 +168,11 @@ pub const Design = struct {
     /// parent net `elems[k]`. Lowering interns no node for it: each element
     /// aliases its net's node (`Lower.lowerModule`).
     port_concats: []const PortConcat = &.{},
+    /// §6.4.3 "If a paramset variable without a description has the same name
+    /// as a module output variable, the module output variable shall not be
+    /// available for instances using the paramset." The flat names of those
+    /// variables, for §9.16's `$simprobe` to treat as unresolvable.
+    ps_hidden: []const []const u8 = &.{},
 };
 
 pub const PortConcat = struct {
@@ -431,6 +436,8 @@ pub const Flatten = struct {
     last_unit: u32 = 0,
     /// §9.15/§9.16 one entry per unit id, in issue order (so index == unit id).
     unit_paths: std.ArrayList(UnitPath) = .empty,
+    /// `Design.ps_hidden`, as the walk finds them.
+    ps_hidden: std.ArrayList([]const u8) = .empty,
 
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
@@ -732,6 +739,7 @@ pub const Flatten = struct {
             .units = self.unit_paths.items,
             .inserts = self.inserts.items,
             .port_concats = self.port_concats.items,
+            .ps_hidden = self.ps_hidden.items,
         };
     }
 
@@ -818,6 +826,7 @@ pub const Flatten = struct {
             //
             // Not an error and not a declaration: see `Design.implicit_nets`.
             // The source's own connections, not `plan`'s segments, which are.
+            if (!auto and idx < module.instances.len) try self.checkVariableActuals(module, &module.instances[idx]);
             if (!auto) for ((if (idx < module.instances.len) module.instances[idx] else inst).ports) |c| {
                 const n = elab_names.netRefName(self, c.expr) orelse continue;
                 if (declares(module, n)) continue;
@@ -1021,6 +1030,11 @@ pub const Flatten = struct {
             try elab_paramset.paramsetOverrides(self, inst, p, child, &parent, &over, &unit, path)
         else
             try self.collectOverrides(inst, child, &parent, &over, &unit, path);
+        // §6.4.3 an undescribed paramset variable hides the module's variable of
+        // the same name from this instance's reporting. Only the selected
+        // paramset's own declarations; a chain's earlier links are not read.
+        if (ps) |p| for (p.vars) |v| if (!v.desc) for (child.vars) |mv| if (mv.name == v.name)
+            try self.ps_hidden.append(self.ctx.arena, try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(v.name) }));
 
         // ---- names: every local declaration gets its flat spelling ----------
         for (child.params) |p| try elab_names.bind(self, &unit, path, p.name);
@@ -1190,6 +1204,33 @@ pub const Flatten = struct {
         for (module.ports) |p| if (p.name == name) return true;
         for (module.nets) |n| if (n.name == name) return true;
         return false;
+    }
+
+    /// §6.5 "Ports provide a means of interconnecting instances of modules. If a
+    /// module A instantiates module B, the ports of module B are associated with
+    /// either the ports or the internal nets of module A." A VARIABLE of A is
+    /// neither, so it cannot stand as the actual of B's continuous port: there is
+    /// no node for the port to join (§6.5.1 lists the port expressions, every one
+    /// of them a net), and `declares` above already says why it is not an
+    /// implicit net either.
+    ///
+    /// Only a port of CONTINUOUS discipline: a real variable driving a discrete
+    /// or `wreal` input is a real EXPRESSION, which §3.7 and IEEE 1364's input
+    /// port rules allow, and the mixed-signal kernel decides those.
+    fn checkVariableActuals(self: *Flatten, module: *const Ast.ModuleDecl, inst: *const Ast.Instance) Error!void {
+        const child = elab_names.findModule(self, inst.module) orelse return;
+        for (child.ports, 0..) |p, i| {
+            const c = connectionFor(inst, p, i) orelse continue;
+            const n = elab_names.netRefName(self, c.expr) orelse continue;
+            if (declares(module, n)) continue;
+            const is_var = for (module.vars) |v| {
+                if (v.name == n) break true;
+            } else false;
+            if (!is_var or p.discipline == .none or !discipline.isContinuous(self.ctx.file, p.discipline)) continue;
+            try self.err(c.main_tok, .E0906, "`{s}` is a variable, and port `{s}` of `{s}` has the continuous discipline `{s}`: it joins only a net", .{
+                self.ctx.file.str(n), self.ctx.file.str(p.name), self.ctx.file.str(child.name), self.ctx.file.str(p.discipline),
+            });
+        }
     }
 
     /// The ways a connection list can be malformed: longer than the port list,
