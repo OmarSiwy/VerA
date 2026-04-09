@@ -213,9 +213,17 @@ static void nodes_and_branches(void)
         "net -> discipline is its node's");
 
   /* 11.6.6 */
+  /* Two branches are DECLARED, and a third exists: `Ip(f) <+ ...` names the
+   * pair (f, ground), and 5.4.2 makes that "the unnamed branch" between them —
+   * a branch like any other, which 11.6.6's module ->> branch edge reaches.
+   * Declaration order first; the unnamed one has no name to report and its
+   * negative terminal is the reference node, which no node object carries. */
   count = scan_all(vpi_iterate(vpiBranch, top), got, 8);
-  CHECK(count == 2, "two branches are declared, got %d", count);
+  CHECK(count == 3, "two declared branches and f's unnamed one, got %d", count);
   b1 = got[0]; b2 = got[1];
+  CHECK(vpi_compare_objects(vpi_handle(vpiPosNode, got[2]), f), "5.4.2: the unnamed branch runs from f");
+  CHECK(vpi_handle(vpiNegNode, got[2]) == NULL, "to the reference node");
+  CHECK(strcmp(vpi_get_str(vpiName, got[2]), "") == 0, "and has no name");
   CHECK(vpi_get(vpiType, b1) == vpiBranch, "a branch's type is vpiBranch");
   CHECK(strcmp(vpi_get_str(vpiName, b1), "b1") == 0 && strcmp(vpi_get_str(vpiFullName, b1), "p04_analog.b1") == 0,
         "b1's names");
