@@ -166,6 +166,10 @@ pub fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     defer self.block_path = outer_path;
     if (b.name != .none)
         self.block_path = try std.fmt.allocPrint(self.arena, "{s}{s}.", .{ outer_path, self.file.str(b.name) });
+    const outer_scope = self.scope_path;
+    defer self.scope_path = outer_scope;
+    if (try scopeElem(self, b)) |elem|
+        self.scope_path = if (outer_scope.len == 0) elem else try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ outer_scope, Elaborate.sep, elem });
     for (b.params) |*p| try lower_param.lowerParamDecl(self, p); // §5.3.2 local parameters
     try lower_param.checkOneItemPerScope(self, b.vars);
     for (b.vars) |*v| try lower_param.declareVarDecl(self, v, .local);
@@ -186,6 +190,24 @@ pub fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
         try self.builder.sealBlock(e);
         self.cur = e;
     }
+}
+
+/// The name `b` adds to §9.15's "path", or null for a block that is no scope.
+/// A generate block is named by §6.6.3 (`Ast.SeqBlock.gen_name`), with §6.6.1's
+/// `[i]` when a loop generate made it; any other block by its label, which
+/// elaboration flattened onto the instance path (`joinLocal`) and which is
+/// read back here relative to that instance.
+fn scopeElem(self: *Lower, b: Ast.SeqBlock) Oom!?[]const u8 {
+    const iter = self.gen_iter;
+    self.gen_iter = null; // this block's alone, never a nested one's
+    if (b.gen_name != .none) {
+        const g = self.file.str(b.gen_name);
+        return if (iter) |k| try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ g, k }) else g;
+    }
+    if (b.name == .none) return null;
+    const label = self.file.str(b.name);
+    const unit = if (self.cur_unit < self.out.unit_paths.len) self.out.unit_paths[self.cur_unit].path else "";
+    return if (std.mem.startsWith(u8, label, unit)) label[unit.len..] else label;
 }
 
 /// §5.3.2: "All identifiers declared within a named sequential block can be

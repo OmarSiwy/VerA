@@ -590,6 +590,15 @@ active_genvars: std.ArrayList([]const u8) = .empty,
 /// scope, "lo." inside `begin : lo`). The lowering-side half of `held_names`'
 /// key; see `declareVarDecl`.
 block_path: []const u8 = "",
+/// §9.15 Table 9-28 "path": the scopes between the instance and the call —
+/// named blocks and (§6.6.3) generate blocks under their external names —
+/// joined by §6.7's period, "" at the top of the instance. Unlike `block_path`
+/// it is never a storage key.
+scope_path: []const u8 = "",
+/// §6.6.1 the genvar value of the loop-generate iteration whose block is about
+/// to be lowered: `tryUnrollFor` sets it, `lowerSeqBlock` takes it, so the
+/// block's scope is `name[i]`.
+gen_iter: ?i64 = null,
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected BEFORE the module's
 /// variables are declared, for the same reason `held_names` is: the value a

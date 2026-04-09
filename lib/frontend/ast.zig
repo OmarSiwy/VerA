@@ -1367,6 +1367,14 @@ pub const SeqBlock = struct {
     /// decides a digital parse's scheme; elaboration gates an analog
     /// if-generate's (`Flatten.genInstances`).
     instances: []const Instance = &.{},
+    /// §6.6.3 a GENERATE block's name for external interfaces: its declared
+    /// name, or `genblk<n>` for an unnamed one ("n" the number of its generate
+    /// construct in the enclosing scope, zero-padded past any clash). `.none`
+    /// for every block that is not a generate block, and for the block §6.6.2's
+    /// direct nesting does not treat as a scope. Never a name that hierarchical
+    /// references resolve through: "an unnamed generate block has no name that
+    /// can be used in a hierarchical name".
+    gen_name: StrId = .none,
 };
 
 // ---------------------------------------------------------------------------

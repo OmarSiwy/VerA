@@ -148,21 +148,38 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // one flattened module and answered them with the TOP's name and "" — right
     // only for a call that happens to sit in the top module. `cur_unit` is the
     // instance that wrote this block, which is exactly what the clause asks for.
-    if (std.mem.eql(u8, name, "$simparam$str") and self.cur_unit < self.out.unit_paths.len) {
+    if (std.mem.eql(u8, name, "$simparam$str") and (self.cur_unit < self.out.unit_paths.len or self.out.module != null)) {
         const a = ex.args(e);
         if (a.len >= 1) if (constStrArg(self, a[0])) |nm| {
-            const u = self.out.unit_paths[self.cur_unit];
+            // A design with no instances has no unit table: its one unit is the
+            // top module, at the root.
+            const u: struct { module: []const u8, path: []const u8 } = if (self.cur_unit < self.out.unit_paths.len)
+                .{ .module = self.out.unit_paths[self.cur_unit].module, .path = self.out.unit_paths[self.cur_unit].path }
+            else
+                .{ .module = self.file.str(self.out.module.?.name), .path = "" };
             if (std.mem.eql(u8, nm, "module"))
                 return .{ .v = try self.mir.addStrConst(self.arena, u.module), .ty = .string };
             // §9.15's worked example produces "testbench.dut1": a top-level
             // module's instance name is its module name, and the path is joined
             // to it by §6.7's period. `path` already carries the separator.
-            if (std.mem.eql(u8, nm, "instance")) {
+            if (std.mem.eql(u8, nm, "instance") or std.mem.eql(u8, nm, "path")) {
                 const top = if (self.out.unit_paths.len != 0) self.out.unit_paths[0].module else u.module;
-                const full = if (u.path.len == 0)
+                const inst = if (u.path.len == 0)
                     top
                 else
                     try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ top, Elaborate.sep, u.path[0 .. u.path.len - 1] });
+                // "path" is "the hierarchical path to the $simparam$str
+                // function": the instance, then every scope inside it that
+                // encloses the call (§6.7 named blocks, §6.6.3 generate blocks
+                // by their external names). The example's "testbench.dut1.mytask"
+                // is the task form of the same thing.
+                // ponytail: an analog function body is not a scope here yet —
+                // its calls are inlined — so a call inside one reports the
+                // caller's path.
+                const full = if (std.mem.eql(u8, nm, "instance") or self.scope_path.len == 0)
+                    inst
+                else
+                    try std.fmt.allocPrint(self.arena, "{s}{c}{s}", .{ inst, Elaborate.sep, self.scope_path });
                 return .{ .v = try self.mir.addStrConst(self.arena, full), .ty = .string };
             }
         };
