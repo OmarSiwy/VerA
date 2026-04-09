@@ -168,6 +168,11 @@ pub const Design = struct {
     /// parent net `elems[k]`. Lowering interns no node for it: each element
     /// aliases its net's node (`Lower.lowerModule`).
     port_concats: []const PortConcat = &.{},
+    /// §6.4.3 "If a paramset variable without a description has the same name
+    /// as a module output variable, the module output variable shall not be
+    /// available for instances using the paramset." The flat names of those
+    /// variables, for §9.16's `$simprobe` to treat as unresolvable.
+    ps_hidden: []const []const u8 = &.{},
 };
 
 pub const PortConcat = struct {
@@ -427,6 +432,8 @@ pub const Flatten = struct {
     last_unit: u32 = 0,
     /// §9.15/§9.16 one entry per unit id, in issue order (so index == unit id).
     unit_paths: std.ArrayList(UnitPath) = .empty,
+    /// `Design.ps_hidden`, as the walk finds them.
+    ps_hidden: std.ArrayList([]const u8) = .empty,
 
     // The synthesized module's declarations, in append order.
     params: std.ArrayList(Ast.ParamDecl) = .empty,
@@ -725,6 +732,7 @@ pub const Flatten = struct {
             .units = self.unit_paths.items,
             .inserts = self.inserts.items,
             .port_concats = self.port_concats.items,
+            .ps_hidden = self.ps_hidden.items,
         };
     }
 
@@ -1015,6 +1023,11 @@ pub const Flatten = struct {
             try elab_paramset.paramsetOverrides(self, inst, p, child, &parent, &over, &unit, path)
         else
             try self.collectOverrides(inst, child, &parent, &over, &unit, path);
+        // §6.4.3 an undescribed paramset variable hides the module's variable of
+        // the same name from this instance's reporting. Only the selected
+        // paramset's own declarations; a chain's earlier links are not read.
+        if (ps) |p| for (p.vars) |v| if (!v.desc) for (child.vars) |mv| if (mv.name == v.name)
+            try self.ps_hidden.append(self.ctx.arena, try std.fmt.allocPrint(self.ctx.arena, "{s}{s}", .{ path, self.ctx.file.str(v.name) }));
 
         // ---- names: every local declaration gets its flat spelling ----------
         for (child.params) |p| try elab_names.bind(self, &unit, path, p.name);

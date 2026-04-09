@@ -599,6 +599,9 @@ scope_path: []const u8 = "",
 /// to be lowered: `tryUnrollFor` sets it, `lowerSeqBlock` takes it, so the
 /// block's scope is `name[i]`.
 gen_iter: ?i64 = null,
+/// §6.4.3 `Elaborate.Design.ps_hidden`: module output variables a paramset
+/// makes unavailable, by flat name. Read by `lowerSimprobe`.
+ps_hidden: []const []const u8 = &.{},
 /// A.6.2 the digital `initial` block's assignments, name -> the constant
 /// expression it leaves in that variable. Collected BEFORE the module's
 /// variables are declared, for the same reason `held_names` is: the value a
@@ -1123,6 +1126,7 @@ pub fn lowerFile(self: *Lower) Error!Lowered {
     });
     self.out.hier_names = design.names;
     self.out.unit_paths = design.units; // §9.15 Table 9-28 / §9.16 sibling scope
+    self.ps_hidden = design.ps_hidden; // §6.4.3
     self.out.inserts = design.inserts;
     // IEEE 1364 §19.2 on §3.6.5's STRUCTURAL implicit nets, which is the half
     // elaboration made but could not judge. Before `lowerModule`, so a design
