@@ -1,5 +1,14 @@
 # P03 — Analog VPI and accepted-point callbacks
 
+**Landed 2026-09-24** for everything but a user analog `$systf` and `ac`:
+01–05, 08, 10, 11, 91 and the new 92 run under `zig build test`
+(`build.zig`'s `vpi_runs`). The host builds the design's device and solver
+as a shared library (`vera.tb.renderVpiLib`) and drives the time walk from
+`src/vpi/analog.zig`. Still compile-only: 06, 07 and 90 (an analog systf's
+calltf — the device calls it through `contract.SystfHost`, which the host
+does not bind yet) and 09 (no small-signal analysis runs in-process). The
+ground-truth section below is the state before this landed.
+
 Pending fixtures. **Every one of them fails today**, and it fails at the C
 compiler, not at an assertion: the surface they call does not exist.
 
@@ -124,6 +133,13 @@ Ten positive fixtures, two rejections.
   that picks the other polarity must change the fixture and say so in this file
   — it may not leave the question open, because an application cannot be written
   against an unspecified return.
+* **Whether the first solution is also an `acbAcceptedPoint`.** §12.31.3 gives
+  it its own reason ("acbInitialStep — Upon acceptance of the first analog
+  solution") and does not say whether acbAcceptedPoint fires for it too. `02`
+  seeds `prev_t = 0` in acbInitialStep and requires every accepted time to be
+  strictly greater, which fixes the reading VerA implements
+  (`src/vpi/analog.zig`): the first solution is delivered as acbInitialStep
+  only; every later one — the final one included — is an accepted point.
 * **Dispatch order among same-reason callbacks.** Neither Verilog-AMS §12.31 nor
   IEEE 1364 §27 fixes the order of two `acbAcceptedPoint` routines at one point.
   Nothing here asserts it. The only ordering asserted is the one the clause text

@@ -645,6 +645,102 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
     return out.items;
 }
 
+/// Clause 12's analog host (§12.7–§12.10, §12.18, §12.31.3): the device
+/// and the fixed solver as a SHARED LIBRARY with a C interface, driven one
+/// solution at a time by a host that owns the clock.
+///
+/// The fixed-grid `renderRunner` decides every time point when it is
+/// generated; §12.31.3's acbAbsTime and acbElapsedTime "shall force a
+/// solution at that time", and acbConvergenceTest may reject one and "back
+/// up to an earlier time" — decisions made by a VPI application while the
+/// analysis runs. So the time walk is the host's (`src/vpi/analog.zig`) and
+/// this library answers four questions: solve at t (tentatively), accept the
+/// last solution, what is x, and what is each §5.6 row's value
+/// (`Options.vpi_contribs`, which the device must be compiled with).
+///
+/// A tentative solve changes nothing an accepted one reads: history is
+/// written by `stepPost` alone, so a rejected point is simply not accepted,
+/// and the next solve at an earlier time starts from the same history.
+/// Every unknown is solved for (§3.6.1: a node's value is the solution of
+/// the instances' equations); a `//! bias`/`//! wave` line still pins one, as
+/// a host driving that terminal.
+pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
+    var out: std.ArrayList(u8) = .empty;
+    try out.appendSlice(arena, tb_runner_text.runner_head);
+    try print(&out, arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.appendSlice(arena, tb_runner_text.runner_body);
+    try out.appendSlice(arena, "const times = [_]f64{");
+    for (d.times, 0..) |t, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
+    try out.appendSlice(arena, " };\n");
+    for (d.waves, 0..) |wv, k| {
+        try print(&out, arena, "const wave_{d} = [_]f64{{", .{k});
+        for (wv.values, 0..) |v, i| try print(&out, arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
+        try out.appendSlice(arena, " };\n");
+    }
+    try out.appendSlice(arena, tb_runner_text.vpi_lib_body);
+
+    // --- open: the card, the instance, the unknowns -----------------------
+    try out.appendSlice(arena,
+        \\export fn vera_vpi_open(kind: u8) callconv(.c) void {
+        \\    g_model = .{};
+        \\
+    );
+    for (d.params) |p| {
+        try print(&out, arena, "    g_model.{f} = cardValue(@TypeOf(g_model.{f}), {f});\n", .{
+            std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
+        });
+        try print(&out, arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(g_model, \"{f}__given\") = true;\n", .{
+            std.zig.fmtString(p.name), std.zig.fmtString(p.name),
+        });
+    }
+    try out.appendSlice(arena,
+        \\    if (comptime @hasDecl(D, "derive")) D.derive(&g_model);
+        \\    shapeCheck(&g_model);
+        \\    g_inst = .{};
+        \\
+    );
+    try print(&out, arena, "    g_inst.temperature = {f};\n", .{fmtF64(d.temp)});
+    try out.appendSlice(arena,
+        \\    g_inst.analysis_kind = @enumFromInt(kind);
+        \\    if (comptime @hasDecl(D, "systf_calls")) g_inst.systf = host_systf orelse &no_vpi_app;
+        \\    if (comptime @hasField(D.Instance, "plusargs")) g_inst.plusargs = &.{};
+        \\    if (comptime @hasDecl(D, "setup")) D.setup(Dual, &g_model, &g_inst);
+        \\    g_x = @splat(0.0);
+        \\    g_forced = @splat(null);
+        \\    if (comptime @hasDecl(D, "u_nodeset")) for (D.u_nodeset, 0..) |nodeset_i, i| {
+        \\        if (nodeset_i) |v| g_x[i] = v;
+        \\    };
+        \\
+    );
+    for (d.bias) |b|
+        try print(&out, arena, "    set(&g_x, &g_forced, \"{f}\", {f});\n", .{ std.zig.fmtString(b.name), fmtF64(b.value) });
+    try out.appendSlice(arena,
+        \\    g_state = newState(&g_model, &g_inst);
+        \\    q_prev = @splat(0.0);
+        \\    g_solved = false;
+        \\}
+        \\
+        \\export fn vera_vpi_solve(t: f64, dt: f64, first: bool, last: bool) callconv(.c) bool {
+        \\
+    );
+    for (d.waves, 0..) |wv, k|
+        try print(&out, arena, "    set(&g_x, &g_forced, \"{f}\", pwl(&wave_{d}, t));\n", .{ std.zig.fmtString(wv.name), k });
+    try out.appendSlice(arena,
+        \\    g_inst.abstime = t;
+        \\    g_inst.dt = dt;
+        \\    g_inst.is_initial_step = first;
+        \\    g_inst.is_final_step = last;
+        \\    g_inst.is_analog_initial = first;
+        \\    g_solved = solve(&g_x, &g_forced, &g_model, &g_inst);
+        \\    return g_solved;
+        \\}
+        \\
+        \\const print_residual = false;
+        \\
+    );
+    return out.items;
+}
+
 /// The relative compare the `white`/`flicker`/`ef`/`points` fields use, emitted
 /// as a local rather than added to the prelude: it exists only where a `//!
 /// noise` line asked for a number, and a prelude declaration would be dead in

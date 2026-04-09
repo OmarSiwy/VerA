@@ -355,6 +355,7 @@ pub const parse = tb_directive.parse;
 // Runner generation: the testbench `main` for one fixture — tb/runner.zig
 const tb_runner = @import("tb/runner.zig");
 pub const renderRunner = tb_runner.renderRunner;
+pub const renderVpiLib = tb_runner.renderVpiLib;
 pub const mixedPlan = tb_runner.mixedPlan;
 pub const shapeOverrides = tb_runner.shapeOverrides;
 

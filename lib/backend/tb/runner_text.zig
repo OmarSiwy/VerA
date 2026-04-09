@@ -826,6 +826,69 @@ pub const runner_body =
 /// The mixed-signal runner's fixed text (`renderMixed`): the digital half, the
 /// coordinator call, and the two conversions the adapter needs. Only a
 /// testbench built with `BuildOptions.mixed` imports `sim` and `diag`.
+/// `renderVpiLib`'s fixed half: the state one analysis lives in and the
+/// exports that do not depend on the directives.
+pub const vpi_lib_body =
+    \\var g_model: D.Model = .{};
+    \\var g_inst: D.Instance = .{};
+    \\var g_x: [n_u]f64 = @splat(0.0);
+    \\var g_forced: [n_u]?f64 = @splat(null);
+    \\var g_state: State = undefined;
+    \\var g_solved: bool = false;
+    \\/// §12.32 the host's analog system task/function callbacks, when it
+    \\/// registered any (`vera_vpi_systf`); the zero answer otherwise.
+    \\var host_systf: ?*contract.SystfHost = null;
+    \\
+    \\/// A `//! wave` value between the declared times, as the mixed runner
+    \\/// reads it: one value per `//! time` point, linear between them.
+    \\fn pwl(values: []const f64, t: f64) f64 {
+    \\    var k: usize = 0;
+    \\    while (k + 1 < times.len and times[k + 1] <= t) k += 1;
+    \\    const v0 = values[@min(k, values.len - 1)];
+    \\    if (k + 1 >= times.len or k + 1 >= values.len) return v0;
+    \\    return v0 + (values[k + 1] - v0) * (t - times[k]) / (times[k + 1] - times[k]);
+    \\}
+    \\
+    \\export fn vera_vpi_systf(h: ?*contract.SystfHost) callconv(.c) void {
+    \\    host_systf = h;
+    \\}
+    \\export fn vera_vpi_n_u() callconv(.c) usize {
+    \\    return n_u;
+    \\}
+    \\/// The solution the last `vera_vpi_solve` reached, tentative or accepted.
+    \\export fn vera_vpi_x() callconv(.c) [*]const f64 {
+    \\    return &g_x;
+    \\}
+    \\/// §5.6.1.3/§9.4.6: the last solution is final. The model's own §9.4
+    \\/// output for it, then the accepted-step bookkeeping every §4.5 operator
+    \\/// reads its history from.
+    \\export fn vera_vpi_accept() callconv(.c) void {
+    \\    if (@hasDecl(D, "display")) D.display(Dual, seed(&g_x), &g_model, &g_inst, g_inst.abstime);
+    \\    stepPost(&g_model, &g_inst, &g_x, &g_state, g_solved);
+    \\}
+    \\const n_rows = if (@hasDecl(D, "vpiContribs")) D.vpi_contrib_access.len else 0;
+    \\export fn vera_vpi_n_rows() callconv(.c) usize {
+    \\    return n_rows;
+    \\}
+    \\/// Row k's shape: access (0 potential, 1 flow), the terminal unknowns and
+    \\/// a potential source's flow unknown, -1 for ground / none.
+    \\export fn vera_vpi_row(k: usize, out: *[4]i32) callconv(.c) void {
+    \\    if (comptime n_rows == 0) return;
+    \\    out.* = .{ D.vpi_contrib_access[k], D.vpi_contrib_hi[k], D.vpi_contrib_lo[k], D.vpi_contrib_flow_u[k] };
+    \\}
+    \\/// Every row's (resistive, reactive) value at the current x, into `out`
+    \\/// (2 per row).
+    \\export fn vera_vpi_rows(out: [*]f64) callconv(.c) void {
+    \\    if (comptime n_rows == 0) return;
+    \\    const v = D.vpiContribs(Dual, seed(&g_x), &g_model, &g_inst);
+    \\    for (v, 0..) |r, k| {
+    \\        out[2 * k] = r[0];
+    \\        out[2 * k + 1] = r[1];
+    \\    }
+    \\}
+    \\
+;
+
 pub const mixed_body =
     \\const sim = @import("sim");
     \\const diag = @import("diag");

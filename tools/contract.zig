@@ -1562,6 +1562,11 @@ pub fn validate(comptime D: type) void {
     // ARPice has none and `@compileError`s (devices/engine.zig collectNoise).
     expectArray(D, "noise_gens", NoiseGen(D));
     requireWith(D, "noisePsd", "noise_gens");
+    // Clause 12: the row values are meaningless without the rows' shape.
+    requireWith(D, "vpiContribs", "vpi_contrib_access");
+    requireWith(D, "vpiContribs", "vpi_contrib_hi");
+    requireWith(D, "vpiContribs", "vpi_contrib_lo");
+    requireWith(D, "vpiContribs", "vpi_contrib_flow_u");
     if (@hasDecl(D, "noisePsd"))
         expectFn(D, "noisePsd", fn ([n]f64, *const D.Model, *const D.Instance) [D.noise_gens.len]PsdTerm);
 
@@ -1882,6 +1887,14 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "nextBreakpoint", {} },
     .{ "pendingBreakpoint", {} },
     .{ "delays", {} },
+    // Clause 12 (`codegen.Options.vpi_contribs`): the §5.6 contribution rows
+    // an analog VPI host reads §12.10's flows from. Opt-in; no other device
+    // declares them.
+    .{ "vpiContribs", {} },
+    .{ "vpi_contrib_access", {} },
+    .{ "vpi_contrib_hi", {} },
+    .{ "vpi_contrib_lo", {} },
+    .{ "vpi_contrib_flow_u", {} },
 });
 
 fn rejectStrayPubDecls(comptime D: type) void {
@@ -2454,6 +2467,14 @@ const MockAll = struct {
     /// void`. This used to be a 2-arg `(Model, Instance)` fn, which no caller
     /// anywhere has ever used; `validate` now refuses that shape.
     pub fn display(comptime S: type, _: [n_u]S, _: *const Model, _: *const Instance, _: f64) void {}
+    /// `codegen.Options.vpi_contribs`: one flow row from p to n.
+    pub const vpi_contrib_access = [_]u8{1};
+    pub const vpi_contrib_hi = [_]i32{0};
+    pub const vpi_contrib_lo = [_]i32{1};
+    pub const vpi_contrib_flow_u = [_]i32{-1};
+    pub fn vpiContribs(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance) [1][2]f64 {
+        return .{.{ x[0].sub(x[1]).val() * m.g, 0.0 }};
+    }
 };
 
 test "validate: minimal resistor" {

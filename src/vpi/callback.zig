@@ -20,6 +20,7 @@
 const std = @import("std");
 const root = @import("root.zig");
 const value = @import("value.zig");
+const analog = @import("analog.zig");
 
 const vpiHandle = root.vpiHandle;
 
@@ -82,6 +83,20 @@ pub const cbEndOfCompile: c_int = 10;
 pub const cbStartOfSimulation: c_int = 11;
 pub const cbEndOfSimulation: c_int = 12;
 
+// §12.31.3 the analog reasons. Verilog-AMS names them and numbers none; the
+// numbers are the ones tests/fixtures/ch12_vpi_routines/p03_vpi_analog.h
+// allocated, now vpi_user.h's.
+pub const acbInitialStep: c_int = 701;
+pub const acbFinalStep: c_int = 702;
+pub const acbAbsTime: c_int = 703;
+pub const acbElapsedTime: c_int = 704;
+pub const acbConvergenceTest: c_int = 705;
+pub const acbAcceptedPoint: c_int = 706;
+
+pub fn isAnalogReason(r: c_int) bool {
+    return r >= acbInitialStep and r <= acbAcceptedPoint;
+}
+
 /// §11.6.25's callback object, as `vpi_get(vpiType, cb)` reports it.
 pub const vpiCallback: c_int = 107;
 
@@ -109,6 +124,9 @@ pub const Cb = struct {
     /// cbNextSimTime: the tick it was registered at — it fires at the first
     /// time queue after this one.
     since: u64 = 0,
+    /// acbAbsTime / acbElapsedTime: the analog time, in seconds, whose
+    /// accepted solution it is delivered upon — and which it forces.
+    due_real: f64 = 0,
     dead: bool = false,
 };
 
@@ -216,6 +234,27 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 }
             }
         },
+        // §12.31.3. The four step reasons carry no time; acbAbsTime names an
+        // absolute analog time and acbElapsedTime an interval "advanced from
+        // the current solution" — the latest accepted one, or the start of
+        // the next analysis when none is running. Both are seconds, so only
+        // vpiScaledRealTime can state them.
+        acbInitialStep, acbFinalStep, acbConvergenceTest, acbAcceptedPoint => {},
+        acbAbsTime, acbElapsedTime => {
+            const t = d.time orelse {
+                root.fail("BADTIME", "vpi_register_cb: reason {d} needs a vpiScaledRealTime time", .{d.reason});
+                return null;
+            };
+            if (t.type != vpiScaledRealTime) {
+                root.fail("BADTIME", "vpi_register_cb: an analog time is in seconds; time type {d} is not vpiScaledRealTime", .{t.type});
+                return null;
+            }
+            if (!std.math.isFinite(t.real) or t.real < 0) {
+                root.fail("BADTIME", "vpi_register_cb: {e} is not a time an analysis reaches", .{t.real});
+                return null;
+            }
+            cb.due_real = if (d.reason == acbAbsTime) t.real else analog.acceptedTime() + t.real;
+        },
         else => {
             root.fail("NOREASON", "vpi_register_cb: reason {d} is not a reason VerA can deliver", .{d.reason});
             return null;
@@ -300,7 +339,7 @@ fn sweep() void {
 /// value are filled in the registered type and format. A value-change
 /// callback reads its value from `from`: the array element that changed, or
 /// the registered object itself.
-fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) void {
+fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) c_int {
     var t: Time = std.mem.zeroes(Time);
     const override = cb.reason == cbForce or cb.reason == cbRelease;
     var data: CbData = .{
@@ -312,7 +351,15 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) void {
         .index = index,
         .user_data = cb.user_data,
     };
-    if (cb.time_type != vpiSuppressTime) {
+    if (isAnalogReason(cb.reason)) {
+        // §12.31.3's time is the analog clock's, in seconds.
+        if (cb.time_type != vpiSuppressTime) {
+            t = cb.time;
+            t.type = vpiScaledRealTime;
+            t.real = analog.time();
+            data.time = &t;
+        }
+    } else if (cb.time_type != vpiSuppressTime) {
         t.type = cb.time_type;
         root.run.timeNow(cb.obj, &t);
         data.time = &t;
@@ -325,7 +372,7 @@ fn call(cb: *Cb, index: c_int, from: ?*const root.Obj) void {
     }
     depth += 1;
     defer depth -= 1;
-    _ = cb.rtn(&data);
+    return cb.rtn(&data);
 }
 
 /// Every live callback of `reason`, in registration order. Only the ones
@@ -336,7 +383,7 @@ fn fireAll(reason: c_int) void {
     const n = cbs.items.len;
     for (0..n) |i| {
         const cb = cbs.items[i];
-        if (!cb.dead and cb.reason == reason) call(cb, cb.index, null);
+        if (!cb.dead and cb.reason == reason) _ = call(cb, cb.index, null);
     }
     sweep();
 }
@@ -389,7 +436,7 @@ pub fn fireDue(reason: c_int, now: u64) void {
         const cb = cbs.items[i];
         if (cb.dead or cb.reason != reason or cb.due != now) continue;
         retire(cb);
-        call(cb, cb.index, null);
+        _ = call(cb, cb.index, null);
     }
     sweep();
 }
@@ -402,7 +449,7 @@ pub fn fireNext(now: u64) void {
         const cb = cbs.items[i];
         if (cb.dead or cb.reason != cbNextSimTime or now <= cb.since) continue;
         retire(cb);
-        call(cb, cb.index, null);
+        _ = call(cb, cb.index, null);
     }
     sweep();
 }
@@ -416,7 +463,7 @@ pub fn fireSlot(slot: u32) void {
         if (cb.dead or cb.reason != cbValueChange) continue;
         const target = root.asObj(cb.obj) orelse continue;
         if (target.slot == slot) {
-            call(cb, cb.index, null);
+            _ = call(cb, cb.index, null);
             continue;
         }
         // §12.31.1: a callback on an array hears each element's change, with
@@ -426,7 +473,7 @@ pub fn fireSlot(slot: u32) void {
         for (target.members) |m| {
             const word = &d.objects[m];
             if (word.slot != slot) continue;
-            call(cb, @intCast(d.objects[word.index.?].value.?.int), word);
+            _ = call(cb, @intCast(d.objects[word.index.?].value.?.int), word);
         }
     }
     sweep();
@@ -446,9 +493,69 @@ pub fn fireOverride(reason: c_int, o: *root.Obj) void {
         const cb = cbs.items[i];
         if (cb.dead or cb.reason != reason) continue;
         if (cb.obj != null and root.asObj(cb.obj) != o) continue;
-        call(cb, cb.index, o);
+        _ = call(cb, cb.index, o);
     }
     sweep();
+}
+
+// ---------------------------------------------------------------------------
+// §12.31.3 analog dispatch — driven by `analog.zig`'s time walk.
+// ---------------------------------------------------------------------------
+
+/// acbInitialStep, acbFinalStep or acbAcceptedPoint: every live callback of
+/// `reason` registered before this dispatch began. These persist: §12.31.3
+/// ties them to a kind of solution, not to one.
+pub fn fireAnalog(reason: c_int) void {
+    fireAll(reason);
+}
+
+/// acbConvergenceTest, "prior acceptance of the analog solution for the
+/// given time (this callback allows rejection of the analog solution at that
+/// time and backup to an earlier time)". Every callback runs; the solution
+/// is rejected if ANY returned non-zero.
+///
+/// IMPLEMENTATION-DEFINED, and documented here and in p03_SPEC.md: the LRM
+/// types `cb_rtn` as returning `int` and gives this reason the power to
+/// reject without spelling the encoding. 0 accepts, as 0 is the uneventful
+/// return of every other callback; anything else rejects.
+pub fn convergenceRejected() bool {
+    var rejected = false;
+    const n = cbs.items.len;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (cb.dead or cb.reason != acbConvergenceTest) continue;
+        if (call(cb, cb.index, null) != 0) rejected = true;
+    }
+    sweep();
+    return rejected;
+}
+
+/// acbAbsTime / acbElapsedTime due upon the solution accepted at `t`: each
+/// is delivered once and then retired — AFTER its routine returns, so a
+/// routine that removes itself is removing a live callback (§12.34 returns 1
+/// for it, p03_04).
+pub fn fireTimed(t: f64) void {
+    const n = cbs.items.len;
+    for (0..n) |i| {
+        const cb = cbs.items[i];
+        if (cb.dead or (cb.reason != acbAbsTime and cb.reason != acbElapsedTime)) continue;
+        if (!analog.sameTime(cb.due_real, t)) continue;
+        _ = call(cb, cb.index, null);
+        if (!cb.dead) retire(cb);
+    }
+    sweep();
+}
+
+/// The earliest acbAbsTime/acbElapsedTime instant strictly after `after`
+/// and at most `until`: the next solution §12.31.3 says "shall" be forced.
+pub fn nextForced(after: f64, until: f64) ?f64 {
+    var best: ?f64 = null;
+    for (cbs.items) |cb| {
+        if (cb.dead or (cb.reason != acbAbsTime and cb.reason != acbElapsedTime)) continue;
+        if (cb.due_real <= after or analog.sameTime(cb.due_real, after) or cb.due_real > until) continue;
+        if (best == null or cb.due_real < best.?) best = cb.due_real;
+    }
+    return best;
 }
 
 fn retire(cb: *Cb) void {
