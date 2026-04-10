@@ -3,7 +3,7 @@
 //! In: net and port declarations. Out: `nodes` (the U-enum index codegen depends on),
 //! implicit nets, and the port/branch tables.
 //!
-//! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2.
+//! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2.
 //!
 //! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
 //! directly, `lower_node.f(self, ...)`; `lower.zig` aliases only what other modules call.
@@ -97,14 +97,24 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
     const idx = self.node_voltages.get(name) orelse return;
     if (idx == ground) return;
     if (self.out.nodes.items(.disc)[idx].len != 0) return;
-    if (main_tok >= self.tok_starts.len) return;
-    const at = self.tok_starts[main_tok];
+    const dname = defaultDisciplineAt(self, main_tok) orelse return;
+    // A default naming a discipline that was never declared supplies no
+    // nature, so leaving the net bare is the honest outcome: E0337 then says
+    // the net has no discipline, which is exactly what happened.
+    if (!self.out.disciplines.contains(dname)) return;
+    self.out.nodes.items(.disc)[idx] = dname;
+}
 
-    // Backwards from the declaration: the most recent directive wins, and a
-    // wire-qualified one wins over an unqualified one however old it is.
+/// §10.2 the `default_discipline in force for a wire at token `main_tok`, or
+/// null when none is. Backwards from the token: the most recent directive
+/// wins, and a wire-qualified one wins over an unqualified one however old it
+/// is.
+pub fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
+    if (main_tok >= self.tok_starts.len) return null;
+    const at = self.tok_starts[main_tok];
     var fallback: ?[]const u8 = null;
     var i = self.directives.disciplines.len;
-    const chosen = while (i > 0) {
+    return while (i > 0) {
         i -= 1;
         const e = self.directives.disciplines[i];
         if (e.at > at) continue;
@@ -114,13 +124,55 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
         if (e.qualifier == .wire) break e.discipline;
         if (e.qualifier == null and fallback == null) fallback = e.discipline;
     } else fallback;
+}
 
-    const dname = chosen orelse return;
-    // A default naming a discipline that was never declared supplies no
-    // nature, so leaving the net bare is the honest outcome: E0337 then says
-    // the net has no discipline, which is exactly what happened.
-    if (!self.out.disciplines.contains(dname)) return;
-    self.out.nodes.items(.disc)[idx] = dname;
+/// §3.9 "For digital primitives the domain is discrete and thus the discipline
+/// is set via the default_discipline directive as it is for digital modules.
+/// If the discipline of digital connections (vpiLoConn) to a mixed net are
+/// unknown then the default_discipline must be specified (via the directive or
+/// other vendor specific method). If not specified, an error will result
+/// during discipline resolution." — E0960.
+///
+/// Every terminal of a gate, pull source or switch is such a digital
+/// connection. The net it names is MIXED when the net's own discipline is
+/// continuous: the primitive's side is discrete by the clause's second
+/// sentence, so the net joins the two domains. VerA has no vendor-specific
+/// method, so the directive in force at the primitive's text-stream position
+/// (the position §10.2 reads for any net) is the only way the connection's
+/// discipline can be known.
+///
+/// Run after `applyDefaultToAll`, so a bare net the directive made discrete is
+/// already not continuous. A net with no discipline at all is not mixed HERE:
+/// §3.6.5/§7.4 resolve it, and E0337 rules if anything analog touches it.
+pub fn checkPrimitiveDisciplines(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+    for (module.gates) |g| {
+        try checkPrimitiveTerminal(self, g.out, g.main_tok, "gate");
+        for (g.ins) |t| try checkPrimitiveTerminal(self, t, g.main_tok, "gate");
+    }
+    for (module.pulls) |p| try checkPrimitiveTerminal(self, p.out, p.main_tok, "pull source");
+    for (module.switches) |sw| for (sw.terms) |t| try checkPrimitiveTerminal(self, t, sw.main_tok, "switch");
+}
+
+fn checkPrimitiveTerminal(self: *Lower, term: Ast.ExprId, prim_tok: u32, what: []const u8) Oom!void {
+    const ex = &self.file.exprs;
+    const base = self.file.lvalueBase(term);
+    if (base == .none or ex.tag(base) != .ident) return;
+    if (defaultDisciplineAt(self, prim_tok) != null) return;
+    const name = self.file.str(ex.strOf(base));
+    // A vector is scalarised by now and its elements share one discipline
+    // (§3.6.3), so the first element answers for the whole net.
+    var key_buf: [lower_param.elem_key_len]u8 = undefined;
+    const key = if (self.out.vectors.get(name)) |r| try lower_param.elemKey(self, &key_buf, name, &.{r.at(0)}) else name;
+    const idx = self.node_voltages.get(key) orelse return;
+    if (idx == ground) return;
+    const dname = self.out.nodes.items(.disc)[idx];
+    const decl = lower_discipline.disciplineDecl(self, dname) orelse return;
+    if (lower_discipline.domainOf(decl) != .continuous) return;
+    var b = self.errWith(ex.mainTok(base), .E0960);
+    b.msg("`{s}` is of continuous discipline `{s}` and a terminal of a digital {s}", .{ name, dname, what });
+    b.note("the primitive's side of the net is discrete, so the net is mixed, and no `default_discipline is in force to name that side's discipline", .{});
+    b.help("put `default_discipline logic (or another discrete discipline) before the primitive", .{});
+    try b.emit();
 }
 
 /// IEEE 1364 §19.2 `` `default_nettype none ``, on a name that is about to

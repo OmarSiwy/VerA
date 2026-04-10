@@ -1348,6 +1348,9 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.ports) |p| try lower_node.applyDefaultToAll(self, self.file.str(p.name), p.main_tok);
     for (module.nets) |n| if (!self.out.discrete_inputs.contains(self.file.str(n.name)))
         try lower_node.applyDefaultToAll(self, self.file.str(n.name), n.main_tok);
+    // §3.9 a digital primitive on a continuous net needs the default the loops
+    // above just applied — after them, so a net it made discrete is not mixed.
+    try lower_node.checkPrimitiveDisciplines(self, module);
 
     // §1.3.4.1 "Nets of potential signal flow disciplines in modules may only
     // be bound to `input` or `output` ports of the module, not to `inout`
