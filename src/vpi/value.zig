@@ -414,6 +414,12 @@ pub export fn vpi_get_value(obj: vpiHandle, value_p: ?*Value) void {
         root.fail("BADVALUE", "vpi_get_value: value_p is NULL", .{});
         return;
     };
+    // §12.22.1 a derivative object reads back what calltf put on it.
+    if (@import("analog.zig").asDeriv(obj)) |dv| {
+        v.format = vpiRealVal;
+        v.value.real = dv.value;
+        return;
+    }
     const o = root.asObj(obj) orelse {
         root.fail("BADHANDLE", "vpi_get_value: that handle is not an object with a value", .{});
         return;
@@ -504,6 +510,19 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
     }
     if (run.read_only) {
         root.fail("READONLY", "vpi_put_value: cbReadOnlySynch forbids writing values or scheduling events", .{});
+        return null;
+    }
+    // §12.32.2 a derivative object of the running analog call.
+    if (@import("analog.zig").asDeriv(obj)) |dv| {
+        const pv = value_p orelse {
+            root.fail("BADVALUE", "vpi_put_value: value_p is NULL", .{});
+            return null;
+        };
+        if (pv.format != vpiRealVal) {
+            root.fail("BADFORMAT", "vpi_put_value: a derivative is a real, put with vpiRealVal", .{});
+            return null;
+        }
+        _ = @import("analog.zig").putDerivative(dv, pv.value.real);
         return null;
     }
     const o = root.asObj(obj) orelse {
