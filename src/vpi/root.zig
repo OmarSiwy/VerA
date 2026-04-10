@@ -422,6 +422,10 @@ pub const Obj = struct {
     /// source row's canonical pair — its flow is the row's, negated
     /// (§1.3.1.2: the reference direction is the declaration's).
     flow_neg: bool = false,
+    /// `.code` of the digital model: the main token of the statement it is —
+    /// a gate, a UDP instance, a continuous assignment — which with `owner`
+    /// names the engine driver §12.29's vpi_put_delays rewrites.
+    src_tok: u32 = 0,
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference

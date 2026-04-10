@@ -1966,6 +1966,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             .s0 = a.s0,
             .s1 = a.s1,
             .delay = try r.declaredDelay3(a.delay, a.tok),
+            .tok = a.tok,
         };
         try grouped[a.net].append(arena, @intCast(i));
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .continuous = @intCast(i) }) }, null, false);

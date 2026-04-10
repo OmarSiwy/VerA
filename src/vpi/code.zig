@@ -380,6 +380,7 @@ pub const Builder = struct {
                 .{ .tag = vpiDelay, .to = delay },
             }, &.{}, &.{});
             b.objects.items[at].delays = try b.delays(a.delay);
+            b.objects.items[at].src_tok = a.main_tok;
             try b.lists.cont_assigns.append(b.gpa, at);
         }
         // §11.6.13 gates, in source order, then UDP instances.
@@ -390,6 +391,7 @@ pub const Builder = struct {
             const at = try b.primitive(vpiGate, gateType(g.kind), gateName(g.kind), terms.items);
             const delay = if (g.delay.any()) try b.expr(g.delay.rise) else none;
             b.objects.items[at].delays = try b.delays(g.delay);
+            b.objects.items[at].src_tok = g.main_tok;
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{.{ .tag = vpiDelay, .to = delay }});
         }
         if (b.udps) |udps| for (m.instances) |inst| {
@@ -401,6 +403,7 @@ pub const Builder = struct {
             try b.setName(at, try b.arena.dupe(u8, b.file.str(inst.name)));
             const delay = if (inst.delay.any()) try b.expr(inst.delay.rise) else none;
             b.objects.items[at].delays = try b.delays(inst.delay);
+            b.objects.items[at].src_tok = inst.main_tok;
             b.objects.items[at].edges = try b.arena.dupe(Edge, &.{
                 .{ .tag = vpiUdpDefn, .to = defn },
                 .{ .tag = vpiDelay, .to = delay },
@@ -1041,3 +1044,101 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
         };
     }
 }
+
+// ---------------------------------------------------------------------------
+// §12.29 vpi_put_delays
+// ---------------------------------------------------------------------------
+
+/// "shall set the delays or timing limits of an object as indicated in the
+/// delay_p structure. The same ordering of delays shall be used as described
+/// in the vpi_get_delays() function. If only the delay changes, and not the
+/// pulse limits, the pulse limits shall retain the values they had before the
+/// delays where altered."
+///
+/// The objects are the ones whose delays the ENGINE applies — a primitive
+/// (§11.6.13: "For primitive objects, the no_of_delays value shall be 2 or
+/// 3") and a continuous assignment (§11.6.17, a delay3: 1..3), found as the
+/// driver their statement became in their instance. The new delays hold from
+/// the next transition the engine schedules; one already in flight keeps the
+/// delay it was scheduled with (IEEE 1364 §6.1.3/§7.14 fix a delay when the
+/// change is scheduled). A delay control (§11.6.22) is a statement's, read
+/// by a process, not a driver's, and is refused.
+///
+/// Table 12-5's layouts: with `mtm_flag` each delay is a min/typ/max triple
+/// and the TYPICAL is applied (no mintypmax selection reaches the engine,
+/// which runs typical, as `vpi_get_delays` reports); with `pulsere_flag` each
+/// is a (delay, reject, error) triple, and the limits have nowhere to live
+/// apart from the delay — IEEE 1364 §14.6.1's inertial default, "the pulse
+/// limits ... the delay itself" — so they follow it, as they read back.
+pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
+    root.clearError();
+    const o = root.asObj(obj) orelse {
+        root.fail("BADHANDLE", "vpi_put_delays: that handle is not an object", .{});
+        return;
+    };
+    const d = delay_p orelse {
+        root.fail("BADDELAY", "vpi_put_delays: delay_p is NULL", .{});
+        return;
+    };
+    const primitive = o.kind == .code and (o.vtype == vpiGate or o.vtype == vpiUdp);
+    const assign = o.kind == .code and o.vtype == vpiContAssign;
+    if (!primitive and !assign) {
+        root.fail("NODELAY", "vpi_put_delays: that object has no delays a put can set", .{});
+        return;
+    }
+    const least: c_int = if (primitive) 2 else 1;
+    if (d.no_of_delays < least or d.no_of_delays > 3) {
+        root.fail("BADDELAY", "vpi_put_delays: no_of_delays {d} is not legal here ({d}..3)", .{ d.no_of_delays, least });
+        return;
+    }
+    if (d.time_type != callback.vpiScaledRealTime and d.time_type != callback.vpiSimTime) {
+        root.fail("BADDELAY", "vpi_put_delays: time_type {d} is neither vpiScaledRealTime nor vpiSimTime", .{d.time_type});
+        return;
+    }
+    if (d.da == null) {
+        root.fail("BADDELAY", "vpi_put_delays: da is NULL", .{});
+        return;
+    }
+    const r = run.attached() orelse {
+        root.fail("NOENGINE", "vpi_put_delays: no simulation is running this object's drivers", .{});
+        return;
+    };
+    const n: usize = @intCast(d.no_of_delays);
+    const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
+    const pulse: usize = if (d.pulsere_flag != 0) 3 else 1;
+    var ticks: [3]u64 = undefined;
+    var units: [3]f64 = undefined;
+    for (0..n) |k| {
+        // The k-th delay's element: its typical (mtm), its delay (pulsere).
+        const t = d.da[k * mtm * pulse + (if (mtm == 3) @as(usize, 1) else 0)];
+        if (t.type != d.time_type) {
+            root.fail("BADDELAY", "vpi_put_delays: da[{d}] is not of the structure's time_type", .{k});
+            return;
+        }
+        ticks[k] = run.ticksOf(t, obj) orelse return;
+        units[k] = if (t.type == callback.vpiScaledRealTime) t.real else @floatFromInt(ticks[k]);
+    }
+    // IEEE 1364 §7.14's derivations for the delays not given.
+    if (n < 2) ticks[1] = ticks[0];
+    if (n < 3) ticks[2] = @min(ticks[0], ticks[1]);
+    const scope = o.owner orelse 0;
+    var hit = false;
+    for (r.drivers) |*drv| {
+        if (drv.tok != o.src_tok or drv.scope != scope) continue;
+        drv.delay = .{ .rise = ticks[0], .fall = ticks[1], .off = ticks[2], .present = true };
+        hit = true;
+    }
+    if (!hit) {
+        root.fail("NODRIVER", "vpi_put_delays: the engine holds no driver for that statement", .{});
+        return;
+    }
+    // What vpi_get_delays reads back: the written delays, in the module's
+    // unit when given scaled.
+    const d_objs = &root.design.?;
+    const idx = (@intFromPtr(o) - @intFromPtr(d_objs.objects.ptr)) / @sizeOf(root.Obj);
+    d_objs.objects[idx].delays = d_objs.arena.allocator().dupe(f64, units[0..n]) catch {
+        root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
+        return;
+    };
+}
+
