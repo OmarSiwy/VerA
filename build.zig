@@ -351,8 +351,9 @@ const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, s
 /// NOT here, each for a reason outside the routine it exercises:
 ///   p02_10  a $systf call in digital code — the engine has no user-systf call
 ///   p02_11  an analog $systf — needs an analog solver in this process
-///   p03_06/07/90  an analog $systf's calltf — the device calls it
-///           through `contract.SystfHost`, which this host does not yet bind
+///   p03_07/90, p02_11  an analog system TASK whose calltf writes an output
+///           argument (§12.22.2's $resistor): the device calls user system
+///           FUNCTIONS only (`contract.SystfHost` returns one value)
 ///   p03_09  an `ac` analysis — no small-signal solve runs in this process
 ///   audit_builtin_override, audit_lazy_arguments — a user $systf call,
 ///           as p02_10
@@ -398,6 +399,16 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ch12_vpi_routines/p03_11_registration_roundtrip.c",
         .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
         .stdout = "p03-11: systf_roundtrip=1 cb_roundtrip=1 dup_rejected=1 probe_hits=1 probe_t=0.0025\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_06_sampler_plugin.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_sampnhold.va",
+        .stdout = "p03-06: samples=6 first=0 last=5 hold_2p5=2 hold_4p25=4\n",
+    },
+    .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_93_get_real_in_calltf.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_env_probe.va",
+        .stdout = "p03-93: start=0 end=0.001 max_step=0.0001 refused_per_call=2 v_b=1\n",
     },
     .{
         .c = "tests/fixtures/ch12_vpi_routines/p03_92_reject_analog_callback_times.c",

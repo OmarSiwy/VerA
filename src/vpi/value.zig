@@ -167,7 +167,7 @@ pub var cb_store: Store = .{};
 /// Fill `v` from `o` in the format `v.format` names. Errors are recorded and
 /// leave `v` as it was.
 pub fn read(o: *const Obj, v: *Value, st: *Store) void {
-    const src = source(o) orelse {
+    const src = source(o) orelse if (@import("analog.zig").argValue(o)) |r| Source{ .real = r } else {
         root.fail("NOVALUE", "vpi_get_value: `{s}` has no value this process can read", .{o.full});
         return;
     };
@@ -524,6 +524,11 @@ pub export fn vpi_put_value(obj: vpiHandle, value_p: ?*Value, time_p: ?*const Ti
         root.fail("NOPUT", "vpi_put_value: `{s}` is a parameter, which vpi_put_value does not apply to", .{o.full});
         return null;
     }
+    // §12.30 "system function calls": the returned value of the analog call
+    // calltf is running for (§12.32.3 "Set returned value to held value").
+    if (o.kind == .code and o.vtype == root.code.vpiSysFuncCall) if (value_p) |pv| if (pv.format == vpiRealVal) {
+        if (@import("analog.zig").putResult(o, pv.value.real)) return null;
+    };
     const at = o.slot orelse {
         root.fail("NOVALUE", "vpi_put_value: `{s}` has no value this process holds", .{o.full});
         return null;
