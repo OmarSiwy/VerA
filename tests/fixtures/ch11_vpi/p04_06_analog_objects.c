@@ -76,6 +76,8 @@
 //! lrm 12.19
 //! lrm 12.23
 //! lrm 12.33.2
+//! lrm C.13
+//! lrm-reject C.13
 
 #include "p02_check.h"
 
