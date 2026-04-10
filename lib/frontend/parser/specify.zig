@@ -39,16 +39,16 @@ const found = Parser.found;
 /// PARSED, not skipped to `endspecify`. A token skip would accept any text
 /// at all between the keywords, which is a strictly weaker claim than the
 /// annex makes and would let a typo in a path declaration ship silently.
-// ponytail: nothing is recorded, because nothing consumes it — same call as
-// `parsePassSwitch`. The upgrade path is a discrete half in `Flatten`, and
-// until that exists an AST field for a path delay is dead weight.
-pub fn parseSpecifyBlock(self: *Parser) Error!void {
+// The paths and timing checks ARE recorded (`ModuleDecl.paths`,
+// `.timing_checks`): §11.6.15's VPI objects read them. No simulation applies
+// them, which is what W0251 still says.
+pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     const open = self.pos;
     self.pos += 1; // `specify`
     while (!parse_module.reservedIs(self, self.pos, "endspecify")) {
         if (self.peek() == .eof or self.peek() == .kw_endmodule)
             return self.failAt(self.pos, .E0207, "found {s}: no `endspecify` closes the specify block", .{self.found(self.pos)});
-        try parseSpecifyItem(self);
+        try parseSpecifyItem(self, b);
     }
     self.pos += 1; // `endspecify`
     try self.bag.add(
@@ -68,7 +68,7 @@ pub fn parseSpecifyBlock(self: *Parser) Error!void {
 ///             | showcancelled_declaration
 ///             | path_declaration
 ///             | system_timing_check
-pub fn parseSpecifyItem(self: *Parser) Error!void {
+pub fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
     switch (self.peek()) {
         .kw_reserved => {
             const w = parse_expr.tokenText(self, self.pos);
@@ -98,7 +98,7 @@ pub fn parseSpecifyItem(self: *Parser) Error!void {
             // simple_path_declaration`.
             if (std.mem.eql(u8, w, "ifnone")) {
                 self.pos += 1;
-                return parsePathDeclaration(self);
+                return parsePathDeclaration(self, b, .none, true);
             }
             return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)});
         },
@@ -107,12 +107,12 @@ pub fn parseSpecifyItem(self: *Parser) Error!void {
         .kw_if => {
             self.pos += 1;
             _ = try self.expect(.lparen);
-            _ = try parse_expr.parseExpr(self);
+            const cond = try parse_expr.parseExpr(self);
             _ = try self.expect(.rparen);
-            return parsePathDeclaration(self);
+            return parsePathDeclaration(self, b, cond, false);
         },
-        .lparen => return parsePathDeclaration(self),
-        .system_identifier => return parseTimingCheck(self),
+        .lparen => return parsePathDeclaration(self, b, .none, false),
+        .system_identifier => return parseTimingCheck(self, b),
         else => return self.failAt(self.pos, .E0207, "found {s}, which begins no A.7.1 specify_item", .{self.found(self.pos)}), // else: begins no A.7.1 specify_item: E0207
     }
 }
@@ -121,23 +121,30 @@ pub fn parseSpecifyItem(self: *Parser) Error!void {
 /// [ [ constant_range_expression ] ]` and its output twin, which differ
 /// only in which port directions the identifier may name — a rule about
 /// the NAME, judged where the ports are known, not here.
-pub fn parseSpecifyTerminal(self: *Parser) Error!void {
-    _ = try self.expectIdent();
-    if (!self.eat(.lbracket)) return;
-    _ = try parse_expr.parseExpr(self);
-    if (self.eat(.colon)) _ = try parse_expr.parseExpr(self);
+pub fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
+    const tok = self.pos;
+    const name = try self.expectIdent();
+    var e = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
+    if (!self.eat(.lbracket)) return e;
+    const at = self.pos - 1;
+    var idx = try parse_expr.parseExpr(self);
+    if (self.eat(.colon)) {
+        const lsb = try parse_expr.parseExpr(self);
+        idx = try self.file.exprs.add(self.arena, .{ .tag = .range, .main_tok = at, .lhs = idx, .rhs = lsb });
+    }
     _ = try self.expect(.rbracket);
+    e = try self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = at, .lhs = e, .rhs = idx });
+    return e;
 }
 
 /// A.7.2 `list_of_path_inputs` / `list_of_path_outputs` — the same
 /// comma-separated run of A.7.3 descriptors under two names. Returns how
 /// many it read, for the parallel path's one-to-one rule.
-pub fn parseSpecifyTerminalList(self: *Parser) Error!u32 {
-    var n: u32 = 0;
+pub fn parseSpecifyTerminalList(self: *Parser) Error![]const Ast.ExprId {
+    var out: std.ArrayList(Ast.ExprId) = .empty;
     while (true) {
-        try parseSpecifyTerminal(self);
-        n += 1;
-        if (!self.eat(.comma)) return n;
+        try out.append(self.arena, try parseSpecifyTerminal(self));
+        if (!self.eat(.comma)) return out.items;
     }
 }
 
@@ -158,15 +165,16 @@ pub fn parseSpecifyTerminalList(self: *Parser) Error!u32 {
 /// one by a token the cursor is already on: `=>` versus `*>` chooses
 /// parallel from full, and a `(` after the arrow chooses edge-sensitive
 /// from simple. The caller has consumed any `if (…)` or `ifnone` prefix.
-pub fn parsePathDeclaration(self: *Parser) Error!void {
+pub fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, ifnone: bool) Error!void {
+    const main_tok = self.pos;
     _ = try self.expect(.lparen);
     // A.7.4 `edge_identifier ::= posedge | negedge`, present only on the
     // two edge-sensitive descriptions.
-    _ = self.eat(.kw_posedge) or self.eat(.kw_negedge);
+    const edge: Ast.SpecEdge = if (self.eat(.kw_posedge)) .posedge else if (self.eat(.kw_negedge)) .negedge else .none;
     const src_tok = self.pos;
     const sources = try parseSpecifyTerminalList(self);
     // A.7.4 `polarity_operator ::= + | -`.
-    _ = self.eat(.plus) or self.eat(.minus);
+    const polarity = eatPolarity(self);
     const parallel = parse_module.eatSymbol(self, "=>");
     if (!parallel and !parse_module.eatSymbol(self, "*>")) return self.failAt(
         self.pos,
@@ -178,21 +186,23 @@ pub fn parsePathDeclaration(self: *Parser) Error!void {
     // before the arrow and one output descriptor after it; lists are the
     // full path's (`*>`).
     const dst_tok = self.pos;
+    var data: Ast.ExprId = .none;
+    var data_polarity: Ast.SpecPolarity = .none;
     const outputs = if (self.eat(.lparen)) edge: {
         // The edge-sensitive arms: the outputs, a polarity and the
         // `data_source_expression` the path's value comes from.
-        const n = try parseSpecifyTerminalList(self);
-        _ = self.eat(.plus) or self.eat(.minus);
+        const outs = try parseSpecifyTerminalList(self);
+        data_polarity = eatPolarity(self);
         _ = try self.expect(.colon);
-        _ = try parse_expr.parseExpr(self);
+        data = try parse_expr.parseExpr(self);
         _ = try self.expect(.rparen);
-        break :edge n;
+        break :edge outs;
     } else try parseSpecifyTerminalList(self);
-    if (parallel and (sources != 1 or outputs != 1)) return self.failAt(
-        if (sources != 1) src_tok else dst_tok,
+    if (parallel and (sources.len != 1 or outputs.len != 1)) return self.failAt(
+        if (sources.len != 1) src_tok else dst_tok,
         .E0207,
         "a parallel path (`=>`) connects one source to one destination, and this one lists {d} source(s) and {d} destination(s); lists need the full path `*>` (A.7.2)",
-        .{ sources, outputs },
+        .{ sources.len, outputs.len },
     );
     _ = try self.expect(.rparen);
     _ = try self.expect(.assign_eq);
@@ -202,25 +212,43 @@ pub fn parsePathDeclaration(self: *Parser) Error!void {
     // and a parenthesized expression is one.
     const bracketed = self.eat(.lparen);
     const delay_tok = self.pos;
-    var delays: u32 = 0;
+    var delays: std.ArrayList(Ast.ExprId) = .empty;
     while (true) {
-        _ = try parse_expr.parseExpr(self);
-        delays += 1;
+        try delays.append(self.arena, try parse_expr.parseExpr(self));
         if (!self.eat(.comma)) break;
     }
     // A.7.4 `list_of_path_delay_expressions` has five arms: one value,
     // rise/fall, rise/fall/z, the six transition delays and the twelve.
-    switch (delays) {
+    switch (delays.items.len) {
         1, 2, 3, 6, 12 => {},
         else => return self.failAt(
             delay_tok,
             .E0207,
             "a path delay lists 1, 2, 3, 6 or 12 values (A.7.4 list_of_path_delay_expressions), not {d}",
-            .{delays},
+            .{delays.items.len},
         ),
     }
     if (bracketed) _ = try self.expect(.rparen);
     _ = try self.expect(.semicolon);
+    try b.paths.append(self.arena, .{
+        .full = !parallel,
+        .edge = edge,
+        .polarity = polarity,
+        .cond = cond,
+        .ifnone = ifnone,
+        .ins = sources,
+        .outs = outputs,
+        .data = data,
+        .data_polarity = data_polarity,
+        .delays = delays.items,
+        .main_tok = main_tok,
+    });
+}
+
+fn eatPolarity(self: *Parser) Ast.SpecPolarity {
+    if (self.eat(.plus)) return .positive;
+    if (self.eat(.minus)) return .negative;
+    return .none;
 }
 
 /// A.7.5.1's twelve `system_timing_check` commands, as the argument counts
@@ -253,8 +281,10 @@ const controlled_first = std.StaticStringMap(void).initComptime(.{ .{"$period"},
 /// A.7.5.1 `system_timing_check`. A `$name` inside a specify block is one
 /// of exactly twelve commands — A.7.1 admits no other system task there —
 /// so a name the table does not hold is an error rather than a call.
-pub fn parseTimingCheck(self: *Parser) Error!void {
+pub fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     const tok = self.pos;
+    var args: std.ArrayList(Ast.ExprId) = .empty;
+    var edges: std.ArrayList(Ast.SpecEdge) = .empty;
     const arity = timing_checks.get(parse_expr.tokenText(self, tok)) orelse return self.failAt(
         tok,
         .E0207,
@@ -270,7 +300,11 @@ pub fn parseTimingCheck(self: *Parser) Error!void {
         // EMPTY. That is why an argument is counted before it is read.
         n +|= 1;
         const arg = self.pos;
-        const controlled = self.peek() != .comma and self.peek() != .rparen and try parseTimingCheckArg(self);
+        var slot: Ast.ExprId = .none;
+        var ev: Ast.SpecEdge = .none;
+        const controlled = self.peek() != .comma and self.peek() != .rparen and try parseTimingCheckArg(self, &slot, &ev);
+        try args.append(self.arena, slot);
+        try edges.append(self.arena, ev);
         // A.7.5.1: `$period` and `$width` open with a
         // `controlled_reference_event`, and A.7.5.3's
         // `controlled_timing_check_event` makes its event control
@@ -299,6 +333,12 @@ pub fn parseTimingCheck(self: *Parser) Error!void {
         "`{s}` takes {d} to {d} arguments, not {d}",
         .{ parse_expr.tokenText(self, tok), arity[0], arity[1], n },
     );
+    try b.timing_checks.append(self.arena, .{
+        .name = try self.internTok(tok),
+        .args = args.items,
+        .edges = edges.items,
+        .main_tok = tok,
+    });
 }
 
 /// One argument of A.7.5.1's commands. The clause's argument productions
@@ -314,10 +354,12 @@ pub fn parseTimingCheck(self: *Parser) Error!void {
 /// read; `parseTimingCheck` enforces the MANDATORY one of a
 /// `controlled_reference_event` (`$period`, `$width`). The union means
 /// every optional piece of A.7.5.3 is read rather than skipped.
-pub fn parseTimingCheckArg(self: *Parser) Error!bool {
-    var controlled = self.eat(.kw_posedge) or self.eat(.kw_negedge);
+pub fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Error!bool {
+    ev.* = if (self.eat(.kw_posedge)) .posedge else if (self.eat(.kw_negedge)) .negedge else .none;
+    var controlled = ev.* != .none;
     if (!controlled and parse_module.reservedIs(self, self.pos, "edge")) {
         controlled = true;
+        ev.* = .edge;
         // A.7.5.3 `edge_control_specifier ::= edge [ edge_descriptor
         // { , edge_descriptor } ]`. The descriptors are two-character
         // symbols (`01`, `z1`, `0x`) that reach here as numbers or
@@ -332,7 +374,7 @@ pub fn parseTimingCheckArg(self: *Parser) Error!bool {
             self.pos += 1;
         };
     }
-    _ = try parse_expr.parseExpr(self);
+    slot.* = try parse_expr.parseExpr(self);
     // A.7.5.3's `&&&`, which is three tokens' worth of `&` in a stream that
     // has no tag for it.
     if (parse_module.eatSymbol(self, "&&&")) _ = try parse_expr.parseExpr(self);

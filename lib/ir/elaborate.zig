@@ -420,6 +420,11 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     .tasks = .top,
     // §8.5.3.5 switches, run by the digital engine; merged like gates.
     .switches = .merged,
+    // A.7 specify paths and timing checks: read only by the VPI's §11.6.15
+    // model, which walks each module's OWN declaration, never the flattened
+    // one — so the flat design keeps the top's, as it does its tasks.
+    .paths = .top,
+    .timing_checks = .top,
     .attrs = .merged,
     // `pickTop` never picks a connect module, so this is always the top's
     // `false`; a hand-placed one (§7.1) is a child like any other.

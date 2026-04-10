@@ -103,6 +103,31 @@ pub const vpiArgument: c_int = 89;
 pub const vpiOperand: c_int = 97;
 pub const vpiProcess: c_int = 99;
 pub const vpiExpr: c_int = 102;
+// §11.6.15 (IEEE 1364 Annex G numbering): module paths, path terms, timing
+// checks and their terms, the relations between them, and their properties.
+pub const vpiModPath: c_int = 31;
+pub const vpiPathTerm: c_int = 43;
+pub const vpiTchk: c_int = 61;
+pub const vpiTchkTerm: c_int = 62;
+pub const vpiTchkDataTerm: c_int = 86;
+pub const vpiTchkNotifier: c_int = 87;
+pub const vpiTchkRefTerm: c_int = 88;
+pub const vpiModPathIn: c_int = 95;
+pub const vpiModPathOut: c_int = 96;
+pub const vpiEdge: c_int = 36;
+pub const vpiPathType: c_int = 37;
+pub const vpiPolarity: c_int = 38;
+pub const vpiDataPolarity: c_int = 39;
+pub const vpiTchkType: c_int = 40;
+pub const vpiPathFull: c_int = 1;
+pub const vpiPathParallel: c_int = 2;
+pub const vpiPositive: c_int = 1;
+pub const vpiNegative: c_int = 2;
+pub const vpiUnknown: c_int = 3;
+pub const vpiNoEdge: c_int = 0x00;
+pub const vpiPosedge: c_int = 0x0D;
+pub const vpiNegedge: c_int = 0x32;
+pub const vpiAnyEdge: c_int = 0x3F;
 pub const vpiStmt: c_int = 104;
 pub const vpiRightRange: c_int = 83;
 
@@ -224,6 +249,10 @@ pub fn typeName(t: c_int) ?[]const u8 {
         vpiAnalog => "vpiAnalog",
         vpiContrib => "vpiContrib",
         vpiAccessFunc => "vpiAccessFunc",
+        vpiModPath => "vpiModPath",
+        vpiPathTerm => "vpiPathTerm",
+        vpiTchk => "vpiTchk",
+        vpiTchkTerm => "vpiTchkTerm",
         else => null, // else: not a type this file makes; the caller answers
     };
 }
@@ -236,8 +265,12 @@ pub const ScopeLists = struct {
     functions: std.ArrayList(u32) = .empty,
     events: std.ArrayList(u32) = .empty,
     primitives: std.ArrayList(u32) = .empty,
+    mod_paths: std.ArrayList(u32) = .empty,
+    tchks: std.ArrayList(u32) = .empty,
 
     pub fn deinit(s: *ScopeLists, gpa: std.mem.Allocator) void {
+        s.mod_paths.deinit(gpa);
+        s.tchks.deinit(gpa);
         s.cont_assigns.deinit(gpa);
         s.processes.deinit(gpa);
         s.tasks.deinit(gpa);
@@ -255,6 +288,8 @@ pub const ScopeLists = struct {
             .{ .tag = vpiFunction, .items = try arena.dupe(u32, s.functions.items) },
             .{ .tag = vpiNamedEvent, .items = try arena.dupe(u32, s.events.items) },
             .{ .tag = vpiPrimitive, .items = try arena.dupe(u32, s.primitives.items) },
+            .{ .tag = vpiModPath, .items = try arena.dupe(u32, s.mod_paths.items) },
+            .{ .tag = vpiTchk, .items = try arena.dupe(u32, s.tchks.items) },
         });
     }
 };
@@ -409,6 +444,9 @@ pub const Builder = struct {
                 .{ .tag = vpiDelay, .to = delay },
             });
         };
+        // §11.6.15 the specify block's module paths and timing checks.
+        for (m.paths) |p| try b.modPath(p);
+        for (m.timing_checks) |t| try b.timingCheck(t);
         // §11.6.21 initial and always.
         for (m.discrete) |d| {
             const body = try b.stmt(d.body);
@@ -464,6 +502,86 @@ pub const Builder = struct {
     /// A delay3's literal values, in the module's time unit: IEEE 1364
     /// §7.14's rise, fall, and turn-off. A value that is not a literal is not
     /// folded here, and the object then holds no delays (§12.11 refuses).
+    /// §11.6.15 a module path: `vpiModPathIn` / `vpiModPathOut` path terms
+    /// (each ->vpiExpr its terminal, with vpiDirection and vpiEdge),
+    /// ->vpiCondition its `if` expression, and vpiPathType, vpiPolarity,
+    /// vpiDataPolarity. Its delays are the A.7.4 list, for §12.11.
+    fn modPath(b: *Builder, p: Ast.SpecPath) Error!void {
+        var ins: std.ArrayList(u32) = .empty;
+        for (p.ins) |e| try ins.append(b.arena, try b.term(vpiPathTerm, e, root.vpiInput, p.edge));
+        var outs: std.ArrayList(u32) = .empty;
+        for (p.outs) |e| try outs.append(b.arena, try b.term(vpiPathTerm, e, root.vpiOutput, .none));
+        const cond = if (p.cond != .none) try b.expr(p.cond) else none;
+        const at = try b.code(vpiModPath, &.{
+            .{ .tag = vpiCondition, .to = cond },
+        }, &.{
+            .{ .tag = vpiModPathIn, .items = ins.items },
+            .{ .tag = vpiModPathOut, .items = outs.items },
+        }, &.{
+            .{ .prop = vpiPathType, .value = if (p.full) vpiPathFull else vpiPathParallel },
+            .{ .prop = vpiPolarity, .value = polarity(p.polarity) },
+            .{ .prop = vpiDataPolarity, .value = polarity(p.data_polarity) },
+        });
+        b.objects.items[at].delays = try b.foldAll(p.delays);
+        b.objects.items[at].src_tok = p.main_tok;
+        try b.lists.mod_paths.append(b.gpa, at);
+    }
+
+    /// §11.6.15 a timing check: vpiTchkType, ->vpiTchkRefTerm its first event,
+    /// ->vpiTchkDataTerm its second (not `$period`/`$width`, which have one),
+    /// ->vpiTchkNotifier the reg a violation toggles, when written. Its
+    /// "limits" are §12.11's delays: "the no_of_delays value shall match the
+    /// number of limits existing in the timing check".
+    fn timingCheck(b: *Builder, t: Ast.TimingCheck) Error!void {
+        const name = b.file.str(t.name);
+        const kind = tchk_kinds.get(name) orelse return;
+        const arg = struct {
+            fn at(tc: Ast.TimingCheck, k: usize) Ast.ExprId {
+                return if (k < tc.args.len) tc.args[k] else .none;
+            }
+        }.at;
+        // A.7.5.1: `$setup ( data_event , reference_event , …)` is the one
+        // command that writes its data event first.
+        const r: usize = if (kind.data_first) 1 else 0;
+        const dt: usize = 1 - r;
+        const ref = try b.term(vpiTchkTerm, arg(t, r), 0, if (t.edges.len > r) t.edges[r] else .none);
+        const data = if (kind.data) try b.term(vpiTchkTerm, arg(t, dt), 0, if (t.edges.len > dt) t.edges[dt] else .none) else none;
+        const notifier = if (arg(t, kind.notifier) != .none) try b.expr(arg(t, kind.notifier)) else none;
+        const at = try b.code(vpiTchk, &.{
+            .{ .tag = vpiTchkRefTerm, .to = ref },
+            .{ .tag = vpiTchkDataTerm, .to = data },
+            .{ .tag = vpiTchkNotifier, .to = notifier },
+        }, &.{}, &.{.{ .prop = vpiTchkType, .value = kind.type }});
+        var limits: std.ArrayList(Ast.ExprId) = .empty;
+        for (kind.limits[0..kind.n_limits]) |k| try limits.append(b.arena, arg(t, k));
+        b.objects.items[at].delays = try b.foldAll(limits.items);
+        b.objects.items[at].src_tok = t.main_tok;
+        try b.lists.tchks.append(b.gpa, at);
+    }
+
+    /// A path or timing-check terminal: its expression, direction and edge.
+    fn term(b: *Builder, vtype: c_int, e: Ast.ExprId, dir: c_int, edge: Ast.SpecEdge) Error!u32 {
+        if (e == .none) return none;
+        const x = try b.expr(e);
+        var props: std.ArrayList(Prop) = .empty;
+        if (dir != 0) try props.append(b.arena, .{ .prop = vpiDirection, .value = dir });
+        try props.append(b.arena, .{ .prop = vpiEdge, .value = switch (edge) {
+            .none => vpiNoEdge,
+            .posedge => vpiPosedge,
+            .negedge => vpiNegedge,
+            .edge => vpiAnyEdge,
+        } });
+        return b.code(vtype, &.{.{ .tag = vpiExpr, .to = x }}, &.{}, props.items);
+    }
+
+    /// Every expression folded to a literal, or none of them when one does
+    /// not fold (a specparam name, which this model does not elaborate).
+    fn foldAll(b: *Builder, es: []const Ast.ExprId) Error![]const f64 {
+        var out: std.ArrayList(f64) = .empty;
+        for (es) |e| try out.append(b.arena, literal(b.file, e) orelse return &.{});
+        return out.items;
+    }
+
     fn delays(b: *Builder, d: Ast.Delay3) Error![]const f64 {
         if (!d.any()) return &.{};
         var out: std.ArrayList(f64) = .empty;
@@ -1009,12 +1127,21 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
         return;
     }
     // §12.11: "For primitive objects, the no_of_delays value shall be 2 or
-    // 3."
+    // 3. For path delay objects, the no_of_delays value shall be 1, 2, 3, 6,
+    // or 12. For timing check objects, the no_of_delays value shall match
+    // the number of limits existing in the timing check."
     const primitive = o.vtype == vpiGate or o.vtype == vpiUdp;
-    const least: c_int = if (primitive) 2 else 1;
-    const most: c_int = if (o.vtype == vpiDelayControl) 1 else 3;
-    if (d.no_of_delays < least or d.no_of_delays > most) {
-        root.fail("BADDELAY", "vpi_get_delays: no_of_delays {d} is not legal here ({d}..{d})", .{ d.no_of_delays, least, most });
+    const legal = switch (o.vtype) {
+        vpiModPath => switch (d.no_of_delays) {
+            1, 2, 3, 6, 12 => true,
+            else => false,
+        },
+        vpiTchk => d.no_of_delays == o.delays.len,
+        else => d.no_of_delays >= @as(c_int, if (primitive) 2 else 1) and
+            d.no_of_delays <= @as(c_int, if (o.vtype == vpiDelayControl) 1 else 3),
+    };
+    if (!legal) {
+        root.fail("BADDELAY", "vpi_get_delays: no_of_delays {d} is not legal for this object", .{d.no_of_delays});
         return;
     }
     if (d.time_type != callback.vpiScaledRealTime and d.time_type != callback.vpiSimTime) {
@@ -1028,10 +1155,20 @@ pub export fn vpi_get_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     const rise = o.delays[0];
     const fall = if (o.delays.len > 1) o.delays[1] else rise;
     const off = if (o.delays.len > 2) o.delays[2] else @min(rise, fall);
-    const values = [3]f64{ rise, fall, off };
+    var values_buf: [12]f64 = undefined;
+    const values: []const f64 = if (o.vtype == vpiModPath)
+        pathDelays(o.delays, &values_buf)
+    else if (o.vtype == vpiTchk)
+        o.delays
+    else blk: {
+        values_buf[0..3].* = .{ rise, fall, off };
+        break :blk values_buf[0..3];
+    };
     const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
     const pulse: usize = if (d.pulsere_flag != 0) 3 else 1;
     var at: usize = 0;
+    // A path's first three transitions (0->1, 1->0, 0->z) ARE its rise,
+    // fall and turn-off, so every count reads a prefix.
     for (values[0..@intCast(d.no_of_delays)]) |v| {
         for (0..pulse) |_| for (0..mtm) |_| {
             var t: callback.Time = .{ .type = d.time_type, .high = 0, .low = 0, .real = v };
@@ -1082,6 +1219,12 @@ pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
     };
     const primitive = o.kind == .code and (o.vtype == vpiGate or o.vtype == vpiUdp);
     const assign = o.kind == .code and o.vtype == vpiContAssign;
+    // §11.6.15's paths and timing checks: "For path delay objects, the
+    // no_of_delays value shall be 1, 2, 3, 6, or 12. For timing check
+    // objects, the no_of_delays value shall match the number of limits".
+    // They are the model's to hold — no simulation here applies a specify
+    // block (W0251) — so the put sets what vpi_get_delays reads back.
+    if (o.kind == .code and (o.vtype == vpiModPath or o.vtype == vpiTchk)) return putModelDelays(o, d);
     if (!primitive and !assign) {
         root.fail("NODELAY", "vpi_put_delays: that object has no delays a put can set", .{});
         return;
@@ -1140,5 +1283,87 @@ pub export fn vpi_put_delays(obj: root.vpiHandle, delay_p: ?*Delay) void {
         root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
         return;
     };
+}
+
+fn polarity(p: Ast.SpecPolarity) c_int {
+    return switch (p) {
+        .none => vpiUnknown,
+        .positive => vpiPositive,
+        .negative => vpiNegative,
+    };
+}
+
+/// A.7.5.1's twelve commands as §11.6.15 describes them: vpiTchkType, whether
+/// a data event accompanies the reference one (and whether it is written
+/// first, `$setup` alone), the 0-based argument slots that
+/// are "limits" (§12.11), and the notifier's slot (A.7.5.2; `$width`'s
+/// optional threshold comes before it).
+const TchkKind = struct { type: c_int, data: bool, limits: [2]usize, n_limits: usize, notifier: usize, data_first: bool = false };
+const tchk_kinds = std.StaticStringMap(TchkKind).initComptime(.{
+    .{ "$setup", TchkKind{ .type = 1, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3, .data_first = true } },
+    .{ "$hold", TchkKind{ .type = 2, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3 } },
+    .{ "$period", TchkKind{ .type = 3, .data = false, .limits = .{ 1, 0 }, .n_limits = 1, .notifier = 2 } },
+    .{ "$width", TchkKind{ .type = 4, .data = false, .limits = .{ 1, 0 }, .n_limits = 1, .notifier = 3 } },
+    .{ "$skew", TchkKind{ .type = 5, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3 } },
+    .{ "$recovery", TchkKind{ .type = 6, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3 } },
+    .{ "$nochange", TchkKind{ .type = 7, .data = true, .limits = .{ 2, 3 }, .n_limits = 2, .notifier = 4 } },
+    .{ "$setuphold", TchkKind{ .type = 8, .data = true, .limits = .{ 2, 3 }, .n_limits = 2, .notifier = 4 } },
+    .{ "$fullskew", TchkKind{ .type = 9, .data = true, .limits = .{ 2, 3 }, .n_limits = 2, .notifier = 4 } },
+    .{ "$recrem", TchkKind{ .type = 10, .data = true, .limits = .{ 2, 3 }, .n_limits = 2, .notifier = 4 } },
+    .{ "$removal", TchkKind{ .type = 11, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3 } },
+    .{ "$timeskew", TchkKind{ .type = 12, .data = true, .limits = .{ 2, 0 }, .n_limits = 1, .notifier = 3 } },
+});
+
+/// IEEE 1364 §14.3.1 Table 14-3: a path's written delays as the twelve
+/// transitions 0->1, 1->0, 0->z, z->1, 1->z, z->0, 0->x, x->1, 1->x, x->0,
+/// x->z, z->x. One value is every transition; two are rise and fall; three
+/// add turn-off; six are the first six; the x transitions of a six-value
+/// path are the pessimistic ones, min into x and max out of it.
+fn pathDelays(w: []const f64, out: *[12]f64) []const f64 {
+    const t: [6]f64 = switch (w.len) {
+        1 => .{ w[0], w[0], w[0], w[0], w[0], w[0] },
+        2 => .{ w[0], w[1], w[0], w[0], w[1], w[1] },
+        3 => .{ w[0], w[1], w[2], w[0], w[2], w[1] },
+        6, 12 => w[0..6].*,
+        else => return w,
+    };
+    out[0..6].* = t;
+    if (w.len == 12) {
+        out[6..12].* = w[6..12].*;
+    } else {
+        out[6] = @min(t[0], t[2]); // 0->x
+        out[7] = @max(t[0], t[3]); // x->1
+        out[8] = @min(t[1], t[4]); // 1->x
+        out[9] = @max(t[1], t[5]); // x->0
+        out[10] = @max(t[4], t[2]); // x->z
+        out[11] = @min(t[3], t[5]); // z->x
+    }
+    return out[0..12];
+}
+
+fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
+    const legal = if (o.vtype == vpiModPath) switch (d.no_of_delays) {
+        1, 2, 3, 6, 12 => true,
+        else => false,
+    } else d.no_of_delays == o.delays.len;
+    if (!legal) {
+        root.fail("BADDELAY", "vpi_put_delays: no_of_delays {d} is not legal for this object", .{d.no_of_delays});
+        return;
+    }
+    if (d.time_type != callback.vpiScaledRealTime or d.da == null) {
+        root.fail("BADDELAY", "vpi_put_delays: a specify object's delays are put as vpiScaledRealTime, in an array", .{});
+        return;
+    }
+    const n: usize = @intCast(d.no_of_delays);
+    const mtm: usize = if (d.mtm_flag != 0) 3 else 1;
+    const pulse: usize = if (d.pulsere_flag != 0) 3 else 1;
+    const design = &root.design.?;
+    const out = design.arena.allocator().alloc(f64, n) catch {
+        root.fail("NOMEM", "vpi_put_delays: out of memory", .{});
+        return;
+    };
+    for (out, 0..) |*v, k| v.* = d.da[k * mtm * pulse + (if (mtm == 3) @as(usize, 1) else 0)].real;
+    const idx = (@intFromPtr(o) - @intFromPtr(design.objects.ptr)) / @sizeOf(root.Obj);
+    design.objects[idx].delays = out;
 }
 

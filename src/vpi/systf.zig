@@ -336,7 +336,19 @@ pub export fn vpi_handle_multi(obj_type: c_int, ref1: vpiHandle, ref2: vpiHandle
     root.clearError();
     switch (obj_type) {
         vpiDerivative => return @import("analog.zig").derivative(ref1, ref2),
-        vpiInterModPath => root.fail("NOPATH", "vpi_handle_multi(vpiInterModPath): inter-module paths are not modelled", .{}),
+        // §11.6.15's inter-module path joins two PORTS, and exists where a
+        // delay was annotated on the interconnect between them (an SDF
+        // INTERCONNECT, IEEE 1364 Clause 16) — nothing in Verilog-AMS source
+        // declares one, and VerA reads no SDF. So two ports have none between
+        // them, and a handle that is not a port is refused as such.
+        vpiInterModPath => {
+            const a = root.asObj(ref1);
+            const b = root.asObj(ref2);
+            if (a == null or b == null or a.?.kind != .port or b.?.kind != .port)
+                root.fail("BADHANDLE", "vpi_handle_multi(vpiInterModPath): an inter-module path joins two port handles", .{})
+            else
+                root.fail("NOPATH", "vpi_handle_multi(vpiInterModPath): no delay is annotated between those ports", .{});
+        },
         else => root.fail("NOTRAVERSE", "vpi_handle_multi: {d} is not a many-to-one relationship", .{obj_type}),
     }
     return null;

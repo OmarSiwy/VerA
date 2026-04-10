@@ -891,6 +891,42 @@ pub const GateInst = struct {
     main_tok: u32 = 0,
 };
 
+/// A.7.4 `edge_identifier` / A.7.5.3 `timing_check_event_control`.
+pub const SpecEdge = enum(u8) { none, posedge, negedge, edge };
+/// A.7.4 `polarity_operator`, absent when not written.
+pub const SpecPolarity = enum(u8) { none, positive, negative };
+
+/// A.7.2 one `path_declaration`: parallel (`=>`) or full (`*>`), simple or
+/// edge-sensitive, optionally state-dependent.
+pub const SpecPath = struct {
+    full: bool,
+    edge: SpecEdge = .none,
+    /// The polarity before the arrow (a simple path's).
+    polarity: SpecPolarity = .none,
+    /// `if ( module_path_expression )`, or `.none`.
+    cond: ExprId = .none,
+    ifnone: bool = false,
+    ins: []const ExprId,
+    outs: []const ExprId,
+    /// An edge-sensitive path's `data_source_expression` and the polarity
+    /// written before its colon.
+    data: ExprId = .none,
+    data_polarity: SpecPolarity = .none,
+    /// A.7.4 `list_of_path_delay_expressions`: 1, 2, 3, 6 or 12.
+    delays: []const ExprId,
+    main_tok: u32,
+};
+
+/// A.7.5.1 one `system_timing_check`: the command, and each argument slot in
+/// order — `.none` for a slot A.7.5.1 lets be empty — with the event control
+/// written on it.
+pub const TimingCheck = struct {
+    name: StrId,
+    args: []const ExprId,
+    edges: []const SpecEdge,
+    main_tok: u32,
+};
+
 /// A.3.1 one `pull_gate_instance` — IEEE 1364-2005 §7.8's pullup/pulldown
 /// source. It drives one constant, so it is not a `GateInst`: it has no
 /// inputs and §7.8 gives it no delay. `strength` is the one side that counts
@@ -1035,6 +1071,12 @@ pub const ModuleDecl = struct {
     tasks: []const Subroutine = &.{},
     /// A.3.1 switch instances (§7.6), filled by a digital parse only.
     switches: []const SwitchInst = &.{},
+    /// A.7.2 module paths and A.7.5 system timing checks of the module's
+    /// `specify` blocks (IEEE 1364 Clause 14/15, inherited through §1.1).
+    /// Recorded for §11.6.15's VPI objects; no simulation applies them
+    /// (W0251).
+    paths: []const SpecPath = &.{},
+    timing_checks: []const TimingCheck = &.{},
     /// §2.9 every `attr_spec` reached anywhere in this module, flattened. NOT
     /// attached to the item each decorated, because both rules the LRM states
     /// about an attribute — §2.9's "constant_expression" and §2.9.2's value
