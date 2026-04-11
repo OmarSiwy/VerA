@@ -677,6 +677,9 @@ pub const Code = enum(u16) {
     /// §7.8 a connect statement's two disciplines are not one discrete and
     /// one continuous.
     E0923,
+    /// §3.9 a digital primitive's terminal is a continuous net and no
+    /// `default_discipline` names the primitive side's discipline.
+    E0960,
     /// §7.6 Table 7-2 a connect statement designates a connect module whose
     /// continuous/discrete port directions are not a supported combination.
     E0982,
@@ -5685,6 +5688,33 @@ fn infoOf(c: Code) Info {
             \\continuous and discrete ports. Two disciplines of one domain are the
             \\7.7.2 `resolveto` form's business, which resolves a net instead of
             \\bridging it.
+            ,
+        },
+        .E0960 => .{
+            .title = "a digital primitive on a continuous net with no default discipline",
+            .lrm = "3.9",
+            .explain =
+            \\LRM 3.9: "For digital primitives the domain is discrete and thus the
+            \\discipline is set via the default_discipline directive as it is for
+            \\digital modules. If the discipline of digital connections
+            \\(vpiLoConn) to a mixed net are unknown then the default_discipline
+            \\must be specified (via the directive or other vendor specific
+            \\method). If not specified, an error will result during discipline
+            \\resolution."
+            \\
+            \\A gate, a pullup/pulldown or a switch is a digital primitive, and
+            \\each of its terminals is a discrete connection. A terminal naming a
+            \\net of a continuous discipline (`electrical`) makes that net mixed,
+            \\and discipline resolution then needs the primitive side's
+            \\discipline. VerA has no vendor-specific method: the
+            \\`default_discipline directive in force at the primitive is the only
+            \\source, so without one the connection's discipline is unknown and
+            \\this is the error the clause promises.
+            \\
+            \\Write `default_discipline logic (or another discrete
+            \\discipline) before the primitive — and, since the net then joins two
+            \\domains, a connect statement for the pair (3.11, 7.8) — or connect
+            \\the primitive to a discrete net instead.
             ,
         },
         .E0982 => .{

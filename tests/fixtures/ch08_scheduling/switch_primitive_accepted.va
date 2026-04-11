@@ -1,51 +1,56 @@
-// A switch primitive is INSIDE the Verilog-A subset, so this file is a run
-// fixture and not a `//! reject`.
+// A switch primitive between two electrical nets is legal Verilog-AMS once
+// §3.9's precondition holds, so this file is a run fixture and not a
+// `//! reject`.
 //
 // Annex A.4.1: `gate_instantiation ::= ... | pass_switchtype pass_switch_instance ;`
 // with `pass_switchtype ::= tran | rtran`, and A.1.4 makes gate_instantiation a
-// `module_or_generate_item`. Annex C.8 keeps the Clause 6 hierarchical
-// structure applicable to Verilog-A with one stated exception (real value
-// ports), and that exception is not this. C.16's list of keywords Verilog-A
-// does not use -- connect, connectmodule, connectrules, driver_update,
-// endconnectrules, merged, resolveto, split, wreal -- does not
-// contain `tran` either, though absence from a negative list is only
-// corroboration; A.4.1 is the clause that admits the construct.
+// `module_or_generate_item`. That is the clause that admits the construct.
 //
-// So a conforming Verilog-A compiler accepts this source, and VerA now does.
-// An earlier version of this file wrote the gap as `//! reject E0205`, which
-// inverted it: a conforming compiler would have failed the fixture and only
-// VerA would have passed. A later one carried `//! xfail` while `tran` was
-// E0205 "unsupported module item".
+// §3.9 IS WHAT THE FILE USED TO BREAK. "For digital primitives the domain is
+// discrete and thus the discipline is set via the default_discipline directive
+// as it is for digital modules. If the discipline of digital connections
+// (vpiLoConn) to a mixed net are unknown then the default_discipline must be
+// specified ... If not specified, an error will result during discipline
+// resolution." A `tran` is a digital primitive (§8.5.3.5 processes it in the
+// discrete cycle), and `a`/`b` are electrical, so both are mixed nets. The
+// earlier version of this file wrote no `default_discipline and argued from
+// Annex C that Verilog-A admits the switch — but C.4 withdraws
+// `default_discipline from Verilog-A, so under Verilog-A the connection's
+// discipline could never be known and the file was an error there too. A
+// conforming compiler refused it; VerA passed it only because it did not check
+// §3.9. That refusal is now pinned by
+// ch03_data_types/digital_primitive_on_mixed_net_rejected.va (E0960), and the
+// C.8 claim this file carried went with the Verilog-A argument.
+//
+// So the file supplies both halves the LRM asks for: `default_discipline logic
+// names the switch's discrete side (§3.8 "a default discrete discipline"), and
+// since `a` and `b` then join two domains, §3.11's Signal Domain Rule wants a
+// connect statement between logic and electrical, which `ch8_sw_rules` gives
+// (an inout/inout bridge, Table 7-2's third row). The bare `default_discipline
+// after the module withdraws the default again (§10.2).
 //
 // ACCEPTANCE IS NOT MODELLING, AND VerA SAYS SO. The instance is parsed and
 // contributes nothing to the device, with a W0250 at the keyword saying that
-// out loud (`--deny=W0250` refuses the module instead). That is not a shortcut
-// this fixture is papering over: 8.5.3.5 gives a pass switch its meaning in the
-// DISCRETE cycle -- logic values and strengths across two terminals -- and no
-// continuous behavior anywhere, so a compiled analog device has nothing to
-// stamp for it and any equation VerA invented would be VerA's convention rather
-// than the standard's.
-//
-// It is NOT a gap in 8.5.3.5. Switch processing is part of the digital
-// simulation cycle, which Annex C.10 puts outside Verilog-A ("The mixed-signal
-// simulation cycle from 8.2 is only applicable to Verilog-AMS HDL"), so no
-// amount of instantiation support would make this file cover that clause.
+// out loud (`--deny=W0250` refuses the module instead): §8.5.3.5 gives a pass
+// switch its meaning in the DISCRETE cycle and no continuous behavior, and
+// VerA inserts no connect module (§7.8's insertion does not run — see
+// ch07_mixed_signal/connect_mode_accepted.va), so the analog device has
+// nothing to stamp for it.
 //
 // WHAT IS ASSERTED. The harness imposes node values rather than solving a
-// network, so the electrical effect of an ideal bidirectional switch -- a and b
-// driven to one potential -- is not observable from inside the module. What the
-// fixture pins is the part that is: the source is accepted, and the analog block
-// of a module that also carries a switch primitive is still elaborated and
-// evaluated at its operating point, reading 0.75 - 0.25 = 0.5 V across the pair.
-// That is the whole of what A.4.1 plus C.8 require of this file, and it is why
-// the fixture can be green while the switch stamps nothing: nothing here claims
-// the switch conducts, because nothing in the LRM says what it would conduct in
-// a continuous domain.
+// network, so the electrical effect of the switch is not observable from inside
+// the module. What the fixture pins is the part that is: the source is
+// accepted, and the analog block of a module that also carries a switch
+// primitive is still elaborated and evaluated at its operating point, reading
+// 0.75 - 0.25 = 0.5 V across the pair.
 //
 //! lrm A.4.1
-//! lrm C.8
 //! bias V(a) = 0.75, V(b) = 0.25
 `include "check.vh"
+connectmodule ch8_sw_bridge(d, e);
+  inout d, e; logic d; electrical e;
+endmodule
+`default_discipline logic
 module ch8_switch(a, b);
   inout a, b; electrical a, b;
   tran (a, b);
@@ -54,3 +59,7 @@ module ch8_switch(a, b);
     I(a, b) <+ 0.0;
   end
 endmodule
+`default_discipline
+connectrules ch8_sw_rules;
+  connect ch8_sw_bridge;
+endconnectrules

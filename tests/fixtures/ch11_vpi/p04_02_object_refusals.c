@@ -36,6 +36,15 @@
  *            put is refused and W still reads 8 afterwards.
  *   11.3.1 / 12.21  no object is named `p04_objects.nosuch`, and a NULL name
  *            names nothing                            -> NULL
+ *   11.2.2   "VPI routines provide access to objects in an instantiated
+ *            Verilog-AMS design. An instantiated design is one where each
+ *            instance of an object is uniquely accessible. For instance, if a
+ *            module m contains wire w and is instantiated twice as m1 and m2,
+ *            then m1.w and m2.w are two distinct objects". p04_leaf is m:
+ *            `p04_leaf.a` names the DEFINITION's port, which is u.a and v.a at
+ *            once and so no one object, and `p04_leaf` itself is no instance
+ *            (it is instantiated, so it is not a root either) -> NULL, while
+ *            `p04_objects.u.a`, the instance path, is the object
  *   12.12    vpiSize is an int property, not a string -> NULL
  *   12.19    module ->> port is a DOUBLE arrow (11.6.1): vpi_handle() traverses
  *            "one-to-one relationships ... indicated as single arrows", so
@@ -74,6 +83,7 @@
  * would be refused for that reason and would say nothing about parameters.
  */
 
+//! lrm-reject 11.2.2
 //! lrm-reject 11.2.3
 //! lrm-reject 11.3
 //! lrm-reject 11.3.1
@@ -172,6 +182,17 @@ static PLI_INT32 refuse(p_cb_data cb_data)
   expect_error("vpi_handle_by_name(nosuch, u)");
   CHECK(vpi_handle_by_name(NULL, NULL) == NULL, "12.21: a NULL name names nothing");
   expect_error("vpi_handle_by_name(NULL)");
+
+  /* 11.2.2: only the instantiated design is accessible. */
+  CHECK(vpi_handle_by_name((PLI_BYTE8 *)"p04_leaf.a", NULL) == NULL,
+        "11.2.2: the definition p04_leaf is not an instance, so p04_leaf.a names no object");
+  expect_error("vpi_handle_by_name(p04_leaf.a)");
+  CHECK(vpi_handle_by_name((PLI_BYTE8 *)"p04_leaf", NULL) == NULL,
+        "11.2.2: nor is the definition itself an instantiated object");
+  expect_error("vpi_handle_by_name(p04_leaf)");
+  CHECK(vpi_handle_by_name((PLI_BYTE8 *)"p04_objects.u.a", NULL) != NULL,
+        "11.2.2: the instance path to the same port is the object");
+  expect_no_error("vpi_handle_by_name(p04_objects.u.a)");
 
   /* 12.19: a double arrow is not traversed by vpi_handle(). */
   CHECK(vpi_handle(vpiPort, top) == NULL, "12.19: module -> port is one-to-many");
