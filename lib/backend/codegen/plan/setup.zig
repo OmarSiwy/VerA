@@ -41,13 +41,16 @@
 //! THE INITIAL-STEP RULE (research C.6, vbic). `@(initial_step)` and
 //! `analog initial` bodies are the model's temperature prep in many models,
 //! and every variable they assign is §5.10 held. Such a variable is
-//! INITIAL-ONLY when its end-of-block value is invariant; then the merge
-//! `phi(held read, assigned value)` at the event's join is invariant too,
-//! with the assigned value's definition, and `setup` computes it by taking
-//! the event's arm unconditionally. The one difference from evaluating it:
-//! an evaluation before the first initial step used to read the declared
-//! initializer. A host evaluates an initial step first; that is its
-//! obligation, stated on `setup`.
+//! INITIAL-ONLY when its end-of-block value IS the merge
+//! `phi(held read, assigned value)` at the event's join and the assigned
+//! value is invariant: the held read is the previous evaluation's copy of
+//! that same phi, so by induction every evaluation sees the assigned value,
+//! and `setup` computes it by taking the event's arm unconditionally. A write
+//! after the join (`k = k + 1`) breaks the identity: assuming the held read
+//! invariant there would justify itself, so the phi is per-eval. The one
+//! difference from evaluating it: an evaluation before the first initial step
+//! used to read the declared initializer. A host evaluates an initial step
+//! first; that is its obligation, stated on `setup`.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -261,7 +264,6 @@ const Scan = struct {
     plc: []bool,
     varying: []bool,
     init_else: []bool,
-    held_ok: []bool,
 
     fn sv(s: *const Scan, v0: Mir.Value) bool {
         const v = s.in.an.rv(v0);
@@ -272,9 +274,9 @@ const Scan = struct {
         };
     }
 
-    /// The §5.10.2 exception's incoming value: the held read of an
-    /// initial-only variable.
-    fn heldEquiv(s: *const Scan, v0: Mir.Value) bool {
+    /// The §5.10.2 exception's incoming value: the held read of the variable
+    /// whose end-of-block value is `phi` itself.
+    fn heldEquiv(s: *const Scan, phi: Mir.Value, v0: Mir.Value) bool {
         const in = s.in;
         const def = in.mir.valueDef(in.an.rv(v0));
         if (def != .inst_result or in.mir.instOp(def.inst_result) != .call) return false;
@@ -283,11 +285,12 @@ const Scan = struct {
             .@"$held_real", .@"$held_int" => {},
             else => return false, // else: only the two §5.10 held reads name a held variable
         }
-        if (s.held_ok.len == 0) return false;
+        const held = in.lowered.held_vars.items;
+        if (held.len == 0) return false;
         // The `held_vars` index is the call's literal argument (`gen_call.heldIdx`).
         const c = in.an.foldConst(if (d.args.len != 0) d.args[0] else .zero, 0, false) orelse return false;
         const i: usize = @intFromFloat(c.f);
-        return s.held_ok[@min(i, s.held_ok.len - 1)];
+        return in.an.rv(held[@min(i, held.len - 1)].final) == phi;
     }
 
     /// Does the edge `src → y` run only when the initial step does NOT?
@@ -319,7 +322,7 @@ const Scan = struct {
                     const p = in.mir.phiPair(inst, k);
                     const src: u32 = @intFromEnum(p.block);
                     if (s.plc[src] and s.sv(p.value) and !s.initElseEdge(src, blk)) continue;
-                    if (s.initElseEdge(src, blk) and s.heldEquiv(p.value)) continue;
+                    if (s.initElseEdge(src, blk) and s.heldEquiv(v, p.value)) continue;
                     return false;
                 }
                 return true;
@@ -368,11 +371,9 @@ fn solve(in: Input, placing: bool) Error!Sinv {
         .plc = try a.alloc(bool, nb),
         .varying = try a.alloc(bool, nb),
         .init_else = try a.alloc(bool, nb),
-        .held_ok = try a.alloc(bool, in.lowered.held_vars.items.len),
     };
     @memset(s.val, true);
     @memset(s.plc, true);
-    @memset(s.held_ok, true);
     const reach = try a.alloc(bool, nb);
     var stack: std.ArrayList(u32) = .empty;
     while (true) {
@@ -411,13 +412,6 @@ fn solve(in: Input, placing: bool) Error!Sinv {
             s.init_else[bi] = ie;
             if (s.plc[bi] and !ok) {
                 s.plc[bi] = false;
-                changed = true;
-            }
-        }
-        for (in.lowered.held_vars.items, 0..) |h, i| {
-            const ok = s.sv(h.final);
-            if (s.held_ok[i] and !ok) {
-                s.held_ok[i] = false;
                 changed = true;
             }
         }
