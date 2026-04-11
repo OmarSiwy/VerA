@@ -220,7 +220,12 @@ pub fn infer(r: *Run, e: Ast.ExprId, f: Fn) Error!compile.Type {
     const want: usize = if (f == .count or f == .receiver_count) 1 else 2;
     if (args.len != want or args[0] == .none or (want == 2 and args[1] == .none))
         return r.exprFail(e, "§9.22: a driver access function takes (signal_name) or (signal_name, driver_index)");
-    if (r.net_of.get(try r.scalarSlot(args[0])) == null) return r.exprFail(args[0], "§9.22: signal_name names a net");
+    if (!isConnect(r, r.scope))
+        return r.failWith(.E0818, r.file.exprs.mainTok(e), "§9.22: \"Driver access functions can only be called from connect modules.\" This is a `module`", .{});
+    const slot = try r.scalarSlot(args[0]);
+    if (r.net_of.get(slot) == null) return r.exprFail(args[0], "§9.22: signal_name names a net");
+    // §9.22.3 a driver's state is one of "0, 1, x, or z": one bit.
+    if (r.values[slot].width != 1) return r.exprFail(args[0], "§9.22.3: signal_name is a scalar net; a driver's state is one bit");
     if (want == 2) {
         try compile.checkExpr(r, args[1]);
         if (compile.typeOf(r, args[1]).real) return r.exprFail(args[1], "§9.22.3: driver_index is an integer");
@@ -286,7 +291,6 @@ const Pend = struct { bit: Int.Bit, time: u64 };
 /// The earliest value scheduled onto driver `dr` and not yet active: its own
 /// A.6.1 delayed transition, or — a `reg` driver — a scheduled write of the
 /// variable it carries (§9.23's "a non-blocking assign with delays").
-/// ponytail: scalar drivers; a vector reads its bit 0.
 fn pending(r: *Run, a: std.mem.Allocator, di: u32) Error!?Pend {
     const dr = r.drivers[di];
     var live: std.ArrayList(@import("../scheduler.zig").Live) = .empty;
@@ -351,4 +355,20 @@ fn typeBits(r: *const Run, dr: Driver) u32 {
         else => 0, // else: no other net type has a Table 7-4 wired-logic bit
     };
     return t;
+}
+
+test "§9.22.3 a driver's state is one bit: a vector signal_name is refused, not read at bit 0" {
+    const diag = @import("diag");
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    var bag = diag.Bag.init(arena.allocator());
+    var out = std.Io.Writer.Allocating.init(arena.allocator());
+    try std.testing.expectError(error.DigitalFailed, root.elaborate(arena.allocator(),
+        \\connectmodule c(d); input [3:0] d; initial $display("%b", $driver_state(d, 0)); endmodule
+        \\module top; wire [3:0] w; assign w = 4'b1010; c cm(.d(w)); endmodule
+        \\
+    , .{ .mixed = .{ .top = "top", .timescale = null } }, &bag, &out.writer));
+    var messages = std.Io.Writer.Allocating.init(arena.allocator());
+    try diag.render(&bag, &messages.writer, .{});
+    try std.testing.expect(std.mem.indexOf(u8, messages.written(), "signal_name is a scalar net") != null);
 }

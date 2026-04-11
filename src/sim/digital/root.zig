@@ -616,8 +616,12 @@ pub const Run = struct {
     }
 
     pub fn fail(self: *Run, tok: u32, comptime fmt: []const u8, args: anytype) Error {
+        return self.failWith(.E1100, tok, fmt, args);
+    }
+    /// `fail` under a rule's own code, for a refusal the analog side reports.
+    pub fn failWith(self: *Run, code: diag.Code, tok: u32, comptime fmt: []const u8, args: anytype) Error {
         const start = self.starts[@min(tok, self.starts.len - 1)];
-        self.bag.add(.lower, .E1100, .{ .start = start, .end = start }, fmt, args) catch return error.OutOfMemory;
+        self.bag.add(.lower, code, .{ .start = start, .end = start }, fmt, args) catch return error.OutOfMemory;
         return error.DigitalFailed;
     }
     pub fn exprFail(self: *Run, e: Ast.ExprId, comptime msg: []const u8) Error {
