@@ -94,6 +94,12 @@
 
 const std = @import("std");
 
+/// The device↔host ABI this file specifies. A generated device mirrors it as
+/// `pub const contract_abi`, and `validateHost` refuses a device whose value
+/// differs, so a host pinned to one VerA cannot link another's device and run.
+/// Bump it in every `[ABI BUMP]` commit: 2 = 28d517e8 `setup`, 3 = 0c4d6afc `q` per ddt site, 4 = this check.
+pub const abi_version: u32 = 4;
+
 /// Device-routed f64 transcendentals for the SCALAR paths of generated code
 /// (`R`, the §4.5.15 limiters, zLimexp's clamp constant). Those helpers also
 /// compile inside GPU kernels (the engine's StateKernel runs `D.limit` /
@@ -1701,6 +1707,20 @@ pub fn validate(comptime D: type) void {
 /// `lib/backend/tb.zig`. An exemption for the tool's own host is how a seam
 /// stops being tested.
 pub fn validateHost(comptime H: type, comptime D: type) void {
+    if (!@hasDecl(D, "contract_abi") or D.contract_abi != abi_version)
+        @compileError(@typeName(D) ++ " was generated for a different device ABI than this contract's " ++
+            std.fmt.comptimePrint("abi_version = {d}", .{abi_version}) ++
+            "; regenerate it with the VerA this contract came from.");
+    // `eval` reads `inst.su`, which only `setup` fills: a host that skips it
+    // evaluates every solve-invariant value at its NaN initializer.
+    if (@hasDecl(D, "setup")) {
+        if (!@hasDecl(H, "calls_setup") or !H.calls_setup)
+            @compileError(@typeName(H) ++ " must call `setup`: " ++ @typeName(D) ++
+                " computes its solve-invariant values once, into `Instance.su`, and `eval` " ++
+                "reads them. Declare calls_setup = true once the host calls " ++
+                "`setup(V, &model, &inst)` after every card, instance, temperature or " ++
+                "`setup_simparams` write.");
+    }
     if (@hasDecl(D, "mutable_eval") and D.mutable_eval) {
         if (!@hasDecl(H, "mutable_eval") or !H.mutable_eval)
             @compileError("this device requires exclusive mutable evaluation; declare mutable_eval = true");
@@ -1749,6 +1769,8 @@ pub fn validateHost(comptime H: type, comptime D: type) void {
 const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "U", {} },
     .{ "num_ports", {} },
+    // The `abi_version` the device was generated for; see `validateHost`.
+    .{ "contract_abi", {} },
     .{ "Model", {} },
     .{ "Instance", {} },
     .{ "eval", {} },
@@ -2171,6 +2193,7 @@ const testing = std.testing;
 const MockR = struct {
     pub const U = enum(u8) { p, n };
     pub const num_ports: usize = 2;
+    pub const contract_abi = abi_version;
     const n_u = nU(@This());
 
     pub const Model = struct {
@@ -2277,6 +2300,7 @@ const MockAll = struct {
 
     pub const U = enum(u8) { p, n };
     pub const num_ports: usize = 2;
+    pub const contract_abi = abi_version;
     pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
@@ -2758,6 +2782,8 @@ test "validateHost: a systf is the host's to bind, and only when there is one" {
         pub const noise_table_points = true;
         // ...and MockAll has a shape parameter, so the host calls `checkShape`.
         pub const shape_check = true;
+        // ...and a `setup`, so the host fills `Instance.su` before `eval`.
+        pub const calls_setup = true;
         var app: SystfHost = .{ .ctx = undefined, .call = zero };
         fn zero(_: *anyopaque, _: usize, _: []const f64, partials: []f64) f64 {
             @memset(partials, 0);
