@@ -53,15 +53,19 @@ pub const Options = struct {
 };
 
 /// The greatest tick whose time is <= `t` (§7.3.6.5's "greatest digital time
-/// tick which is less than or equal to the analog time"). A `t` within
-/// rounding of a tick IS that tick: 4e-9 / 1e-9 is 3.9999999999999996 in
+/// tick which is less than or equal to the analog time"). A `t` within a few
+/// ulps of a tick IS that tick: 4e-9 / 1e-9 is 3.9999999999999996 in
 /// binary64, and flooring it would put the analog solve one tick early.
 pub fn tickAtOrBefore(t: f64, tick: f64) Tick {
     const x = t / tick;
     const r = @round(x);
-    if (@abs(x - r) <= 1e-9 * @max(1.0, @abs(r))) return @intFromFloat(@max(r, 0.0));
+    if (@abs(x - r) <= ulps * @abs(r)) return @intFromFloat(@max(r, 0.0));
     return @intFromFloat(@max(@floor(x), 0.0));
 }
+
+/// The relative distance within which two times are one: rounding, never a
+/// fraction of a tick however many ticks the run is long.
+const ulps = 4 * std.math.floatEps(f64);
 
 /// Run one analysis over `opts.times`.
 ///
@@ -241,7 +245,7 @@ fn State(comptime A: type) type {
 
         fn timeOf(s: *const Self, k: Tick, target: f64, horizon: Tick) f64 {
             const tk = @as(f64, @floatFromInt(k)) * s.opts.tick;
-            return if (k == horizon and @abs(tk - target) <= 1e-9 * @max(s.opts.tick, target)) target else tk;
+            return if (k == horizon and @abs(tk - target) <= ulps * target) target else tk;
         }
 
         /// A solution at `t`, tentative: `acc` moves, `prev` does not.
@@ -426,6 +430,7 @@ test "tickAtOrBefore: a time within rounding of a tick is that tick" {
     try testing.expectEqual(@as(Tick, 4), tickAtOrBefore(4.5e-9, 1e-9));
     try testing.expectEqual(@as(Tick, 0), tickAtOrBefore(0, 1e-9));
     try testing.expectEqual(@as(Tick, 20), tickAtOrBefore(20e-9, 1e-9));
+    try testing.expectEqual(@as(Tick, 600000000), tickAtOrBefore(0.6000000006, 1e-9));
 }
 
 test "§7.3.6.5 the solve at t reads the greatest tick <= t, not the next and not the one before" {
