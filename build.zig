@@ -396,6 +396,11 @@ const vpi_runs = [_]VpiRun{
         .stdout = "p03-05: rejected=1 backed_up=1 ct_before_ap=1 t_final=0.005\n",
     },
     .{
+        .c = "tests/fixtures/ch12_vpi_routines/p03_12_sim_control_reject_step.c",
+        .design = "tests/fixtures/ch12_vpi_routines/p03_ramp_load.va",
+        .stdout = "p03-12: rejected=1 backed_up=1 t_final=0.005\n",
+    },
+    .{
         .c = "tests/fixtures/ch12_vpi_routines/p03_08_analog_value_formats.c",
         .design = "tests/fixtures/ch12_vpi_routines/p03_dc_divider.va",
         .stdout = "p03-08: v=1.25 i=0.0025 vexp=1.250000e+00 vdec=1.25 vg=1.25 fmt_reset=1 sep_buf=1 overwritten=1\n",

@@ -104,6 +104,21 @@ var t_accepted: f64 = 0;
 var delta: f64 = 0;
 /// A solution has been attempted in this process, so x means something.
 var have_solution = false;
+/// A later-than-first solution is attempted and not yet accepted: the one
+/// §12.36 vpiRejectTransientStep can reject.
+var open_step = false;
+/// §12.36 vpiRejectTransientStep was called on the open step.
+var reject_step = false;
+
+/// §12.36 vpiRejectTransientStep: "cause the current analog simulation time
+/// point to be rejected". The walk backs up as for an acbConvergenceTest
+/// rejection. False when no rejectable solution is open: outside an analysis,
+/// on the first solution (no earlier time to back up to), or once accepted.
+pub fn rejectStep() bool {
+    if (current == null or !open_step) return false;
+    reject_step = true;
+    return true;
+}
 
 const gpa = std.heap.smp_allocator;
 
@@ -221,7 +236,7 @@ pub fn run(a: Analysis) Error!void {
         while (true) : (tries += 1) {
             if (tries == 60) return error.BackupExhausted;
             try attempt(l, target, target - t_accepted, false, sameTime(target, a.stop));
-            if (!callback.convergenceRejected()) break;
+            if (!(callback.convergenceRejected() or reject_step)) break;
             // "backup to an earlier time": half the step, from the same
             // accepted solution.
             target = t_accepted + (target - t_accepted) / 2;
@@ -234,11 +249,14 @@ fn attempt(l: Lib, t: f64, dt: f64, first: bool, last: bool) Error!void {
     t_now = t;
     delta = dt;
     have_solution = true;
+    open_step = !first;
+    reject_step = false;
     vals_fresh = false;
     _ = l.solve(t, dt, first, last);
 }
 
 fn accept(l: Lib, first: bool, last: bool) void {
+    open_step = false;
     // Row values are the accepted solution's, read before history moves.
     refreshRows(l);
     l.accept();
