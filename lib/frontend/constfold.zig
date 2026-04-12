@@ -7,7 +7,8 @@
 //!
 //! The rules, and the clause each comes from:
 //!   §4.2.1.3  an operator is integer iff BOTH operands are integer.
-//!   §3.2      integer `+ - *` (and `<<`, `**`) wrap at 32 bits: `wrap32`.
+//!   §3.2      integer `+ - *`, unary `-` and `abs` (and `<<`, `**`) wrap at
+//!             32 bits: `wrap32`.
 //!   §4.2.4    integer `/` truncates toward zero; a zero divisor declines.
 //!   Table 3-3 string relations compare bytes; a mixed pair declines.
 //!   §4.2.12   `?:` is lazy: only the taken arm must fold.
@@ -180,9 +181,9 @@ pub fn unary(op: Ast.UnaryOp, a: Const) ?Const {
     return switch (op) {
         .plus => a,
         .minus => switch (a) {
-            // Wrapping: a 64-bit literal can be minInt(i64), whose negation
-            // is itself rather than a panic.
-            .int => |i| .{ .int = 0 -% i },
+            // §3.2: -(-2^31) is -2^31. `-%` because a 64-bit literal can be
+            // minInt(i64).
+            .int => |i| .{ .int = wrap32(0 -% i) },
             .real => |r| .{ .real = -r },
             .str => null,
         },
@@ -337,7 +338,7 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
     } else true;
     return switch (f) {
         // Wrapping, like unary minus: |minInt(i64)| is not an i64.
-        .abs => if (int) Const{ .int = if (args[0].int < 0) 0 -% args[0].int else args[0].int } else Const{ .real = @abs(x) },
+        .abs => if (int) Const{ .int = wrap32(if (args[0].int < 0) 0 -% args[0].int else args[0].int) } else Const{ .real = @abs(x) },
         .min => if (int) Const{ .int = @min(args[0].int, args[1].int) } else Const{ .real = @min(x, y) },
         .max => if (int) Const{ .int = @max(args[0].int, args[1].int) } else Const{ .real = @max(x, y) },
         .pow => .{ .real = std.math.pow(f64, x, y) },

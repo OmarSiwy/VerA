@@ -58,7 +58,7 @@ pub const Fold = union(enum) {
 /// type — `int` or real — because a MIR opcode, unlike a source operator,
 /// already names it: `fadd` is real whatever its operands folded to. `wrap`
 /// applies §3.2's 32 bits to the result where the device does (`wrap32`);
-/// `+ - * << /` and `**` already wrap in the kernel.
+/// `+ - * << /`, `**`, unary `-` and `abs` already wrap in the kernel.
 pub fn Kernel(comptime Op: type) type {
     return struct { f: Op, int: bool = false, wrap: bool = false };
 }
@@ -107,7 +107,7 @@ pub const table = std.EnumArray(Opcode, Info).init(.{
     .imul = .{ .class = .binary, .int = true, .fold = .{ .binary = .{ .f = .mul, .int = true } } },
     .idiv = .{ .class = .binary, .int = true, .domain = .nonzero_divisor, .fold = .{ .binary = .{ .f = .div, .int = true } } },
     .imod = .{ .class = .binary, .int = true, .domain = .nonzero_divisor, .fold = .{ .binary = .{ .f = .mod, .int = true } } },
-    .ineg = .{ .class = .unary, .int = true, .fold = .{ .unary = .{ .f = .minus, .int = true, .wrap = true } } },
+    .ineg = .{ .class = .unary, .int = true, .fold = .{ .unary = .{ .f = .minus, .int = true } } },
     .flt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .lt, .fold = .{ .binary = .{ .f = .lt } } },
     .fgt = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .gt, .fold = .{ .binary = .{ .f = .gt } } },
     .fle = .{ .class = .binary, .int = true, .bool01 = true, .predicate = true, .rel = .le, .fold = .{ .binary = .{ .f = .le } } },
@@ -143,7 +143,7 @@ pub const table = std.EnumArray(Opcode, Info).init(.{
     .fabs = .{ .class = .unary, .fold = .{ .math = .{ .f = .abs } } },
     .fmin = .{ .class = .binary, .fold = .{ .math = .{ .f = .min } } },
     .fmax = .{ .class = .binary, .fold = .{ .math = .{ .f = .max } } },
-    .iabs = .{ .class = .unary, .int = true, .fold = .{ .math = .{ .f = .abs, .int = true, .wrap = true } } },
+    .iabs = .{ .class = .unary, .int = true, .fold = .{ .math = .{ .f = .abs, .int = true } } },
     .imin = .{ .class = .binary, .int = true, .fold = .{ .math = .{ .f = .min, .int = true } } },
     .imax = .{ .class = .binary, .int = true, .fold = .{ .math = .{ .f = .max, .int = true } } },
     .ipow = .{ .class = .binary, .int = true, .domain = .pow_sign, .fold = .{ .binary = .{ .f = .pow, .int = true } } },
