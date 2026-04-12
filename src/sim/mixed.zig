@@ -118,7 +118,7 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
             // §5.10.3.1 cross(expr, dir, time_tol, ...); §5.10.3.2 above(expr, time_tol, ...).
             const dir = if (above) 1.0 else (try dig.monitorArg(j, 1)) orelse 0.0;
             const tol = (try dig.monitorArg(j, if (above) 1 else 2)) orelse 0.0;
-            m.* = .{ .dir = @intFromFloat(dir), .tol = if (tol > 0) tol else @min(default_time_tol, opts.tick / 2) };
+            m.* = .{ .dir = dir, .tol = if (tol > 0) tol else @min(default_time_tol, opts.tick / 2), .enable = if (above) 3 else 4 };
         }
     }
     for (opts.times, 0..) |target, i| {
@@ -185,8 +185,11 @@ const default_time_tol = 1e-12;
 /// time tolerance, and its value on the last final solution — or, for a
 /// timer, its next firing time.
 const Mon = struct {
-    dir: i8,
+    dir: f64,
     tol: f64,
+    /// §5.10.3.1 / §5.10.3.2 the argument index of `enable`, whose zero makes
+    /// the event inactive; null for a function without one here.
+    enable: ?u8 = null,
     v0: f64 = 0,
     timer: ?struct { next: f64, period: f64 } = null,
     /// §5.10.3.4: the change that makes an event, and the value at the last one.
@@ -211,15 +214,10 @@ const Mon = struct {
 /// §5.10.3.1: "If dir is +1, the event ... only occur[s] on rising edge
 /// transitions", -1 on falling ones, 0 on both, and any other value on none.
 /// The same test the device's `cross` makes against its accepted value.
-fn crosses(dir: i8, v0: f64, v1: f64) bool {
+fn crosses(dir: f64, v0: f64, v1: f64) bool {
     const rise = v0 <= 0 and v1 > 0;
     const fall = v0 >= 0 and v1 < 0;
-    return switch (dir) {
-        1 => rise,
-        -1 => fall,
-        0 => rise or fall,
-        else => false,
-    };
+    return if (dir == 1) rise else if (dir == -1) fall else if (dir == 0) rise or fall else false;
 }
 
 fn State(comptime A: type) type {
@@ -289,9 +287,21 @@ fn State(comptime A: type) type {
         }
 
         fn monValue(s: *Self, j: usize) !f64 {
+            return (try s.monArg(j, 0)).?;
+        }
+
+        fn monArg(s: *Self, j: usize, k: usize) !?f64 {
             s.mon_eval = true;
             defer s.mon_eval = false;
-            return (try s.dig.monitorArg(j, 0)).?;
+            return s.dig.monitorArg(j, k);
+        }
+
+        /// §5.10.3.1: "If enable argument is specified and it is zero, then
+        /// cross() is inactive, meaning that it does not generate an event at
+        /// threshold crossings and does not act to control the timestep."
+        fn active(s: *Self, m: Mon, j: usize) !bool {
+            const k = m.enable orelse return true;
+            return ((try s.monArg(j, k)) orelse 1) != 0;
         }
 
         /// One analog step toward `t_end`, which lies before the next digital
@@ -310,7 +320,7 @@ fn State(comptime A: type) type {
             while (cuts < 64) : (cuts += 1) {
                 var cut: ?f64 = null;
                 for (s.mons, 0..) |m, j| {
-                    if (!m.isCrossing()) continue;
+                    if (!m.isCrossing() or !try s.active(m, j)) continue;
                     const v1 = try s.monValue(j);
                     if (!crosses(m.dir, m.v0, v1)) continue;
                     const tc = base + m.v0 / (m.v0 - v1) * (s.acc.? - base);
@@ -344,7 +354,7 @@ fn State(comptime A: type) type {
                     try s.dig.deliverA2d(j, @intFromFloat(@round(te / s.opts.tick)));
                     ad.last = level;
                 }
-            } else if (crosses(m.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick);
+            } else if (try s.active(m.*, j) and crosses(m.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick);
             try s.runDigital(tickAtOrBefore(s.acc.?, s.opts.tick));
         }
 
