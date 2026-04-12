@@ -901,6 +901,8 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             try pp.mark(&pp.nettypes, NetType.default);
             try pp.mark(&pp.cells, false);
             try pp.mark(&pp.drives, Drive.default);
+            // §10.3's default is "controlled by the simulator": no directive.
+            try pp.mark(&pp.transitions, null);
             // IEEE 1364 §19.6: "It shall be illegal for the `resetall directive
             // to be specified within a module or UDP declaration." Only the
             // parser knows where a module is, so the word is also passed
