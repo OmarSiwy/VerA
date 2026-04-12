@@ -404,6 +404,20 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             if (idx) |k| if (endsInEscapedIdent(args[k])) try out.append(pp.arena, ' ');
             continue;
         }
+        if (std.ascii.isDigit(c)) {
+            // A number is one token (IEEE 1364 §19.3.1): the `e` of `1e-3` and
+            // the `k` of `2k` are not identifiers a formal could replace.
+            const start = i;
+            i += 1;
+            while (i < body.len) : (i += 1) {
+                const d = body[i];
+                if (isIdentChar(d) or d == '.') continue;
+                if ((d == '+' or d == '-') and (body[i - 1] | 0x20) == 'e') continue;
+                break;
+            }
+            try out.appendSlice(pp.arena, body[start..i]);
+            continue;
+        }
         try out.append(pp.arena, c);
         i += 1;
     }
