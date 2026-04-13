@@ -153,14 +153,7 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                 try parse_decl.parseParamDecl(self, &params);
                 _ = try self.expect(.semicolon);
             },
-            .kw_aliasparam => {
-                self.pos += 1;
-                const alias = try self.expectIdent();
-                _ = try self.expect(.assign_eq);
-                const t = try self.expectIdent();
-                _ = try self.expect(.semicolon);
-                try aliasparams.append(self.arena, .{ .alias = alias, .target = t });
-            },
+            .kw_aliasparam => try aliasparams.append(self.arena, try parse_decl.parseAliasparam(self)),
             .kw_integer, .kw_real, .kw_string, .kw_realtime, .kw_time => {
                 const first = vars.items.len;
                 try parse_decl.parseVarDecl(self, &vars);
@@ -658,24 +651,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             _ = try self.expect(.semicolon);
         },
         // §3.4.6 aliasparam (A.2.1.1)
-        .kw_aliasparam => {
-            self.pos += 1;
-            const alias = try self.expectIdent();
-            _ = try self.expect(.assign_eq);
-            // §3.4.7 prints `aliasparam m = $mfactor;` beside `aliasparam
-            // trise = dtemp;`. Syntax 3-2 puts a parameter_identifier on the
-            // right, so a §9.18 hierarchical system parameter is a form the
-            // clause states in prose only — one token tag here, not a second
-            // production. WHICH system parameters have storage to alias is
-            // `Lower.aliasSystemParam`'s question, not the grammar's.
-            const target = if (self.peek() == .system_identifier) blk: {
-                const s = try self.internTok(self.pos);
-                self.pos += 1;
-                break :blk s;
-            } else try self.expectIdent();
-            _ = try self.expect(.semicolon);
-            try b.aliasparams.append(self.arena, .{ .alias = alias, .target = target });
-        },
+        .kw_aliasparam => try b.aliasparams.append(self.arena, try parse_decl.parseAliasparam(self)),
         // §3.2/§3.3 variable declarations (A.2.1.3)
         .kw_integer, .kw_real, .kw_string, .kw_realtime, .kw_time => {
             try parse_decl.parseVarDecl(self, &b.vars);
