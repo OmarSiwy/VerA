@@ -861,8 +861,13 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         else => {}, // else: the line-oriented directives, below
     }
 
-    // Everything else is line-oriented and dies with the arm it sits in.
-    const end = logicalLineEnd(text, j);
+    // Everything else dies with the arm it sits in. A directive with no
+    // operand (IEEE 1364 §19.1, §19.6, §19.10) is its word alone; the rest
+    // take their operands to the end of the line.
+    const end = switch (kind) {
+        .celldefine, .endcelldefine, .nounconnected_drive, .resetall => j,
+        else => logicalLineEnd(text, j), // else: every other directive reads its operand from the rest of the line
+    };
     if (!pp.emitting()) {
         try pp.putNewlines(text[at..end]);
         return end;
@@ -896,14 +901,14 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
             try pp.mark(&pp.nettypes, NetType.default);
             try pp.mark(&pp.cells, false);
             try pp.mark(&pp.drives, Drive.default);
+            // §10.3's default is "controlled by the simulator": no directive.
+            try pp.mark(&pp.transitions, null);
             // IEEE 1364 §19.6: "It shall be illegal for the `resetall directive
             // to be specified within a module or UDP declaration." Only the
-            // parser knows where a module is, so the directive is also passed
-            // through, like §10.6's pair below, for it to judge: the word
-            // itself, and the rest of its line collapsed as usual.
+            // parser knows where a module is, so the word is also passed
+            // through, like §10.6's pair below, for it to judge.
             try pp.out.appendSlice(pp.arena, text[at..j]);
-            try pp.putNewlines(text[j..end]);
-            return end;
+            return j;
         },
         .default_discipline => try pp_directive.handleDefaultDiscipline(pp, text[j..end], j),
         .default_transition => try pp_directive.handleDefaultTransition(pp, text[j..end], j),
@@ -912,8 +917,7 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
         .default_nettype => try pp_directive.handleDefaultNettype(pp, text[j..end], j),
         .unconnected_drive => try pp_directive.handleUnconnectedDrive(pp, text[j..end], j),
         // IEEE 1364 §19.1 and §19.10's closing half take no operand at all, so
-        // there is nothing to parse and nothing to get wrong. Anything written
-        // after them is on the directive's own line and collapses with it.
+        // there is nothing to parse and nothing to get wrong.
         .celldefine => try pp.mark(&pp.cells, true),
         .endcelldefine => try pp.mark(&pp.cells, false),
         .nounconnected_drive => try pp.mark(&pp.drives, .float),
@@ -933,14 +937,14 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
 
 /// `ifdef / `ifndef / `elsif / `else / `endif. IEEE Std 1364 Verilog.
 fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Directive) Error!usize {
-    const end = logicalLineEnd(text, after_name);
-    const rest = text[after_name..end];
+    // The operand, if any, is on the directive's line; the text after it is
+    // ordinary source (IEEE 1364 §19.4 Syntax 19-5 has no line break).
+    var r: Rest = .{ .s = text[after_name..logicalLineEnd(text, after_name)] };
     // The directive word itself: `ifdef, `else, ...
     const sp = pp.spanAt(at, after_name);
 
     switch (kind) {
         .ifdef, .ifndef => {
-            var r: Rest = .{ .s = rest };
             // The operand is a text_macro_identifier (Syntax 10-3), and A.9.3
             // makes `identifier` simple OR escaped — the same pair of spellings
             // `handleDefine` accepts, so `` `ifdef \M-X `` tests the macro that
@@ -969,7 +973,6 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
                 top.active = top.parent_active and !top.taken;
                 top.taken = true;
             } else {
-                var r: Rest = .{ .s = rest };
                 // Same A.9.3 pair as `ifdef above: the name may be escaped.
                 const macro = r.escapedIdent() orelse r.ident() orelse
                     return pp.fail(sp, .E0107, "", .{});
@@ -982,6 +985,7 @@ fn conditional(pp: *Pp, text: []const u8, at: usize, after_name: usize, kind: Di
         },
         else => unreachable,
     }
+    const end = after_name + r.i;
     try pp.putNewlines(text[at..end]);
     return end;
 }

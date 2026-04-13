@@ -151,6 +151,8 @@ pub inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
 /// the copies have to be made in `Lower.tryUnrollFor` where the trip count
 /// is known, not here where it is not.
 pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId {
+    try self.enter();
+    defer self.depth -= 1;
     const tok = self.pos;
     const loop_body = self.gen_loop_body;
     self.gen_loop_body = false;

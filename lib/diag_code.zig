@@ -209,6 +209,8 @@ pub const Code = enum(u16) {
     /// A.1.4: text that begins no `module_item` — a syntax error, where E0205
     /// is a derivable item VerA does not implement.
     E0240,
+    /// Nesting past the parser's depth limit: an engine limit.
+    E0241,
     /// A.6.8 `loop_statement ::= forever statement`: a `forever` whose body
     /// is a null statement. `statement`, not `statement_or_null`.
     E0296,
@@ -1959,6 +1961,21 @@ fn infoOf(c: Code) Info {
             \\module (both are descriptions of the file, A.1.2), text left over
             \\from a comment that was closed early, a statement written outside
             \\the analog block, or a keyword in upper case.
+            ,
+        },
+        .E0241 => .{
+            .title = "nested too deeply",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. The parser reads nested
+            \\parentheses, unary operators, conditional operators, statements
+            \\and generate blocks by recursion, and past 1024 open levels it
+            \\stops with this error rather than overflow its stack and crash
+            \\with no location.
+            \\
+            \\No model needs that depth. Machine-generated source can reach it:
+            \\split the expression through intermediate variables, or flatten
+            \\the nested `begin` blocks.
             ,
         },
         .E0296 => .{

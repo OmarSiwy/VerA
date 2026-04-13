@@ -630,6 +630,13 @@ test "§10.3 `default_transition Syntax 10-2" {
         try testing.expectEqual(@as(f64, 4e-9), e[0].value.?);
     }
 
+    // IEEE 1364 §19.6: `resetall returns the directive to its default, which
+    // §10.3 leaves to the simulator — a null event after the 4n.
+    const reset = try T.ev("`default_transition 4n\n`resetall\n");
+    defer testing.allocator.free(reset);
+    try testing.expectEqual(@as(usize, 2), reset.len);
+    try testing.expectEqual(@as(?f64, null), reset[1].value);
+
     // fixture ch10 48: the operand is not bracketed in Syntax 10-2, so it is
     // mandatory — and the bare form is NOT a request for the simulator default.
     try expectFail("`default_transition\n", .E0129);
@@ -653,6 +660,22 @@ test "`include resolves the built-in annex D files" {
     const d3 = try runTest("`include \"driver_access.vams\"\n`DRIVER_WAND\n");
     defer testing.allocator.free(d3);
     try testing.expect(std.mem.indexOf(u8, d3, "32'b10000000000") != null);
+}
+
+test "IEEE 1364 §19.5 `include opens a full path name as written" {
+    // A path is machine-specific, so no fixture can spell one; the file is
+    // written here, and no include dir is given to join it onto.
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "abs.vh", .data = "`define ABS_OK 7\n" });
+    const abs = try tmp.dir.realPathFileAlloc(io, "abs.vh", testing.allocator);
+    defer testing.allocator.free(abs);
+    const src = try std.fmt.allocPrint(testing.allocator, "`include \"{s}\"\n`ABS_OK\n", .{abs});
+    defer testing.allocator.free(src);
+    const got = try runTest(src);
+    defer testing.allocator.free(got);
+    try testing.expect(std.mem.indexOf(u8, got, "7") != null);
 }
 
 test "§10.4 the NAME may be escaped and the TEXT may not begin with __VAMS_" {

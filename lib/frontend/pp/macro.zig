@@ -309,7 +309,7 @@ pub fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
 pub const MacroArgs = struct { args: []const []const u8, end: usize };
 
 /// Splits a top-level comma list starting at the '(' at `lparen`. Nested
-/// (), [], {} and string literals are opaque.
+/// (), [], {}, string literals and escaped identifiers are opaque.
 ///
 /// The nesting is a STACK of opener kinds, not one shared counter: with a
 /// counter every one of `)]}` could close the argument list, so `` `ID(2.0] ``
@@ -325,6 +325,11 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
         const c = text[i];
         switch (c) {
             '"' => i = stringStop(text, i),
+            // §2.8.1: an escaped identifier runs to white space, commas and
+            // brackets included.
+            '\\' => while (i + 1 < text.len and !isSpace(text[i + 1])) {
+                i += 1;
+            },
             '(', '[', '{' => try opens.append(pp.arena, c),
             ')', ']', '}' => {
                 // Non-empty: the first iteration pushes the '(' at `lparen`,
@@ -402,6 +407,20 @@ pub fn substitute(pp: *Pp, body: []const u8, params: []const []const u8, args: [
             // it — `macroArgs` trimmed that space off with the rest. Put one
             // back, or `(ARG)` turns `\a.b ` into the identifier `\a.b)`.
             if (idx) |k| if (endsInEscapedIdent(args[k])) try out.append(pp.arena, ' ');
+            continue;
+        }
+        if (std.ascii.isDigit(c)) {
+            // A number is one token (IEEE 1364 §19.3.1): the `e` of `1e-3` and
+            // the `k` of `2k` are not identifiers a formal could replace.
+            const start = i;
+            i += 1;
+            while (i < body.len) : (i += 1) {
+                const d = body[i];
+                if (isIdentChar(d) or d == '.') continue;
+                if ((d == '+' or d == '-') and (body[i - 1] | 0x20) == 'e') continue;
+                break;
+            }
+            try out.appendSlice(pp.arena, body[start..i]);
             continue;
         }
         try out.append(pp.arena, c);
