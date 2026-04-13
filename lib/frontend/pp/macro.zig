@@ -309,7 +309,7 @@ pub fn expandArg(pp: *Pp, arg: []const u8, at: usize) Error![]const u8 {
 pub const MacroArgs = struct { args: []const []const u8, end: usize };
 
 /// Splits a top-level comma list starting at the '(' at `lparen`. Nested
-/// (), [], {} and string literals are opaque.
+/// (), [], {}, string literals and escaped identifiers are opaque.
 ///
 /// The nesting is a STACK of opener kinds, not one shared counter: with a
 /// counter every one of `)]}` could close the argument list, so `` `ID(2.0] ``
@@ -325,6 +325,11 @@ pub fn macroArgs(pp: *Pp, text: []const u8, lparen: usize, at: usize, name: []co
         const c = text[i];
         switch (c) {
             '"' => i = stringStop(text, i),
+            // §2.8.1: an escaped identifier runs to white space, commas and
+            // brackets included.
+            '\\' => while (i + 1 < text.len and !isSpace(text[i + 1])) {
+                i += 1;
+            },
             '(', '[', '{' => try opens.append(pp.arena, c),
             ')', ']', '}' => {
                 // Non-empty: the first iteration pushes the '(' at `lparen`,
