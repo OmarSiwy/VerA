@@ -662,6 +662,22 @@ test "`include resolves the built-in annex D files" {
     try testing.expect(std.mem.indexOf(u8, d3, "32'b10000000000") != null);
 }
 
+test "IEEE 1364 §19.5 `include opens a full path name as written" {
+    // A path is machine-specific, so no fixture can spell one; the file is
+    // written here, and no include dir is given to join it onto.
+    const io = testing.io;
+    var tmp = testing.tmpDir(.{});
+    defer tmp.cleanup();
+    try tmp.dir.writeFile(io, .{ .sub_path = "abs.vh", .data = "`define ABS_OK 7\n" });
+    const abs = try tmp.dir.realPathFileAlloc(io, "abs.vh", testing.allocator);
+    defer testing.allocator.free(abs);
+    const src = try std.fmt.allocPrint(testing.allocator, "`include \"{s}\"\n`ABS_OK\n", .{abs});
+    defer testing.allocator.free(src);
+    const got = try runTest(src);
+    defer testing.allocator.free(got);
+    try testing.expect(std.mem.indexOf(u8, got, "7") != null);
+}
+
 test "§10.4 the NAME may be escaped and the TEXT may not begin with __VAMS_" {
     // Syntax 10-3: text_macro_identifier ::= identifier, and A.9.3 makes that
     // simple OR escaped. §2.8.1 drops the `\` and the terminating white space,

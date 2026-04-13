@@ -85,10 +85,13 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
 pub const Included = struct { text: []const u8, path: []const u8 };
 
 pub fn readInclude(pp: *Pp, path: []const u8) Error!?Included {
-    if (pp.opts.include_dirs.len != 0) {
+    // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
+    // the empty base.
+    const bases: []const []const u8 = if (std.fs.path.isAbsolute(path)) &.{""} else pp.opts.include_dirs;
+    if (bases.len != 0) {
         const io = std.Io.Threaded.global_single_threaded.io();
         const dir: std.Io.Dir = .cwd();
-        for (pp.opts.include_dirs) |base| {
+        for (bases) |base| {
             const full = try std.fs.path.join(pp.arena, &.{ base, path });
             if (dir.readFileAlloc(io, full, pp.arena, .limited(max_include_bytes))) |bytes| {
                 return .{ .text = bytes, .path = full };
