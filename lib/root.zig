@@ -275,8 +275,14 @@ pub fn compileSourceOpts(
     // errdefers that used to do it ran first and left `detach` reading freed
     // memory.
     if (opts.diags) |out| {
+        bag.detach(gpa) catch |err| {
+            if (result) |r| {
+                var ok = r;
+                ok.deinit();
+            } else |_| freeArena(gpa, arena_state);
+            return err;
+        };
         out.* = bag;
-        try out.detach(gpa);
     }
 
     var ok = result catch |err| {
@@ -570,6 +576,21 @@ test "diagnostics outlive the compilation arena" {
     defer aw.deinit();
     try diag.render(&bag, &aw.writer, .{});
     try std.testing.expect(std.mem.indexOf(u8, aw.writer.buffered(), "-->") != null);
+}
+
+fn compileBadWithDiags(gpa: Allocator) !void {
+    var bag: diag.Bag = .init(gpa);
+    defer bag.deinit(gpa);
+    const src = "module bad(p); inout p; electrical p; analog I(p) <+ ;\nendmodule\n";
+    _ = compileSourceOpts(gpa, src, .lint, .{ .diags = &bag }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return,
+    };
+    return error.TestUnexpectedResult;
+}
+
+test "an allocation failure while detaching diagnostics leaks nothing" {
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, compileBadWithDiags, .{});
 }
 
 test "a clean compilation reports no diagnostics but still hands back the bag" {
