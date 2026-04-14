@@ -16,7 +16,7 @@
 // VerA refuses it with E0238 "a loop generate's index is not a genvar".
 //
 //! lrm A.4.2
-//! reject genvar
+//! reject E0238
 `include "disciplines.vams"
 module annex_a_generate_integer_index(p, n);
   inout p, n;

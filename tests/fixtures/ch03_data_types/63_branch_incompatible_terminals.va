@@ -12,12 +12,11 @@
 // applied to two nets, this one is the branch DECLARATION, and §3.12 states the
 // requirement separately because a compiler can check one and not the other.
 //
-// The pinned substring is only the phase label: VerA has no compatibility
-// diagnostic, so a code would pin the wrong rule.
+// VerA refuses it with E0355, "incompatible disciplines" — the §3.11 rule.
 //
 //! lrm 3.12
 //! lrm 3.11
-//! reject DiagnosticsReported
+//! reject E0355
 module ch3_branch_incompatible_terminals(p, n);
     inout p, n;
     electrical p, n;
