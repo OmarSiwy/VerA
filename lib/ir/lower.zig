@@ -470,6 +470,9 @@ noise_tab: std.AutoHashMapUnmanaged(u32, []const Mir.Value) = .empty,
 /// the variable `noiseCoeff` differentiates a contribution with respect to —
 /// the AST says which generator, this says which SSA value carries it.
 noise_val: std.AutoHashMapUnmanaged(u32, Mir.Value) = .empty,
+/// `contrib.scanFinite`'s per-value answers for the `<+` being checked;
+/// cleared per statement, since a later alias can change a fold.
+finite_scan: std.AutoHashMapUnmanaged(Mir.Value, lower_contrib.FiniteScan) = .empty,
 /// §5.9 break/continue targets.
 loops: std.ArrayList(LoopCtx) = .empty,
 /// §5.3.2 "All identifiers declared within a named sequential block can be

@@ -288,7 +288,7 @@ const Scan = struct {
         const held = in.lowered.held_vars.items;
         if (held.len == 0) return false;
         // The `held_vars` index is the call's literal argument (`gen_call.heldIdx`).
-        const c = in.an.foldConst(if (d.args.len != 0) d.args[0] else .zero, 0, false) orelse return false;
+        const c = in.an.foldConst(if (d.args.len != 0) d.args[0] else .zero, false) orelse return false;
         const i: usize = @intFromFloat(c.f);
         return in.an.rv(held[@min(i, held.len - 1)].final) == phi;
     }
@@ -446,7 +446,7 @@ pub fn candidate(in: Input, sinv: []const bool, v: Mir.Value) bool {
     if (in.an.vty[i] == .str) return false;
     const b = in.an.def_block[i];
     if (b == none_u32 or in.an.loop_of[b] != none_u32) return false;
-    return in.an.foldConst(v, 0, false) == null;
+    return in.an.foldConst(v, false) == null;
 }
 
 /// §3.2 retention the card decides. A `.unless_invariant` held variable has no
