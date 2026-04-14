@@ -152,8 +152,8 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     self.out.params.items[self.out.params.items.len - 1].integer32 = decl.ty == .integer;
 }
 
-/// §3.4/A.2.4: the spelling of the first simulation-state reference in a
-/// parameter default, or null when none exists. Access functions, analog
+/// §3.4/A.2.4: the spelling of the first simulation-state or module-variable
+/// reference in a parameter default, or null when none exists. Access functions, analog
 /// operators, small-signal sources and event functions are state reads by
 /// TAG; a `sys_call` is one by NAME (`simStateName`), because most `$` names
 /// that could appear here — `$param_given`, `$mfactor`, `$simprobe` — resolve
@@ -170,6 +170,11 @@ pub fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
         .sys_call => {
             const n = self.file.str(ex.strOf(e));
             if (simStateName(n)) return n;
+        },
+        // §3.4 "constant numbers and previously defined parameters": a module
+        // variable is neither, and holds nothing until the analog block runs.
+        .ident => if (self.out.module) |m| for (m.vars) |v| {
+            if (v.name == ex.strOf(e)) return self.file.str(v.name);
         },
         else => {}, // else: a state read only through its children
     }
