@@ -317,7 +317,7 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
         if (u.role != .analog_op or u.op != .timer) continue;
         const args = from.names.opArgs(self.mir, i);
         if (args.len < 2) continue;
-        if (self.an.foldConst(args[1], 0, false) != null) continue; // renders inline
+        if (self.an.foldConst(args[1], false) != null) continue; // renders inline
         const v = self.an.rv(args[1]);
         if (v == .f_zero) continue;
         try jobs.append(self.arena, .{

@@ -337,7 +337,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
         // takes the subtree in ONE step and cannot see the check above.
         // So ask first whether it would swallow a slot.
         if (!gen_render.foldHidesSlot(self, v, 0)) {
-            if (self.an.foldConst(v, 0, false)) |k| return try gen_file.fmtF64(self, k.f);
+            if (self.an.foldConst(v, false)) |k| return try gen_file.fmtF64(self, k.f);
         }
     } else {
         // A real parameter may depend on integer arithmetic. Evaluate that
@@ -346,7 +346,7 @@ pub fn f64Const(self: *Gen, v0: Mir.Value, depth: u32, in_unit: bool) Error!?[]c
             const integer = try i64Const(self, v, depth + 1) orelse return null;
             return try std.fmt.allocPrint(self.arena, "@as(f64, @floatFromInt({s}))", .{integer});
         }
-        if (self.an.foldConst(v0, 0, false)) |k| return try gen_file.fmtF64(self, k.f);
+        if (self.an.foldConst(v0, false)) |k| return try gen_file.fmtF64(self, k.f);
     }
     switch (self.mir.valueDef(v)) {
         .param_ref => |p| {
@@ -559,7 +559,7 @@ pub fn ctrlStep(self: *Gen, args: []const Mir.Value, i: usize, dflt: []const u8)
 /// spell.
 pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
     if (args.len < 2) return "0.0";
-    if (self.an.foldConst(args[1], 0, false) == null) {
+    if (self.an.foldConst(args[1], false) == null) {
         const lo = self.core.lo_idx[@intFromEnum(self.an.rv(args[1]))];
         if (lo != none_u32) return std.fmt.allocPrint(self.arena, "m.f{d}.v", .{lo});
     }
@@ -572,13 +572,13 @@ pub fn timerPeriod(self: *Gen, args: []const Mir.Value) Error![]const u8 {
 /// it to 0.0 — and a period that does not fold cannot be decided here.
 pub fn timerIsOneShot(self: *Gen, args: []const Mir.Value) bool {
     if (args.len < 2) return true;
-    const c = self.an.foldConst(args[1], 0, false) orelse return false;
+    const c = self.an.foldConst(args[1], false) orelse return false;
     return c.f <= 0.0;
 }
 
 pub fn crossTest(self: *Gen, n: []const u8, args: []const Mir.Value, in: []const u8) Error![]const u8 {
     const arg: Mir.Value = if (args.len > 1) args[1] else .zero;
-    if (self.an.foldConst(arg, 0, false)) |c| {
+    if (self.an.foldConst(arg, false)) |c| {
         // §5.10.3.1's fourth case, the one with a number in it: "For any
         // other values of dir, the cross() function does not generate an
         // event and does not act to control the timestep", restated in the
@@ -627,7 +627,7 @@ pub fn enableTest(self: *Gen, k: OpKind, args: []const Mir.Value) Error![]const 
 /// §5.10 the `held_vars` index a `$held_*` call carries as its only
 /// argument. Always a literal `Lower` emitted, so the fold cannot fail.
 pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
-    const c = self.an.foldConst(if (args.len != 0) args[0] else .zero, 0, false) orelse return 0;
+    const c = self.an.foldConst(if (args.len != 0) args[0] else .zero, false) orelse return 0;
     const i: usize = @intFromFloat(c.f);
     return @min(i, self.names.held_names.len -| 1);
 }
@@ -743,7 +743,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // does not carry.
         .ddx => {
             if (args.len > 0) float_lanes.pinLanes(self, args[0]);
-            const u = if (args.len > 1) self.an.foldConst(args[1], 0, true) else null;
+            const u = if (args.len > 1) self.an.foldConst(args[1], true) else null;
             const lane = if (u) |x| std.math.lossyCast(i64, x.f) else 0;
             // The VALUE reads a lane, so that lane must exist in a narrow S —
             // `ddx_reads`, which `contract.validate` holds inside `deriv_reads`.
@@ -1576,7 +1576,7 @@ pub fn transitionTime(self: *Gen, args: []const Mir.Value, i: usize, dflt: []con
     // overridden on the model card used to take `default_transition
     // forever. Only a time that is zero WITHOUT parameters is spelled-
     // absent at compile time.
-    if (self.an.foldConst(args[i], 0, false)) |c| {
+    if (self.an.foldConst(args[i], false)) |c| {
         if (c.f == 0.0) return dflt;
         return f64Expr(self, args[i]); // a known-nonzero literal, as before
     }

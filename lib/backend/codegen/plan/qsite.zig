@@ -175,7 +175,7 @@ pub fn plan(in: Input, branch_u: []const u32, topo: plan_topo.Topology, sinv: []
 /// Does a charge with this end-of-block value move in time?
 fn live(in: Input, sinv: []const bool, v0: Mir.Value) bool {
     const v = in.an.rv(v0);
-    if (in.an.foldConst(v, 0, false) != null) return false;
+    if (in.an.foldConst(v, false) != null) return false;
     const i = @intFromEnum(v);
     return !(i < sinv.len and sinv[i] and in.mir.valueDef(v) == .inst_result);
 }
