@@ -95,6 +95,8 @@ pub fn lowerParamDecl(self: *Lower, decl: *const Ast.ParamDecl) Oom!void {
     if (simStateInDefault(self, decl.default)) |what| {
         try self.err(decl.main_tok, .E0363, "`{s}` reads `{s}`", .{ name, what });
     }
+    if (oomrInDefault(self, decl.default)) |h|
+        try self.err(self.file.exprs.mainTok(h), .E0924, "`{s}` in the default of `{s}`", .{ try lower_expr.flatName(self, h), name });
 
     // §3.4.4 array parameters are scalarized into `name[i]` entries.
     if (decl.dims.len != 0) return lowerParamArray(self, decl, name);
@@ -180,6 +182,22 @@ pub fn simStateInDefault(self: *const Lower, e: Ast.ExprId) ?[]const u8 {
     }
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (simStateInDefault(self, c)) |w| return w;
+    return null;
+}
+
+/// §6.7.1 "parameter declaration statements shall not make out-of-module
+/// references": the first hierarchical name in `e`, or null. A §5.5.3 nature
+/// attribute reference (`net.potential.attr`) is a constant, not a reference.
+fn oomrInDefault(self: *const Lower, e: Ast.ExprId) ?Ast.ExprId {
+    if (e == .none) return null;
+    const ex = &self.file.exprs;
+    if (ex.tag(e) == .hier_ident) {
+        const parts = ex.nameParts(e);
+        const half = if (parts.len == 3) self.file.str(parts[1]) else "";
+        if (!std.mem.eql(u8, half, "potential") and !std.mem.eql(u8, half, "flow")) return e;
+    }
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (oomrInDefault(self, c)) |h| return h;
     return null;
 }
 
