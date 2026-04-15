@@ -679,6 +679,8 @@ pub const Code = enum(u16) {
     E0923,
     /// §6.7.1 a parameter declaration makes an out-of-module reference.
     E0924,
+    /// §6.5.7.1 a port and the net connected to it differ in width.
+    E0925,
     /// §3.9 a digital primitive's terminal is a continuous net and no
     /// `default_discipline` names the primitive side's discipline.
     E0960,
@@ -5706,6 +5708,23 @@ fn infoOf(c: Code) Info {
             \\
             \\Read the other parameter in the analog block instead, or pass the
             \\value down as an instance parameter override (6.3).
+            ,
+        },
+        .E0925 => .{
+            .title = "port and connected net differ in width",
+            .lrm = "6.5.7.1",
+            .explain =
+            \\LRM 6.5.7.1: "A scalar port can be connected to a scalar net and a
+            \\vector port can be connected to a vector net or concatenated net
+            \\expression of the matching width. The sizes of the ports and net
+            \\must match."
+            \\
+            \\Verilog-AMS does not carry IEEE 1364's truncate-or-extend rule for
+            \\a port connection: each element of a vector port is its own node,
+            \\so a width mismatch would leave elements joined to nothing.
+            \\
+            \\Connect a net of the port's width, or a concatenation of that many
+            \\scalar nets.
             ,
         },
         .E0960 => .{

@@ -168,11 +168,22 @@ pub const Design = struct {
     /// parent net `elems[k]`. Lowering interns no node for it: each element
     /// aliases its net's node (`Lower.lowerModule`).
     port_concats: []const PortConcat = &.{},
+    /// §6.5.7.1 "The sizes of the ports and net must match." One entry per
+    /// port bound to a net: the bound flat net and the child's declared range
+    /// (null for a scalar port), for lowering to fold and compare.
+    port_widths: []const PortWidth = &.{},
     /// §6.4.3 "If a paramset variable without a description has the same name
     /// as a module output variable, the module output variable shall not be
     /// available for instances using the paramset." The flat names of those
     /// variables, for §9.16's `$simprobe` to treat as unresolvable.
     ps_hidden: []const []const u8 = &.{},
+};
+
+pub const PortWidth = struct {
+    net: []const u8,
+    /// Cloned into the flat namespace, as `PortConcat.range` is.
+    range: ?Ast.Dim,
+    main_tok: u32,
 };
 
 pub const PortConcat = struct {
@@ -518,6 +529,7 @@ pub const Flatten = struct {
     implicit_nets: std.ArrayList(NameSite) = .empty,
     unconnected_inputs: std.ArrayList(NameSite) = .empty,
     port_concats: std.ArrayList(PortConcat) = .empty,
+    port_widths: std.ArrayList(PortWidth) = .empty,
 
     /// §6.3.1 every `defparam` seen so far, keyed by the ABSOLUTE flat name of
     /// the parameter it overrides — the declaring module's own path joined with
@@ -744,6 +756,7 @@ pub const Flatten = struct {
             .units = self.unit_paths.items,
             .inserts = self.inserts.items,
             .port_concats = self.port_concats.items,
+            .port_widths = self.port_widths.items,
             .ps_hidden = self.ps_hidden.items,
         };
     }
@@ -945,6 +958,7 @@ pub const Flatten = struct {
         // rename map: an actual naming a net of a mid-level module has already
         // been flattened to `u.n`.
         var concats: std.ArrayList(struct { port: Ast.Port, elems: []const []const u8, tok: u32 }) = .empty;
+        var widths: std.ArrayList(struct { port: Ast.Port, net: Ast.StrId, tok: u32 }) = .empty;
         for (child.ports, 0..) |p, i| {
             const conn = connectionFor(inst, p, i);
             try unit.connected.put(self.ctx.arena, p.name, conn != null and conn.?.expr != .none);
@@ -991,6 +1005,7 @@ pub const Flatten = struct {
                 if (unit.primitive) {
                     try self.prim_ports.append(self.ctx.arena, .{ .path = path, .port = p, .bound = bound });
                 } else {
+                    try widths.append(self.ctx.arena, .{ .port = p, .net = bound, .tok = conn.?.main_tok });
                     try elab_resolve.resolveDiscipline(self, path, p, bound, conn.?.main_tok);
                     const local = (try elab_resolve.oocDiscipline(self, path, p.name)) orelse p.discipline;
                     if (local != .none) try unit.port_disc.put(self.ctx.arena, p.name, local);
@@ -1061,6 +1076,11 @@ pub const Flatten = struct {
             .range = (try elab_clone.cloneDim(self, cc.port.range orelse cc.port.type_range)).?,
             .elems = cc.elems,
             .main_tok = cc.tok,
+        });
+        for (widths.items) |pw| try self.port_widths.append(self.ctx.arena, .{
+            .net = self.ctx.file.str(pw.net),
+            .range = try elab_clone.cloneDim(self, pw.port.range orelse pw.port.type_range),
+            .main_tok = pw.tok,
         });
 
         // ---- the declarations themselves -----------------------------------
