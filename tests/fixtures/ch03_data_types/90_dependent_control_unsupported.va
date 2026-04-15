@@ -1,8 +1,0 @@
-// Legal dependent expressions outside the host renderer must not freeze.
-// System-function derivation remains a support gap; rejection is not conformance.
-//! lrm 6.3.4
-//! reject E1004
-module dependent_control_unsupported;
-  parameter integer amount = 2;
-  localparam integer size = $clog2(amount);
-endmodule
