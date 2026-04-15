@@ -1,6 +1,19 @@
-// Constant folding must not bypass the unsupported mixed-context diagnostic.
+// The all-constant twin of 90_dependent_control_shift_mixed.va, so constant
+// folding meets the same rule. IEEE 1364 §5.5.1: "If any operand is unsigned,
+// the result is unsigned"; 32'h1 is unsigned, so `-1` is read as 32'hFFFF_FFFF:
+//
+//   32'hFFFF_FFFF >> 0 = 32'hFFFF_FFFF;   1 < 32'hFFFF_FFFF  ->  mixed = 1.
+//
+// A fold over the signed carrier gives 1 < -1 = 0.
+//
 //! lrm 4.2.11
-//! reject E0364
-module dependent_control_shift_mixed_folded;
+//! xfail E0364: the analog MIR carries no expression signedness, so an unsigned context over a signed shift is refused rather than evaluated
+`include "check.vh"
+module dependent_control_shift_mixed_folded(p);
+  inout p; electrical p;
   localparam integer mixed = 32'h1 < (-1 >> 0);
+  analog begin
+    `CHECKI("unsigned context: 32'h1 < (-1 >> 0)", mixed, 1);
+    I(p) <+ V(p);
+  end
 endmodule

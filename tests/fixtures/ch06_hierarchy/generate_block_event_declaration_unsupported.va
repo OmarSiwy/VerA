@@ -6,21 +6,35 @@
 // the block's own scope, brought into existence only when the scheme
 // selects the block.
 //
-// VerA has no generate scope to hold the declaration. It used to drop it
-// without a word; it now refuses it (E0235, "not supported inside a generate
-// block"). This pins that refusal: a limitation of VerA, not an error in the
-// source, so it is a `reject` of VerA's own code and moves to a positive
-// fixture the day generate blocks keep their own items.
+// The block triggers its own event once at 20 ns and counts it, so `hits` is
+// 0 before 20 ns and 1 after. The analog block reads it (§7.3.6.5) at 10 ns
+// and 30 ns: 0, then 1. A compiler that dropped the declaration has no event
+// for the trigger and the wait to share.
+//
+// The same file with the block's items moved to module scope passes, so the
+// generate block is the only thing under test.
 //
 //! lrm 6.6
-//! reject E0235
+//! analysis tran
+//! time 10n, 30n
+//! xfail E0235: VerA has no generate scope for an event declaration and refuses it
+`timescale 1ns/1ns
 `include "disciplines.vams"
+`include "check.vh"
 module ch6_generate_block_event(p);
   inout p; electrical p;
+  integer hits;
+  initial hits = 0;
   generate
     if (1) begin : g
       event e;
+      initial #20 -> e;
+      always @(e) hits = hits + 1;
     end
   endgenerate
-  analog I(p) <+ V(p);
+  analog begin
+    `CHECKEQ("§6.6 the generated event fires once at 20 ns", hits,
+             ($abstime >= 20n) ? 1 : 0, 0);
+    I(p) <+ V(p);
+  end
 endmodule
