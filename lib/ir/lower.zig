@@ -1509,7 +1509,7 @@ pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // the assignment that reveals it — see `holdSlot`.
     try lower_param.markHeldVars(self, module);
     try lower_param.markMemArrays(self, module);
-    try lower_param.checkOneItemPerScope(self, module.vars);
+    try lower_param.checkOneItemPerScope(self, module.params, module.vars, module.nets);
     // A.6.2 the digital `initial` block, for the same reason and at the same
     // point as the §5.10 scan above: what a variable holds at the top of every
     // evaluation is decided at its declaration. `initial x = 3;` and

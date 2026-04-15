@@ -778,27 +778,44 @@ pub fn declareVar(self: *Lower, name: []const u8, ty: Ty) Oom!VarSlot {
 /// to give an instance the same name as the name of the net connected to its
 /// output."
 ///
-/// The first clause of that sentence, which is the one that has a second
-/// declaration to point at. Without it the second `put` in `declareVar` rebinds
-/// the name and the first declaration's initializer is silently unreachable —
-/// and the legal case looks identical from the map's side, which is why the test
-/// is over ONE DECLARATION LIST rather than over `self.vars`: a list is exactly
-/// the declarations of one scope (§6.8 lists what opens one; a second declaration
-/// is not on it), so shadowing an outer name cannot reach this.
+/// Checked across every kind a scope declares by name — parameters, variables,
+/// nets — not only variable against variable: a second parameter used to reach
+/// codegen as a duplicate struct field, and a net or parameter sharing a
+/// variable's name was silently rebound. The test is over ONE SCOPE'S
+/// DECLARATION LISTS rather than over `self.vars`: the lists are exactly the
+/// declarations of one scope (§6.8 lists what opens one), so shadowing an outer
+/// name cannot reach this. Net against net is left alone: a port direction and
+/// its discipline are two declarations of one item. So is a discipline against
+/// a variable — §7's connect modules write `reg out; ddiscrete out;` — so only a
+/// net declaration with no discipline (`wire x;`) is a second item beside a
+/// variable.
 ///
-/// ponytail: O(n²) over one scope's variables, which is a handful. A set would
-/// need an allocation per scope to save comparisons that cost nothing.
-pub fn checkOneItemPerScope(self: *Lower, vars: []const Ast.VarDecl) Oom!void {
-    for (vars, 0..) |v, i| {
-        for (vars[0..i]) |earlier| {
-            if (earlier.name != v.name) continue;
-            var b = self.errWith(v.main_tok, .E0362);
-            b.msg("`{s}`", .{self.file.str(v.name)});
-            b.note("§6.8: one identifier declares one item in a scope — the earlier declaration is unreachable", .{});
-            try b.emit();
-            break;
-        }
+/// ponytail: O(n²) over one scope's names — ~1e6 u32 compares for a thousand-
+/// parameter compact model. A set per scope when a model makes that show.
+pub fn checkOneItemPerScope(self: *Lower, params: []const Ast.ParamDecl, vars: []const Ast.VarDecl, nets: []const Ast.NetDecl) Oom!void {
+    for (params, 0..) |p, i| {
+        if (declares(params[0..i], p.name)) try dupItem(self, p.main_tok, p.name);
     }
+    for (vars, 0..) |v, i| {
+        if (declares(vars[0..i], v.name) or declares(params, v.name))
+            try dupItem(self, v.main_tok, v.name);
+        for (nets) |n| if (n.name == v.name and n.discipline == .none) try dupItem(self, v.main_tok, v.name);
+    }
+    for (nets) |n| {
+        if (declares(params, n.name)) try dupItem(self, n.main_tok, n.name);
+    }
+}
+
+fn declares(decls: anytype, name: Ast.StrId) bool {
+    for (decls) |d| if (d.name == name) return true;
+    return false;
+}
+
+fn dupItem(self: *Lower, tok: u32, name: Ast.StrId) Oom!void {
+    var b = self.errWith(tok, .E0362);
+    b.msg("`{s}`", .{self.file.str(name)});
+    b.note("§6.8: one identifier declares one item in a scope — the earlier declaration is unreachable", .{});
+    try b.emit();
 }
 
 /// Where a `declareVarDecl` sits. §5.3.2 gives a persistent §5.10 slot to a
