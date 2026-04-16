@@ -70,41 +70,57 @@ const rscalar_txt = gen_kernel_text.rscalar_txt;
 // File assembly
 // =======================================================================
 
+/// The optional helper blocks a device carries. Each flag gates the same
+/// block in device.zig, the unit prologue and `h.zig`.
+const Features = struct {
+    stateful: bool,
+    hist: bool,
+    filt: bool,
+    timer: bool,
+    strs: bool,
+    tbl: bool,
+    rng: bool,
+    files: bool,
+    arrs: bool,
+};
+
 pub fn emitFile(self: *Gen) Error!void {
-    const stateful = hasStatefulOps(self);
-    const hist = usesOp(self, .absdelay);
-    const filt = usesOp(self, .laplace) or usesOp(self, .zi);
-    const timer = usesOp(self, .timer);
-    // §9.5.3/§9.5.4.2. Set at the call in lowering, because by the time the
-    // MIR is sliced into units the formatter's call may sit in any of them.
-    //
-    // `display == .emit` joins it because §9.4.3's real conversions live in
-    // the same file: Table 9-23 grants them "the full formatting
-    // capabilities available in the C language", and `zCReal` is that C —
-    // so a printing artifact needs the string kernels whether or not the
-    // model ever names `$sformat`. This is the same condition `display_txt`
-    // has always carried, now spelled once.
-    const strs = self.lowered.uses.contains(.str_tasks) or self.display == .emit;
-    // §9.21, set at the call for the same reason `strs` is: the lookup may
-    // land in any unit once the MIR is sliced.
-    const tbl = self.lowered.uses.contains(.table_model);
-    // §9.13, set at the call for the same reason: `lowerRandom` runs long
-    // before the MIR is sliced into units.
-    const rng = self.lowered.uses.contains(.rng);
-    // §9.5 the descriptor table. `display == .emit` is the second condition
-    // and not a convenience: it is the artifact whose host runs the per-point
-    // side-effect phase these kernels have to be sequenced in.
-    const files = self.display == .emit and self.lowered.uses.contains(.file_tasks);
-    // §3.2.2 set in lowering: a runtime-indexed array is one storage.
-    const arrs = self.lowered.mem_arrays.items.len != 0;
-    try buildPrelude(self, stateful, hist, filt, timer, strs, tbl, rng, files, arrs);
+    const f: Features = .{
+        .stateful = hasStatefulOps(self),
+        .hist = usesOp(self, .absdelay),
+        .filt = usesOp(self, .laplace) or usesOp(self, .zi),
+        .timer = usesOp(self, .timer),
+        // §9.5.3/§9.5.4.2. Set at the call in lowering, because by the time the
+        // MIR is sliced into units the formatter's call may sit in any of them.
+        //
+        // `display == .emit` joins it because §9.4.3's real conversions live in
+        // the same file: Table 9-23 grants them "the full formatting
+        // capabilities available in the C language", and `zCReal` is that C —
+        // so a printing artifact needs the string kernels whether or not the
+        // model ever names `$sformat`. This is the same condition `display_txt`
+        // has always carried, now spelled once.
+        .strs = self.lowered.uses.contains(.str_tasks) or self.display == .emit,
+        // §9.21, set at the call for the same reason `strs` is: the lookup may
+        // land in any unit once the MIR is sliced.
+        .tbl = self.lowered.uses.contains(.table_model),
+        // §9.13, set at the call for the same reason: `lowerRandom` runs long
+        // before the MIR is sliced into units.
+        .rng = self.lowered.uses.contains(.rng),
+        // §9.5 the descriptor table. `display == .emit` is the second condition
+        // and not a convenience: it is the artifact whose host runs the per-point
+        // side-effect phase these kernels have to be sequenced in.
+        .files = self.display == .emit and self.lowered.uses.contains(.file_tasks),
+        // §3.2.2 set in lowering: a runtime-indexed array is one storage.
+        .arrs = self.lowered.mem_arrays.items.len != 0,
+    };
+    try buildPrelude(self, f);
     try self.out.appendSlice(self.gpa, header_txt);
     try self.out.appendSlice(self.gpa, math_txt);
     try self.out.appendSlice(self.gpa, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
     try self.out.appendSlice(self.gpa, ops_txt);
-    if (timer) try self.out.appendSlice(self.gpa, timer_txt);
-    if (hist) try self.out.appendSlice(self.gpa, hist_txt);
-    if (arrs) try self.out.appendSlice(self.gpa, arr_txt);
+    if (f.timer) try self.out.appendSlice(self.gpa, timer_txt);
+    if (f.hist) try self.out.appendSlice(self.gpa, hist_txt);
+    if (f.arrs) try self.out.appendSlice(self.gpa, arr_txt);
     // §4.5.11/§4.5.12 the filter kernels are embedded from a real Zig file,
     // so they arrive already `pub` — which is right for `h.zig` and wrong
     // here: `contract.rejectStrayPubDecls` allows only contract-recognized
@@ -112,18 +128,18 @@ pub fn emitFile(self: *Gen) Error!void {
     // `--check`/`--emit-so` on `stray pub decl \`zBilin\``. Every other
     // helper block is written private and made public by `publish`; this one
     // has to go the other way.
-    if (filt) try depublish(self.gpa, &self.out, filt_txt);
+    if (f.filt) try depublish(self.gpa, &self.out, filt_txt);
     // §9.4.3's padding helper serves §9.5.3 too — `$sformat` is the same
     // formatter — so a device that never prints still needs it if it formats
     // into a string.
-    if (strs) try self.out.appendSlice(self.gpa, display_txt);
-    if (strs) try depublish(self.gpa, &self.out, str_txt);
-    if (files) try depublish(self.gpa, &self.out, file_txt);
+    if (f.strs) try self.out.appendSlice(self.gpa, display_txt);
+    if (f.strs) try depublish(self.gpa, &self.out, str_txt);
+    if (f.files) try depublish(self.gpa, &self.out, file_txt);
     // §9.5.1.2 the same table, public for a host's second context to share
     // (`contract.FileIo`, optional: a host that runs one context ignores it).
-    if (files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .new_analysis = zFNewAnalysis };\n\n");
-    if (tbl) try depublish(self.gpa, &self.out, table_txt);
-    if (rng) try depublish(self.gpa, &self.out, rng_txt);
+    if (f.files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .new_analysis = zFNewAnalysis };\n\n");
+    if (f.tbl) try depublish(self.gpa, &self.out, table_txt);
+    if (f.rng) try depublish(self.gpa, &self.out, rng_txt);
     if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, limit_txt);
     if (self.lowered.uses.contains(.plusargs)) try self.out.appendSlice(self.gpa, plusarg_txt);
     try self.out.appendSlice(self.gpa, "\n");
@@ -137,7 +153,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // `emitSwitchRow` splits exactly these branches; `prepare` planned them
     // (`plan/topology.zig`) before any residual is emitted.
     const cpairs = self.topo.cpairs;
-    if (stateful or cg_limit.needsR(self) or cpairs.len != 0 or pathLatches(self) or
+    if (f.stateful or cg_limit.needsR(self) or cpairs.len != 0 or pathLatches(self) or
         self.noise.rows.len != 0 or try gen_dispatch.acUsesCore(self))
     {
         try self.out.appendSlice(self.gpa, rscalar_txt);
@@ -163,7 +179,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
     // advance, which is the ONLY place a stream may move: a per-iteration draw
     // makes the residual non-deterministic and Newton never converges.
-    if (stateful or self.lowered.rng_auto_sites != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
+    if (f.stateful or self.lowered.rng_auto_sites != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
     try cg_limit.emit(self);
     try gen_state.emitCollapse(self, cpairs);
     try gen_state.emitNextBreakpoint(self);
@@ -191,20 +207,20 @@ pub fn emitFile(self: *Gen) Error!void {
 /// `n_u` is RECOMPUTED (`contract.nU(dev)`) rather than aliased: it is
 /// private in device.zig and `contract.rejectStrayPubDecls` will not let it
 /// become public. It is the same comptime value either way.
-pub fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: bool, strs: bool, tbl: bool, rng: bool, files: bool, arrs: bool) Error!void {
+fn buildPrelude(self: *Gen, f: Features) Error!void {
     var p: std.ArrayList(u8) = .empty;
     try p.appendSlice(self.arena, prelude_head_txt);
     try p.appendSlice(self.arena, prelude_math_txt);
-    if (timer) try p.appendSlice(self.arena, prelude_timer_txt);
-    if (hist) try p.appendSlice(self.arena, prelude_hist_txt);
-    if (arrs) try p.appendSlice(self.arena, prelude_arr_txt);
-    if (filt) try p.appendSlice(self.arena, prelude_filt_txt);
-    if (self.display == .emit or strs) try p.appendSlice(self.arena, prelude_display_txt);
-    if (strs) try p.appendSlice(self.arena, prelude_str_txt);
-    if (files) try p.appendSlice(self.arena, prelude_file_txt);
-    if (tbl) try p.appendSlice(self.arena, prelude_table_txt);
-    if (rng) try p.appendSlice(self.arena, prelude_rng_txt);
-    if (stateful) try p.appendSlice(self.arena, "const R = h.R;\n");
+    if (f.timer) try p.appendSlice(self.arena, prelude_timer_txt);
+    if (f.hist) try p.appendSlice(self.arena, prelude_hist_txt);
+    if (f.arrs) try p.appendSlice(self.arena, prelude_arr_txt);
+    if (f.filt) try p.appendSlice(self.arena, prelude_filt_txt);
+    if (self.display == .emit or f.strs) try p.appendSlice(self.arena, prelude_display_txt);
+    if (f.strs) try p.appendSlice(self.arena, prelude_str_txt);
+    if (f.files) try p.appendSlice(self.arena, prelude_file_txt);
+    if (f.tbl) try p.appendSlice(self.arena, prelude_table_txt);
+    if (f.rng) try p.appendSlice(self.arena, prelude_rng_txt);
+    if (f.stateful) try p.appendSlice(self.arena, "const R = h.R;\n");
     // The shared core is a unit file like any other, and it sits beside the
     // unit that calls it — device.zig's own alias for it is private to
     // device.zig, so it is not in scope here.
@@ -224,16 +240,16 @@ pub fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: b
     try publish(self.arena, &hz, math_txt);
     try publish(self.arena, &hz, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
     try publish(self.arena, &hz, ops_txt);
-    if (timer) try publish(self.arena, &hz, timer_txt);
-    if (hist) try publish(self.arena, &hz, hist_txt);
-    if (arrs) try publish(self.arena, &hz, arr_txt);
-    if (filt) try publish(self.arena, &hz, filt_txt);
-    if (self.display == .emit or strs) try publish(self.arena, &hz, display_txt);
-    if (strs) try publish(self.arena, &hz, str_txt);
-    if (files) try publish(self.arena, &hz, file_txt);
-    if (tbl) try publish(self.arena, &hz, table_txt);
-    if (rng) try publish(self.arena, &hz, rng_txt);
-    if (stateful) try publish(self.arena, &hz, rscalar_txt);
+    if (f.timer) try publish(self.arena, &hz, timer_txt);
+    if (f.hist) try publish(self.arena, &hz, hist_txt);
+    if (f.arrs) try publish(self.arena, &hz, arr_txt);
+    if (f.filt) try publish(self.arena, &hz, filt_txt);
+    if (self.display == .emit or f.strs) try publish(self.arena, &hz, display_txt);
+    if (f.strs) try publish(self.arena, &hz, str_txt);
+    if (f.files) try publish(self.arena, &hz, file_txt);
+    if (f.tbl) try publish(self.arena, &hz, table_txt);
+    if (f.rng) try publish(self.arena, &hz, rng_txt);
+    if (f.stateful) try publish(self.arena, &hz, rscalar_txt);
     self.helpers = hz.items;
 }
 
