@@ -754,8 +754,6 @@ pub const prelude_rng_txt = aliasesOf(rng_txt);
 pub const prelude_file_txt = aliasesOf(file_txt);
 pub const prelude_str_txt = aliasesOf(str_txt);
 
-/// Plain-f64 instantiation of the scalar interface. `updateState` has to run a
-/// unit body on the accepted solution, where derivatives are meaningless.
 /// §9.4.3 support, emitted ONLY into the printing artifact (`display == .emit`).
 ///
 /// `std.fmt` writes `+42` for `{d:>5}`: once a width fixes the field, it spells
@@ -783,6 +781,8 @@ pub const display_txt =
     \\
 ;
 
+/// Plain-f64 instantiation of the scalar interface. `updateState` has to run a
+/// unit body on the accepted solution, where derivatives are meaningless.
 pub const rscalar_txt =
     \\/// Value-only scalar: `updateState` runs unit bodies on the accepted
     \\/// solution, where no derivative is wanted.

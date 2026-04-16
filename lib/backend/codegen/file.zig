@@ -221,9 +221,6 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.tbl) try p.appendSlice(self.arena, prelude_table_txt);
     if (f.rng) try p.appendSlice(self.arena, prelude_rng_txt);
     if (f.stateful) try p.appendSlice(self.arena, "const R = h.R;\n");
-    // The shared core is a unit file like any other, and it sits beside the
-    // unit that calls it — device.zig's own alias for it is private to
-    // device.zig, so it is not in scope here.
     // The shared core is a unit file like any other and sits beside the
     // units that call it; device.zig's own alias for it is private to
     // device.zig, so it is not in scope here. The alias is spelled `core`
@@ -253,11 +250,6 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     self.helpers = hz.items;
 }
 
-/// Copy `src` into `out`, making each top-level declaration public. The
-/// same text is emitted PRIVATE into device.zig, where the contract forbids
-/// stray public names, and PUBLIC into `h.zig`, where the unit files can
-/// reach it — one source of truth, one three-line transform, instead of two
-/// near-identical copies of 10 KB of helper text to keep in sync.
 /// The inverse of `publish`: drop a leading `pub ` so an embedded Zig file
 /// can be spliced into device.zig, where the contract forbids stray public
 /// names. See `emitFile`.
@@ -271,7 +263,12 @@ fn depublish(gpa: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) E
     }
 }
 
-pub fn publish(arena: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) Error!void {
+/// Copy `src` into `out`, making each top-level declaration public. The
+/// same text is emitted PRIVATE into device.zig, where the contract forbids
+/// stray public names, and PUBLIC into `h.zig`, where the unit files can
+/// reach it — one source of truth, one three-line transform, instead of two
+/// near-identical copies of 10 KB of helper text to keep in sync.
+fn publish(arena: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) Error!void {
     var it = std.mem.splitScalar(u8, src, '\n');
     var first = true;
     while (it.next()) |line| {

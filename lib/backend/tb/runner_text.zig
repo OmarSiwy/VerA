@@ -825,9 +825,6 @@ pub const runner_body =
     \\
 ;
 
-/// The mixed-signal runner's fixed text (`renderMixed`): the digital half, the
-/// coordinator call, and the two conversions the adapter needs. Only a
-/// testbench built with `BuildOptions.mixed` imports `sim` and `diag`.
 /// `renderVpiLib`'s fixed half: the state one analysis lives in and the
 /// exports that do not depend on the directives.
 pub const vpi_lib_body =
@@ -908,6 +905,9 @@ pub const vpi_lib_body =
     \\
 ;
 
+/// The mixed-signal runner's fixed text (`renderMixed`): the digital half, the
+/// coordinator call, and the two conversions the adapter needs. Only a
+/// testbench built with `BuildOptions.mixed` imports `sim` and `diag`.
 pub const mixed_body =
     \\const sim = @import("sim");
     \\const diag = @import("diag");
