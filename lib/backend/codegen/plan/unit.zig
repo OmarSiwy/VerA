@@ -128,6 +128,9 @@ su_on: bool = false,
 /// (`sinv`); every other one is taken `then` without reading its condition.
 setup_mode: bool = false,
 sinv: []const bool = &.{},
+/// While planning `setup`: value → the block `setup` computes it in when that
+/// is not its own (`Sinv.home`).
+su_home: []const u32 = &.{},
 /// Set by `analyze`: did this unit end up reading the core? Drives the one
 /// `const c = <module>__common__core(...)` line the emitter puts at the top.
 uses_cache: bool = false,
@@ -241,6 +244,12 @@ inline fn fileDep(self: *const UnitPlan, v: Mir.Value) bool {
 pub inline fn isRoot(self: *const UnitPlan, v: Mir.Value) bool {
     if (!self.su_on) return false;
     return self.su_idx[@intFromEnum(v)] != none_u32;
+}
+
+/// The block this unit computes `v` in.
+fn homeBlock(self: *const UnitPlan, v: usize) u32 {
+    if (self.setup_mode and self.su_home[v] != none_u32) return self.su_home[v];
+    return self.an.def_block[v];
 }
 
 /// A branch the unit being planned actually tests: every one, except while
@@ -712,7 +721,7 @@ pub fn isStraightLine(self: *const UnitPlan) bool {
         // collapses most units to a flat body once the shared core is
         // hoisted out of them.
         if (self.cached(lv) or self.isRoot(lv)) continue;
-        const db = self.an.def_block[v];
+        const db = self.homeBlock(v);
         if (db != none_u32 and db != 0) return false;
         const def = self.mir.valueDef(lv);
         if (def == .inst_result and self.mir.instOp(def.inst_result) == .phi) return false;
@@ -734,7 +743,7 @@ pub fn planDeadBranches(self: *UnitPlan) void {
     for (self.live.items) |lv| {
         const v = @intFromEnum(lv);
         if (v < Mir.Value.first_dynamic) continue;
-        const db = self.an.def_block[v];
+        const db = self.homeBlock(v);
         if (db == none_u32) continue;
         // A phi marks its block EVEN WHEN CACHED. `blk_phi` means "the two
         // arms disagree at this SSA join", which is a property of the CFG

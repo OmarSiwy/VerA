@@ -53,28 +53,37 @@ pub fn emitReturn(self: *Gen, depth: u32, target: Mir.Value) Error!void {
 pub fn emitBlockInsts(self: *Gen, bi: u32, depth: u32, comptime decl: bool) Error!void {
     const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
     for (stmts) |inst| {
-        const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
-        if (!self.plan.needed[i]) continue;
-        // §3.2.2 an `anew`/`store` is a statement on its storage, not a slot.
-        if (self.an.arr_of[i] != none_u32) {
-            if (!self.plan.cached(@enumFromInt(i))) try gen_render.emitArrayStmt(self, inst, depth);
-            continue;
-        }
-        if (self.plan.slot[i] == none_u32) continue;
-        gen_unit.probeDef(self, self.plan.slot[i], true);
-        // `or` short-circuits, so the straight-line path (`decl`, which runs
-        // without a probe) never touches `place`.
-        const at_def = decl or self.place.items[self.plan.slot[i]].at_def;
-        try self.ind(depth);
-        if (at_def) {
-            try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], gen_unit.zigTy(self.an.vty[i]) });
-        } else {
-            try gen_unit.writeSlotRef(self, i);
-            try self.b(" = ", .{});
-        }
-        try gen_render.renderInst(self, inst);
-        try self.b(";\n", .{});
+        // `setup` computes a speculable value at its home instead.
+        if (self.su.mode and self.sinv.home[@intFromEnum(self.an.i_res[@intFromEnum(inst)])] != none_u32) continue;
+        try emitStmt(self, inst, depth, decl);
     }
+    if (self.su.mode) for (self.sinv.movedTo(bi)) |v| {
+        try emitStmt(self, self.mir.valueDef(v).inst_result, depth, decl);
+    };
+}
+
+fn emitStmt(self: *Gen, inst: Mir.Inst, depth: u32, comptime decl: bool) Error!void {
+    const i = @intFromEnum(self.an.i_res[@intFromEnum(inst)]);
+    if (!self.plan.needed[i]) return;
+    // §3.2.2 an `anew`/`store` is a statement on its storage, not a slot.
+    if (self.an.arr_of[i] != none_u32) {
+        if (!self.plan.cached(@enumFromInt(i))) try gen_render.emitArrayStmt(self, inst, depth);
+        return;
+    }
+    if (self.plan.slot[i] == none_u32) return;
+    gen_unit.probeDef(self, self.plan.slot[i], true);
+    // `or` short-circuits, so the straight-line path (`decl`, which runs
+    // without a probe) never touches `place`.
+    const at_def = decl or self.place.items[self.plan.slot[i]].at_def;
+    try self.ind(depth);
+    if (at_def) {
+        try self.b("const t{d}: {s} = ", .{ self.plan.slot[i], gen_unit.zigTy(self.an.vty[i]) });
+    } else {
+        try gen_unit.writeSlotRef(self, i);
+        try self.b(" = ", .{});
+    }
+    try gen_render.renderInst(self, inst);
+    try self.b(";\n", .{});
 }
 
 pub fn emitTree(self: *Gen, bi: u32, depth: u32, target: Mir.Value) Error!void {

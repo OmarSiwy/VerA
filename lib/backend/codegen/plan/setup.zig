@@ -25,7 +25,8 @@
 //! only ever falls, so the fixpoint terminates:
 //!   - a constant, parameter or `undef` is invariant; a §4.4 probe is not;
 //!   - a pure operation is invariant when its operands are and its block is
-//!     PLACEABLE;
+//!     PLACEABLE — or, when it cannot fault, whatever its block
+//!     (`speculable`): `setup` then computes it at its `home`;
 //!   - a call is invariant only on the allowlist (`callInvariant`): the
 //!     environment reads that answer from the card, the instance or its
 //!     temperature, `$simparam` of every §9.15 Table 9-27 name but
@@ -71,6 +72,19 @@ pub const Sinv = struct {
     blk: []bool = &.{},
     /// Loop header → a branch inside it is per-eval, so `setup` stops there.
     loop_varying: []bool = &.{},
+    /// Value → the placeable block `setup` computes it in, for an invariant
+    /// value whose own block is not placeable (`Scan.speculable`); `none_u32`
+    /// for every other value. `moved`/`moved_off` list the same values per
+    /// home block in ascending value order.
+    home: []u32 = &.{},
+    moved: []Mir.Value = &.{},
+    moved_off: []u32 = &.{},
+
+    /// The values `setup` computes at the end of block `b`.
+    pub fn movedTo(s: Sinv, b: u32) []const Mir.Value {
+        if (s.moved_off.len == 0) return &.{};
+        return s.moved[s.moved_off[b]..s.moved_off[b + 1]];
+    }
 };
 
 /// One control dependence: block B depends on the branch at `a` through its
@@ -300,13 +314,63 @@ const Scan = struct {
         return initCond(s.in, c) and elseOf(s.in, src) == y and thenOf(s.in, src) != y;
     }
 
+    /// A pure op in a block `setup` does not place, over operands that are
+    /// the same at every evaluation: `setup` computes it anyway, at its
+    /// `home`, and the core reads it only where it would have computed it.
+    /// Sound only for an op that cannot fault when its guard is false: a real
+    /// outside its domain is NaN or ±inf. So no integer arithmetic (a zero
+    /// divisor traps), no `%`, and none of the four functions whose domain
+    /// check reports when `display == .emit` (`zDomain`).
+    fn speculable(s: *const Scan, inst: Mir.Inst, blk: u32) bool {
+        const in = s.in;
+        if (in.an.loop_of[blk] != none_u32 or s.homeOf(blk) == none_u32) return false;
+        const row = in.mir.instRow(inst);
+        const info = Mir.opcode.get(row.op);
+        switch (info.fold) {
+            .unary, .binary, .math, .to_real => {},
+            .none, .identity, .to_int => return false,
+        }
+        if (info.int and !info.bool01) return false;
+        switch (info.domain) {
+            .all, .positive, .gt_neg_one, .non_negative, .pow_sign, .tan_poles => {},
+            .unit_closed, .unit_open, .ge_one, .nonzero_divisor => return false,
+        }
+        return switch (Mir.opClass(row.op)) {
+            .unary => s.anchored(@enumFromInt(row.a)),
+            .binary => s.anchored(@enumFromInt(row.a)) and s.anchored(@enumFromInt(row.b)),
+            .ternary, .phi, .branch, .jump, .call, .anew, .load, .store => false,
+        };
+    }
+
+    /// An operand `setup` holds wherever it places a speculable op: a leaf,
+    /// or an invariant value outside every loop. Its block dominates the
+    /// user's, so it is placed at or above the user's `home`.
+    fn anchored(s: *const Scan, v0: Mir.Value) bool {
+        const v = s.in.an.rv(v0);
+        if (s.in.mir.valueDef(v) != .inst_result) return s.sv(v);
+        const b = s.in.an.def_block[@intFromEnum(v)];
+        return s.val[@intFromEnum(v)] and b != none_u32 and s.in.an.loop_of[b] == none_u32;
+    }
+
+    /// The nearest placeable dominator of `b`, or `none_u32`.
+    fn homeOf(s: *const Scan, b0: u32) u32 {
+        var b = b0;
+        while (!s.plc[b]) {
+            const up = s.in.an.idom[b];
+            if (up == none_u32 or up == b) return none_u32;
+            b = up;
+        }
+        return b;
+    }
+
     fn rule(s: *const Scan, v: Mir.Value) bool {
         const in = s.in;
         const def = in.mir.valueDef(v);
         if (def != .inst_result) return s.sv(v);
         const inst = def.inst_result;
         const blk = in.an.def_block[@intFromEnum(v)];
-        if (blk == none_u32 or !s.plc[blk]) return false;
+        if (blk == none_u32) return false;
+        if (!s.plc[blk]) return s.speculable(inst, blk);
         const row = in.mir.instRow(inst);
         switch (row.op) {
             .call => {
@@ -350,7 +414,30 @@ const Scan = struct {
 
 /// The fixpoint. See the header for the rules.
 pub fn plan(in: Input) Error!Sinv {
-    return solve(in, true);
+    var r = try solve(in, true);
+    const a = in.arena;
+    const s: Scan = .{ .in = in, .val = r.val, .plc = r.blk, .varying = r.loop_varying, .init_else = &.{} };
+    r.home = try a.alloc(u32, in.an.nv);
+    @memset(r.home, none_u32);
+    r.moved_off = try a.alloc(u32, in.an.nb + 1);
+    @memset(r.moved_off, 0);
+    var n: u32 = 0;
+    for (Mir.Value.first_dynamic..in.an.nv) |i| {
+        const v: Mir.Value = @enumFromInt(@as(u32, @intCast(i)));
+        const b = in.an.def_block[i];
+        if (!r.val[i] or b == none_u32 or r.blk[b] or in.an.rv(v) != v) continue;
+        r.home[i] = s.homeOf(b);
+        r.moved_off[r.home[i] + 1] += 1;
+        n += 1;
+    }
+    for (0..in.an.nb) |b| r.moved_off[b + 1] += r.moved_off[b];
+    r.moved = try a.alloc(Mir.Value, n);
+    const fill = try a.dupe(u32, r.moved_off[0..in.an.nb]);
+    for (r.home, 0..) |h, i| if (h != none_u32) {
+        r.moved[fill[h]] = @enumFromInt(@as(u32, @intCast(i)));
+        fill[h] += 1;
+    };
+    return r;
 }
 
 /// `placing == false` drops the one rule that is about PLACEMENT rather than
@@ -571,4 +658,36 @@ test "a value of parameters and $temperature is solve-invariant; one reading a p
     try std.testing.expect(s.blk[0]);
     try std.testing.expect(candidate(in, s.val, k));
     try std.testing.expect(!candidate(in, s.val, i));
+}
+
+test "a pure op of parameters under a bias-dependent branch is invariant and computed at its placeable dominator; an integer divide is not" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{"a"});
+    defer f.deinit();
+    const a = f.alloc();
+    try f.lowered.params.append(a, .{ .name = "mj", .ty = .real, .default = .f_one });
+    try f.lowered.params.append(a, .{ .name = "n", .ty = .integer, .default = .zero });
+    const mj = try f.mir.addParamRef(a, 0);
+    const n = try f.mir.addParamRef(a, 1);
+    // entry: if (V(a) > 0) then else; then/else: join.
+    const then_b = try f.mir.addBlock(a);
+    const else_b = try f.mir.addBlock(a);
+    const join = try f.mir.addBlock(a);
+    const c = try f.mir.emit(a, .entry, .fgt, &.{ try f.probe(0), try f.mir.addFloatConst(a, 0.0) });
+    _ = try f.mir.emitBranch(a, .entry, c, then_b, else_b);
+    const p = try f.mir.emit(a, else_b, .pow, &.{ try f.mir.addFloatConst(a, 0.5), mj }); // pow(0.5, mj)
+    const d = try f.mir.emit(a, else_b, .idiv, &.{ n, n }); // n / n
+    _ = try f.mir.emitJump(a, then_b, join);
+    _ = try f.mir.emitJump(a, else_b, join);
+    const an = try f.analysis();
+    const in: Input = .{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered };
+
+    const s = try plan(in);
+    try std.testing.expect(!s.blk[@intFromEnum(else_b)]);
+    try std.testing.expect(s.val[@intFromEnum(p)]);
+    try std.testing.expectEqual(@as(u32, 0), s.home[@intFromEnum(p)]);
+    try std.testing.expectEqualSlices(Mir.Value, &.{p}, s.movedTo(0));
+    try std.testing.expect(candidate(in, s.val, p));
+    // An integer divide by zero traps, so it stays under its guard.
+    try std.testing.expect(!s.val[@intFromEnum(d)]);
 }
