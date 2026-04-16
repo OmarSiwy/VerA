@@ -1,7 +1,7 @@
 // IEEE1364-2005 §§8.1.4/8.4 permit at most one input transition per row.
 // This definition is not instantiated, isolating validation from unsupported
-// UDP execution. The control tools/udp-audit-controls/one_edge_legal.v changes
-// only the second descriptor to level0 and must still be accepted.
+// UDP execution. The legal twin audit_udp_one_edge.v changes only the second
+// descriptor to level0 and is accepted.
 // digital-runner: reject
 //! lrm A.5.3
 //! reject E0234

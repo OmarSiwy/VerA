@@ -1,5 +1,5 @@
 // IEEE1364-2005 13.3.1.2/13.3.1.6: default can pair only with liblist,
-// never use. Legal neighboring default/liblist declaration is in controls.
+// never use. Legal twin: audit_config_default_liblist.v.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 13.3.1.2 13.3.1.6
 //! reject E0207
