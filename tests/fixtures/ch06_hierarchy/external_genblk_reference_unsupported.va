@@ -24,17 +24,12 @@
 // and becomes `genblk02`. Nothing in this suite can read those names back; what can
 // be pinned is that the HDL path built from them is illegal.
 //
-// No `//! reject <code>`: VerA's road to the verdict has nothing to do with the
-// rule — its parser has no `hierarchical_identifier` at all, so the `.` in
-// `genblk1.tag` dies at E0207 ("unexpected token: found `.`") long before any
-// generate scope is resolved. `DiagnosticsReported` is the weakest form that still
-// demands the rejection, and it is the portable one: another compiler diagnoses the
-// same source with its own code. Tighten it the day VerA resolves hierarchical
-// names and can refuse this one for the reason the LRM gives.
+// VerA refuses both paths with E0901, "names nothing in the elaborated design":
+// the §6.6.3 external names are not scopes a source path can reach.
 //
 //! lrm 6.6.2
 //! lrm 6.6.3
-//! reject DiagnosticsReported
+//! reject E0901
 module ch6_external_genblk_reference(p);
   inout p; electrical p;
   parameter integer genblk2 = 0;

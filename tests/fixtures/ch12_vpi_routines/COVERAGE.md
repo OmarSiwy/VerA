@@ -6,8 +6,9 @@ This supersedes the earlier section-ID census: a clause tag is not execution.
 
 ## Existing evidence and withdrawn claims
 
-The numbered HDL files remain language regression tests. The `*_not_va.va`
-files reject unknown ordinary function names under §4.7. Files01,02,48 check
+The numbered HDL files remain language regression tests.
+`vpi_routines_not_va_functions.va` rejects the 35 routine names as unknown
+ordinary functions under §4.7. Files01,02,48 check
 source-example acceptance, a local parameter, or surrounding block sequencing;
 they do not observe a registered C callback. Their `//! lrm 12.*` tags were
 withdrawn, with executable HDL and other directives unchanged. Their filenames

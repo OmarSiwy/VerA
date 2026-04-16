@@ -11,18 +11,12 @@
 // Replacing `scratch` with a literal, or with a parameter declared above, makes
 // the file legal.
 //
-// The pinned substring is only the phase label. VerA reports E0314 "unknown
-// identifier: `scratch`", which is false of a name declared one line above — it
-// is an accident of parameter lowering not seeing module-scope variables, so
-// pinning that code would pin the accident rather than §3.4's
-// constant-expression restriction, and it would stop matching the day VerA
-// resolves the name and reports a proper not-a-constant-expression diagnostic,
-// which is exactly when this fixture starts being worth something.
-// 58_forward_parameter_reference.va does pin E0314, and honestly: there the
-// name genuinely is not yet defined at the point of use.
+// VerA refuses it with E0363, "parameter default is not a constant expression:
+// `slope` reads `scratch`" — the §3.4 rule. 58_forward_parameter_reference.va
+// pins E0314 for the other half: a name not yet defined at the point of use.
 //
 //! lrm 3.4
-//! reject DiagnosticsReported
+//! reject E0363
 module ch3_variable_in_parameter_initializer(p, n);
     inout p, n;
     electrical p, n;

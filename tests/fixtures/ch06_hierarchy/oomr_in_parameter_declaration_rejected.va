@@ -2,31 +2,33 @@
 // hierarchically. HOWEVER, PARAMETER DECLARATION STATEMENTS SHALL NOT MAKE
 // OUT-OF-MODULE REFERENCES (e.g., for setting default values)."
 //
-// One sentence, two rules pointing opposite ways, and the chapter previously
-// tested neither. Its permitted half — a hierarchical parameter read from inside
-// an analog block — is oomr_parameter_unsupported.va, which is a run fixture
-// carrying an `//! xfail` because VerA cannot parse the reference yet. This file
-// is the forbidden half: the same reference, moved into a parameter DECLARATION,
-// where the LRM says it shall not appear.
+// One sentence, two rules pointing opposite ways. Its permitted half — a
+// hierarchical parameter read from inside an analog block — is
+// oomr_parameter_unsupported.va. This file is the forbidden half: the same kind
+// of reference, moved into a parameter DECLARATION.
 //
 // The reason is elaboration order (§6.9.4): parameter values are computed as part
 // of elaboration, and a default that reads another instance's parameter would need
 // the hierarchy to already be resolved in order to resolve the hierarchy. So the
 // rejection is correct conformance and there is no `//! xfail`.
 //
-// The diagnostic is a scope boundary and not the rule. The `.` PARSES now
-// (§5.5.3's nature attribute reference needed a dotted name), so `other.gain` is
-// E0901 "hierarchical name in a flat module" — VerA has no instance tree to
-// resolve it in, which is the same code the permitted half dies on. That is
-// exactly why the two files have to exist together: today one diagnostic covers
-// both, and the day hierarchical names resolve this one must keep failing while
-// its sibling starts passing.
+// `other` is a real instance and `gain` a real parameter of it, so the path
+// names something and the only defect is where it is written. VerA refuses it
+// with E0924, the §6.7.1 code.
 //
 //! lrm 6.7.1
 //! lrm 6.9.4
-//! reject E0901
+//! reject E0924
+`include "disciplines.vams"
 module ch6_oomr_in_parameter_declaration(p);
   inout p; electrical p;
+  ch6_oomr_in_parameter_declaration_child other(p);
   parameter real g = other.gain;
   analog I(p) <+ g * V(p);
+endmodule
+
+module ch6_oomr_in_parameter_declaration_child(a);
+  inout a; electrical a;
+  parameter real gain = 2.0;
+  analog I(a) <+ gain * V(a);
 endmodule

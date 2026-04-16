@@ -29,7 +29,7 @@
 // conflict with another row. IEEE8.1.4 forbids those independent defects.
 // The replacement `1 1 : 0` is disjoint from the first row's b=0. A matching
 // legal definition changes only `(01)` to level1; see
-// tools/udp-audit-controls/combinational_level_legal.v. The edge descriptor is
+// audit_udp_comb_level.v. The edge descriptor is
 // now the isolated table-shape defect (UDP-SHAPE-001 in the audit report).
 //
 // WHAT THE DIRECTIVES DEMAND, AND WHY THEY ARE NOT `DiagnosticsReported`.

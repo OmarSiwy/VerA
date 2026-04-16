@@ -5,22 +5,38 @@
 // existence" — at most once for a conditional generate — and a gate
 // instance is one of those.
 //
-// VerA has no generate scope for a gate. It used to drop the one below
-// without a word (besides W0252's "modelled by nothing", which is about the
-// analog device, not about the generate block); it now refuses it with
-// E0235, "not supported inside a generate block". A limitation of VerA, not
-// an error in the source.
+// So `g.g1` exists and drives y = a & a = a. `a` is 0 until 20 ns and 1 after;
+// `yr` follows `y` through an ordinary `always`, and the analog block reads it
+// (§7.3.6.5) at 10 ns and 30 ns: 0, then 1. The identity yr == a is asserted
+// with CHECKEQ because that is what the gate computes; a compiler that dropped
+// the gate leaves `y` undriven (z), so `yr` never takes a's value.
+//
+// The same file with the gate moved out of the generate block passes, so the
+// generate block is the only thing under test.
 //
 //! lrm 6.6
-//! reject E0235
+//! analysis tran
+//! time 10n, 30n
+//! xfail E0235: VerA has no generate scope for a gate instance and refuses it
+`timescale 1ns/1ns
 `include "disciplines.vams"
+`include "check.vh"
 module ch6_generate_block_gate(p);
   inout p; electrical p;
-  wire a, y;
+  wire y;
+  reg a, yr;
+  always @(y) yr = y;
+  initial begin
+    a = 1'b0;
+    #20 a = 1'b1;
+  end
   generate
     if (1) begin : g
       and g1(y, a, a);
     end
   endgenerate
-  analog I(p) <+ V(p);
+  analog begin
+    `CHECKEQ("§6.6 the generated gate drives y = a & a", yr, a, 0);
+    I(p) <+ V(p);
+  end
 endmodule

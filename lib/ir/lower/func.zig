@@ -342,7 +342,7 @@ pub fn inlineUserFuncPre(
     }
     // §6.8 an analog function is one of the six scopes; its locals are a list
     // like a module's or a block's.
-    try lower_param.checkOneItemPerScope(self, fd.vars);
+    try lower_param.checkOneItemPerScope(self, &.{}, fd.vars, &.{});
     for (fd.vars) |*v| try lower_param.declareVarDecl(self, v, .local);
 
     const exit = try self.mir.addBlock(self.arena);
