@@ -245,7 +245,7 @@ pub fn buildPrelude(self: *Gen, stateful: bool, hist: bool, filt: bool, timer: b
 /// The inverse of `publish`: drop a leading `pub ` so an embedded Zig file
 /// can be spliced into device.zig, where the contract forbids stray public
 /// names. See `emitFile`.
-pub fn depublish(gpa: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) Error!void {
+fn depublish(gpa: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) Error!void {
     var it = std.mem.splitScalar(u8, src, '\n');
     var first = true;
     while (it.next()) |line| {
@@ -400,7 +400,7 @@ pub fn emitTopology(self: *Gen) Error!void {
 /// unknown that is not a declared net is null too — a §5.4.2 branch flow
 /// has no net_decl_assignment to carry one, since the clause gives the
 /// value to "the potential of the net".
-pub fn emitNodesets(self: *Gen) Error!void {
+fn emitNodesets(self: *Gen) Error!void {
     if (self.lowered.nodesets.items.len == 0) return;
     try self.w("/// §3.6.3.2 nodeset: the initial guess the source states for each\n", .{});
     try self.w("/// unknown's potential. A HINT to the solver — not an initial\n", .{});
@@ -454,7 +454,7 @@ pub fn abstolOf(self: *const Gen, i: u32) f64 {
 }
 
 /// §3.4 parameters. One field, typed, with the constant-folded spec default.
-pub fn emitModel(self: *Gen) Error!void {
+fn emitModel(self: *Gen) Error!void {
     try self.w("/// §3.4 module parameters (spec defaults folded at compile time).\npub const Model = struct {{\n", .{});
     for (self.lowered.params.items, 0..) |p, i| {
         const ty: []const u8 = switch (Analysis.tyOfParam(p.ty)) {
@@ -618,7 +618,7 @@ pub fn emitDerive(self: *Gen) Error!void {
 /// null is "the card fits". Integer and f64 compares, no allocation, no print:
 /// cheap, and safe in a GPU build. Absent when nothing is shaped by a
 /// parameter — the common case, and the contract's default.
-pub fn emitShapeCheck(self: *Gen) Error!void {
+fn emitShapeCheck(self: *Gen) Error!void {
     const at = self.out.items.len;
     try self.w(
         \\/// §3.4 the shape parameters this device was compiled for: the name of
@@ -691,7 +691,7 @@ fn deriveFlags(self: *Gen) Error!void {
 /// reads a simulator quantity, and no evidence in this tree says those do
 /// not exist. `--deny=W1050` is there for a host that wants the stricter
 /// reading of §3.4.1.
-pub fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
+fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
     const bag = self.diags orelse return;
     if (!bag.enabled(.W1050)) return;
     if (p.folded != null or self.an.foldConst(p.default, true) != null) return;
@@ -1074,7 +1074,7 @@ fn emitHeldArrayField(self: *Gen, h: Lower.HeldVar, name: []const u8, comment: [
 /// smears across whatever dt the integrator happened to carry
 /// (devices/switch: one 0.8-of-full-scale sample against a 1e-11 match
 /// everywhere else).
-pub fn fsmStateCtl(self: *const Gen) bool {
+fn fsmStateCtl(self: *const Gen) bool {
     for (self.lowered.held_vars.items) |h| {
         if (h.why == .event) break;
     } else return false;

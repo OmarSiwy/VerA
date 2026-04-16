@@ -292,7 +292,7 @@ pub fn zigTy(t: VTy) []const u8 {
 /// Matches `renderVal`'s rendering of an `.undef` operand, so the two agree
 /// on what "no value here" looks like.
 /// Name of the hoist array a slot of this type lives in — see `hoist_idx`.
-pub fn hoistArray(t: VTy) []const u8 {
+fn hoistArray(t: VTy) []const u8 {
     return switch (t) {
         .real => "h",
         .int => "hi",
@@ -307,12 +307,12 @@ pub fn hoistArray(t: VTy) []const u8 {
 /// `writeSlotRef` is the hot form — every slotted use goes through it, and
 /// it writes straight into the output buffer. `slotRefStr` is for the one
 /// caller that needs the name as a value (`f64Const`).
-pub fn slotArr(self: *Gen, i: usize) ?[]const u8 {
+fn slotArr(self: *Gen, i: usize) ?[]const u8 {
     const s = self.plan.slot[i];
     if (s < self.hoist_idx.items.len and self.hoist_idx.items[s] != none_u32) return hoistArray(self.an.vty[i]);
     return null;
 }
-pub fn slotNum(self: *Gen, i: usize) u32 {
+fn slotNum(self: *Gen, i: usize) u32 {
     const s = self.plan.slot[i];
     if (s < self.hoist_idx.items.len and self.hoist_idx.items[s] != none_u32) return self.hoist_idx.items[s];
     return s;

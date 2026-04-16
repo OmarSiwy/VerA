@@ -38,7 +38,7 @@ pub const ipow_fn = "(struct { fn zp_f(zp_b: i64, zp_n: i64) i64 { " ++
     "return zp_r; } }.zp_f)";
 
 /// Integer `/` with a zero divisor defined as 0 — see `renderOp`'s `.idiv`.
-pub const idiv_fn = "(struct { fn zd_f(zd_a: i64, zd_b: i64) i64 { " ++
+const idiv_fn = "(struct { fn zd_f(zd_a: i64, zd_b: i64) i64 { " ++
     "return if (zd_b == 0) 0 else @divTrunc(zd_a, zd_b); } }.zd_f)";
 
 // ---- value / instruction rendering --------------------------------------
@@ -171,7 +171,7 @@ pub fn materialized(self: *const Gen, v: Mir.Value) bool {
 /// The select cond as an INLINE real comparison — unslotted, so rendering
 /// it in mask space leaves no unread `const` behind. Slotted predicates
 /// and int comparisons take the `S.con(@floatFromInt(..))` fallback.
-pub fn maskCmp(self: *Gen, cond: Mir.Value) ?Mir.Inst {
+fn maskCmp(self: *Gen, cond: Mir.Value) ?Mir.Inst {
     const v = self.an.rv(cond);
     if (materialized(self, v)) return null;
     const def = self.mir.valueDef(v);
@@ -724,7 +724,7 @@ pub fn foldHidesSlot(self: *Gen, v0: Mir.Value, depth: u32) bool {
 /// Depth 1, not 0: `v` is an OPERAND, so naming its own slot is exactly
 /// what is wanted. Depth 0 is reserved for `renderInst` asking about the
 /// value it is declaring, where naming that slot is a self-reference.
-pub fn writeConst(self: *Gen, v: Mir.Value) Error!void {
+fn writeConst(self: *Gen, v: Mir.Value) Error!void {
     if (try gen_call.f64Const(self, v, 1, true)) |s| return self.b("{s}", .{s});
     try self.b("(", .{});
     try renderVal(self, v, .real);
@@ -734,7 +734,7 @@ pub fn writeConst(self: *Gen, v: Mir.Value) Error!void {
 /// `writeConst` negated, for `a - k` rendered as `a.addC(-k)`. A literal
 /// negates in the formatter rather than picking up a `-(...)` wrapper,
 /// because `addC(-1.0)` is the spelling a reader expects.
-pub fn writeNegConst(self: *Gen, v: Mir.Value) Error!void {
+fn writeNegConst(self: *Gen, v: Mir.Value) Error!void {
     // Same guard as `f64Const`: negating the folded number is only legal
     // where the fold itself is.
     if (!foldHidesSlot(self, v, 0)) {
@@ -745,13 +745,13 @@ pub fn writeNegConst(self: *Gen, v: Mir.Value) Error!void {
     try self.b(")", .{});
 }
 
-pub fn method1(self: *Gen, a: Mir.Value, name: []const u8) Error!void {
+fn method1(self: *Gen, a: Mir.Value, name: []const u8) Error!void {
     try self.b("(", .{});
     try renderVal(self, a, .real);
     try self.b(").{s}()", .{name});
 }
 
-pub fn method2(self: *Gen, a: Mir.Value, name: []const u8, b2: Mir.Value) Error!void {
+fn method2(self: *Gen, a: Mir.Value, name: []const u8, b2: Mir.Value) Error!void {
     try self.b("(", .{});
     try renderVal(self, a, .real);
     try self.b(").{s}(", .{name});
@@ -985,7 +985,7 @@ pub fn intArg(self: *const Gen, args: []const Mir.Value, i: usize) ?usize {
 }
 
 // ponytail: integer callees infer their type; add a typed variant only for a caller.
-pub fn intCall2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!void {
+fn intCall2(self: *Gen, name: []const u8, a: Mir.Value, b2: Mir.Value) Error!void {
     try self.b("{s}(", .{name});
     try renderVal(self, a, .int);
     try self.b(", ", .{});
@@ -1017,7 +1017,7 @@ pub fn shrLogical(self: *Gen, a: Mir.Value, b2: Mir.Value) Error!void {
     try self.b(")", .{});
 }
 
-pub fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
+fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
     float_lanes.pinLanes(self, a);
     float_lanes.pinLanes(self, b2);
     try self.b("@as(i64, @intFromBool((", .{});
@@ -1027,7 +1027,7 @@ pub fn cmpReal(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!v
     try self.b(").val()))", .{});
 }
 
-pub fn cmpInt(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
+fn cmpInt(self: *Gen, a: Mir.Value, opx: []const u8, b2: Mir.Value) Error!void {
     try self.b("@as(i64, @intFromBool((", .{});
     try renderVal(self, a, .int);
     try self.b(") {s} (", .{opx});

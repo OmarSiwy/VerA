@@ -239,7 +239,7 @@ pub fn buildFree(self: Input, v0: Mir.Value, depth: u32) bool {
 /// `buildFree` without the Instance: no §9.10 `$temperature`/`$vt`, no
 /// §6.3.6 `$mfactor`. What is left is a function of the model card, which
 /// `derive` — it has no Instance — can compute.
-pub fn cardOnly(self: Input, v0: Mir.Value) bool {
+fn cardOnly(self: Input, v0: Mir.Value) bool {
     return constFree(self, v0, 0, false);
 }
 

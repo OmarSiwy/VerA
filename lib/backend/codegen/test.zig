@@ -98,7 +98,7 @@ pub const Harness = struct {
     }
 };
 
-pub const resistor_va =
+const resistor_va =
     \\module res(p, n);
     \\  inout p, n;
     \\  electrical p, n;
@@ -310,7 +310,7 @@ test "codegen: one stably-named declaration for the model, thin dispatcher" {
     try std.testing.expect(std.mem.indexOf(u8, src, "v12") == null);
 }
 
-pub const shared_va =
+const shared_va =
     \\module sh(p, n);
     \\  inout p, n;
     \\  electrical p, n, m;
