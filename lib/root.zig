@@ -79,6 +79,7 @@ const Lower = @import("ir").Lower;
 const Lowered = @import("ir").Lowered;
 /// §3.4 a `--param name=value` compile-time override (`Options.param_overrides`).
 pub const ParamOverride = Lower.ParamOverride;
+pub const KeywordSet = token.KeywordSet;
 const ifconv = @import("ir").ifconv;
 const proof = @import("ir").proof;
 pub const diag = @import("diag");
@@ -132,6 +133,8 @@ pub const Options = struct {
     param_overrides: []const Lower.ParamOverride = &.{},
     /// Prepend annex D.2 constants.vams + annex D.1 disciplines.vams (§3.6.2).
     std_defs: bool = true,
+    /// The source language, `vera --std=`. See `Parser.setLanguage`.
+    language: KeywordSet = token.default_keyword_set,
     /// Receives every diagnostic of the run — errors AND warnings, so a
     /// SUCCESSFUL compilation may still fill it (see W0650, the finiteness
     /// warning). Detached from the compilation arena before this call returns,
@@ -346,6 +349,7 @@ fn compileInArena(
     // the same snapshot and are gated on the same `std_defs`, which is what
     // makes "`tags` begins with the prelude's run" true for stage 3 as well.
     var p = try Parser.Parser.initSeeded(arena, text, tags, starts, bag, try Preprocessor.preludeAst(opts.std_defs));
+    p.setLanguage(opts.language);
     const file = try arena.create(Ast.SourceFile);
     // Annex E — the shipped Table E.1 primitives are the first declarations in
     // `text`, so they are the first entries of `file.modules`. See

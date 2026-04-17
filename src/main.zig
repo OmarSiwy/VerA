@@ -28,6 +28,9 @@
 //! a testbench exists to print, so dropping its prints is a contradiction.
 
 const std = @import("std");
+/// `-Dlanguage=ams`. False is an IEEE 1364-2005 tool: every path past the
+/// digital one is comptime-dead, so the analog backend is never compiled in.
+const ams = @import("build_options").ams;
 const vera = @import("vera");
 const digital = @import("sim").digital;
 const diag = vera.diag;
@@ -63,6 +66,11 @@ const usage_text =
     \\                          E.2's .MODEL and .SUBCKT cards in it become
     \\                          module definitions the .va can instantiate
     \\  --no-std-defs           do not prepend the annex D prelude
+    \\  --std=SPEC              source language, a `begin_keywords specifier:
+    \\                          1364-1995|1364-2001|1364-2005|VAMS-2.3|VAMS-2023
+    \\                          (default; 1364-2005 under -Dlanguage=verilog).
+    \\                          A 1364 language frees every AMS keyword as an
+    \\                          identifier and refuses AMS constructs (E0242)
     \\  --diagnostics=text|json how to report (default: text)
     \\  --color=auto|always|never
     \\  --allow/--warn/--deny/--forbid=CODE   per-code lint level
@@ -99,6 +107,7 @@ pub fn main(init: std.process.Init) !u8 {
     var color: enum { auto, always, never } = .auto;
     var unknown_bound: ?f64 = null;
     var std_defs = true;
+    var language: vera.KeywordSet = if (ams) .vams_2023 else .v1364_2005;
     var out_path: ?[]const u8 = null;
     var expect_module: ?[]const u8 = null;
     var check = false;
@@ -189,6 +198,11 @@ pub fn main(init: std.process.Init) !u8 {
             spice_path = args.next() orelse return missing(err, "--spice", "a path");
         } else if (std.mem.eql(u8, arg, "-I")) {
             try include_dirs.append(gpa, args.next() orelse return missing(err, "-I", "a directory"));
+        } else if (std.mem.startsWith(u8, arg, "--std=")) {
+            language = vera.KeywordSet.fromSpecifier(arg["--std=".len..]) orelse {
+                try err.print("error: `{s}`: not a `begin_keywords version specifier\n", .{arg});
+                return 2;
+            };
         } else if (std.mem.eql(u8, arg, "--no-std-defs")) {
             std_defs = false;
         } else if (std.mem.eql(u8, arg, "--diagnostics=json")) {
@@ -302,13 +316,18 @@ pub fn main(init: std.process.Init) !u8 {
         defer arena.deinit();
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
-        digital.run(arena.allocator(), source, .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io }, &digital_bag, out) catch |e| {
+        digital.run(arena.allocator(), source, .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language }, &digital_bag, out) catch |e| {
             try report(&digital_bag, err, json, use_color);
             if (e != error.DigitalFailed) try err.print("error: digital execution failed: {t}\n", .{e});
             return 1;
         };
         try report(&digital_bag, err, json, use_color);
         return 0;
+    }
+
+    if (!ams) {
+        try err.print("error: {s}: this vera is built with -Dlanguage=verilog; it runs .v sources only\n", .{in_path});
+        return 2;
     }
 
     // E.1.1's antecedent, made true from the command line: "if a simulator which
@@ -342,6 +361,7 @@ pub fn main(init: std.process.Init) !u8 {
         .include_dirs = include_dirs.items,
         .spice_netlist = netlist,
         .std_defs = std_defs,
+        .language = language,
         .diags = &bag,
         .lint = levels,
         .proof = .{ .unknown_bound = unknown_bound },

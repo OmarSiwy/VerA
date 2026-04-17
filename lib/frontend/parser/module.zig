@@ -570,6 +570,7 @@ pub fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
 }
 
 pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
+    try self.refuseAms();
     switch (self.peek()) {
         // §10.6: "can only be specified outside of a design element".
         .dir_begin_keywords, .dir_end_keywords => return self.failAt(
