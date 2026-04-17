@@ -253,28 +253,31 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 /// every column of every shape has a lane, so each emits two masks and an
 /// empty table.
 /// `contract_abi` adds 111 bytes to every shape: one doc line and one decl.
+/// `zResidual`, the rows `eval` and `evalQ` share, adds 162 bytes to every
+/// shape. The n = 4096 points overflow the stack in the recursive renderer
+/// (at 925c52a2 too), so they were not re-measured.
 /// MEASURED on this tree, not predicted: the numbers came out of this bench.
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 24218, .defs = 8, .insts = 5 },
-        .{ .device = 24576, .defs = 35, .insts = 26 },
-        .{ .device = 27319, .defs = 258, .insts = 194 },
-        .{ .device = 49684, .defs = 2050, .insts = 1538 },
+        .{ .device = 24380, .defs = 8, .insts = 5 },
+        .{ .device = 24738, .defs = 35, .insts = 26 },
+        .{ .device = 27481, .defs = 258, .insts = 194 },
+        .{ .device = 49846, .defs = 2050, .insts = 1538 },
         .{ .device = 231981, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 24218, .defs = 8, .insts = 5 },
-        .{ .device = 24400, .defs = 24, .insts = 19 },
-        .{ .device = 25856, .defs = 136, .insts = 131 },
-        .{ .device = 37504, .defs = 1032, .insts = 1027 },
+        .{ .device = 24380, .defs = 8, .insts = 5 },
+        .{ .device = 24562, .defs = 24, .insts = 19 },
+        .{ .device = 26018, .defs = 136, .insts = 131 },
+        .{ .device = 37666, .defs = 1032, .insts = 1027 },
         .{ .device = 130688, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 24218, .defs = 8, .insts = 5 },
-        .{ .device = 25422, .defs = 50, .insts = 40 },
-        .{ .device = 35270, .defs = 386, .insts = 320 },
-        .{ .device = 115766, .defs = 3074, .insts = 2560 },
+        .{ .device = 24380, .defs = 8, .insts = 5 },
+        .{ .device = 25584, .defs = 50, .insts = 40 },
+        .{ .device = 35432, .defs = 386, .insts = 320 },
+        .{ .device = 115928, .defs = 3074, .insts = 2560 },
         .{ .device = 773270, .defs = 24578, .insts = 20480 },
     },
 });

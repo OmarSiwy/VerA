@@ -402,16 +402,12 @@ pub const Gen = struct {
     /// `emitCommon` from the core's slice (`gen_call.readsSimState`), emitted
     /// as `core_reads_simstate`.
     core_reads_simstate: bool = false,
-    /// Set while `emitFused` is emitting: the `core` call belongs to the whole
-    /// function, above both halves, so `emitStamps` must not open its own.
+    /// Set while the caller owns the `core` call (`zResidual`'s `m`, `acceptQ`'s
+    /// hoisted line), so `emitStamps` must not open its own.
     core_hoisted: bool = false,
     /// Set by `emitStamps` when it wanted a core call. Under `core_hoisted` it
-    /// is the only record that one is needed, and `emitFused` reads it to
-    /// decide whether to insert the hoisted line.
+    /// is the only record that one is needed.
     core_wanted: bool = false,
-    /// Extra indent levels for body emission, so the residual stamps can be
-    /// emitted verbatim inside `evalQ`'s two nested blocks. Only `ind` reads it.
-    ind_base: u32 = 0,
     /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
     display: Display = .drop,
     /// `Options.vpi_contribs`.
@@ -538,7 +534,7 @@ pub const Gen = struct {
     }
 
     pub fn ind(self: *Gen, n: u32) Error!void {
-        try self.out.appendNTimes(self.gpa, ' ', (n + self.ind_base) * 4);
+        try self.out.appendNTimes(self.gpa, ' ', n * 4);
     }
 
     // ------------------------------------------------------------------ setup

@@ -260,6 +260,7 @@ pub fn emitDisplay(self: *Gen) Error!void {
 }
 
 pub fn emitResidual(self: *Gen, react: bool) Error!void {
+    if (!react) return emitEval(self);
     self.uses_x = false;
     self.uses_model = false;
     self.uses_inst = false;
@@ -288,12 +289,52 @@ pub fn emitResidual(self: *Gen, react: bool) Error!void {
     try self.w("    return res;\n}}\n\n", .{});
 }
 
+/// `eval` over `zResidual`: the §5.6 rows, emitted once and shared with
+/// `evalQ`, which passes them its own core result.
+fn emitEval(self: *Gen) Error!void {
+    self.core_wanted = false;
+    self.core_hoisted = true;
+    // `model` and `inst` reach a row only through `core`, so the rows take
+    // its result and not them.
+    try self.w("/// §5.6 the resistive rows over the core result `m`: `eval` and `evalQ`.\n", .{});
+    try self.w("inline fn zResidual(comptime S: type, ", .{});
+    const at_x = self.out.items.len;
+    try self.w("x: [n_u]S, ", .{});
+    const at_m = self.out.items.len;
+    try self.w("m: anytype) [n_u]S {{\n    ", .{});
+    const at_mut = self.out.items.len;
+    try self.w("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
+    const stamps = try emitStamps(self, false);
+    self.core_hoisted = false;
+    // `uses_x` also counts a row that reads `x` only through the core, so ask
+    // the text: every direct read is `x[@intFromEnum(U.<name>)]`.
+    if (std.mem.indexOf(u8, self.out.items[at_mut..], "x[@intFromEnum(") == null) gen_unit.patchParam(self, at_x, "x".len);
+    if (!self.core_wanted) gen_unit.patchParam(self, at_m, "m".len);
+    if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
+    try self.w("    return res;\n}}\n\n", .{});
+
+    try self.w("/// §5.6 resistive residual: KCL at every unknown (§1.3.2)\n", .{});
+    if (self.core_wanted) {
+        try self.w(
+            \\pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_u]S {{
+            \\    return zResidual(S, x, @call(.always_inline, core, .{{ S, x, model, inst{s} }}));
+            \\}}
+            \\
+            \\
+        , .{self.heldArg(false)});
+    } else try self.w(
+        \\pub fn eval(comptime S: type, x: [n_u]S, _: *const Model, _: InstancePtr, _: f64) [n_u]S {{
+        \\    return zResidual(S, x, {{}});
+        \\}}
+        \\
+        \\
+    , .{});
+}
+
 /// The §5.6 stamp rows for one residual half, into a `res` the caller has
 /// already declared. Accumulates `uses_x`/`uses_model`/`uses_inst` and
 /// returns the row count, so the caller can back-patch its own signature.
 ///
-/// Split out of `emitResidual` so `emitFused` can emit BOTH halves against
-/// one `core` call without restating any of this.
 pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
     var stamps: u32 = 0;
     // Which half `patRow` accumulates into. `eval`/`q` and `evalQ` emit the
@@ -563,61 +604,17 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
 /// contract; DC wants the resistive half alone and should keep calling
 /// `eval`. `evalQ` exists only when there IS a reactive half.
 pub fn emitFused(self: *Gen) Error!void {
-    self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = false;
-    self.core_wanted = false;
-    self.core_hoisted = true;
-    defer self.core_hoisted = false;
-
     try self.w(
         \\/// §5.6 + §5.6.1.2 both residuals from ONE core evaluation.
         \\/// Equivalent to `.{{ .res = eval(...), .q = q(...) }}`, at half the cost.
+        \\pub fn evalQ(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) struct {{ res: [n_u]S, q: [n_q]S }} {{
+        \\    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});
         \\
-    , .{});
-    try self.w("pub fn evalQ(comptime S: type, ", .{});
-    const at_x = self.out.items.len;
-    try self.w("x: [n_u]S, ", .{});
-    const at_model = self.out.items.len;
-    try self.w("model: *const Model, ", .{});
-    const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr, _: f64) struct {{ res: [n_u]S, q: [n_q]S }} {{\n", .{});
-    // Reserved: the hoisted `core` line is INSERTED here afterwards, once
-    // both halves have said whether either wants one. Every offset taken
-    // above is before this point, so none of them move.
-    const at_core = self.out.items.len;
-
-    try self.ind(1);
-    try self.b("const rr = blk: {{\n", .{});
-    try self.ind(2);
-    const at_mut = self.out.items.len;
-    try self.b("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
-    self.ind_base = 1;
-    const stamps = try emitStamps(self, false);
-    self.ind_base = 0;
-    if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
-    try self.ind(2);
-    try self.b("break :blk res;\n", .{});
-    try self.ind(1);
-    try self.b("}};\n", .{});
+    , .{self.heldArg(false)});
     // §5.6.1.2 the charges, one per site, off the same core.
-    self.uses_x = true;
-    self.uses_model = true;
-    self.uses_inst = true;
-    self.core_wanted = true;
-    try self.b("    return .{{ .res = rr, .q = ", .{});
+    try self.b("    return .{{ .res = zResidual(S, x, m), .q = ", .{});
     try writeSites(self);
     try self.b(" }};\n}}\n\n", .{});
-
-    // `core_wanted` implies all three are used: `emitStamps` sets `uses_x`
-    // for every live row and `uses_model`/`uses_inst` on the same branch
-    // that opens the core, so this can never reference a patched-out `_`.
-    if (self.core_wanted)
-        try self.out.insertSlice(self.gpa, at_core, try std.fmt.allocPrint(self.arena, "    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)}));
-
-    if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
-    if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
-    if (!self.uses_inst) gen_unit.patchParam(self, at_inst, "inst".len);
 }
 
 /// §5.6.1.3 the runtime-selected branch row — §5.6.5's switch branch, and

@@ -301,7 +301,7 @@ test "codegen: one stably-named declaration for the model, thin dispatcher" {
     // keys still exist (naming.zig, proof.zig, the `Instance` state fields) but
     // no longer name a declaration.
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(comptime S: type,") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "const m = @call(.always_inline, core, .{ S, x, model, inst });") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "return zResidual(S, x, @call(.always_inline, core, .{ S, x, model, inst }));") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "contract.validate(Self)") != null);
     // no reactive part ⇒ no q()
@@ -338,7 +338,7 @@ test "codegen: two contributions sharing a subexpression evaluate it ONCE" {
     // of times the model runs per Newton iteration.
     try std.testing.expectEqual(
         @as(usize, 1),
-        std.mem.count(u8, src, "const m = @call(.always_inline, core, .{ S, x, model, inst });"),
+        std.mem.count(u8, src, "return zResidual(S, x, @call(.always_inline, core, .{ S, x, model, inst }));"),
     );
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
     // The costly part — `exp` — is emitted once. That is the whole scaling
@@ -365,7 +365,7 @@ test "codegen: one declaration even for a single contribution" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(") != null);
-    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "= @call(.always_inline, core, .{ S, x, model, inst });"));
+    try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, "return zResidual(S, x, @call(.always_inline, core, .{ S, x, model, inst }));"));
 }
 
 test "codegen: the unit ranges tile the emission and each names its own decl" {
@@ -466,8 +466,8 @@ test "codegen: adding a contribution appends to the core, it does not renumber" 
     // `TrackedInst` for the dispatcher does not churn on an unrelated edit.
     try std.testing.expect(std.mem.indexOf(u8, a, "const c = m.f0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, b2, "const c = m.f0;") != null);
-    const ka = a[std.mem.indexOf(u8, a, "pub fn eval(").?..];
-    const kb = b2[std.mem.indexOf(u8, b2, "pub fn eval(").?..];
+    const ka = a[std.mem.indexOf(u8, a, "inline fn zResidual(").?..];
+    const kb = b2[std.mem.indexOf(u8, b2, "inline fn zResidual(").?..];
     const na = std.mem.indexOf(u8, ka, "    }\n").? + 6;
     const nb = std.mem.indexOf(u8, kb, "    }\n").? + 6;
     try std.testing.expectEqualStrings(ka[0..na], kb[0..nb]);
@@ -531,13 +531,14 @@ test "codegen: evalQ fuses both residuals onto ONE core call" {
     // The whole point: ONE core call for both halves. Two would make `evalQ`
     // exactly the `eval` + `q` it exists to replace.
     try std.testing.expect(std.mem.count(u8, fused, "@call(.always_inline, core, .{ S, x, model, inst })") == 1);
-    // ...and it is hoisted ABOVE both blocks, not opened inside one of them.
+    // ...and it is hoisted ABOVE both halves: the resistive rows are `eval`'s
+    // own `zResidual`, handed this core result.
     try std.testing.expect(std.mem.indexOf(u8, fused, "@call(.always_inline, core, .{ S, x, model, inst })").? <
-        std.mem.indexOf(u8, fused, "blk:").?);
+        std.mem.indexOf(u8, fused, "zResidual(S, x, m)").?);
     try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: [n_u]S, q: [n_q]S }") != null);
     // §5.6.1.2 the reactive half is the charge sites, read off the same core.
-    try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = rr, .q = [n_q]S{ m.f") != null);
-    try std.testing.expect(std.mem.count(u8, fused, "var   res = [_]S{S.con(0.0)} ** n_u;") == 1);
+    try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = zResidual(S, x, m), .q = [n_q]S{ m.f") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_u]S {\n    return zResidual(S, x, @call(") != null);
     // The one `ddt` site stamps +p and −n (§1.3.1.2).
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const n_q: usize = 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".{ .site = 0, .row = .p, .sign = 1.0 },\n    .{ .site = 0, .row = .n, .sign = -1.0 },") != null);
@@ -3153,7 +3154,7 @@ test "codegen: §3.6.3.2 a net initializer is exported as a nodeset, not as a va
 
     // A NODESET, so nothing in the residual may read it: `eval` is a function
     // of x alone, and a starting point that leaked into it would be a clamp.
-    const at = std.mem.indexOf(u8, src, "pub fn eval(").?;
+    const at = std.mem.indexOf(u8, src, "inline fn zResidual(").?;
     try std.testing.expect(std.mem.indexOf(u8, src[at..], "u_nodeset") == null);
 }
 
