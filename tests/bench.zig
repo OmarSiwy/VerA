@@ -1548,13 +1548,18 @@ fn digitalCases(gpa: Allocator, io: Io) ![]const []const u8 {
 fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !bool {
     const src = try std.fmt.allocPrint(arena, "{s}/{s}/{s}.v", .{ options.fixture_root, digital_dir, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
+    var argv_buf: [4][]const u8 = .{ vera_exe, "--run", src, undefined };
+    const argv: []const []const u8 = if (harness.digitalStd(source)) |s| blk: {
+        argv_buf[3] = s;
+        break :blk &argv_buf;
+    } else argv_buf[0..3];
     if (harness.digitalNegative(source)) {
         const golden = try std.fmt.allocPrint(arena, "{s}/{s}/{s}.expected.txt", .{ options.fixture_root, digital_dir, case });
         if (Io.Dir.cwd().access(io, golden, .{})) |_| {
             try w.print("FAIL {s}: digital reject also has a positive transcript\n", .{case});
             return false;
         } else |_| {}
-        const r = try capture(arena, io, &.{ vera_exe, "--run", src });
+        const r = try capture(arena, io, argv);
         if (!harness.digitalRejectionMatches(source, r.exit, r.stderr)) {
             try w.print("FAIL {s}: digital rejection mismatch (exit {d})\n{s}\n", .{ case, r.exit, r.stderr });
             return false;
@@ -1567,7 +1572,7 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
         arena,
         .limited(1 << 20),
     );
-    const r = try capture(arena, io, &.{ vera_exe, "--run", src });
+    const r = try capture(arena, io, argv);
     if (r.exit != 0) {
         try w.print("FAIL {s}: vera --run exited {d}\n{s}\n", .{ case, r.exit, r.stderr });
         return false;

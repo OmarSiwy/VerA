@@ -1169,6 +1169,17 @@ pub fn digitalNegative(source: []const u8) bool {
     return false;
 }
 
+/// `// digital-runner: --std=SPEC`: the one `vera` flag a digital case passes.
+pub fn digitalStd(source: []const u8) ?[]const u8 {
+    const key = "// digital-runner: ";
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trim(u8, raw, " \t\r");
+        if (std.mem.startsWith(u8, line, key ++ "--std=")) return line[key.len..];
+    }
+    return null;
+}
+
 pub fn digitalCaseSelected(has_golden: bool, source: []const u8) bool {
     return has_golden or digitalNegative(source);
 }
@@ -1379,6 +1390,8 @@ test "digital negative routing is explicit and diagnostics are specific" {
     try std.testing.expect(digitalCaseSelected(true, "module positive; endmodule"));
     try std.testing.expect(!digitalCaseSelected(false, "//! reject E1100\n"));
     try std.testing.expect(!digitalCaseSelected(false, "module support; endmodule"));
+    try std.testing.expectEqualStrings("--std=1364-2005", digitalStd("// digital-runner: reject\n// digital-runner: --std=1364-2005\n").?);
+    try std.testing.expect(digitalStd("// digital-runner: reject\n") == null);
 }
 
 test "digital opt-in is excluded from analog fixture collection" {
