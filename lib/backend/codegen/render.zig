@@ -252,10 +252,21 @@ pub fn renderInst(self: *Gen, inst: Mir.Inst) Error!void {
                 try renderVal(self, if (swap_ops) d.lhs else d.rhs, .real);
                 try self.b(")).sel(", .{});
             } else if (self.an.tyOf(self.an.rv(a)) == .int) {
+                // A 0/1 i64 is already one scalar decision, so an `S` mask
+                // buys nothing: pick in f64 when both arms have an f64 form,
+                // else pick the `S` arm.
                 float_lanes.pinLanes(self, a);
-                try self.b("(S.con(@floatFromInt(", .{});
+                const fb = try gen_call.f64Const(self, b2, 1, true);
+                const fc = if (fb != null) try gen_call.f64Const(self, c, 1, true) else null;
+                try self.b("{s}(if ((", .{if (fc != null) "S.con" else ""});
                 try renderVal(self, a, .int);
-                try self.b("))).sel(", .{});
+                try self.b(") != 0) ", .{});
+                if (fc) |f| return self.b("{s} else {s})", .{ fb.?, f });
+                try renderVal(self, b2, .real);
+                try self.b(" else ", .{});
+                try renderVal(self, c, .real);
+                try self.b(")", .{});
+                return;
             } else {
                 try self.b("(", .{});
                 try renderVal(self, a, .real);
