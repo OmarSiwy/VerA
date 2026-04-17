@@ -3229,6 +3229,27 @@ test "codegen: the setup split computes a probe-guarded card value, and lists it
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const setup_simparams = [_][]const u8{ \"gmin\" };") != null);
 }
 
+test "codegen: setup stores a card expression written twice once, and a 0/1 flag as a bool" {
+    // `exp(r)` is two MIR values with one op over one operand: one field.
+    // `on > 0` is a §4.2.5 comparison, 0 or 1: a byte, not an i64.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module dd(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  parameter real r = 2.0;
+        \\  parameter integer on = 1;
+        \\  analog begin
+        \\    I(p, n) <+ V(p, n) * exp(r);
+        \\    if (on > 0) I(p, n) <+ V(p, n) * V(p, n) * exp(r);
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const src = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, src, "    r: [1]f64 = @splat(std.math.nan(f64)),\n    b: [1]bool = @splat(false),\n};") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "inst.su.b[0] = (") != null);
+}
+
 test "codegen: §5.10.2 a held variable written only by @(initial_step) is computed once, by setup" {
     // Every write of `g` is in an unqualified `@(initial_step)` with a
     // card-only value, so `g` is initial-only (plan/setup.zig's header): its
