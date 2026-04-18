@@ -1791,39 +1791,37 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // and not the dispatch's that resolves its names.
                 self.scope = d.scope;
                 var or_z = false;
-                const value = if (d.bridge) |b|
-                    try window(self, scratch, b, d.current.width)
-                else if (d.gate) |g|
-                    try gateValue(self, scratch, g, d.current.width, &or_z)
-                else if (d.udp) |u|
-                    try udpValue(self, scratch, u)
-                else if (d.mos) |mo|
-                    try mosValue(self, scratch, at, mo, &or_z)
-                else if (d.pull) |b|
-                    try filled(scratch, d.current.width, false, b)
-                else blk: {
-                    if (d.slice) |sl| {
-                        const whole = try eval(self, scratch, d.value, sl.total);
-                        const part = try filled(scratch, d.current.width, false, .z);
-                        for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
-                        break :blk part;
-                    }
-                    break :blk try evalFor(self, scratch, d.value, self.slotType(self.nets[d.net].slot));
+                const value = switch (d.source) {
+                    .bridge => |b| try window(self, scratch, b, d.current.width),
+                    .gate => |g| try gateValue(self, scratch, g, d.current.width, &or_z),
+                    .udp => |u| try udpValue(self, scratch, u),
+                    .mos => |mo| try mosValue(self, scratch, at, mo, &or_z),
+                    .pull => |b| try filled(scratch, d.current.width, false, b),
+                    .expr => |x| blk: {
+                        if (x.slice) |sl| {
+                            const whole = try eval(self, scratch, x.e, sl.total);
+                            const part = try filled(scratch, d.current.width, false, .z);
+                            for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
+                            break :blk part;
+                        }
+                        break :blk try evalFor(self, scratch, x.e, self.slotType(self.nets[d.net].slot));
+                    },
                 };
                 // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,
                 // not what the net shows: the other drivers are unaffected
                 // and the net re-resolves when the delayed value lands.
                 // §8.5: a UDP's initial output is published at time 0; only
                 // later transitions wait for the instance delay.
-                const first_udp = if (d.udp) |u| !u.started else false;
-                if (d.udp) |u| u.started = true;
+                const first_udp = if (d.source == .udp) !d.source.udp.started else false;
+                if (d.source == .udp) d.source.udp.started = true;
                 if (d.delay.present and !first_udp) {
                     const st = &self.drivers[at].transition;
                     if (try schedule(self, d.current, d.or_z, value, or_z, st)) {
-                        const delay = if (d.gate == null and d.bridge == null and d.pull == null and d.udp == null and d.mos == null)
-                            d.delay.continuous(d.current, st.target)
-                        else
-                            d.delay.to(st.target.bit(if (d.gate) |g| g.out_bit orelse 0 else 0));
+                        const delay = switch (d.source) {
+                            .expr => d.delay.continuous(d.current, st.target),
+                            .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
+                            .bridge, .udp, .mos, .pull => d.delay.to(st.target.bit(0)),
+                        };
                         st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }
                 } else {

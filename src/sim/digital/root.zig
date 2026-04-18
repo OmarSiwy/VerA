@@ -44,6 +44,7 @@ const Mos = @import("net.zig").Mos;
 const Tran = @import("net.zig").Tran;
 const Signal = @import("net.zig").Signal;
 const Driver = @import("net.zig").Driver;
+const Source = @import("net.zig").Source;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
 const undriven = @import("net.zig").undriven;
@@ -827,15 +828,7 @@ pub const Run = struct {
 const Wire = struct {
     net: u32,
     scope: u32,
-    value: Ast.ExprId = .none,
-    bridge: ?Bridge = null,
-    gate: ?Gate = null,
-    udp: ?*Udp = null,
-    /// Set instead of `value` for IEEE 1364 §19.10's pull — see `Driver.pull`.
-    pull: ?Int.Bit = null,
-    /// The driven net is bits [lo, lo+width) of `value` read `total` wide.
-    slice: ?Slice = null,
-    mos: ?Mos = null,
+    source: Source,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
     delay: Ast.Delay3 = .{},
@@ -1024,7 +1017,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // the `delay3` before the name list, not on the `=`), which is why the
         // row it contributes carries none of its own.
         if (n.init != .none)
-            try e.wires.append(arena, .{ .net = at, .scope = scope, .value = n.init, .tok = n.main_tok });
+            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
     }
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
@@ -1042,7 +1035,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 .collapse => |net| try e.wires.append(arena, .{
                     .net = net,
                     .scope = scope,
-                    .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(width, e.nets.items[net].resolved.width) },
+                    .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(width, e.nets.items[net].resolved.width) } },
                     .tok = p.main_tok,
                 }),
                 .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
@@ -1084,14 +1077,14 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 if (drive != .float) try e.wires.append(arena, .{
                     .net = at,
                     .scope = scope,
-                    .pull = if (drive == .pull1) .one else .zero,
+                    .source = .{ .pull = if (drive == .pull1) .one else .zero },
                     .s0 = .pull,
                     .s1 = .pull,
                     .tok = p.main_tok,
                 });
             },
             .collapse => {},
-            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .value = c.expr, .slice = c.slice, .tok = c.tok }),
+            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok }),
             .send => |c| {
                 // §6.5.7.1 joins the operands highest-order first, so the
                 // rightmost operand takes the port's low bits.
@@ -1105,7 +1098,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                     try e.wires.append(arena, .{
                         .net = c.operands[k],
                         .scope = scope,
-                        .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w },
+                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w } },
                         .tok = c.tok,
                     });
                     lo += w;
@@ -1117,7 +1110,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     for (m.assigns) |a| {
         const target = try r.scalarSlot(a.target);
         const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
-        try e.wires.append(arena, .{ .net = net, .scope = scope, .value = a.value, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
+        try e.wires.append(arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
@@ -1137,7 +1130,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             try e.wires.append(arena, .{
                 .net = net,
                 .scope = scope,
-                .gate = .{ .kind = g.kind, .ins = g.ins, .lane = lane, .lanes = lanes, .out_bit = if (width == 1) null else lane },
+                .source = .{ .gate = .{ .kind = g.kind, .ins = g.ins, .lane = lane, .lanes = lanes, .out_bit = if (width == 1) null else lane } },
                 .s0 = g.strength0,
                 .s1 = g.strength1,
                 .delay = g.delay,
@@ -1164,7 +1157,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 for (0..@as(usize, if (cmos) 2 else 1)) |half| try e.wires.append(arena, .{
                     .net = out,
                     .scope = scope,
-                    .mos = .{ .data = sw.terms[1], .gate = sw.terms[2 + half], .n_type = if (cmos) half == 0 else n_type, .resistive = resistive },
+                    .source = .{ .mos = .{ .data = sw.terms[1], .gate = sw.terms[2 + half], .n_type = if (cmos) half == 0 else n_type, .resistive = resistive } },
                     .delay = sw.delay,
                     .tok = sw.main_tok,
                 });
@@ -1200,7 +1193,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // constant driver, the same row `unconnected_drive` contributes.
     for (m.pulls) |p| {
         const net = r.net_of.get(try r.scalarSlot(p.out)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
-        try e.wires.append(arena, .{ .net = net, .scope = scope, .pull = if (p.one) .one else .zero, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
+        try e.wires.append(arena, .{ .net = net, .scope = scope, .source = .{ .pull = if (p.one) .one else .zero }, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
     }
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     if (!r.mixed) for (m.analog) |ab| try generate(r, e, scope, ab.body, depth);
@@ -1777,7 +1770,7 @@ fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *cons
     };
     const udp = try r.arena.create(Udp);
     udp.* = .{ .rows = rows, .sequential = u.is_sequential, .ins = ins, .prev = prev, .state = state };
-    try e.wires.append(r.arena, .{ .net = net, .scope = scope, .udp = udp, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
+    try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .udp = udp }, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
 }
 
 /// A port by the name a named connection may use: its own, when the header
@@ -1974,46 +1967,42 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     for (e.wires.items, 0..) |a, i| {
         r.scope = a.scope;
         var watched: std.ArrayList(u32) = .empty;
-        if (a.bridge) |b| {
-            try watched.append(arena, b.src);
-        } else if (a.gate) |g| {
+        switch (a.source) {
+            .bridge => |b| try watched.append(arena, b.src),
             // §7.8.5 a gate re-evaluates on any input change, exactly as a
             // continuous assignment does on any operand change.
-            for (g.ins) |in| {
+            .gate => |g| for (g.ins) |in| {
                 try compile.checkExpr(&r, in);
                 const w = compile.typeOf(&r, in).width;
                 if (w != 1 and !(g.lane != null and w == g.lanes)) return r.exprFail(in, "a gate's input terminal is one bit, or one per instance of an array");
                 try compile.sensitivity(&r, in, &watched);
-            }
-        } else if (a.mos) |mo| {
-            for ([_]Ast.ExprId{ mo.data, mo.gate }) |in| {
+            },
+            .mos => |mo| for ([_]Ast.ExprId{ mo.data, mo.gate }) |in| {
                 try compile.checkExpr(&r, in);
                 if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar switch terminals are implemented");
                 try compile.sensitivity(&r, in, &watched);
-            }
-        } else if (a.udp) |u| {
-            for (u.ins) |in| {
+            },
+            .udp => |u| for (u.ins) |in| {
                 try compile.checkExpr(&r, in);
                 if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar UDP terminals are implemented");
                 try compile.sensitivity(&r, in, &watched);
-            }
-        } else if (a.pull == null) {
-            try compile.checkExpr(&r, a.value);
-            try compile.sensitivity(&r, a.value, &watched);
+            },
+            .expr => |x| {
+                try compile.checkExpr(&r, x.e);
+                try compile.sensitivity(&r, x.e, &watched);
+            },
+            .pull => {},
         }
         r.drivers[i] = .{
             .net = a.net,
-            .value = a.value,
+            .source = a.source,
             .scope = a.scope,
-            .bridge = a.bridge,
-            .gate = a.gate,
-            .udp = a.udp,
-            .pull = a.pull,
-            .slice = a.slice,
-            .mos = a.mos,
             .sensitivity = watched.items,
             // A sequential UDP's output is its state from the start (§8.5).
-            .current = try filled(arena, r.nets[a.net].resolved.width, false, if (a.udp) |u| (if (u.sequential) u.state else .z) else .z),
+            .current = try filled(arena, r.nets[a.net].resolved.width, false, switch (a.source) {
+                .udp => |u| if (u.sequential) u.state else .z,
+                .expr, .bridge, .gate, .mos, .pull => .z,
+            }),
             .s0 = a.s0,
             .s1 = a.s1,
             .delay = try r.declaredDelay3(a.delay, a.tok),
@@ -2038,9 +2027,9 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         try compile.sensitivity(&r, t.tran.ctrl, &watched);
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .switch_ctrl = .{ .tran = @intCast(i), .slots = watched.items } }) }, null, false);
     }
-    for (r.drivers) |d| if (d.mos) |mo| if (file.exprs.tag(mo.data) == .ident) {
+    for (r.drivers) |d| if (d.source == .mos and file.exprs.tag(d.source.mos.data) == .ident) {
         r.scope = d.scope;
-        if (r.net_of.get(try r.slot(mo.data))) |net| r.nets[net].strength_read = true;
+        if (r.net_of.get(try r.slot(d.source.mos.data))) |net| r.nets[net].strength_read = true;
     };
     for (r.nets, on_net) |*n, t| n.trans = t.items;
     for (r.nets, grouped) |*n, g| {

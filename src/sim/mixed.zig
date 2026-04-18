@@ -104,20 +104,20 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 // and every period after that"; a period <= 0 fires once.
                 // ponytail: a firing at or before the DC point is not delivered.
                 const start = (try dig.monitorArg(j, 0)).?;
-                m.* = .{ .dir = 0, .tol = 0, .timer = .{ .next = start, .period = (try dig.monitorArg(j, 1)) orelse 0 } };
-                while (m.timer.?.next <= opts.times[0]) if (!m.advanceTimer()) break;
+                m.* = .{ .kind = .{ .timer = .{ .next = start, .period = (try dig.monitorArg(j, 1)) orelse 0 } } };
+                while (m.kind.timer.next <= opts.times[0]) if (!m.advanceTimer()) break;
                 continue;
             }
             if (mon.kind == .absdelta) {
                 // §5.10.3.4 absdelta(expr, delta, time_tol, expr_tol, enable).
-                m.* = .{ .dir = 0, .tol = 0, .absdelta = .{ .delta = @max((try dig.monitorArg(j, 1)) orelse 0, 0) } };
+                m.* = .{ .kind = .{ .absdelta = .{ .delta = @max((try dig.monitorArg(j, 1)) orelse 0, 0) } } };
                 continue;
             }
             const above = mon.kind == .above;
             // §5.10.3.1 cross(expr, dir, time_tol, ...); §5.10.3.2 above(expr, time_tol, ...).
             const dir = if (above) 1.0 else (try dig.monitorArg(j, 1)) orelse 0.0;
             const tol = (try dig.monitorArg(j, if (above) 1 else 2)) orelse 0.0;
-            m.* = .{ .dir = dir, .tol = if (tol > 0) tol else @min(default_time_tol, opts.tick / 2), .enable = if (above) 3 else 4 };
+            m.* = .{ .kind = .{ .crossing = .{ .dir = dir, .tol = if (tol > 0) tol else @min(default_time_tol, opts.tick / 2), .enable = if (above) 3 else 4 } } };
         }
     }
     for (opts.times, 0..) |target, i| {
@@ -130,8 +130,8 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 };
                 // §5.10.3.3 a timer places a point at its firing time, whether
                 // it is monitored here or only the device's (`nextBreakpoint`).
-                for (s.mons) |m| if (m.timer) |tm| if (tm.next > s.acc.?) {
-                    t_end = @min(t_end, tm.next);
+                for (s.mons) |m| if (m.kind == .timer and m.kind.timer.next > s.acc.?) {
+                    t_end = @min(t_end, m.kind.timer.next);
                 };
                 if (@hasDecl(A, "breakpoint")) if (a.breakpoint(s.acc.?)) |b| if (b > s.acc.?) {
                     t_end = @min(t_end, b);
@@ -166,7 +166,8 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         // §5.10.3.4 absdelta "generates events ... During initialization".
         if (sync and i == 0) {
             var any = false;
-            for (s.mons, 0..) |*m, j| if (m.absdelta) |*ad| {
+            for (s.mons, 0..) |*m, j| if (m.kind == .absdelta) {
+                const ad = &m.kind.absdelta;
                 ad.last = try s.monValue(j);
                 try dig.deliverA2d(j, horizon);
                 any = true;
@@ -180,27 +181,24 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
 /// §5.10.3.1 leaves an absent `time_tol` to the tool.
 const default_time_tol = 1e-12;
 
-/// One monitored analog event (`digital.Run.monitors`): its direction, its
-/// time tolerance, and its value on the last final solution — or, for a
-/// timer, its next firing time.
+/// One monitored analog event (`digital.Run.monitors`): what its kind needs,
+/// and its value on the last final solution (`v0`, unused by a timer).
 const Mon = struct {
-    dir: f64,
-    tol: f64,
-    /// §5.10.3.1 / §5.10.3.2 the argument index of `enable`, whose zero makes
-    /// the event inactive; null for a function without one here.
-    enable: ?u8 = null,
     v0: f64 = 0,
-    timer: ?struct { next: f64, period: f64 } = null,
-    /// §5.10.3.4: the change that makes an event, and the value at the last one.
-    absdelta: ?struct { delta: f64, last: f64 = 0 } = null,
-
-    fn isCrossing(m: Mon) bool {
-        return m.timer == null and m.absdelta == null;
-    }
+    kind: union(enum) {
+        /// §5.10.3.1 cross / §5.10.3.2 above: the direction, the time
+        /// tolerance, and the argument index of `enable`, whose zero makes the
+        /// event inactive.
+        crossing: struct { dir: f64, tol: f64, enable: u8 },
+        /// §5.10.3.3: the next firing time and the period.
+        timer: struct { next: f64, period: f64 },
+        /// §5.10.3.4: the change that makes an event, and the value at the last one.
+        absdelta: struct { delta: f64, last: f64 = 0 },
+    },
 
     /// The firing after this one, or false when there is none.
     fn advanceTimer(m: *Mon) bool {
-        const tm = &m.timer.?;
+        const tm = &m.kind.timer;
         if (tm.period <= 0) {
             tm.next = std.math.inf(f64);
             return false;
@@ -298,9 +296,8 @@ fn State(comptime A: type) type {
         /// §5.10.3.1: "If enable argument is specified and it is zero, then
         /// cross() is inactive, meaning that it does not generate an event at
         /// threshold crossings and does not act to control the timestep."
-        fn active(s: *Self, m: Mon, j: usize) !bool {
-            const k = m.enable orelse return true;
-            return ((try s.monArg(j, k)) orelse 1) != 0;
+        fn active(s: *Self, enable: u8, j: usize) !bool {
+            return ((try s.monArg(j, enable)) orelse 1) != 0;
         }
 
         /// One analog step toward `t_end`, which lies before the next digital
@@ -310,7 +307,7 @@ fn State(comptime A: type) type {
         /// it for every D2A they cause (§8.4.3.2 "accept at wake-up time").
         fn step(s: *Self, t_end: f64) !void {
             const base = s.acc.?;
-            for (s.mons, 0..) |*m, j| if (m.timer == null) {
+            for (s.mons, 0..) |*m, j| if (m.kind != .timer) {
                 m.v0 = try s.monValue(j);
             };
             try s.accept(t_end);
@@ -319,41 +316,49 @@ fn State(comptime A: type) type {
             while (cuts < 64) : (cuts += 1) {
                 var cut: ?f64 = null;
                 for (s.mons, 0..) |m, j| {
-                    if (!m.isCrossing() or !try s.active(m, j)) continue;
+                    const c = switch (m.kind) {
+                        .crossing => |c| c,
+                        .timer, .absdelta => continue,
+                    };
+                    if (!try s.active(c.enable, j)) continue;
                     const v1 = try s.monValue(j);
-                    if (!crosses(m.dir, m.v0, v1)) continue;
+                    if (!crosses(c.dir, m.v0, v1)) continue;
                     const tc = base + m.v0 / (m.v0 - v1) * (s.acc.? - base);
-                    if (s.acc.? - tc > m.tol) cut = @min(cut orelse tc + m.tol / 2, tc + m.tol / 2);
+                    if (s.acc.? - tc > c.tol) cut = @min(cut orelse tc + c.tol / 2, tc + c.tol / 2);
                 }
                 try s.solve(cut orelse break);
             }
             const tick: Tick = @intFromFloat(@round(s.acc.? / s.opts.tick));
-            for (s.mons, 0..) |*m, j| if (m.timer) |tm| {
-                // Stepped to exactly, so the point IS the firing.
-                if (s.acc.? + s.opts.tick * 1e-6 < tm.next) continue;
-                try s.dig.deliverA2d(j, tick);
-                while (m.timer.?.next <= s.acc.? + s.opts.tick * 1e-6) if (!m.advanceTimer()) break;
-            } else if (m.absdelta) |*ad| {
-                // §5.10.3.4 / §8.4.6: absdelta does not force a timestep; each
-                // change of "more than delta, relative to the previous
-                // absdelta() event" is interpolated between the step's ends.
-                // ponytail: a D2A it causes is re-solved at the step's end, not
-                // rolled back to the event (§8.4.6 case a); expr_tol, time_tol,
-                // enable and the direction-change trigger are not read.
-                const v1 = try s.monValue(j);
-                if (ad.delta == 0) {
-                    // "an event is generated every timestep the expression
-                    // value changes".
-                    if (v1 != m.v0) try s.dig.deliverA2d(j, tick);
-                    ad.last = v1;
-                } else while (@abs(v1 - ad.last) > ad.delta) {
-                    const level = ad.last + std.math.sign(v1 - ad.last) * ad.delta;
-                    const f = if (v1 != m.v0) std.math.clamp((level - m.v0) / (v1 - m.v0), 0, 1) else 1;
-                    const te = base + f * (s.acc.? - base);
-                    try s.dig.deliverA2d(j, @intFromFloat(@round(te / s.opts.tick)));
-                    ad.last = level;
-                }
-            } else if (try s.active(m.*, j) and crosses(m.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick);
+            for (s.mons, 0..) |*m, j| switch (m.kind) {
+                .timer => |tm| {
+                    // Stepped to exactly, so the point IS the firing.
+                    if (s.acc.? + s.opts.tick * 1e-6 < tm.next) continue;
+                    try s.dig.deliverA2d(j, tick);
+                    while (m.kind.timer.next <= s.acc.? + s.opts.tick * 1e-6) if (!m.advanceTimer()) break;
+                },
+                .absdelta => |*ad| {
+                    // §5.10.3.4 / §8.4.6: absdelta does not force a timestep; each
+                    // change of "more than delta, relative to the previous
+                    // absdelta() event" is interpolated between the step's ends.
+                    // ponytail: a D2A it causes is re-solved at the step's end, not
+                    // rolled back to the event (§8.4.6 case a); expr_tol, time_tol,
+                    // enable and the direction-change trigger are not read.
+                    const v1 = try s.monValue(j);
+                    if (ad.delta == 0) {
+                        // "an event is generated every timestep the expression
+                        // value changes".
+                        if (v1 != m.v0) try s.dig.deliverA2d(j, tick);
+                        ad.last = v1;
+                    } else while (@abs(v1 - ad.last) > ad.delta) {
+                        const level = ad.last + std.math.sign(v1 - ad.last) * ad.delta;
+                        const f = if (v1 != m.v0) std.math.clamp((level - m.v0) / (v1 - m.v0), 0, 1) else 1;
+                        const te = base + f * (s.acc.? - base);
+                        try s.dig.deliverA2d(j, @intFromFloat(@round(te / s.opts.tick)));
+                        ad.last = level;
+                    }
+                },
+                .crossing => |c| if (try s.active(c.enable, j) and crosses(c.dir, m.v0, try s.monValue(j))) try s.dig.deliverA2d(j, tick),
+            };
             try s.runDigital(tickAtOrBefore(s.acc.?, s.opts.tick));
         }
 

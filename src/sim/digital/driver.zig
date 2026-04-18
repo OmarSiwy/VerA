@@ -157,8 +157,8 @@ pub fn arm(r: *Run) Error!void {
             for (r.nets[half].drivers) |di| {
                 const dr = r.drivers[di];
                 if (isConnect(r, dr.scope) and !cm_driver_updates) continue;
-                if (dr.bridge) |b| {
-                    try watch(r, b.src, r.nets[net].slot, true);
+                if (dr.source == .bridge) {
+                    try watch(r, dr.source.bridge.src, r.nets[net].slot, true);
                 } else for (dr.sensitivity) |s| try watch(r, s, r.nets[net].slot, false);
             }
         }
@@ -301,7 +301,10 @@ fn pending(r: *Run, a: std.mem.Allocator, di: u32) Error!?Pend {
         if (ev.payload >= r.pending.items.len) continue;
         const bit: Int.Bit = switch (r.pending.items[ev.payload].item) {
             .drive => |at| if (at == di) dr.transition.target.bit(0) else continue,
-            .write => |w| if (dr.bridge) |b| (if (w.target == b.src and w.sel == null) w.value.bit(b.src_lo) else continue) else continue,
+            .write => |w| switch (dr.source) {
+                .bridge => |b| if (w.target == b.src and w.sel == null) w.value.bit(b.src_lo) else continue,
+                .expr, .gate, .udp, .mos, .pull => continue,
+            },
             else => continue, // else: only a drive or a write carries a driver's next value
         };
         if (best == null or ev.time < best.?.time) best = .{ .bit = bit, .time = ev.time };
@@ -346,9 +349,13 @@ fn level(s: Signal) u32 {
 fn typeBits(r: *const Run, dr: Driver) u32 {
     var t: u32 = 0;
     if (dr.delay.present) t |= 1; // DRIVER_DELAYED
-    if (dr.gate != null or dr.mos != null) t |= 2; // DRIVER_GATE
-    if (dr.udp != null) t |= 4; // DRIVER_UDP
-    if (dr.bridge != null) t |= 16 else if (dr.pull != null) t |= 256 else if (dr.gate == null and dr.mos == null and dr.udp == null) t |= 8;
+    t |= switch (dr.source) {
+        .gate, .mos => 2, // DRIVER_GATE
+        .udp => 4, // DRIVER_UDP
+        .expr => 8,
+        .bridge => 16,
+        .pull => 256,
+    };
     t |= switch (r.nets[dr.net].kind) {
         .wor, .trior => 512,
         .wand, .triand => 1024,
