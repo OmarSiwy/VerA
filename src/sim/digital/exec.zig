@@ -101,11 +101,16 @@ pub const Edge = enum(u2) {
     }
 };
 
-// One suspended process, keyed by the variable it watches. `pc` is both the
-// resumption point and the process's identity while it is suspended: the terms
-// of one `or` share it, and retire together when any one of them fires.
-/// `ctx` is the task activation the process is in, 0 for none.
-pub const Waiter = struct { slot: u32, edge: Edge, pc: u32, ctx: u32 = 0 };
+/// One process suspended on an event control (§9.7): where it resumes, and
+/// in which task activation (`ctx`, 0 for none). The terms of its `or` all
+/// name this row, and retire together when any one of them fires. `gen`
+/// counts the row's retirements, so a term filed by an earlier occupant of a
+/// recycled row is recognisably stale.
+pub const Susp = struct { pc: u32, ctx: u32, gen: u32, alive: bool };
+
+/// One term of a suspension's event expression, filed under the slot it
+/// watches (`Run.terms`). Live while `gen` is its suspension's.
+pub const Term = struct { susp: u32, gen: u32, edge: Edge };
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
@@ -800,30 +805,120 @@ pub fn wakeA2d(self: *Run, slot: u32) Error!void {
 /// Resume every process suspended on `target` whose edge matches. Split out
 /// of `store` because §5.10.4's `-> e` resumes without publishing anything:
 /// a named event has no value for a change to be detected in.
+///
+/// The continuous drivers and controlled switches reading `target` come
+/// first, then the event controls in the order they suspended. §11.4.2 lets
+/// the processes one event resumes run in any order.
 pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
-    if (self.waiters.items.len == 0) return;
-    // ponytail: linear scan. The list holds only currently-suspended
-    // processes, so it is bounded by the source's process count; index it
-    // by slot if a design ever suspends in bulk.
-    var i: usize = 0;
-    while (i < self.waiters.items.len) {
-        const w = self.waiters.items[i];
-        if (w.slot != target or !w.edge.matches(before, after)) {
-            i += 1;
+    if (target + 1 < self.fan_start.len) for (self.fan[self.fan_start[target]..self.fan_start[target + 1]]) |pc| if (self.armed[pc]) {
+        self.armed[pc] = false;
+        _ = try enqueue(self, .{ .run_process = pc }, null, false);
+    };
+    const list = termsOf(self, target) orelse return;
+    // Compacts as it goes: a matched term leaves with its suspension, and a
+    // stale one (its suspension resumed through another slot, or was
+    // disabled) is dropped.
+    var keep: usize = 0;
+    for (list.items) |t| {
+        const s = &self.susps.items[t.susp];
+        if (s.gen != t.gen) continue;
+        if (!t.edge.matches(before, after)) {
+            list.items[keep] = t;
+            keep += 1;
             continue;
         }
-        // Retire every term of this process's event expression. Scanning
-        // down keeps the not-yet-examined prefix intact, so each swapped-in
-        // entry has already been checked; the scan then restarts because
-        // removal moved the tail. Every pass drops at least one entry.
-        var j = self.waiters.items.len;
-        while (j != 0) {
-            j -= 1;
-            if (self.waiters.items[j].pc == w.pc) _ = self.waiters.swapRemove(j);
-        }
-        _ = try enqueue(self, resumption(w.pc, w.ctx), null, false);
-        i = 0;
+        const pc = s.pc;
+        const ctx = s.ctx;
+        retire(self, t.susp);
+        _ = try enqueue(self, resumption(pc, ctx), null, false);
     }
+    list.shrinkRetainingCapacity(keep);
+}
+
+fn termsOf(self: *Run, slot: u32) ?*std.ArrayList(Term) {
+    return if (slot < self.terms.len) &self.terms[slot] else self.far_terms.getPtr(slot);
+}
+
+/// Suspend the executing process at `pc` (§9.7). Its terms are filed with
+/// `watch` under the id returned.
+fn park(self: *Run, pc: u32) Error!u32 {
+    const id = self.free_susps.pop() orelse blk: {
+        try self.susps.append(self.arena, .{ .pc = 0, .ctx = 0, .gen = 0, .alive = false });
+        // Room for every row on the free list, so `retire` cannot fail.
+        try self.free_susps.ensureTotalCapacity(self.arena, self.susps.items.len);
+        break :blk @as(u32, @intCast(self.susps.items.len - 1));
+    };
+    const s = &self.susps.items[id];
+    s.pc = pc;
+    s.ctx = self.ctx;
+    s.alive = true;
+    return id;
+}
+
+/// File one term of suspension `id` under `slot`.
+fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
+    const list = termsOf(self, slot) orelse blk: {
+        const g = try self.far_terms.getOrPut(self.arena, slot);
+        g.value_ptr.* = .empty;
+        break :blk g.value_ptr;
+    };
+    // Stale terms stay until their slot is next woken, which a slot that
+    // never changes never is: sweep them before the list grows, and grow
+    // anyway past half full so a sweep is paid for by as many appends.
+    if (list.items.len == list.capacity and list.capacity != 0) {
+        var keep: usize = 0;
+        for (list.items) |t| if (self.susps.items[t.susp].gen == t.gen) {
+            list.items[keep] = t;
+            keep += 1;
+        };
+        list.shrinkRetainingCapacity(keep);
+        if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.arena, list.capacity * 2);
+    }
+    try list.append(self.arena, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
+}
+
+/// The process at suspension `id` is no longer waiting: every term it filed
+/// goes stale, and the row is free.
+fn retire(self: *Run, id: u32) void {
+    const s = &self.susps.items[id];
+    s.alive = false;
+    s.gen +%= 1;
+    self.free_susps.appendAssumeCapacity(id);
+}
+
+/// The static fan-out of every continuous driver and controlled switch
+/// (§6.1, §7.6): their operands are fixed at compile time, so each slot's
+/// list of them is built once, and a flag per pc stands for the whole
+/// sensitivity list the process would otherwise re-register per evaluation.
+/// Called once the slot space and the code are final.
+pub fn buildFanout(r: *Run) Error!void {
+    const n = r.values.len;
+    const start = try r.arena.alloc(u32, n + 1);
+    @memset(start, 0);
+    for (r.code.items) |ins| for (staticSlots(r, ins)) |at| {
+        start[at + 1] += 1;
+    };
+    for (1..n + 1) |i| start[i] += start[i - 1];
+    const fill = try r.arena.dupe(u32, start[0..n]);
+    const fan = try r.arena.alloc(u32, start[n]);
+    for (r.code.items, 0..) |ins, pc| for (staticSlots(r, ins)) |at| {
+        fan[fill[at]] = @intCast(pc);
+        fill[at] += 1;
+    };
+    r.fan_start = start;
+    r.fan = fan;
+    r.armed = try r.arena.alloc(bool, r.code.items.len);
+    @memset(r.armed, false);
+    r.terms = try r.arena.alloc(std.ArrayList(Term), n);
+    @memset(r.terms, .empty);
+}
+
+fn staticSlots(r: *const Run, ins: compile.Instruction) []const u32 {
+    return switch (ins) {
+        .continuous => |i| r.drivers[i].sensitivity,
+        .switch_ctrl => |s| s.slots,
+        else => &.{}, // else: every other instruction suspends through `park`
+    };
 }
 
 /// §7.9: a net's value is the wired-logic resolution of ALL its drivers, so
@@ -1162,25 +1257,25 @@ fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Erro
         return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
 }
 
-fn suspendOn(self: *Run, e: Ast.ExprId, resume_pc: u32) Error!void {
+fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
     const ex = &self.file.exprs;
     const edge: Edge = switch (ex.tag(e)) {
         .event_or => {
-            try suspendOn(self, ex.lhs(e), resume_pc);
-            return suspendOn(self, ex.rhs(e), resume_pc);
+            try suspendOn(self, ex.lhs(e), id);
+            return suspendOn(self, ex.rhs(e), id);
         },
         .event_posedge => .posedge,
         .event_negedge => .negedge,
         .event_function => {
             const slot = self.monitorSlot(e, self.instanceOf(self.scope)).?; // registered by checkEvent
-            return self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = resume_pc, .ctx = self.ctx });
+            return watch(self, id, slot, .any);
         },
         // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
-        .event_driver_update => return self.waiters.append(self.arena, .{ .slot = driver.key(try self.slot(ex.lhs(e))), .edge = .any, .pc = resume_pc, .ctx = self.ctx }),
+        .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
         else => .any, // else: a plain name, the one other term checkEvent admits
     };
     const watched = if (edge == .any) e else ex.lhs(e);
-    try self.waiters.append(self.arena, .{ .slot = try self.slot(watched), .edge = edge, .pc = resume_pc, .ctx = self.ctx });
+    try watch(self, id, try self.slot(watched), edge);
 }
 
 /// The `.monitor` region at the CURRENT time — §17.1.2/§17.1.3's "end of
@@ -1241,15 +1336,10 @@ fn disableRange(self: *Run, start: u32, end: u32) Error!void {
 /// the queued `.run_process` rows. Whether anything was.
 fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
     var hit = false;
-    var i = self.waiters.items.len;
-    while (i != 0) {
-        i -= 1;
-        const at = self.waiters.items[i].pc;
-        if (at >= start and at < end) {
-            _ = self.waiters.swapRemove(i);
-            hit = true;
-        }
-    }
+    for (self.susps.items, 0..) |s, id| if (s.alive and s.pc >= start and s.pc < end) {
+        retire(self, @intCast(id));
+        hit = true;
+    };
     // Only live rows: a free row's handle is stale, and so is the handle of
     // the row now dispatching, which the scheduler released before returning.
     for (self.pending.items) |row| switch (row.item) {
@@ -1582,10 +1672,11 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 pc = target;
                 continue;
             },
-            .wait_event => |e| return suspendOn(self, e, pc + 1),
+            .wait_event => |e| return suspendOn(self, e, try park(self, pc + 1)),
             // §9.7.5 the implicit list is a plain `or` of value changes.
             .wait_slots => |slots| {
-                for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1, .ctx = self.ctx });
+                const id = try park(self, pc + 1);
+                for (slots) |s| try watch(self, id, s, .any);
                 return;
             },
             // A.6.5 a `wait` that is already satisfied does not suspend at
@@ -1596,7 +1687,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     pc += 1;
                     continue;
                 }
-                for (s.slots) |at| try self.waiters.append(self.arena, .{ .slot = at, .edge = .any, .pc = pc, .ctx = self.ctx });
+                const id = try park(self, pc);
+                for (s.slots) |at| try watch(self, id, at, .any);
                 return;
             },
             // §8.5.3.3 "computes the right-hand side value using the
@@ -1635,7 +1727,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 if (a.timing_is_delay)
                     _ = try enqueue(self, resumption(pc + 1, self.ctx), try delayOf(self, scratch, a.timing, tok), false)
                 else
-                    try suspendOn(self, a.timing, pc + 1);
+                    try suspendOn(self, a.timing, try park(self, pc + 1));
                 return;
             },
             // §8.5.3.3 "the values at the time the process resumes are used
@@ -1710,7 +1802,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     self.drivers[at].or_z = or_z;
                     try resolve(self, d.net);
                 }
-                for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });
+                self.armed[pc] = true;
                 return;
             },
             // §17.5 an asynchronous PLA: its own process, which evaluates and
@@ -1724,7 +1816,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     try resolve(self, t.a);
                     try resolve(self, t.b);
                 }
-                for (s.slots) |slot| try self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = pc });
+                self.armed[pc] = true;
                 return;
             },
             .override_on => |o| {
