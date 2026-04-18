@@ -17,6 +17,7 @@ const display = @import("display.zig");
 const driver = @import("driver.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
+const SpecExpr = @import("root.zig").SpecExpr;
 const expectRun = @import("root.zig").expectRun;
 const expectRejected = @import("root.zig").expectRejected;
 const filled = @import("net.zig").filled;
@@ -309,9 +310,12 @@ pub fn common(a: Type, b: Type) Type {
 }
 
 pub fn typeOf(self: *Run, e: Ast.ExprId) Type {
-    const ty = self.types[@intFromEnum(e)];
-    std.debug.assert(ty.width != 0 or self.replications.contains(e)); // zero only for validated replication
-    return ty;
+    const i = @intFromEnum(e);
+    return switch (self.ty_state[i]) {
+        .one => self.types[i],
+        .many => self.spec_types.get(.{ .spec = self.specOf(self.scope), .e = e }).?,
+        .untyped => unreachable, // infer runs before any evaluation
+    };
 }
 
 pub fn checkExpr(self: *Run, e: Ast.ExprId) Error!void {
@@ -388,8 +392,8 @@ fn replicationCount(self: *Run, e: Ast.ExprId) Error!u32 {
 fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
     if (e == .none) return self.fail(0, "omitted expressions are not implemented", .{});
     if (depth == 256) return self.exprFail(e, "digital expressions deeper than 256 AST levels are not implemented");
-    const entry = &self.types[@intFromEnum(e)];
-    if (entry.width != 0 or self.replications.contains(e)) return entry.*;
+    const key: SpecExpr = .{ .spec = self.specOf(self.scope), .e = e };
+    if (self.spec_types.get(key)) |ty| return ty;
     const ex = &self.file.exprs;
     const ty: Type = switch (ex.tag(e)) {
         .int_literal, .logic_literal, .str_literal, .real_literal, .ident, .hier_ident => try leafType(self, e),
@@ -412,7 +416,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                     const msb = (try self.constant(ex.lhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
                     const lsb = (try self.constant(ex.rhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
                     if (@abs(msb - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
-                    try self.part_selects.put(self.arena, e, .{ .msb = msb, .lsb = lsb });
+                    try self.part_selects.put(self.arena, key, .{ .msb = msb, .lsb = lsb });
                     break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
                 }
                 const index = try inferValue(self, ex.rhs(e), depth + 1);
@@ -584,7 +588,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             const operand = try inferValue(self, ex.rhs(e), depth + 1);
             const count = try replicationCount(self, ex.lhs(e));
             const width = std.math.mul(u32, count, operand.width) catch return self.exprFail(e, "replication width exceeds the supported u32 range");
-            try self.replications.put(self.arena, e, count);
+            try self.replications.put(self.arena, key, count);
             break :blk .{ .width = width, .signed = false };
         },
         // VAMS §7.3.3 / §7.3.6.3 a potential probe of a continuous net, read
@@ -598,7 +602,18 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         },
         else => return self.exprFail(e, "this digital expression form is not implemented"), // else: the analog-only forms (access functions, filters, patterns, events), refused out loud
     };
-    entry.* = ty;
+    try self.spec_types.put(self.arena, key, ty);
+    const i = @intFromEnum(e);
+    switch (self.ty_state[i]) {
+        .untyped => {
+            self.types[i] = ty;
+            self.ty_state[i] = .one;
+        },
+        .one => if (!std.meta.eql(self.types[i], ty)) {
+            self.ty_state[i] = .many;
+        },
+        .many => {},
+    }
     return ty;
 }
 

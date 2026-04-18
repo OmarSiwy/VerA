@@ -116,6 +116,12 @@ pub const Insert = struct {
 /// One declared identifier, qualified by the §6.2.2 instance that declared it.
 const Name = struct { scope: u32, str: Ast.StrId };
 
+/// One expression in one specialization (`Run.specOf`).
+pub const SpecExpr = struct { spec: u32, e: Ast.ExprId };
+
+/// How many distinct types the specializations that typed a row gave it.
+pub const TyState = enum(u8) { untyped, one, many };
+
 // §3.9 an unpacked array is `count` consecutive element slots; the declared
 // name maps to the first. `low`/`high` are the declared address bounds, in
 // either order of declaration — no operation here observes element ORDER, only
@@ -239,13 +245,19 @@ pub const Run = struct {
     /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
     /// there, because §5.10's events "do not hold any data".
     events: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    // Natural types, indexed by AST ExprId; width zero marks an unvisited row.
+    /// Natural types (§5.5.1), indexed by AST ExprId. An ExprId is shared by
+    /// every instance of its module, and IEEE 1364-2005 §12.2 gives each
+    /// instance its own parameter values, so the truth is `spec_types`, keyed
+    /// by `specOf`. `types` is the dense copy for a row every specialization
+    /// typed alike (`ty_state` `.one`); `.many` rows are read from the map.
     types: []Type = &.{},
+    ty_state: []TyState = &.{},
+    spec_types: std.AutoHashMapUnmanaged(SpecExpr, Type) = .empty,
     /// Which system function each `.sys_call` is, indexed by AST ExprId and
     /// written by `infer` — so evaluation switches on it instead of hashing
     /// the name again. Null for every other node.
     sys_calls: []?compile.SysFn = &.{},
-    replications: std.AutoHashMapUnmanaged(Ast.ExprId, u32) = .empty,
+    replications: std.AutoHashMapUnmanaged(SpecExpr, u32) = .empty,
     code: std.ArrayList(Instruction) = .empty,
     /// The instance scope each instruction was compiled in, one row per `code`
     /// row. A process never leaves the scope it was written in, so `execute`
@@ -387,7 +399,7 @@ pub const Run = struct {
     /// (`system.table`).
     file_io: ?@import("contract").FileIo = null,
     /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
-    part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
+    part_selects: std.AutoHashMapUnmanaged(SpecExpr, VecRange) = .empty,
     /// §18 the value change dump.
     vcd: @import("vcd.zig").Vcd = .{},
 
@@ -663,6 +675,20 @@ pub const Run = struct {
         }
     }
     /// The instance a (possibly nested) scope belongs to.
+    /// The scope whose parameters decide every type, part-select bound and
+    /// replication count in `scope`: the nearest instance (§12.2) or §12.4.1
+    /// loop-generate iteration (its genvar is a local parameter) at or above
+    /// it. A named block or a task frame declares names from its instance's
+    /// parameters, so it shares its instance's types.
+    pub fn specOf(self: *const Run, scope: u32) u32 {
+        var s = scope;
+        while (s < self.scope_info.items.len) {
+            const info = self.scope_info.items[s];
+            if (!info.lexical or info.index != null) break;
+            s = info.parent;
+        }
+        return s;
+    }
     pub fn instanceOf(self: *const Run, scope: u32) u32 {
         var s = scope;
         while (self.scope_info.items[s].lexical) s = self.scope_info.items[s].parent;
@@ -1905,7 +1931,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // Allocated before pass one: a bound or a parameter is typed and folded
     // while the slot space is still growing (`Run.constant`).
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
-    @memset(r.types, .{ .width = 0, .signed = false });
+    r.ty_state = try arena.alloc(TyState, file.exprs.nodes.len);
+    @memset(r.ty_state, .untyped);
     r.sys_calls = try arena.alloc(?compile.SysFn, file.exprs.nodes.len);
     @memset(r.sys_calls, null);
     r.growing = &e.values;

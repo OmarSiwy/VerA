@@ -167,7 +167,7 @@ fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
     const rhs = ex.rhs(e);
     if (ex.tag(rhs) == .range) {
-        const b = self.part_selects.get(e).?; // infer folded it
+        const b = self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?; // infer folded it
         return .{ .first = b.lsb, .count = @intCast(@abs(b.msb - b.lsb) + 1), .step = if (b.msb >= b.lsb) 1 else -1 };
     }
     const index = (try eval(self, a, rhs, 0)).asInt() orelse return null;
@@ -675,7 +675,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
         },
         .multi_concat => {
             const value = try eval(self, a, ex.rhs(e), 0);
-            const repeated = value.replicate(a, self.replications.get(e).?) catch |err| switch (err) {
+            const repeated = value.replicate(a, self.replications.get(.{ .spec = self.specOf(self.scope), .e = e }).?) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ZeroSize, error.Overflow => unreachable, // zero only consumed by .concat above
             };
