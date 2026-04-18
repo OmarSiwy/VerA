@@ -116,8 +116,11 @@ pub const Net = struct {
     /// The §3.8 decay countdown in flight, cancelled on leaving the state.
     decay_event: ?Handle = null,
     /// Per bit, the §7.10 signal the last resolution found — its strength is
-    /// what a MOS switch reading this net passes on (§7.12).
+    /// what a MOS switch reading this net passes on (§7.12). Kept current only
+    /// where `strength_read` or the net resolves through a fold.
     signal: []Signal = &.{},
+    /// A MOS switch's data terminal is this net, so `signal` is read.
+    strength_read: bool = false,
     /// The §7.6 pass switches with this net as a terminal.
     trans: []const u32 = &.{},
 };
