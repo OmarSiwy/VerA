@@ -34,7 +34,6 @@ const driver = @import("driver.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
 const Row = exec.Row;
-const Waiter = exec.Waiter;
 const Delay = @import("net.zig").Delay;
 const Bridge = @import("net.zig").Bridge;
 const Net = @import("net.zig").Net;
@@ -45,6 +44,7 @@ const Mos = @import("net.zig").Mos;
 const Tran = @import("net.zig").Tran;
 const Signal = @import("net.zig").Signal;
 const Driver = @import("net.zig").Driver;
+const Source = @import("net.zig").Source;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
 const undriven = @import("net.zig").undriven;
@@ -118,6 +118,12 @@ pub const Insert = struct {
 /// One declared identifier, qualified by the §6.2.2 instance that declared it.
 const Name = struct { scope: u32, str: Ast.StrId };
 
+/// One expression in one specialization (`Run.specOf`).
+pub const SpecExpr = struct { spec: u32, e: Ast.ExprId };
+
+/// How many distinct types the specializations that typed a row gave it.
+pub const TyState = enum(u8) { untyped, one, many };
+
 // §3.9 an unpacked array is `count` consecutive element slots; the declared
 // name maps to the first. `low`/`high` are the declared address bounds, in
 // either order of declaration — no operation here observes element ORDER, only
@@ -152,7 +158,10 @@ pub const Watcher = enum { monitor, analog, vpi, vcd, d2a, driver_update };
 pub const Stop = enum { idle, analog, explicit_d2a };
 
 /// One analog event a digital event control waits on (`Run.registerMonitor`).
-pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32 };
+pub const Monitor = struct { expr: Ast.ExprId, scope: u32, slot: u32, kind: MonitorKind };
+
+/// A.6.5 `analog_event_functions`, the four VAMS §5.10.3 events a monitor is.
+pub const MonitorKind = enum { cross, above, timer, absdelta };
 
 /// One digital event term of an analog event control (`Run.watchEvent`).
 pub const D2aSite = struct { slot: u32, edge: exec.Edge, site: u6 };
@@ -241,13 +250,19 @@ pub const Run = struct {
     /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
     /// there, because §5.10's events "do not hold any data".
     events: std.AutoHashMapUnmanaged(u32, void) = .empty,
-    // Natural types, indexed by AST ExprId; width zero marks an unvisited row.
+    /// Natural types (§5.5.1), indexed by AST ExprId. An ExprId is shared by
+    /// every instance of its module, and IEEE 1364-2005 §12.2 gives each
+    /// instance its own parameter values, so the truth is `spec_types`, keyed
+    /// by `specOf`. `types` is the dense copy for a row every specialization
+    /// typed alike (`ty_state` `.one`); `.many` rows are read from the map.
     types: []Type = &.{},
+    ty_state: []TyState = &.{},
+    spec_types: std.AutoHashMapUnmanaged(SpecExpr, Type) = .empty,
     /// Which system function each `.sys_call` is, indexed by AST ExprId and
     /// written by `infer` — so evaluation switches on it instead of hashing
     /// the name again. Null for every other node.
     sys_calls: []?compile.SysFn = &.{},
-    replications: std.AutoHashMapUnmanaged(Ast.ExprId, u32) = .empty,
+    replications: std.AutoHashMapUnmanaged(SpecExpr, u32) = .empty,
     code: std.ArrayList(Instruction) = .empty,
     /// The instance scope each instruction was compiled in, one row per `code`
     /// row. A process never leaves the scope it was written in, so `execute`
@@ -287,7 +302,22 @@ pub const Run = struct {
     /// `free_rows`, so this is bounded by the most events queued at once.
     pending: std.ArrayList(Row) = .empty,
     free_rows: std.ArrayList(u32) = .empty,
-    waiters: std.ArrayList(Waiter) = .empty,
+    /// §9.7 the processes suspended on an event control. A row is recycled
+    /// once its process resumes or is disabled.
+    susps: std.ArrayList(exec.Susp) = .empty,
+    free_susps: std.ArrayList(u32) = .empty,
+    /// §5.10.1 per slot, the terms of the event controls waiting on it; a
+    /// slot no variable owns (`driver.key`, `registerMonitor`) is in
+    /// `far_terms`.
+    terms: []std.ArrayList(exec.Term) = &.{},
+    far_terms: std.AutoHashMapUnmanaged(u32, std.ArrayList(exec.Term)) = .empty,
+    /// §6.1 / §7.6 the static fan-out (`exec.buildFanout`): per slot
+    /// `fan[fan_start[slot]..fan_start[slot + 1]]` are the pcs of the
+    /// continuous drivers and controlled switches reading it, and `armed[pc]`
+    /// says that process is suspended on its operands right now.
+    fan_start: []u32 = &.{},
+    fan: []u32 = &.{},
+    armed: []bool = &.{},
     scheduler: Scheduler,
     /// The source's own path, so §17.2.9's memory file resolves beside the
     /// module that names it.
@@ -389,7 +419,7 @@ pub const Run = struct {
     /// (`system.table`).
     file_io: ?@import("contract").FileIo = null,
     /// §5.2.1 each part-select's constant `[msb:lsb]`, folded once by `infer`.
-    part_selects: std.AutoHashMapUnmanaged(Ast.ExprId, VecRange) = .empty,
+    part_selects: std.AutoHashMapUnmanaged(SpecExpr, VecRange) = .empty,
     /// §18 the value change dump.
     vcd: @import("vcd.zig").Vcd = .{},
 
@@ -428,9 +458,7 @@ pub const Run = struct {
     /// The process waits on a slot no variable owns (counted down from the
     /// top of the slot space), which `deliverA2d` wakes.
     pub fn registerMonitor(r: *Run, e: Ast.ExprId) Error!void {
-        const ex = &r.file.exprs;
-        const name = r.file.str(ex.strOf(e));
-        if (!r.mixed or !(std.mem.eql(u8, name, "cross") or std.mem.eql(u8, name, "above") or std.mem.eql(u8, name, "absdelta")))
+        if (!r.mixed or monitorKind(r, e) == .timer)
             return r.exprFail(e, "only cross(), above() and absdelta() are monitored in a digital event control");
         const scope = r.instanceOf(r.scope);
         if (r.monitorSlot(e, scope) != null) return;
@@ -442,7 +470,12 @@ pub const Run = struct {
         const args = r.file.exprs.args(e);
         if (args.len == 0 or args[0] == .none) return r.exprFail(e, "an analog event needs its expression");
         for (args) |arg| if (arg != .none) try compile.checkExpr(r, arg);
-        try r.monitors.append(r.arena, .{ .expr = e, .scope = r.instanceOf(r.scope), .slot = wakes });
+        try r.monitors.append(r.arena, .{ .expr = e, .scope = r.instanceOf(r.scope), .slot = wakes, .kind = monitorKind(r, e) });
+    }
+
+    fn monitorKind(r: *const Run, e: Ast.ExprId) MonitorKind {
+        // The parser admits exactly A.6.5's four names as an event function.
+        return std.meta.stringToEnum(MonitorKind, r.file.str(r.file.exprs.strOf(e))).?;
     }
 
     /// VAMS §5.10.4 / §7.3.6.1: `@(timer(..)) -> ev;` (or `cross`/`above`) in
@@ -665,6 +698,20 @@ pub const Run = struct {
         }
     }
     /// The instance a (possibly nested) scope belongs to.
+    /// The scope whose parameters decide every type, part-select bound and
+    /// replication count in `scope`: the nearest instance (§12.2) or §12.4.1
+    /// loop-generate iteration (its genvar is a local parameter) at or above
+    /// it. A named block or a task frame declares names from its instance's
+    /// parameters, so it shares its instance's types.
+    pub fn specOf(self: *const Run, scope: u32) u32 {
+        var s = scope;
+        while (s < self.scope_info.items.len) {
+            const info = self.scope_info.items[s];
+            if (!info.lexical or info.index != null) break;
+            s = info.parent;
+        }
+        return s;
+    }
     pub fn instanceOf(self: *const Run, scope: u32) u32 {
         var s = scope;
         while (self.scope_info.items[s].lexical) s = self.scope_info.items[s].parent;
@@ -783,15 +830,7 @@ pub const Run = struct {
 const Wire = struct {
     net: u32,
     scope: u32,
-    value: Ast.ExprId = .none,
-    bridge: ?Bridge = null,
-    gate: ?Gate = null,
-    udp: ?*Udp = null,
-    /// Set instead of `value` for IEEE 1364 §19.10's pull — see `Driver.pull`.
-    pull: ?Int.Bit = null,
-    /// The driven net is bits [lo, lo+width) of `value` read `total` wide.
-    slice: ?Slice = null,
-    mos: ?Mos = null,
+    source: Source,
     s0: Ast.Strength = .strong,
     s1: Ast.Strength = .strong,
     delay: Ast.Delay3 = .{},
@@ -980,7 +1019,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // the `delay3` before the name list, not on the `=`), which is why the
         // row it contributes carries none of its own.
         if (n.init != .none)
-            try e.wires.append(arena, .{ .net = at, .scope = scope, .value = n.init, .tok = n.main_tok });
+            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
     }
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
@@ -998,7 +1037,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 .collapse => |net| try e.wires.append(arena, .{
                     .net = net,
                     .scope = scope,
-                    .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(width, e.nets.items[net].resolved.width) },
+                    .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(width, e.nets.items[net].resolved.width) } },
                     .tok = p.main_tok,
                 }),
                 .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
@@ -1040,14 +1079,14 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 if (drive != .float) try e.wires.append(arena, .{
                     .net = at,
                     .scope = scope,
-                    .pull = if (drive == .pull1) .one else .zero,
+                    .source = .{ .pull = if (drive == .pull1) .one else .zero },
                     .s0 = .pull,
                     .s1 = .pull,
                     .tok = p.main_tok,
                 });
             },
             .collapse => {},
-            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .value = c.expr, .slice = c.slice, .tok = c.tok }),
+            .receive => |c| try e.wires.append(arena, .{ .net = at, .scope = c.scope, .source = .{ .expr = .{ .e = c.expr, .slice = c.slice } }, .tok = c.tok }),
             .send => |c| {
                 // §6.5.7.1 joins the operands highest-order first, so the
                 // rightmost operand takes the port's low bits.
@@ -1061,7 +1100,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                     try e.wires.append(arena, .{
                         .net = c.operands[k],
                         .scope = scope,
-                        .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w },
+                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w } },
                         .tok = c.tok,
                     });
                     lo += w;
@@ -1073,7 +1112,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     for (m.assigns) |a| {
         const target = try r.scalarSlot(a.target);
         const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
-        try e.wires.append(arena, .{ .net = net, .scope = scope, .value = a.value, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
+        try e.wires.append(arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
@@ -1093,7 +1132,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             try e.wires.append(arena, .{
                 .net = net,
                 .scope = scope,
-                .gate = .{ .kind = g.kind, .ins = g.ins, .lane = lane, .lanes = lanes, .out_bit = if (width == 1) null else lane },
+                .source = .{ .gate = .{ .kind = g.kind, .ins = g.ins, .lane = lane, .lanes = lanes, .out_bit = if (width == 1) null else lane } },
                 .s0 = g.strength0,
                 .s1 = g.strength1,
                 .delay = g.delay,
@@ -1120,7 +1159,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 for (0..@as(usize, if (cmos) 2 else 1)) |half| try e.wires.append(arena, .{
                     .net = out,
                     .scope = scope,
-                    .mos = .{ .data = sw.terms[1], .gate = sw.terms[2 + half], .n_type = if (cmos) half == 0 else n_type, .resistive = resistive },
+                    .source = .{ .mos = .{ .data = sw.terms[1], .gate = sw.terms[2 + half], .n_type = if (cmos) half == 0 else n_type, .resistive = resistive } },
                     .delay = sw.delay,
                     .tok = sw.main_tok,
                 });
@@ -1156,7 +1195,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // constant driver, the same row `unconnected_drive` contributes.
     for (m.pulls) |p| {
         const net = r.net_of.get(try r.scalarSlot(p.out)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
-        try e.wires.append(arena, .{ .net = net, .scope = scope, .pull = if (p.one) .one else .zero, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
+        try e.wires.append(arena, .{ .net = net, .scope = scope, .source = .{ .pull = if (p.one) .one else .zero }, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
     }
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     if (!r.mixed) for (m.analog) |ab| try generate(r, e, scope, ab.body, depth);
@@ -1733,7 +1772,7 @@ fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *cons
     };
     const udp = try r.arena.create(Udp);
     udp.* = .{ .rows = rows, .sequential = u.is_sequential, .ins = ins, .prev = prev, .state = state };
-    try e.wires.append(r.arena, .{ .net = net, .scope = scope, .udp = udp, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
+    try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .udp = udp }, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
 }
 
 /// A port by the name a named connection may use: its own, when the header
@@ -1908,7 +1947,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     // Allocated before pass one: a bound or a parameter is typed and folded
     // while the slot space is still growing (`Run.constant`).
     r.types = try arena.alloc(Type, file.exprs.nodes.len);
-    @memset(r.types, .{ .width = 0, .signed = false });
+    r.ty_state = try arena.alloc(TyState, file.exprs.nodes.len);
+    @memset(r.ty_state, .untyped);
     r.sys_calls = try arena.alloc(?compile.SysFn, file.exprs.nodes.len);
     @memset(r.sys_calls, null);
     r.growing = &e.values;
@@ -1930,46 +1970,42 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     for (e.wires.items, 0..) |a, i| {
         r.scope = a.scope;
         var watched: std.ArrayList(u32) = .empty;
-        if (a.bridge) |b| {
-            try watched.append(arena, b.src);
-        } else if (a.gate) |g| {
+        switch (a.source) {
+            .bridge => |b| try watched.append(arena, b.src),
             // §7.8.5 a gate re-evaluates on any input change, exactly as a
             // continuous assignment does on any operand change.
-            for (g.ins) |in| {
+            .gate => |g| for (g.ins) |in| {
                 try compile.checkExpr(&r, in);
                 const w = compile.typeOf(&r, in).width;
                 if (w != 1 and !(g.lane != null and w == g.lanes)) return r.exprFail(in, "a gate's input terminal is one bit, or one per instance of an array");
                 try compile.sensitivity(&r, in, &watched);
-            }
-        } else if (a.mos) |mo| {
-            for ([_]Ast.ExprId{ mo.data, mo.gate }) |in| {
+            },
+            .mos => |mo| for ([_]Ast.ExprId{ mo.data, mo.gate }) |in| {
                 try compile.checkExpr(&r, in);
                 if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar switch terminals are implemented");
                 try compile.sensitivity(&r, in, &watched);
-            }
-        } else if (a.udp) |u| {
-            for (u.ins) |in| {
+            },
+            .udp => |u| for (u.ins) |in| {
                 try compile.checkExpr(&r, in);
                 if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar UDP terminals are implemented");
                 try compile.sensitivity(&r, in, &watched);
-            }
-        } else if (a.pull == null) {
-            try compile.checkExpr(&r, a.value);
-            try compile.sensitivity(&r, a.value, &watched);
+            },
+            .expr => |x| {
+                try compile.checkExpr(&r, x.e);
+                try compile.sensitivity(&r, x.e, &watched);
+            },
+            .pull => {},
         }
         r.drivers[i] = .{
             .net = a.net,
-            .value = a.value,
+            .source = a.source,
             .scope = a.scope,
-            .bridge = a.bridge,
-            .gate = a.gate,
-            .udp = a.udp,
-            .pull = a.pull,
-            .slice = a.slice,
-            .mos = a.mos,
             .sensitivity = watched.items,
             // A sequential UDP's output is its state from the start (§8.5).
-            .current = try filled(arena, r.nets[a.net].resolved.width, false, if (a.udp) |u| (if (u.sequential) u.state else .z) else .z),
+            .current = try filled(arena, r.nets[a.net].resolved.width, false, switch (a.source) {
+                .udp => |u| if (u.sequential) u.state else .z,
+                .expr, .bridge, .gate, .mos, .pull => .z,
+            }),
             .s0 = a.s0,
             .s1 = a.s1,
             .delay = try r.declaredDelay3(a.delay, a.tok),
@@ -1994,6 +2030,10 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         try compile.sensitivity(&r, t.tran.ctrl, &watched);
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .switch_ctrl = .{ .tran = @intCast(i), .slots = watched.items } }) }, null, false);
     }
+    for (r.drivers) |d| if (d.source == .mos and file.exprs.tag(d.source.mos.data) == .ident) {
+        r.scope = d.scope;
+        if (r.net_of.get(try r.slot(d.source.mos.data))) |net| r.nets[net].strength_read = true;
+    };
     for (r.nets, on_net) |*n, t| n.trans = t.items;
     for (r.nets, grouped) |*n, g| {
         // §7.9 `uwire` is the UNRESOLVED net type: a second driver is not a
@@ -2072,6 +2112,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     r.values = e.values.items;
     r.watch = try arena.alloc(std.EnumSet(Watcher), r.values.len);
     @memset(r.watch, .initEmpty());
+    try exec.buildFanout(&r);
     try driver.arm(&r);
     return r;
 }

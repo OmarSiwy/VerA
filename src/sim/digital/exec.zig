@@ -30,6 +30,7 @@ const netPull = @import("net.zig").netPull;
 const wiredLogic = @import("net.zig").wiredLogic;
 const filled = @import("net.zig").filled;
 const setBit = @import("net.zig").setBit;
+const wordMask = @import("net.zig").wordMask;
 const wired = @import("net.zig").wired;
 const undriven = @import("net.zig").undriven;
 const Show = display.Show;
@@ -101,11 +102,16 @@ pub const Edge = enum(u2) {
     }
 };
 
-// One suspended process, keyed by the variable it watches. `pc` is both the
-// resumption point and the process's identity while it is suspended: the terms
-// of one `or` share it, and retire together when any one of them fires.
-/// `ctx` is the task activation the process is in, 0 for none.
-pub const Waiter = struct { slot: u32, edge: Edge, pc: u32, ctx: u32 = 0 };
+/// One process suspended on an event control (§9.7): where it resumes, and
+/// in which task activation (`ctx`, 0 for none). The terms of its `or` all
+/// name this row, and retire together when any one of them fires. `gen`
+/// counts the row's retirements, so a term filed by an earlier occupant of a
+/// recycled row is recognisably stale.
+pub const Susp = struct { pc: u32, ctx: u32, gen: u32, alive: bool };
+
+/// One term of a suspension's event expression, filed under the slot it
+/// watches (`Run.terms`). Live while `gen` is its suspension's.
+pub const Term = struct { susp: u32, gen: u32, edge: Edge };
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
@@ -167,7 +173,7 @@ fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
     const rhs = ex.rhs(e);
     if (ex.tag(rhs) == .range) {
-        const b = self.part_selects.get(e).?; // infer folded it
+        const b = self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?; // infer folded it
         return .{ .first = b.lsb, .count = @intCast(@abs(b.msb - b.lsb) + 1), .step = if (b.msb >= b.lsb) 1 else -1 };
     }
     const index = (try eval(self, a, rhs, 0)).asInt() orelse return null;
@@ -675,7 +681,7 @@ fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!
         },
         .multi_concat => {
             const value = try eval(self, a, ex.rhs(e), 0);
-            const repeated = value.replicate(a, self.replications.get(e).?) catch |err| switch (err) {
+            const repeated = value.replicate(a, self.replications.get(.{ .spec = self.specOf(self.scope), .e = e }).?) catch |err| switch (err) {
                 error.OutOfMemory => return error.OutOfMemory,
                 error.ZeroSize, error.Overflow => unreachable, // zero only consumed by .concat above
             };
@@ -708,13 +714,17 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // `dest.planes` (`a = a`), a copy @memcpy forbids.
     if (changed) @memcpy(dest.planes, planes);
     if (!changed) return driver.stored(self, target, false);
-    // The value-change hook: every watcher of this slot hears it here.
-    if (self.watch[target].contains(.monitor)) try requestMonitor(self);
-    if (self.watch[target].contains(.analog)) try requestAnalog(self);
-    if (self.watch[target].contains(.vcd)) try requestVcd(self);
-    if (self.watch[target].contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
+    // The value-change hook: every watcher of this slot hears it here. Most
+    // slots have none, so one test skips the lot.
+    const watchers = self.watch[target];
+    if (watchers.count() != 0) {
+        if (watchers.contains(.monitor)) try requestMonitor(self);
+        if (watchers.contains(.analog)) try requestAnalog(self);
+        if (watchers.contains(.vcd)) try requestVcd(self);
+        if (watchers.contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
+    }
     try wake(self, target, before, dest.bit(0));
-    if (self.watch[target].contains(.vpi)) if (self.vpi_change) |f| f(self, target);
+    if (watchers.contains(.vpi)) if (self.vpi_change) |f| f(self, target);
     // After `wake`, so a `driver_update` process runs after the driver it
     // watches has re-evaluated (both join the same active-region FIFO).
     try driver.stored(self, target, true);
@@ -800,30 +810,120 @@ pub fn wakeA2d(self: *Run, slot: u32) Error!void {
 /// Resume every process suspended on `target` whose edge matches. Split out
 /// of `store` because §5.10.4's `-> e` resumes without publishing anything:
 /// a named event has no value for a change to be detected in.
+///
+/// The continuous drivers and controlled switches reading `target` come
+/// first, then the event controls in the order they suspended. §11.4.2 lets
+/// the processes one event resumes run in any order.
 pub fn wake(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!void {
-    if (self.waiters.items.len == 0) return;
-    // ponytail: linear scan. The list holds only currently-suspended
-    // processes, so it is bounded by the source's process count; index it
-    // by slot if a design ever suspends in bulk.
-    var i: usize = 0;
-    while (i < self.waiters.items.len) {
-        const w = self.waiters.items[i];
-        if (w.slot != target or !w.edge.matches(before, after)) {
-            i += 1;
+    if (target + 1 < self.fan_start.len) for (self.fan[self.fan_start[target]..self.fan_start[target + 1]]) |pc| if (self.armed[pc]) {
+        self.armed[pc] = false;
+        _ = try enqueue(self, .{ .run_process = pc }, null, false);
+    };
+    const list = termsOf(self, target) orelse return;
+    // Compacts as it goes: a matched term leaves with its suspension, and a
+    // stale one (its suspension resumed through another slot, or was
+    // disabled) is dropped.
+    var keep: usize = 0;
+    for (list.items) |t| {
+        const s = &self.susps.items[t.susp];
+        if (s.gen != t.gen) continue;
+        if (!t.edge.matches(before, after)) {
+            list.items[keep] = t;
+            keep += 1;
             continue;
         }
-        // Retire every term of this process's event expression. Scanning
-        // down keeps the not-yet-examined prefix intact, so each swapped-in
-        // entry has already been checked; the scan then restarts because
-        // removal moved the tail. Every pass drops at least one entry.
-        var j = self.waiters.items.len;
-        while (j != 0) {
-            j -= 1;
-            if (self.waiters.items[j].pc == w.pc) _ = self.waiters.swapRemove(j);
-        }
-        _ = try enqueue(self, resumption(w.pc, w.ctx), null, false);
-        i = 0;
+        const pc = s.pc;
+        const ctx = s.ctx;
+        retire(self, t.susp);
+        _ = try enqueue(self, resumption(pc, ctx), null, false);
     }
+    list.shrinkRetainingCapacity(keep);
+}
+
+fn termsOf(self: *Run, slot: u32) ?*std.ArrayList(Term) {
+    return if (slot < self.terms.len) &self.terms[slot] else self.far_terms.getPtr(slot);
+}
+
+/// Suspend the executing process at `pc` (§9.7). Its terms are filed with
+/// `watch` under the id returned.
+fn park(self: *Run, pc: u32) Error!u32 {
+    const id = self.free_susps.pop() orelse blk: {
+        try self.susps.append(self.arena, .{ .pc = 0, .ctx = 0, .gen = 0, .alive = false });
+        // Room for every row on the free list, so `retire` cannot fail.
+        try self.free_susps.ensureTotalCapacity(self.arena, self.susps.items.len);
+        break :blk @as(u32, @intCast(self.susps.items.len - 1));
+    };
+    const s = &self.susps.items[id];
+    s.pc = pc;
+    s.ctx = self.ctx;
+    s.alive = true;
+    return id;
+}
+
+/// File one term of suspension `id` under `slot`.
+fn watch(self: *Run, id: u32, slot: u32, edge: Edge) Error!void {
+    const list = termsOf(self, slot) orelse blk: {
+        const g = try self.far_terms.getOrPut(self.arena, slot);
+        g.value_ptr.* = .empty;
+        break :blk g.value_ptr;
+    };
+    // Stale terms stay until their slot is next woken, which a slot that
+    // never changes never is: sweep them before the list grows, and grow
+    // anyway past half full so a sweep is paid for by as many appends.
+    if (list.items.len == list.capacity and list.capacity != 0) {
+        var keep: usize = 0;
+        for (list.items) |t| if (self.susps.items[t.susp].gen == t.gen) {
+            list.items[keep] = t;
+            keep += 1;
+        };
+        list.shrinkRetainingCapacity(keep);
+        if (keep > list.capacity / 2) try list.ensureTotalCapacity(self.arena, list.capacity * 2);
+    }
+    try list.append(self.arena, .{ .susp = id, .gen = self.susps.items[id].gen, .edge = edge });
+}
+
+/// The process at suspension `id` is no longer waiting: every term it filed
+/// goes stale, and the row is free.
+fn retire(self: *Run, id: u32) void {
+    const s = &self.susps.items[id];
+    s.alive = false;
+    s.gen +%= 1;
+    self.free_susps.appendAssumeCapacity(id);
+}
+
+/// The static fan-out of every continuous driver and controlled switch
+/// (§6.1, §7.6): their operands are fixed at compile time, so each slot's
+/// list of them is built once, and a flag per pc stands for the whole
+/// sensitivity list the process would otherwise re-register per evaluation.
+/// Called once the slot space and the code are final.
+pub fn buildFanout(r: *Run) Error!void {
+    const n = r.values.len;
+    const start = try r.arena.alloc(u32, n + 1);
+    @memset(start, 0);
+    for (r.code.items) |ins| for (staticSlots(r, ins)) |at| {
+        start[at + 1] += 1;
+    };
+    for (1..n + 1) |i| start[i] += start[i - 1];
+    const fill = try r.arena.dupe(u32, start[0..n]);
+    const fan = try r.arena.alloc(u32, start[n]);
+    for (r.code.items, 0..) |ins, pc| for (staticSlots(r, ins)) |at| {
+        fan[fill[at]] = @intCast(pc);
+        fill[at] += 1;
+    };
+    r.fan_start = start;
+    r.fan = fan;
+    r.armed = try r.arena.alloc(bool, r.code.items.len);
+    @memset(r.armed, false);
+    r.terms = try r.arena.alloc(std.ArrayList(Term), n);
+    @memset(r.terms, .empty);
+}
+
+fn staticSlots(r: *const Run, ins: compile.Instruction) []const u32 {
+    return switch (ins) {
+        .continuous => |i| r.drivers[i].sensitivity,
+        .switch_ctrl => |s| s.slots,
+        else => &.{}, // else: every other instruction suspends through `park`
+    };
 }
 
 /// §7.9: a net's value is the wired-logic resolution of ALL its drivers, so
@@ -850,14 +950,22 @@ pub fn resolve(self: *Run, net: u32) Error!void {
     // enough to show up, not before.
     const tables = wiredLogic(n.kind);
     var floating: u32 = 0;
-    for (0..n.resolved.width) |i| {
+    if (plainCopy(self, n)) {
+        // The fold below would reproduce the one driver bit for bit:
+        // `Signal.of` at strong/strong, then `collapse`, is the identity.
+        const src = self.drivers[n.drivers[0]].current;
+        @memcpy(n.resolved.planes, src.planes);
+        const last = n.resolved.values().len - 1;
+        n.resolved.values()[last] &= wordMask(n.resolved.width, last);
+        n.resolved.unknowns()[last] &= wordMask(n.resolved.width, last);
+    } else for (0..n.resolved.width) |i| {
         const at: u32 = @intCast(i);
         var bit: Int.Bit = .z;
-        if (tables) {
+        if (tables) |table| {
             // Each driver collapses on its own first, so that a strength
             // that suppresses a value (`highz0` holding 0) drops out of the
             // fold entirely instead of voting as a 0.
-            for (n.drivers) |d| bit = wired(n.kind, bit, contribution(self.drivers[d], at).collapse());
+            for (n.drivers) |d| bit = wired(table, bit, contribution(self.drivers[d], at).collapse());
             if (bit == .z) bit = undriven(n.kind);
         } else {
             var acc: Signal = .{};
@@ -874,7 +982,7 @@ pub fn resolve(self: *Run, net: u32) Error!void {
             n.signal[at] = acc;
             bit = acc.collapse();
         }
-        if (tables) n.signal[at] = .of(bit, .strong, .strong);
+        if (tables != null) n.signal[at] = .of(bit, .strong, .strong);
         setBit(n.resolved, at, bit);
     }
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
@@ -888,6 +996,19 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         return;
     }
     try store(self, n.slot, n.resolved.planes);
+}
+
+/// Whether `n` shows its one driver unchanged: a strong, unambiguous driver
+/// on a net type with no wired logic and no pull of its own (§7.9, §7.10),
+/// whose per-bit `signal` no MOS switch reads.
+fn plainCopy(self: *const Run, n: @import("net.zig").Net) bool {
+    const plain = switch (n.kind) {
+        .wire, .tri, .uwire => true,
+        .tri0, .tri1, .trireg, .wand, .wor, .triand, .trior, .supply0, .supply1, .wreal => false,
+    };
+    if (!plain or n.drivers.len != 1 or n.strength_read) return false;
+    const d = self.drivers[n.drivers[0]];
+    return !d.or_z and d.s0 == .strong and d.s1 == .strong;
 }
 
 /// IEEE 1364-2005 §7.6/§8.5.3.5 "switch processing shall consider all the
@@ -1162,25 +1283,25 @@ fn delayOf(self: *Run, scratch: std.mem.Allocator, e: Ast.ExprId, tok: u32) Erro
         return self.fail(tok, "digital delay cannot be represented: {t}", .{err});
 }
 
-fn suspendOn(self: *Run, e: Ast.ExprId, resume_pc: u32) Error!void {
+fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
     const ex = &self.file.exprs;
     const edge: Edge = switch (ex.tag(e)) {
         .event_or => {
-            try suspendOn(self, ex.lhs(e), resume_pc);
-            return suspendOn(self, ex.rhs(e), resume_pc);
+            try suspendOn(self, ex.lhs(e), id);
+            return suspendOn(self, ex.rhs(e), id);
         },
         .event_posedge => .posedge,
         .event_negedge => .negedge,
         .event_function => {
             const slot = self.monitorSlot(e, self.instanceOf(self.scope)).?; // registered by checkEvent
-            return self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = resume_pc, .ctx = self.ctx });
+            return watch(self, id, slot, .any);
         },
         // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
-        .event_driver_update => return self.waiters.append(self.arena, .{ .slot = driver.key(try self.slot(ex.lhs(e))), .edge = .any, .pc = resume_pc, .ctx = self.ctx }),
+        .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
         else => .any, // else: a plain name, the one other term checkEvent admits
     };
     const watched = if (edge == .any) e else ex.lhs(e);
-    try self.waiters.append(self.arena, .{ .slot = try self.slot(watched), .edge = edge, .pc = resume_pc, .ctx = self.ctx });
+    try watch(self, id, try self.slot(watched), edge);
 }
 
 /// The `.monitor` region at the CURRENT time — §17.1.2/§17.1.3's "end of
@@ -1241,15 +1362,10 @@ fn disableRange(self: *Run, start: u32, end: u32) Error!void {
 /// the queued `.run_process` rows. Whether anything was.
 fn stopRange(self: *Run, start: u32, end: u32) Error!bool {
     var hit = false;
-    var i = self.waiters.items.len;
-    while (i != 0) {
-        i -= 1;
-        const at = self.waiters.items[i].pc;
-        if (at >= start and at < end) {
-            _ = self.waiters.swapRemove(i);
-            hit = true;
-        }
-    }
+    for (self.susps.items, 0..) |s, id| if (s.alive and s.pc >= start and s.pc < end) {
+        retire(self, @intCast(id));
+        hit = true;
+    };
     // Only live rows: a free row's handle is stale, and so is the handle of
     // the row now dispatching, which the scheduler released before returning.
     for (self.pending.items) |row| switch (row.item) {
@@ -1286,11 +1402,14 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
     std.debug.assert(value.width == label.width);
     if (kind == .normal) return value.equality(.case_equal, label) == .one;
     // IEEE1364-2005 §9.5.1: wildcards apply symmetrically to either value.
-    for (0..value.width) |i| {
-        const a = value.bit(@intCast(i));
-        const b = label.bit(@intCast(i));
-        if (a == .z or b == .z or (kind == .casex and (a == .x or b == .x))) continue;
-        if (a != b) return false;
+    // Per plane word: z is (value 0, unknown 1), x is (1, 1).
+    for (0..(value.width + 63) / 64) |w| {
+        const av = value.values()[w];
+        const au = value.unknowns()[w];
+        const bv = label.values()[w];
+        const bu = label.unknowns()[w];
+        const wild = if (kind == .casex) au | bu else (au & ~av) | (bu & ~bv);
+        if (((av ^ bv) | (au ^ bu)) & ~wild & wordMask(value.width, w) != 0) return false;
     }
     return true;
 }
@@ -1582,10 +1701,11 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 pc = target;
                 continue;
             },
-            .wait_event => |e| return suspendOn(self, e, pc + 1),
+            .wait_event => |e| return suspendOn(self, e, try park(self, pc + 1)),
             // §9.7.5 the implicit list is a plain `or` of value changes.
             .wait_slots => |slots| {
-                for (slots) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc + 1, .ctx = self.ctx });
+                const id = try park(self, pc + 1);
+                for (slots) |s| try watch(self, id, s, .any);
                 return;
             },
             // A.6.5 a `wait` that is already satisfied does not suspend at
@@ -1596,7 +1716,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     pc += 1;
                     continue;
                 }
-                for (s.slots) |at| try self.waiters.append(self.arena, .{ .slot = at, .edge = .any, .pc = pc, .ctx = self.ctx });
+                const id = try park(self, pc);
+                for (s.slots) |at| try watch(self, id, at, .any);
                 return;
             },
             // §8.5.3.3 "computes the right-hand side value using the
@@ -1635,7 +1756,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 if (a.timing_is_delay)
                     _ = try enqueue(self, resumption(pc + 1, self.ctx), try delayOf(self, scratch, a.timing, tok), false)
                 else
-                    try suspendOn(self, a.timing, pc + 1);
+                    try suspendOn(self, a.timing, try park(self, pc + 1));
                 return;
             },
             // §8.5.3.3 "the values at the time the process resumes are used
@@ -1670,39 +1791,37 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // and not the dispatch's that resolves its names.
                 self.scope = d.scope;
                 var or_z = false;
-                const value = if (d.bridge) |b|
-                    try window(self, scratch, b, d.current.width)
-                else if (d.gate) |g|
-                    try gateValue(self, scratch, g, d.current.width, &or_z)
-                else if (d.udp) |u|
-                    try udpValue(self, scratch, u)
-                else if (d.mos) |mo|
-                    try mosValue(self, scratch, at, mo, &or_z)
-                else if (d.pull) |b|
-                    try filled(scratch, d.current.width, false, b)
-                else blk: {
-                    if (d.slice) |sl| {
-                        const whole = try eval(self, scratch, d.value, sl.total);
-                        const part = try filled(scratch, d.current.width, false, .z);
-                        for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
-                        break :blk part;
-                    }
-                    break :blk try evalFor(self, scratch, d.value, self.slotType(self.nets[d.net].slot));
+                const value = switch (d.source) {
+                    .bridge => |b| try window(self, scratch, b, d.current.width),
+                    .gate => |g| try gateValue(self, scratch, g, d.current.width, &or_z),
+                    .udp => |u| try udpValue(self, scratch, u),
+                    .mos => |mo| try mosValue(self, scratch, at, mo, &or_z),
+                    .pull => |b| try filled(scratch, d.current.width, false, b),
+                    .expr => |x| blk: {
+                        if (x.slice) |sl| {
+                            const whole = try eval(self, scratch, x.e, sl.total);
+                            const part = try filled(scratch, d.current.width, false, .z);
+                            for (0..d.current.width) |i| setBit(part, @intCast(i), whole.bit(sl.lo + @as(u32, @intCast(i))));
+                            break :blk part;
+                        }
+                        break :blk try evalFor(self, scratch, x.e, self.slotType(self.nets[d.net].slot));
+                    },
                 };
                 // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,
                 // not what the net shows: the other drivers are unaffected
                 // and the net re-resolves when the delayed value lands.
                 // §8.5: a UDP's initial output is published at time 0; only
                 // later transitions wait for the instance delay.
-                const first_udp = if (d.udp) |u| !u.started else false;
-                if (d.udp) |u| u.started = true;
+                const first_udp = if (d.source == .udp) !d.source.udp.started else false;
+                if (d.source == .udp) d.source.udp.started = true;
                 if (d.delay.present and !first_udp) {
                     const st = &self.drivers[at].transition;
                     if (try schedule(self, d.current, d.or_z, value, or_z, st)) {
-                        const delay = if (d.gate == null and d.bridge == null and d.pull == null and d.udp == null and d.mos == null)
-                            d.delay.continuous(d.current, st.target)
-                        else
-                            d.delay.to(st.target.bit(if (d.gate) |g| g.out_bit orelse 0 else 0));
+                        const delay = switch (d.source) {
+                            .expr => d.delay.continuous(d.current, st.target),
+                            .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
+                            .bridge, .udp, .mos, .pull => d.delay.to(st.target.bit(0)),
+                        };
                         st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }
                 } else {
@@ -1710,7 +1829,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     self.drivers[at].or_z = or_z;
                     try resolve(self, d.net);
                 }
-                for (d.sensitivity) |s| try self.waiters.append(self.arena, .{ .slot = s, .edge = .any, .pc = pc });
+                self.armed[pc] = true;
                 return;
             },
             // §17.5 an asynchronous PLA: its own process, which evaluates and
@@ -1724,7 +1843,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     try resolve(self, t.a);
                     try resolve(self, t.b);
                 }
-                for (s.slots) |slot| try self.waiters.append(self.arena, .{ .slot = slot, .edge = .any, .pc = pc });
+                self.armed[pc] = true;
                 return;
             },
             .override_on => |o| {
@@ -1865,6 +1984,32 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
 }
 
 // ---- tests ------------------------------------------------------------------
+
+test "§9.5.1 casez/casex per plane word agree with the per-bit wildcard rule" {
+    var arena = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena.deinit();
+    const a = arena.allocator();
+    var prng = std.Random.DefaultPrng.init(0x9051);
+    const rand = prng.random();
+    for ([_]u32{ 1, 3, 64, 70 }) |width| for (0..500) |_| {
+        const v = try filled(a, width, false, .zero);
+        const l = try filled(a, width, false, .zero);
+        for (0..width) |i| {
+            // Mostly 0/1 so that some pairs match.
+            setBit(v, @intCast(i), if (rand.uintLessThan(u8, 4) == 0) rand.enumValue(Int.Bit) else .zero);
+            setBit(l, @intCast(i), if (rand.uintLessThan(u8, 4) == 0) rand.enumValue(Int.Bit) else .zero);
+        }
+        for ([_]Ast.CaseKind{ .casez, .casex }) |kind| {
+            const want = for (0..width) |i| {
+                const x = v.bit(@intCast(i));
+                const y = l.bit(@intCast(i));
+                if (x == .z or y == .z or (kind == .casex and (x == .x or y == .x))) continue;
+                if (x != y) break false;
+            } else true;
+            try std.testing.expectEqual(want, caseMatches(kind, v, l));
+        }
+    };
+}
 
 test "continuous vector delay audit_assignment_pending_same_value" {
     try expectRun(
