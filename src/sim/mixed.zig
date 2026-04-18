@@ -98,9 +98,8 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
         dig.probe = State(A).probeHook;
         dig.probe_ctx = &s;
         s.mons = try dig.arena.alloc(Mon, dig.monitors.items.len);
-        for (s.mons, 0..) |*m, j| {
-            const name = dig.file.str(dig.file.exprs.strOf(dig.monitors.items[j].expr));
-            if (std.mem.eql(u8, name, "timer")) {
+        for (s.mons, dig.monitors.items, 0..) |*m, mon, j| {
+            if (mon.kind == .timer) {
                 // §5.10.3.3 timer(start_time, period, ...): "at start_time,
                 // and every period after that"; a period <= 0 fires once.
                 // ponytail: a firing at or before the DC point is not delivered.
@@ -109,12 +108,12 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
                 while (m.timer.?.next <= opts.times[0]) if (!m.advanceTimer()) break;
                 continue;
             }
-            if (std.mem.eql(u8, name, "absdelta")) {
+            if (mon.kind == .absdelta) {
                 // §5.10.3.4 absdelta(expr, delta, time_tol, expr_tol, enable).
                 m.* = .{ .dir = 0, .tol = 0, .absdelta = .{ .delta = @max((try dig.monitorArg(j, 1)) orelse 0, 0) } };
                 continue;
             }
-            const above = std.mem.eql(u8, name, "above");
+            const above = mon.kind == .above;
             // §5.10.3.1 cross(expr, dir, time_tol, ...); §5.10.3.2 above(expr, time_tol, ...).
             const dir = if (above) 1.0 else (try dig.monitorArg(j, 1)) orelse 0.0;
             const tol = (try dig.monitorArg(j, if (above) 1 else 2)) orelse 0.0;
