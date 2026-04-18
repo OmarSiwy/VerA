@@ -65,13 +65,11 @@ pub const Delay = struct {
     /// The caller supplies the published driver value, not a pending target.
     pub fn continuous(self: Delay, from: Int.Literal, value: Int.Literal) u64 {
         if (value.width == 1) return self.to(value.bit(0));
-        var all_z = true;
-        for (0..value.width) |bit| {
-            if (value.bit(@intCast(bit)) != .z) {
-                all_z = false;
-                break;
-            }
-        }
+        // z is (value 0, unknown 1): one plane word tests 64 bits.
+        const all_z = for (0..(value.width + 63) / 64) |w| {
+            const m = wordMask(value.width, w);
+            if (value.unknowns()[w] & ~value.values()[w] & m != m) break false;
+        } else true;
         if (all_z) return self.off;
         if (from.truth() == .one and value.truth() == .zero) return self.fall;
         return self.rise;
@@ -614,6 +612,13 @@ pub fn setBit(value: Int.Literal, index: u32, b: Int.Bit) void {
     const word = index / 64;
     if (@intFromEnum(b) & 1 != 0) value.values()[word] |= at else value.values()[word] &= ~at;
     if (@intFromEnum(b) >> 1 != 0) value.unknowns()[word] |= at else value.unknowns()[word] &= ~at;
+}
+
+/// The bits of plane word `w` that lie inside a `width`-bit value; the ones
+/// above it carry nothing and may hold anything.
+pub fn wordMask(width: u32, w: usize) u64 {
+    const rest = width - @as(u32, @intCast(w * 64));
+    return if (rest >= 64) ~@as(u64, 0) else (@as(u64, 1) << @intCast(rest)) - 1;
 }
 
 // ---- tests ------------------------------------------------------------------
