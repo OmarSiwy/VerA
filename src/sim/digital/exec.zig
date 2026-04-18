@@ -713,13 +713,17 @@ pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // `dest.planes` (`a = a`), a copy @memcpy forbids.
     if (changed) @memcpy(dest.planes, planes);
     if (!changed) return driver.stored(self, target, false);
-    // The value-change hook: every watcher of this slot hears it here.
-    if (self.watch[target].contains(.monitor)) try requestMonitor(self);
-    if (self.watch[target].contains(.analog)) try requestAnalog(self);
-    if (self.watch[target].contains(.vcd)) try requestVcd(self);
-    if (self.watch[target].contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
+    // The value-change hook: every watcher of this slot hears it here. Most
+    // slots have none, so one test skips the lot.
+    const watchers = self.watch[target];
+    if (watchers.count() != 0) {
+        if (watchers.contains(.monitor)) try requestMonitor(self);
+        if (watchers.contains(.analog)) try requestAnalog(self);
+        if (watchers.contains(.vcd)) try requestVcd(self);
+        if (watchers.contains(.d2a)) try requestD2a(self, target, before, dest.bit(0));
+    }
     try wake(self, target, before, dest.bit(0));
-    if (self.watch[target].contains(.vpi)) if (self.vpi_change) |f| f(self, target);
+    if (watchers.contains(.vpi)) if (self.vpi_change) |f| f(self, target);
     // After `wake`, so a `driver_update` process runs after the driver it
     // watches has re-evaluated (both join the same active-region FIFO).
     try driver.stored(self, target, true);
