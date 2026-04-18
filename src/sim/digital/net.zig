@@ -419,25 +419,25 @@ pub fn netPull(kind: Ast.NetKind) Signal {
     };
 }
 
+/// The two §7.9 value tables a wired-logic net folds its drivers through:
+/// wired AND (`wand`, `triand`) and wired OR (`wor`, `trior`).
+pub const Wired = enum { @"and", @"or" };
+
 /// §7.9 Tables 7-4/7-6/7-7 are VALUE tables: a wired-logic net combines what
 /// its drivers say, and a strength decides only whether a driver says anything
-/// (a 0 driven through `highz0` is a z, and z is the tables' identity).
-pub fn wiredLogic(kind: Ast.NetKind) bool {
+/// (a 0 driven through `highz0` is a z, and z is the tables' identity). Null
+/// for every other net type, which resolves through `Signal` (§7.10).
+pub fn wiredLogic(kind: Ast.NetKind) ?Wired {
     return switch (kind) {
-        .wand, .triand, .wor, .trior => true,
-        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => false,
+        .wand, .triand => .@"and",
+        .wor, .trior => .@"or",
+        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => null,
     };
 }
 
 /// IEEE1364-2005 §7.9 wired logic, Tables 7-4/7-6/7-7: fold one more driver's
 /// bit into a net's accumulated bit. `z` is the identity of all three tables,
 /// which is exactly why an undriven net reads z.
-///
-/// Only the wired-logic net types reach this now: `wire`/`tri`/`tri0`/`tri1`/
-/// `trireg` and the supply nets resolve through `Signal`, which is clause 7's
-/// strength model, and the `else` arm below survives for the one thing the
-/// value tables still do there — deciding what a fold with no contribution at
-/// all reads as.
 ///
 /// ponytail: the wired-logic result carries no strength onward. §7.10 gives
 /// the combination a strength of its own (the stronger of the two on the
@@ -446,14 +446,12 @@ pub fn wiredLogic(kind: Ast.NetKind) bool {
 /// primitives land (D08) and a `wand` feeds a `tran`, this becomes a `Signal`
 /// fold with the table applied to the collapsed values and the strength taken
 /// alongside.
-pub fn wired(kind: Ast.NetKind, acc: Int.Bit, b: Int.Bit) Int.Bit {
+pub fn wired(table: Wired, acc: Int.Bit, b: Int.Bit) Int.Bit {
     if (acc == .z) return b;
     if (b == .z) return acc;
-    return switch (kind) {
-        .wand, .triand => if (acc == .zero or b == .zero) .zero else if (acc == .one and b == .one) .one else .x,
-        .wor, .trior => if (acc == .one or b == .one) .one else if (acc == .zero and b == .zero) .zero else .x,
-        // Agreement, else conflict.
-        .wire, .tri, .tri0, .tri1, .trireg, .uwire, .supply0, .supply1, .wreal => if (acc == b) acc else .x,
+    return switch (table) {
+        .@"and" => if (acc == .zero or b == .zero) .zero else if (acc == .one and b == .one) .one else .x,
+        .@"or" => if (acc == .one or b == .one) .one else if (acc == .zero and b == .zero) .zero else .x,
     };
 }
 
