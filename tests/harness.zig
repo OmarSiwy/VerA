@@ -1115,7 +1115,7 @@ fn sectionLessThan(a: []const u8, b: []const u8) bool {
 /// does its stem end at? `null` means "not this walk's business".
 ///
 /// `.va` is unconditional. `.v` is the awkward one, because three different
-/// things share that extension in `tests/fixtures/digital/`:
+/// things share that extension in `tests/fixtures/{ieee1364,digital}/`:
 ///
 ///   1. 66 files with a `<stem>.expected.txt` beside them. Those belong to
 ///      `zig build test-devices`, which runs `vera --run` and diffs the

@@ -5,7 +5,7 @@
 // positive half this file pins. 154_timescale_pla_queue_analog_rejected.va is
 // the clause's only .va cite and pins the other half (not callable from the
 // analog block). The PLA logic itself is transcribed from
-// digital/audit_pla_sync_array_logic.v, whose derivation this repeats; what is
+// ieee1364/17_system_tasks/audit_pla_sync_array_logic.v, whose derivation this repeats; what is
 // new here is that the result crosses into a Verilog-AMS analog block.
 //
 // IEEE 1364-2005 §17.5: with ascending ranges, personality row k selects the

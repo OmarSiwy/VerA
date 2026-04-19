@@ -45,7 +45,7 @@ by guess: each expected cell is derived in its fixture header from rules that
 are stated there in full (controlling values, gate-vs-switch z handling, the
 eight-level strength lattice and its reduction rule, the UDP wildcard/z/no-match
 rules), so a reviewer checks the derivation rather than a section number. The
-repo already cites 1364 at this level — `tests/digital/control.v` opens with
+repo already cites 1364 at this level — `tests/ieee1364/09_behavioral_modeling/control.v` opens with
 "IEEE1364-2005 §§9.4–9.6".
 
 ## One interpretive choice, stated once

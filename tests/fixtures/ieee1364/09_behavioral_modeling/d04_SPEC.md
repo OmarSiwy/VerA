@@ -237,7 +237,7 @@ One at a time, to read a diagnostic rather than a verdict:
 
 ```sh
 zig build
-zig-out/bin/vera --run  tests/fixtures/digital/d04_09_task_argument_passing.v
+zig-out/bin/vera --run  tests/fixtures/ieee1364/10_tasks_functions/d04_09_task_argument_passing.v
 zig-out/bin/vera --lint tests/fixtures/digital/d04_15_bare_event_trigger_in_analog_rejected.va
 ```
 

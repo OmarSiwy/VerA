@@ -1937,7 +1937,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_long_distinct.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_long_distinct.v",
               "assertion": "audit_ams_lexical_long_distinct.expected.txt:3 7",
               "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
               "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
@@ -1960,7 +1960,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_length_identity.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_length_identity.v",
               "assertion": "audit_ams_lexical_escaped_length_identity.expected.txt exact stdout; empty stderr; exit0",
               "runner": "root build-produced vera --run",
               "revision": "2026-09-23 dirty root CLI SHA2566b6e9b28b46620533350a062c8a454330b5ff0ff4ab6fc14a01775c9df45e4ce",
@@ -2144,7 +2144,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_terminators.v",
               "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 1 = 1",
               "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
               "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
@@ -2209,7 +2209,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_terminators.v",
               "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 2 = 2",
               "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
               "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
@@ -2274,7 +2274,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_terminators.v",
               "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 3 = 3",
               "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
               "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
@@ -2339,7 +2339,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_terminators.v",
               "assertion": "audit_ams_lexical_escaped_terminators.expected.txt: field 4 = 4",
               "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
               "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
@@ -2404,7 +2404,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_ascii.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_ascii.v",
               "assertion": "expected9; actualexit1 E1100 undeclared digital variable",
               "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
               "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
@@ -2427,7 +2427,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_punctuation_identity.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_punctuation_identity.v",
               "assertion": "audit_ams_lexical_punctuation_identity.expected.txt exact stdout; empty stderr; exit0",
               "runner": "root build-produced vera --run",
               "revision": "2026-09-23 dirty root CLI SHA2566b6e9b28b46620533350a062c8a454330b5ff0ff4ab6fc14a01775c9df45e4ce",
@@ -2492,7 +2492,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_terminators.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_terminators.v",
               "assertion": "audit_ams_lexical_escaped_terminators.expected.txt:1 2 3 4",
               "runner": "root zig-out/bin/vera --run fixture; own-worktree cwd",
               "revision": "2026-09-23 dirty root CLI SHA2560439a27f71562b347f5be260d01e378677ed102d46dee2fc0845df39acb73a51",
@@ -2515,7 +2515,7 @@
           "mutation_status": "not-run; proposed discriminator only",
           "evidence": [
             {
-              "fixture": "tests/fixtures/digital/audit_ams_lexical_escaped_length_identity.v",
+              "fixture": "tests/fixtures/ieee1364/03_lexical_conventions/audit_ams_lexical_escaped_length_identity.v",
               "assertion": "audit_ams_lexical_escaped_length_identity.expected.txt exact stdout; empty stderr; exit0",
               "runner": "root build-produced vera --run",
               "revision": "2026-09-23 dirty root CLI SHA2566b6e9b28b46620533350a062c8a454330b5ff0ff4ab6fc14a01775c9df45e4ce",

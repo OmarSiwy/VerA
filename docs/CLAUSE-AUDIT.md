@@ -220,7 +220,7 @@ it stays `test-devices`' when it has one (`tests/bench.zig`'s `digitalCases`).
 `test-devices` **reports 48/66 and still FAILs** — `ROADMAP.md` Appendix A item 5
 records 47/66, which was measured before the port-net-type fix landed.
 
-Several §4 rows below are carried by `tests/fixtures/digital/d09_*.v` evidence
+Several §4 rows below are carried by `tests/fixtures/ieee1364/17_system_tasks/d09_*.v` evidence
 that is executable and byte-exact against committed transcripts but sits in the
 `test-devices` register rather than measure A. Where that is so, the row says
 which harness proves it.
@@ -486,7 +486,7 @@ Was: missing 11 · partial 2 · implemented-without-evidence 4 · verified 0.
 | 17.2-18 | 17.2.6 `$fflush` with no argument flushes all open files | **implemented-without-evidence** | Same kernel; the zero-argument form lowers (`cg_display.zig:441-443` supplies `Mir.Value.zero`) and compiles. No fixture calls it — every `$fflush` in the tree is `$fflush(fd)` |
 | 17.2-19 | **17.2.7** `$ferror` returns an error code and a description | **verified**; the numeric errno **unspecified** | `file_kernels.zig:411` `zFError`, `:419` `zFErrorStr`, values from `:142-152`; `053_ferror.va:45-48` pins both directions. §9.5.7 says only "an error code is returned" and `:141-143` records that no fixture may assert the value — correctly unasserted |
 | 17.2-20 | 17.2.8 `$feof` | **verified** | `file_kernels.zig:399` `zFEof`, flag set in `:348` `zFTake`; `054_feof.va` puts the descriptor in both states, and `s01_08:91,95` adds the discrimination the clause turns on — stopping on a newline is **not** EOF, input ending before a conversion **is** |
-| 17.2-21 | 17.2.9 `$readmemb`/`$readmemh`: comments, addresses, ranges, direction, x/z, malformed and excess data | **partial** | **A digital loader now exists** — `src/sim/digital.zig:615-616` task table, `:1565-1621` `readMemory`, `:1626-1634` `readSideFile`, `:2423` dispatch. Verified halves: `tests/fixtures/digital/d09_08_readmemh.v` (comments ignored, load starts at the left declared index, `@<hex>` relocates, untouched addresses keep their X) and `d09_09_readmemb_range.v` (four-argument form, `start > finish` loads **downward**, `x`/`z` digits) both reproduce their `.expected.txt` exactly. **Missing half — excess data**: `:1611-1618` breaks on reaching `last` and never counts the surplus; measured, five words into `reg [7:0] m [0:3]` prints four and **exits 0, silently**. Left-index rule holds only for ascending declarations (`:1587-1590` sorts `arr.low`/`.high`). Analog correctly refused (`lib/ir/lower.zig:7537-7538`, pinned by `153`). Table 9-2 `Yes/No`. **See §7.5 item 3 — its refusal fixture `d09_91` is run by nothing** |
+| 17.2-21 | 17.2.9 `$readmemb`/`$readmemh`: comments, addresses, ranges, direction, x/z, malformed and excess data | **partial** | **A digital loader now exists** — `src/sim/digital.zig:615-616` task table, `:1565-1621` `readMemory`, `:1626-1634` `readSideFile`, `:2423` dispatch. Verified halves: `tests/fixtures/ieee1364/17_system_tasks/d09_08_readmemh.v` (comments ignored, load starts at the left declared index, `@<hex>` relocates, untouched addresses keep their X) and `d09_09_readmemb_range.v` (four-argument form, `start > finish` loads **downward**, `x`/`z` digits) both reproduce their `.expected.txt` exactly. **Missing half — excess data**: `:1611-1618` breaks on reaching `last` and never counts the surplus; measured, five words into `reg [7:0] m [0:3]` prints four and **exits 0, silently**. Left-index rule holds only for ascending declarations (`:1587-1590` sorts `arr.low`/`.high`). Analog correctly refused (`lib/ir/lower.zig:7537-7538`, pinned by `153`). Table 9-2 `Yes/No`. **See §7.5 item 3 — its refusal fixture `d09_91` is run by nothing** |
 | 17.2-22 | 17.2.10 `$sdf_annotate` | **missing** | `lib/ir/lower.zig:7538`. No implementation in `lib/` or `src/`; not in the digital task table. Blocked on D07/D09 specify blocks |
 | 17.2-23 | §9.5.1.1 reopening a write-mode file across analyses appends | **missing (untestable today)** | The append machinery exists (`file_kernels.zig:132-133`) but the rule's subject is the SECOND analysis, and `lib/backend/tb.zig:98` `analysis: Analysis = .dc` is a single enum — one analysis per process, and a second `//! analysis` line is dropped in silence. Remains UNCITED |
 | 17.2-24 | §9.5.1.2 descriptor sharing between analog and digital contexts | **partial** (was missing) | 2026-09-24: an `initial` block that calls the §9.5 family runs on the digital kernel (`lib/ir/lower/context.zig` `usesFiles`), and a mixed simulation has ONE descriptor table — the mixed runner routes the digital kernel's file tasks through the device's (`contract.FileIo`, `src/sim/digital/system.zig` `table`). `194_file_descriptor_shared_across_contexts.va` PASSES: the analog context writes through the descriptor the digital context opened. Positive evidence only — no invalid-input fixture yet, so **partial** |
@@ -521,7 +521,7 @@ obligations are still open; no whole-row upgrade is inferred.
 
 | # | Obligation | Verdict | Reason / reference |
 |---|---|---|---|
-| 17.3-01 | `$printtimescale`, `$timeformat`: scope, rounding, formatted output | **partial** | `$timeformat` is **implemented and pinned**: `src/sim/digital.zig:614`, the clause's defaults at `:620-623`, argument rules at `:1420-1426`, `%t` at `:1516`/`:1638-1640`. `tests/fixtures/digital/d09_07_timeformat.v` passes and pins the `units_number` conversion at −9/−6/−12, precision, suffix, min field width, and that `%t` formats its **argument** rather than the clock. `$printtimescale` remains a name on `lib/ir/lower.zig:7541`'s refusal list — `d09_SPEC.md:209-211` declares its banner text non-derivable from the offline chapter and deliberately unfixtured. Analog refusal correct (§9.6 Table 9-3), pinned by `154`. **Boundary: `$timeformat` verified (digital), `$printtimescale` missing** |
+| 17.3-01 | `$printtimescale`, `$timeformat`: scope, rounding, formatted output | **partial** | `$timeformat` is **implemented and pinned**: `src/sim/digital.zig:614`, the clause's defaults at `:620-623`, argument rules at `:1420-1426`, `%t` at `:1516`/`:1638-1640`. `tests/fixtures/ieee1364/17_system_tasks/d09_07_timeformat.v` passes and pins the `units_number` conversion at −9/−6/−12, precision, suffix, min field width, and that `%t` formats its **argument** rather than the clock. `$printtimescale` remains a name on `lib/ir/lower.zig:7541`'s refusal list — `d09_SPEC.md:209-211` declares its banner text non-derivable from the offline chapter and deliberately unfixtured. Analog refusal correct (§9.6 Table 9-3), pinned by `154`. **Boundary: `$timeformat` verified (digital), `$printtimescale` missing** |
 | 17.4-01 | `$finish` and its optional diagnostic level | **partial** | The 2026-09-16 claim that "the level's diagnostic output is not implemented in either context" is **false at HEAD**. Analog: `lib/backend/cg_display.zig:239` `finishLevel` (default 1 per §9.7.1), `:269-271` prints accepted time and module for level ≥ 1, `:255-258` documents level 2 collapsing to level 1 with a named ceiling. Digital: `src/sim/digital.zig:617`, arity at `:1445`, **level 2 refused** at `:1449`, `:2424-2431` prints for level ≥ 1 and nothing for 0. `172_finish_terminates.va` pins analog termination; `digital.zig:3421` pins the level-2 refusal inside the test at `:3408`. **Boundary: Table 9-25's level-2 memory/CPU statistics exist nowhere, and the level-1 text is asserted by no test in either context** |
 | 17.4-02 | `$stop` host behavior | **partial** | `174_stop_terminates.va` pins print-and-exit-0, which `cg_display.zig:266-269` names as a deliberate simplification with "a debugger hook" as the upgrade path — **implementation-defined and documented** — but the LRM's suspension semantics are absent. Digital half added at this re-derivation: `$stop` appears nowhere in `src/sim/digital.zig:596-617`; the digital engine has no `$stop` at all |
 | 17.4-03 | Scheduler and resource cleanup on `$finish`/`$stop` | **partial** | Pending-process discard **is** observed: `src/sim/digital.zig:3522` `test "unknown delay is zero and finish discards pending later processes"` — a sibling `initial begin #2 $display("not run"); end` never runs — and it is on `zig build test`. Implementation at `:2431` `self.scheduler.finish()`. Nothing observes file-descriptor or memory release, and the analog context has no cleanup observation at all |
@@ -584,11 +584,11 @@ lib/ir/mir.zig:345:/// library cell, and the tools that care (a timing library, 
 lib/backend/codegen.zig:728:    //   calls to the core (`objdump | grep -c core` = 30), because it cannot
 lib/frontend/preprocessor.zig:289:/// timing library, a `$dumpvars` filter), not a change to what the module
 $ grep -rln 'dumpvars\|dumpfile' tests/
-tests/fixtures/ch09_system_tasks/d09_11_vcd_dumpvars.expected.vcd
-tests/fixtures/ch09_system_tasks/d09_12_vcd_dumpoff_on.expected.vcd
+tests/fixtures/ieee1364/18_vcd/d09_11_vcd_dumpvars.expected.vcd
+tests/fixtures/ieee1364/18_vcd/d09_12_vcd_dumpoff_on.expected.vcd
 tests/fixtures/ch09_system_tasks/d09_SPEC.md
-tests/fixtures/digital/d09_11_vcd_dumpvars.v
-tests/fixtures/digital/d09_12_vcd_dumpoff_on.v
+tests/fixtures/ieee1364/18_vcd/d09_11_vcd_dumpvars.v
+tests/fixtures/ieee1364/18_vcd/d09_12_vcd_dumpoff_on.v
 tests/fixtures/digital/d09_90_dumpfile_twice_rejected.v
 tests/fixtures/MANIFEST.md
 ```
@@ -617,8 +617,8 @@ FAIL.** They carry full hand derivations and `//! expect vcd` /
 widened `collect` now takes them instead, and the suite reports:
 
 ```
-FAIL digital/d09_11_vcd_dumpvars.v:          `//!` directive: BadLrmSection
-FAIL digital/d09_12_vcd_dumpoff_on.v:        `//!` directive: BadLrmSection
+FAIL ieee1364/18_vcd/d09_11_vcd_dumpvars.v:          `//!` directive: BadLrmSection
+FAIL ieee1364/18_vcd/d09_12_vcd_dumpoff_on.v:        `//!` directive: BadLrmSection
 FAIL digital/d09_90_dumpfile_twice_rejected.v: `//!` directive: UnknownDirective
 ```
 
@@ -1101,7 +1101,7 @@ Recorded rather than guessed. Each would change a §7.1 row.
    §17.9 and §17.11 are — each of which has an explicit separate digital row
    (17.9-14, 17.11-24) — then §17.10 needs a `17.10-03 digital` row, those two go
    back to `verified`, and the total becomes 128.
-3. **`tests/fixtures/digital/d09_91_readmem_overflow_rejected.v` is now scored,
+3. **`tests/fixtures/ieee1364/17_system_tasks/d09_91_readmem_overflow_rejected.v` is now scored,
    and fails for a reason that is not §17.2.9.** v0.0.3's widened `collect`
    takes it — it carries `//! reject` and has no `.expected.txt` — and it FAILs
    on `UnknownDirective`, not on excess data. Its data file also still sits in

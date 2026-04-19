@@ -58,7 +58,7 @@ Use edition-correct citations rather than silently inventing IEEE A.10.
 
 ## Targeted parameter-header evidence
 
-New `tests/fixtures/digital/audit_grammar_parameter_header.v` with expected
+New `tests/fixtures/ieee1364/A_formal_syntax/audit_grammar_parameter_header.v` with expected
 transcript `3 7` derives a legal repeated parameter header and empty port list.
 Actual root CLI `--run` exits 1 with E1100: digital execution does not support
 these module contents. This is a legal positive failure, not a parser rejection

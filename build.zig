@@ -172,7 +172,7 @@ pub fn build(b: *std.Build) void {
     ).dependOn(&bench.step);
 
     // The other run of the same executable: `vera --run` over every `.v` under
-    // `tests/fixtures/digital/` that has a committed transcript beside it.
+    // `tests/fixtures/ieee1364/` and `tests/fixtures/digital/` that has a committed transcript beside it.
     // `addArtifactArg` is what makes the built `vera` a dependency of this run,
     // so it cannot race the compiler it is testing.
     //

@@ -43,7 +43,7 @@ denominator. AMS-only additions are not retroactively entries of the IEEE table.
 
 ### Existing evidence inspected
 
-`digital/d09_10_clog2.v` covers zero,one,small exact/non-exact powers and
+`ieee1364/17_system_tasks/d09_10_clog2.v` covers zero,one,small exact/non-exact powers and
 assignment to a narrow packed result. Its comment says a real result cannot
 produce the expected narrow assignment, which is not a valid discriminator:
 assignment conversion can produce the same integral result. Its Table9-11

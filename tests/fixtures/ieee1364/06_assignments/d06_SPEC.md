@@ -83,7 +83,7 @@ makes the asserted numbers pin a delay value rather than merely "some lag".
 Stimulus is applied in the active region (plain `#N`, no `#0`) from the same
 sequential process as the samples, so no two events of the fixture ever race.
 
-The idiom was verified to work today against `tests/digital/scheduling.v`
+The idiom was verified to work today against `tests/ieee1364/11_scheduling/scheduling.v`
 semantics and by direct execution.
 
 ## Fixtures

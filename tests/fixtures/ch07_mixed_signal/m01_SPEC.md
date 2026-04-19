@@ -101,7 +101,7 @@ this row's work.
 | §7.2.2's both-contexts refusal | `E0432`, reported at the analog assignment that collides with an `initial` one |
 | §7.3.7's *second* sentence (analog function from a digital context) | `E0430`, at the call site, block accepted — genuinely pinned |
 | named events *within* the analog block (`-> ev`, `@(ev)`) | `tests/fixtures/annex_a_syntax/17_named_event_trigger.va`, green |
-| a real digital engine, with 4-state `case`/`casez`/`casex`, NBA regions, `#` delays and `$display` | `src/sim/digital.zig`, `tests/digital/control.v` |
+| a real digital engine, with 4-state `case`/`casez`/`casex`, NBA regions, `#` delays and `$display` | `src/sim/digital.zig`, `tests/ieee1364/09_behavioral_modeling/control.v` |
 
 **What is NOT implemented.** Each was confirmed by running a probe:
 
@@ -191,7 +191,7 @@ Two rejections against eleven positives, as required.
   ("It is an error if these operands return x or z bit values when solved").
 - **`casex` / `casez` in an analog context.** §7.3.2 lists them, but their
   wildcard semantics add a second axis that is fully covered on the digital side
-  by `tests/digital/control.v`; fixture 03 pins the `case` form, which is the
+  by `tests/ieee1364/09_behavioral_modeling/control.v`; fixture 03 pins the `case` form, which is the
   one the clause actually demonstrates.
 - **`absdelta` event *timing*.** The clause grants an explicit scheduling
   window, so no firing time here is asserted — only the two consequences that
