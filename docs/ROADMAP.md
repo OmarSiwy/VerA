@@ -835,6 +835,13 @@ is struck through and says what settled it; the rest are open.
    word for that (§7.3 item 14). §7.5 item 3 adds a second dependency — whether
    §17.2.9 *requires* an error on excess `$readmem` data cannot be settled
    without the same missing standard. See Appendix B.
+   **Evidence half settled 2026-09-26**: `docs/1364-2005.pdf` is in the tree
+   (gitignored, licensed; hash pinned by `tools/ieee1364_audit.py`).
+   `tests/fixtures/ieee1364/CLAUSES.tsv` lists its 808 numbered headings and
+   `zig build test-1364 -- --coverage` resolves every `//! inherited` cite
+   against them, failing on one that names none — measure B is now that
+   command. `d09_11`/`d09_12` cite `//! inherited` and pass. The `$readmem`
+   excess-data question is now a reading, not a blocker.
 9. **Does §17.10 get its own digital row?** (`CLAUSE-AUDIT.md §7.5` item 2.)
    §17.9 and §17.11 each carry an explicit separate digital row — 17.9-14 and
    17.11-24 — and §17.10 does not, so the "weaker context sets the verdict" rule

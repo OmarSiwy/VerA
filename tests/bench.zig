@@ -106,6 +106,7 @@ const vera = @import("vera");
 const harness = @import("harness.zig");
 const torture = @import("torture.zig");
 const external = @import("external.zig");
+const ieee1364 = @import("ieee1364.zig");
 const options = @import("suite_options");
 
 const Io = std.Io;
@@ -122,6 +123,7 @@ test {
     _ = harness;
     _ = torture;
     _ = external;
+    _ = ieee1364;
 }
 const Allocator = std.mem.Allocator;
 const Args = std.process.Args.Iterator;
@@ -1076,7 +1078,10 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
-    while (args.next()) |a| filter = a;
+    while (args.next()) |a| {
+        if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
+        filter = a;
+    }
 
     var buf: [4096]u8 = undefined;
     var stderr = Io.File.stderr().writer(io, &buf);

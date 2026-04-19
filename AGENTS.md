@@ -12,7 +12,7 @@ code that an external simulator links and calls inside a Newton loop.
 ## 0. The three rules that are not negotiable
 
 **1. Never type a conformance number. Measure it.**
-`tools/conformance.sh` is the only thing that may write measures A and C.
+`tools/conformance.sh` is the only thing that may write measures A, B and C.
 `CHANGELOG.md` is its output. `.github/workflows/publish.yaml` re-measures on
 the runner and refuses any tag whose entry disagrees with the tree. If you find
 yourself about to write a percentage into a document, run the script instead.
@@ -68,7 +68,7 @@ reduces to another. Every change you make should say which one it moves.
 | | Measure | Command |
 |---|---|---|
 | **A** | Fixtures behaving as stated | `zig build benchmark -- --strict` |
-| **B** | Inherited IEEE 1364 §§17–18 obligations closed | hand-read against `CLAUSE-AUDIT.md` §7.1 |
+| **B** | IEEE 1364-2005 clauses with **two-way** evidence | `zig build test-1364 -- --coverage` (§§17–18 obligation detail: `CLAUSE-AUDIT.md` §7.1) |
 | **C** | LRM clauses with **two-way** evidence | `zig build benchmark -- --coverage` |
 | **D** | `ARCHITECTURE.md` §6 phases landed | hand-read against its §6/§8 (`git show 297e97d^:ARCHITECTURE.md`) |
 
@@ -98,7 +98,7 @@ zig build benchmark -- --strict      # exit 1 until v1.0.0 — read the names
 # 2. Write the entry. This RUNS the suites; it does not ask you for numbers.
 tools/conformance.sh --changelog v0.1.0
 
-# 3. Fill in B and D by hand — the two rows the script marks `hand-entered`.
+# 3. Fill in D by hand — the one row the script marks `hand-entered`.
 #    Name the document and the date you read. Do not guess.
 
 # 4. Commit, tag, push the tag. CI does the rest.
