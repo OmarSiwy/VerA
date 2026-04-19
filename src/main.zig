@@ -28,6 +28,7 @@
 //! a testbench exists to print, so dropping its prints is a contradiction.
 
 const std = @import("std");
+const builtin = @import("builtin");
 /// `-Dlanguage=ams`. False is an IEEE 1364-2005 tool: every path past the
 /// digital one is comptime-dead, so the analog backend is never compiled in.
 const ams = @import("build_options").ams;
@@ -55,6 +56,8 @@ const usage_text =
     \\  --dyn PATH              root of the `dyn` module (--emit-so)
     \\  --work-dir DIR          scratch + artifact directory (--emit-so)
     \\  --zig PATH              zig executable to drive (default: zig)
+    \\  --optimize=MODE         Debug|ReleaseSafe|ReleaseFast|ReleaseSmall (default: exe Debug, so ReleaseFast)
+    \\  --zig-backend=auto|llvm|native   auto: native for Debug on x86_64, else llvm
     \\  -I DIR                  add an `include search directory
     \\  --param NAME=VALUE      compile with the top module's parameter NAME set
     \\                          to VALUE (LRM 3.4). A parameter that sizes an
@@ -128,6 +131,8 @@ pub fn main(init: std.process.Init) !u8 {
     var dyn_path: ?[]const u8 = null;
     var work_dir: ?[]const u8 = null;
     var zig_exe: []const u8 = "zig";
+    var optimize: ?std.builtin.OptimizeMode = null;
+    var zig_backend: ?vera.orchestrator.Backend = null; // null: `Backend.auto`
     var spice_path: ?[]const u8 = null;
 
     var args = init.minimal.args.iterate();
@@ -188,6 +193,17 @@ pub fn main(init: std.process.Init) !u8 {
             work_dir = args.next() orelse return missing(err, "--work-dir", "a directory");
         } else if (std.mem.eql(u8, arg, "--zig")) {
             zig_exe = args.next() orelse return missing(err, "--zig", "a path");
+        } else if (std.mem.startsWith(u8, arg, "--optimize=")) {
+            optimize = std.meta.stringToEnum(std.builtin.OptimizeMode, arg["--optimize=".len..]) orelse {
+                try err.print("error: `{s}`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n", .{arg});
+                return 2;
+            };
+        } else if (std.mem.startsWith(u8, arg, "--zig-backend=")) {
+            const v = arg["--zig-backend=".len..];
+            zig_backend = if (std.mem.eql(u8, v, "auto")) null else if (std.mem.eql(u8, v, "llvm")) .llvm else if (std.mem.eql(u8, v, "native")) .self_hosted else {
+                try err.print("error: `{s}`: not auto|llvm|native\n", .{arg});
+                return 2;
+            };
         } else if (std.mem.eql(u8, arg, "-o")) {
             out_path = args.next() orelse return missing(err, "-o", "a path");
             emit_zig = true;
@@ -254,6 +270,14 @@ pub fn main(init: std.process.Init) !u8 {
     // built a testbench with every model print discarded and exited 0, and
     // `--emit-zig --lint` left `emit_zig` set while the pipeline stopped
     // before codegen, so the "generated device" step read a lint result.
+    // A testbench compiles for seconds and runs for microseconds; a `.so` is
+    // the host's hot loop.
+    const opt = optimize orelse if (exe_flag != null) std.builtin.OptimizeMode.Debug else .ReleaseFast;
+    const backend = zig_backend orelse vera.orchestrator.Backend.auto(opt, builtin.cpu.arch);
+    // The self-hosted backend takes `-O` and does not optimise: legal, but a
+    // Release build under it is only as fast as Debug minus the safety checks.
+    if ((exe_flag != null or emit_so) and backend == .self_hosted and opt != .Debug)
+        try err.print("warning: --zig-backend=native does not optimise; the {t} artifact is unoptimised\n", .{opt});
     if (exe_flag) |f| if (display_drop_flag) {
         try err.print(
             "error: `{s}` and `--display=drop` conflict: the testbench IS the display " ++
@@ -370,7 +394,7 @@ pub fn main(init: std.process.Init) !u8 {
         .jac_f32_host = jac_f32_host,
         .param_overrides = overrides.items,
     };
-    const target: vera.Target = if (codegen_flag == null) .lint else .release_fast;
+    const target: vera.Target = if (codegen_flag == null) .lint else .build;
     var result = vera.compileSourceOpts(gpa, source, target, opts) catch |e| return compileFailed(&bag, err, json, use_color, e);
     defer result.deinit();
 
@@ -483,6 +507,8 @@ pub fn main(init: std.process.Init) !u8 {
             .out_path = out_path,
             .zig_exe = zig_exe,
             .mixed = dm.mixed != null,
+            .optimize = opt,
+            .backend = backend,
         }) catch |e| {
             try err.print("error: {s}: building the testbench failed: {t}\n", .{ in_path, e });
             return 1;
@@ -530,8 +556,8 @@ pub fn main(init: std.process.Init) !u8 {
         var r = vera.buildArtifact(gpa, io, &result, .{
             .work_dir = wd,
             .name = result.mir.name,
-            .optimize = .ReleaseFast,
-            .backend = .llvm,
+            .optimize = opt,
+            .backend = backend,
             .modules = &modules,
             .zig_exe = zig_exe,
         }, 1, null) catch |e| {
