@@ -8,12 +8,12 @@
 //! OWNS dlopen/dlclose/state-reset. Emit a VERSIONED .so path per generation so
 //! the host dlopens a fresh inode (sidesteps dlclose-didn't-unload).
 //!
-//! Backend split:
-//!   - Debug   → self-hosted, incremental via a resident compiler child holding
-//!               -fincremental. Build ONLY on demand (not --watch).
+//! Two build shapes, each under any `Options.optimize`/`Options.backend`:
+//!   - resident → incremental via a compiler child holding -fincremental
+//!               (self-hosted only). Build ONLY on demand (not --watch).
 //!               Cross-process -fincremental is unimplemented on ELF 0.16, so the
 //!               child MUST stay resident to keep incremental state warm.
-//!   - Release → LLVM, cold build, per-unit float mode.
+//!   - cold     → `compileRelease`, one build, child reaped.
 //!
 //! NOT THE BUILD-RUNNER PROTOCOL, verified on this toolchain (zig 0.16.0).
 //! The obvious resident child is `zig build --listen=-` speaking to the build
@@ -39,7 +39,19 @@ const Cache = std.Build.Cache;
 const ClientMsg = std.zig.Client.Message;
 const ServerMsg = std.zig.Server.Message;
 
-pub const Backend = enum { self_hosted, llvm };
+/// Which Zig code generator builds the artifact. Orthogonal to the optimize
+/// mode: `.self_hosted` accepts `-O` but does not optimise, and it has no
+/// nvptx/amdgcn target.
+pub const Backend = enum {
+    self_hosted,
+    llvm,
+
+    /// `.self_hosted` exactly where it is the faster build and the eval cost
+    /// does not matter: Debug on x86_64. Everything else is `.llvm`.
+    pub fn auto(optimize: std.builtin.OptimizeMode, arch: std.Target.Cpu.Arch) Backend {
+        return if (optimize == .Debug and arch == .x86_64) .self_hosted else .llvm;
+    }
+};
 
 /// One support module on the compiler command line. `name` is the `@import`
 /// string; `root` is a path to its root source file (relative to the process
@@ -59,8 +71,7 @@ pub const Options = struct {
     work_dir: []const u8,
     /// Device name. Artifact is `<work_dir>/lib<name>.<generation>.so`.
     name: []const u8,
-    /// Debug ⇒ `.self_hosted`; ReleaseFast ⇒ `.llvm` (the "Backend split" in
-    /// this file's header is what the two modes buy).
+    /// Independent of `backend`; `Backend.auto` is the usual pairing.
     optimize: std.builtin.OptimizeMode,
     backend: Backend,
     /// Support modules. MUST contain `contract` (device.zig imports it) and
@@ -547,12 +558,10 @@ pub const ResidentChild = struct {
     }
 };
 
-/// ReleaseFast: cold, one-shot build. LLVM, per-unit float mode (already baked
-/// into device.zig by codegen.zig).
+/// Cold, one-shot build under whatever `o.optimize`/`o.backend` say.
 ///
-/// Same machinery as the resident path — the only differences are in `o`
-/// (`.llvm` ⇒ no `-fincremental`, LLVM cannot patch in place) and that the
-/// child is reaped immediately. Caller owns `Result`.
+/// Same machinery as the resident path; the child is reaped immediately.
+/// Caller owns `Result`.
 pub fn compileRelease(
     gpa: Allocator,
     io: Io,
@@ -560,7 +569,6 @@ pub fn compileRelease(
     device: codegen.Output,
     generation: u32,
 ) !Result {
-    std.debug.assert(o.backend == .llvm);
     var child = try ResidentChild.spawn(gpa, io, o);
     defer child.deinit();
     return child.rebuild(gpa, device, generation);
@@ -569,6 +577,13 @@ pub fn compileRelease(
 // ===========================================================================
 // Tests
 // ===========================================================================
+
+test "Backend.auto is self-hosted only for Debug on x86_64" {
+    try std.testing.expectEqual(Backend.self_hosted, Backend.auto(.Debug, .x86_64));
+    try std.testing.expectEqual(Backend.llvm, Backend.auto(.ReleaseFast, .x86_64));
+    try std.testing.expectEqual(Backend.llvm, Backend.auto(.Debug, .aarch64));
+    try std.testing.expectEqual(Backend.llvm, Backend.auto(.Debug, .nvptx64));
+}
 
 test "layoutHash pins optimize, backend and the module graph" {
     const mods = [_]Module{

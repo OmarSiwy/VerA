@@ -5,7 +5,9 @@
 //! Cut verbatim from `tb.zig`.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const tb = @import("../tb.zig");
+const orchestrator = @import("../orchestrator.zig");
 const Io = tb.Io;
 const Allocator = tb.Allocator;
 
@@ -26,6 +28,8 @@ pub const BuildOptions = struct {
     /// `-O` for the testbench. Debug by default; see `buildExe` for why that is
     /// not the timid choice.
     optimize: std.builtin.OptimizeMode = .Debug,
+    /// Null is `Backend.auto(optimize, <this host>)`.
+    backend: ?orchestrator.Backend = null,
     /// The runner is `renderMixed`'s: it imports the digital engine (`sim`) and
     /// `diag`, which are compiled from the VerA source tree the contract sits
     /// in (`<root>/tools/contract.zig`). Only mixed-signal testbenches pay the
@@ -101,6 +105,10 @@ pub fn buildExe(
         try std.fmt.allocPrint(arena, "-O{t}", .{opts.optimize}),
         "--cache-dir",
         ".zig-cache",
+    });
+    try argv.appendSlice(arena, switch (opts.backend orelse orchestrator.Backend.auto(opts.optimize, builtin.cpu.arch)) {
+        .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
+        .llvm => &.{"-fllvm"},
     });
     if (opts.shared_lib) try argv.append(arena, "-dynamic");
     try argv.appendSlice(arena, &.{ "--dep", "device" });

@@ -61,6 +61,7 @@
 //!   zig build benchmark -- --coverage     # LRM clauses cited, one-sided, uncited
 //!   zig build benchmark -- -j1            # one at a time, streaming; for debugging
 //!   zig build benchmark -- --fixture-opt=ReleaseFast
+//!   zig build benchmark -- --fixture-backend=llvm   # default: Backend.auto
 //!   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
 
 const std = @import("std");
@@ -76,13 +77,13 @@ const Fixture = harness.Fixture;
 const Result = harness.Result;
 
 /// VerA at full depth: compile, build a testbench, run it, read the `ok=`
-/// columns. `fixture_opt` is borrowed — it lives in the caller's `Config`.
-pub fn compiler(fixture_opt: *std.builtin.OptimizeMode) harness.Compiler {
+/// columns. `cfg` is borrowed for its `fixture_opt`/`fixture_backend`.
+pub fn compiler(cfg: *harness.Config) harness.Compiler {
     return .{
         .name = "vera",
         .runs = true,
         .owns_xfail = true,
-        .ctx = fixture_opt,
+        .ctx = cfg,
         .check = check,
     };
 }
@@ -160,9 +161,9 @@ fn check(
     d: vera.tb.Directives,
     w: *Io.Writer,
 ) anyerror!Result {
-    const fixture_opt: *std.builtin.OptimizeMode = @ptrCast(@alignCast(ctx));
+    const cfg: *const harness.Config = @ptrCast(@alignCast(ctx));
     if (d.reject.len != 0) return verifyRejected(gpa, f, source, d, w);
-    return runAndCheck(gpa, io, arena, fixture_opt.*, f, source, d, w);
+    return runAndCheck(gpa, io, arena, cfg, f, source, d, w);
 }
 
 /// Why a fixture failed to produce a device, in the vocabulary the `//! reject`
@@ -233,9 +234,9 @@ fn verifyRejected(
 ///   `GeneratedCompileError` — codegen deliberately emitted `@compileError`.
 fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: vera.tb.Directives) !Outcome {
     var diags: vera.diag.Bag = .init(gpa);
-    // `.debug` (not `.lint`) so stage 6 runs: some fixtures are rejected by
+    // `.build` (not `.lint`) so stage 6 runs: some fixtures are rejected by
     // codegen emitting `@compileError`, which `.lint` would never see.
-    var result = vera.compileSourceOpts(gpa, source, .debug, .{
+    var result = vera.compileSourceOpts(gpa, source, .build, .{
         .file_name = f.path,
         .include_dirs = &.{ f.dir, f.root },
         .diags = &diags,
@@ -363,7 +364,7 @@ fn runAndCheck(
     gpa: std.mem.Allocator,
     io: Io,
     arena: std.mem.Allocator,
-    fixture_opt: std.builtin.OptimizeMode,
+    cfg: *const harness.Config,
     f: Fixture,
     source: []const u8,
     d: vera.tb.Directives,
@@ -386,7 +387,7 @@ fn runAndCheck(
         .display = .emit,
         .spice_netlist = d.spice,
     };
-    var result = vera.compileSourceOpts(gpa, source, .release_fast, opts) catch |err| {
+    var result = vera.compileSourceOpts(gpa, source, .build, opts) catch |err| {
         try w.print("FAIL {s}: did not compile: {t}\n", .{ f.path, err });
         vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
         return .unmet;
@@ -398,7 +399,7 @@ fn runAndCheck(
     if (opts.param_overrides.len != 0) {
         diags.deinit(gpa);
         diags = .init(gpa);
-        const again = vera.compileSourceOpts(gpa, source, .release_fast, opts) catch |err| {
+        const again = vera.compileSourceOpts(gpa, source, .build, opts) catch |err| {
             try w.print("FAIL {s}: did not compile: {t}\n", .{ f.path, err });
             vera.diag.render(&diags, w, .{ .explain_hint = false, .summary = false }) catch {};
             return .unmet;
@@ -413,6 +414,11 @@ fn runAndCheck(
     };
     if (result.device_has_compile_error) {
         try w.print("FAIL {s}: codegen refused a construct (generated output is not usable)\n", .{f.path});
+        return .unmet;
+    }
+    // An LLVM intrinsic link-fails under `--zig-backend=native`.
+    if (std.mem.indexOf(u8, device, "extern fn @\"llvm.") != null) {
+        try w.print("FAIL {s}: the device declares an `llvm.*` intrinsic; it cannot build under the self-hosted backend\n", .{f.path});
         return .unmet;
     }
 
@@ -436,7 +442,8 @@ fn runAndCheck(
         .name = result.mir.name,
         .mixed = dm.mixed != null,
         .zig_exe = options.zig_exe,
-        .optimize = fixture_opt,
+        .optimize = cfg.fixture_opt,
+        .backend = cfg.fixture_backend,
     }) catch |err| {
         try w.print("FAIL {s}: building the testbench: {t}\n", .{ f.path, err });
         return .unmet;
@@ -622,12 +629,12 @@ test "declared check count rejects missing and duplicated observations" {
         .root = suite.fixture_root,
         .slug = "harness_check_count_selftest",
     };
-    const missing = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{ .expected_checks = 2 }, &report.writer);
+    const missing = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{ .expected_checks = 2 }, &report.writer);
     try std.testing.expect(missing == .unmet);
     try std.testing.expect(std.mem.indexOf(u8, report.written(), "observed 1 assertion(s), expected exactly 2") != null);
-    const complete = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{ .expected_checks = 1 }, &report.writer);
+    const complete = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{ .expected_checks = 1 }, &report.writer);
     try std.testing.expect(complete == .met);
-    const duplicated = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{
+    const duplicated = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{
         .expected_checks = 1,
         .times = &.{ 0.0, 1e-9 },
     }, &report.writer);
@@ -658,10 +665,10 @@ test "a fatal exit after a passing assertion must be explicitly expected" {
         .root = suite.fixture_root,
         .slug = "harness_exit_status_selftest",
     };
-    const unexpected = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{}, &report.writer);
+    const unexpected = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{}, &report.writer);
     try std.testing.expect(unexpected == .unmet);
     try std.testing.expect(std.mem.indexOf(u8, report.written(), "exit 1, expected 0") != null);
-    const expected = try runAndCheck(gpa, std.testing.io, arena, .Debug, fixture, source, .{ .expected_exit = 1 }, &report.writer);
+    const expected = try runAndCheck(gpa, std.testing.io, arena, &.{}, fixture, source, .{ .expected_exit = 1 }, &report.writer);
     try std.testing.expect(expected == .met);
 }
 

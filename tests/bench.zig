@@ -511,13 +511,13 @@ fn benchmark(init: std.process.Init, vera_exe: []const u8, first: ?[]const u8, a
 
     // `--coverage` is a question about the FIXTURES — which LRM clauses they
     // cite — so it compiles nothing and there is nothing to time or compare.
-    if (cfg.coverage) return harness.run(init, torture.compiler(&cfg.fixture_opt), cfg, null);
+    if (cfg.coverage) return harness.run(init, torture.compiler(&cfg), cfg, null);
 
     // THE DEPTH PASS: VerA compiles, builds a testbench, runs it and reads the
     // `ok=` columns. It owns the exit code, because it is the only pass that
     // can fail — a wall clock has no verdict.
     var depth: harness.Counts = .{};
-    const code = try harness.run(init, torture.compiler(&cfg.fixture_opt), cfg, &depth);
+    const code = try harness.run(init, torture.compiler(&cfg), cfg, &depth);
 
     try report(gpa, io, arena, w, vera_exe, cfg, depth, if (ov) |*c| c else null);
     return code;
