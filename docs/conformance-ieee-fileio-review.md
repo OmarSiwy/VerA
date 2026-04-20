@@ -34,7 +34,7 @@ transcript execution. It does NOT make a compiler defect disappear. The
 withdrawn claimed error becomes the distinct unasserted mandatory warning in
 IEEE-FILE-MEM-002. The original data existed only as
 ch09_system_tasks/d09_91_readmem_overflow_rejected.hex, not the source's named
-digital/91_readmem_overflow_rejected.hex; the new five-word control corrects
+ieee1364/17_system_tasks/91_readmem_overflow_rejected.hex; the new five-word control corrects
 that runtime setup without deleting the historical control.
 
 ## Atomic obligation worklist

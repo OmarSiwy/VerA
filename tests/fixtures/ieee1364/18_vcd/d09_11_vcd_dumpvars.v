@@ -14,7 +14,7 @@
 // #<time> records. Every variable gets a short printable-ASCII identifier code
 // that stands in for its name in every later value change.
 //
-// HAND DERIVATION of ../ch09_system_tasks/d09_11_vcd_dumpvars.expected.vcd:
+// HAND DERIVATION of d09_11_vcd_dumpvars.expected.vcd:
 //
 //   Header. The directive is `timescale 1ns/1ns`, so the $timescale record
 //   carries 1ns.
@@ -84,7 +84,7 @@
 // The golden lives in ch09_system_tasks/ (4250899 moved it there from
 // tests/pending/D09/, next to tools/test_vcd_semantics.py's GOLDENS); the old
 // operand named a file that no longer existed under that name.
-//! expect vcd d09_vcd.vcd == ../ch09_system_tasks/d09_11_vcd_dumpvars.expected.vcd
+//! expect vcd d09_vcd.vcd == d09_11_vcd_dumpvars.expected.vcd
 `timescale 1ns/1ns
 module d09_vcd;
   reg a;

@@ -17,7 +17,7 @@
 //   $dumpall  writes a checkpoint of the current value of every selected
 //             variable without changing whether dumping is on.
 //
-// HAND DERIVATION of ../ch09_system_tasks/d09_12_vcd_dumpoff_on.expected.vcd, `timescale 1ns/1ns`,
+// HAND DERIVATION of d09_12_vcd_dumpoff_on.expected.vcd, `timescale 1ns/1ns`,
 // one scalar `reg a` which therefore takes identifier code `!`:
 //
 //   t=0  $dumpfile, $dumpvars(0, d09_vcd_off), then a <- 0.
@@ -58,7 +58,7 @@
 //! inherited IEEE 1364-2005 18.1 ($dumpoff, $dumpon, $dumpall)
 //! inherited IEEE 1364-2005 18.2 (checkpoint records)
 // The golden lives in ch09_system_tasks/; see d09_11_vcd_dumpvars.v.
-//! expect vcd d09_vcd_off.vcd == ../ch09_system_tasks/d09_12_vcd_dumpoff_on.expected.vcd
+//! expect vcd d09_vcd_off.vcd == d09_12_vcd_dumpoff_on.expected.vcd
 `timescale 1ns/1ns
 module d09_vcd_off;
   reg a;

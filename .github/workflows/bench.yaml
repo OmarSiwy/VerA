@@ -49,10 +49,10 @@ jobs:
       # Verdict prose (`FAIL <path>: why`) goes to stderr and the TSV tables go
       # to stdout, so both streams are merged into one log — conformance.sh
       # parses the TSV and the name list below comes from the prose.
-      - name: Torture suite — every fixture, strict
+      - name: Verilog-AMS suite — every fixture, strict
         continue-on-error: true
         run: |
-          zig build benchmark -- --strict 2>&1 | tee /tmp/strict.txt
+          zig build test-ams 2>&1 | tee /tmp/strict.txt
           echo "strict exit: ${PIPESTATUS[0]}" >> /tmp/strict.txt
           tail -1 /tmp/strict.txt
 
@@ -60,7 +60,11 @@ jobs:
         continue-on-error: true
         run: zig build benchmark -- --coverage 2>&1 | tee /tmp/coverage.txt
 
-      - name: Digital transcripts
+      - name: IEEE 1364-2005 suite
+        continue-on-error: true
+        run: zig build test-1364 2>&1 | tee /tmp/ieee1364.txt
+
+      - name: Digital transcripts — 1364 plus the AMS digital-context cases
         continue-on-error: true
         run: zig build test-devices 2>&1 | tee /tmp/devices.txt
 
@@ -93,10 +97,12 @@ jobs:
             echo
             tools/conformance.sh || echo '(conformance.sh could not parse this run)'
             echo
-            echo '## Torture suite — verdicts'
+            echo '## Verilog-AMS suite — verdicts'
             echo '```'; tail -40 /tmp/strict.txt; echo '```'
             echo '## Clause coverage'
             echo '```'; tail -6 /tmp/coverage.txt; echo '```'
+            echo '## IEEE 1364-2005 suite'
+            echo '```'; tail -20 /tmp/ieee1364.txt; echo '```'
             echo '## Digital transcripts'
             echo '```'; tail -20 /tmp/devices.txt; echo '```'
             echo '## Footprint and speed sweep'
@@ -115,6 +121,7 @@ jobs:
             failing-names.txt
             /tmp/strict.txt
             /tmp/coverage.txt
+            /tmp/ieee1364.txt
             /tmp/devices.txt
             /tmp/sweep.txt
             /tmp/source-audit.txt

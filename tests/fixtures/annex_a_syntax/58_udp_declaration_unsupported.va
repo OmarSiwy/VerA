@@ -45,8 +45,8 @@
 // alphabets the clause enumerates. What that buys, measured on the two `.v`
 // fixtures that asked for it in writing:
 //
-//     digital/d08_reject_udp_z_output.v    E0233 "`z` is not a UDP output symbol"
-//     digital/d08_reject_udp_comb_edge.v   E0234 "an edge indicator `(` in a
+//     ieee1364/08_udp/d08_reject_udp_z_output.v    E0233 "`z` is not a UDP output symbol"
+//     ieee1364/08_udp/d08_reject_udp_comb_edge.v   E0234 "an edge indicator `(` in a
 //                                          combinational UDP table entry"
 //
 // Both files say, at length, that a bare `DiagnosticsReported` would have been
@@ -64,7 +64,7 @@
 // subclauses this file exercises and states no production of its own. What
 // this file proves for it is the GRAMMAR — the UDP parses and the file runs its
 // analog assertion — not a behaviour: an instance of the UDP reaches no device (W0252). The behaviour is
-// run under the discrete engine by tests/fixtures/digital/d08_udp_comb.v.
+// run under the discrete engine by tests/fixtures/ieee1364/08_udp/d08_udp_comb.v.
 //
 //! lrm A.5
 //! lrm A.5.1

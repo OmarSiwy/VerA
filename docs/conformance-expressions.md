@@ -147,14 +147,14 @@ context matrix is not established by this rejection split. B/D are unchanged;
 A/C are remeasured by the script rather than inferred from the new file count.
 
 Inherited follow-up: complete IEEE §5.1.11 text/tables (printed pages 51–52)
-was read. `digital/expressions.v` has known reductions for AND/NAND, OR/NOR
+was read. `ieee1364/05_expressions/expressions.v` has known reductions for AND/NAND, OR/NOR
 and XOR/XNOR, plus zero-dominant AND, one-dominant OR and unknown XOR cases.
 Its transcript gives the independently justified rows `1 0 0 1 1 0` and
 `0 1 x` for those inputs. This is useful existing positive evidence, but does
 not cover both XNOR spellings or every table combination, operand width and
-single-bit x/z case. `digital/d08_strength_reduction.v` concerns electrical
+single-bit x/z case. `ieee1364/07_gate_switch_level/d08_strength_reduction.v` concerns electrical
 drive strength, not unary reduction operators, despite the matching filename.
-Direct execution of `digital/expressions.v` exits 0 and its complete stdout
+Direct execution of `ieee1364/05_expressions/expressions.v` exits 0 and its complete stdout
 matches the committed expected transcript. Only the reduction rows above were
 source-audited in this follow-up; a matching transcript does not validate the
 independent derivation of every other expectation in that file.
