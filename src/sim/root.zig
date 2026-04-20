@@ -4,6 +4,7 @@ pub const time = @import("time.zig");
 pub const scheduler = @import("scheduler.zig");
 pub const mixed = @import("mixed.zig");
 pub const fmt = @import("fmt.zig");
+pub const rt = @import("rt/root.zig");
 
 test {
     _ = scheduler;
@@ -11,4 +12,5 @@ test {
     _ = digital;
     _ = mixed;
     _ = fmt;
+    _ = rt;
 }

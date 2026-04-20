@@ -1078,8 +1078,13 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
+    var native = false;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
+        if (std.mem.eql(u8, a, "--native")) {
+            native = true;
+            continue;
+        }
         filter = a;
     }
 
@@ -1104,6 +1109,8 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     var scratch_dir = try Io.Dir.cwd().openDir(io, scratch, .{});
     defer scratch_dir.close(io);
     try std.process.setCurrentDir(io, scratch_dir);
+
+    if (native) return nativeDevices(gpa, io, exe, cases, filter, w);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1485,19 +1492,27 @@ const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
 /// writes more than a few hundred bytes to either; the upgrade path is a
 /// two-thread drain, as `external.zig` would also need.
 fn capture(arena: Allocator, io: Io, argv: []const []const u8) !Captured {
+    return captureIn(arena, io, argv, null);
+}
+
+/// `capture` with the child's working directory at `cwd`.
+fn captureIn(arena: Allocator, io: Io, argv: []const []const u8, cwd: ?[]const u8) !Captured {
     var child = try std.process.spawn(io, .{
         .argv = argv,
+        .cwd = if (cwd) |p| .{ .path = p } else .inherit,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
     });
-    var obuf: [1 << 16]u8 = undefined;
-    var ebuf: [1 << 16]u8 = undefined;
+    // Heap, not stack: `--native` captures from pool threads, whose stacks
+    // are smaller than these two buffers.
+    const obuf = try arena.alloc(u8, 1 << 16);
+    const ebuf = try arena.alloc(u8, 1 << 16);
     var out: Io.Writer.Allocating = .init(arena);
     var err: Io.Writer.Allocating = .init(arena);
-    var or_ = child.stdout.?.readerStreaming(io, &obuf);
+    var or_ = child.stdout.?.readerStreaming(io, obuf);
     _ = or_.interface.streamRemaining(&out.writer) catch {};
-    var er = child.stderr.?.readerStreaming(io, &ebuf);
+    var er = child.stderr.?.readerStreaming(io, ebuf);
     _ = er.interface.streamRemaining(&err.writer) catch {};
     return .{
         .stdout = out.written(),
@@ -1598,6 +1613,138 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
 }
 
 // ---------------------------------------------------------------------------
+// `--native`: the same cases through `vera --emit-exe` and the executable it
+// builds. The golden `--run` matches is the oracle, so matching it is matching
+// the interpreter and neither engine runs twice. Every case is also one of
+// three name lists — `NATIVE`, `FALLBACK <reason>` (the executable embeds the
+// interpreter, `rt.interpret`) or `FAIL` — so native coverage is diffed by
+// name, and a fallback that hides a regression shows up as a moved name.
+//
+//   zig build test-1364 -- --native            # all of IEEE 1364
+//   zig build test-devices -- --native d04     # the cases whose name has d04
+// ---------------------------------------------------------------------------
+
+const NativeJob = struct {
+    gpa: Allocator,
+    io: Io,
+    vera_exe: []const u8,
+    cases: []const []const u8,
+    slots: []NativeSlot,
+    next: std.atomic.Value(usize) = .init(0),
+
+    fn work(job: *NativeJob) void {
+        var arena_state: std.heap.ArenaAllocator = .init(job.gpa);
+        defer arena_state.deinit();
+        while (true) {
+            const i = job.next.fetchAdd(1, .monotonic);
+            if (i >= job.cases.len) return;
+            _ = arena_state.reset(.retain_capacity);
+            var aw: Io.Writer.Allocating = .init(job.gpa);
+            const v = nativeCase(arena_state.allocator(), job.io, job.vera_exe, job.cases[i], &aw.writer) catch |e| blk: {
+                aw.writer.print("FAIL {s}: the runner itself failed: {t}\n", .{ job.cases[i], e }) catch {};
+                break :blk NativeVerdict{ .pass = false, .fallback = null };
+            };
+            var list = aw.toArrayList();
+            // The reason is in the arena the next case resets.
+            var kept = v;
+            if (v.fallback) |why| kept.fallback = job.gpa.dupe(u8, why) catch "?";
+            job.slots[i] = .{ .verdict = kept, .output = list.toOwnedSlice(job.gpa) catch "" };
+        }
+    }
+};
+
+/// `fallback` is the executable's reason for embedding the interpreter;
+/// `refused` is a case the shared elaboration rejected, so no executable
+/// was built at all.
+const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false };
+const NativeSlot = struct { verdict: NativeVerdict = .{ .pass = false, .fallback = null }, output: []const u8 = "" };
+
+fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
+    var picked: std.ArrayList([]const u8) = .empty;
+    defer picked.deinit(gpa);
+    for (all) |c| if (filter == null or std.mem.indexOf(u8, c, filter.?) != null) try picked.append(gpa, c);
+    if (picked.items.len == 0) {
+        try w.print("devices: nothing matched `{s}`\n", .{filter orelse ""});
+        return 1;
+    }
+    const slots = try gpa.alloc(NativeSlot, picked.items.len);
+    defer gpa.free(slots);
+    @memset(slots, .{});
+    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .cases = picked.items, .slots = slots };
+    var group: Io.Group = .init;
+    const jobs = std.Thread.getCpuCount() catch 1;
+    var hands: usize = 0;
+    while (hands < jobs) : (hands += 1) group.concurrent(io, NativeJob.work, .{&job}) catch break;
+    if (hands == 0) job.work();
+    try group.await(io);
+
+    var failed: usize = 0;
+    var fell: usize = 0;
+    var refused: usize = 0;
+    for (picked.items, slots) |case, s| {
+        try w.writeAll(s.output);
+        if (!s.verdict.pass) failed += 1;
+        if (s.verdict.refused) {
+            refused += 1;
+        } else if (s.verdict.fallback) |why| {
+            fell += 1;
+            try w.print("FALLBACK {s}: {s}\n", .{ case, why });
+        } else if (s.verdict.pass) try w.print("NATIVE {s}\n", .{case});
+    }
+    try w.print(
+        "devices --native: {d}/{d} cases behave as they say they do; {d} native, " ++
+            "{d} through the embedded interpreter, {d} refused before any executable\n",
+        .{ picked.items.len - failed, picked.items.len, picked.items.len - fell - refused, fell, refused },
+    );
+    for (slots) |s| {
+        gpa.free(s.output);
+        if (s.verdict.fallback) |why| gpa.free(why);
+    }
+    return if (failed == 0) 0 else 1;
+}
+
+/// `digitalCase` through the executable. A rejection may come from `vera
+/// --emit-exe` (the shared elaboration) or from the executable at run time;
+/// either way its stderr is judged, the build's and the run's together.
+fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
+    const work = try std.fmt.allocPrint(arena, "native/{s}", .{case});
+    try Io.Dir.cwd().createDirPath(io, work);
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--contract", options.contract, "--work-dir", work });
+    if (harness.digitalStd(source)) |s| try argv.append(arena, s);
+    try argv.append(arena, src);
+    const built = try capture(arena, io, argv.items);
+    const fallback: ?[]const u8 = if (std.mem.indexOf(u8, built.stderr, "not native (")) |at| blk: {
+        const rest = built.stderr[at + "not native (".len ..];
+        break :blk rest[0 .. std.mem.indexOf(u8, rest, ")\n") orelse rest.len];
+    } else null;
+    const negative = harness.digitalNegative(source);
+    if (built.exit != 0) {
+        if (negative and harness.digitalRejectionMatches(source, built.exit, built.stderr)) return .{ .pass = true, .fallback = null, .refused = true };
+        try w.print("FAIL {s}: vera --emit-exe exited {d}\n{s}\n", .{ case, built.exit, built.stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    const bin = try Io.Dir.cwd().realPathFileAlloc(io, std.mem.trimEnd(u8, built.stdout, "\n"), arena);
+    const ran = try captureIn(arena, io, &.{bin}, work);
+    const stderr = try std.mem.concat(arena, u8, &.{ built.stderr, ran.stderr });
+    if (negative) {
+        if (harness.digitalRejectionMatches(source, ran.exit, stderr)) return .{ .pass = true, .fallback = fallback };
+        try w.print("FAIL {s}: digital rejection mismatch (exit {d})\n{s}\n", .{ case, ran.exit, stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    if (ran.exit != 0) {
+        try w.print("FAIL {s}: the executable exited {d}\n{s}\n", .{ case, ran.exit, stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    if (!harness.digitalWarningsMatch(source, stderr)) {
+        try w.print("FAIL {s}: successful digital run has missing warning evidence or error diagnostics\n{s}\n", .{ case, stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
+    return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback };
+}
 
 // orchestrator.zig's claim, and the whole basis of the incremental story:
 // writing a tree that is already on disk touches nothing. It is a `test` and

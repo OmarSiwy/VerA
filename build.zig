@@ -201,7 +201,7 @@ pub fn build(b: *std.Build) void {
     v1364.addArtifactArg(exe);
     v1364.addArg("ieee1364");
     if (b.args) |a| v1364.addArgs(a);
-    b.step("test-1364", "Run the IEEE 1364-2005 transcript suite (`-- --coverage`: its clause inventory)")
+    b.step("test-1364", "Run the IEEE 1364-2005 transcript suite (`-- --coverage`: its clause inventory; `-- --native`: through `vera --emit-exe`)")
         .dependOn(&v1364.step);
     const ams = b.addRunArtifact(suite_exe);
     ams.addArtifactArg(exe);

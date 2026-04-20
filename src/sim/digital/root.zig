@@ -30,6 +30,8 @@ const compile = @import("compile.zig");
 /// §12.30 put wakes waiters and value-change watchers like any other write.
 pub const exec = @import("exec.zig");
 const display = @import("display.zig");
+/// `vera --emit-exe design.v`: an elaborated `Run` as an executable's root.
+pub const emit = @import("emit.zig");
 const driver = @import("driver.zig");
 const Type = compile.Type;
 const Instruction = compile.Instruction;
@@ -2120,6 +2122,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
 // ---- tests ------------------------------------------------------------------
 
 test {
+    _ = emit;
     _ = @import("system.zig");
     _ = @import("vcd.zig");
     _ = @import("driver.zig");

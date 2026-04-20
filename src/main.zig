@@ -47,7 +47,8 @@ const usage_text =
     \\  --expect-module=NAME    fail unless the compiled module is called NAME
     \\  --check                 type-check the generated device with zig
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
-    \\  --emit-exe              build a runnable Verilog-A testbench; print its path
+    \\  --emit-exe              build a runnable Verilog-A testbench, or a .v design's
+    \\                          executable (needs --contract); print its path
     \\  --run                   run a .v initial-process program, or an analog testbench
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
@@ -332,15 +333,31 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     if (std.mem.eql(u8, std.fs.path.extension(in_path), ".v")) {
-        if (!run_exe or lint_flag or emit_zig or check or emit_so or out_path != null) {
-            try err.writeAll("error: digital .v source currently requires --run; artifact generation is not implemented\n");
+        if (exe_flag == null or lint_flag or emit_zig or check or emit_so or out_path != null) {
+            try err.writeAll("error: digital .v source takes --run or --emit-exe; no other artifact is implemented\n");
             return 2;
         }
         var arena = std.heap.ArenaAllocator.init(gpa);
         defer arena.deinit();
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
-        digital.run(arena.allocator(), source, .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language }, &digital_bag, out) catch |e| {
+        const opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language };
+        if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
+            .work_dir = work_dir orelse ".zig-cache/vera-tb",
+            .contract = contract_path orelse {
+                try err.writeAll(
+                    "error: --emit-exe needs --contract PATH (the root of the `contract` " ++
+                        "module; the executable is built from the VerA tree beside it)\n",
+                );
+                return 2;
+            },
+            .name = std.fs.path.stem(in_path),
+            .zig_exe = zig_exe,
+            .mixed = true,
+            .optimize = opt,
+            .backend = backend,
+        }, out, err, json, use_color);
+        digital.run(arena.allocator(), source, opts, &digital_bag, out) catch |e| {
             try report(&digital_bag, err, json, use_color);
             if (e != error.DigitalFailed) try err.print("error: digital execution failed: {t}\n", .{e});
             return 1;
@@ -584,6 +601,53 @@ pub fn main(init: std.process.Init) !u8 {
         } else {
             try out.writeAll(device);
         }
+    }
+    return 0;
+}
+
+/// `vera --emit-exe design.v`: elaborate here, so a design the engine refuses
+/// is refused now with `vera --run`'s diagnostics; then build the executable
+/// `digital.emit` writes and print its path. A design that is not native says
+/// so on stderr and embeds the interpreter.
+fn emitDigital(
+    gpa: std.mem.Allocator,
+    io: Io,
+    arena: std.mem.Allocator,
+    bag: *diag.Bag,
+    source: []const u8,
+    opts: digital.Options,
+    build: vera.tb.BuildOptions,
+    out: *Io.Writer,
+    err: *Io.Writer,
+    json: bool,
+    use_color: bool,
+) !u8 {
+    var sink: Io.Writer.Discarding = .init(&.{});
+    var r = digital.elaborate(arena, source, opts, bag, &sink.writer) catch |e| {
+        try report(bag, err, json, use_color);
+        if (e != error.DigitalFailed) try err.print("error: digital elaboration failed: {t}\n", .{e});
+        return 1;
+    };
+    try report(bag, err, json, use_color);
+    const prog = try digital.emit.program(arena, &r, .{
+        .source = source,
+        .file_name = opts.file_name,
+        .include_dirs = opts.include_dirs,
+        .language = opts.language,
+    });
+    if (prog.fallback) |why| try err.print("note: {s}: not native ({s})\n", .{ opts.file_name, why });
+    const built = vera.tb.buildExe(gpa, io, null, prog.text, build) catch |e| {
+        try err.print("error: {s}: building the executable failed: {t}\n", .{ opts.file_name, e });
+        return 1;
+    };
+    defer built.deinit(gpa);
+    switch (built) {
+        .failed => |text| {
+            try err.print("error: {s}: the generated executable does not compile — this is an engine bug:\n", .{opts.file_name});
+            try err.writeAll(text);
+            return 1;
+        },
+        .ok => |p| try out.print("{s}\n", .{p}),
     }
     return 0;
 }
