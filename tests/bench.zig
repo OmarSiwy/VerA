@@ -254,8 +254,10 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 /// empty table.
 /// `contract_abi` adds 111 bytes to every shape: one doc line and one decl.
 /// `zResidual`, the rows `eval` and `evalQ` share, adds 162 bytes to every
-/// shape. The n = 4096 points overflow the stack in the recursive renderer
-/// (at 925c52a2 too), so they were not re-measured.
+/// shape.
+/// A fused chain deeper than `max_inline_depth` (256) keeps a statement every
+/// 256 links, which is what moves the n = 512 and n = 4096 points; before it
+/// the n = 4096 points overflowed the stack in the recursive renderer.
 /// MEASURED on this tree, not predicted: the numbers came out of this bench.
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
@@ -263,22 +265,22 @@ const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 
         .{ .device = 24380, .defs = 8, .insts = 5 },
         .{ .device = 24738, .defs = 35, .insts = 26 },
         .{ .device = 27481, .defs = 258, .insts = 194 },
-        .{ .device = 49846, .defs = 2050, .insts = 1538 },
-        .{ .device = 231981, .defs = 16386, .insts = 12290 },
+        .{ .device = 49890, .defs = 2050, .insts = 1538 },
+        .{ .device = 232511, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
         .{ .device = 24380, .defs = 8, .insts = 5 },
         .{ .device = 24562, .defs = 24, .insts = 19 },
         .{ .device = 26018, .defs = 136, .insts = 131 },
-        .{ .device = 37666, .defs = 1032, .insts = 1027 },
-        .{ .device = 130688, .defs = 8200, .insts = 8195 },
+        .{ .device = 37732, .defs = 1032, .insts = 1027 },
+        .{ .device = 131576, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
         .{ .device = 24380, .defs = 8, .insts = 5 },
         .{ .device = 25584, .defs = 50, .insts = 40 },
         .{ .device = 35432, .defs = 386, .insts = 320 },
-        .{ .device = 115928, .defs = 3074, .insts = 2560 },
-        .{ .device = 773270, .defs = 24578, .insts = 20480 },
+        .{ .device = 115972, .defs = 3074, .insts = 2560 },
+        .{ .device = 773798, .defs = 24578, .insts = 20480 },
     },
 });
 
@@ -1602,13 +1604,13 @@ test "a second writeTree writes no bytes" {
     try std.testing.expectEqual(@as(usize, 0), try rewrite(io, gpa, result.device, work));
 }
 
-// The two cheap points of every axis, in `zig build test`. The sweep's tail is
-// seconds, which is why `benchmark` is not in `test` — but the table above is a
-// size regression on the emitted device, and a size regression that is only
-// checked when someone remembers to run the bench is not checked.
+// Every point of every axis, in `zig build test`: the table above is a size
+// regression on the emitted device, and a size regression that is only checked
+// when someone remembers to run the bench is not checked. The n = 4096 points
+// are also the renderer's stack-depth check, and cost about a second each.
 test "generated shapes emit the expected device and MIR size" {
     for (std.enums.values(Axis)) |axis| {
-        for (0..2) |i| _ = try checkShape(std.testing.allocator, axis, i);
+        for (0..5) |i| _ = try checkShape(std.testing.allocator, axis, i);
     }
 }
 
