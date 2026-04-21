@@ -1,9 +1,15 @@
 #!/usr/bin/env bash
-# `vera --std=1364-2005 --run` against Verilator 5 (`--binary`) on the same .v
-# designs: six self-contained digital fixtures plus the two scalable benchmarks
-# in tools/bench-v/. Prints one Markdown table: wall time and peak RSS, and
-# whether the two stdouts agree (Verilator's `- ` report lines dropped). VerA
-# interprets, so its one column is parse + elaborate + run.
+# VerA against Verilator 5 (`--binary`) on the same .v designs: six
+# self-contained digital fixtures plus the two scalable benchmarks in
+# tools/bench-v/. Three engines per design, one Markdown row:
+#   interp     `vera --run`: parse + elaborate + interpret, one process
+#   native     `vera --emit-exe --optimize=ReleaseFast --zig-backend=llvm`,
+#              built in a cold cache, then the executable run. A design the
+#              emitter refuses embeds the interpreter; its row says `(interp)`
+#   verilator  `verilator --binary -j 0`, then obj/sim
+# Wall time and peak RSS of each build and run (GNU time), executable bytes
+# as built (not stripped), and whether all three stdouts agree (Verilator's
+# `- ` report lines dropped).
 #
 # usage: tools/vs-verilator.sh [VERA]    default zig-out/bin/vera; build it with
 #        -Doptimize=ReleaseFast (either -Dlanguage) or the times mean nothing.
@@ -69,6 +75,7 @@ if [ "${1:-}" = --oracle ]; then
   exit 0
 fi
 VERA=$(realpath "${1:-zig-out/bin/vera}")
+CONTRACT=$PWD/tools/contract.zig
 
 designs=()
 for f in 05_expressions/audit_expr_signed_boundaries 10_tasks_functions/audit_function_return_variable \
@@ -97,16 +104,27 @@ timed() {
   return $rc
 }
 
-echo "| design | vera run s | vera MB | verilator build s | verilator run s | verilator MB | outputs agree |"
-echo "|---|---:|---:|---:|---:|---:|---|"
+kb() { echo $(( ($(stat -c %s "$1") + 1023) / 1024 )); }
+
+echo "| design | interp run s | interp MB | native build s | native run s | native MB | native KB | verilator build s | verilator run s | verilator MB | verilator KB | outputs agree |"
+echo "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"
 for d in "${designs[@]}"; do
   n=$(basename "$d" .v)
   if timed "$W/vera.out" "$VERA" --std=1364-2005 --run "$d"; then vs=$secs vm=$mb; else vs=error vm=-; fi
+  # Native: a cold cache per design, so the build column is a whole build.
+  mkdir -p "$W/vn_$n"
+  if timed "$W/vn.path" bash -c 'cd "$1" && "$2" --std=1364-2005 --emit-exe --contract "$3" --optimize=ReleaseFast --zig-backend=llvm --work-dir . "$4"' _ \
+    "$W/vn_$n" "$VERA" "$CONTRACT" "$(realpath "$d")"; then
+    nb=$secs nexe=$W/vn_$n/$(head -1 "$W/vn.path")
+    grep -q 'not native (' "$W/err" && nb="$nb (interp)"
+    if timed "$W/vn.out" "$nexe"; then nr=$secs nm=$mb nk=$(kb "$nexe"); else nr=error nm=- nk=-; fi
+  else nb=error nr=- nm=- nk=-; : > "$W/vn.out"; fi
   if timed /dev/null verilator --binary -j 0 -Wno-fatal --Mdir "$W/obj_$n" -o sim "$d"; then
     bs=$secs
-    if timed "$W/vl.out" "$W/obj_$n/sim"; then rs=$secs rm=$mb; else rs=error rm=-; fi
-  else bs=error rs=- rm=-; : > "$W/vl.out"; fi
-  if [ "$vs" != error ] && [ "$rs" != error ] && [ "$rs" != - ] &&
+    if timed "$W/vl.out" "$W/obj_$n/sim"; then rs=$secs rm=$mb rk=$(kb "$W/obj_$n/sim"); else rs=error rm=- rk=-; fi
+  else bs=error rs=- rm=- rk=-; : > "$W/vl.out"; fi
+  if [ "$vs" != error ] && [ "$nr" != error ] && [ "$nr" != - ] && [ "$rs" != error ] && [ "$rs" != - ] &&
+    diff -q "$W/vera.out" "$W/vn.out" > /dev/null &&
     diff -q "$W/vera.out" <(grep -v '^- ' "$W/vl.out") > /dev/null; then ok=yes; else ok=NO; fi
-  echo "| $n | $vs | $vm | $bs | $rs | $rm | $ok |"
+  echo "| $n | $vs | $vm | $nb | $nr | $nm | $nk | $bs | $rs | $rm | $rk | $ok |"
 done
