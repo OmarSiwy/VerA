@@ -1080,8 +1080,17 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
+    var native = false;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
+        if (std.mem.eql(u8, a, "--native")) {
+            native = true;
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--fuzz")) {
+            const n = std.fmt.parseInt(u32, args.next() orelse "", 10) catch return usage(init.io, "--fuzz takes a count");
+            return fuzz(init, vera_exe, n);
+        }
         filter = a;
     }
 
@@ -1106,6 +1115,8 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     var scratch_dir = try Io.Dir.cwd().openDir(io, scratch, .{});
     defer scratch_dir.close(io);
     try std.process.setCurrentDir(io, scratch_dir);
+
+    if (native) return nativeDevices(gpa, io, exe, cases, filter, w);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1487,19 +1498,27 @@ const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
 /// writes more than a few hundred bytes to either; the upgrade path is a
 /// two-thread drain, as `external.zig` would also need.
 fn capture(arena: Allocator, io: Io, argv: []const []const u8) !Captured {
+    return captureIn(arena, io, argv, null);
+}
+
+/// `capture` with the child's working directory at `cwd`.
+fn captureIn(arena: Allocator, io: Io, argv: []const []const u8, cwd: ?[]const u8) !Captured {
     var child = try std.process.spawn(io, .{
         .argv = argv,
+        .cwd = if (cwd) |p| .{ .path = p } else .inherit,
         .stdin = .ignore,
         .stdout = .pipe,
         .stderr = .pipe,
     });
-    var obuf: [1 << 16]u8 = undefined;
-    var ebuf: [1 << 16]u8 = undefined;
+    // Heap, not stack: `--native` captures from pool threads, whose stacks
+    // are smaller than these two buffers.
+    const obuf = try arena.alloc(u8, 1 << 16);
+    const ebuf = try arena.alloc(u8, 1 << 16);
     var out: Io.Writer.Allocating = .init(arena);
     var err: Io.Writer.Allocating = .init(arena);
-    var or_ = child.stdout.?.readerStreaming(io, &obuf);
+    var or_ = child.stdout.?.readerStreaming(io, obuf);
     _ = or_.interface.streamRemaining(&out.writer) catch {};
-    var er = child.stderr.?.readerStreaming(io, &ebuf);
+    var er = child.stderr.?.readerStreaming(io, ebuf);
     _ = er.interface.streamRemaining(&err.writer) catch {};
     return .{
         .stdout = out.written(),
@@ -1600,6 +1619,373 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
 }
 
 // ---------------------------------------------------------------------------
+// `--native`: the same cases through `vera --emit-exe` and the executable it
+// builds. The golden `--run` matches is the oracle, so matching it is matching
+// the interpreter and neither engine runs twice. Every case is also one of
+// three name lists — `NATIVE`, `FALLBACK <reason>` (the executable embeds the
+// interpreter, `rt.interpret`) or `FAIL` — so native coverage is diffed by
+// name, and a fallback that hides a regression shows up as a moved name.
+//
+//   zig build test-1364 -- --native            # all of IEEE 1364
+//   zig build test-devices -- --native d04     # the cases whose name has d04
+// ---------------------------------------------------------------------------
+
+const NativeJob = struct {
+    gpa: Allocator,
+    io: Io,
+    vera_exe: []const u8,
+    cases: []const []const u8,
+    slots: []NativeSlot,
+    next: std.atomic.Value(usize) = .init(0),
+
+    fn work(job: *NativeJob) void {
+        var arena_state: std.heap.ArenaAllocator = .init(job.gpa);
+        defer arena_state.deinit();
+        while (true) {
+            const i = job.next.fetchAdd(1, .monotonic);
+            if (i >= job.cases.len) return;
+            _ = arena_state.reset(.retain_capacity);
+            var aw: Io.Writer.Allocating = .init(job.gpa);
+            const v = nativeCase(arena_state.allocator(), job.io, job.vera_exe, job.cases[i], &aw.writer) catch |e| blk: {
+                aw.writer.print("FAIL {s}: the runner itself failed: {t}\n", .{ job.cases[i], e }) catch {};
+                break :blk NativeVerdict{ .pass = false, .fallback = null };
+            };
+            var list = aw.toArrayList();
+            // The reason is in the arena the next case resets.
+            var kept = v;
+            if (v.fallback) |why| kept.fallback = job.gpa.dupe(u8, why) catch "?";
+            job.slots[i] = .{ .verdict = kept, .output = list.toOwnedSlice(job.gpa) catch "" };
+        }
+    }
+};
+
+/// `fallback` is the executable's reason for embedding the interpreter;
+/// `refused` is a case the shared elaboration rejected, so no executable
+/// was built at all.
+const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false };
+const NativeSlot = struct { verdict: NativeVerdict = .{ .pass = false, .fallback = null }, output: []const u8 = "" };
+
+fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
+    var picked: std.ArrayList([]const u8) = .empty;
+    defer picked.deinit(gpa);
+    for (all) |c| if (filter == null or std.mem.indexOf(u8, c, filter.?) != null) try picked.append(gpa, c);
+    if (picked.items.len == 0) {
+        try w.print("devices: nothing matched `{s}`\n", .{filter orelse ""});
+        return 1;
+    }
+    const slots = try gpa.alloc(NativeSlot, picked.items.len);
+    defer gpa.free(slots);
+    @memset(slots, .{});
+    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .cases = picked.items, .slots = slots };
+    var group: Io.Group = .init;
+    const jobs = std.Thread.getCpuCount() catch 1;
+    var hands: usize = 0;
+    while (hands < jobs) : (hands += 1) group.concurrent(io, NativeJob.work, .{&job}) catch break;
+    if (hands == 0) job.work();
+    try group.await(io);
+
+    var failed: usize = 0;
+    var fell: usize = 0;
+    var refused: usize = 0;
+    for (picked.items, slots) |case, s| {
+        try w.writeAll(s.output);
+        if (!s.verdict.pass) failed += 1;
+        if (s.verdict.refused) {
+            refused += 1;
+        } else if (s.verdict.fallback) |why| {
+            fell += 1;
+            try w.print("FALLBACK {s}: {s}\n", .{ case, why });
+        } else if (s.verdict.pass) try w.print("NATIVE {s}\n", .{case});
+    }
+    try w.print(
+        "devices --native: {d}/{d} cases behave as they say they do; {d} native, " ++
+            "{d} through the embedded interpreter, {d} refused before any executable\n",
+        .{ picked.items.len - failed, picked.items.len, picked.items.len - fell - refused, fell, refused },
+    );
+    for (slots) |s| {
+        gpa.free(s.output);
+        if (s.verdict.fallback) |why| gpa.free(why);
+    }
+    return if (failed == 0) 0 else 1;
+}
+
+/// `digitalCase` through the executable. A rejection may come from `vera
+/// --emit-exe` (the shared elaboration) or from the executable at run time;
+/// either way its stderr is judged, the build's and the run's together.
+fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
+    const work = try std.fmt.allocPrint(arena, "native/{s}", .{case});
+    try Io.Dir.cwd().createDirPath(io, work);
+    var argv: std.ArrayList([]const u8) = .empty;
+    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--contract", options.contract, "--work-dir", work });
+    if (harness.digitalStd(source)) |s| try argv.append(arena, s);
+    try argv.append(arena, src);
+    const built = try capture(arena, io, argv.items);
+    const fallback: ?[]const u8 = if (std.mem.indexOf(u8, built.stderr, "not native (")) |at| blk: {
+        const rest = built.stderr[at + "not native (".len ..];
+        break :blk rest[0 .. std.mem.indexOf(u8, rest, ")\n") orelse rest.len];
+    } else null;
+    const negative = harness.digitalNegative(source);
+    if (built.exit != 0) {
+        if (negative and harness.digitalRejectionMatches(source, built.exit, built.stderr)) return .{ .pass = true, .fallback = null, .refused = true };
+        try w.print("FAIL {s}: vera --emit-exe exited {d}\n{s}\n", .{ case, built.exit, built.stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    const bin = try Io.Dir.cwd().realPathFileAlloc(io, std.mem.trimEnd(u8, built.stdout, "\n"), arena);
+    const ran = try captureIn(arena, io, &.{bin}, work);
+    const stderr = try std.mem.concat(arena, u8, &.{ built.stderr, ran.stderr });
+    if (negative) {
+        if (harness.digitalRejectionMatches(source, ran.exit, stderr)) return .{ .pass = true, .fallback = fallback };
+        try w.print("FAIL {s}: digital rejection mismatch (exit {d})\n{s}\n", .{ case, ran.exit, stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    if (ran.exit != 0) {
+        try w.print("FAIL {s}: the executable exited {d}\n{s}\n", .{ case, ran.exit, stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    if (!harness.digitalWarningsMatch(source, stderr)) {
+        try w.print("FAIL {s}: successful digital run has missing warning evidence or error diagnostics\n{s}\n", .{ case, stderr });
+        return .{ .pass = false, .fallback = fallback };
+    }
+    const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
+    return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback };
+}
+
+// ---------------------------------------------------------------------------
+// `--fuzz N`: N random expressions, each printed by `vera --run` and by the
+// native executable of the same source; the two transcripts must be equal
+// and the executable must be native. The fixtures pin the §5.5 context
+// rules at the points someone thought of; this is the check on the rule
+// being implemented twice (`exec.evalContext`, `emit_expr.value`).
+//
+//   zig build test-devices -- --fuzz 2000
+// ---------------------------------------------------------------------------
+
+const FuzzVar = struct { width: u32, signed: bool };
+const fuzz_widths = [_]u32{ 1, 2, 3, 7, 8, 13, 16, 31, 32, 33, 48, 63, 64 };
+const fuzz_vars = 12;
+const fuzz_per_file = 400;
+
+fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
+    const gpa = init.gpa;
+    const io = init.io;
+    var buf: [4096]u8 = undefined;
+    var stderr = Io.File.stderr().writer(io, &buf);
+    const w = &stderr.interface;
+    defer w.flush() catch {};
+    const exe = try Io.Dir.cwd().realPathFileAlloc(io, vera_exe, gpa);
+    defer gpa.free(exe);
+    const work = options.work_root ++ "/fuzz";
+    try Io.Dir.cwd().createDirPath(io, work);
+    var arena_state: std.heap.ArenaAllocator = .init(gpa);
+    defer arena_state.deinit();
+    var prng = std.Random.DefaultPrng.init(0x5eed_1364);
+    const rand = prng.random();
+    var done: u32 = 0;
+    var file: u32 = 0;
+    var failed = false;
+    while (done < count) : (file += 1) {
+        _ = arena_state.reset(.retain_capacity);
+        const a = arena_state.allocator();
+        const n = @min(fuzz_per_file, count - done);
+        const src = try fuzzSource(a, rand, n);
+        const path = try std.fmt.allocPrint(a, "{s}/fuzz{d}.v", .{ work, file });
+        try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = src });
+        const want = try capture(a, io, &.{ exe, "--run", path });
+        const built = try capture(a, io, &.{ exe, "--emit-exe", "--contract", options.contract, "--work-dir", work, path });
+        if (want.exit != 0 or built.exit != 0) {
+            try w.print("FAIL {s}: --run exited {d}, --emit-exe exited {d}\n{s}{s}\n", .{ path, want.exit, built.exit, want.stderr, built.stderr });
+            return 1;
+        }
+        if (std.mem.indexOf(u8, built.stderr, "not native (") != null) {
+            try w.print("FAIL {s}: not native\n{s}\n", .{ path, built.stderr });
+            return 1;
+        }
+        const got = try capture(a, io, &.{std.mem.trimEnd(u8, built.stdout, "\n")});
+        if (!std.mem.eql(u8, want.stdout, got.stdout)) {
+            failed = true;
+            var wl = std.mem.splitScalar(u8, want.stdout, '\n');
+            var gl = std.mem.splitScalar(u8, got.stdout, '\n');
+            while (wl.next()) |x| {
+                const y = gl.next() orelse "";
+                if (!std.mem.eql(u8, x, y)) try w.print("FAIL {s}: --run `{s}`, native `{s}`\n", .{ path, x, y });
+            }
+        }
+        done += n;
+    }
+    try w.print("fuzz: {d} expressions in {d} files, native {s} --run\n", .{ count, file, if (failed) "DIFFERS from" else "equals" });
+    return if (failed) 1 else 0;
+}
+
+/// One design: `fuzz_vars` random four-state operands, then `n` lines, each
+/// one random expression printed self-determined or through an assignment
+/// to a random-width target (so its context width and signedness vary).
+fn fuzzSource(a: Allocator, rand: std.Random, n: u32) ![]const u8 {
+    var out: Io.Writer.Allocating = .init(a);
+    const o = &out.writer;
+    var vars: [fuzz_vars]FuzzVar = undefined;
+    try o.writeAll("module fuzz;\n");
+    for (&vars, 0..) |*v, i| {
+        v.* = .{ .width = fuzz_widths[rand.uintLessThan(usize, fuzz_widths.len)], .signed = rand.boolean() };
+        try o.print("  reg {s}[{d}:0] v{d};\n", .{ if (v.signed) "signed " else "", v.width - 1, i });
+    }
+    try o.writeAll("  reg [7:0] mem [2:5];\n");
+    for (fuzz_widths, 0..) |tw, i| try o.print("  reg {s}[{d}:0] t{d};\n", .{ if (i % 2 == 0) "signed " else "", tw - 1, i });
+    try o.writeAll("  initial begin\n");
+    // Half the operands fully known, or arithmetic would almost always see
+    // an x and never reach its known-value path.
+    for (vars, 0..) |v, i| try o.print("    v{d} = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = v.width, .known = i % 2 == 0 } });
+    for (2..6) |i| try o.print("    mem[{d}] = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = 8 } });
+    for (0..n) |_| {
+        var g: FuzzGen = .{ .rand = rand, .vars = &vars, .out = o };
+        if (rand.boolean()) {
+            try o.writeAll("    $display(\"%b ");
+            try o.writeAll(if (rand.boolean()) "%d\", " else "%h\", ");
+            const cut = out.written().len;
+            _ = try g.expr(3);
+            const e = try a.dupe(u8, out.written()[cut..]);
+            try o.print(", {s});\n", .{e});
+        } else {
+            const t = rand.uintLessThan(usize, fuzz_widths.len);
+            try o.print("    t{d} = ", .{t});
+            _ = try g.expr(3);
+            try o.print(";\n    $display(\"%b %d\", t{d}, t{d});\n", .{ t, t });
+        }
+    }
+    try o.writeAll("  end\nendmodule\n");
+    return out.written();
+}
+
+/// A sized binary literal of `width` random bits, mostly known.
+const FuzzBits = struct {
+    rand: std.Random,
+    width: u32,
+    known: bool = false,
+    pub fn format(self: FuzzBits, o: *Io.Writer) Io.Writer.Error!void {
+        try o.print("{d}'b", .{self.width});
+        for (0..self.width) |_| try o.writeByte(if (!self.known and self.rand.uintLessThan(u8, 8) == 0) "xz"[self.rand.uintLessThan(u8, 2)] else "01"[self.rand.uintLessThan(u8, 2)]);
+    }
+};
+
+/// Random expressions whose every operand and result is at most 64 bits,
+/// so the native executable takes all of them.
+const FuzzGen = struct {
+    rand: std.Random,
+    vars: []const FuzzVar,
+    out: *Io.Writer,
+
+    /// Writes one expression; returns its self-determined width.
+    fn expr(g: *FuzzGen, depth: u32) Io.Writer.Error!u32 {
+        const o = g.out;
+        const r = g.rand;
+        if (depth == 0 or r.uintLessThan(u8, 5) == 0) return g.leaf();
+        switch (r.uintLessThan(u8, 12)) {
+            0 => {
+                try o.writeAll(([_][]const u8{ "-", "~", "!", "&", "|", "^", "~&", "~^", "+" })[r.uintLessThan(usize, 9)]);
+                try o.writeByte('(');
+                const wa = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return wa;
+            },
+            1, 2, 3 => {
+                try o.writeByte('(');
+                const wa = try g.expr(depth - 1);
+                try o.writeAll(([_][]const u8{ " + ", " - ", " * ", " / ", " % ", " & ", " | ", " ^ ", " ~^ " })[r.uintLessThan(usize, 9)]);
+                const wb = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return @max(wa, wb);
+            },
+            4 => {
+                try o.writeByte('(');
+                _ = try g.expr(depth - 1);
+                try o.writeAll(([_][]const u8{ " == ", " != ", " === ", " !== ", " < ", " <= ", " > ", " >= ", " && ", " || " })[r.uintLessThan(usize, 10)]);
+                _ = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return 1;
+            },
+            5 => {
+                try o.writeByte('(');
+                const wa = try g.expr(depth - 1);
+                try o.writeAll(([_][]const u8{ " << ", " >> ", " <<< ", " >>> ", " ** " })[r.uintLessThan(usize, 5)]);
+                if (r.boolean()) try o.print("{d}", .{r.uintLessThan(u32, 70)}) else _ = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return wa;
+            },
+            6 => {
+                try o.writeByte('(');
+                _ = try g.expr(depth - 1);
+                try o.writeAll(" ? ");
+                const wa = try g.expr(depth - 1);
+                try o.writeAll(" : ");
+                const wb = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return @max(wa, wb);
+            },
+            7 => {
+                // A concatenation of narrow operands only, so it stays within 64.
+                const i = r.uintLessThan(usize, g.vars.len);
+                const j = r.uintLessThan(usize, g.vars.len);
+                if (g.vars[i].width + g.vars[j].width > 64) return g.leaf();
+                try o.print("{{v{d}, v{d}}}", .{ i, j });
+                return g.vars[i].width + g.vars[j].width;
+            },
+            8 => {
+                const i = r.uintLessThan(usize, g.vars.len);
+                const k = 64 / g.vars[i].width;
+                const n = 1 + r.uintLessThan(u32, @min(k, 4));
+                try o.print("{{{d}{{v{d}}}}}", .{ n, i });
+                return n * g.vars[i].width;
+            },
+            9 => {
+                try o.writeAll(if (r.boolean()) "$signed(" else "$unsigned(");
+                const wa = try g.expr(depth - 1);
+                try o.writeByte(')');
+                return wa;
+            },
+            10 => {
+                const i = r.uintLessThan(usize, g.vars.len);
+                const vw = g.vars[i].width;
+                if (r.boolean()) {
+                    try o.print("v{d}[", .{i});
+                    _ = try g.expr(0);
+                    try o.writeByte(']');
+                    return 1;
+                }
+                const lo = r.uintLessThan(u32, vw);
+                const hi = lo + r.uintLessThan(u32, vw - lo);
+                try o.print("v{d}[{d}:{d}]", .{ i, hi, lo });
+                return hi - lo + 1;
+            },
+            else => {
+                try o.writeAll("mem[");
+                _ = try g.expr(0);
+                try o.writeByte(']');
+                return 8;
+            },
+        }
+    }
+
+    fn leaf(g: *FuzzGen) Io.Writer.Error!u32 {
+        const o = g.out;
+        const r = g.rand;
+        switch (r.uintLessThan(u8, 6)) {
+            0 => {
+                try o.print("{d}", .{r.uintLessThan(u32, 300)});
+                return 32;
+            },
+            1 => {
+                try o.writeAll(([_][]const u8{ "'bx", "'bz", "'hx1", "'b1", "-4'sd3", "4'sb1x01", "'sd7", "3'bz0x" })[r.uintLessThan(usize, 8)]);
+                return 32;
+            },
+            else => {
+                const i = r.uintLessThan(usize, g.vars.len);
+                try o.print("v{d}", .{i});
+                return g.vars[i].width;
+            },
+        }
+    }
+};
 
 // orchestrator.zig's claim, and the whole basis of the incremental story:
 // writing a tree that is already on disk touches nothing. It is a `test` and
