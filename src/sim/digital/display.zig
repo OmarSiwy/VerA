@@ -457,7 +457,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
 /// §17.1.1.6 `%m`: the hierarchical name of the scope the display runs in —
 /// the instance path from the root, then every §5.3.2 named block around the
 /// running instruction, outermost first.
-fn emitScope(self: *Run) Error!void {
+pub fn emitScope(self: *Run) Error!void {
     var chain: [64]u32 = undefined;
     var depth: usize = 0;
     var s = self.scope;
