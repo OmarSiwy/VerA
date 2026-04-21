@@ -190,6 +190,7 @@ pub fn build(b: *std.Build) void {
     const dev = b.addRunArtifact(suite_exe);
     dev.addArtifactArg(exe);
     dev.addArg("devices");
+    if (b.args) |a| dev.addArgs(a);
     b.step("test-devices", "Run `vera --run` over ieee1364/ and digital/ and diff their transcripts")
         .dependOn(&dev.step);
 
