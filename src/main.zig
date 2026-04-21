@@ -47,8 +47,8 @@ const usage_text =
     \\  --expect-module=NAME    fail unless the compiled module is called NAME
     \\  --check                 type-check the generated device with zig
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
-    \\  --emit-exe              build a runnable Verilog-A testbench, or a .v design's
-    \\                          executable (needs --contract); print its path
+    \\  --emit-exe              build a runnable Verilog-A testbench (needs --contract),
+    \\                          or a .v design's executable; print its path
     \\  --run                   run a .v initial-process program, or an analog testbench
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
@@ -342,14 +342,12 @@ pub fn main(init: std.process.Init) !u8 {
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
         const opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language };
+        const wd = work_dir orelse ".zig-cache/vera-tb";
         if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
-            .work_dir = work_dir orelse ".zig-cache/vera-tb",
-            .contract = contract_path orelse {
-                try err.writeAll(
-                    "error: --emit-exe needs --contract PATH (the root of the `contract` " ++
-                        "module; the executable is built from the VerA tree beside it)\n",
-                );
-                return 2;
+            .work_dir = wd,
+            .contract = contract_path orelse simTree(io, arena.allocator(), wd) catch |e| {
+                try err.print("error: writing the engine sources under {s} failed: {t}\n", .{ wd, e });
+                return 1;
             },
             .name = std.fs.path.stem(in_path),
             .zig_exe = zig_exe,
@@ -603,6 +601,23 @@ pub fn main(init: std.process.Init) !u8 {
         }
     }
     return 0;
+}
+
+/// Write the sources `sim` compiles from (`sim_sources`, embedded at build
+/// time) under `dir`, and return the `contract` root among them: the path
+/// `tb.buildExe` finds the tree from. Each file lands atomically, so a
+/// concurrent `vera` writing the same tree never exposes half a file.
+fn simTree(io: Io, arena: std.mem.Allocator, dir: []const u8) ![]const u8 {
+    const root = try std.fs.path.join(arena, &.{ dir, "vera-src" });
+    var d = try Io.Dir.cwd().createDirPathOpen(io, root, .{});
+    defer d.close(io);
+    for (@import("sim_sources").files) |f| {
+        var af = try d.createFileAtomic(io, f[0], .{ .make_path = true, .replace = true });
+        defer af.deinit(io);
+        try af.file.writeStreamingAll(io, f[1]);
+        try af.replace(io);
+    }
+    return std.fs.path.join(arena, &.{ root, "tools", "contract.zig" });
 }
 
 /// `vera --emit-exe design.v`: elaborate here, so a design the engine refuses
