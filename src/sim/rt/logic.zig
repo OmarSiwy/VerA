@@ -1,19 +1,131 @@
-//! IEEE 1364-2005 four-state operators on one machine word, for a native
-//! executable. std-only.
+//! IEEE 1364-2005 four-state operators for a native executable.
 //!
-//! In: operands of at most 64 bits as a `W`, their widths and signedness
-//! known when the design is compiled (§5.5: every width is static). Out: the
+//! In: operands as `T(w)` — a `W` up to 64 bits, a `Wide(n)` of `n` words
+//! per plane above — their widths and signedness known when the design is
+//! compiled (§5.5: every width is static), so the representation is chosen
+//! at compile time and nothing dispatches on width at run time. Out: the
 //! value `Integer.Literal`'s operator of the same name computes — which is
-//! the oracle the tests at the bottom compare against, bit for bit.
+//! the oracle the tests at the bottom compare against, bit for bit. Wide
+//! `* / % **` are that oracle itself.
 //!
 //! Clauses: §5.1.5 arithmetic, §5.1.7 relational, §5.1.8 equality, §5.1.9
 //! logical, §5.1.10 bitwise, §5.1.11 reduction, §5.1.12 shift, §5.1.13
 //! conditional, Tables 5-12..5-21; §5.5.2 extension; §9.5.1 casez/casex.
 const std = @import("std");
+const Int = @import("frontend").Integer;
 
 /// A value of at most 64 bits as two planes, VPI-encoded per bit: (v, x) =
 /// 00/10/11/01 for 0/1/x/z. Bits at and above the width are 0 in both.
 pub const W = struct { v: u64, x: u64 };
+
+/// A value of more than 64 bits: `n` words per plane, least significant
+/// first, encoded and zero-padded above the width as `W` is.
+pub fn Wide(comptime n: u32) type {
+    return struct { v: [n]u64, x: [n]u64 };
+}
+
+pub fn words(comptime w: u32) u32 {
+    return (w + 63) / 64;
+}
+
+/// The type a `w`-bit value is carried in.
+pub fn T(comptime w: u32) type {
+    return if (w <= 64) W else Wide(words(w));
+}
+
+/// The type of a `w`-bit plane mask: what `State.put` takes beside a `T(w)`.
+pub fn M(comptime w: u32) type {
+    return if (w <= 64) u64 else [words(w)]u64;
+}
+
+const ones = std.math.maxInt(u64);
+
+/// The mask of the last word of a `w`-bit value.
+fn top(comptime w: u32) u64 {
+    return if (w % 64 == 0) ones else (@as(u64, 1) << @intCast(w % 64)) - 1;
+}
+
+fn wordsOf(comptime A: type) u32 {
+    const V = @FieldType(A, "v");
+    return if (V == u64) 1 else @typeInfo(V).array.len;
+}
+
+/// `a` as words: a `W` is one.
+inline fn wide(a: anytype) Wide(wordsOf(@TypeOf(a))) {
+    if (@FieldType(@TypeOf(a), "v") == u64) return .{ .v = .{a.v}, .x = .{a.x} };
+    return .{ .v = a.v, .x = a.x };
+}
+
+/// Words back as the `T(w)` they carry.
+inline fn narrow(comptime w: u32, a: Wide(words(w))) T(w) {
+    if (w <= 64) return .{ .v = a.v[0], .x = a.x[0] };
+    return a;
+}
+
+/// Every bit of a `w`-bit value.
+pub fn full(comptime w: u32) M(w) {
+    if (w <= 64) return mask(w);
+    var m: [words(w)]u64 = @splat(ones);
+    m[words(w) - 1] = top(w);
+    return m;
+}
+
+/// A `w`-bit value of all x.
+pub fn xs(comptime w: u32) T(w) {
+    return narrow(w, .{ .v = wideFull(w), .x = wideFull(w) });
+}
+
+/// Bits `[lo, hi)` of word `j`, clamped to the word.
+fn span(j: usize, lo: i64, hi: i64) u64 {
+    const base: i64 = @intCast(64 * j);
+    return below(std.math.clamp(hi - base, 0, 64)) & ~below(std.math.clamp(lo - base, 0, 64));
+}
+
+fn below(n: i64) u64 {
+    return if (n >= 64) ones else (@as(u64, 1) << @intCast(n)) - 1;
+}
+
+/// The 64 bits of `p` from bit `pos` up; bits outside `p` read 0.
+fn funnel(p: []const u64, at: i64) u64 {
+    const q = @divFloor(at, 64);
+    const b: u6 = @intCast(@mod(at, 64));
+    const lo = wordAt(p, q) >> b;
+    const hi = if (b == 0) 0 else wordAt(p, q + 1) << @intCast(64 - @as(u7, b));
+    return lo | hi;
+}
+
+fn wordAt(p: []const u64, i: i64) u64 {
+    return if (i < 0 or i >= p.len) 0 else p[@intCast(i)];
+}
+
+/// `dst |= src << at`, bits past `dst` dropped.
+fn orAt(dst: []u64, src: []const u64, at: u32) void {
+    const q = at / 64;
+    const b: u6 = @intCast(at % 64);
+    for (src, 0..) |w, j| {
+        if (q + j < dst.len) dst[q + j] |= w << b;
+        if (b != 0 and q + j + 1 < dst.len) dst[q + j + 1] |= w >> @intCast(64 - @as(u7, b));
+    }
+}
+
+fn anyX(a: anytype) bool {
+    var u: u64 = 0;
+    for (wide(a).x) |x| u |= x;
+    return u != 0;
+}
+
+/// `r` of width `w`, or all x when `unk` (§5.1.5).
+fn orX(comptime w: u32, r: [words(w)]u64, unk: bool) T(w) {
+    const u = 0 -% @as(u64, @intFromBool(unk));
+    var o: Wide(words(w)) = undefined;
+    for (&o.v, &o.x, r) |*v, *x, rv| {
+        v.* = rv | u;
+        x.* = u;
+    }
+    o.v[words(w) - 1] &= top(w);
+    o.x[words(w) - 1] &= top(w);
+    return narrow(w, o);
+}
 
 /// One bit, as `Integer.Bit` encodes it: `v | x << 1`.
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
@@ -32,13 +144,15 @@ fn allX(comptime w: u32) W {
 }
 
 /// Bit 0.
-pub inline fn low(a: W) Bit {
-    return @enumFromInt(@as(u2, @intCast(a.v & 1)) | @as(u2, @intCast(a.x & 1)) << 1);
+pub inline fn low(a: anytype) Bit {
+    const s = wide(a);
+    return @enumFromInt(@as(u2, @intCast(s.v[0] & 1)) | @as(u2, @intCast(s.x[0] & 1)) << 1);
 }
 
 /// `Literal.resize`: truncate, or extend by `sign` (per plane, so a top x
 /// or z replicates as itself).
-pub inline fn rs(a: W, comptime from: u32, comptime to: u32, comptime sign: bool) W {
+pub inline fn rs(a: anytype, comptime from: u32, comptime to: u32, comptime sign: bool) T(to) {
+    if (from > 64 or to > 64) return rsWide(wide(a), from, to, sign);
     if (to <= from or !sign) return .{ .v = a.v & mask(to), .x = a.x & mask(to) };
     const hi = ~mask(from) & mask(to);
     return .{
@@ -47,25 +161,72 @@ pub inline fn rs(a: W, comptime from: u32, comptime to: u32, comptime sign: bool
     };
 }
 
-/// A one-bit result in its context (`exec.scalarContext`).
-pub inline fn ctx(b: Bit, comptime w: u32, comptime sign: bool) W {
-    const n: u2 = @intFromEnum(b);
-    return rs(.{ .v = n & 1, .x = n >> 1 }, 1, w, sign);
+fn rsWide(s: anytype, comptime from: u32, comptime to: u32, comptime sign: bool) T(to) {
+    const nf = comptime words(from);
+    const nt = comptime words(to);
+    const b: u6 = (from - 1) % 64;
+    const fv: u64 = if (sign) 0 -% ((s.v[nf - 1] >> b) & 1) else 0;
+    const fx: u64 = if (sign) 0 -% ((s.x[nf - 1] >> b) & 1) else 0;
+    var o: Wide(nt) = undefined;
+    for (0..nt) |i| {
+        o.v[i] = if (i < nf) s.v[i] else fv;
+        o.x[i] = if (i < nf) s.x[i] else fx;
+    }
+    if (nf <= nt) {
+        o.v[nf - 1] |= fv & ~top(from);
+        o.x[nf - 1] |= fx & ~top(from);
+    }
+    o.v[nt - 1] &= top(to);
+    o.x[nt - 1] &= top(to);
+    return narrow(to, o);
 }
 
-pub inline fn not(a: W, comptime w: u32) W {
-    return .{ .v = (~a.v | a.x) & mask(w), .x = a.x };
+/// A one-bit result in its context (`exec.scalarContext`).
+pub inline fn ctx(b: Bit, comptime w: u32, comptime sign: bool) T(w) {
+    const n: u2 = @intFromEnum(b);
+    return rs(W{ .v = n & 1, .x = n >> 1 }, 1, w, sign);
+}
+
+pub inline fn not(a: anytype, comptime w: u32) T(w) {
+    if (w <= 64) return .{ .v = (~a.v | a.x) & mask(w), .x = a.x };
+    var o = a;
+    for (&o.v, a.x) |*v, x| v.* = ~v.* | x;
+    o.v[words(w) - 1] &= top(w);
+    return o;
 }
 
 /// Any unknown bit makes all of it x.
-pub inline fn neg(a: W, comptime w: u32) W {
+pub inline fn neg(a: anytype, comptime w: u32) T(w) {
+    if (w > 64) return negWide(w, a);
     const unk = 0 -% @as(u64, @intFromBool(a.x != 0));
     return .{ .v = ((0 -% a.v) | unk) & mask(w), .x = unk & mask(w) };
 }
 
+fn negWide(comptime w: u32, a: T(w)) T(w) {
+    var r: [words(w)]u64 = undefined;
+    var borrow: u1 = 0;
+    for (&r, a.v) |*d, v| {
+        const s = @subWithOverflow(0, v);
+        const t = @subWithOverflow(s[0], borrow);
+        d.* = t[0];
+        borrow = s[1] | t[1];
+    }
+    return orX(w, r, anyX(a));
+}
+
 pub const Bitwise = enum { @"and", @"or", xor, xnor };
 
-pub inline fn bitwise(comptime op: Bitwise, a: W, b: W, comptime w: u32) W {
+pub inline fn bitwise(comptime op: Bitwise, a: anytype, b: @TypeOf(a), comptime w: u32) T(w) {
+    if (w > 64) {
+        var o: T(w) = undefined;
+        for (&o.v, &o.x, a.v, a.x, b.v, b.x) |*ov, *ox, av, ax, bv, bx| {
+            const r = bitwise(op, W{ .v = av, .x = ax }, W{ .v = bv, .x = bx }, 64);
+            ov.* = r.v;
+            ox.* = r.x;
+        }
+        o.v[words(w) - 1] &= top(w);
+        return o;
+    }
     return switch (op) {
         .@"and" => blk: {
             const x = (a.x | b.x) & (a.v | a.x) & (b.v | b.x);
@@ -89,7 +250,13 @@ pub const Arith = enum { add, sub, mul, div, mod };
 
 /// `Literal.arithmetic` at one word: any unknown bit, and `/` or `%` by 0,
 /// is all x (§5.1.5).
-pub inline fn arith(comptime op: Arith, a: W, b: W, comptime w: u32, comptime signed: bool) W {
+pub inline fn arith(comptime op: Arith, a: anytype, b: @TypeOf(a), comptime w: u32, comptime signed: bool) T(w) {
+    if (w > 64) return switch (op) {
+        .add, .sub => addWide(op == .sub, w, a, b),
+        .mul => big(w, signed, a, b, w, signed, .multiply),
+        .div => big(w, signed, a, b, w, signed, .divide),
+        .mod => big(w, signed, a, b, w, signed, .remainder),
+    };
     const av = if (signed) sext(a.v, w) else a.v;
     const bv = if (signed) sext(b.v, w) else b.v;
     const zero = (op == .div or op == .mod) and bv == 0;
@@ -109,9 +276,46 @@ pub inline fn arith(comptime op: Arith, a: W, b: W, comptime w: u32, comptime si
     return .{ .v = (r | unk) & mask(w), .x = unk & mask(w) };
 }
 
-/// `Literal.power` at one word: the base in context, the exponent
-/// self-determined (§5.1.5 Table 5-6).
-pub fn pow(a: W, comptime w: u32, comptime signed: bool, e: W, comptime ew: u32, comptime esigned: bool) W {
+/// A carry (or borrow) chain: `+` and `-` at any width wrap the same way
+/// signed or not.
+fn addWide(comptime sub: bool, comptime w: u32, a: T(w), b: T(w)) T(w) {
+    var r: [words(w)]u64 = undefined;
+    var c: u1 = 0;
+    for (&r, a.v, b.v) |*d, av, bv| {
+        const s = if (sub) @subWithOverflow(av, bv) else @addWithOverflow(av, bv);
+        const t = if (sub) @subWithOverflow(s[0], c) else @addWithOverflow(s[0], c);
+        d.* = t[0];
+        c = s[1] | t[1];
+    }
+    return orX(w, r, anyX(a) or anyX(b));
+}
+
+/// Both planes of `a`, values first: an `Integer.Literal`'s `planes`.
+pub fn planesOf(a: anytype) [2 * wordsOf(@TypeOf(a))]u64 {
+    const s = wide(a);
+    return s.v ++ s.x;
+}
+
+/// `Integer.Literal`'s operator itself, for the wide `* / % **`: rare, and
+/// already exact at every width.
+fn big(comptime w: u32, comptime signed: bool, a: anytype, b: anytype, comptime bw: u32, comptime bsigned: bool, comptime op: ?Int.Arithmetic) T(w) {
+    var arena: std.heap.ArenaAllocator = .init(std.heap.smp_allocator);
+    defer arena.deinit();
+    var pa = planesOf(a);
+    var pb = planesOf(b);
+    const la: Int.Literal = .{ .width = w, .signed = signed, .sized = true, .planes = &pa };
+    const lb: Int.Literal = .{ .width = bw, .signed = bsigned, .sized = true, .planes = &pb };
+    const r = (if (op) |o| la.arithmetic(arena.allocator(), o, lb) else la.power(arena.allocator(), lb)) catch @panic("out of memory");
+    var o: Wide(words(w)) = undefined;
+    @memcpy(&o.v, r.values()[0..words(w)]);
+    @memcpy(&o.x, r.unknowns()[0..words(w)]);
+    return narrow(w, o);
+}
+
+/// `Literal.power`: the base in context, the exponent self-determined
+/// (§5.1.5 Table 5-6).
+pub fn pow(a: anytype, comptime w: u32, comptime signed: bool, e: anytype, comptime ew: u32, comptime esigned: bool) T(w) {
+    if (w > 64 or ew > 64) return big(w, signed, a, e, ew, esigned, null);
     if (a.x != 0 or e.x != 0) return allX(w);
     const m = mask(w);
     const ev = e.v & mask(ew);
@@ -135,7 +339,8 @@ pub const Shift = enum { left, right, arithmetic_left, arithmetic_right };
 
 /// `Literal.shift`: an unknown amount is all x; an amount of at least the
 /// width leaves only the fill (§5.1.12).
-pub inline fn shift(comptime op: Shift, a: W, comptime w: u32, comptime signed: bool, b: W) W {
+pub inline fn shift(comptime op: Shift, a: anytype, comptime w: u32, comptime signed: bool, b: anytype) T(w) {
+    if (comptime w > 64 or wordsOf(@TypeOf(b)) > 1) return shiftWide(op, w, signed, wide(a), wide(b));
     if (b.x != 0) return allX(w);
     const fill = op == .arithmetic_right and signed;
     if (b.v >= w) return if (fill)
@@ -152,10 +357,49 @@ pub inline fn shift(comptime op: Shift, a: W, comptime w: u32, comptime signed: 
     };
 }
 
+fn shiftWide(comptime op: Shift, comptime w: u32, comptime signed: bool, a: Wide(words(w)), b: anytype) T(w) {
+    if (anyX(b)) return narrow(w, .{ .v = wideFull(w), .x = wideFull(w) });
+    var hi: u64 = 0;
+    for (b.v[1..]) |v| hi |= v;
+    // `Literal.shift`: an amount of at least the width leaves only the fill.
+    const amount: u32 = if (hi != 0) w else @intCast(@min(b.v[0], w));
+    const fill = op == .arithmetic_right and signed;
+    const n = comptime words(w);
+    const sb: u6 = (w - 1) % 64;
+    var o: Wide(n) = undefined;
+    inline for (.{ &o.v, &o.x }, .{ a.v, a.x }) |out, src_| {
+        var src = src_;
+        const f: u64 = if (fill) 0 -% ((src[n - 1] >> sb) & 1) else 0;
+        src[n - 1] |= f & ~top(w);
+        const q = amount / 64;
+        const bs: u6 = @intCast(amount % 64);
+        for (out, 0..) |*d, i| {
+            if (op == .left or op == .arithmetic_left) {
+                d.* = if (i >= q) src[i - q] << bs else 0;
+                if (bs != 0 and i > q) d.* |= src[i - q - 1] >> @intCast(64 - @as(u7, bs));
+            } else {
+                const lo = if (i + q < n) src[i + q] else f;
+                const up_ = if (i + q + 1 < n) src[i + q + 1] else f;
+                d.* = lo >> bs;
+                if (bs != 0) d.* |= up_ << @intCast(64 - @as(u7, bs));
+            }
+        }
+        out[n - 1] &= top(w);
+    }
+    return narrow(w, o);
+}
+
+fn wideFull(comptime w: u32) [words(w)]u64 {
+    var m: [words(w)]u64 = @splat(ones);
+    m[words(w) - 1] = top(w);
+    return m;
+}
+
 pub const Relational = enum { lt, le, gt, ge };
 
 /// Any unknown bit makes the relation x (§5.1.7).
-pub inline fn rel(comptime op: Relational, a: W, b: W, comptime w: u32, comptime signed: bool) Bit {
+pub inline fn rel(comptime op: Relational, a: anytype, b: @TypeOf(a), comptime w: u32, comptime signed: bool) Bit {
+    if (w > 64) return relWide(op, w, signed, a, b);
     if ((a.x | b.x) != 0) return .x;
     const ord = if (signed)
         std.math.order(@as(i64, @bitCast(sext(a.v, w))), @as(i64, @bitCast(sext(b.v, w))))
@@ -169,28 +413,71 @@ pub inline fn rel(comptime op: Relational, a: W, b: W, comptime w: u32, comptime
     }) .one else .zero;
 }
 
+/// Word order from the top, the sign bit biased so unsigned order is
+/// two's-complement order (`Literal.relational`).
+fn relWide(comptime op: Relational, comptime w: u32, comptime signed: bool, a: T(w), b: T(w)) Bit {
+    if (anyX(a) or anyX(b)) return .x;
+    var lt: u1 = 0;
+    var gt: u1 = 0;
+    var decided: u1 = 0;
+    var i: usize = words(w);
+    while (i > 0) {
+        i -= 1;
+        const bias: u64 = if (signed and i == words(w) - 1) @as(u64, 1) << ((w - 1) % 64) else 0;
+        const av = a.v[i] ^ bias;
+        const bv = b.v[i] ^ bias;
+        lt |= ~decided & @intFromBool(av < bv);
+        gt |= ~decided & @intFromBool(av > bv);
+        decided |= @intFromBool(av != bv);
+    }
+    return if (switch (op) {
+        .lt => lt == 1,
+        .le => gt == 0,
+        .gt => gt == 1,
+        .ge => lt == 0,
+    }) .one else .zero;
+}
+
 pub const Equality = enum { eq, neq, case_eq, case_neq };
 
 /// Both operands already in their common type (§5.1.8).
-pub inline fn eq(comptime op: Equality, a: W, b: W) Bit {
-    const different = switch (op) {
-        .case_eq, .case_neq => (a.v ^ b.v) | (a.x ^ b.x),
-        .eq, .neq => (a.v ^ b.v) & ~(a.x | b.x),
-    };
+pub inline fn eq(comptime op: Equality, a: anytype, b: @TypeOf(a)) Bit {
+    var different: u64 = 0;
+    var unknown: u64 = 0;
+    const sa = wide(a);
+    const sb = wide(b);
+    for (sa.v, sa.x, sb.v, sb.x) |av, ax, bv, bx| {
+        different |= switch (op) {
+            .case_eq, .case_neq => (av ^ bv) | (ax ^ bx),
+            .eq, .neq => (av ^ bv) & ~(ax | bx),
+        };
+        unknown |= ax | bx;
+    }
     const r: Bit = if (different != 0) .zero else switch (op) {
         .case_eq, .case_neq => .one,
-        .eq, .neq => if ((a.x | b.x) != 0) .x else .one,
+        .eq, .neq => if (unknown != 0) .x else .one,
     };
     return if (op == .neq or op == .case_neq) invert(r) else r;
 }
 
 pub const Reduction = enum { @"and", nand, @"or", nor, xor, xnor };
 
-pub inline fn reduce(comptime op: Reduction, a: W, comptime w: u32) Bit {
+pub inline fn reduce(comptime op: Reduction, a: anytype, comptime w: u32) Bit {
+    var zeros: u64 = 0;
+    var known1: u64 = 0;
+    var unknown: u64 = 0;
+    var parity: u64 = 0;
+    const s = wide(a);
+    for (s.v, s.x, 0..) |v, x, i| {
+        zeros |= ~(v | x) & (if (i == s.v.len - 1) top(w) else ones);
+        known1 |= v & ~x;
+        unknown |= x;
+        parity ^= @popCount(v);
+    }
     const r: Bit = switch (op) {
-        .@"and", .nand => if (~(a.v | a.x) & mask(w) != 0) .zero else if (a.x != 0) .x else .one,
-        .@"or", .nor => if (a.v & ~a.x != 0) .one else if (a.x != 0) .x else .zero,
-        .xor, .xnor => if (a.x != 0) .x else if (@popCount(a.v) & 1 == 1) .one else .zero,
+        .@"and", .nand => if (zeros != 0) .zero else if (unknown != 0) .x else .one,
+        .@"or", .nor => if (known1 != 0) .one else if (unknown != 0) .x else .zero,
+        .xor, .xnor => if (unknown != 0) .x else if (parity & 1 == 1) .one else .zero,
     };
     return switch (op) {
         .nand, .nor, .xnor => invert(r),
@@ -199,8 +486,15 @@ pub inline fn reduce(comptime op: Reduction, a: W, comptime w: u32) Bit {
 }
 
 /// §5.1.9: any known 1 makes it true, even beside x or z.
-pub inline fn truth(a: W) Bit {
-    return if (a.v & ~a.x != 0) .one else if (a.x != 0) .x else .zero;
+pub inline fn truth(a: anytype) Bit {
+    var known1: u64 = 0;
+    var unknown: u64 = 0;
+    const s = wide(a);
+    for (s.v, s.x) |v, x| {
+        known1 |= v & ~x;
+        unknown |= x;
+    }
+    return if (known1 != 0) .one else if (unknown != 0) .x else .zero;
 }
 
 pub inline fn invert(b: Bit) Bit {
@@ -223,80 +517,170 @@ pub inline fn logical(comptime op: Logical, a: Bit, b: Bit) Bit {
 
 /// §5.1.13 Table 5-21: under an ambiguous condition only matching known
 /// bits survive. Both arms already in the context type.
-pub inline fn cond(c: Bit, y: W, n: W) W {
+pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
     return switch (c) {
         .one => y,
         .zero => n,
         .x, .z => blk: {
-            const x = y.x | n.x | (y.v ^ n.v);
-            break :blk .{ .v = y.v | x, .x = x };
+            if (@FieldType(@TypeOf(y), "v") == u64) {
+                const x = y.x | n.x | (y.v ^ n.v);
+                break :blk .{ .v = y.v | x, .x = x };
+            }
+            var o = y;
+            for (&o.v, &o.x, n.v, n.x) |*ov, *ox, nv, nx| {
+                const x = ox.* | nx | (ov.* ^ nv);
+                ov.* |= x;
+                ox.* = x;
+            }
+            break :blk o;
         },
     };
 }
 
-/// `{hi, lo}`, `lo` being `lw` bits wide.
-pub inline fn join(hi: W, lo: W, comptime lw: u32) W {
-    if (lw == 64) return lo;
-    return .{ .v = hi.v << lw | lo.v, .x = hi.x << lw | lo.x };
+/// `{hi, lo}`, `hi` being `hw` bits wide and `lo` `lw`.
+pub inline fn join(hi: anytype, comptime hw: u32, lo: anytype, comptime lw: u32) T(hw + lw) {
+    if (hw + lw <= 64) return .{ .v = hi.v << lw | lo.v, .x = hi.x << lw | lo.x };
+    var o: Wide(words(hw + lw)) = .{ .v = @splat(0), .x = @splat(0) };
+    const sl = wide(lo);
+    const sh = wide(hi);
+    orAt(&o.v, &sl.v, 0);
+    orAt(&o.x, &sl.x, 0);
+    orAt(&o.v, &sh.v, lw);
+    orAt(&o.x, &sh.x, lw);
+    return o;
 }
 
 /// The integer a self-determined index reads as, or null when it has an
-/// unknown bit (`Literal.asInt`).
-pub inline fn asInt(a: W, comptime w: u32, comptime signed: bool) ?i64 {
+/// unknown bit or is wider than 64 bits (`Literal.asInt`).
+pub inline fn asInt(a: anytype, comptime w: u32, comptime signed: bool) ?i64 {
+    if (w > 64) return null;
     if (a.x != 0) return null;
     return @bitCast(if (signed) sext(a.v, w) else a.v);
 }
 
 /// `exec.position` then `readSelect` of one bit: bit `index` of a vector
 /// declared `[msb:lsb]`, x when the index is x/z or outside it (§5.2.1).
-pub inline fn bitAt(a: W, index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) W {
-    const i = index orelse return .{ .v = 1, .x = 1 };
-    const p = if (msb >= lsb) i - lsb else lsb - i;
-    if (p < 0 or p >= w) return .{ .v = 1, .x = 1 };
-    const n: u6 = @intCast(p);
-    return .{ .v = (a.v >> n) & 1, .x = (a.x >> n) & 1 };
+pub inline fn bitAt(a: anytype, index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) W {
+    const p = pos(index, msb, lsb, w) orelse return .{ .v = 1, .x = 1 };
+    const s = wide(a);
+    const n: u6 = @intCast(p % 64);
+    return .{ .v = (s.v[p / 64] >> n) & 1, .x = (s.x[p / 64] >> n) & 1 };
 }
 
-/// A constant part-select (`emit_expr.partPlace`): bit i is bit `i + shift`
-/// of `a` where `valid` has bit i, else x.
-pub inline fn part(a: W, comptime shift_: i64, comptime valid: u64, comptime w: u32) W {
+/// A constant part-select (`emit_expr.partPlace`) of an `sw`-bit vector:
+/// bit i of the `count`-bit result is bit `i + shift` of `a` where that bit
+/// exists, else x (§5.2.1).
+pub inline fn part(a: anytype, comptime shift_: i64, comptime count: u32, comptime sw: u32) T(count) {
+    const lo: i64 = @max(0, -shift_);
+    const hi: i64 = @min(count, @as(i64, sw) - shift_);
+    if (count > 64 or sw > 64) {
+        const s = wide(a);
+        var o: Wide(words(count)) = undefined;
+        for (&o.v, &o.x, 0..) |*v, *x, j| {
+            const at = shift_ + @as(i64, @intCast(64 * j));
+            const valid = span(j, lo, hi);
+            const holes = ~valid & (if (j == words(count) - 1) top(count) else ones);
+            v.* = (funnel(&s.v, at) & valid) | holes;
+            x.* = (funnel(&s.x, at) & valid) | holes;
+        }
+        return narrow(count, o);
+    }
+    const valid = comptime span(0, lo, hi);
     const v = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.v >> @intCast(shift_) else a.v << @intCast(-shift_);
     const x = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.x >> @intCast(shift_) else a.x << @intCast(-shift_);
-    const holes = ~valid & mask(w);
+    const holes = ~valid & mask(count);
     return .{ .v = (v & valid) | holes, .x = (x & valid) | holes };
 }
 
-/// The inverse of `part` for an assignment: `a`'s bits placed at `shift`,
-/// under `m` (the slot bits the select names).
-pub inline fn place(a: W, comptime shift_: i64, comptime m: u64) W {
+/// The slot bits a constant part-select of `count` bits at `shift` names
+/// in an `sw`-bit vector: the mask `place`'s value is stored under.
+pub fn field(comptime shift_: i64, comptime count: u32, comptime sw: u32) M(sw) {
+    const lo: i64 = @max(0, shift_);
+    const hi: i64 = @min(sw, shift_ + count);
+    if (sw <= 64) return span(0, lo, hi);
+    var m: [words(sw)]u64 = undefined;
+    for (&m, 0..) |*w, j| w.* = span(j, lo, hi);
+    return m;
+}
+
+/// The inverse of `part` for an assignment: `a`'s `count` bits placed at
+/// `shift` in an `sw`-bit vector, zero outside `field`.
+pub inline fn place(a: anytype, comptime shift_: i64, comptime count: u32, comptime sw: u32) T(sw) {
+    const m = comptime field(shift_, count, sw);
+    if (count > 64 or sw > 64) {
+        const s = wide(a);
+        var o: Wide(words(sw)) = undefined;
+        for (&o.v, &o.x, 0..) |*v, *x, j| {
+            const at = @as(i64, @intCast(64 * j)) - shift_;
+            const fm = if (sw <= 64) m else m[j];
+            v.* = funnel(&s.v, at) & fm;
+            x.* = funnel(&s.x, at) & fm;
+        }
+        return narrow(sw, o);
+    }
     const v = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.v << @intCast(shift_) else a.v >> @intCast(-shift_);
     const x = if (shift_ >= 64 or shift_ <= -64) 0 else if (shift_ >= 0) a.x << @intCast(shift_) else a.x >> @intCast(-shift_);
     return .{ .v = v & m, .x = x & m };
 }
 
-/// `a` moved up to bit `p`: a one-bit value landing on a runtime bit-select.
-pub inline fn up(a: W, p: u6) W {
-    return .{ .v = a.v << p, .x = a.x << p };
+/// The one-bit `a` moved up to bit `p` of an `sw`-bit vector: a runtime
+/// bit-select's value.
+pub inline fn up(a: W, p: u32, comptime sw: u32) T(sw) {
+    if (sw <= 64) return .{ .v = a.v << @intCast(p), .x = a.x << @intCast(p) };
+    var o: T(sw) = .{ .v = @splat(0), .x = @splat(0) };
+    o.v[p / 64] = a.v << @intCast(p % 64);
+    o.x[p / 64] = a.x << @intCast(p % 64);
+    return o;
 }
 
-/// The bit position a runtime bit-select writes, or null (`exec.position`).
-pub inline fn pos(index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) ?u6 {
+/// Bit `p` alone of an `sw`-bit vector: a runtime bit-select's mask.
+pub inline fn bit(p: u32, comptime sw: u32) M(sw) {
+    if (sw <= 64) return @as(u64, 1) << @intCast(p);
+    var m: M(sw) = @splat(0);
+    m[p / 64] = @as(u64, 1) << @intCast(p % 64);
+    return m;
+}
+
+/// The bit position a runtime bit-select names, or null (`exec.position`).
+pub inline fn pos(index: ?i64, comptime msb: i64, comptime lsb: i64, comptime w: u32) ?u32 {
     const i = index orelse return null;
     const p = if (msb >= lsb) i - lsb else lsb - i;
     return if (p < 0 or p >= w) null else @intCast(p);
 }
 
 /// §5.1.14 `{count{a}}`.
-pub inline fn rep(a: W, comptime w: u32, comptime count: u32) W {
-    var out: W = .{ .v = 0, .x = 0 };
-    inline for (0..count) |_| out = join(out, a, w);
-    return out;
+pub inline fn rep(a: anytype, comptime w: u32, comptime count: u32) T(w * count) {
+    if (w * count <= 64) {
+        var out: W = .{ .v = 0, .x = 0 };
+        inline for (0..count) |i| {
+            out.v |= a.v << (i * w);
+            out.x |= a.x << (i * w);
+        }
+        return out;
+    }
+    var o: Wide(words(w * count)) = .{ .v = @splat(0), .x = @splat(0) };
+    const s = wide(a);
+    for (0..count) |i| {
+        orAt(&o.v, &s.v, @intCast(i * w));
+        orAt(&o.x, &s.x, @intCast(i * w));
+    }
+    return o;
 }
 
 /// §17.11 `$clog2` of a self-determined operand, x/z read as 0 (`exec`'s
 /// `integerCeilingLog2`).
-pub inline fn clog2(a: W, comptime w: u32) u64 {
-    _ = w;
+pub inline fn clog2(a: anytype, comptime w: u32) u64 {
+    if (w > 64) {
+        if (anyX(a)) return 0;
+        var length: u64 = 0;
+        var power_of_two = true;
+        for (a.v, 0..) |word, index| {
+            if (word == 0) continue;
+            if (length != 0 or word & (word - 1) != 0) power_of_two = false;
+            length = @as(u64, @intCast(index)) * 64 + 64 - @clz(word);
+        }
+        return if (length != 0 and power_of_two) length - 1 else length;
+    }
     if (a.x != 0 or a.v == 0) return 0;
     const length: u64 = 64 - @clz(a.v);
     return if (a.v & (a.v - 1) == 0) length - 1 else length;
@@ -306,36 +690,38 @@ pub const CaseKind = enum { normal, casez, casex };
 
 /// §9.5 / §9.5.1: `case` is `===`; casez/casex skip z (and x) bits of
 /// either side.
-pub inline fn caseMatch(comptime kind: CaseKind, a: W, b: W) bool {
-    const wild: u64 = switch (kind) {
-        .normal => 0,
-        .casex => a.x | b.x,
-        .casez => (a.x & ~a.v) | (b.x & ~b.v),
-    };
-    return ((a.v ^ b.v) | (a.x ^ b.x)) & ~wild == 0;
+pub inline fn caseMatch(comptime kind: CaseKind, a: anytype, b: @TypeOf(a)) bool {
+    var miss: u64 = 0;
+    const sa = wide(a);
+    const sb = wide(b);
+    for (sa.v, sa.x, sb.v, sb.x) |av, ax, bv, bx| {
+        const wild: u64 = switch (kind) {
+            .normal => 0,
+            .casex => ax | bx,
+            .casez => (ax & ~av) | (bx & ~bv),
+        };
+        miss |= ((av ^ bv) | (ax ^ bx)) & ~wild;
+    }
+    return miss == 0;
 }
 
 // ---- tests: every kernel against `Integer.Literal` --------------------------
 
-const Int = @import("frontend").Integer;
-
-fn lit(a: std.mem.Allocator, v: W, w: u32, signed: bool) !Int.Literal {
-    const planes = try a.alloc(u64, 2);
-    planes[0] = v.v;
-    planes[1] = v.x;
-    return .{ .width = w, .sized = true, .signed = signed, .planes = planes };
+fn lit(a: std.mem.Allocator, v: anytype, w: u32, signed: bool) !Int.Literal {
+    return .{ .width = w, .sized = true, .signed = signed, .planes = try a.dupe(u64, &planesOf(v)) };
 }
 
-fn same(want: Int.Literal, got: W) !void {
-    try std.testing.expectEqual(want.values()[0], got.v);
-    try std.testing.expectEqual(want.unknowns()[0], got.x);
+fn same(want: Int.Literal, got: anytype) !void {
+    const g = wide(got);
+    try std.testing.expectEqualSlices(u64, want.values(), &g.v);
+    try std.testing.expectEqualSlices(u64, want.unknowns(), &g.x);
 }
 
 fn bitOf(b: Int.Bit) Bit {
     return @enumFromInt(@intFromEnum(b));
 }
 
-fn check(comptime w: u32, comptime signed: bool, a: W, b: W) !void {
+fn check(comptime w: u32, comptime signed: bool, a: T(w), b: T(w)) !void {
     var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
     defer arena.deinit();
     const al = arena.allocator();
@@ -358,17 +744,30 @@ fn check(comptime w: u32, comptime signed: bool, a: W, b: W) !void {
         try std.testing.expectEqual(bitOf(la.reduce(iop)), reduce(op, a, w));
     try std.testing.expectEqual(bitOf(la.truth()), truth(a));
     try same(try la.conditional(al, la, lb), cond(truth(a), a, b));
-    inline for (.{ w, @min(w + 3, 64), 64 }) |to| {
+    inline for (.{ 1, w, w + 3, 63, 64, 65, 130 }) |to| {
         try same(try la.resize(al, to, if (signed) .sign else .zero), rs(a, w, to, signed));
     }
-    const lab = try Int.Literal.concatenate(al, &.{ la, lb });
-    if (2 * w <= 64) try same(lab, join(a, b, w));
+    try same(try Int.Literal.concatenate(al, &.{ la, lb }), join(a, w, b, w));
+    try same(try la.replicate(al, 3), rep(a, w, 3));
+    try std.testing.expectEqual(if (w > 64) null else la.asInt(), asInt(a, w, signed));
 }
 
-fn randomW(rand: std.Random, comptime w: u32) W {
+fn randomW(rand: std.Random, comptime w: u32) T(w) {
     // Mostly known, so arithmetic is exercised past its all-x early exit.
-    const x = if (rand.uintLessThan(u8, 3) == 0) rand.int(u64) & mask(w) else 0;
-    return .{ .v = rand.int(u64) & mask(w), .x = x };
+    var o: Wide(words(w)) = undefined;
+    const known = rand.uintLessThan(u8, 3) != 0;
+    for (&o.v, &o.x) |*v, *x| {
+        v.* = rand.int(u64);
+        x.* = if (known) 0 else rand.int(u64);
+    }
+    o.v[words(w) - 1] &= top(w);
+    o.x[words(w) - 1] &= top(w);
+    return narrow(w, o);
+}
+
+/// A known amount below `n`, as a `w`-bit value.
+fn small(rand: std.Random, comptime w: u32, n: u64) T(w) {
+    return rs(W{ .v = rand.uintLessThan(u64, n) & mask(@min(w, 64)), .x = 0 }, @min(w, 64), w, false);
 }
 
 test "every kernel equals Integer.Literal: all 4^w operand pairs for w in 1..3" {
@@ -388,7 +787,94 @@ test "every kernel equals Integer.Literal: random words at block-boundary widths
     inline for (.{ 5, 31, 32, 33, 63, 64 }) |w| inline for (.{ false, true }) |signed| {
         for (0..2000) |_| try check(w, signed, randomW(rand, w), randomW(rand, w));
         // Small shift amounts and exponents, which random words never are.
-        for (0..500) |_| try check(w, signed, randomW(rand, w), .{ .v = rand.uintLessThan(u64, w + 2), .x = 0 });
+        for (0..500) |_| try check(w, signed, randomW(rand, w), small(rand, w, w + 2));
+    };
+}
+
+test "every kernel equals Integer.Literal: random multi-word values" {
+    var prng = std.Random.DefaultPrng.init(0x1365);
+    const rand = prng.random();
+    inline for (.{ 65, 100, 127, 128, 129, 130, 200, 256 }) |w| inline for (.{ false, true }) |signed| {
+        for (0..400) |_| try check(w, signed, randomW(rand, w), randomW(rand, w));
+        for (0..200) |_| try check(w, signed, randomW(rand, w), small(rand, w, w + 2));
+        // Equal high words, so comparison reaches the low ones.
+        for (0..200) |_| {
+            const a = randomW(rand, w);
+            var b = a;
+            b.v[0] = rand.int(u64);
+            try check(w, signed, a, b);
+        }
+    };
+}
+
+test "a shift of a one-word value by a multi-word amount, and back" {
+    var prng = std.Random.DefaultPrng.init(0x5112);
+    const rand = prng.random();
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+    const al = arena.allocator();
+    inline for (.{ .{ 8, 100 }, .{ 64, 65 }, .{ 130, 7 } }) |ww| for (0..500) |_| {
+        const a = randomW(rand, ww[0]);
+        const b = if (rand.boolean()) randomW(rand, ww[1]) else small(rand, ww[1], ww[0] + 2);
+        const la = try lit(al, a, ww[0], true);
+        const lb = try lit(al, b, ww[1], false);
+        inline for (.{ .left, .right, .arithmetic_left, .arithmetic_right }) |op|
+            try same(try la.shift(al, @field(Int.Shift, @tagName(op)), lb), shift(op, a, ww[0], true, b));
+        try same(try la.power(al, lb), pow(a, ww[0], true, b, ww[1], false));
+    };
+}
+
+test "$clog2 of a multi-word value" {
+    inline for (.{ 65, 129, 200 }) |w| for (0..w) |e| {
+        var a: T(w) = .{ .v = @splat(0), .x = @splat(0) };
+        a.v[e / 64] = @as(u64, 1) << @intCast(e % 64);
+        try std.testing.expectEqual(@as(u64, e), clog2(a, w));
+        a.v[0] |= 1;
+        try std.testing.expectEqual(@as(u64, if (e == 0) 0 else e + 1), clog2(a, w));
+        a.x[0] = 1;
+        try std.testing.expectEqual(@as(u64, 0), clog2(a, w));
+    };
+}
+
+test "part, place, up and bitAt move the bits the per-bit rule names" {
+    var prng = std.Random.DefaultPrng.init(0x521);
+    const rand = prng.random();
+    inline for (.{ .{ 130, -3, 70 }, .{ 130, 60, 10 }, .{ 130, 120, 16 }, .{ 70, 0, 70 }, .{ 20, -4, 8 }, .{ 20, 16, 8 }, .{ 200, 64, 65 } }) |c| for (0..200) |_| {
+        const sw = c[0];
+        const sh = c[1];
+        const count = c[2];
+        const a = wide(randomW(rand, sw));
+        const got = wide(part(narrow(sw, a), sh, count, sw));
+        const val = wide(randomW(rand, count));
+        const put = wide(place(narrow(count, val), sh, count, sw));
+        const m = field(sh, count, sw);
+        for (0..count) |i| {
+            const p = @as(i64, @intCast(i)) + sh;
+            const want: u2 = if (p < 0 or p >= sw) 3 else @intCast((a.v[@intCast(@divFloor(p, 64))] >> @intCast(@mod(p, 64))) & 1 | ((a.x[@intCast(@divFloor(p, 64))] >> @intCast(@mod(p, 64))) & 1) << 1);
+            const g: u2 = @intCast((got.v[i / 64] >> @intCast(i % 64)) & 1 | ((got.x[i / 64] >> @intCast(i % 64)) & 1) << 1);
+            try std.testing.expectEqual(want, g);
+        }
+        for (0..sw) |p| {
+            const i = @as(i64, @intCast(p)) - sh;
+            const inside = i >= 0 and i < count;
+            const mb = ((if (sw <= 64) m else m[p / 64]) >> @intCast(p % 64)) & 1 == 1;
+            try std.testing.expectEqual(inside, mb);
+            const want: u2 = if (!inside) 0 else @intCast((val.v[@intCast(@divFloor(i, 64))] >> @intCast(@mod(i, 64))) & 1 | ((val.x[@intCast(@divFloor(i, 64))] >> @intCast(@mod(i, 64))) & 1) << 1);
+            const g: u2 = @intCast((put.v[p / 64] >> @intCast(p % 64)) & 1 | ((put.x[p / 64] >> @intCast(p % 64)) & 1) << 1);
+            try std.testing.expectEqual(want, g);
+        }
+        const p: u32 = rand.uintLessThan(u32, sw);
+        const one = wide(up(W{ .v = 1, .x = 1 }, p, sw));
+        const bm = bit(p, sw);
+        for (0..words(sw)) |j| {
+            const want: u64 = if (j == p / 64) @as(u64, 1) << @intCast(p % 64) else 0;
+            try std.testing.expectEqual(want, one.v[j]);
+            try std.testing.expectEqual(want, one.x[j]);
+            try std.testing.expectEqual(want, if (sw <= 64) bm else bm[j]);
+        }
+        const b = bitAt(narrow(sw, a), p, sw - 1, 0, sw);
+        try std.testing.expectEqual((a.v[p / 64] >> @intCast(p % 64)) & 1, b.v);
+        try std.testing.expectEqual((a.x[p / 64] >> @intCast(p % 64)) & 1, b.x);
     };
 }
 
@@ -398,6 +884,8 @@ test "casez/casex agree with the per-bit wildcard rule" {
     for (0..5000) |_| {
         const a = randomW(rand, 6);
         const b = randomW(rand, 6);
+        try std.testing.expectEqual(caseMatch(.casez, a, b), caseMatch(.casez, rs(a, 6, 130, false), rs(b, 6, 130, false)));
+        try std.testing.expectEqual(caseMatch(.casex, a, b), caseMatch(.casex, rs(a, 6, 130, false), rs(b, 6, 130, false)));
         inline for (.{ .casez, .casex }) |kind| {
             var want = true;
             for (0..6) |i| {

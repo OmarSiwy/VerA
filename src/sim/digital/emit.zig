@@ -80,6 +80,8 @@ pub const Emitter = struct {
     /// Why the design is not native, once something refused.
     why: []const u8 = "",
     labels: u32 = 0,
+    /// Each slot's first word in `rt.State`'s planes.
+    off: []const u32 = &.{},
 
     pub fn print(self: *Emitter, comptime f: []const u8, args: anytype) Error!void {
         self.out.writer.print(f, args) catch return error.OutOfMemory;
@@ -96,10 +98,27 @@ pub const Emitter = struct {
         return self.labels;
     }
 
-    /// Refuse a type a `logic.W` cannot hold.
+    /// Refuse a type a `logic.T` cannot hold.
     pub fn fits(self: *Emitter, t: Type) Error!void {
         if (t.real) return self.refuse("a real value");
-        if (t.width > 64) return self.refuse("a value wider than 64 bits");
+    }
+
+    /// `s.get` (or `s.getw`) of slot `at`'s value.
+    pub fn get(self: *Emitter, at: u32) Error!void {
+        const w = self.r.values[at].width;
+        if (w <= 64) return self.print("s.get({d})", .{self.off[at]});
+        try self.print("s.getw({d}, {d})", .{ self.off[at], words(w) });
+    }
+
+    /// `slot, off` of slot `at`, as `rt.State.put` takes them.
+    pub fn target(self: *Emitter, at: u32) Error!void {
+        try self.print("{d}, {d}", .{ at, self.off[at] });
+    }
+
+    /// `slot, off` of the element `a<lb>` of the array whose first element
+    /// is slot `base`.
+    pub fn elementTarget(self: *Emitter, base: u32, lb: u32) Error!void {
+        try self.print("a{d}, {d} + (a{d} - {d}) * {d}", .{ lb, self.off[base], lb, base, words(self.r.values[base].width) });
     }
 
     /// The slot `e` names in the current scope (`Run.slot`).
@@ -110,9 +129,7 @@ pub const Emitter = struct {
     }
 
     pub fn slotWidth(self: *Emitter, at: u32) Error!u32 {
-        const w = self.r.values[at].width;
-        if (w > 64) return self.refuse("a value wider than 64 bits");
-        return w;
+        return self.r.values[at].width;
     }
 
     /// Does `e` name an element of an unpacked array (`Run.indexedArray`)?
@@ -121,9 +138,30 @@ pub const Emitter = struct {
     }
 };
 
+pub fn words(w: u32) u32 {
+    return (w + 63) / 64;
+}
+
+/// Every bit of a `w`-bit slot, as `rt.State.put`'s mask.
+pub fn full(w: u32) std.fmt.Alt(u32, fullText) {
+    return .{ .data = w };
+}
+
+fn fullText(w: u32, out: *std.Io.Writer) std.Io.Writer.Error!void {
+    if (w <= 64) return out.print("0x{x}", .{expr.maskOf(w)});
+    try out.print("L.full({d})", .{w});
+}
+
 /// The native root, or `error.Unsupported` with `self.why` set.
 fn native(self: *Emitter, file_name: []const u8) Error![]const u8 {
     const r = self.r;
+    const off = try self.arena.alloc(u32, r.values.len);
+    var total: u32 = 0;
+    for (r.values, off) |v, *o| {
+        o.* = total;
+        total += words(v.width);
+    }
+    self.off = off;
     if (r.drv.watched.items.len != 0) return self.refuse("VAMS §9.22 driver access");
     if (r.trans.len != 0) return self.refuse("a §7.6 pass switch");
     // The time-0 queue in `Run.pending` order: every driver, declaration
@@ -157,10 +195,10 @@ fn native(self: *Emitter, file_name: []const u8) Error![]const u8 {
     try self.print("        else => unreachable,\n    }};\n}}\n\n", .{});
 
     try self.print("const design: rt.Design = .{{\n    .v = &.{{", .{});
-    for (r.values) |v| try self.print(" 0x{x},", .{v.values()[0]});
+    for (r.values) |v| for (v.values()[0..words(v.width)]) |x| try self.print(" 0x{x},", .{x});
     try self.print(" }},\n    .x = &.{{", .{});
-    for (r.values) |v| try self.print(" 0x{x},", .{v.unknowns()[0]});
-    try self.print(" }},\n    .fan_start = &.{{", .{});
+    for (r.values) |v| for (v.unknowns()[0..words(v.width)]) |x| try self.print(" 0x{x},", .{x});
+    try self.print(" }},\n    .slots = {d},\n    .fan_start = &.{{", .{r.values.len});
     for (r.fan_start) |v| try self.print(" {d},", .{v});
     try self.print(" }},\n    .fan = &.{{", .{});
     for (r.fan) |v| try self.print(" {d},", .{v});
@@ -263,9 +301,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
     switch (r.code.items[pc]) {
         .stop => try self.print("            return;\n", .{}),
         .init_var => |x| {
-            try self.print("            try s.put({d}, ", .{x.slot});
+            try self.print("            try s.put(", .{});
+            try self.target(x.slot);
+            try self.print(", ", .{});
             try expr.assigned(self, x.value, try slotType(self, x.slot));
-            try self.print(", 0x{x});\n            continue :sw {d};\n", .{ expr.maskOf(try self.slotWidth(x.slot)), next });
+            try self.print(", {f});\n            continue :sw {d};\n", .{ full(try self.slotWidth(x.slot)), next });
         },
         .assign => |x| {
             try assignment(self, x.target, x.value, x.nonblocking);
@@ -339,6 +379,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            continue :sw {d};\n", .{c.fallback});
         },
         .repeat_start => |x| {
+            if ((try expr.natural(self, x.count)).width > 64) return self.refuse("a repeat count wider than 64 bits");
             try self.print("            const n = try s.repeatCount(", .{});
             const ty = try expr.selfDetermined(self, x.count);
             try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            continue :sw if (n == 0) {d} else {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
@@ -390,18 +431,22 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Ast.ExprId, nonblocking: 
     const op = if (nonblocking) "nba" else "put";
     if (ex.tag(target) != .index) {
         const at = try self.slot(target);
-        try self.print("            try s.{s}({d}, ", .{ op, at });
+        try self.print("            try s.{s}(", .{op});
+        try self.target(at);
+        try self.print(", ", .{});
         try expr.assigned(self, val, try slotType(self, at));
-        return self.print(", 0x{x});\n", .{expr.maskOf(try self.slotWidth(at))});
+        return self.print(", {f});\n", .{full(try self.slotWidth(at))});
     }
     if (try self.element(target)) {
         const base = try self.slot(r.chainBase(target).base);
         const lb = self.label();
         try self.print("            if (", .{});
         try expr.address(self, target, lb);
-        try self.print(") |a{d}| try s.{s}(a{d}, ", .{ lb, op, lb });
+        try self.print(") |a{d}| try s.{s}(", .{ lb, op });
+        try self.elementTarget(base, lb);
+        try self.print(", ", .{});
         try expr.assigned(self, val, try slotType(self, base));
-        return self.print(", 0x{x});\n", .{expr.maskOf(try self.slotWidth(base))});
+        return self.print(", {f});\n", .{full(try self.slotWidth(base))});
     }
     // §5.2.1 a select of a vector: unsigned, as wide as it selects.
     const at = try self.slot(ex.lhs(target));
@@ -409,18 +454,21 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Ast.ExprId, nonblocking: 
     const range = expr.vecRange(r, at, sw);
     const rg = ex.rhs(target);
     if (ex.tag(rg) == .range) {
-        const p = try expr.partPlace(self, target, range, sw);
-        const m = if (p.shift >= 0) p.valid << @intCast(@min(p.shift, 63)) else p.valid >> @intCast(@min(-p.shift, 63));
-        try self.print("            try s.{s}({d}, L.place(", .{ op, at });
+        const p = try expr.partPlace(self, target, range);
+        try self.print("            try s.{s}(", .{op});
+        try self.target(at);
+        try self.print(", L.place(", .{});
         try expr.assigned(self, val, .{ .width = p.count, .signed = false });
-        return self.print(", {d}, 0x{x}), 0x{x});\n", .{ p.shift, m, m });
+        return self.print(", {d}, {d}, {d}), L.field({d}, {d}, {d}));\n", .{ p.shift, p.count, sw, p.shift, p.count, sw });
     }
     const lb = self.label();
     try self.print("            if (L.pos(L.asInt(", .{});
     const t = try expr.selfDetermined(self, rg);
-    try self.print(", {d}, {}), {d}, {d}, {d})) |q{d}| try s.{s}({d}, L.up(", .{ t.width, t.signed, range.msb, range.lsb, sw, lb, op, at });
+    try self.print(", {d}, {}), {d}, {d}, {d})) |q{d}| try s.{s}(", .{ t.width, t.signed, range.msb, range.lsb, sw, lb, op });
+    try self.target(at);
+    try self.print(", L.up(", .{});
     try expr.assigned(self, val, .{ .width = 1, .signed = false });
-    try self.print(", q{d}), @as(u64, 1) << q{d});\n", .{ lb, lb });
+    try self.print(", q{d}, {d}), L.bit(q{d}, {d}));\n", .{ lb, sw, lb, sw });
 }
 
 /// `exec.delayOf` of an integral delay, in ticks: folded when constant.
@@ -428,6 +476,7 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     const r = self.r;
     const scale = r.timeOf(r.scope).scale;
     const t = try expr.natural(self, amount);
+    if (t.width > 64) return self.refuse("a delay wider than 64 bits");
     if (compile.constantExpression(r, amount)) {
         const v = exec.eval(r, self.arena, amount, 0) catch return self.refuse("a delay the engine does not fold");
         const ticks = if (v.hasUnknown()) 0 else (if (v.signed) scale.signedDelay(v.asInt().?) else scale.unsignedDelay(v.values()[0])) catch |e|
@@ -480,15 +529,17 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     if (n.strength_read or d.s0 != .strong or d.s1 != .strong) return self.refuse("a driver strength other than strong");
     if (d.delay.present or n.delay.present) return self.refuse("a delayed continuous assignment or net");
     const nw = try self.slotWidth(n.slot);
-    try self.print("            try s.put({d}, ", .{n.slot});
+    try self.print("            try s.put(", .{});
+    try self.target(n.slot);
+    try self.print(", ", .{});
     if (x.slice) |sl| {
         const t = try expr.natural(self, x.e);
         const ctx: Type = .{ .width = @max(t.width, sl.total), .signed = t.signed };
         try self.print("L.part(", .{});
         try expr.value(self, x.e, ctx);
-        try self.print(", {d}, 0x{x}, {d})", .{ sl.lo, expr.maskOf(nw), nw });
+        try self.print(", {d}, {d}, {d})", .{ sl.lo, nw, ctx.width });
     } else try expr.assigned(self, x.e, try slotType(self, n.slot));
-    try self.print(", 0x{x});\n            s.armed[{d}] = true;\n            return;\n", .{ expr.maskOf(nw), pc });
+    try self.print(", {f});\n            s.armed[{d}] = true;\n            return;\n", .{ full(nw), pc });
 }
 
 /// `exec.eval(e, 0).asInt() orelse 0` as a Zig `i64`.
