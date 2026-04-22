@@ -596,6 +596,40 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
     return true;
 }
 
+/// Remove `inst` from `block`'s chain; the rows after it stay linked. The row
+/// is orphaned, not reused.
+pub fn unlink(self: *Mir, block: Block, inst: Inst) void {
+    const next = self.insts.items(.next);
+    const first = self.blocks.items(.first);
+    const last = self.blocks.items(.last);
+    const b = @intFromEnum(block);
+    var prev: Inst = .none;
+    var cur = first[b];
+    while (cur != inst) : (cur = next[@intFromEnum(cur)]) prev = cur;
+    const after = next[@intFromEnum(inst)];
+    if (prev == .none) first[b] = after else next[@intFromEnum(prev)] = after;
+    if (last[b] == inst) last[b] = prev;
+    next[@intFromEnum(inst)] = .none;
+}
+
+/// Relink every row of `from`, in order, at the end of `to`; `from` is left
+/// empty.
+pub fn splice(self: *Mir, to: Block, from: Block) void {
+    assert(to != from);
+    const next = self.insts.items(.next);
+    const first = self.blocks.items(.first);
+    const last = self.blocks.items(.last);
+    const head = first[@intFromEnum(from)];
+    if (head == .none) return;
+    var moved = head;
+    while (moved != .none) : (moved = next[@intFromEnum(moved)]) self.insts.items(.block)[@intFromEnum(moved)] = to;
+    const tail = last[@intFromEnum(to)];
+    if (tail == .none) first[@intFromEnum(to)] = head else next[@intFromEnum(tail)] = head;
+    last[@intFromEnum(to)] = last[@intFromEnum(from)];
+    first[@intFromEnum(from)] = .none;
+    last[@intFromEnum(from)] = .none;
+}
+
 // ---------------------------------------------------------- instructions ----
 
 /// Append `row` to the end of `block` and link it in. Caller sets row.result
