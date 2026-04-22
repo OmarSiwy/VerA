@@ -191,12 +191,12 @@ pub fn needsR(g: *const Gen) bool {
 }
 
 pub fn emit(g: *Gen) Error!void {
-    if (g.limits.declined.len != 0) {
-        try g.w("// §4.5.15 `$limit` DECLINED at {d} call site(s) — the probe is\n", .{g.limits.declined.len});
-        try g.w("// returned unchanged there, which §4.5.15 permits:\n", .{});
-        for (g.limits.declined) |d| try g.w("//   - {s}\n", .{d});
-        try g.w("\n", .{});
-    }
+    if (g.diags) |bag| for (g.limits.declined) |d| {
+        var b = bag.build(.codegen, .W0853, g.lowered.tokenSpan(d.tok));
+        b.msg("{s}", .{d.msg});
+        if (d.help) |h| b.help("{s}", .{h});
+        try b.emit();
+    };
     if (g.limits.calls.len == 0) return;
 
     const needs_core = usesCore(g);
