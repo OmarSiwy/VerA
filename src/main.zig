@@ -49,6 +49,9 @@ const usage_text =
     \\  --emit-so               build lib<name>.<gen>.so via the orchestrator
     \\  --emit-exe              build a runnable Verilog-A testbench (needs --contract),
     \\                          or a .v design's executable; print its path
+    \\  --schedule=static|fifo  a .v executable's order of same-time events:
+    \\                          combinational logic levelized (static, the
+    \\                          default; IEEE 1364 §11.4.1), or the interpreter's
     \\  --run                   run a .v initial-process program, or an analog testbench
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
@@ -135,6 +138,7 @@ pub fn main(init: std.process.Init) !u8 {
     var optimize: ?std.builtin.OptimizeMode = null;
     var zig_backend: ?vera.orchestrator.Backend = null; // null: `Backend.auto`
     var spice_path: ?[]const u8 = null;
+    var schedule: digital.emit.Schedule = .static;
 
     var args = init.minimal.args.iterate();
     _ = args.skip();
@@ -197,6 +201,11 @@ pub fn main(init: std.process.Init) !u8 {
         } else if (std.mem.startsWith(u8, arg, "--optimize=")) {
             optimize = std.meta.stringToEnum(std.builtin.OptimizeMode, arg["--optimize=".len..]) orelse {
                 try err.print("error: `{s}`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n", .{arg});
+                return 2;
+            };
+        } else if (std.mem.startsWith(u8, arg, "--schedule=")) {
+            schedule = std.meta.stringToEnum(digital.emit.Schedule, arg["--schedule=".len..]) orelse {
+                try err.print("error: `{s}`: not static|fifo\n", .{arg});
                 return 2;
             };
         } else if (std.mem.startsWith(u8, arg, "--zig-backend=")) {
@@ -354,7 +363,7 @@ pub fn main(init: std.process.Init) !u8 {
             .mixed = true,
             .optimize = opt,
             .backend = backend,
-        }, out, err, json, use_color);
+        }, schedule, out, err, json, use_color);
         digital.run(arena.allocator(), source, opts, &digital_bag, out) catch |e| {
             try report(&digital_bag, err, json, use_color);
             if (e != error.DigitalFailed) try err.print("error: digital execution failed: {t}\n", .{e});
@@ -632,6 +641,7 @@ fn emitDigital(
     source: []const u8,
     opts: digital.Options,
     build: vera.tb.BuildOptions,
+    schedule: digital.emit.Schedule,
     out: *Io.Writer,
     err: *Io.Writer,
     json: bool,
@@ -649,7 +659,7 @@ fn emitDigital(
         .file_name = opts.file_name,
         .include_dirs = opts.include_dirs,
         .language = opts.language,
-    });
+    }, schedule);
     if (prog.fallback) |why| try err.print("note: {s}: not native ({s})\n", .{ opts.file_name, why });
     const built = vera.tb.buildExe(gpa, io, null, prog.text, build) catch |e| {
         try err.print("error: {s}: building the executable failed: {t}\n", .{ opts.file_name, e });
