@@ -2909,8 +2909,59 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
     , &h2);
     defer h2.deinit();
     const s2 = try h2.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s2, "no complete mode ladder") != null);
+    try std.testing.expect(limitDeclined(&h2, "no complete mode ladder"));
     try std.testing.expect(std.mem.indexOf(u8, s2, "pub fn limit(") == null);
+}
+
+/// Does the bag carry a W0853 whose message contains `why`?
+fn limitDeclined(h: *Harness, why: []const u8) bool {
+    for (h.bag.messages()) |mi| {
+        const e = h.bag.get(mi);
+        if (e.code == .W0853 and std.mem.indexOf(u8, e.message, why) != null) return true;
+    }
+    return false;
+}
+
+test "codegen: §9.17.3 a declined $limit is W0853 naming why, an honoured one is silent" {
+    // §9.17.3 lets the simulator return the probe unchanged, so every one of
+    // these compiles; what the warning adds is the reason, so a model that
+    // asked for limiting learns it did not get it.
+    const cases = [_]struct { body: []const u8, why: ?[]const u8 }{
+        .{ .body = "$limit(V(a, c), \"pnjlim\", $vt, 0.6)", .why = null },
+        .{ .body = "$limit(V(a, c), \"nosuchlim\", 0.6)", .why = "names no algorithm VerA implements" },
+        .{ .body = "$limit(V(a, c))", .why = "names no algorithm, and VerA's own choice" },
+        .{ .body = "$limit(I(a, c), \"pnjlim\", $vt, 0.6)", .why = "not a §4.4 potential probe" },
+        .{ .body = "(V(a) > 0.0 ? $limit(V(a, c), \"pnjlim\", $vt, 0.6) : V(a, c))", .why = "under an `if`" },
+        .{ .body = "$limit(V(p, n), \"pnjlim\", $vt, 0.6)", .why = "both nets are §6.5 ports" },
+        .{ .body = "$limit(V(a, c), \"steplim\")", .why = "too few arguments" },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module d(p, n);
+            \\  inout p, n; electrical p, n, a, c;
+            \\  real v;
+            \\  analog begin
+            \\    I(p, a) <+ V(p, a) / 10.0;
+            \\    I(c, n) <+ V(c, n) / 10.0;
+            \\    v = {s};
+            \\    I(a, c) <+ 1e-14 * (limexp(v / $vt) - 1.0);
+            \\  end
+            \\endmodule
+        , .{c.body});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const out = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, out, "@compileError") == null);
+        if (c.why) |why| {
+            try std.testing.expect(limitDeclined(&h, why));
+            try std.testing.expect(std.mem.indexOf(u8, out, "pub fn limit(") == null);
+        } else {
+            for (h.bag.messages()) |mi| try std.testing.expect(h.bag.get(mi).code != .W0853);
+            try std.testing.expect(std.mem.indexOf(u8, out, "pub fn limit(") != null);
+        }
+    }
 }
 
 test "codegen: §3.2 a held slot only a card-varying write could need is dropped" {

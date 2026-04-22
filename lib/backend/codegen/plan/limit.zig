@@ -3,10 +3,10 @@
 //!
 //! PURE (ARCHITECTURE.md §2): `plan` takes the lowered module and the unknowns'
 //! names and returns a `Limits` — the honoured sites in source order and one
-//! line per declined site. `cg_limit.zig` is the emitter that reads it (`limit`,
-//! `seed`); the questions both sides ask of the list
-//! (`ladderOf`, `limvdsClaimed`, `writable`) are methods here so the two can
-//! only ever agree.
+//! `Decline` per site it does not honour, which `cg_limit.emit` reports as
+//! W0853. `cg_limit.zig` is the emitter that reads it (`limit`, `seed`); the
+//! questions both sides ask of the list (`ladderOf`, `limvdsClaimed`,
+//! `writable`) are methods here so the two can only ever agree.
 //!
 //! Cut verbatim from `cg_limit.zig` (`collect` and its helpers); only the
 //! receiver changed.
@@ -20,11 +20,11 @@ pub const Error = std.mem.Allocator.Error;
 const none_u32 = std.math.maxInt(u32);
 
 /// §4.5.15 the `$limit` call sites this device honours, in source order, and
-/// one line per site it does not. `buildJobs` queues the honoured sites'
+/// one `Decline` per site it does not. `buildJobs` queues the honoured sites'
 /// algorithm arguments into the core.
 pub const Limits = struct {
     calls: []LimitCall = &.{},
-    declined: [][]const u8 = &.{},
+    declined: []Decline = &.{},
     /// `Lowered.num_ports` — what `writable` answers from.
     num_ports: usize = 0,
 
@@ -118,6 +118,23 @@ pub const Alg = enum {
 
 const max_args = 2;
 
+/// The `Alg` spellings, comma-separated, for the unknown-name warning.
+const alg_names = blk: {
+    var s: []const u8 = "";
+    for (std.meta.fieldNames(Alg), 0..) |n, i| s = s ++ (if (i == 0) "" else ", ") ++ n;
+    break :blk s;
+};
+
+/// A `$limit` site this device does not honour: its probe is returned
+/// unchanged, which §9.17.3 permits. `tok` is the call's token.
+pub const Decline = struct {
+    tok: u32,
+    /// The call as written and why it is declined.
+    msg: []const u8,
+    /// The model-side change that would get the site honoured, if one exists.
+    help: ?[]const u8 = null,
+};
+
 /// One resolved `$limit` call site.
 pub const LimitCall = struct {
     alg: Alg,
@@ -125,6 +142,8 @@ pub const LimitCall = struct {
     /// ground, which is not an unknown and reads as a hard 0.
     hi: u32,
     lo: u32,
+    /// The call's token, for a decline that is only decided after resolution.
+    tok: u32 = 0,
     /// The algorithm's numeric arguments as MIR values. `buildJobs` queues these
     /// as core jobs, so by emission time each has an `lo_idx` field.
     argv: [max_args]Mir.Value = .{ .f_zero, .f_zero },
@@ -147,7 +166,7 @@ pub const LimitCall = struct {
 pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
     var lim: Limits = .{ .num_ports = g.lowered.num_ports };
     var out: std.ArrayList(LimitCall) = .empty;
-    var declined: std.ArrayList([]const u8) = .empty;
+    var declined: std.ArrayList(Decline) = .empty;
     // A block that dominates the exit is on every path to it, so a call there
     // runs unconditionally. `limit` has no CFG of its own — it is a flat list
     // of clamps — so a call under an `if` is one this cannot honour: its guard
@@ -170,25 +189,36 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
             const d = g.mir.instData(inst).call;
             if (d.callee != .@"$limit") continue;
 
-            const alg = algOf(g, d.args) orelse continue; // §4.5.15 declining is conformant
+            const tok = g.mir.instTok(inst);
+            const at: Site = .{ .g = g, .u_names = u_names, .list = &declined, .tok = tok, .args = d.args };
+            // §9.17.3 an unknown string, or none, leaves the algorithm to the
+            // simulator "just as if no string had been supplied"; VerA's choice
+            // is no limiting.
+            const alg = algOf(g, d.args) orelse {
+                try at.decline(if (d.args.len < 2)
+                    "names no algorithm, and VerA's own choice is no limiting"
+                else
+                    "names no algorithm VerA implements, so VerA applies none", "name one of " ++ alg_names);
+                continue;
+            };
             const pair = probePair(g, d.args) orelse {
-                try decline(g, u_names, &declined, d.args, "its first argument is not a §4.4 potential probe of one or two nets");
+                try at.decline("its first argument is not a §4.4 potential probe of one or two nets", "limit `V(a,b)` itself; for a reversed-polarity junction pass the polarity as the trailing sign argument instead of scaling the probe");
                 continue;
             };
             if (!g.an.dominates(bi, exit)) {
-                try decline(g, u_names, &declined, d.args, "it is under an `if`, and the clamp list carries no control flow");
+                try at.decline("it is under an `if`, and the clamp list carries no control flow", "move the call out of the `if`; a polarity guard such as `if (type > 0)` is the trailing sign argument: `$limit(V(a,b), \"pnjlim\", vte, vcrit, type)`");
                 continue;
             }
             if (!lim.writable(pair[0]) and !lim.writable(pair[1])) {
-                try decline(g, u_names, &declined, d.args, "both nets are §6.5 ports, which the host masks — there is nothing private to correct");
+                try at.decline("both nets are §6.5 ports, which the host masks — there is nothing private to correct", "limit across an internal node, such as the one behind a series resistance");
                 continue;
             }
             const n = alg.arity();
             if (d.args.len < 2 + n) {
-                try decline(g, u_names, &declined, d.args, "too few arguments for the algorithm named");
+                try at.decline("too few arguments for the algorithm named", try std.fmt.allocPrint(g.arena, "`{t}` takes {d} argument(s) after its name", .{ alg, n }));
                 continue;
             }
-            var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1] };
+            var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1], .tok = tok };
             var bad = false;
             for (0..n) |k| {
                 const v = g.an.rv(d.args[2 + k]);
@@ -209,7 +239,7 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 lc.sign = v;
             }
             if (bad) {
-                try decline(g, u_names, &declined, d.args, "an algorithm argument is not real-valued");
+                try at.decline("an algorithm argument is not real-valued", null);
                 continue;
             }
             try out.append(g.arena, lc);
@@ -231,7 +261,11 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
         const keep = try g.arena.alloc(bool, lim.calls.len);
         for (lim.calls, 0..) |lc, i| {
             keep[i] = lc.alg != .fetlimds or lim.ladderOf(i) != null;
-            if (!keep[i]) try declineLc(g, u_names, &declined, lc, "no complete mode ladder — it needs a second fetlimds site on the same gate node and a limvds site across the two channel nodes, all channel sides internal");
+            if (!keep[i]) try declined.append(g.arena, .{
+                .tok = lc.tok,
+                .msg = try std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{t}\"): no complete mode ladder", .{ uName(u_names, lc.hi), uName(u_names, lc.lo), lc.alg }),
+                .help = "write a second fetlimds site on the same gate node and a limvds site across the two channel nodes, both channel nodes internal",
+            });
         }
         var w_: usize = 0;
         for (out.items, 0..) |lc, i| {
@@ -245,19 +279,27 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
     return lim;
 }
 
-fn declineLc(g: Input, u_names: []const []const u8, list: *std.ArrayList([]const u8), lc: LimitCall, why: []const u8) Error!void {
-    try list.append(g.arena, try std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{t}\"): {s}", .{ uName(u_names, lc.hi), uName(u_names, lc.lo), lc.alg, why }));
-}
-
 /// A resolved mode ladder: indices into `calls` of the vgs leg, the vgd
 /// leg, and the `limvds` site whose probe orients them — `limvds` reads
 /// V(di,si), so the leg landing on its `lo` is the source leg (vgs) and the
 /// one landing on its `hi` is the drain leg (vgd).
 pub const Ladder = struct { gs: u32, gd: u32, ds: u32 };
 
-fn decline(g: Input, u_names: []const []const u8, list: *std.ArrayList([]const u8), args: []const Mir.Value, why: []const u8) Error!void {
-    try list.append(g.arena, try std.fmt.allocPrint(g.arena, "{s}: {s}", .{ spell(g, u_names, args), why }));
-}
+const Site = struct {
+    g: Input,
+    u_names: []const []const u8,
+    list: *std.ArrayList(Decline),
+    tok: u32,
+    args: []const Mir.Value,
+
+    fn decline(s: Site, why: []const u8, help: ?[]const u8) Error!void {
+        try s.list.append(s.g.arena, .{
+            .tok = s.tok,
+            .msg = try std.fmt.allocPrint(s.g.arena, "{s}: {s}", .{ spell(s.g, s.u_names, s.args), why }),
+            .help = help,
+        });
+    }
+};
 
 /// `$limit(V(a,b), "alg")` as it reads in the source, for the declined list.
 fn spell(g: Input, u_names: []const []const u8, args: []const Mir.Value) []const u8 {
@@ -265,10 +307,9 @@ fn spell(g: Input, u_names: []const []const u8, args: []const Mir.Value) []const
         .str_const => |s| s,
         .undef, .float_const, .int_const, .param_ref, .block_param, .inst_result => "?",
     } else "?";
-    const pair = probePair(g, args);
-    const hi: []const u8 = if (pair) |p| uName(u_names, p[0]) else "?";
-    const lo: []const u8 = if (pair) |p| uName(u_names, p[1]) else "?";
-    return std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{s}\")", .{ hi, lo, alg }) catch "$limit(…)";
+    const pair = probePair(g, args) orelse
+        return std.fmt.allocPrint(g.arena, "$limit(…, \"{s}\")", .{alg}) catch "$limit(…)";
+    return std.fmt.allocPrint(g.arena, "$limit(V({s},{s}), \"{s}\")", .{ uName(u_names, pair[0]), uName(u_names, pair[1]), alg }) catch "$limit(…)";
 }
 
 pub fn uName(u_names: []const []const u8, u: u32) []const u8 {
@@ -345,6 +386,6 @@ test "an honoured pnjlim, and the declines that say why" {
     try std.testing.expectEqual(@as(u32, 2), lim.calls[0].lo);
     try std.testing.expect(lim.writable(2) and !lim.writable(0));
     try std.testing.expectEqual(@as(usize, 2), lim.declined.len);
-    try std.testing.expect(std.mem.indexOf(u8, lim.declined[0], "§6.5 ports") != null);
-    try std.testing.expect(std.mem.indexOf(u8, lim.declined[1], "too few arguments") != null);
+    try std.testing.expect(std.mem.indexOf(u8, lim.declined[0].msg, "§6.5 ports") != null);
+    try std.testing.expect(std.mem.indexOf(u8, lim.declined[1].msg, "too few arguments") != null);
 }
