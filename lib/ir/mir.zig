@@ -703,6 +703,8 @@ pub fn setPhiPairs(self: *Mir, gpa: std.mem.Allocator, inst: Inst, pairs: []cons
     self.insts.items(.c)[@intFromEnum(inst)] = @intCast(pairs.len);
 }
 
+/// Gathers every column, the cold `tok` and `next` included; a hot walk
+/// decodes through `instData` instead.
 pub fn instRow(self: *const Mir, inst: Inst) InstRow {
     return self.insts.get(@intFromEnum(inst));
 }
@@ -723,8 +725,15 @@ pub fn instResult(self: *const Mir, inst: Inst) Value {
 }
 
 /// Decoded view of one instruction. Switch on the class, not on raw a/b/c.
+/// Reads only the `op`/`a`/`b`/`c` columns, never the cold `tok`/`next`.
 pub fn instData(self: *const Mir, inst: Inst) InstData {
-    const row = self.instRow(inst);
+    const i = @intFromEnum(inst);
+    const row: struct { op: Opcode, a: u32, b: u32, c: u32 } = .{
+        .op = self.insts.items(.op)[i],
+        .a = self.insts.items(.a)[i],
+        .b = self.insts.items(.b)[i],
+        .c = self.insts.items(.c)[i],
+    };
     return switch (opClass(row.op)) {
         .unary => .{ .unary = .{ .op = row.op, .operand = @enumFromInt(row.a) } },
         .binary => .{ .binary = .{
@@ -762,9 +771,9 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
 
 /// Operand `i` of a phi (0..count-1 from `instData(...).phi`).
 pub fn phiPair(self: *const Mir, inst: Inst, i: u32) PhiPair {
-    const row = self.instRow(inst);
-    assert(row.op == .phi and i < row.c);
-    const at = row.b + i * 2;
+    const n = @intFromEnum(inst);
+    assert(self.insts.items(.op)[n] == .phi and i < self.insts.items(.c)[n]);
+    const at = self.insts.items(.b)[n] + i * 2;
     return .{
         .block = @enumFromInt(self.extra.items[at]),
         .value = @enumFromInt(self.extra.items[at + 1]),

@@ -726,8 +726,7 @@ fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
         .block_param => |u| return @as(u64, 1) << @intCast(u & 63),
         .undef, .float_const, .int_const, .str_const, .param_ref => return 0,
         .inst_result => |inst| {
-            const row = self.mir.instRow(inst);
-            switch (Mir.opClass(row.op)) {
+            switch (self.mir.instData(inst)) {
                 .branch, .jump => return 0, // no result to speak of
                 // A call inherits from its ARGUMENTS and from nothing else.
                 // That holds for the whole of §4.5 — `ddt`, `idt`, `slew`,
@@ -743,32 +742,28 @@ fn defDeps(self: *const Analysis, val: Mir.Value) u64 {
                 // call, so without this EVERY temperature-dependent parameter
                 // in a compact model is derivative-carrying — which is most of
                 // the prep in mos9 and all of it in BSIM4.
-                .call => {
+                .call => |c| {
                     var acc: u64 = 0;
-                    for (self.mir.instData(inst).call.args) |arg| acc |= self.depsOf(arg);
+                    for (c.args) |arg| acc |= self.depsOf(arg);
                     return acc;
                 },
-                .unary => return self.depsOf(@enumFromInt(row.a)),
-                .binary => return self.depsOf(@enumFromInt(row.a)) |
-                    self.depsOf(@enumFromInt(row.b)),
+                .unary => |u| return self.depsOf(u.operand),
+                .binary => |b| return self.depsOf(b.lhs) | self.depsOf(b.rhs),
                 // §4.2.12: the CONDITION does not matter. It selects between
                 // arms rather than entering the value, so a conditional over
                 // two constants is constant however x steers it — the same
                 // reading `renderInst` already takes when it emits a Zig `if`
                 // — and `S.sel` lets the taken arm's derivative ride through.
-                .ternary => return self.depsOf(@enumFromInt(row.b)) |
-                    self.depsOf(@enumFromInt(row.c)),
+                .ternary => |t| return self.depsOf(t.then_val) | self.depsOf(t.else_val),
                 // §3.2.2 an array version carries the union of what was stored
                 // into it; a fresh one (zero, or the held `Instance` copy) is
                 // constant. The INDEX does not enter, for `select`'s reason:
                 // it picks an element, and the picked element's derivative is
                 // what rides through.
                 .anew => return 0,
-                .load => return self.depsOf(@enumFromInt(row.a)),
-                .store => return self.depsOf(@enumFromInt(row.a)) |
-                    self.depsOf(@enumFromInt(row.c)),
-                .phi => {
-                    const d = self.mir.instData(inst).phi;
+                .load => |l| return self.depsOf(l.arr),
+                .store => |st| return self.depsOf(st.arr) | self.depsOf(st.value),
+                .phi => |d| {
                     var acc: u64 = 0;
                     for (0..d.count) |k| acc |= self.depsOf(self.mir.phiPair(inst, @intCast(k)).value);
                     return acc;
