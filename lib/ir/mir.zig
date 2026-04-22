@@ -4,8 +4,8 @@
 //! Transformation: lowering writes MIR; proof.zig reads it; codegen.zig walks it.
 //!
 //! DOD (this is the performance core):
-//!   - Instructions are a MultiArrayList of fixed rows {op,a,b,c,result,next,tok}
-//!     (25 B/inst as SoA columns), NOT tagged unions in a linked list.
+//!   - Instructions are a MultiArrayList of fixed rows {op,a,b,c,result,next,block,tok}
+//!     (29 B/inst as SoA columns), NOT tagged unions in a linked list.
 //!   - Values, blocks, and the extra payload pool are separate SoA arrays.
 //!   - Every reference is a typed enum(u32) handle.
 //!   - Constants are deduped (fconst_map/iconst_map) at construction.
@@ -231,6 +231,9 @@ pub const InstRow = struct {
     c: u32 = 0,
     result: Value = .undef,
     next: Inst = .none,
+    /// The block whose `next` chain links this row. Never set by a caller:
+    /// `addInst` stamps it and every relink restamps it.
+    block: Block = .entry,
     /// PROVENANCE: index of the token this instruction came from, for
     /// diagnostics, or `no_tok`. Never set by a caller — `addInst` stamps it
     /// from `Mir.cur_tok` (see there).
@@ -584,6 +587,8 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
         }
     } else return false;
     const tail = last[@intFromEnum(from)];
+    var moved = head;
+    while (moved != .none) : (moved = next[@intFromEnum(moved)]) self.insts.items(.block)[@intFromEnum(moved)] = to;
     if (after == .none) first[@intFromEnum(from)] = .none else next[@intFromEnum(after)] = .none;
     last[@intFromEnum(from)] = after;
     next[@intFromEnum(tail)] = term;
@@ -600,6 +605,7 @@ pub fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !
     assert(i < std.math.maxInt(u32) - 1); // maxInt is Inst.none
     var stamped = row;
     stamped.tok = self.cur_tok; // provenance — see InstRow.tok and cur_tok
+    stamped.block = block;
     try self.insts.append(gpa, stamped);
     const inst: Inst = @enumFromInt(@as(u32, @intCast(i)));
 
@@ -717,6 +723,11 @@ pub fn instTok(self: *const Mir, inst: Inst) u32 {
 
 pub fn instOp(self: *const Mir, inst: Inst) Opcode {
     return self.insts.items(.op)[@intFromEnum(inst)];
+}
+
+/// The block `inst` is linked into.
+pub fn instBlock(self: *const Mir, inst: Inst) Block {
+    return self.insts.items(.block)[@intFromEnum(inst)];
 }
 
 /// The Value this instruction defines, or `.undef` for terminators.
@@ -848,6 +859,8 @@ test "mir: const dedup, block chain, phi pairs, alias" {
     const p = try mir.emitPhi(gpa, join, &.{});
     const pi = mir.valueDef(p).inst_result;
     try std.testing.expectEqual(@as(u32, 0), mir.instData(pi).phi.count);
+    try std.testing.expectEqual(join, mir.instBlock(pi));
+    try std.testing.expectEqual(entry, mir.instBlock(in1));
     try mir.setPhiPairs(gpa, pi, &.{ .{ .block = entry, .value = id }, .{ .block = join, .value = e } });
     try std.testing.expectEqual(@as(u32, 2), mir.instData(pi).phi.count);
     try std.testing.expectEqual(e, mir.phiPair(pi, 1).value);
