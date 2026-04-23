@@ -242,7 +242,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
 /// the elaborator declines to evaluate, which would turn a missing folder
 /// into a selection error; `Lower` still judges the value it ends up with
 /// (E0361), so nothing is lost, only deferred.
-pub fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) bool {
+fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) bool {
     if (ranges.len == 0) return true;
     // §3.4.2: "Valid values of string parameters are indicated differently.
     // The `from` keyword may be used with a list of valid string values, or
@@ -278,7 +278,7 @@ pub fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRang
 /// clauses, any `exclude` hit is fatal — but it returns a verdict instead
 /// of a diagnostic, because here a non-member only means "this bin is not
 /// the one".
-pub fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bool {
+fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bool {
     var has_from = false;
     var in_from = false;
     for (ranges) |r| {

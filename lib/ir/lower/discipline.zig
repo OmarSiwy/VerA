@@ -278,7 +278,7 @@ pub fn checkNatureTable(self: *Lower) Oom!void {
 /// The identifier/string distinction is one character wide and means two
 /// different things: `access = V` introduces a callable name into every module
 /// that uses the discipline, `access = "V"` is a value nothing can call.
-pub fn checkNatureAttrValue(self: *Lower, n: *const Ast.NatureDecl, a: Ast.NatureAttr, an: []const u8) Oom!void {
+fn checkNatureAttrValue(self: *Lower, n: *const Ast.NatureDecl, a: Ast.NatureAttr, an: []const u8) Oom!void {
     const tag = self.file.exprs.tag(a.value);
     // §3.6.1.2: `access` "shall be an identifier (by name, not as a string)";
     // idt_nature/ddt_nature take "the name (not a string) of a nature".
@@ -311,7 +311,7 @@ pub fn checkNatureAttrValue(self: *Lower, n: *const Ast.NatureDecl, a: Ast.Natur
 /// Which source file a token came from (§3.13.1 scope comparisons). The
 /// preprocessor's segment map is the only thing that still knows: by lowering,
 /// the prelude and the user's text are one byte stream.
-pub fn fileOf(self: *const Lower, tok: u32) diag.FileId {
+fn fileOf(self: *const Lower, tok: u32) diag.FileId {
     return self.bag.locate(self.tokenSpan(tok), null).file;
 }
 

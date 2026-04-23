@@ -66,7 +66,7 @@ pub fn idtNatureOf(file: *const Ast.SourceFile, name: Ast.StrId) Ast.StrId {
 /// The Non-Existent Binding Rule is also what makes §3.11.1's Natureless
 /// Discipline Rule fall out with no arm of its own: a discipline that binds no
 /// nature is `.none` on both halves, so it conflicts with nobody.
-pub fn naturesCompatible(file: *const Ast.SourceFile, a: Ast.StrId, b: Ast.StrId) bool {
+fn naturesCompatible(file: *const Ast.SourceFile, a: Ast.StrId, b: Ast.StrId) bool {
     if (a == .none or b == .none) return true;
     if (a == b) return true;
     // The Base and Derived Nature Rules are ONE comparison: `baseNatureOf`

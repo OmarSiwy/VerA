@@ -128,7 +128,7 @@ fn hasD2aTerm(self: *Lower, e: Ast.ExprId) bool {
 }
 
 /// §5.10.1 or-lists, §5.10.2 initial_step/final_step, §5.10.3 cross/above/timer.
-pub fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
+fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
     const ex = &self.file.exprs;
     // §7.3.4 / §7.3.6.2 a digital event term: the explicit D2A flag the host
     // raises for the solve at the tick the event occurred in (§8.5.3.6).
@@ -417,7 +417,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
 /// step whether or not the statement ran in it, so no at-statement value
 /// exists to capture — and it is on the unconditional spine even when the
 /// statement is guarded, which is why this path takes a guarded one too.
-pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId, monitor: ?Mir.Value) Oom!void {
+fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId, monitor: ?Mir.Value) Oom!void {
     const pre = try self.arena.alloc(?TypedValue, args.len);
     var any_deferred = false;
     for (args, pre) |a, *p| {
@@ -478,7 +478,7 @@ pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
 /// The arm rides `display_cond_place` and NOT `displays`: it is part of the
 /// same source statement as the report, which already has its `displays` row,
 /// and W0850 is one warning per statement.
-pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
+fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
     if (std.mem.eql(u8, name, "$fmonitor")) {
         self.out.uses.insert(.file_tasks);
         self.out.uses.insert(.str_tasks);
@@ -495,7 +495,7 @@ pub fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
 /// resolve to solver unknowns and read the same value everywhere, so they do
 /// not force an operand to the end. Every child edge is searched
 /// (`ExprStore.children`), assignment-pattern elements included.
-pub fn containsFlowRead(self: *const Lower, e: Ast.ExprId) bool {
+fn containsFlowRead(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
     if (ex.tag(e) == .branch_access) {
@@ -711,7 +711,7 @@ pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!
 /// Preserve the source integer width before SSA replaces variables with their
 /// values. The synthetic identity is consumed by the display formatter only;
 /// other conversions still see the same numeric value.
-pub fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value {
+fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value {
     const bits = formatBits(self, e) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0819, "numeric `%s` needs a preserved integral width; this expression's sizing is not implemented", .{});
         return tv.v;
@@ -721,7 +721,7 @@ pub fn formatOperand(self: *Lower, e: Ast.ExprId, tv: TypedValue) Oom!Mir.Value 
 
 /// Only return widths the current analog IR preserves. A guessed carrier width
 /// can silently truncate a wide conditional or sign-extend a small operand.
-pub fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
+fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
     const ex = &self.file.exprs;
     return switch (ex.tag(e)) {
         .int_literal => @intCast(if (ex.intLiteral(e).width == 0) 64 else ex.intLiteral(e).width),
@@ -774,7 +774,7 @@ pub fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
 /// operands so a string used by `%s` does not become a new format. Numeric
 /// `%s` operands also retain their source width through an identity call.
 /// A shortfall stops where the operands stop; E0810 already owns it.
-pub fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
+fn prepareFormatArgs(self: *Lower, live: []const Ast.ExprId, tys: []const Ty, vals: []Mir.Value) Oom!void {
     std.debug.assert(live.len == tys.len);
     var at: usize = 0;
     while (at < live.len) {
@@ -886,7 +886,7 @@ fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
 /// unit out of the MIR — which is precisely how the old stub could return
 /// `S.con(0.0)` and lose the text. Rendering the formatter is then the same job
 /// as rendering a `$display`, and `cg_display` does both.
-pub fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
     if (args.len == 0 or args[0] == .none) {
         try self.err(tok, .E0813, "`{s}` needs a string variable to write into", .{name});
         return;
@@ -1197,7 +1197,7 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
 /// compares the raw byte, matches nothing, and returns zero items — no
 /// diagnostic and no data. Refusing is the implementation-dependent result
 /// worth having.
-pub fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
+fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
     var i: usize = 0;
     while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
         i = p + 1;
@@ -1230,7 +1230,7 @@ pub fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
 /// call because both tasks WRITE TO THE HOST: a plain call would render as
 /// `S.con(0.0)` in an eval unit and the request would be silently dropped.
 /// Returns true when `name` was one of them.
-pub fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!bool {
+fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!bool {
     // §9.17.2 `$bound_step ( expression ) ;` — "the simulator shall ensure that
     // the next time step taken is no larger than the smallest $bound_step()
     // argument currently active", so the accumulation is a running minimum.

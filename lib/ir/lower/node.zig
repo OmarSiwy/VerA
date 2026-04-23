@@ -93,7 +93,7 @@ pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void
         try applyDefaultDiscipline(self, try lower_param.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok);
 }
 
-pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
+fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     if (self.directives.disciplines.len == 0) return;
     const idx = self.node_voltages.get(name) orelse return;
     if (idx == ground) return;
@@ -110,7 +110,7 @@ pub fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom
 /// null when none is. Backwards from the token: the most recent directive
 /// wins, and a wire-qualified one wins over an unqualified one however old it
 /// is.
-pub fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
+fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
     if (main_tok >= self.tok_starts.len) return null;
     const at = self.tok_starts[main_tok];
     var fallback: ?[]const u8 = null;
@@ -292,7 +292,7 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
 /// caller owns the IDENTITY question itself (`node_voltages` for a net,
 /// `flow_unknowns` for a branch, `port_probes` for a port) — this function does
 /// not dedupe and must not, since two distinct unknowns may ask for one name.
-pub fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
+fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
     const idx: u16 = @intCast(self.out.nodes.len);
     assert(idx != ground);
     const spelling = try uniqueSpelling(self, name);
@@ -322,7 +322,7 @@ pub fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: 
 /// The suffix falls on the LATER slot, so it is a function of source order and
 /// nothing else. A fixture that has to spell one of these writes the member as
 /// `emitTopology` prints it — the same rule as every other unknown.
-pub fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
+fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
     if (!self.node_state.spellings.contains(name)) return name;
     // The candidates that LOSE are hashed and thrown away, so they are built on
     // the stack and only the winner reaches the arena — `elemKey`'s trick, with
@@ -340,7 +340,7 @@ pub fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
 /// §2.7 identifiers — capped at 1024 characters, the same source bound
 /// `elem_key_len` and `naming.max_name_len` are sized from — plus the
 /// punctuation and a `#` with a `u32` after it.
-pub const spelling_buf_len = 2 * 1024 + 32;
+const spelling_buf_len = 2 * 1024 + 32;
 
 /// §3.12.1 "A port branch ... is a branch between the upper and lower
 /// connections of the port", Syntax 3-9 `branch ( < port_identifier > )`.
@@ -496,7 +496,7 @@ pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
     return std.fmt.allocPrint(self.arena, "\\{s}", .{name});
 }
 
-pub fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
+fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
     var buf: [lower_param.elem_key_len]u8 = undefined;
     const key = try lower_param.elemKey(self, &buf, base, &.{i});
     const name = self.node_voltages.getKey(key) orelse try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ base, i });
