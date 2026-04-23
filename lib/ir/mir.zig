@@ -36,7 +36,7 @@ const Mir = @This();
 
 pub const Inst = enum(u32) { none = std.math.maxInt(u32), _ };
 pub const Value = enum(u32) {
-    // Reserved sentinels 0..11 (common constants); dynamic values from 12+.
+    // Reserved sentinels 0..9 (common constants); dynamic values from 10+.
     undef = 0,
     f_zero,
     f_one,
@@ -47,13 +47,11 @@ pub const Value = enum(u32) {
     zero,
     one,
     neg_one,
-    false_,
-    true_,
     _,
 
     /// First dynamic Value index. Values below this are the sentinels above and
     /// have no row in the `defs` side table.
-    pub const first_dynamic: u32 = 12;
+    pub const first_dynamic: u32 = 10;
 
 };
 pub const Block = enum(u32) { entry = 0, _ };
@@ -434,10 +432,8 @@ pub fn valueDef(self: *const Mir, value: Value) Def {
         .f_two => return .{ .float_const = 2.0 },
         .f_ten => return .{ .float_const = 10.0 },
         .f_inf => return .{ .float_const = std.math.inf(f64) },
-        // §4.2.8: booleans are just integers 0/1; false_/true_ exist for
-        // readable lowering and decode identically to zero/one.
-        .zero, .false_ => return .{ .int_const = 0 },
-        .one, .true_ => return .{ .int_const = 1 },
+        .zero => return .{ .int_const = 0 },
+        .one => return .{ .int_const = 1 },
         .neg_one => return .{ .int_const = -1 },
         _ => {},
     }
@@ -458,7 +454,7 @@ pub fn valueKind(self: *const Mir, value: Value) DefKind {
     return switch (value) {
         .undef => .undef,
         .f_zero, .f_one, .f_neg_one, .f_two, .f_ten, .f_inf => .float_const,
-        .zero, .one, .neg_one, .false_, .true_ => .int_const,
+        .zero, .one, .neg_one => .int_const,
         _ => self.defs.items(.kind)[@intFromEnum(value) - Value.first_dynamic],
     };
 }
