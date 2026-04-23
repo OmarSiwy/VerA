@@ -6,8 +6,8 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-const opdb = @import("ir").op;
-const OpKind = opdb.OpKind;
+const opdb = @import("../op_zig.zig");
+const OpKind = @import("ir").op.OpKind;
 const Input = @import("input.zig").Input;
 
 /// What to do with the §9.4 display tasks a model contains.

@@ -411,7 +411,7 @@ pub fn takesFormat(c: Callee) bool {
 }
 
 /// The §4.5 operator, §5.10.3 event or §9.17 task this callee is — the unit
-/// `naming.enumerateUnits` gives it and the `Instance` state `op.table` says
+/// `naming.enumerateUnits` gives it and the `Instance` state `op_zig.table` says
 /// it owns — or `.none`. Written out, so a new callee states whether it owns
 /// state.
 pub fn opKind(c: Callee) op.OpKind {
