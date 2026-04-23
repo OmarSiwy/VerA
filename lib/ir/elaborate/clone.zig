@@ -14,7 +14,7 @@ const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
 const elab_paramset = @import("paramset.zig");
 const Ast = @import("frontend").Ast;
-const Lower = @import("../lower.zig");
+const dist = @import("../dist.zig");
 const rng = @import("kernels").rng_kernels;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
@@ -394,7 +394,7 @@ pub fn rewriteSysCall(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
 pub fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
     const x = &self.ctx.file.exprs;
     const name = self.ctx.file.str(x.strOf(e));
-    const d = Lower.distOf(name) orelse return null;
+    const d = dist.of(name) orelse return null;
     if (std.mem.eql(u8, name, "$random")) return null;
     const tok = x.mainTok(e);
     const args = x.args(e);
@@ -422,13 +422,13 @@ pub fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
         for (eff[1..], 0..) |arg, i| {
             p[i] = elab_paramset.constReal(self, arg) orelse break :fold;
             if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(p[i] > 0)) {
-                try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, Lower.distParamName(d, i), p[i] });
+                try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, dist.paramName(d, i), p[i] });
                 bad = true;
             }
             if (d.count and i == 0 and p[i] > 0 and
                 (!(p[i] <= 2147483647.0) or p[i] != @trunc(p[i])))
             {
-                try self.err(x.mainTok(arg), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, Lower.distParamName(d, i) });
+                try self.err(x.mainTok(arg), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, dist.paramName(d, i) });
                 bad = true;
             }
         }
