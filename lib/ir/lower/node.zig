@@ -13,6 +13,7 @@ const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_contrib = @import("contrib.zig");
 const lower_discipline = @import("discipline.zig");
+const discipline_rules = @import("../discipline_rules.zig");
 const lower_expr = @import("expr.zig");
 const lower_param = @import("param.zig");
 const Ast = @import("frontend").Ast;
@@ -167,7 +168,7 @@ fn checkPrimitiveTerminal(self: *Lower, term: Ast.ExprId, prim_tok: u32, what: [
     if (idx == ground) return;
     const dname = self.out.nodes.items(.disc)[idx];
     const decl = lower_discipline.disciplineDecl(self, dname) orelse return;
-    if (lower_discipline.domainOf(decl) != .continuous) return;
+    if (discipline_rules.domainOf(decl) != .continuous) return;
     var b = self.errWith(ex.mainTok(base), .E0960);
     b.msg("`{s}` is of continuous discipline `{s}` and a terminal of a digital {s}", .{ name, dname, what });
     b.note("the primitive's side of the net is discrete, so the net is mixed, and no `default_discipline is in force to name that side's discipline", .{});

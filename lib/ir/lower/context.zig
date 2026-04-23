@@ -12,7 +12,7 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_param = @import("param.zig");
-const lower_discipline = @import("discipline.zig");
+const discipline_rules = @import("../discipline_rules.zig");
 const lower_event = @import("event.zig");
 const lower_contrib = @import("contrib.zig");
 const Ast = @import("frontend").Ast;
@@ -220,7 +220,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         // context of their domain" — and a continuous assignment is the
         // discrete context. A `ddiscrete` net (§3.6.2.2 `domain discrete`) is
         // a net exactly as `wire` is, and legal here.
-        if (lower_discipline.isContinuous(self.file, n.?.discipline)) {
+        if (discipline_rules.isContinuous(self.file, n.?.discipline)) {
             try self.err(a.main_tok, .E0435, "`{s}` is driven by a continuous assignment", .{self.file.str(ex.strOf(t))});
             continue;
         }
@@ -503,7 +503,7 @@ pub fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.S
 fn discreteNet(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: Ast.ExprId) ?Ast.ExprId {
     if (e == .none or file.exprs.tag(e) != .ident) return null;
     const n = netOf(module, file.exprs.strOf(e)) orelse return null;
-    return if (lower_discipline.isContinuous(file, n.discipline)) null else e;
+    return if (discipline_rules.isContinuous(file, n.discipline)) null else e;
 }
 
 /// Is `name` a NET of `module` — a declared net, or a port no variable
