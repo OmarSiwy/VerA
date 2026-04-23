@@ -12,7 +12,6 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_expr = @import("expr.zig");
-const lower_event = @import("event.zig");
 const Ast = @import("frontend").Ast;
 const Mir = @import("../mir.zig");
 const Ssa = @import("../ssa.zig");
@@ -1234,7 +1233,7 @@ const Exposed = struct {
         if (s == .for_stmt) try x.stmt(s.for_stmt.init);
         // §9.4 a print the device drops reads nothing in the device.
         const dropped = s == .sys_task and self.displays_dropped and
-            lower_event.isDisplayTask(self.file.str(s.sys_task.name));
+            Mir.callee.family(.fromName(self.file.str(s.sys_task.name))) == .display;
         if (!dropped) try self.file.stmtEdges(id, Own{ .x = x });
         const funcs: []const Ast.FuncDecl = if (self.out.module) |m| m.functions else &.{};
         var ws: std.ArrayList(Ast.ExprId) = .empty;

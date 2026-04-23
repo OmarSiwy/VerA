@@ -272,6 +272,9 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
 /// §5.12/ch9 analog system task. Display/file tasks are void calls codegen may
 /// drop; the deliberately-unsupported set is rejected by exact name.
 pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
+    const c: Mir.Callee = .fromName(name);
+    const family = Mir.callee.family(c);
+    const formats = Mir.callee.takesFormat(c);
     if (isDigitalOnlySysFunc(name)) { // §9.2
         try self.err(tok, .E0806, "`{s}`", .{name});
         return;
@@ -293,7 +296,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // the file ones as "the same as their counterparts", so it covers both — and
     // `checkFormatPairing` picks the format as "the first argument that folds to a
     // string", which steps over the descriptor without being told about it.
-    if (isDisplayTask(name) or isFileOutTask(name)) try checkFormatPairing(self, tok, args);
+    if (formats) try checkFormatPairing(self, tok, args);
     // §9.5.3/§9.5.4.2: all three of these write through an argument, which is
     // not something a `call` result can do — see `lowerStringWrite`/`lowerScan`.
     if (std.mem.eql(u8, name, "$swrite") or std.mem.eql(u8, name, "$sformat"))
@@ -308,7 +311,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     if (try lowerKernelCtl(self, tok, name, args)) return; // §9.17
     // §9.4.1 `$monitor` and its §9.5.2 file twin: registered HERE, reported at
     // the end of every accepted step from then on — see `armMonitor`.
-    const mon: ?Mir.Value = if (isMonitor(name)) try armMonitor(self, name) else null;
+    const mon: ?Mir.Value = if (c == .@"$monitor" or c == .@"$fmonitor") try armMonitor(self, name) else null;
     if (mon != null and self.restrict == null) return queueDisplay(self, tok, name, args, mon);
     // §9.4.1 the display/severity/control family on the unconditional spine:
     // its call is minted at the end of the block, and an operand that reads a
@@ -317,7 +320,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // STATEMENT IS: a guarded call has to stay in its arm to be guarded, and a
     // restricted context owns the diagnostic (E0421 fires at the statement,
     // where `restrict` is still set).
-    if ((isDisplayTask(name) or isSimCtlTask(name)) and
+    if ((family == .display or family == .simctl) and
         self.cond_depth == 0 and self.restrict == null)
         return queueDisplay(self, tok, name, args, null);
     var vals: std.ArrayList(Mir.Value) = .empty;
@@ -334,13 +337,13 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
         try live.append(self.arena, a);
         try tys.append(self.arena, tv.ty);
     }
-    if (isFileOutTask(name)) {
+    if (family == .file_out) {
         self.out.uses.insert(.file_tasks);
         // The §9.4.3 formatter renders into a scratch row before the write, so a
         // module with a §9.5.2 output task needs the string kernels too.
         self.out.uses.insert(.str_tasks);
     }
-    if (isDisplayTask(name) or isFileOutTask(name)) {
+    if (formats) {
         // §9.4.3's other pairing half — each conversion against its operand's
         // TYPE. After the loop, because the types are what lowering computed.
         try prepareFormatArgs(self, live.items, tys.items, vals.items);
@@ -350,7 +353,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     if (mon) |k| try vals.insert(self.arena, 0, k);
     const v = try self.call(name, vals.items);
     // ponytail: printing and simulation control share one display-chain append.
-    if (isDisplayTask(name) or isFileOutTask(name) or isSimCtlTask(name)) {
+    if (formats or family == .simctl) {
         // §9.7.1/§9.7.2 simulation control joins the same per-accepted-point
         // side-effect phase as the display tasks: both clauses tie the task to
         // the SOLVE ("during an accepted iteration"), which is exactly what the
@@ -455,12 +458,6 @@ pub fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     });
 }
 
-/// §9.4.1 `$monitor` and §9.5.2's `$fmonitor`, the two members of the display
-/// family that report on a CHANGE rather than when executed.
-pub fn isMonitor(name: []const u8) bool {
-    return std.mem.eql(u8, name, "$monitor") or std.mem.eql(u8, name, "$fmonitor");
-}
-
 /// §9.4.1: "When a $monitor task is invoked with one or more arguments, the
 /// simulator SETS UP A MECHANISM whereby for each accepted step, if the variable
 /// or an expression in the argument list changes value compared with the last
@@ -542,15 +539,6 @@ pub fn lowerDeferredDisplays(self: *Lower) Oom!void {
     }
 }
 
-/// §9.7.1 `$finish` and §9.7.2 `$stop` — the two IEEE 1364 simulation-control
-/// tasks the analog context inherits. NOT `isDisplayTask`: they print only
-/// their Table 9-25 diagnostics, take no §9.4.3 format, and what defines them
-/// is what they do to the RUN. The §9.7.3 severity family ($fatal included) is
-/// in `isDisplayTask`, because its whole content is a formatted message.
-pub fn isSimCtlTask(name: []const u8) bool {
-    return std.mem.eql(u8, name, "$finish") or std.mem.eql(u8, name, "$stop");
-}
-
 /// §9.5 Sequence one file-family call into the per-point I/O phase.
 ///
 /// Every §9.5 call has a side effect on a descriptor — an open, a position, a
@@ -561,7 +549,7 @@ pub fn isSimCtlTask(name: []const u8) bool {
 /// cannot run per Newton iteration.
 ///
 /// So a file call joins the chain whether or not its value is read. That is the
-/// difference between this and `isDisplayTask`'s append, whose calls are void by
+/// difference between this and a display task's append, whose calls are void by
 /// nature: `$fgets` returns a count `049_ftell.va` throws away, and the READ it
 /// performed is what the `$ftell` two lines later measures.
 ///
@@ -673,65 +661,6 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
         item += 1;
     }
     return n;
-}
-
-/// §9.5.2's five output tasks: `$display`/`$write`/`$strobe`/`$monitor`/`$debug`
-/// "with one additional argument, which is either a multichannel descriptor or a
-/// file descriptor", plus the two §9.5.1/§9.5.6 tasks that take a descriptor and
-/// return nothing. Every one of them is a STATEMENT, so its value is dead and it
-/// only survives into the emitted device by joining the display chain.
-pub fn isFileOutTask(name: []const u8) bool {
-    const tasks = [_][]const u8{
-        "$fdisplay", "$fwrite", "$fstrobe", "$fmonitor",
-        "$fdebug",   "$fclose", "$fflush",
-    };
-    for (tasks) |t| if (std.mem.eql(u8, name, t)) return true;
-    return false;
-}
-
-/// The §9.5 names that RETURN something: §9.5.1 `$fopen`, §9.5.4 `$fgets` and
-/// `$fscanf`, §9.5.5 `$ftell`/`$fseek`/`$rewind`, §9.5.7 `$ferror`, §9.5.8
-/// `$feof`. Every one is integer-valued (`sysFuncTy`), and every one has a SIDE
-/// EFFECT on the descriptor — so each joins the display chain too, whether or not
-/// anything reads its value: `049_ftell.va` drops the `$fgets` count on the floor
-/// and then asserts the position that read moved to.
-pub fn isFileFunc(name: []const u8) bool {
-    const fns = [_][]const u8{
-        "$fopen", "$fgets",  "$fscanf", "$ftell",
-        "$fseek", "$rewind", "$ferror", "$feof",
-    };
-    for (fns) |f| if (std.mem.eql(u8, name, f)) return true;
-    return false;
-}
-
-/// Every §9.5 spelling that reaches the emitter: the two classifications above,
-/// plus the synthetic readers `lowerFileRead` splits out of the three calls that
-/// write through an argument. One predicate, because three consumers ask the same
-/// question — the emitter's dispatch, its live-operand rule, and `proof`.
-pub fn isFileCall(name: []const u8) bool {
-    if (isFileOutTask(name) or isFileFunc(name)) return true;
-    const synth = [_][]const u8{
-        "$fgets$str", "$ferror$str", "$fscanf$int", "$fscanf$real", "$fscanf$str",
-    };
-    for (synth) |s| if (std.mem.eql(u8, name, s)) return true;
-    return false;
-}
-
-/// §9.4.1 display family + §9.7.3 severity family: the tasks whose whole content
-/// is text on the simulator's output. The §9.5 file family is NOT here — it is
-/// `isFileOutTask`/`isFileFunc`, because a descriptor operation is sequenced with
-/// the prints but rendered by different kernels — and neither is
-/// `$monitoron`/`$monitoroff`, which toggle a mode rather than print.
-pub fn isDisplayTask(name: []const u8) bool {
-    const printing = [_][]const u8{
-        "$display", "$displayb", "$displayo", "$displayh",
-        "$write",   "$writeb",   "$writeo",   "$writeh",
-        "$strobe",  "$strobeb",  "$strobeo",  "$strobeh",
-        "$monitor", "$debug",    "$fatal",    "$error",
-        "$warning", "$info",
-    };
-    for (printing) |p| if (std.mem.eql(u8, name, p)) return true;
-    return false;
 }
 
 /// §9.4.3: "for each % character (except %m, %% and %l) that appears in a

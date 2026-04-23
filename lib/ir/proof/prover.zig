@@ -1390,6 +1390,17 @@ pub const Prover = struct {
 pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
     const positive: proof_lattice.Interval = .{ .lo = 0, .lo_open = true, .nonzero = true };
     const non_negative: proof_lattice.Interval = .{ .lo = 0 };
+    // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
+    // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
+    // unit — the only kind `proof` rates — the emitter renders it as the literal 0
+    // §9.5.1 reserves, because the descriptor operation itself happens only in the
+    // display unit (`codegen.Gen.emitting_display`). Without this line a model
+    // that reads a file into its contribution compiled `.strict` on account of a
+    // call the emitter had already folded to a constant.
+    //
+    // No interval: §9.5.1's fd has bit 31 set, so it is a large positive number
+    // rather than a small one, and there is nothing useful to bound.
+    if (Mir.callee.isFileCall(c)) return .{ .iv = .top, .finite = true };
     return switch (c) {
         // §9.10 environment parameter functions; §9.18 $mfactor. `limexp` is
         // not here: its range is its argument's (`Prover.callTransfer`).
@@ -1398,54 +1409,11 @@ pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
         .@"$mfactor", // multiplicity factor > 0
         => .{ .iv = positive, .finite = true },
         .@"$abstime", .@"$realtime" => .{ .iv = non_negative, .finite = true },
-        // §9.5 the descriptor family. FINITE, and here the claim is the easy one:
-        // every §9.5 call is integer-valued (`analysis.callTy`), and in a residual
-        // unit — the only kind `proof` rates — the emitter renders it as the literal 0
-        // §9.5.1 reserves, because the descriptor operation itself happens only in the
-        // display unit (`codegen.Gen.emitting_display`). Without this line a model
-        // that reads a file into its contribution compiled `.strict` on account of a
-        // call the emitter had already folded to a constant.
-        //
-        // No interval: §9.5.1's fd has bit 31 set, so it is a large positive number
-        // rather than a small one, and there is nothing useful to bound.
-        // `Lower.isFileCall`'s set; the test below holds the two together.
-        .@"$fopen",
-        .@"$fclose",
-        .@"$fflush",
-        .@"$fdisplay",
-        .@"$fwrite",
-        .@"$fstrobe",
-        .@"$fmonitor",
-        .@"$fdebug",
-        .@"$fgets",
-        .@"$fscanf",
-        .@"$ftell",
-        .@"$fseek",
-        .@"$rewind",
-        .@"$ferror",
-        .@"$feof",
-        .@"$fgets$str",
-        .@"$ferror$str",
-        .@"$fscanf$int",
-        .@"$fscanf$real",
-        .@"$fscanf$str",
-        => .{ .iv = .top, .finite = true },
         // §9.13 reference algorithms can overflow or underflow (Erlang's product,
         // Student-t's divisor, and unbounded real scale parameters). A distribution
         // name alone proves no finite value; retain strict floating-point mode.
         else => .{ .iv = .top, .finite = false }, // else: the prover models no other call's range
     };
-}
-
-test "callAbstract's §9.5 prong is exactly Lower.isFileCall" {
-    for (std.meta.tags(Mir.Callee)) |c| {
-        const env = switch (c) {
-            .@"$vt", .@"$temperature", .@"$mfactor", .@"$abstime", .@"$realtime" => true,
-            else => false, // else: the file prong is the question
-        };
-        if (env) continue;
-        try std.testing.expectEqual(Lower.isFileCall(@tagName(c)), callAbstract(c).finite);
-    }
 }
 
 /// LRM Table 4-14/4-15 spelling of an opcode, for diagnostics.
