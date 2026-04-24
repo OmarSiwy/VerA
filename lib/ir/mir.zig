@@ -4,8 +4,8 @@
 //! Transformation: lowering writes MIR; proof.zig reads it; codegen.zig walks it.
 //!
 //! DOD (this is the performance core):
-//!   - Instructions are a MultiArrayList of fixed rows {op,a,b,c,result,next,tok}
-//!     (25 B/inst as SoA columns), NOT tagged unions in a linked list.
+//!   - Instructions are a MultiArrayList of fixed rows {op,a,b,c,result,next,block,tok}
+//!     (29 B/inst as SoA columns), NOT tagged unions in a linked list.
 //!   - Values, blocks, and the extra payload pool are separate SoA arrays.
 //!   - Every reference is a typed enum(u32) handle.
 //!   - Constants are deduped (fconst_map/iconst_map) at construction.
@@ -36,7 +36,7 @@ const Mir = @This();
 
 pub const Inst = enum(u32) { none = std.math.maxInt(u32), _ };
 pub const Value = enum(u32) {
-    // Reserved sentinels 0..11 (common constants); dynamic values from 12+.
+    // Reserved sentinels 0..9 (common constants); dynamic values from 10+.
     undef = 0,
     f_zero,
     f_one,
@@ -47,13 +47,11 @@ pub const Value = enum(u32) {
     zero,
     one,
     neg_one,
-    false_,
-    true_,
     _,
 
     /// First dynamic Value index. Values below this are the sentinels above and
     /// have no row in the `defs` side table.
-    pub const first_dynamic: u32 = 12;
+    pub const first_dynamic: u32 = 10;
 
 };
 pub const Block = enum(u32) { entry = 0, _ };
@@ -231,6 +229,9 @@ pub const InstRow = struct {
     c: u32 = 0,
     result: Value = .undef,
     next: Inst = .none,
+    /// The block whose `next` chain links this row. Never set by a caller:
+    /// `addInst` stamps it and every relink restamps it.
+    block: Block = .entry,
     /// PROVENANCE: index of the token this instruction came from, for
     /// diagnostics, or `no_tok`. Never set by a caller — `addInst` stamps it
     /// from `Mir.cur_tok` (see there).
@@ -352,7 +353,7 @@ pub fn deinit(self: *Mir, gpa: std.mem.Allocator) void {
 // ---------------------------------------------------------------- values ----
 
 /// Register a new dynamic Value. Prefer the typed helpers below.
-pub fn addValue(self: *Mir, gpa: std.mem.Allocator, kind: DefKind, payload: u64) !Value {
+fn addValue(self: *Mir, gpa: std.mem.Allocator, kind: DefKind, payload: u64) !Value {
     const i = self.defs.len + Value.first_dynamic;
     assert(i < std.math.maxInt(u32));
     const v: Value = @enumFromInt(@as(u32, @intCast(i)));
@@ -431,10 +432,8 @@ pub fn valueDef(self: *const Mir, value: Value) Def {
         .f_two => return .{ .float_const = 2.0 },
         .f_ten => return .{ .float_const = 10.0 },
         .f_inf => return .{ .float_const = std.math.inf(f64) },
-        // §4.2.8: booleans are just integers 0/1; false_/true_ exist for
-        // readable lowering and decode identically to zero/one.
-        .zero, .false_ => return .{ .int_const = 0 },
-        .one, .true_ => return .{ .int_const = 1 },
+        .zero => return .{ .int_const = 0 },
+        .one => return .{ .int_const = 1 },
         .neg_one => return .{ .int_const = -1 },
         _ => {},
     }
@@ -450,10 +449,13 @@ pub fn valueDef(self: *const Mir, value: Value) Def {
     };
 }
 
-/// Cheap kind test without decoding the payload.
+/// Kind of `value`, read from the `kind` column without decoding the payload.
 pub fn valueKind(self: *const Mir, value: Value) DefKind {
-    return switch (self.valueDef(value)) {
-        inline else => |_, tag| tag,
+    return switch (value) {
+        .undef => .undef,
+        .f_zero, .f_one, .f_neg_one, .f_two, .f_ten, .f_inf => .float_const,
+        .zero, .one, .neg_one => .int_const,
+        _ => self.defs.items(.kind)[@intFromEnum(value) - Value.first_dynamic],
     };
 }
 
@@ -581,6 +583,8 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
         }
     } else return false;
     const tail = last[@intFromEnum(from)];
+    var moved = head;
+    while (moved != .none) : (moved = next[@intFromEnum(moved)]) self.insts.items(.block)[@intFromEnum(moved)] = to;
     if (after == .none) first[@intFromEnum(from)] = .none else next[@intFromEnum(after)] = .none;
     last[@intFromEnum(from)] = after;
     next[@intFromEnum(tail)] = term;
@@ -588,15 +592,50 @@ pub fn moveTailBefore(self: *Mir, from: Block, after: Inst, to: Block) bool {
     return true;
 }
 
+/// Remove `inst` from `block`'s chain; the rows after it stay linked. The row
+/// is orphaned, not reused.
+pub fn unlink(self: *Mir, block: Block, inst: Inst) void {
+    const next = self.insts.items(.next);
+    const first = self.blocks.items(.first);
+    const last = self.blocks.items(.last);
+    const b = @intFromEnum(block);
+    var prev: Inst = .none;
+    var cur = first[b];
+    while (cur != inst) : (cur = next[@intFromEnum(cur)]) prev = cur;
+    const after = next[@intFromEnum(inst)];
+    if (prev == .none) first[b] = after else next[@intFromEnum(prev)] = after;
+    if (last[b] == inst) last[b] = prev;
+    next[@intFromEnum(inst)] = .none;
+}
+
+/// Relink every row of `from`, in order, at the end of `to`; `from` is left
+/// empty.
+pub fn splice(self: *Mir, to: Block, from: Block) void {
+    assert(to != from);
+    const next = self.insts.items(.next);
+    const first = self.blocks.items(.first);
+    const last = self.blocks.items(.last);
+    const head = first[@intFromEnum(from)];
+    if (head == .none) return;
+    var moved = head;
+    while (moved != .none) : (moved = next[@intFromEnum(moved)]) self.insts.items(.block)[@intFromEnum(moved)] = to;
+    const tail = last[@intFromEnum(to)];
+    if (tail == .none) first[@intFromEnum(to)] = head else next[@intFromEnum(tail)] = head;
+    last[@intFromEnum(to)] = last[@intFromEnum(from)];
+    first[@intFromEnum(from)] = .none;
+    last[@intFromEnum(from)] = .none;
+}
+
 // ---------------------------------------------------------- instructions ----
 
 /// Append `row` to the end of `block` and link it in. Caller sets row.result
 /// (use `emit` to get a fresh result Value automatically).
-pub fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst {
+fn addInst(self: *Mir, gpa: std.mem.Allocator, block: Block, row: InstRow) !Inst {
     const i = self.insts.len;
     assert(i < std.math.maxInt(u32) - 1); // maxInt is Inst.none
     var stamped = row;
     stamped.tok = self.cur_tok; // provenance — see InstRow.tok and cur_tok
+    stamped.block = block;
     try self.insts.append(gpa, stamped);
     const inst: Inst = @enumFromInt(@as(u32, @intCast(i)));
 
@@ -700,6 +739,8 @@ pub fn setPhiPairs(self: *Mir, gpa: std.mem.Allocator, inst: Inst, pairs: []cons
     self.insts.items(.c)[@intFromEnum(inst)] = @intCast(pairs.len);
 }
 
+/// Gathers every column, the cold `tok` and `next` included; a hot walk
+/// decodes through `instData` instead.
 pub fn instRow(self: *const Mir, inst: Inst) InstRow {
     return self.insts.get(@intFromEnum(inst));
 }
@@ -714,14 +755,26 @@ pub fn instOp(self: *const Mir, inst: Inst) Opcode {
     return self.insts.items(.op)[@intFromEnum(inst)];
 }
 
+/// The block `inst` is linked into.
+pub fn instBlock(self: *const Mir, inst: Inst) Block {
+    return self.insts.items(.block)[@intFromEnum(inst)];
+}
+
 /// The Value this instruction defines, or `.undef` for terminators.
 pub fn instResult(self: *const Mir, inst: Inst) Value {
     return self.insts.items(.result)[@intFromEnum(inst)];
 }
 
 /// Decoded view of one instruction. Switch on the class, not on raw a/b/c.
+/// Reads only the `op`/`a`/`b`/`c` columns, never the cold `tok`/`next`.
 pub fn instData(self: *const Mir, inst: Inst) InstData {
-    const row = self.instRow(inst);
+    const i = @intFromEnum(inst);
+    const row: struct { op: Opcode, a: u32, b: u32, c: u32 } = .{
+        .op = self.insts.items(.op)[i],
+        .a = self.insts.items(.a)[i],
+        .b = self.insts.items(.b)[i],
+        .c = self.insts.items(.c)[i],
+    };
     return switch (opClass(row.op)) {
         .unary => .{ .unary = .{ .op = row.op, .operand = @enumFromInt(row.a) } },
         .binary => .{ .binary = .{
@@ -759,9 +812,9 @@ pub fn instData(self: *const Mir, inst: Inst) InstData {
 
 /// Operand `i` of a phi (0..count-1 from `instData(...).phi`).
 pub fn phiPair(self: *const Mir, inst: Inst, i: u32) PhiPair {
-    const row = self.instRow(inst);
-    assert(row.op == .phi and i < row.c);
-    const at = row.b + i * 2;
+    const n = @intFromEnum(inst);
+    assert(self.insts.items(.op)[n] == .phi and i < self.insts.items(.c)[n]);
+    const at = self.insts.items(.b)[n] + i * 2;
     return .{
         .block = @enumFromInt(self.extra.items[at]),
         .value = @enumFromInt(self.extra.items[at + 1]),
@@ -778,7 +831,7 @@ pub fn addExtra(self: *Mir, gpa: std.mem.Allocator, words: []const u32) !u32 {
     return @intCast(start);
 }
 
-pub fn addExtraPairs(self: *Mir, gpa: std.mem.Allocator, pairs: []const PhiPair) !u32 {
+fn addExtraPairs(self: *Mir, gpa: std.mem.Allocator, pairs: []const PhiPair) !u32 {
     const start = self.extra.items.len;
     assert(start < std.math.maxInt(u32));
     try self.extra.ensureUnusedCapacity(gpa, pairs.len * 2);
@@ -836,6 +889,8 @@ test "mir: const dedup, block chain, phi pairs, alias" {
     const p = try mir.emitPhi(gpa, join, &.{});
     const pi = mir.valueDef(p).inst_result;
     try std.testing.expectEqual(@as(u32, 0), mir.instData(pi).phi.count);
+    try std.testing.expectEqual(join, mir.instBlock(pi));
+    try std.testing.expectEqual(entry, mir.instBlock(in1));
     try mir.setPhiPairs(gpa, pi, &.{ .{ .block = entry, .value = id }, .{ .block = join, .value = e } });
     try std.testing.expectEqual(@as(u32, 2), mir.instData(pi).phi.count);
     try std.testing.expectEqual(e, mir.phiPair(pi, 1).value);

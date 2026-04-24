@@ -846,10 +846,40 @@ pub fn init(
 }
 
 /// Unmaps the SSA matrix, the one allocation an arena cannot reclaim.
-/// Every other table lives in `arena`: all six constructors (the driver,
-/// lower/codegen/proof test harnesses, naming.zig, cg_display.zig) pass one.
+/// Every other table lives in `arena`.
 pub fn deinit(self: *Lower) void {
     self.builder.deinit();
+}
+
+/// What only the driver knows; each field documents the `Lower` field it sets.
+pub const Options = struct {
+    directives: Preprocessor.Directives = .{},
+    include_dirs: []const []const u8 = &.{},
+    param_overrides: []const ParamOverride = &.{},
+    displays_dropped: bool = false,
+};
+
+/// Lower `file` into the empty `mir`. Retains nothing: the SSA builder's OS
+/// mappings are gone on return, so everything returned lives in `arena`.
+pub fn lower(
+    arena: std.mem.Allocator,
+    mir: *Mir,
+    file: *Ast.SourceFile,
+    src: []const u8,
+    tok_starts: []const u32,
+    bag: *diag.Bag,
+    opts: Options,
+) Error!Lowered {
+    var self = init(arena, mir, file, src, tok_starts, bag);
+    self.directives = opts.directives;
+    self.include_dirs = opts.include_dirs;
+    self.param_overrides = opts.param_overrides;
+    self.displays_dropped = opts.displays_dropped;
+    defer {
+        self.deinit();
+        assert(self.builder.defs.len == 0);
+    }
+    return self.lowerFile();
 }
 
 // ---------------------------------------------------------------------------
@@ -1164,7 +1194,7 @@ fn lowered(self: *Lower) Lowered {
 /// LRM §6.2/§6.9. Register ports (§6.5) into `nodes`, elaborate the
 /// declarations, then lower each analog block (§5.2) in source order —
 /// multiple analog blocks are executed as if concatenated (§6.9.1).
-pub fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
+fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     self.out.module = module;
     self.mir.name = self.file.str(module.name);
     // IEEE 1364 §19.1 (§10.1 carries it over): the tag of the module keyword's
@@ -1776,13 +1806,6 @@ const lower_control = @import("lower/control.zig");
 
 // §5.10 analog events: `@(...)`, cross/above/timer, initial_step/final_step — lower/event.zig
 const lower_event = @import("lower/event.zig");
-pub const isSimCtlTask = lower_event.isSimCtlTask;
-pub const isFileOutTask = lower_event.isFileOutTask;
-pub const isFileCall = lower_event.isFileCall;
-pub const isDisplayTask = lower_event.isDisplayTask;
-pub const isMonitor = lower_event.isMonitor;
-pub const distOf = lower_event.distOf;
-pub const distParamName = lower_event.distParamName;
 
 // §4.2 expressions, §4.3 math functions, §4.4 signal access — lower/expr.zig
 const lower_expr = @import("lower/expr.zig");

@@ -83,7 +83,7 @@ pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args
 /// The `limit_slots` index for this access function, minting nothing: every
 /// slot was created by `scanCallSites` before the body was lowered. Null
 /// when the argument is not an access function at all.
-pub fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
+fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
     const t = try limitSlotKey(self, a) orelse return null;
     for (self.out.limit_slots.items, 0..) |s, i| {
         if (s.access == t.access and s.hi == t.hi and s.lo == t.lo and s.neg == t.neg and s.br == t.br)
@@ -98,7 +98,7 @@ pub fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
 /// the site — and that costs nothing: `branchOf`'s diagnostics are deduped by
 /// `(code, span)` in the bag, so a malformed access function is still reported
 /// exactly once.
-pub fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?lower_contrib.Target {
+fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?lower_contrib.Target {
     if (a == .none or self.file.exprs.tag(a) != .branch_access) return null;
     return lower_contrib.branchOf(self, a);
 }

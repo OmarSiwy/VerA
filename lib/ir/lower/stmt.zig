@@ -109,7 +109,7 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// gated here exactly as `disable` (E0401) is, two alternatives over in the
 /// same list. A bare trigger would mean "active at every timepoint", which sets
 /// the event's rate from the solver's step control rather than from the model.
-pub fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
+fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
     if (!self.in_event_stmt) {
         var b = self.errWith(tok, .E0434);
         b.help("only `@(<event>) -> ev;` is legal", .{});
@@ -126,7 +126,7 @@ pub fn lowerEventTrigger(self: *Lower, tok: u32, name: []const u8) Oom!void {
 /// an analog block can legally contain. There is no clause-5 section for
 /// `disable` (5.11 is `jump_statement`: return/break/continue), so annex A is
 /// the citation.
-pub fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
+fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
     if (!self.in_event_stmt) {
         var b = self.errWith(tok, .E0401);
         b.help("only `@(<event>) disable <block>;` is legal", .{});
@@ -158,7 +158,7 @@ pub fn lowerDisable(self: *Lower, tok: u32, name: []const u8) Oom!void {
 }
 
 /// §5.3.2 named sequential block: its declarations shadow for the block only.
-pub fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
+fn lowerSeqBlock(self: *Lower, b: Ast.SeqBlock) Oom!void {
     const mark = self.scope_log.items.len;
     defer lower_param.closeScope(self, mark);
     // §5.3.2's key for a local's static location, in step with `scanHeld`'s.
@@ -223,7 +223,7 @@ fn scopeElem(self: *Lower, b: Ast.SeqBlock) Oom!?[]const u8 {
 /// ponytail: last declaration wins when the same label runs twice (a §6.6.1
 /// unrolled `for` body). Nothing can name one iteration's copy apart from
 /// another, so there is nothing for an ordinal to disambiguate yet.
-pub fn publishBlockLocals(self: *Lower, label: []const u8, b: Ast.SeqBlock) Oom!void {
+fn publishBlockLocals(self: *Lower, label: []const u8, b: Ast.SeqBlock) Oom!void {
     for (b.vars) |v| {
         const local = self.file.str(v.name);
         // Arrays are scalarized into `name[i]` entries, which have no scalar
@@ -248,7 +248,7 @@ pub fn publishBlockLocals(self: *Lower, label: []const u8, b: Ast.SeqBlock) Oom!
 /// §5.7 procedural assignment. The target is an lvalue expression so array
 /// elements (§3.2.2) work; both sides are coerced to the target's type
 /// (§4.2.1.1/§4.2.1.2).
-pub fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
+fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     const ex = &self.file.exprs;
     // §3.2.2 whole-array assignment from an assignment pattern (§4.2.13):
     // both sides are scalarized, so this is an element-wise copy.
@@ -323,7 +323,7 @@ pub fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void
 /// value, old)`, leaving all other cells unchanged, including on an invalid index.
 /// ponytail: N masked writes per assignment; replace scalarization with explicit
 /// array storage if large mutable arrays make this compile-time expansion costly.
-pub fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
+fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
     // Asked BEFORE the rhs is lowered: a `false` here falls through to the
     // scalar path, which lowers `value` itself, and lowering it twice would
     // run its side effects twice.
@@ -334,7 +334,7 @@ pub fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) O
 /// Is `target` an element of a declared array whose subscript only has a value
 /// at run time? The precondition `assignRuntimeIndex` and §4.7.2.3's
 /// output-argument writeback share.
-pub fn isRuntimeElem(self: *Lower, target: Ast.ExprId) Oom!bool {
+fn isRuntimeElem(self: *Lower, target: Ast.ExprId) Oom!bool {
     var subs: [lower_param.max_stack_dims]Ast.ExprId = undefined;
     const chain = (try indexChain(self, target, &subs)) orelse return false;
     for (chain.subs) |s| {
@@ -422,7 +422,7 @@ pub fn runtimeArrayIndex(self: *Lower, subs: []const Ast.ExprId, dims: []const l
 ///
 /// Returns false when the right-hand side is not an array at all, so the
 /// ordinary scalar path keeps its own diagnostics.
-pub fn copyWholeArray(
+fn copyWholeArray(
     self: *Lower,
     target: Ast.ExprId,
     value: Ast.ExprId,
@@ -530,7 +530,7 @@ pub fn arrayRef(self: *Lower, e: Ast.ExprId, buf: *[lower_param.max_stack_dims]A
 ///
 /// Returns false when neither side is a slice, so the whole-array and
 /// runtime-element paths keep their own diagnostics.
-pub fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
+fn copyArraySlice(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!bool {
     var tbuf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
     var vbuf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
     const dst = (try arrayRef(self, target, &tbuf)) orelse return false;
@@ -654,7 +654,7 @@ pub fn writeSliceCells(self: *Lower, at_e: Ast.ExprId, d: ArraySlice, dd: []cons
 /// The slice's leading subscripts, if every one of them folds: true when they
 /// are also in range, false when §3.2.2 has been reported on them, null when at
 /// least one is only known during the solve.
-pub fn constPrefix(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, out: []i64) Oom!?bool {
+fn constPrefix(self: *Lower, at_e: Ast.ExprId, s: ArraySlice, out: []i64) Oom!?bool {
     for (s.subs, out) |e, *o| {
         const c = lower_constfold.foldExpr(self, e, false) orelse return null;
         o.* = c.asInt();
@@ -761,7 +761,7 @@ pub fn resolveLvalue(self: *Lower, e: Ast.ExprId) Oom!?Lvalue {
     }
 }
 
-pub fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oom!?Lvalue {
+fn arrayElem(self: *Lower, e: Ast.ExprId, name: []const u8, idx: []const i64) Oom!?Lvalue {
     const info = self.arrays.get(name) orelse {
         try self.err(self.file.exprs.mainTok(e), .E0309, "`{s}`", .{name});
         return null;
@@ -829,7 +829,7 @@ pub fn checkSubscripts(self: *Lower, e: Ast.ExprId, name: []const u8, info: Arra
 /// §4.7.1 `return`, §5.9 `break` / `continue`. All three close the current
 /// block and continue into dead code, so statements after them are lowered but
 /// unreachable (and dropped by codegen).
-pub fn lowerJump(self: *Lower, tok: u32, kind: Ast.Stmt.JumpKind, value: Ast.ExprId) Oom!void {
+fn lowerJump(self: *Lower, tok: u32, kind: Ast.Stmt.JumpKind, value: Ast.ExprId) Oom!void {
     switch (kind) {
         .ret => {
             const rc = self.ret orelse {

@@ -12,10 +12,11 @@ const std = @import("std");
 const Lower = @import("../lower.zig");
 const lower_constfold = @import("constfold.zig");
 const lower_param = @import("param.zig");
-const lower_discipline = @import("discipline.zig");
+const discipline_rules = @import("../discipline_rules.zig");
 const lower_event = @import("event.zig");
 const lower_contrib = @import("contrib.zig");
 const Ast = @import("frontend").Ast;
+const Mir = @import("../mir.zig");
 const Oom = Lower.Oom;
 const init = Lower.init;
 const tokenSpan = Lower.tokenSpan;
@@ -74,7 +75,7 @@ pub const DiscreteCtx = struct {
 /// needs no kernel and keeps its fast path.
 ///
 /// Takes the FILE rather than the `Lower`: it is a question about the AST.
-pub fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
+fn isMixed(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl) bool {
     if (module.assigns.len != 0) return true;
     // §3.7 a wreal is a digital net, and only the digital kernel holds its
     // value — 0.0 undriven, or its single driver's.
@@ -93,7 +94,7 @@ fn usesFiles(file: *const Ast.SourceFile, id: Ast.StmtId) bool {
         file: *const Ast.SourceFile,
         hit: *bool,
         fn isFile(name: []const u8) bool {
-            return lower_event.isFileCall(name) or std.mem.eql(u8, name, "$ungetc") or
+            return Mir.callee.isFileCall(.fromName(name)) or std.mem.eql(u8, name, "$ungetc") or
                 (std.mem.startsWith(u8, name, "$f") and lower_event.isDigitalOnlySysFunc(name));
         }
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) error{}!void {
@@ -219,7 +220,7 @@ pub fn declareDiscreteInputs(self: *Lower, module: *const Ast.ModuleDecl) Oom!vo
         // context of their domain" — and a continuous assignment is the
         // discrete context. A `ddiscrete` net (§3.6.2.2 `domain discrete`) is
         // a net exactly as `wire` is, and legal here.
-        if (lower_discipline.isContinuous(self.file, n.?.discipline)) {
+        if (discipline_rules.isContinuous(self.file, n.?.discipline)) {
             try self.err(a.main_tok, .E0435, "`{s}` is driven by a continuous assignment", .{self.file.str(ex.strOf(t))});
             continue;
         }
@@ -481,7 +482,7 @@ const Edge = @FieldType(Lower.Lowered.DiscreteEvent, "edge");
 /// §7.3.4 a digital event term over one name: `posedge d`, `negedge d`, or a
 /// bare `d` (a change of a digital value, or a digitally triggered named
 /// event). Null for anything else, which stays an analog event.
-pub fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.StringHashMapUnmanaged(void)) ?struct { name: []const u8, edge: Edge } {
+fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.StringHashMapUnmanaged(void)) ?struct { name: []const u8, edge: Edge } {
     const ex = &file.exprs;
     const tag = ex.tag(e);
     const operand = switch (tag) {
@@ -502,7 +503,7 @@ pub fn d2aTerm(file: *const Ast.SourceFile, e: Ast.ExprId, digital: *const std.S
 fn discreteNet(file: *const Ast.SourceFile, module: *const Ast.ModuleDecl, e: Ast.ExprId) ?Ast.ExprId {
     if (e == .none or file.exprs.tag(e) != .ident) return null;
     const n = netOf(module, file.exprs.strOf(e)) orelse return null;
-    return if (lower_discipline.isContinuous(file, n.discipline)) null else e;
+    return if (discipline_rules.isContinuous(file, n.discipline)) null else e;
 }
 
 /// Is `name` a NET of `module` — a declared net, or a port no variable
@@ -715,7 +716,7 @@ pub fn collectInitialState(self: *Lower, module: *const Ast.ModuleDecl) Oom!void
     }
 }
 
-pub fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
+fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
     if (id == .none) return;
     const ex = &self.file.exprs;
     switch (self.file.stmt(id)) {
@@ -783,7 +784,7 @@ pub fn collectInitialStmt(self: *Lower, id: Ast.StmtId) Oom!void {
 /// ever recording a name the module itself declared. A block-local `integer x`
 /// shadowing a module-level `real x` would still be recorded; give
 /// `Ast.SeqBlock` a scope walk here if a model ever does that.
-pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: if (discrete) u32 else bool, ctx: *DiscreteCtx) Oom!void {
+fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, context: if (discrete) u32 else bool, ctx: *DiscreteCtx) Oom!void {
     if (id == .none or (!discrete and ctx.assigned.count() == 0)) return;
     const is_initial = if (discrete) {} else context;
     const ex = &self.file.exprs;
@@ -861,7 +862,7 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
         // the digital context too, where §9.4.7 adds %r to the letters it
         // counts. Judged here, before the digital kernel would meet the gap at
         // run time.
-        else if (lower_event.isDisplayTask(n) or lower_event.isFileOutTask(n))
+        else if (Mir.callee.takesFormat(.fromName(n)))
             try lower_event.checkFormatPairing(self, self.file.stmtTok(id), st.args);
     };
     switch (self.file.stmt(id)) {
@@ -901,7 +902,7 @@ pub fn scanContext(self: *Lower, id: Ast.StmtId, comptime discrete: bool, contex
 /// Only the READ is diagnosed, and only inside an `analog initial` — the same
 /// read from the ordinary analog block is what §7.3.1 Table 7-1 is the
 /// conversion table for.
-pub fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_initial: if (discrete) void else bool, ctx: *DiscreteCtx) Oom!void {
+fn scanContextExpr(self: *Lower, e: Ast.ExprId, comptime discrete: bool, is_initial: if (discrete) void else bool, ctx: *DiscreteCtx) Oom!void {
     if (e == .none or (!discrete and !is_initial)) return;
     const ex = &self.file.exprs;
     const tag = ex.tag(e);
