@@ -38,15 +38,10 @@
 
 const std = @import("std");
 const Mir = @import("mir.zig");
-const Lower = @import("lower.zig");
 const proof = @import("proof.zig");
 
-/// `contributions` fed a use census that decided whether a domain-restricted
-/// op was exclusively owned. No such op converts any more (classifyArm), so
-/// nothing reads it.
-// ponytail: the parameter stays so root.zig and the tests keep their call.
-pub fn run(gpa: std.mem.Allocator, mir: *Mir, contributions: []const Lower.Contribution) !u32 {
-    _ = contributions;
+/// Convert every pure diamond, to a fixpoint; returns how many converted.
+pub fn run(gpa: std.mem.Allocator, mir: *Mir) !u32 {
     const nb = mir.blockCount();
     if (nb == 0) return 0;
     const preds = try gpa.alloc(u32, nb);
@@ -336,7 +331,7 @@ test "if conversion refreshes phi iterator when select emission grows instructio
     try mir.insts.setCapacity(a, mir.insts.len);
     const old_capacity = mir.insts.capacity;
     try std.testing.expectEqual(mir.insts.len, old_capacity);
-    try std.testing.expectEqual(@as(u32, 1), try run(a, &mir, &.{}));
+    try std.testing.expectEqual(@as(u32, 1), try run(a, &mir));
     try std.testing.expect(mir.insts.capacity > old_capacity);
 
     for (results, left_values, right_values) |result, l, r| {
@@ -378,7 +373,7 @@ test "a phi row after the branch neither blocks the conversion nor leaves the ch
     _ = try mir.emitJump(a, right, join);
     _ = try mir.emitPhi(a, join, &.{ .{ .block = left, .value = lv }, .{ .block = right, .value = rv } });
 
-    try std.testing.expectEqual(@as(u32, 1), try run(a, &mir, &.{}));
+    try std.testing.expectEqual(@as(u32, 1), try run(a, &mir));
     var saw_late = false;
     var it = mir.blockInsts(entry);
     while (it.next()) |inst| {
