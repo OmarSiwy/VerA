@@ -930,8 +930,7 @@ fn genDisplayText(arena: std.mem.Allocator, src: []const u8) ![]const u8 {
     var file = try p.parseSourceFile();
     file.builtin_modules = Preprocessor.spice_module_count;
     var mir: Mir = .{};
-    var low = Lower.init(arena, &mir, &file, text, toks.items(.start), &bag);
-    const lowered = try low.lowerFile();
+    const lowered = try Lower.lower(arena, &mir, &file, text, toks.items(.start), &bag, .{});
     const v = try proof.prove(arena, &mir, &lowered, &bag);
     var fatal = false;
     return (try cg.generate(arena, arena, &mir, &lowered, v, &fatal, .{ .display = .emit })).text;

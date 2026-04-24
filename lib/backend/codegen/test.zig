@@ -32,7 +32,6 @@ pub const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
     file: Ast.SourceFile,
     mir: Mir,
-    low: Lower,
     lowered: Lowered,
     bag: diag.Bag,
 
@@ -46,7 +45,6 @@ pub const Harness = struct {
             .arena_state = std.heap.ArenaAllocator.init(gpa),
             .file = .empty,
             .mir = .{},
-            .low = undefined,
             .lowered = undefined,
             .bag = undefined,
         };
@@ -60,9 +58,7 @@ pub const Harness = struct {
         // The annex E prelude came with `Preprocessor.process` (std_defs is on by
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
-        out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
-        out.low.param_overrides = over;
-        out.lowered = try out.low.lowerFile();
+        out.lowered = try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{ .param_overrides = over });
     }
 
     fn gen(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
@@ -93,7 +89,6 @@ pub const Harness = struct {
     }
 
     fn deinit(self: *Harness) void {
-        self.low.deinit();
         self.arena_state.deinit();
     }
 };

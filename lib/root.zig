@@ -388,27 +388,19 @@ fn compileInArena(
     const mir = try arena.create(Mir);
     mir.* = .{};
     const lowered = try arena.create(Lowered);
-    {
-        var lower = Lower.init(arena, mir, file, text, starts, bag);
-        lower.directives = pp.directives;
-        lower.include_dirs = opts.include_dirs; // §9.21.1 a $table_model data file
-        lower.param_overrides = opts.param_overrides; // §3.4 `--param`
-        lower.displays_dropped = opts.display == .drop; // §3.2 retention, see `Exposed`
-        // SSA maps its matrix directly; the compilation arena cannot free it.
-        defer {
-            lower.builder.deinit();
-            // Direct OS mappings must be gone before returning the arena-owned MIR.
-            std.debug.assert(lower.builder.defs.len == 0);
-        }
-        lowered.* = lower.lowerFile() catch |err| switch (err) {
-            error.OutOfMemory => return error.OutOfMemory,
-            error.NoModule => {
-                try bag.add(.lower, .E1001, .{}, "", .{});
-                return error.NoModule;
-            },
-            error.DiagnosticsReported => return error.CompileFailed,
-        };
-    }
+    lowered.* = Lower.lower(arena, mir, file, text, starts, bag, .{
+        .directives = pp.directives,
+        .include_dirs = opts.include_dirs, // §9.21.1 a $table_model data file
+        .param_overrides = opts.param_overrides, // §3.4 `--param`
+        .displays_dropped = opts.display == .drop, // §3.2 retention, see `Exposed`
+    }) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        error.NoModule => {
+            try bag.add(.lower, .E1001, .{}, "", .{});
+            return error.NoModule;
+        },
+        error.DiagnosticsReported => return error.CompileFailed,
+    };
 
     // --- stage 4.4: §3.2 drop the held slots no card can observe -----------
     // Needs codegen's solve invariance, and ifconv's select must not yet hide

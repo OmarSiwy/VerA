@@ -846,10 +846,40 @@ pub fn init(
 }
 
 /// Unmaps the SSA matrix, the one allocation an arena cannot reclaim.
-/// Every other table lives in `arena`: all six constructors (the driver,
-/// lower/codegen/proof test harnesses, naming.zig, cg_display.zig) pass one.
+/// Every other table lives in `arena`.
 pub fn deinit(self: *Lower) void {
     self.builder.deinit();
+}
+
+/// What only the driver knows; each field documents the `Lower` field it sets.
+pub const Options = struct {
+    directives: Preprocessor.Directives = .{},
+    include_dirs: []const []const u8 = &.{},
+    param_overrides: []const ParamOverride = &.{},
+    displays_dropped: bool = false,
+};
+
+/// Lower `file` into the empty `mir`. Retains nothing: the SSA builder's OS
+/// mappings are gone on return, so everything returned lives in `arena`.
+pub fn lower(
+    arena: std.mem.Allocator,
+    mir: *Mir,
+    file: *Ast.SourceFile,
+    src: []const u8,
+    tok_starts: []const u32,
+    bag: *diag.Bag,
+    opts: Options,
+) Error!Lowered {
+    var self = init(arena, mir, file, src, tok_starts, bag);
+    self.directives = opts.directives;
+    self.include_dirs = opts.include_dirs;
+    self.param_overrides = opts.param_overrides;
+    self.displays_dropped = opts.displays_dropped;
+    defer {
+        self.deinit();
+        assert(self.builder.defs.len == 0);
+    }
+    return self.lowerFile();
 }
 
 // ---------------------------------------------------------------------------
