@@ -37,6 +37,7 @@
 //! lrm A.6.4
 //! lrm 1.2
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.8.2 9.8.4
 `timescale 1ns/1ps
 module d04_fork_join_is_concurrent;
   reg [3:0] a, b, c;

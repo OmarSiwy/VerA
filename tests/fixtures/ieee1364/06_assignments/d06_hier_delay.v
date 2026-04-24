@@ -17,6 +17,7 @@
 //! lrm annex A.6.1
 //! lrm annex A.2.2.3
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.3 11.6.6
 //
 // Hand derivation.  Two `assign #5` stages in series, u1: a -> mid,
 // u2: mid -> y.

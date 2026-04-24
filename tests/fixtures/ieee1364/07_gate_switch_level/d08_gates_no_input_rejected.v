@@ -10,6 +10,7 @@
 // digital-runner: reject
 //! lrm A.3.1
 //! reject at least one input
+//! inherited IEEE 1364-2005 7.2
 module d08_gates_no_input_rejected;
   wire y;
   and g (y);

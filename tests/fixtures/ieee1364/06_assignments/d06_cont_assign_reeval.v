@@ -19,6 +19,7 @@
 //! lrm 8.5.3.1
 //! lrm 8.5.3.3 (the `#0` inactive-region sampling idiom used to read settled values)
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.2 11.6.1
 //
 // Hand derivation (y = sel ? a : b):
 //   t=0  a=0, b=1, sel=0            -> expression = b = 1, update queued

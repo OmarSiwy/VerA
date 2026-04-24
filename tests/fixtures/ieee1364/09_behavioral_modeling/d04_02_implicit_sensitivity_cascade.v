@@ -24,6 +24,7 @@
 //! lrm A.6.5
 //! lrm 1.2
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.7.5
 `timescale 1ns/1ps
 module d04_implicit_sensitivity_cascade;
   reg [3:0] x, q, r;

@@ -70,6 +70,7 @@
 //! lrm A.2.2.2
 //! lrm 1.1
 //! lrm 7.8.5.1
+//! inherited IEEE 1364-2005 7.1.2 7.8 7.10.1 7.11 7.12
 `timescale 1ns/1ns
 module d08_strength_reduction;
   reg d, g, en;

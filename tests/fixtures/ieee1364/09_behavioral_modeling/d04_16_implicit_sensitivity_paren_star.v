@@ -17,6 +17,7 @@
 //
 //! lrm A.6.5
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.7.5
 `timescale 1ns/1ps
 module d04_implicit_sensitivity_paren_star;
   reg [3:0] a, b, c, d;

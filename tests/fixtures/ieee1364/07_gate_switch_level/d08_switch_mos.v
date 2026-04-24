@@ -39,6 +39,7 @@
 //! lrm A.3.4
 //! lrm 1.1
 //! lrm 7.8.5.1
+//! inherited IEEE 1364-2005 7.5
 `timescale 1ns/1ns
 module d08_switch_mos;
   reg d, g;

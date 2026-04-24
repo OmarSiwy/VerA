@@ -35,6 +35,7 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 4.4.1 4.6.3 4.6.3.2
 //
 // HAND DERIVATION — one stimulus `d` driving three triregs that differ only in
 // their declared charge strength, and one plain wire.

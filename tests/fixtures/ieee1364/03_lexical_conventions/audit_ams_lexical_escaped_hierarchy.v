@@ -4,6 +4,7 @@
 //! lrm 2.8.1
 //! lrm 6.7
 //! expect stdout audit_ams_lexical_escaped_hierarchy.expected.txt
+//! inherited IEEE 1364-2005 3.7.1 12.5
 `timescale 1ns/1ps
 module audit_ams_lexical_escaped_hierarchy;
   lexical_child \a.b ();

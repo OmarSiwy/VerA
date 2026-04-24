@@ -20,6 +20,7 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 4.6.2 6.1.4 7.10.1
 //
 // HAND DERIVATION
 //   wa : wand, drivers (strong1, highz0) a  and (weak1, weak0) b

@@ -18,6 +18,7 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.4 7.10.1 12.3.9.2
 //
 // HAND DERIVATION — levels strong = 6, weak = 3.
 //   t=1  s=1: u1 asserts s1=6.  w=0: u2 asserts s0=3.   6 > 3     -> y = 1

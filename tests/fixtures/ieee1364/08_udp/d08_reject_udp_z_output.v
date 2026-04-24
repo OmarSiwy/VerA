@@ -47,6 +47,7 @@
 //
 //! lrm A.5.3
 //! reject output symbol
+//! inherited IEEE 1364-2005 8.1.4 8.1.5
 `timescale 1ns/1ns
 
 primitive udp_bad_z (o, a, b);

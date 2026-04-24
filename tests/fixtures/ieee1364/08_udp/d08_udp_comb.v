@@ -69,6 +69,7 @@
 //! lrm A.5.3
 //! lrm A.5.4
 //! lrm 1.1
+//! inherited IEEE 1364-2005 8.1.4 8.1.5 8.2
 `timescale 1ns/1ns
 
 primitive udp_mux (out, sel, a, b);
