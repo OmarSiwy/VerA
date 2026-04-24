@@ -16,7 +16,10 @@ module scheduling;
     $finish(0);
   end
   initial begin
-    #0 $display("peer %b", a);
+    // A single #0 would put this display in the same inactive batch as the
+    // other block's `#0 $display`, and 11.3 lets a batch run in any order;
+    // the second #0 orders it after "inactive", still before the NBA region.
+    #0 #0 $display("peer %b", a);
     #2 $display("unreachable after finish");
   end
 endmodule
