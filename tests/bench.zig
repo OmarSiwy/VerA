@@ -1107,17 +1107,24 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
 
     var ran: usize = 0;
     var failed: usize = 0;
+    var xfailed: usize = 0;
     for (cases) |case| {
         if (filter) |f| if (std.mem.indexOf(u8, case, f) == null) continue;
         _ = arena_state.reset(.retain_capacity);
         ran += 1;
-        if (!try digitalCase(arena_state.allocator(), io, exe, case, w)) failed += 1;
+        switch (try digitalVerdict(arena_state.allocator(), io, exe, case, w)) {
+            .pass => {},
+            .fail => failed += 1,
+            .xfail => xfailed += 1,
+        }
     }
     if (ran == 0) {
         try w.print("devices: nothing matched `{s}`\n", .{filter orelse ""});
         return 1;
     }
-    try w.print("devices: {d}/{d} cases behave as they say they do\n", .{ ran - failed, ran });
+    try w.print("devices: {d}/{d} cases behave as they say they do", .{ ran - failed - xfailed, ran });
+    if (xfailed != 0) try w.print(", {d} XFAIL (a known gap, not a pass)", .{xfailed});
+    try w.writeAll("\n");
     return if (failed == 0) 0 else 1;
 }
 
@@ -1556,6 +1563,27 @@ fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8) ![]const []con
         }
     }.lt);
     return list.toOwnedSlice(gpa);
+}
+
+/// `digitalCase` under `//! xfail`, with the .va suite's algebra
+/// (`harness.judge`): an unmet xfail case is XFAIL and does not fail the run;
+/// a met one is an XPASS FAIL, so a marker cannot outlive its limitation.
+fn digitalVerdict(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !enum { pass, fail, xfail } {
+    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
+        return if (try digitalCase(arena, io, vera_exe, case, w)) .pass else .fail;
+    if (xfail.len == 0) {
+        try w.print("FAIL {s}: `//! xfail` names no reason\n", .{case});
+        return .fail;
+    }
+    var detail: Io.Writer.Allocating = .init(arena);
+    if (try digitalCase(arena, io, vera_exe, case, &detail.writer)) {
+        try w.print("FAIL {s}: XPASS — marked `//! xfail`, but VerA now does what the fixture says.\n" ++
+            "  Delete the `//! xfail` line.\n", .{case});
+        return .fail;
+    }
+    try w.print("XFAIL {s}: known: {s}\n", .{ case, xfail });
+    return .xfail;
 }
 
 fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !bool {
