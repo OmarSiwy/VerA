@@ -1674,7 +1674,7 @@ const NativeJob = struct {
             if (i >= job.cases.len) return;
             _ = arena_state.reset(.retain_capacity);
             var aw: Io.Writer.Allocating = .init(job.gpa);
-            const v = nativeCase(arena_state.allocator(), job.io, job.vera_exe, job.cases[i], &aw.writer) catch |e| blk: {
+            const v = nativeVerdict(arena_state.allocator(), job.io, job.vera_exe, job.cases[i], &aw.writer) catch |e| blk: {
                 aw.writer.print("FAIL {s}: the runner itself failed: {t}\n", .{ job.cases[i], e }) catch {};
                 break :blk NativeVerdict{ .pass = false, .fallback = null };
             };
@@ -1689,8 +1689,31 @@ const NativeJob = struct {
 
 /// `fallback` is the executable's reason for embedding the interpreter;
 /// `refused` is a case the shared elaboration rejected, so no executable
-/// was built at all.
-const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false };
+/// was built at all; `xfail` is an unmet `//! xfail` case, which does not
+/// fail the run.
+const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false, xfail: bool = false };
+
+/// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
+fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+    const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
+    const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
+        return nativeCase(arena, io, vera_exe, case, w);
+    if (xfail.len == 0) {
+        try w.print("FAIL {s}: `//! xfail` names no reason\n", .{case});
+        return .{ .pass = false, .fallback = null };
+    }
+    var detail: Io.Writer.Allocating = .init(arena);
+    var v = try nativeCase(arena, io, vera_exe, case, &detail.writer);
+    if (v.pass) {
+        try w.print("FAIL {s}: XPASS — marked `//! xfail`, but VerA now does what the fixture says.\n" ++
+            "  Delete the `//! xfail` line.\n", .{case});
+        v.pass = false;
+        return v;
+    }
+    try w.print("XFAIL {s}: known: {s}\n", .{ case, xfail });
+    v.xfail = true;
+    return v;
+}
 const NativeSlot = struct { verdict: NativeVerdict = .{ .pass = false, .fallback = null }, output: []const u8 = "" };
 
 fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
@@ -1713,11 +1736,14 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u
     try group.await(io);
 
     var failed: usize = 0;
+    var xfailed: usize = 0;
     var fell: usize = 0;
     var refused: usize = 0;
     for (picked.items, slots) |case, s| {
         try w.writeAll(s.output);
-        if (!s.verdict.pass) failed += 1;
+        if (s.verdict.xfail) {
+            xfailed += 1;
+        } else if (!s.verdict.pass) failed += 1;
         if (s.verdict.refused) {
             refused += 1;
         } else if (s.verdict.fallback) |why| {
@@ -1727,9 +1753,11 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u
     }
     try w.print(
         "devices --native: {d}/{d} cases behave as they say they do; {d} native, " ++
-            "{d} through the embedded interpreter, {d} refused before any executable\n",
-        .{ picked.items.len - failed, picked.items.len, picked.items.len - fell - refused, fell, refused },
+            "{d} through the embedded interpreter, {d} refused before any executable",
+        .{ picked.items.len - failed - xfailed, picked.items.len, picked.items.len - fell - refused, fell, refused },
     );
+    if (xfailed != 0) try w.print("; {d} XFAIL (a known gap, not a pass)", .{xfailed});
+    try w.writeAll("\n");
     for (slots) |s| {
         gpa.free(s.output);
         if (s.verdict.fallback) |why| gpa.free(why);
