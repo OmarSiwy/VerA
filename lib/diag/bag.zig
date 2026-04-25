@@ -74,14 +74,10 @@ pub const Bag = struct {
     /// Dropped because the cap was reached — reported as a trailer so a
     /// truncated run never looks like a complete one.
     suppressed: u32 = 0,
-    /// Dropped because an identical (code, span) was already present.
+    /// Dropped because an identical (code, file, span.start) was already present.
     deduped: u32 = 0,
     err_count: u32 = 0,
     warn_count: u32 = 0,
-
-    /// (code, span.start) pairs already emitted. Lazily created: a clean
-    /// compilation never allocates it.
-    seen: std.AutoHashMapUnmanaged(u64, void) = .empty,
 
     pub fn init(arena: Allocator) Bag {
         return .{ .arena = arena };
@@ -414,8 +410,6 @@ pub const Bag = struct {
         self.list = list;
         self.files = files;
         self.map = .{ .segs = segs, .prelude_lines = self.map.prelude_lines };
-        // The dedupe set was arena memory and has done its job.
-        self.seen = .empty;
         self.arena = gpa;
     }
 
@@ -434,10 +428,6 @@ pub const Bag = struct {
         self.extra.deinit(gpa);
         self.list.deinit(gpa);
         self.files.deinit(gpa);
-        // `detach` emptied the dedupe set and moved the bag onto `gpa`, so
-        // anything in it now was allocated by a POST-detach `emit` — a codegen
-        // diagnostic. Empty for every bag that never took one.
-        self.seen.deinit(gpa);
         // NOT `levels`: it is CONFIGURATION the caller owns and copied in
         // (`bag.levels = opts.lint`). Freeing it here double-frees the
         // caller's list the moment it deinits its own.
@@ -605,11 +595,15 @@ pub const Builder = struct {
             return;
         }
 
-        const key = (@as(u64, @intFromEnum(self.code)) << 32) | self.span.start;
-        const gop = try bag.seen.getOrPut(bag.arena, key);
-        if (gop.found_existing) {
-            bag.deduped += 1;
-            return;
+        // `src_file` is in the key because a preprocessor span is file-local.
+        // ponytail: linear scan, bounded by `max_entries`.
+        const src_file: u32 = if (self.file) |f| @as(u32, @intFromEnum(f)) + 1 else 0;
+        for (bag.list.items) |mi| {
+            const m = bag.extraData(diag_entry.Message, @intFromEnum(mi)).data;
+            if (m.head.code == self.code and m.span_start == self.span.start and m.src_file == src_file) {
+                bag.deduped += 1;
+                return;
+            }
         }
 
         const severity: Severity = switch (level) {
@@ -626,7 +620,7 @@ pub const Builder = struct {
             .counts = .{ .labels_len = self.n_labels, .notes_len = self.n_notes },
             .msg = self.message,
             .point = self.point_text,
-            .src_file = if (self.file) |f| @as(u32, @intFromEnum(f)) + 1 else 0,
+            .src_file = src_file,
             .span_start = self.span.start,
             .span_end = self.span.end,
         }));

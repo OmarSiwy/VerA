@@ -29,7 +29,7 @@
 //!   - Diagnostics are COLD by construction (capped at 64 per run, written
 //!     once, read once). So this file optimises for one thing only: never
 //!     paying anything on the path where no diagnostic is produced. The line
-//!     index, the dedupe set and the sort all happen lazily, after the first
+//!     index and the sort happen lazily, after the first
 //!     entry exists.
 //!   - Everything the stages allocate lives in the compilation arena. The one
 //!     gpa copy happens in `detach`, at the API boundary, because a failed
