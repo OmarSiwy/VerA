@@ -656,6 +656,62 @@ pub const hist_txt =
     \\}
 ;
 
+/// `zAbsdelay` and `zHistAt` under VerA's `(* vera_interp = 2 *)`: 3-point
+/// Lagrange instead of §4.5.7's linear reading, which is what SPICE's lossless
+/// transmission line does (ngspice traload.c). Emitted after `hist_txt`, only
+/// for a device that asks, so every other device keeps exactly its bytes.
+pub const hist_quad_txt =
+    \\
+    \\/// `zAbsdelay` read quadratically. Every edge `zAbsdelay` decides for itself
+    \\/// — a static analysis, an empty ring, a query past `now` — is its answer
+    \\/// here too, and so is a single accepted sample.
+    \\///
+    \\/// Past the newest sample the parabola runs through the last two samples
+    \\/// and the in-flight (now, vin), so the output carries ∂/∂vin, the
+    \\/// Lagrange weight of `now`.
+    \\fn zAbsdelayQ(comptime S: type, vin: S, ts: []const f64, vs: []const f64, head: u32, now: f64, dt: f64, td: f64) S {
+    \\    const t = now - td;
+    \\    if (dt <= 0.0 or head < 2 or !(t < now)) return zAbsdelay(S, vin, ts, vs, head, now, dt, td);
+    \\    const b = (head + ts.len - 1) % ts.len;
+    \\    const a = (head + ts.len - 2) % ts.len;
+    \\    if (t <= ts[b]) return S.con(zHistAtQ(ts, vs, head, t));
+    \\    const dab = ts[b] - ts[a];
+    \\    const dan = now - ts[a];
+    \\    const dbn = now - ts[b];
+    \\    if (!(dab > 0.0 and dbn > 0.0)) return zAbsdelay(S, vin, ts, vs, head, now, dt, td);
+    \\    const wa = (t - ts[b]) * (t - now) / (dab * dan);
+    \\    const wb = -(t - ts[a]) * (t - now) / (dab * dbn);
+    \\    const wn = (t - ts[a]) * (t - ts[b]) / (dan * dbn);
+    \\    return vin.scale(wn).addC(vs[a] * wa + vs[b] * wb);
+    \\}
+    \\/// `zHistAt` read quadratically: the parabola through the two samples
+    \\/// bracketing `t` and the one before them (the first three, in the first
+    \\/// interval). Fewer than three samples, a query at or before the oldest,
+    \\/// or two samples at one time is `zHistAt`'s linear answer.
+    \\fn zHistAtQ(ts: []const f64, vs: []const f64, head: u32, t: f64) f64 {
+    \\    const n: u32 = @intCast(ts.len);
+    \\    const count = @min(head, n);
+    \\    const oldest: u32 = if (head > n) head % n else 0;
+    \\    if (count < 3 or t <= ts[oldest]) return zHistAt(ts, vs, head, t);
+    \\    // The ring is monotone in time and its live slots are `ts[0..count]`,
+    \\    // so the samples at or before `t` count out the older end of its
+    \\    // interval: no data-dependent exit.
+    \\    var m: u32 = 0;
+    \\    for (ts[0..count]) |s| m += @intFromBool(s <= t);
+    \\    const w = oldest + @min(m - 1 -| 1, count - 3);
+    \\    const i_0 = w % n;
+    \\    const i_1 = (w + 1) % n;
+    \\    const i_2 = (w + 2) % n;
+    \\    const d01 = ts[i_1] - ts[i_0];
+    \\    const d12 = ts[i_2] - ts[i_1];
+    \\    if (!(d01 > 0.0 and d12 > 0.0)) return zHistAt(ts, vs, head, t);
+    \\    const d02 = ts[i_2] - ts[i_0];
+    \\    return vs[i_0] * (t - ts[i_1]) * (t - ts[i_2]) / (d01 * d02) -
+    \\        vs[i_1] * (t - ts[i_0]) * (t - ts[i_2]) / (d01 * d12) +
+    \\        vs[i_2] * (t - ts[i_0]) * (t - ts[i_1]) / (d02 * d12);
+    \\}
+;
+
 // ---- the `u/<key>.zig` file-scope prologue (see `Output.prelude`) ----------
 //
 // A unit file is a separate Zig FILE, so device.zig's file-scope helpers are
@@ -740,6 +796,7 @@ pub fn aliasesOf(comptime src: []const u8) []const u8 {
 pub const prelude_math_txt = aliasesOf(math_txt ++ ops_txt);
 pub const prelude_timer_txt = aliasesOf(timer_txt);
 pub const prelude_hist_txt = aliasesOf(hist_txt);
+pub const prelude_hist_quad_txt = aliasesOf(hist_quad_txt);
 pub const prelude_arr_txt = aliasesOf(arr_txt);
 pub const prelude_filt_txt = aliasesOf(filt_txt);
 

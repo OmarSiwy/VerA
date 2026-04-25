@@ -43,6 +43,7 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .idt,
         .idtmod,
         .absdelay,
+        .@"absdelay$quad",
         .transition,
         .slew,
         .last_crossing,

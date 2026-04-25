@@ -231,6 +231,35 @@ test "codegen: State.t_prev exists only for a reader, and state_class is declare
     }
 }
 
+test "codegen: a vera_interp = 2 absdelay site publishes exactly a linear site's state and delays" {
+    // The host finds delay state by the `__absdelay__` field infix and sizes
+    // its breakpoints from `delays`: the attribute may change the kernel only.
+    const srcs = [2][]const u8{
+        \\module d(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ absdelay(V(p, n), 1e-9) + absdelay(V(p, n), 2e-9);
+        \\endmodule
+        ,
+        \\module d(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ absdelay(V(p, n), 1e-9) + absdelay (* vera_interp = 2 *) (V(p, n), 2e-9);
+        \\endmodule
+    };
+    var out: [2][]const u8 = undefined;
+    var hs: [2]Harness = undefined;
+    for (srcs, &out, &hs) |s, *o, *h| {
+        try Harness.run(std.testing.allocator, s, h);
+        o.* = try h.gen(std.testing.allocator);
+    }
+    defer for (&hs) |*h| h.deinit();
+    try std.testing.expect(std.mem.indexOf(u8, out[0], "zAbsdelayQ(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out[1], "zAbsdelayQ(S,") != null);
+    try std.testing.expectEqual(std.mem.count(u8, out[0], "d__analog_op__absdelay__"), std.mem.count(u8, out[1], "d__analog_op__absdelay__"));
+    try std.testing.expect(std.mem.indexOf(u8, out[1], "Z24") == null);
+    const delays = "pub fn delays(_: *const Model) [2]f64 {\n    return .{ 0.000000001, 0.000000002 };\n}";
+    for (out) |o| try std.testing.expect(std.mem.indexOf(u8, o, delays) != null);
+}
+
 test "codegen: acceptQ is q and updateState off ONE core evaluation" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
