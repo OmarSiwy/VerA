@@ -26,16 +26,17 @@
 module absdelay_vera_interp_linear(p, n);
     inout p, n;
     electrical p, n;
-    real tn, want, y0, y1, yb;
+    real y0, y1, yb;
     analog begin
-        tn = floor($abstime / 1n + 0.5);
-        want = tn >= 2 ? (tn - 1.5) * (tn - 1.5) + 0.25 : 0.0;
         y0 = absdelay(V(p, n), 1.5n);
         y1 = absdelay (* vera_interp = 1 *) (V(p, n), 1.5n);
         (* vera_interp *) yb = absdelay(V(p, n), 1.5n);
-        `CHECK("no attribute", y0, want, 1e-9);
-        `CHECK("vera_interp = 1", y1, want, 1e-9);
-        `CHECK("bare vera_interp", yb, want, 1e-9);
+        `CHECK("no attribute", y0,
+            $abstime < 0.5n ? 0.0 : ($abstime < 1.5n ? 0.0 : ($abstime < 2.5n ? 0.5 : ($abstime < 3.5n ? 2.5 : ($abstime < 4.5n ? 6.5 : 12.5)))), 1e-9);
+        `CHECK("vera_interp = 1", y1,
+            $abstime < 0.5n ? 0.0 : ($abstime < 1.5n ? 0.0 : ($abstime < 2.5n ? 0.5 : ($abstime < 3.5n ? 2.5 : ($abstime < 4.5n ? 6.5 : 12.5)))), 1e-9);
+        `CHECK("bare vera_interp", yb,
+            $abstime < 0.5n ? 0.0 : ($abstime < 1.5n ? 0.0 : ($abstime < 2.5n ? 0.5 : ($abstime < 3.5n ? 2.5 : ($abstime < 4.5n ? 6.5 : 12.5)))), 1e-9);
         I(p, n) <+ 0.0;
     end
 endmodule

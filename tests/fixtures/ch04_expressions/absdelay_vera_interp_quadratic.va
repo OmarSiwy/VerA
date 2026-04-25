@@ -48,19 +48,22 @@
 module absdelay_vera_interp_quadratic(p, n);
     inout p, n;
     electrical p, n;
-    real tn, yh, yf, yl, dyf;
+    real yh, yf, yl, dyf;
     analog begin
-        tn = floor($abstime / 1n + 0.5);
         (* vera_interp = 2 *) yh = absdelay(V(p, n), 1.5n);
         yf = absdelay (* vera_interp = 2 *) (V(p, n), 0.5n);
         dyf = ddx(yf, V(p));
         (* vera_interp = 2 *) begin
             yl = absdelay (* vera_interp = 1 *) (V(p, n), 1.5n);
         end
-        `CHECK("history, quadratic", yh, tn >= 3 ? (tn - 1.5) * (tn - 1.5) : (tn >= 2 ? 0.5 : 0.0), 1e-9);
-        `CHECK("in flight, quadratic", yf, tn >= 2 ? (tn - 0.5) * (tn - 0.5) : (tn >= 1 ? 0.5 : 0.0), 1e-9);
-        `CHECK("in flight, d/dvin", dyf, tn >= 2 ? 0.375 : (tn >= 1 ? 0.5 : 1.0), 1e-9);
-        `CHECK("innermost suffix 1 is linear", yl, tn >= 2 ? (tn - 1.5) * (tn - 1.5) + 0.25 : 0.0, 1e-9);
+        `CHECK("history, quadratic", yh,
+            $abstime < 0.5n ? 0.0 : ($abstime < 1.5n ? 0.0 : ($abstime < 2.5n ? 0.5 : ($abstime < 3.5n ? 2.25 : ($abstime < 4.5n ? 6.25 : 12.25)))), 1e-9);
+        `CHECK("in flight, quadratic", yf,
+            $abstime < 0.5n ? 0.0 : ($abstime < 1.5n ? 0.5 : ($abstime < 2.5n ? 2.25 : ($abstime < 3.5n ? 6.25 : ($abstime < 4.5n ? 12.25 : 20.25)))), 1e-9);
+        `CHECK("in flight, d/dvin", dyf,
+            $abstime < 0.5n ? 1.0 : ($abstime < 1.5n ? 0.5 : ($abstime < 2.5n ? 0.375 : ($abstime < 3.5n ? 0.375 : ($abstime < 4.5n ? 0.375 : 0.375)))), 1e-9);
+        `CHECK("innermost suffix 1 is linear", yl,
+            $abstime < 0.5n ? 0.0 : ($abstime < 1.5n ? 0.0 : ($abstime < 2.5n ? 0.5 : ($abstime < 3.5n ? 2.5 : ($abstime < 4.5n ? 6.5 : 12.5)))), 1e-9);
         I(p, n) <+ 0.0;
     end
 endmodule
