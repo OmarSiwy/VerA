@@ -57,6 +57,7 @@
 //! lrm A.5.3
 //! reject combinational
 //! reject edge
+//! inherited IEEE 1364-2005 A.5.3
 `timescale 1ns/1ns
 
 primitive udp_bad_edge (o, a, b);

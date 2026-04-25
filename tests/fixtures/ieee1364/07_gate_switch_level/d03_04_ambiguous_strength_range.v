@@ -14,6 +14,7 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.4 7.10.3
 //
 // HAND DERIVATION — `a` drives BOTH nets through a (pull1, pull0) driver;
 // `w` additionally has a (strong1, strong0) driver `b`, and `v` additionally

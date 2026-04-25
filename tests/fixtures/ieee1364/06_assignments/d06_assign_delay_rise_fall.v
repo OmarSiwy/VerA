@@ -17,6 +17,7 @@
 //! lrm annex A.6.1
 //! lrm 8.5.3.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.3 7.14
 //
 // Hand derivation for `assign #(3, 7) y = a;`  (rise = 3, fall = 7):
 //   t=0   a := 0.  Delivery is at most 7, so by t=10 y has settled -> y = 0

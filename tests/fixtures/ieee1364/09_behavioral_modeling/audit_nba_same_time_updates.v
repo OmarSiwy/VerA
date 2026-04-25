@@ -12,6 +12,7 @@
 // At t6, r=0 and crossed=1. Waiters are armed before delivery, and flags are
 // initialized before arming, avoiding time-zero registration races.
 //! lrm 8.5.3.4
+//! inherited IEEE 1364-2005 9.2.2 11.4.1
 `timescale 1ns/1ns
 module audit_nba_same_time_updates;
   reg q, r, seen, crossed;

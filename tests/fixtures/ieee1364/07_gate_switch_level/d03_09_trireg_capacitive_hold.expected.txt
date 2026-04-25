@@ -1,4 +1,4 @@
-start x x x x
+start x x x
 driven 1 1 1 1
 stored 1 1 1 z
 held 1 1 1 z

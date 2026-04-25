@@ -1,4 +1,5 @@
 // IEEE1364-2005 §§5.1.14,5.5: explicit expected bits, no generated oracle.
+//! inherited IEEE 1364-2005 5.1.14 5.5
 module concatenation;
   reg [7:0] a;
   reg [128:0] wide;
