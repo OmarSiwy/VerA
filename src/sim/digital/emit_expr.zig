@@ -61,12 +61,20 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     const sg = ty.signed;
     if (compile.constantExpression(r, e)) {
         const v = exec.evalContext(r, self.arena, e, ty) catch return self.refuse("a constant the engine does not fold");
-        return self.print("L.k(0x{x}, 0x{x})", .{ v.values()[0], v.unknowns()[0] });
+        if (w <= 64) return self.print("L.k(0x{x}, 0x{x})", .{ v.values()[0], v.unknowns()[0] });
+        const n = emit.words(w);
+        try self.print("L.Wide({d}){{ .v = .{{", .{n});
+        for (v.values()[0..n]) |x| try self.print(" 0x{x},", .{x});
+        try self.print(" }}, .x = .{{", .{});
+        for (v.unknowns()[0..n]) |x| try self.print(" 0x{x},", .{x});
+        return self.print(" }} }}", .{});
     }
     switch (ex.tag(e)) {
         .ident, .hier_ident => {
             const at = try self.slot(e);
-            try self.print("L.rs(s.get({d}), {d}, {d}, {})", .{ at, try self.slotWidth(at), w, sg });
+            try self.print("L.rs(", .{});
+            try self.get(at);
+            try self.print(", {d}, {d}, {})", .{ try self.slotWidth(at), w, sg });
         },
         .index => try index(self, e, ty),
         .unary => switch (ex.unOp(e)) {
@@ -203,11 +211,12 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             const n = try natural(self, e);
             try self.print("L.rs(", .{});
             for (parts.items[1..]) |_| try self.print("L.join(", .{});
-            _ = try selfDetermined(self, parts.items[0]);
+            var acc = (try selfDetermined(self, parts.items[0])).width;
             for (parts.items[1..]) |arg| {
-                try self.print(", ", .{});
+                try self.print(", {d}, ", .{acc});
                 const t = try selfDetermined(self, arg);
                 try self.print(", {d})", .{t.width});
+                acc += t.width;
             }
             try self.print(", {d}, {d}, {})", .{ n.width, w, sg });
         },
@@ -235,19 +244,29 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
         const lb = self.label();
         try self.print("L.rs(if (", .{});
         try address(self, e, lb);
-        try self.print(") |a{d}| s.get(a{d}) else L.k(0x{x}, 0x{x}), {d}, {d}, {})", .{ lb, lb, maskOf(n.width), maskOf(n.width), n.width, w, sg });
-        return;
+        const base = try self.slot(r.chainBase(e).base);
+        const nw = emit.words(n.width);
+        const at = .{ self.off[base], lb, base, nw };
+        if (nw == 1)
+            try self.print(") |a{d}| s.get({d} + (a{d} - {d}) * {d})", .{lb} ++ at)
+        else
+            try self.print(") |a{d}| s.getw({d} + (a{d} - {d}) * {d}, {d})", .{lb} ++ at ++ .{nw});
+        return self.print(" else L.xs({d}), {d}, {d}, {})", .{ n.width, n.width, w, sg });
     }
     const at = try self.slot(ex.lhs(e));
     const sw = try self.slotWidth(at);
     const range = vecRange(r, at, sw);
     const rg = ex.rhs(e);
     if (ex.tag(rg) == .range) {
-        const p = try partPlace(self, e, range, sw);
-        try self.print("L.rs(L.part(s.get({d}), {d}, 0x{x}, {d}), {d}, {d}, {})", .{ at, p.shift, p.valid, n.width, n.width, w, sg });
+        const p = try partPlace(self, e, range);
+        try self.print("L.rs(L.part(", .{});
+        try self.get(at);
+        try self.print(", {d}, {d}, {d}), {d}, {d}, {})", .{ p.shift, p.count, sw, n.width, w, sg });
         return;
     }
-    try self.print("L.rs(L.bitAt(s.get({d}), L.asInt(", .{at});
+    try self.print("L.rs(L.bitAt(", .{});
+    try self.get(at);
+    try self.print(", L.asInt(", .{});
     const t = try selfDetermined(self, rg);
     try self.print(", {d}, {}), {d}, {d}, {d}), 1, {d}, {})", .{ t.width, t.signed, range.msb, range.lsb, sw, w, sg });
 }
@@ -285,26 +304,20 @@ pub fn vecRange(r: anytype, at: u32, width: u32) VecRange {
 }
 
 /// A constant part-select as a shift: select bit i is slot bit `i + shift`
-/// where bit i of `valid` is set, and names no bit elsewhere (§5.2.1).
-pub const Place = struct { shift: i64, valid: u64, count: u32 };
+/// where the slot has that bit, and names no bit elsewhere (§5.2.1).
+pub const Place = struct { shift: i64, count: u32 };
 
-pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange, sw: u32) Error!Place {
+pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!Place {
     const r = self.r;
     const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
     const count: u32 = @intCast(@abs(b.msb - b.lsb) + 1);
-    if (count > 64) return self.refuse("a part-select wider than 64 bits");
     const step: i64 = if (b.msb >= b.lsb) 1 else -1;
     const up = range.msb >= range.lsb;
     // `exec.position` of declared index `lsb + i*step` is `p0 + i*d`.
     const d: i64 = if (up) step else -step;
     if (d != 1 and count > 1) return self.refuse("a part-select against its vector's direction");
     const p0: i64 = if (up) b.lsb - range.lsb else range.lsb - b.lsb;
-    var valid: u64 = 0;
-    for (0..count) |i| {
-        const p = p0 + @as(i64, @intCast(i));
-        if (p >= 0 and p < sw) valid |= @as(u64, 1) << @intCast(i);
-    }
-    return .{ .shift = p0, .valid = valid, .count = count };
+    return .{ .shift = p0, .count = count };
 }
 
 pub fn maskOf(w: u32) u64 {

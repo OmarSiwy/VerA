@@ -1080,11 +1080,15 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
-    var native = false;
+    var native: ?[]const u8 = null;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
-        if (std.mem.eql(u8, a, "--native")) {
-            native = true;
+        if (std.mem.eql(u8, a, "--native") or std.mem.eql(u8, a, "--native=fifo")) {
+            native = "--schedule=fifo";
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--native=static")) {
+            native = "--schedule=static";
             continue;
         }
         if (std.mem.eql(u8, a, "--fuzz")) {
@@ -1116,7 +1120,7 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer scratch_dir.close(io);
     try std.process.setCurrentDir(io, scratch_dir);
 
-    if (native) return nativeDevices(gpa, io, exe, cases, filter, w);
+    if (native) |schedule| return nativeDevices(gpa, io, exe, schedule, cases, filter, w);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1655,6 +1659,7 @@ fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8,
 // name, and a fallback that hides a regression shows up as a moved name.
 //
 //   zig build test-1364 -- --native            # all of IEEE 1364
+//   zig build test-1364 -- --native=static     # combinational logic levelized
 //   zig build test-devices -- --native d04     # the cases whose name has d04
 // ---------------------------------------------------------------------------
 
@@ -1662,6 +1667,7 @@ const NativeJob = struct {
     gpa: Allocator,
     io: Io,
     vera_exe: []const u8,
+    schedule: []const u8,
     cases: []const []const u8,
     slots: []NativeSlot,
     next: std.atomic.Value(usize) = .init(0),
@@ -1674,7 +1680,7 @@ const NativeJob = struct {
             if (i >= job.cases.len) return;
             _ = arena_state.reset(.retain_capacity);
             var aw: Io.Writer.Allocating = .init(job.gpa);
-            const v = nativeVerdict(arena_state.allocator(), job.io, job.vera_exe, job.cases[i], &aw.writer) catch |e| blk: {
+            const v = nativeVerdict(arena_state.allocator(), job.io, job.vera_exe, job.schedule, job.cases[i], &aw.writer) catch |e| blk: {
                 aw.writer.print("FAIL {s}: the runner itself failed: {t}\n", .{ job.cases[i], e }) catch {};
                 break :blk NativeVerdict{ .pass = false, .fallback = null };
             };
@@ -1694,16 +1700,16 @@ const NativeJob = struct {
 const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false, xfail: bool = false };
 
 /// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
-fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
     const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
-        return nativeCase(arena, io, vera_exe, case, w);
+        return nativeCase(arena, io, vera_exe, schedule, case, w);
     if (xfail.len == 0) {
         try w.print("FAIL {s}: `//! xfail` names no reason\n", .{case});
         return .{ .pass = false, .fallback = null };
     }
     var detail: Io.Writer.Allocating = .init(arena);
-    var v = try nativeCase(arena, io, vera_exe, case, &detail.writer);
+    var v = try nativeCase(arena, io, vera_exe, schedule, case, &detail.writer);
     if (v.pass) {
         try w.print("FAIL {s}: XPASS — marked `//! xfail`, but VerA now does what the fixture says.\n" ++
             "  Delete the `//! xfail` line.\n", .{case});
@@ -1716,7 +1722,7 @@ fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u
 }
 const NativeSlot = struct { verdict: NativeVerdict = .{ .pass = false, .fallback = null }, output: []const u8 = "" };
 
-fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
+fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, schedule: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
     var picked: std.ArrayList([]const u8) = .empty;
     defer picked.deinit(gpa);
     for (all) |c| if (filter == null or std.mem.indexOf(u8, c, filter.?) != null) try picked.append(gpa, c);
@@ -1727,7 +1733,7 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u
     const slots = try gpa.alloc(NativeSlot, picked.items.len);
     defer gpa.free(slots);
     @memset(slots, .{});
-    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .cases = picked.items, .slots = slots };
+    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .schedule = schedule, .cases = picked.items, .slots = slots };
     var group: Io.Group = .init;
     const jobs = std.Thread.getCpuCount() catch 1;
     var hands: usize = 0;
@@ -1768,13 +1774,13 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, all: []const []const u
 /// `digitalCase` through the executable. A rejection may come from `vera
 /// --emit-exe` (the shared elaboration) or from the executable at run time;
 /// either way its stderr is judged, the build's and the run's together.
-fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
     const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
     const work = try std.fmt.allocPrint(arena, "native/{s}", .{case});
     try Io.Dir.cwd().createDirPath(io, work);
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--contract", options.contract, "--work-dir", work });
+    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", schedule, "--work-dir", work });
     if (harness.digitalStd(source)) |s| try argv.append(arena, s);
     try argv.append(arena, src);
     const built = try capture(arena, io, argv.items);
@@ -1819,7 +1825,7 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, 
 // ---------------------------------------------------------------------------
 
 const FuzzVar = struct { width: u32, signed: bool };
-const fuzz_widths = [_]u32{ 1, 2, 3, 7, 8, 13, 16, 31, 32, 33, 48, 63, 64 };
+const fuzz_widths = [_]u32{ 1, 2, 3, 7, 8, 13, 16, 31, 32, 33, 48, 63, 64, 65, 100, 128, 129 };
 const fuzz_vars = 12;
 const fuzz_per_file = 400;
 
@@ -1849,7 +1855,7 @@ fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
         const path = try std.fmt.allocPrint(a, "{s}/fuzz{d}.v", .{ work, file });
         try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = src });
         const want = try capture(a, io, &.{ exe, "--run", path });
-        const built = try capture(a, io, &.{ exe, "--emit-exe", "--contract", options.contract, "--work-dir", work, path });
+        const built = try capture(a, io, &.{ exe, "--emit-exe", "--work-dir", work, path });
         if (want.exit != 0 or built.exit != 0) {
             try w.print("FAIL {s}: --run exited {d}, --emit-exe exited {d}\n{s}{s}\n", .{ path, want.exit, built.exit, want.stderr, built.stderr });
             return 1;
@@ -1895,18 +1901,18 @@ fn fuzzSource(a: Allocator, rand: std.Random, n: u32) ![]const u8 {
     for (2..6) |i| try o.print("    mem[{d}] = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = 8 } });
     for (0..n) |_| {
         var g: FuzzGen = .{ .rand = rand, .vars = &vars, .out = o };
+        // `%d` of more than 64 bits is refused by both engines alike, so it
+        // is asked of an expression only when its width is at most 64.
         if (rand.boolean()) {
-            try o.writeAll("    $display(\"%b ");
-            try o.writeAll(if (rand.boolean()) "%d\", " else "%h\", ");
-            const cut = out.written().len;
-            _ = try g.expr(3);
-            const e = try a.dupe(u8, out.written()[cut..]);
-            try o.print(", {s});\n", .{e});
+            var e: Io.Writer.Allocating = .init(a);
+            g.out = &e.writer;
+            const ew = try g.expr(3);
+            try o.print("    $display(\"%b {s}\", {s}, {s});\n", .{ if (ew <= 64 and rand.boolean()) "%d" else "%h", e.written(), e.written() });
         } else {
             const t = rand.uintLessThan(usize, fuzz_widths.len);
             try o.print("    t{d} = ", .{t});
             _ = try g.expr(3);
-            try o.print(";\n    $display(\"%b %d\", t{d}, t{d});\n", .{ t, t });
+            try o.print(";\n    $display(\"%b {s}\", t{d}, t{d});\n", .{ if (fuzz_widths[t] <= 64) "%d" else "%h", t, t });
         }
     }
     try o.writeAll("  end\nendmodule\n");
@@ -1924,8 +1930,8 @@ const FuzzBits = struct {
     }
 };
 
-/// Random expressions whose every operand and result is at most 64 bits,
-/// so the native executable takes all of them.
+/// Random expressions over one- and multi-word operands, every one of which
+/// the native executable takes.
 const FuzzGen = struct {
     rand: std.Random,
     vars: []const FuzzVar,
@@ -1979,17 +1985,14 @@ const FuzzGen = struct {
                 return @max(wa, wb);
             },
             7 => {
-                // A concatenation of narrow operands only, so it stays within 64.
                 const i = r.uintLessThan(usize, g.vars.len);
                 const j = r.uintLessThan(usize, g.vars.len);
-                if (g.vars[i].width + g.vars[j].width > 64) return g.leaf();
                 try o.print("{{v{d}, v{d}}}", .{ i, j });
                 return g.vars[i].width + g.vars[j].width;
             },
             8 => {
                 const i = r.uintLessThan(usize, g.vars.len);
-                const k = 64 / g.vars[i].width;
-                const n = 1 + r.uintLessThan(u32, @min(k, 4));
+                const n = 1 + r.uintLessThan(u32, 4);
                 try o.print("{{{d}{{v{d}}}}}", .{ n, i });
                 return n * g.vars[i].width;
             },
@@ -2004,7 +2007,7 @@ const FuzzGen = struct {
                 const vw = g.vars[i].width;
                 if (r.boolean()) {
                     try o.print("v{d}[", .{i});
-                    _ = try g.expr(0);
+                    try g.index();
                     try o.writeByte(']');
                     return 1;
                 }
@@ -2015,10 +2018,19 @@ const FuzzGen = struct {
             },
             else => {
                 try o.writeAll("mem[");
-                _ = try g.expr(0);
+                try g.index();
                 try o.writeByte(']');
                 return 8;
             },
+        }
+    }
+
+    /// A leaf of at most 64 bits: the engine refuses a wider index.
+    fn index(g: *FuzzGen) Io.Writer.Error!void {
+        while (true) {
+            const cut = g.out.end;
+            if (try g.leaf() <= 64) return;
+            g.out.end = cut;
         }
     }
 
