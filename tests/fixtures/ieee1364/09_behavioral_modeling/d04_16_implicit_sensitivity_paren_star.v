@@ -9,14 +9,16 @@
 //
 // HAND DERIVATION: `c` and `d` are each `a | b`, one block per spelling, so
 // the lines are d04_01's with both columns equal:
-//   t=0   a<-0000, b<-0000                            c = d = 0000
-//   t=1   "zeros 0000 0000",   a<-0011                c = d = 0011
-//   t=2   "a_set 0011 0011",   b<-0100                c = d = 0111
-//   t=3   "b_set 0111 0111",   a<-0000, b<-0000       c = d = 0000
-//   t=4   "cleared 0000 0000"
+//   t=0   nothing is written (the time-zero race d04_01 explains)
+//   t=1   a<-0000, b<-0000                            c = d = 0000
+//   t=2   "zeros 0000 0000",   a<-0011                c = d = 0011
+//   t=3   "a_set 0011 0011",   b<-0100                c = d = 0111
+//   t=4   "b_set 0111 0111",   a<-0000, b<-0000       c = d = 0000
+//   t=5   "cleared 0000 0000"
 //
 //! lrm A.6.5
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.7.5
 `timescale 1ns/1ps
 module d04_implicit_sensitivity_paren_star;
   reg [3:0] a, b, c, d;
@@ -25,7 +27,7 @@ module d04_implicit_sensitivity_paren_star;
   always @( *) d = a | b;
 
   initial begin
-    a = 4'b0000;
+    #1 a = 4'b0000;
     b = 4'b0000;
     #1 $display("zeros %b %b", c, d);
     a = 4'b0011;

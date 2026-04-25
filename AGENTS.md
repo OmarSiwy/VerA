@@ -238,13 +238,14 @@ Device-table directives assert what a device PUBLISHES to a host, as
 `got=/want= ok=` lines: `//! noise`, `//! acstim`, and `//! qsite` (one line
 per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order).
 
-**Vendor attributes.** VerA reads exactly one §2.9 attribute, `vera_lte`: a
+**Vendor attributes.** VerA reads two §2.9 attributes. `vera_lte` is a
 prefix on an analog statement (`(* vera_lte = 0 *) I(b, s) <+ ddt(qbs);`)
 or a suffix on a `ddt` name (`ddt (* vera_lte = 0 *) (q)`, a slot A.8.2 gives
 only analog functions and VerA extends). It leaves those charge sites out of
 the host's truncation-error check (`q_lte`, `contract.QStamp`). Innermost
-wins; the value must fold without the model card (E0523). Every other
-attribute is parsed and ignored.
+wins; the value must fold without the model card (E0523). `vera_interp`, in
+the same slots on `absdelay`, picks 1 = linear (default) or 2 = quadratic (E0524).
+Every other attribute is parsed and ignored.
 
 `check.vh` gives you `CHECK` (absolute tol), `CHECKR` (relative), `CHECKX`
 (exact), `CHECKI` (integer), `CHECKEQ` (two VerA expressions against each

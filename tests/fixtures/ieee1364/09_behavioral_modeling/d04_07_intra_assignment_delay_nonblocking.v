@@ -32,6 +32,7 @@
 //! lrm 8.5.3.4
 //! lrm 8.5.1
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.2.2 9.7.7 11.6.4
 `timescale 1ns/1ps
 module d04_intra_assignment_delay_nonblocking;
   reg [3:0] a, b;

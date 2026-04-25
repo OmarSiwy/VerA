@@ -13,6 +13,7 @@
 // AMS digital behavior. Annex C.3 excludes these four-state semantics from
 // the analog-only profile; a Verilog-A rejection is not AMS implementation.
 //! lrm 2.6.1
+//! inherited IEEE 1364-2005 3.5.1 5.5.3
 module lexical_four_state_constants;
     reg [11:0] extended;
     initial begin

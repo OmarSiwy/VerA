@@ -14,7 +14,7 @@ const Flatten = elaborate.Flatten;
 const elab_names = @import("names.zig");
 const elab_paramset = @import("paramset.zig");
 const Ast = @import("frontend").Ast;
-const Lower = @import("../lower.zig");
+const dist = @import("../dist.zig");
 const rng = @import("kernels").rng_kernels;
 const Error = elaborate.Error;
 const sep = elaborate.sep;
@@ -107,14 +107,14 @@ pub fn cloneDelay(self: *Flatten, d: Ast.Delay3) Error!Ast.Delay3 {
     return .{ .rise = try cloneExpr(self, d.rise), .fall = try cloneExpr(self, d.fall), .off = try cloneExpr(self, d.off) };
 }
 
-pub fn cloneDims(self: *Flatten, dims: []const Ast.Dim) Error![]const Ast.Dim {
+fn cloneDims(self: *Flatten, dims: []const Ast.Dim) Error![]const Ast.Dim {
     if (dims.len == 0) return &.{};
     const out = try self.ctx.arena.alloc(Ast.Dim, dims.len);
     for (dims, out) |d, *o| o.* = (try cloneDim(self, d)).?;
     return out;
 }
 
-pub fn cloneRanges(self: *Flatten, rs: []const Ast.ValueRange) Error![]const Ast.ValueRange {
+fn cloneRanges(self: *Flatten, rs: []const Ast.ValueRange) Error![]const Ast.ValueRange {
     if (rs.len == 0) return &.{};
     const out = try self.ctx.arena.alloc(Ast.ValueRange, rs.len);
     for (rs, out) |r, *o| {
@@ -158,7 +158,7 @@ pub fn hide(self: *Flatten, list: *std.ArrayList(HiddenName), name: Ast.StrId) E
     _ = self.unit.rename.remove(name);
 }
 
-pub fn unhide(self: *Flatten, list: []const HiddenName) void {
+fn unhide(self: *Flatten, list: []const HiddenName) void {
     // Reverse, so a name hidden twice (a formal and a body local) comes back
     // to the outermost saved binding.
     var i = list.len;
@@ -175,7 +175,7 @@ pub fn unhide(self: *Flatten, list: []const HiddenName) void {
 /// A block's or function's own declarations: cloned for their initializers
 /// and ranges, but NOT renamed — they are locals of a scope lowering already
 /// pushes and pops.
-pub fn cloneLocalParams(self: *Flatten, ps: []const Ast.ParamDecl) Error![]const Ast.ParamDecl {
+fn cloneLocalParams(self: *Flatten, ps: []const Ast.ParamDecl) Error![]const Ast.ParamDecl {
     if (ps.len == 0) return &.{};
     const out = try self.ctx.arena.alloc(Ast.ParamDecl, ps.len);
     for (ps, out) |p, *o| {
@@ -187,7 +187,7 @@ pub fn cloneLocalParams(self: *Flatten, ps: []const Ast.ParamDecl) Error![]const
     return out;
 }
 
-pub fn cloneLocalVars(self: *Flatten, vs: []const Ast.VarDecl) Error![]const Ast.VarDecl {
+fn cloneLocalVars(self: *Flatten, vs: []const Ast.VarDecl) Error![]const Ast.VarDecl {
     if (vs.len == 0) return &.{};
     const out = try self.ctx.arena.alloc(Ast.VarDecl, vs.len);
     for (vs, out) |v, *o| {
@@ -205,7 +205,7 @@ pub fn cloneLocalVars(self: *Flatten, vs: []const Ast.VarDecl) Error![]const Ast
 /// The branch a `<+` or an indirect assignment DRIVES, as opposed to one it
 /// reads: §6.3.6's flow-probe division must not fire on it. Everything else
 /// about the clone is the same.
-pub fn cloneTarget(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
+fn cloneTarget(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
     self.contrib_target = true;
     defer self.contrib_target = false;
     return cloneExpr(self, e);
@@ -227,7 +227,7 @@ pub fn cloneTarget(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
 /// unresolved (E0901 at lowering) rather than silently capturing a
 /// same-named paramset parameter. §6.4.1's worked example does not nest.
 /// The upgrade path is a recursive substitution keyed on the owning module.
-pub fn paramsetOomr(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+fn paramsetOomr(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
     if (!self.in_paramset) return null;
     const parts = self.ctx.file.exprs.nameParts(e);
     if (parts.len != 2) return null;
@@ -323,7 +323,7 @@ pub fn cloneExpr(self: *Flatten, e: Ast.ExprId) Error!Ast.ExprId {
     return self.ctx.file.exprs.add(self.ctx.arena, n);
 }
 
-pub inline fn cloneArgs(self: *Flatten, src: []const Ast.ExprId) Error!u32 {
+inline fn cloneArgs(self: *Flatten, src: []const Ast.ExprId) Error!u32 {
     const out = try self.ctx.arena.alloc(Ast.ExprId, src.len);
     for (src, out) |s, *o| o.* = try cloneExpr(self, s);
     return self.ctx.file.exprs.addExprList(self.ctx.arena, out);
@@ -337,7 +337,7 @@ pub inline fn cloneArgs(self: *Flatten, src: []const Ast.ExprId) Error!u32 {
 /// — and it has to be answered here, because after the flatten a connected
 /// port IS the parent's net and nothing downstream can tell it from one.
 /// §9.18 `$mfactor` is the running product `collectOverrides` built.
-pub fn rewriteSysCall(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+fn rewriteSysCall(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
     const x = &self.ctx.file.exprs;
     const name = x.strOf(e);
     const tok = x.mainTok(e);
@@ -391,10 +391,10 @@ pub fn rewriteSysCall(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
 /// integer parameter identifier, and a paramset's own parameters are fixed
 /// by the time this runs — folding through them needs the parameter values
 /// threaded in here; add when a model actually writes one.
-pub fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
+fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
     const x = &self.ctx.file.exprs;
     const name = self.ctx.file.str(x.strOf(e));
-    const d = Lower.distOf(name) orelse return null;
+    const d = dist.of(name) orelse return null;
     if (std.mem.eql(u8, name, "$random")) return null;
     const tok = x.mainTok(e);
     const args = x.args(e);
@@ -422,13 +422,13 @@ pub fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
         for (eff[1..], 0..) |arg, i| {
             p[i] = elab_paramset.constReal(self, arg) orelse break :fold;
             if (d.positive & (@as(u8, 1) << @intCast(i)) != 0 and !(p[i] > 0)) {
-                try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, Lower.distParamName(d, i), p[i] });
+                try self.err(x.mainTok(arg), .E0816, "`{s}`'s `{s}` shall be greater than zero, got {d}", .{ name, dist.paramName(d, i), p[i] });
                 bad = true;
             }
             if (d.count and i == 0 and p[i] > 0 and
                 (!(p[i] <= 2147483647.0) or p[i] != @trunc(p[i])))
             {
-                try self.err(x.mainTok(arg), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, Lower.distParamName(d, i) });
+                try self.err(x.mainTok(arg), .E0816, "`{s}`'s fractional or out-of-range `{s}` is unsupported; the reference count domain is 1..2147483647", .{ name, dist.paramName(d, i) });
                 bad = true;
             }
         }
@@ -483,7 +483,7 @@ pub fn rewriteParamsetDist(self: *Flatten, e: Ast.ExprId) Error!?Ast.ExprId {
 /// §9.13.1 Syntax 9-8's literal seed form, `[ sign ] decimal_number`. A
 /// real is deliberately NOT one — "the seed argument shall be an integer"
 /// is lowering's E0816 to report, so a real seed just declines the fold.
-pub fn constIntLit(x: *const Ast.ExprStore, e: Ast.ExprId) ?i64 {
+fn constIntLit(x: *const Ast.ExprStore, e: Ast.ExprId) ?i64 {
     if (e == .none) return null;
     return switch (x.tag(e)) {
         .int_literal => x.intValue(e),
@@ -619,7 +619,7 @@ pub fn cloneStmt(self: *Flatten, id: Ast.StmtId) Error!Ast.StmtId {
 /// module-level declaration: a §5.3.2 block label. Joined against the unit's
 /// path on demand, which the rename map already carries for every other
 /// name of the unit.
-pub fn joinLocal(self: *Flatten, name: Ast.StrId) Error!Ast.StrId {
+fn joinLocal(self: *Flatten, name: Ast.StrId) Error!Ast.StrId {
     if (self.unit.rename.get(name)) |flat_id| return flat_id;
     // Derive the path from any binding the unit has; a unit with no
     // declarations at all has nothing to collide with, so the label stands.

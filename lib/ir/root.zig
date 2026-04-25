@@ -1,11 +1,10 @@
 //! IR — AST to proven MIR, and the top of this layer's file DAG.
 //!
-//! Re-export only. The leaves import each other directly, and they have to:
-//! `lower.zig` and `elaborate.zig` are mutually recursive, because elaboration
-//! (AST → flat design, §6.2.2) and lowering (design → MIR) are two halves of
-//! one transformation, not two passes in sequence. That cycle is why this
-//! layer is ONE module — it is a boundary around the cycle, not a claim that
-//! no cycle exists.
+//! Re-export only. The leaves import each other directly. Elaboration imports
+//! no lowering file: its closure is `elaborate/`, `dist.zig` and
+//! `discipline_rules.zig`, which lowering imports too. It stays in this module
+//! because a module of its own would own those two shared leaves and add a
+//! `module_specs` row, a minor release, to enforce one edge nothing crosses.
 //!
 //!   AST
 //!     → elaborate.zig  (class 9)     AST → flat design (§6.2.2)
@@ -19,9 +18,7 @@
 //! will run, so the constant it folds and the value it emits agree.
 
 pub const Mir = @import("mir.zig");
-/// §4.5 / §5.10.3 / §9.17 operator facts, one row per operator. A leaf: it
-/// imports nothing but `std`, and everything that used to carry a switch over
-/// the operator set reads a column of it.
+/// §4.5 / §5.10.3 / §9.17 the stateful operator set, `OpKind`.
 pub const op = @import("op.zig");
 pub const Analysis = @import("analysis.zig");
 pub const Ssa = @import("ssa.zig");

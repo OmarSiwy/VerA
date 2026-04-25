@@ -21,6 +21,7 @@
 //! lrm annex A.2.4
 //! lrm 8.5.3.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 6.1.1 6.1.3
 //
 // Hand derivation for `wire #3 y = ~a;`:
 //   t=0   a := 0  -> expression ~a = 1 -> update queued for 0 + 3 = 3

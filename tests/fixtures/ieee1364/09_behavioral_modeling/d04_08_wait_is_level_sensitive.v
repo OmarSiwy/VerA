@@ -32,6 +32,7 @@
 //! lrm A.6.5
 //! lrm 1.2
 //! timescale 1ns/1ps
+//! inherited IEEE 1364-2005 9.7.6
 `timescale 1ns/1ps
 module d04_wait_is_level_sensitive;
   reg g;

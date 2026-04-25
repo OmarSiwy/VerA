@@ -147,6 +147,9 @@ pub const Callee = enum(u8) {
     @"$discontinuity",
     @"$limit",
     @"$table_model",
+    // VerA-synthetic: `absdelay` under `(* vera_interp = 2 *)` — the same
+    // §4.5.7 operator and state, read by 3-point Lagrange interpolation.
+    @"absdelay$quad",
     // VerA-synthetic: lowering's rewrites of one source call into several.
     @"$held_int",
     @"$held_real",
@@ -224,13 +227,33 @@ pub const Arity = struct {
     min: u8 = 0,
     max: u8 = std.math.maxInt(u8),
 
-    pub const unchecked: Arity = .{};
+    const unchecked: Arity = .{};
     pub fn exactly(n: u8) Arity {
         return .{ .min = n, .max = n };
     }
     pub fn admits(a: Arity, n: usize) bool {
         return n >= a.min and n <= a.max;
     }
+};
+
+/// The §9.4/§9.5/§9.7 task family a callee belongs to.
+pub const Family = enum(u3) {
+    none,
+    /// §9.4.1 display and §9.7.3 severity tasks: their whole content is text on
+    /// the simulator's output. Not `$monitoron`/`$monitoroff`, which toggle a
+    /// mode rather than print.
+    display,
+    /// §9.7.1 `$finish` and §9.7.2 `$stop`: they act on the run, print only
+    /// their Table 9-25 diagnostics, and take no §9.4.3 format.
+    simctl,
+    /// §9.5.2's output tasks and §9.5.1/§9.5.6 `$fclose`/`$fflush`: statements
+    /// that take a descriptor and return nothing.
+    file_out,
+    /// The §9.5 functions that return a value; each moves descriptor state.
+    file_func,
+    /// The readers `Lower.lowerFileRead` splits out of `$fgets`, `$fscanf` and
+    /// `$ferror`.
+    file_read,
 };
 
 pub const Info = struct {
@@ -243,7 +266,10 @@ pub const Info = struct {
     /// of a 32-bit unsigned integer value" — so a real or a string there is
     /// not a descriptor at all. Null for a call that takes none.
     fd: ?u3 = null,
+    family: Family = .none,
 };
+
+const display: Info = .{ .family = .display };
 
 const one: Arity = .exactly(1);
 const two: Arity = .exactly(2);
@@ -286,18 +312,36 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$hypot" = .{ .args = two },
     .@"$atan2" = .{ .args = two },
     // Syntax 9-5 `$finish [ ( n ) ]`; §9.7.2 gives $stop the same shape.
-    .@"$finish" = .{ .args = .{ .max = 1 } },
-    .@"$stop" = .{ .args = .{ .max = 1 } },
+    .@"$finish" = .{ .args = .{ .max = 1 }, .family = .simctl },
+    .@"$stop" = .{ .args = .{ .max = 1 }, .family = .simctl },
+    .@"$display" = display,
+    .@"$displayb" = display,
+    .@"$displayo" = display,
+    .@"$displayh" = display,
+    .@"$write" = display,
+    .@"$writeb" = display,
+    .@"$writeo" = display,
+    .@"$writeh" = display,
+    .@"$strobe" = display,
+    .@"$strobeb" = display,
+    .@"$strobeo" = display,
+    .@"$strobeh" = display,
+    .@"$monitor" = display,
+    .@"$debug" = display,
+    .@"$fatal" = display,
+    .@"$error" = display,
+    .@"$warning" = display,
+    .@"$info" = display,
     // Syntax 9-2 and 9-3: `$fclose(fd)`, and every output task's first
     // argument is the descriptor.
-    .@"$fclose" = .{ .args = one, .fd = 0 },
-    .@"$fdisplay" = .{ .args = .{ .min = 1 }, .fd = 0 },
-    .@"$fwrite" = .{ .args = .{ .min = 1 }, .fd = 0 },
-    .@"$fstrobe" = .{ .args = .{ .min = 1 }, .fd = 0 },
-    .@"$fmonitor" = .{ .args = .{ .min = 1 }, .fd = 0 },
-    .@"$fdebug" = .{ .args = .{ .min = 1 }, .fd = 0 },
+    .@"$fclose" = .{ .args = one, .fd = 0, .family = .file_out },
+    .@"$fdisplay" = .{ .args = .{ .min = 1 }, .fd = 0, .family = .file_out },
+    .@"$fwrite" = .{ .args = .{ .min = 1 }, .fd = 0, .family = .file_out },
+    .@"$fstrobe" = .{ .args = .{ .min = 1 }, .fd = 0, .family = .file_out },
+    .@"$fmonitor" = .{ .args = .{ .min = 1 }, .fd = 0, .family = .file_out },
+    .@"$fdebug" = .{ .args = .{ .min = 1 }, .fd = 0, .family = .file_out },
     // §9.5.6 `$fflush(mcd)`, `$fflush(fd)`, `$fflush()`.
-    .@"$fflush" = .{ .args = .{ .max = 1 }, .fd = 0 },
+    .@"$fflush" = .{ .args = .{ .max = 1 }, .fd = 0, .family = .file_out },
     // §9.11 Table 9-8: `$realtobits` yields the bit PATTERN (an integer),
     // `$bitstoreal` the real that pattern stands for — see
     // tests/fixtures/exhaustive/122_bit_conversions.va.
@@ -314,15 +358,16 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     // §9.5: every descriptor function is integer-valued. The arities are
     // Syntax 9-2 (`$fopen(filename [, type])`) and the call shapes §9.5.4.1,
     // §9.5.4.2, §9.5.5, §9.5.7 and §9.5.8 print.
-    .@"$fopen" = .{ .ty = .int, .args = .{ .min = 1, .max = 2 } },
-    .@"$fgets" = .{ .ty = .int, .args = two, .fd = 1 },
-    .@"$fscanf" = .{ .ty = .int, .args = .{ .min = 2 }, .fd = 0 },
-    .@"$fscanf$int" = .{ .ty = .int },
-    .@"$ftell" = .{ .ty = .int, .args = one, .fd = 0 },
-    .@"$fseek" = .{ .ty = .int, .args = .exactly(3), .fd = 0 },
-    .@"$rewind" = .{ .ty = .int, .args = one, .fd = 0 },
-    .@"$ferror" = .{ .ty = .int, .args = two, .fd = 0 },
-    .@"$feof" = .{ .ty = .int, .args = one, .fd = 0 },
+    .@"$fopen" = .{ .ty = .int, .args = .{ .min = 1, .max = 2 }, .family = .file_func },
+    .@"$fgets" = .{ .ty = .int, .args = two, .fd = 1, .family = .file_func },
+    .@"$fscanf" = .{ .ty = .int, .args = .{ .min = 2 }, .fd = 0, .family = .file_func },
+    .@"$fscanf$int" = .{ .ty = .int, .family = .file_read },
+    .@"$fscanf$real" = .{ .family = .file_read },
+    .@"$ftell" = .{ .ty = .int, .args = one, .fd = 0, .family = .file_func },
+    .@"$fseek" = .{ .ty = .int, .args = .exactly(3), .fd = 0, .family = .file_func },
+    .@"$rewind" = .{ .ty = .int, .args = one, .fd = 0, .family = .file_func },
+    .@"$ferror" = .{ .ty = .int, .args = two, .fd = 0, .family = .file_func },
+    .@"$feof" = .{ .ty = .int, .args = one, .fd = 0, .family = .file_func },
     .@"$simparam$str" = .{ .ty = .str },
     .@"$sformat" = .{ .ty = .str },
     .@"$sscanf$str" = .{ .ty = .str },
@@ -330,9 +375,9 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$str$cat" = .{ .ty = .str },
     .@"$str$repeat" = .{ .ty = .str },
     .@"$idx$str" = .{ .ty = .str },
-    .@"$fgets$str" = .{ .ty = .str },
-    .@"$fscanf$str" = .{ .ty = .str },
-    .@"$ferror$str" = .{ .ty = .str },
+    .@"$fgets$str" = .{ .ty = .str, .family = .file_read },
+    .@"$fscanf$str" = .{ .ty = .str, .family = .file_read },
+    .@"$ferror$str" = .{ .ty = .str, .family = .file_read },
 });
 
 pub fn ty(c: Callee) Ty {
@@ -347,8 +392,29 @@ pub fn fdArg(c: Callee) ?u3 {
     return table.get(c).fd;
 }
 
+pub fn family(c: Callee) Family {
+    return table.get(c).family;
+}
+
+/// §9.5: every descriptor spelling that reaches the emitter.
+pub fn isFileCall(c: Callee) bool {
+    return switch (family(c)) {
+        .file_out, .file_func, .file_read => true,
+        .none, .display, .simctl => false,
+    };
+}
+
+/// §9.4.3's format rule covers the display tasks, and §9.5.2 defines the file
+/// output tasks as "the same as their counterparts".
+pub fn takesFormat(c: Callee) bool {
+    return switch (family(c)) {
+        .display, .file_out => true,
+        .none, .simctl, .file_func, .file_read => false,
+    };
+}
+
 /// The §4.5 operator, §5.10.3 event or §9.17 task this callee is — the unit
-/// `naming.enumerateUnits` gives it and the `Instance` state `op.table` says
+/// `naming.enumerateUnits` gives it and the `Instance` state `op_zig.table` says
 /// it owns — or `.none`. Written out, so a new callee states whether it owns
 /// state.
 pub fn opKind(c: Callee) op.OpKind {
@@ -356,7 +422,7 @@ pub fn opKind(c: Callee) op.OpKind {
         .ddt => .ddt,
         .idt => .idt,
         .idtmod => .idtmod,
-        .absdelay => .absdelay,
+        .absdelay, .@"absdelay$quad" => .absdelay,
         .transition => .transition,
         .slew => .slew,
         .last_crossing => .last_crossing,

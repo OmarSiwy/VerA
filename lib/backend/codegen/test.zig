@@ -32,7 +32,6 @@ pub const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
     file: Ast.SourceFile,
     mir: Mir,
-    low: Lower,
     lowered: Lowered,
     bag: diag.Bag,
 
@@ -46,7 +45,6 @@ pub const Harness = struct {
             .arena_state = std.heap.ArenaAllocator.init(gpa),
             .file = .empty,
             .mir = .{},
-            .low = undefined,
             .lowered = undefined,
             .bag = undefined,
         };
@@ -60,9 +58,7 @@ pub const Harness = struct {
         // The annex E prelude came with `Preprocessor.process` (std_defs is on by
         // default), so its modules are the leading entries of `file.modules`.
         out.file.builtin_modules = Preprocessor.spice_module_count;
-        out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
-        out.low.param_overrides = over;
-        out.lowered = try out.low.lowerFile();
+        out.lowered = try Lower.lower(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag, .{ .param_overrides = over });
     }
 
     fn gen(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
@@ -93,7 +89,6 @@ pub const Harness = struct {
     }
 
     fn deinit(self: *Harness) void {
-        self.low.deinit();
         self.arena_state.deinit();
     }
 };
@@ -234,6 +229,35 @@ test "codegen: State.t_prev exists only for a reader, and state_class is declare
         const decl = try std.fmt.allocPrint(h.arena_state.allocator(), "pub const state_class: contract.StateClass = {s};", .{c.class});
         try std.testing.expect(std.mem.indexOf(u8, src, decl) != null);
     }
+}
+
+test "codegen: a vera_interp = 2 absdelay site publishes exactly a linear site's state and delays" {
+    // The host finds delay state by the `__absdelay__` field infix and sizes
+    // its breakpoints from `delays`: the attribute may change the kernel only.
+    const srcs = [2][]const u8{
+        \\module d(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ absdelay(V(p, n), 1e-9) + absdelay(V(p, n), 2e-9);
+        \\endmodule
+        ,
+        \\module d(p, n);
+        \\  inout p, n; electrical p, n;
+        \\  analog I(p, n) <+ absdelay(V(p, n), 1e-9) + absdelay (* vera_interp = 2 *) (V(p, n), 2e-9);
+        \\endmodule
+    };
+    var out: [2][]const u8 = undefined;
+    var hs: [2]Harness = undefined;
+    for (srcs, &out, &hs) |s, *o, *h| {
+        try Harness.run(std.testing.allocator, s, h);
+        o.* = try h.gen(std.testing.allocator);
+    }
+    defer for (&hs) |*h| h.deinit();
+    try std.testing.expect(std.mem.indexOf(u8, out[0], "zAbsdelayQ(") == null);
+    try std.testing.expect(std.mem.indexOf(u8, out[1], "zAbsdelayQ(S,") != null);
+    try std.testing.expectEqual(std.mem.count(u8, out[0], "d__analog_op__absdelay__"), std.mem.count(u8, out[1], "d__analog_op__absdelay__"));
+    try std.testing.expect(std.mem.indexOf(u8, out[1], "Z24") == null);
+    const delays = "pub fn delays(_: *const Model) [2]f64 {\n    return .{ 0.000000001, 0.000000002 };\n}";
+    for (out) |o| try std.testing.expect(std.mem.indexOf(u8, o, delays) != null);
 }
 
 test "codegen: acceptQ is q and updateState off ONE core evaluation" {
@@ -661,7 +685,7 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
     defer h.deinit();
     // root.zig runs this between lower and prove; the harness does the same.
     // The MIR is arena-owned, so the pass must append with the same arena.
-    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir);
     try std.testing.expect(n >= 1);
     const src = try h.gen(std.testing.allocator);
     // exp(unbounded V) forfeits finiteness, so the unit is .strict — the
@@ -692,7 +716,7 @@ test "codegen: a value shared by select arms is computed once, not once per use"
         \\endmodule
     , &h);
     defer h.deinit();
-    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items) >= 1);
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir) >= 1);
     const src = try h.gen(std.testing.allocator);
     const unit = src[std.mem.indexOf(u8, src, "fn sh__").?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
@@ -710,7 +734,7 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
         \\endmodule
     , &h);
     defer h.deinit();
-    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
     const src = try h.gen(std.testing.allocator);
     // What this protects is §4.2.12 laziness, not a spelling: `ln` runs only
     // on the path `V > vmin` selects. The guard may come out as a lazy
@@ -755,7 +779,7 @@ test "codegen: a multi-use domain op under a guard keeps its CFG diamond" {
     // The guard's evidence only survives conversion on exclusively-owned
     // slices; a shared `ln` result must refuse, or the model silently drops
     // to `.strict` (and an integer `/` in the same shape turns REJECTED).
-    const n = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    const n = try ifconv.run(h.arena_state.allocator(), &h.mir);
     try std.testing.expectEqual(@as(u32, 0), n);
     // Still compiles and proves through the CFG dominance path.
     const src = try h.gen(std.testing.allocator);
@@ -2008,7 +2032,7 @@ test "codegen: a zero short still collapses after if-conversion makes its join a
         \\endmodule
     , &h);
     defer h.deinit();
-    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items) >= 1);
+    try std.testing.expect(try ifconv.run(h.arena_state.allocator(), &h.mir) >= 1);
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn collapse(") != null);
     try std.testing.expect(std.mem.indexOf(
@@ -2909,8 +2933,59 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
     , &h2);
     defer h2.deinit();
     const s2 = try h2.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s2, "no complete mode ladder") != null);
+    try std.testing.expect(limitDeclined(&h2, "no complete mode ladder"));
     try std.testing.expect(std.mem.indexOf(u8, s2, "pub fn limit(") == null);
+}
+
+/// Does the bag carry a W0853 whose message contains `why`?
+fn limitDeclined(h: *Harness, why: []const u8) bool {
+    for (h.bag.messages()) |mi| {
+        const e = h.bag.get(mi);
+        if (e.code == .W0853 and std.mem.indexOf(u8, e.message, why) != null) return true;
+    }
+    return false;
+}
+
+test "codegen: §9.17.3 a declined $limit is W0853 naming why, an honoured one is silent" {
+    // §9.17.3 lets the simulator return the probe unchanged, so every one of
+    // these compiles; what the warning adds is the reason, so a model that
+    // asked for limiting learns it did not get it.
+    const cases = [_]struct { body: []const u8, why: ?[]const u8 }{
+        .{ .body = "$limit(V(a, c), \"pnjlim\", $vt, 0.6)", .why = null },
+        .{ .body = "$limit(V(a, c), \"nosuchlim\", 0.6)", .why = "names no algorithm VerA implements" },
+        .{ .body = "$limit(V(a, c))", .why = "names no algorithm, and VerA's own choice" },
+        .{ .body = "$limit(I(a, c), \"pnjlim\", $vt, 0.6)", .why = "not a §4.4 potential probe" },
+        .{ .body = "(V(a) > 0.0 ? $limit(V(a, c), \"pnjlim\", $vt, 0.6) : V(a, c))", .why = "under an `if`" },
+        .{ .body = "$limit(V(p, n), \"pnjlim\", $vt, 0.6)", .why = "both nets are §6.5 ports" },
+        .{ .body = "$limit(V(a, c), \"steplim\")", .why = "too few arguments" },
+    };
+    for (cases) |c| {
+        const src = try std.fmt.allocPrint(std.testing.allocator,
+            \\module d(p, n);
+            \\  inout p, n; electrical p, n, a, c;
+            \\  real v;
+            \\  analog begin
+            \\    I(p, a) <+ V(p, a) / 10.0;
+            \\    I(c, n) <+ V(c, n) / 10.0;
+            \\    v = {s};
+            \\    I(a, c) <+ 1e-14 * (limexp(v / $vt) - 1.0);
+            \\  end
+            \\endmodule
+        , .{c.body});
+        defer std.testing.allocator.free(src);
+        var h: Harness = undefined;
+        try Harness.run(std.testing.allocator, src, &h);
+        defer h.deinit();
+        const out = try h.gen(std.testing.allocator);
+        try std.testing.expect(std.mem.indexOf(u8, out, "@compileError") == null);
+        if (c.why) |why| {
+            try std.testing.expect(limitDeclined(&h, why));
+            try std.testing.expect(std.mem.indexOf(u8, out, "pub fn limit(") == null);
+        } else {
+            for (h.bag.messages()) |mi| try std.testing.expect(h.bag.get(mi).code != .W0853);
+            try std.testing.expect(std.mem.indexOf(u8, out, "pub fn limit(") != null);
+        }
+    }
 }
 
 test "codegen: §3.2 a held slot only a card-varying write could need is dropped" {
@@ -2959,7 +3034,7 @@ test "codegen: §5.2.1 an `analog initial` variable is a setup root, not a per-e
     , &h);
     defer h.deinit();
     try std.testing.expectEqual(Lower.HeldVar.Why.retained, h.lowered.held_vars.items[0].why);
-    _ = try ifconv.run(h.arena_state.allocator(), &h.mir, h.lowered.contributions.items);
+    _ = try ifconv.run(h.arena_state.allocator(), &h.mir);
     const s = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s, "inst.su.r[0] = ") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "if (inst.is_analog_initial)") == null);

@@ -64,6 +64,7 @@
 //! lrm A.3.3
 //! lrm A.3.4
 //! lrm 8.5.3.5
+//! inherited IEEE 1364-2005 7.6 11.6.5
 `timescale 1ns/1ns
 module d08_bidirectional;
   reg da, db, ea, eb, gt;

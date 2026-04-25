@@ -14,6 +14,7 @@
 //! lrm annex A.2.2.1
 //! lrm 1.1
 //! timescale 1ns/1ns
+//! inherited IEEE 1364-2005 4.6.4 7.13.1 7.10.1 7.10.3
 //
 // HAND DERIVATION — one stimulus `a` feeding four nets. Levels: strong = 6,
 // pull = 5, weak = 3. The net's own pull is an extra contribution on one side:

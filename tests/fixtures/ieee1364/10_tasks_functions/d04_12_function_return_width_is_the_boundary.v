@@ -25,6 +25,7 @@
 //! lrm A.2.6
 //! lrm A.8.2
 //! lrm 1.1
+//! inherited IEEE 1364-2005 10.4.2
 module d04_function_return_width_is_the_boundary;
   reg [7:0] r;
 

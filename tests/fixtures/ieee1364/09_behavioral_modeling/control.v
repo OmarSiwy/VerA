@@ -1,4 +1,5 @@
 // IEEE1364-2005 §§9.4–9.6. Expected values follow four-state control rules.
+//! inherited IEEE 1364-2005 9.4 9.5 9.5.1 9.6
 `timescale 1ns/1ns
 module control;
   reg [3:0] i, j, count, value, a, b;
