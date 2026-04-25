@@ -270,12 +270,11 @@ pub const Bag = struct {
         const marks = self.fileMarks(id);
         if (marks.len == 0 or off < marks[0].out) return off;
         // Last mark with out <= off; linear from there (see `StripMark`).
-        var lo: usize = 0;
-        var hi: usize = marks.len;
-        while (lo + 1 < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (marks[mid].out <= off) lo = mid else hi = mid;
-        }
+        const lo = std.sort.partitionPoint(diag_location.StripMark, marks, off, struct {
+            fn f(o: u32, m: diag_location.StripMark) bool {
+                return m.out <= o;
+            }
+        }.f) - 1;
         return marks[lo].src + (off - marks[lo].out);
     }
 
