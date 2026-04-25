@@ -651,7 +651,7 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
 pub fn readsSimState(self: *const Gen, inst: Mir.Inst) bool {
     const d = self.mir.instData(inst).call;
     return switch (d.callee) {
-        .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
+        .ddt, .idt, .idtmod, .absdelay, .@"absdelay$quad", .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
         .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
         .@"$bound_step", .@"$discontinuity",
         => opReadsSimState(Mir.callee.opKind(d.callee)),
@@ -734,7 +734,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .idtmod, .absdelay, .transition, .slew, .last_crossing, .cross, .above, .timer => for (args) |arg| float_lanes.pinLanes(self, arg),
     }
     switch (c) {
-        .ddt, .idt, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
+        .ddt, .idt, .idtmod, .absdelay, .@"absdelay$quad", .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
         .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
         .@"$bound_step", .@"$discontinuity",
         => return emitOperator(self, inst, args, k),
@@ -1447,8 +1447,15 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             try ctrlEval(self, args, 3, "0.0"),
         }),
         .absdelay => try self.b(
-            "zAbsdelay(S, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
-            .{ in, n, n, n, try absdelayTd(self, n, args, false) },
+            "{s}(S, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
+            .{
+                if (self.mir.instData(inst).call.callee == .@"absdelay$quad") "zAbsdelayQ" else "zAbsdelay",
+                in,
+                n,
+                n,
+                n,
+                try absdelayTd(self, n, args, false),
+            },
         ),
         // §4.5.8 the ramp reads its ORIGIN out of `Instance` — where the
         // output was when the current excursion began, and when that was —

@@ -225,7 +225,35 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const tv = try lower_expr.lowerExpr(self, a);
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
     }
-    return .{ .v = try self.call(name, vals.items), .ty = .real };
+    const callee = if (std.mem.eql(u8, name, "absdelay") and try absdelayQuad(self, e)) "absdelay$quad" else name;
+    return .{ .v = try self.call(callee, vals.items), .ty = .real };
+}
+
+/// Does `absdelay` call `e` interpolate quadratically? VerA's `vera_interp`
+/// attribute, innermost wins: the call's own suffix (`absdelay (* vera_interp
+/// = 2 *) (x, td)`), then the nearest enclosing statement's (`interp_stack`),
+/// then §4.5.7's "linear interpolation".
+fn absdelayQuad(self: *Lower, e: Ast.ExprId) Oom!bool {
+    if (self.file.exprLte(e, .vera_interp)) |a| return interpQuad(self, a);
+    const s = self.interp_stack.items;
+    return s.len != 0 and s[s.len - 1];
+}
+
+/// A `vera_interp` value: 1 is linear (§2.9's default when absent), 2 is
+/// quadratic. It must fold WITHOUT the model card — it picks the emitted
+/// kernel. E0524 otherwise, and the site keeps linear.
+pub fn interpQuad(self: *Lower, a: Ast.LteAttr) Oom!bool {
+    if (a.value == .none) return false;
+    const c = lower_constfold.foldExpr(self, a.value, false) orelse {
+        try self.err(a.main_tok, .E0524, "the value depends on the model card", .{});
+        return false;
+    };
+    const v = c.asReal(); // a string is 0
+    if (v != 1 and v != 2) {
+        try self.err(a.main_tok, .E0524, "", .{});
+        return false;
+    }
+    return v == 2;
 }
 
 /// Which argument of an analog operator is its TOLERANCE, or null for an

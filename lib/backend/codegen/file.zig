@@ -50,6 +50,7 @@ const file_txt = gen_kernel_text.file_txt;
 const limit_txt = gen_kernel_text.limit_txt;
 const filt_txt = gen_kernel_text.filt_txt;
 const hist_txt = gen_kernel_text.hist_txt;
+const hist_quad_txt = gen_kernel_text.hist_quad_txt;
 const arr_txt = gen_kernel_text.arr_txt;
 const helpers_head_txt = gen_kernel_text.helpers_head_txt;
 const prelude_head_txt = gen_kernel_text.prelude_head_txt;
@@ -75,6 +76,8 @@ const rscalar_txt = gen_kernel_text.rscalar_txt;
 const Features = struct {
     stateful: bool,
     hist: bool,
+    /// `hist_quad_txt`: an `absdelay` under `(* vera_interp = 2 *)`.
+    hist_quad: bool,
     filt: bool,
     timer: bool,
     strs: bool,
@@ -88,6 +91,7 @@ pub fn emitFile(self: *Gen) Error!void {
     const f: Features = .{
         .stateful = hasStatefulOps(self),
         .hist = usesOp(self, .absdelay),
+        .hist_quad = usesQuad(self),
         .filt = usesOp(self, .laplace) or usesOp(self, .zi),
         .timer = usesOp(self, .timer),
         // §9.5.3/§9.5.4.2. Set at the call in lowering, because by the time the
@@ -120,6 +124,7 @@ pub fn emitFile(self: *Gen) Error!void {
     try self.out.appendSlice(self.gpa, ops_txt);
     if (f.timer) try self.out.appendSlice(self.gpa, timer_txt);
     if (f.hist) try self.out.appendSlice(self.gpa, hist_txt);
+    if (f.hist_quad) try self.out.appendSlice(self.gpa, hist_quad_txt);
     if (f.arrs) try self.out.appendSlice(self.gpa, arr_txt);
     // §4.5.11/§4.5.12 the filter kernels are embedded from a real Zig file,
     // so they arrive already `pub` — which is right for `h.zig` and wrong
@@ -213,6 +218,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     try p.appendSlice(self.arena, prelude_math_txt);
     if (f.timer) try p.appendSlice(self.arena, prelude_timer_txt);
     if (f.hist) try p.appendSlice(self.arena, prelude_hist_txt);
+    if (f.hist_quad) try p.appendSlice(self.arena, gen_kernel_text.prelude_hist_quad_txt);
     if (f.arrs) try p.appendSlice(self.arena, prelude_arr_txt);
     if (f.filt) try p.appendSlice(self.arena, prelude_filt_txt);
     if (self.display == .emit or f.strs) try p.appendSlice(self.arena, prelude_display_txt);
@@ -239,6 +245,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     try publish(self.arena, &hz, ops_txt);
     if (f.timer) try publish(self.arena, &hz, timer_txt);
     if (f.hist) try publish(self.arena, &hz, hist_txt);
+    if (f.hist_quad) try publish(self.arena, &hz, hist_quad_txt);
     if (f.arrs) try publish(self.arena, &hz, arr_txt);
     if (f.filt) try publish(self.arena, &hz, filt_txt);
     if (self.display == .emit or f.strs) try publish(self.arena, &hz, display_txt);
@@ -309,6 +316,13 @@ pub fn hasStatefulOps(self: *const Gen) bool {
 pub fn usesOp(self: *const Gen, k: OpKind) bool {
     for (self.names.units) |u| {
         if (u.role == .analog_op and u.op == k) return true;
+    }
+    return false;
+}
+
+fn usesQuad(self: *const Gen) bool {
+    for (self.names.units) |u| {
+        if (u.role == .analog_op and self.mir.instData(u.inst).call.callee == .@"absdelay$quad") return true;
     }
     return false;
 }
