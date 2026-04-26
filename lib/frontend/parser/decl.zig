@@ -17,7 +17,6 @@ const parse_stmt = @import("stmt.zig");
 const Ast = @import("../ast.zig");
 const token = @import("../token.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.2.1.1 parameter declarations — LRM §3.4

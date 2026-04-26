@@ -19,7 +19,6 @@ const parse_stmt = @import("stmt.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.7 specify blocks — LRM §1.1 (1364 is part of the language), §8

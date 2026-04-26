@@ -19,7 +19,6 @@ const token = @import("../token.zig");
 const Ast = @import("../ast.zig");
 const constfold = @import("../constfold.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.4.2 generate constructs — LRM §6.6
