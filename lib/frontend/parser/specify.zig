@@ -520,12 +520,7 @@ pub fn parseParamValueAssignment(self: *Parser) Error![]const Ast.ParamOverride 
                     // parameters too, and §9.18 Example 1 prints
                     // `module_b #(.$mfactor(2)) B1(p,n);`. One extra token
                     // tag, not a second production.
-                    const name = if (self.peek() == .system_identifier)
-                        try self.internTok(self.pos)
-                    else
-                        null;
-                    if (name != null) self.pos += 1;
-                    const pname = name orelse try self.expectIdent();
+                    const pname = try self.expectIdentOrSys();
                     _ = try self.expect(.lparen);
                     const v = if (self.peek() == .rparen) Ast.ExprId.none else try parse_expr.parseExpr(self);
                     _ = try self.expect(.rparen);

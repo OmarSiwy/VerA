@@ -172,11 +172,7 @@ pub fn parseParamset(self: *Parser) Error!Ast.ParamsetDecl {
                 const tok = self.pos;
                 self.pos += 1;
                 const is_sys = self.peek() == .system_identifier;
-                const pname = if (is_sys) blk: {
-                    const s = try self.internTok(self.pos);
-                    self.pos += 1;
-                    break :blk s;
-                } else try self.expectIdent();
+                const pname = try self.expectIdentOrSys();
                 _ = try self.expect(.assign_eq);
                 const value = try parse_expr.parseExpr(self);
                 _ = try self.expect(.semicolon);
