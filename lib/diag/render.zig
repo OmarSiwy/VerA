@@ -465,9 +465,11 @@ pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
         const meta = info(e.code);
         try w.writeAll("{\"code\":\"");
         try w.writeAll(e.code.name());
-        try w.print("\",\"level\":\"{s}\",\"stage\":\"{s}\",\"lrm\":\"{s}\",\"title\":", .{
-            e.severity.word(), @tagName(e.stage), meta.lrm,
+        try w.print("\",\"level\":\"{s}\",\"stage\":\"{s}\",\"lrm\":", .{
+            e.severity.word(), @tagName(e.stage),
         });
+        try writeJsonString(w, meta.lrm);
+        try w.writeAll(",\"title\":");
         try writeJsonString(w, meta.title);
         try w.writeAll(",\"message\":");
         try writeJsonString(w, e.message);
@@ -529,15 +531,6 @@ pub fn writeJsonSpan(
     });
 }
 
-pub fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
-    try w.writeByte('"');
-    for (s) |c| switch (c) {
-        '"' => try w.writeAll("\\\""),
-        '\\' => try w.writeAll("\\\\"),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        else => if (c < 0x20) try w.print("\\u{x:0>4}", .{c}) else try w.writeByte(c),
-    };
-    try w.writeByte('"');
+fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
+    try std.json.Stringify.encodeJsonString(s, .{}, w);
 }
