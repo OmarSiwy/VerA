@@ -793,8 +793,7 @@ pub fn scan(pp: *Pp, text: []const u8) Error!void {
         // §2.8.1 escaped identifiers are opaque too (they may contain '`').
         if (c == '\\') {
             const start = i;
-            i += 1;
-            while (i < text.len and !isSpace(text[i])) i += 1;
+            i = escapedEnd(text, i + 1);
             if (pp.emitting()) try pp.out.appendSlice(pp.arena, text[start..i]);
             continue;
         }
@@ -836,9 +835,8 @@ pub fn directive(pp: *Pp, text: []const u8, at: usize) Error!usize {
     // directive is spelled with a backslash, so this can only be a macro use
     // and goes straight to `expand`.
     if (j < text.len and text[j] == '\\') {
-        j += 1;
-        const body = j;
-        while (j < text.len and !isSpace(text[j]) and text[j] >= 33 and text[j] <= 126) j += 1;
+        const body = j + 1;
+        j = escapedEnd(text, body);
         if (j == body) {
             if (!pp.emitting()) return at + 1;
             return pp.fail(pp.spanAt(at, at + 1), .E0103, "", .{});
@@ -1030,8 +1028,7 @@ pub const Rest = struct {
         r.skipSpace();
         if (r.i >= r.s.len or r.s[r.i] != '\\') return null;
         const start = r.i + 1;
-        var k = start;
-        while (k < r.s.len and !isSpace(r.s[k]) and r.s[k] >= 33 and r.s[k] <= 126) k += 1;
+        const k = escapedEnd(r.s, start);
         if (k == start) return null;
         r.i = k;
         return r.s[start..k];
@@ -1072,12 +1069,11 @@ pub fn indexOfString(haystack: []const []const u8, needle: []const u8) ?usize {
 }
 
 pub const isSpace = @import("lexer.zig").isSpace;
+pub const isIdentChar = @import("lexer.zig").isIdentChar;
+pub const escapedEnd = @import("lexer.zig").escapedEnd;
 pub fn isIdentStart(c: u8) bool {
     // ponytail: stdlib ASCII classes; `_` and `$` are Verilog's extensions.
     return std.ascii.isAlphabetic(c) or c == '_' or c == '$';
-}
-pub fn isIdentChar(c: u8) bool {
-    return std.ascii.isAlphanumeric(c) or c == '_' or c == '$';
 }
 
 // Annex D standard definitions: disciplines.vams and constants.vams, transcribed verbatim — pp/annex_d.zig
