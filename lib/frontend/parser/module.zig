@@ -348,7 +348,7 @@ pub fn parseConnectRules(self: *Parser) Error!Ast.ConnectRulesDecl {
 /// not use access functions. Shall not use contribution statements or event
 /// control statements. Shall not use named blocks." — because those are
 /// visible in the tokens, and dropping them silently would accept them.
-pub fn skipParamsetStatement(self: *Parser) Error!void {
+fn skipParamsetStatement(self: *Parser) Error!void {
     var depth: u32 = 0;
     while (true) : (self.pos += 1) {
         const what: ?[]const u8 = switch (self.peek()) {
@@ -453,7 +453,7 @@ pub const GenBlock = struct {
 /// A.1.3 list_of_ports / list_of_port_declarations (§6.5). Both styles fall
 /// out of one loop: a direction keyword starts a new declaration and its
 /// direction+discipline stick to the following comma-separated names.
-pub fn parsePortList(self: *Parser, b: *Body) Error!void {
+fn parsePortList(self: *Parser, b: *Body) Error!void {
     _ = try self.expect(.lparen);
     if (self.eat(.rparen)) return;
     var dir: Ast.Direction = .unspecified;
@@ -555,7 +555,7 @@ pub fn optPortType(self: *Parser, kind: *Ast.NetKind, signed: *bool) Error!Ast.S
 // A.1.4 module_item — LRM §6.2, ch3
 // -----------------------------------------------------------------------
 
-pub fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
+fn parseModuleItems(self: *Parser, b: *Body, end: token.Tag) Error!void {
     while (true) {
         try self.skipAttributes();
         const t = self.peek();

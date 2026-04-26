@@ -342,7 +342,7 @@ pub const Tag = enum(u8) {
     kw_reserved,
 
     /// First keyword tag. Keeps `isKeyword` a single compare (see file header).
-    pub const first_keyword: Tag = .kw_module;
+    const first_keyword: Tag = .kw_module;
 
     /// Source spelling, for diagnostics. `null` when the text is not implied by
     /// the tag (identifiers, literals, `kw_reserved`) — slice the source then.
@@ -749,7 +749,7 @@ pub fn isEventFunction(tag: Tag) bool {
 /// A keyword that starts a call-like expression: `name ( args )`. Union of the
 /// math (§4.3), filter (§4.5), small-signal (§4.6) and event (§5.10.3) groups
 /// plus `analysis` (§4.6.1) and the §5.10.2 step events.
-pub fn isBuiltinFunction(tag: Tag) bool {
+fn isBuiltinFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_analysis, .kw_initial_step, .kw_final_step => true,
         else => isMathFunction(tag) or isFilterFunction(tag) or isSmallSignalFunction(tag) or isEventFunction(tag), // else: the four families above decide the rest

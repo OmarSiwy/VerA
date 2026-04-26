@@ -26,7 +26,7 @@ pub fn parseExpr(self: *Parser) Error!Ast.ExprId {
 }
 
 /// Precedence climbing over LRM Table 4-3 (§4.2.2).
-pub fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
+fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
     var lhs = try parseUnary(self);
     while (true) {
         const t = self.peek();
@@ -404,7 +404,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     return id;
 }
 
-pub inline fn addCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, args: []const Ast.ExprId) Error!Ast.ExprId {
+inline fn addCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, args: []const Ast.ExprId) Error!Ast.ExprId {
     const off = try self.file.exprs.addExprList(self.arena, args);
     return self.file.exprs.add(self.arena, .{
         .tag = tag,
@@ -469,7 +469,7 @@ pub fn parseAccess(self: *Parser, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
 /// The `( < port_identifier > )` alternatives of the production are not
 /// parsed: they name the child's §5.4.3 port flow, which is a different
 /// quantity from a node pair, and nothing asks for them yet.
-pub fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprId {
+fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprId {
     var parts: std.ArrayList(Ast.StrId) = .empty;
     {
         var i = self.pos;
@@ -506,7 +506,7 @@ pub fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.E
 }
 
 /// One `branch_terminal` of the production above, rewritten onto `prefix`.
-pub fn hierTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!Ast.ExprId {
+fn hierTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!Ast.ExprId {
     var parts: std.ArrayList(Ast.StrId) = .empty;
     try parts.appendSlice(self.arena, prefix);
     try parts.append(self.arena, try self.expectIdent());
@@ -584,7 +584,7 @@ pub fn parseCallArgs(self: *Parser) Error![]const Ast.ExprId {
 }
 
 /// Operator precedence. LRM §4.2.2 Table 4-3, highest binds tightest.
-pub fn binopPrec(op: Ast.BinaryOp) u8 {
+fn binopPrec(op: Ast.BinaryOp) u8 {
     return switch (op) {
         .pow => 12,
         .mul, .div, .mod => 11,
@@ -601,7 +601,7 @@ pub fn binopPrec(op: Ast.BinaryOp) u8 {
 }
 
 /// §4.2.12 `?:` sits below every binary operator (Table 4-3, last row).
-pub const prec_ternary: u8 = 1;
+const prec_ternary: u8 = 1;
 
 /// A.8.6 binary_operator → `Ast.BinaryOp`, null for a token that is not one.
 /// `===`/`!==`/`<<<`/`>>>` are mapped, not rejected: annex C.5 rejection is
@@ -643,7 +643,7 @@ pub fn binOp(tag: token.Tag) ?Ast.BinaryOp {
 /// §2.6.1 integer (incl. sized/based) and §2.6.2 real (exponent + SI scale
 /// factor) literals. Values are computed here because the token stream
 /// stores only {tag,start}.
-pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
+fn parseNumber(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     self.pos += 1;
 
@@ -701,7 +701,7 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
 /// operator missing between them and keeps that message. `.apostrophe_lbrace`
 /// is deliberately not in the set — `2'{1}` is §4.2.14's assignment
 /// pattern, where the apostrophe is legal and is not a base format.
-pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
+fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
     const text = tokenText(self, tok);
     const start = self.starts[tok];
     const next = self.starts[tok + 1]; // the stream always ends in `.eof`
@@ -757,7 +757,7 @@ pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
 /// string (`{i{"Hi"}}`). That one keeps its `.multi_concat` node and
 /// lowering repeats the string. Digital mode keeps every group and count:
 /// flattening would erase zero-replication legality and operand evaluation.
-pub fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
+fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
     _ = try self.expect(.lbrace);
     if (self.eat(.rbrace)) return null;
 
@@ -810,7 +810,7 @@ pub fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?As
 
 /// `braceOperands` for the positions that cannot pass a count upwards: a
 /// nonconstant replication stays ONE operand instead of being returned.
-pub fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
+fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
     const at = self.pos;
     var g: std.ArrayList(Ast.ExprId) = .empty;
     if (try braceOperands(self, &g)) |c| {
@@ -824,7 +824,7 @@ pub fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
 /// `{count{items}}` kept unexpanded for lowering (§3.3's nonconstant
 /// multiplier). `rhs` is the inner `.concat`, exactly as `Ast.ExprTag`
 /// documents the tag.
-pub fn multiConcat(self: *Parser, tok: u32, count: Ast.ExprId, items: []const Ast.ExprId) Error!Ast.ExprId {
+fn multiConcat(self: *Parser, tok: u32, count: Ast.ExprId, items: []const Ast.ExprId) Error!Ast.ExprId {
     const off = try self.file.exprs.addExprList(self.arena, items);
     const inner = try self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
     return self.file.exprs.add(self.arena, .{ .tag = .multi_concat, .main_tok = tok, .lhs = count, .rhs = inner });
@@ -859,7 +859,7 @@ pub fn replCount(self: *const Parser, e: Ast.ExprId) ?u32 {
 /// Only a concatenation's: an A.8.1 assignment pattern is not one, and keeps
 /// `replCount`. A negative real is a unary minus, not a literal, so it
 /// reaches `lowerConcat` exactly as `{-5{a}}` does.
-pub fn concatReplCount(self: *const Parser, e: Ast.ExprId) ?u32 {
+fn concatReplCount(self: *const Parser, e: Ast.ExprId) ?u32 {
     const ex = &self.file.exprs;
     if (ex.tag(e) != .real_literal) return replCount(self, e);
     const r = @round(ex.realValue(e));

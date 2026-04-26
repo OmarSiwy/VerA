@@ -445,7 +445,7 @@ pub const Literal = struct {
         return self.reduce(.or_bits);
     }
 
-    pub fn logicalNot(self: Literal) Bit {
+    fn logicalNot(self: Literal) Bit {
         return invert(self.truth());
     }
 

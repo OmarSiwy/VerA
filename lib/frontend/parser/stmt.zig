@@ -199,7 +199,7 @@ fn parseStmtBody(self: *Parser) Error!Ast.StmtId {
 /// §5.3.2 / A.6.3 analog_seq_block. Local declarations are only legal on a
 /// named block; accepting them either way costs nothing and keeps the
 /// diagnostic for the real error (an undeclared name) in lowering.
-pub fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
+fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
     const parallel = self.peek() != .kw_begin; // `fork`
     self.pos += 1; // 'begin' / 'fork'
@@ -314,7 +314,7 @@ pub fn parseCase(self: *Parser, kind: Ast.CaseKind, gen: ?*parse_module.Body) Er
 }
 
 /// A.6.5 analog_event_control_statement (§5.10).
-pub fn parseEventControl(self: *Parser) Error!Ast.StmtId {
+fn parseEventControl(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
     self.pos += 1; // '@'
     // A.6.5 `event_control ::= … | @* | @ (*)`. Both spellings mean the same
@@ -347,7 +347,7 @@ pub fn parseEventControl(self: *Parser) Error!Ast.StmtId {
 
 /// A.6.5 analog_event_expression — `or` and `,` both build `.event_or`
 /// (§4.2.2 puts them at the `||` precedence level, below everything else).
-pub fn parseEventExpr(self: *Parser) Error!Ast.ExprId {
+fn parseEventExpr(self: *Parser) Error!Ast.ExprId {
     var lhs = try parseEventTerm(self);
     while (self.peek() == .kw_or or self.peek() == .comma) {
         const tok = self.pos;
@@ -416,7 +416,7 @@ pub fn parseEventTerm(self: *Parser) Error!Ast.ExprId {
 
 /// A.6.9 `$task [ ( [expr] {, [expr]} ) ] ;` — ch9 system tasks. The name
 /// keeps its `$` so lowering reports it the way the user wrote it.
-pub fn parseSysTask(self: *Parser) Error!Ast.StmtId {
+fn parseSysTask(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
     const name = try self.internTok(tok);
     self.pos += 1;
@@ -429,7 +429,7 @@ pub fn parseSysTask(self: *Parser) Error!Ast.StmtId {
 /// Contribution vs procedural-assignment disambiguation. LRM §5.6, §5.7.
 /// One expression is parsed first (`<+`, `=` and `:` all bind looser than
 /// every operator in Table 4-3), then the operator decides the statement.
-pub fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
+fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
     const tok = self.pos;
     const lhs = if (self.discreteGrammar()) try parse_expr.parsePostfix(self) else try parse_expr.parseExpr(self);
     if (self.discreteGrammar() and self.eat(.lt_eq)) {
@@ -500,7 +500,7 @@ pub fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
 /// ponytail: no `repeat ( n ) @(e)`. A.6.5's third alternative needs a
 /// countdown around the waiter and nothing asks for it yet; add it beside
 /// the `.at` arm when something does.
-pub fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool } {
+fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool } {
     if (!self.discreteGrammar()) return .{ .expr = .none, .is_delay = false };
     switch (self.peek()) {
         .hash => {

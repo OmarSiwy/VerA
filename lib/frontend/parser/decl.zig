@@ -121,7 +121,7 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
 
 /// LRM §3.4.2 / A.2.5 value_range. CRITICAL: this is the only bound
 /// evidence class 6 (proof.zig) gets — it must reach `ParamDecl.ranges`.
-pub fn parseRange(self: *Parser) Error!Ast.ValueRange {
+fn parseRange(self: *Parser) Error!Ast.ValueRange {
     const kind: Ast.ValueRange.Kind = if (self.peek() == .kw_from) .from else .exclude;
     self.pos += 1;
 
@@ -180,7 +180,7 @@ pub fn parseRange(self: *Parser) Error!Ast.ValueRange {
 }
 
 /// A.2.5 value_range_expression ::= constant_expression | -inf | inf
-pub fn parseValueRangeExpr(self: *Parser) Error!Ast.ExprId {
+fn parseValueRangeExpr(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     if (self.peek() == .minus and self.peekAt(1) == .kw_inf) {
         self.pos += 2;
@@ -197,7 +197,7 @@ pub fn parseValueRangeExpr(self: *Parser) Error!Ast.ExprId {
 /// token. `time` folds to integer and `realtime` to real (§3.4.1). An analog
 /// function's RETURN type is narrower (`integer | real | string`, A.2.6), so
 /// `parseFuncDecl` does not use this.
-pub fn varType(tag: token.Tag) ?Ast.Type {
+fn varType(tag: token.Tag) ?Ast.Type {
     return switch (tag) {
         .kw_integer, .kw_time => .integer,
         .kw_real, .kw_realtime => .real,

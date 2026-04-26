@@ -221,7 +221,7 @@ pub fn outsideDesignElement(self: *Parser, what: []const u8) Error!void {
 
 /// Skip to the next thing that can start a top-level description (A.1.2),
 /// past any `end*` keyword that closes the construct we bailed out of.
-pub fn recoverTopLevel(self: *Parser, before: u32) void {
+fn recoverTopLevel(self: *Parser, before: u32) void {
     if (self.pos == before) self.pos += 1;
     while (true) : (self.pos += 1) switch (self.peek()) {
         .eof => return,
@@ -284,7 +284,7 @@ pub fn recoverTopLevel(self: *Parser, before: u32) void {
 // files write one — is not a token sequence this lexer can produce, and it
 // should not be asked to: §2.2's token set is `source_text`'s. A library map
 // file needs its own reader, which is the same work E0232 says is absent.
-pub fn parseLibraryDecl(self: *Parser) Error!void {
+fn parseLibraryDecl(self: *Parser) Error!void {
     const kw = self.pos;
     const is_library = parse_module.reservedIs(self, kw, "library");
     self.pos += 1;
@@ -336,7 +336,7 @@ pub fn parseLibraryDecl(self: *Parser) Error!void {
 /// and a digital run takes them as its tops (§13.3.1.1); the rules still bind
 /// nothing, which W0253 keeps saying whenever there are any — and always in
 /// an analog compile, which reads no cell list at all.
-pub fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
+fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
     const kw = self.pos;
     self.pos += 1;
     _ = try self.expectIdent();
@@ -371,7 +371,7 @@ pub fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!vo
 ///     cell_clause ::= cell [ library_identifier . ] cell_identifier
 ///     liblist_clause ::= liblist { library_identifier }
 ///     use_clause ::= use [ library_identifier . ] cell_identifier [ : config ]
-pub fn parseConfigRule(self: *Parser) Error!void {
+fn parseConfigRule(self: *Parser) Error!void {
     const tok = self.pos;
     // `default` is the one word of A.1.5 that this compiler has a tag for:
     // A.6.7's `case` default takes the same spelling, and annex B reserves
@@ -622,7 +622,7 @@ pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast
     });
 }
 
-pub fn udpBodyName(sequential: bool) []const u8 {
+fn udpBodyName(sequential: bool) []const u8 {
     return if (sequential) "sequential" else "combinational";
 }
 

@@ -67,7 +67,7 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
 ///             | showcancelled_declaration
 ///             | path_declaration
 ///             | system_timing_check
-pub fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
+fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
     switch (self.peek()) {
         .kw_reserved => {
             const w = parse_expr.tokenText(self, self.pos);
@@ -120,7 +120,7 @@ pub fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
 /// [ [ constant_range_expression ] ]` and its output twin, which differ
 /// only in which port directions the identifier may name — a rule about
 /// the NAME, judged where the ports are known, not here.
-pub fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
+fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     const name = try self.expectIdent();
     var e = try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
@@ -139,7 +139,7 @@ pub fn parseSpecifyTerminal(self: *Parser) Error!Ast.ExprId {
 /// A.7.2 `list_of_path_inputs` / `list_of_path_outputs` — the same
 /// comma-separated run of A.7.3 descriptors under two names. Returns how
 /// many it read, for the parallel path's one-to-one rule.
-pub fn parseSpecifyTerminalList(self: *Parser) Error![]const Ast.ExprId {
+fn parseSpecifyTerminalList(self: *Parser) Error![]const Ast.ExprId {
     var out: std.ArrayList(Ast.ExprId) = .empty;
     while (true) {
         try out.append(self.arena, try parseSpecifyTerminal(self));
@@ -164,7 +164,7 @@ pub fn parseSpecifyTerminalList(self: *Parser) Error![]const Ast.ExprId {
 /// one by a token the cursor is already on: `=>` versus `*>` chooses
 /// parallel from full, and a `(` after the arrow chooses edge-sensitive
 /// from simple. The caller has consumed any `if (…)` or `ifnone` prefix.
-pub fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, ifnone: bool) Error!void {
+fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, ifnone: bool) Error!void {
     const main_tok = self.pos;
     _ = try self.expect(.lparen);
     // A.7.4 `edge_identifier ::= posedge | negedge`, present only on the
@@ -280,7 +280,7 @@ const controlled_first = std.StaticStringMap(void).initComptime(.{ .{"$period"},
 /// A.7.5.1 `system_timing_check`. A `$name` inside a specify block is one
 /// of exactly twelve commands — A.7.1 admits no other system task there —
 /// so a name the table does not hold is an error rather than a call.
-pub fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
+fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     const tok = self.pos;
     var args: std.ArrayList(Ast.ExprId) = .empty;
     var edges: std.ArrayList(Ast.SpecEdge) = .empty;
@@ -353,7 +353,7 @@ pub fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
 /// read; `parseTimingCheck` enforces the MANDATORY one of a
 /// `controlled_reference_event` (`$period`, `$width`). The union means
 /// every optional piece of A.7.5.3 is read rather than skipped.
-pub fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Error!bool {
+fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Error!bool {
     ev.* = if (self.eat(.kw_posedge)) .posedge else if (self.eat(.kw_negedge)) .negedge else .none;
     var controlled = ev.* != .none;
     if (!controlled and parse_module.reservedIs(self, self.pos, "edge")) {
