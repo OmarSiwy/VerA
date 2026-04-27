@@ -290,6 +290,16 @@ pub fn nameGenBlocks(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!vo
 fn declaredIn(b: *const parse_module.Body, name: Ast.StrId) bool {
     for (b.gen_blocks.items) |g| if (g.name == name) return true;
     for (b.instances.items) |i| if (i.name == name) return true;
+    return inDeclSpaces(b, name) or
+        std.mem.indexOfScalar(Ast.StrId, b.events.items, name) != null;
+}
+
+/// Is `name` in one of the module's ordinary declaration spaces? A port is
+/// listed as well as a net: §6.5's header names are declarations too, and
+/// §3.4.6 an aliasparam's own identifier is a declaration.
+/// ponytail: stdlib membership over interned IDs; index declarations if large
+/// modules make these linear scans hot.
+fn inDeclSpaces(b: *const parse_module.Body, name: Ast.StrId) bool {
     for (b.aliasparams.items) |a| if (a.alias == name) return true;
     return nameIn(Ast.Port, b.ports.items, name) or
         nameIn(Ast.ParamDecl, b.params.items, name) or
@@ -297,8 +307,7 @@ fn declaredIn(b: *const parse_module.Body, name: Ast.StrId) bool {
         nameIn(Ast.NetDecl, b.nets.items, name) or
         nameIn(Ast.BranchDecl, b.branches.items, name) or
         nameIn(Ast.FuncDecl, b.functions.items, name) or
-        std.mem.indexOfScalar(Ast.StrId, b.genvars.items, name) != null or
-        std.mem.indexOfScalar(Ast.StrId, b.events.items, name) != null;
+        std.mem.indexOfScalar(Ast.StrId, b.genvars.items, name) != null;
 }
 
 /// §6.6.1/§6.6.2/§6.8: a named generate block's name is a DECLARATION in
@@ -332,22 +341,7 @@ pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemor
     for (b.gen_loops.items) |l| if (std.mem.indexOfScalar(Ast.StrId, b.genvars.items, l.name) == null)
         try self.report(l.tok, .E0238, "`{s}`", .{self.file.strings.get(l.name)});
     for (b.gen_blocks.items, 0..) |g, i| {
-        // Every ordinary declaration space of the module. A port is listed
-        // as well as a net: §6.5's header names are declarations too.
-        // ponytail: stdlib membership over interned IDs; index declarations
-        // if large modules make these linear scans hot.
-        const clash = nameIn(Ast.Port, b.ports.items, g.name) or
-            nameIn(Ast.ParamDecl, b.params.items, g.name) or
-            nameIn(Ast.VarDecl, b.vars.items, g.name) or
-            nameIn(Ast.NetDecl, b.nets.items, g.name) or
-            nameIn(Ast.BranchDecl, b.branches.items, g.name) or
-            nameIn(Ast.FuncDecl, b.functions.items, g.name) or
-            std.mem.indexOfScalar(Ast.StrId, b.genvars.items, g.name) != null or
-            alias: {
-                // §3.4.6 an aliasparam's own identifier is a declaration.
-                for (b.aliasparams.items) |a| if (a.alias == g.name) break :alias true;
-                break :alias false;
-            } or
+        const clash = inDeclSpaces(b, g.name) or
             other: {
                 for (b.gen_blocks.items[0..i]) |h| {
                     if (h.name == g.name and h.construct != g.construct) break :other true;
