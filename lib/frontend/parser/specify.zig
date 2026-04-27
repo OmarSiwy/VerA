@@ -395,7 +395,7 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Erro
 // identifier at all, so it is not a token this lexer can produce.
 pub fn parseSpecparamDecl(self: *Parser, out: ?*std.ArrayList(Ast.ParamDecl)) Error!void {
     self.pos += 1; // `specparam`
-    const packed_range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+    const packed_range: ?Ast.Dim = try parse_decl.optDim(self);
     while (true) {
         const tok = self.pos;
         const name = try self.expectIdent();
@@ -436,7 +436,7 @@ pub fn parseInstantiation(self: *Parser, b: *parse_module.Body) Error!void {
     while (true) {
         const name_tok = self.pos;
         const name = try self.expectIdent();
-        const range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+        const range: ?Ast.Dim = try parse_decl.optDim(self);
         _ = try self.expect(.lparen);
         var ports: std.ArrayList(Ast.PortConn) = .empty;
         if (!self.eat(.rparen)) {
@@ -590,7 +590,7 @@ pub fn parseGates(self: *Parser, b: *parse_module.Body) Error!void {
         var range: ?Ast.Dim = null;
         if (self.identLike(self.pos)) {
             self.pos += 1;
-            if (self.peek() == .lbracket) range = try parse_decl.parseDim(self);
+            range = try parse_decl.optDim(self);
         }
         _ = try self.expect(.lparen);
         var terms: std.ArrayList(Ast.ExprId) = .empty;
@@ -840,7 +840,7 @@ pub fn parseSwitch(self: *Parser, b: *parse_module.Body) Error!void {
         // arm. `(` after the name tells the two apart, as in `parseGates`.
         if (self.identLike(self.pos)) {
             self.pos += 1;
-            if (self.peek() == .lbracket) _ = try parse_decl.parseDim(self);
+            _ = try parse_decl.optDim(self);
         }
         _ = try self.expect(.lparen);
         const terms = try self.arena.alloc(Ast.ExprId, arm.terminals);

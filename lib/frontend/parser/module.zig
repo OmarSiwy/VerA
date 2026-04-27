@@ -467,7 +467,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
             // the range belongs to the declaration, so it sticks to every
             // name in the list exactly as the direction and the discipline
             // do (§6.5.2 "electrical [3:0] a, b" declares two 4-bit ports).
-            range = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+            range = try parse_decl.optDim(self);
         }
         // A.1.3 `port ::= [ port_expression ] | . port_identifier (
         // [ port_expression ] )`. The second alternative gives the port an
@@ -765,7 +765,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             const tok = self.pos;
             self.pos += 1;
             const signed = self.digital and self.eat(.kw_signed);
-            const range: ?Ast.Dim = if (self.peek() == .lbracket) try parse_decl.parseDim(self) else null;
+            const range: ?Ast.Dim = try parse_decl.optDim(self);
             if (!self.digital) if (range) |d| if (parse_decl.literalWidth(self, d)) |w| {
                 if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
             };

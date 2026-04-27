@@ -380,8 +380,13 @@ pub fn parseDims(self: *Parser) Error![]const Ast.Dim {
     return dims.items;
 }
 
+/// An optional `[ range ]`: null unless the next token is `[`.
+pub fn optDim(self: *Parser) Error!?Ast.Dim {
+    return if (self.peek() == .lbracket) try parseDim(self) else null;
+}
+
 /// A.2.5 `dimension ::= [ expr : expr ]` (§3.2.2, §3.4.4).
-pub fn parseDim(self: *Parser) Error!Ast.Dim {
+fn parseDim(self: *Parser) Error!Ast.Dim {
     _ = try self.expect(.lbracket);
     const msb = try parse_expr.parseExpr(self);
     _ = try self.expect(.colon);
