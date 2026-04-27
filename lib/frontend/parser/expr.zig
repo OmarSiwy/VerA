@@ -108,23 +108,20 @@ pub fn parseUnary(self: *Parser) Error!Ast.ExprId {
 /// §3.2.2/§3.4.4 array and part selects: `base[i]`, `base[msb:lsb]`.
 pub fn parsePostfix(self: *Parser) Error!Ast.ExprId {
     var e = try parsePrimary(self);
-    while (self.peek() == .lbracket) {
-        const tok = self.pos;
-        self.pos += 1;
-        var idx = try parseExpr(self);
-        if (self.eat(.colon)) { // A.8.3 analog_range_expression
-            const lsb = try parseExpr(self);
-            idx = try self.file.exprs.add(self.arena, .{
-                .tag = .range,
-                .main_tok = tok,
-                .lhs = idx,
-                .rhs = lsb,
-            });
-        }
-        _ = try self.expect(.rbracket);
-        e = try self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = e, .rhs = idx });
-    }
+    while (self.peek() == .lbracket) e = try parseSelect(self, e);
     return e;
+}
+
+/// One select on `base`, `[i]` or `[msb:lsb]`, the cursor on the `[`.
+pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
+    const tok = try self.expect(.lbracket);
+    var idx = try parseExpr(self);
+    if (self.eat(.colon)) { // A.8.3 analog_range_expression
+        const lsb = try parseExpr(self);
+        idx = try self.file.exprs.add(self.arena, .{ .tag = .range, .main_tok = tok, .lhs = idx, .rhs = lsb });
+    }
+    _ = try self.expect(.rbracket);
+    return self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
 }
 
 /// A.8.4 analog_primary.
