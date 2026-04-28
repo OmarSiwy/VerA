@@ -2089,8 +2089,8 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
     const src = try h.gen(std.testing.allocator);
 
     var found = false;
-    for (h.bag.messages()) |mi| {
-        const e = h.bag.get(mi);
+    for (0..h.bag.count()) |i| {
+        const e = h.bag.at(i);
         if (e.code != .E0515) continue;
         found = true;
         try std.testing.expectEqual(diag.Stage.codegen, e.stage);
@@ -2154,8 +2154,8 @@ test "codegen: §12.32.3 an unregistered system function is W0852 and a host cal
     const src = try h.gen(std.testing.allocator);
 
     var found = false;
-    for (h.bag.messages()) |mi| {
-        const e = h.bag.get(mi);
+    for (0..h.bag.count()) |i| {
+        const e = h.bag.at(i);
         if (e.code != .W0852) continue;
         found = true;
         try std.testing.expectEqual(diag.Stage.codegen, e.stage);
@@ -2239,7 +2239,7 @@ test "codegen: an unsupported dependent default diagnoses instead of freezing" {
     , &h);
     defer h.deinit();
     try std.testing.expectError(error.UnsupportedParameterDefault, h.gen(std.testing.allocator));
-    for (h.bag.messages()) |mi| if (h.bag.get(mi).code == .E1004) return;
+    for (0..h.bag.count()) |i| if (h.bag.at(i).code == .E1004) return;
     return error.MissingDiagnostic;
 }
 
@@ -2266,8 +2266,8 @@ test "codegen: §3.4 a default with no compile-time value is W1050, a derived on
     const src = try h.gen(std.testing.allocator);
 
     var hits: usize = 0;
-    for (h.bag.messages()) |mi| {
-        const e = h.bag.get(mi);
+    for (0..h.bag.count()) |i| {
+        const e = h.bag.at(i);
         if (e.code != .W1050) continue;
         hits += 1;
         try std.testing.expectEqual(diag.Stage.codegen, e.stage);
@@ -2373,7 +2373,7 @@ test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
 
     // A default that reads the host's table is no longer W1050: `derive()`
     // overwrites the field, which is that warning's own silence condition.
-    for (h.bag.messages()) |mi| try std.testing.expect(h.bag.get(mi).code != .W1050);
+    for (0..h.bag.count()) |i| try std.testing.expect(h.bag.at(i).code != .W1050);
 }
 
 test "codegen: §9.15 $simparam(\"tnom\") read from the body is the same field" {

@@ -129,7 +129,7 @@ test "bag: the flat records survive a round trip, in order, through a sort" {
     var bag = diag_bag.Bag.init(arena_state.allocator());
 
     // Emitted out of source order, so `sort` has something to do and the
-    // handles have to stay valid across it.
+    // labels and notes have to move with their row.
     var b = bag.build(.lower, .E0313, .{ .start = 50, .end = 52 });
     b.msg("second", .{});
     b.label(.{ .start = 51, .end = 53 }, "one", .{});

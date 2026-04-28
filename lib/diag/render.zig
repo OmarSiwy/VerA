@@ -107,7 +107,7 @@ const Placed = struct {
 /// Renders `bag` to `w`. Entries are sorted into source order first, so the
 /// output of a run is stable regardless of which stage found what.
 pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void {
-    if (bag.list.items.len == 0 and bag.suppressed == 0) return;
+    if (bag.isEmpty() and bag.suppressed == 0) return;
     bag.sort();
 
     const p = opts.palette;
@@ -127,8 +127,8 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
 
     var explained: std.EnumSet(Code) = .initEmpty();
 
-    for (bag.messages()) |mi| {
-        try renderOne(bag, scratch, w, opts, bag.get(mi), indices, &explained);
+    for (0..bag.count()) |i| {
+        try renderOne(bag, scratch, w, opts, bag.at(i), indices, &explained);
     }
 
     if (bag.suppressed != 0) {
@@ -239,11 +239,7 @@ fn renderOne(
     }
 
     if (opts.snippets and primary != null) {
-        // One primary plus at most `max_children` labels — the same comptime cap
-        // `Bag.labels` decodes into a caller array for, enforced by `Builder`'s
-        // inline `[max_children]LabelRec`. A bound that is a constant is a stack
-        // array, not an `ArrayList`: this used to be one arena allocation per
-        // rendered diagnostic for at most five elements.
+        // One primary plus at most `max_children` labels.
         var pbuf: [diag_entry.max_children + 1]Placed = undefined;
         pbuf[0] = primary.?;
         var n: usize = 1;
@@ -450,8 +446,8 @@ pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
     const indices = try scratch.alloc(?diag_location.LineIndex, n_files);
     @memset(indices, null);
 
-    for (bag.messages()) |mi| {
-        const e = bag.get(mi);
+    for (0..bag.count()) |row| {
+        const e = bag.at(row);
         const meta = info(e.code);
         try w.writeAll("{\"code\":\"");
         try w.writeAll(e.code.name());

@@ -291,19 +291,18 @@ fn compileFixture(gpa: std.mem.Allocator, f: Fixture, source: []const u8, d: ver
 /// `ParseError`; the labels discriminate.
 fn failureContains(f: Failure, pattern: []const u8) bool {
     if (asCode(pattern)) |want| {
-        for (f.diags.messages()) |mi| {
-            if (f.diags.get(mi).code == want) return true;
+        for (0..f.diags.count()) |i| {
+            if (f.diags.at(i).code == want) return true;
         }
         return false;
     }
     if (std.mem.indexOf(u8, f.error_name, pattern) != null) return true;
     if (f.generated) |g| if (std.mem.indexOf(u8, g, pattern) != null) return true;
 
-    const diags = f.diags.messages();
-    if (diags.len != 0) {
+    if (!f.diags.isEmpty()) {
         if (std.mem.eql(u8, pattern, "DiagnosticsReported")) return true;
         if (std.mem.eql(u8, pattern, "ParseError")) {
-            for (diags) |mi| switch (f.diags.get(mi).stage) {
+            for (0..f.diags.count()) |i| switch (f.diags.at(i).stage) {
                 .preprocess, .parse => {},
                 .lower, .proof, .codegen => return false,
             };
@@ -314,8 +313,8 @@ fn failureContains(f: Failure, pattern: []const u8) bool {
     // migrating to codes moved a lot of wording out of the message and into
     // `Info.title` — a fixture pinning the old prose still matches.
     var nbuf: [vera.diag.max_children]vera.diag.Note = undefined;
-    for (diags) |mi| {
-        const d = f.diags.get(mi);
+    for (0..f.diags.count()) |i| {
+        const d = f.diags.at(i);
         if (std.mem.indexOf(u8, d.message, pattern) != null) return true;
         if (std.mem.indexOf(u8, d.point, pattern) != null) return true;
         if (std.mem.indexOf(u8, vera.diag.info(d.code).title, pattern) != null) return true;
