@@ -204,6 +204,12 @@ pub const Directives = struct {
     /// somewhere in the resulting diagnostic. A fixture that cannot run states
     /// its expectation the same way one that can does — in the .va itself.
     reject: []const []const u8 = &.{},
+    /// `//! warn <substring>`, one per line: each must match a WARNING the
+    /// compile reported, by code or text as `reject` matches. The fixture
+    /// still compiles and runs; a warning nobody named does not fail it.
+    warn: []const []const u8 = &.{},
+    /// `//! nowarn`: the compile reports no warning at all. Never with `warn`.
+    nowarn: bool = false,
     /// `//! lrm <section>`, one per line: the normative clause this fixture
     /// pins. It is not an expectation and changes no verdict — it is what lets
     /// a FAIL name the RULE that broke rather than only the file, and what a
