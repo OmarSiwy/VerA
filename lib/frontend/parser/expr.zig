@@ -656,7 +656,7 @@ fn parseNumber(self: *Parser) Error!Ast.ExprId {
         return self.file.exprs.addLogic(self.arena, tok, lit);
     }
 
-    const text = tokenText(self, tok);
+    const text = self.tokenText(tok);
     // §2.6.2 decoding — `_` removal and the Table 2-1 scale factor — lives
     // in `lexer.parseReal` for the same reason §2.6.1 lives in `integer.parse`:
     // exactly ONE decoder. The second one here computed `mantissa * scale`,
@@ -692,7 +692,7 @@ fn parseNumber(self: *Parser) Error!Ast.ExprId {
 /// is deliberately not in the set — `2'{1}` is §4.2.14's assignment
 /// pattern, where the apostrophe is legal and is not a base format.
 fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
-    const text = tokenText(self, tok);
+    const text = self.tokenText(tok);
     const start = self.starts[tok];
     const next = self.starts[tok + 1]; // the stream always ends in `.eof`
     if (next != start + text.len) return text;
@@ -703,7 +703,7 @@ fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
         // exactly why: §2.6.2's scale_factor alphabet has no `g`, so `1g`
         // "is the integer 1 followed by an identifier" and E0207 is the
         // truth about it.
-        .identifier => for (tokenText(self, tok + 1)) |c| {
+        .identifier => for (self.tokenText(tok + 1)) |c| {
             if (!lexer.isBasedDigit(c, 16)) return text;
         },
         // Only an apostrophe: a stray backtick is the preprocessor's, and
@@ -711,7 +711,7 @@ fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
         .invalid => if (self.src[next] != '\'') return text,
         else => return text, // else: nothing else can be the glued remainder of a based number
     }
-    return self.src[start .. next + tokenText(self, tok + 1).len];
+    return self.src[start .. next + self.tokenText(tok + 1).len];
 }
 
 /// A.8.1, both brace forms at once:
@@ -927,7 +927,7 @@ pub fn foldBitConcat(self: *Parser, tok: u32, items: []const Ast.ExprId) Error!?
 /// the live path, so `"\0"` became the character `0` while the lexer's
 /// tested decoder had it right all along.
 pub fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
-    const raw = tokenText(self, tok);
+    const raw = self.tokenText(tok);
     const body = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
     if (std.mem.indexOfScalar(u8, body, '\\') == null) {
         return self.file.intern(self.arena, body);
@@ -949,21 +949,3 @@ pub fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
     return self.file.intern(self.arena, decoded[0..n]);
 }
 
-/// Source text of a token. `token.Stored` has no length (DOD: recompute,
-/// don't store), so the lexeme is re-scanned from `start` — by the LEXER,
-/// which is what makes it exact: `lexer.tokenEnd` re-runs `next()`, and
-/// `next()` is a pure function of (src, pos) (see lexer.zig's header).
-///
-/// A parser-side copy of the scanners used to live here and it had drifted:
-/// its escaped-identifier arm stopped at white space, where §2.8.1 and
-/// `lexer.lexEscapedIdentifier` stop at any byte outside printable ASCII
-/// 33–126 — so a non-ASCII byte (a UTF-8 comment character pasted into a
-/// name) ended the identifier for the lexer and not for the parser, and the
-/// two disagreed about where the next token began.
-pub fn tokenText(self: *const Parser, i: u32) []const u8 {
-    const lx: lexer.Lexer = .{ .src = self.src };
-    const text = lx.tokenText(self.starts[i]);
-    // §2.8.1: the `\` opens the identifier but is not part of the name.
-    // The terminator is not in the span, so only the head is stripped.
-    return if (self.tags[i] == .escaped_identifier) text[1..] else text;
-}

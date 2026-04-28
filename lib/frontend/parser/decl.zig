@@ -239,7 +239,7 @@ pub fn parseVarDecl(self: *Parser, out: *std.ArrayList(Ast.VarDecl)) Error!void 
 pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) Error!void {
     const main_tok = self.pos;
     self.pos += 1; // `task` / `function`
-    const automatic = parse_module.reservedIs(self, self.pos, "automatic");
+    const automatic = self.reservedIs(self.pos, "automatic");
     if (automatic) self.pos += 1;
     var result: Ast.VarDecl = if (is_function) tfType(self) else .{ .name = .none, .ty = .integer };
     if (is_function and result.storage == .reg and result.packed_range == null and self.peek() == .lbracket) result.packed_range = try parseDim(self);
@@ -295,10 +295,10 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         }
     }
     var body: std.ArrayList(Ast.StmtId) = .empty;
-    while (!(self.peek() == .kw_endfunction or parse_module.reservedIs(self, self.pos, end_word)) and self.peek() != .eof) {
+    while (!(self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word)) and self.peek() != .eof) {
         try body.append(self.arena, try parse_stmt.parseStmt(self));
     }
-    if (self.peek() == .kw_endfunction or parse_module.reservedIs(self, self.pos, end_word)) {
+    if (self.peek() == .kw_endfunction or self.reservedIs(self.pos, end_word)) {
         self.pos += 1;
     } else return self.failAt(self.pos, .E0207, "found {s}: no `{s}` closes the declaration", .{ self.found(self.pos), end_word });
     const body_id: Ast.StmtId = if (body.items.len == 1)
@@ -641,7 +641,7 @@ pub fn parseNatureAttr(self: *Parser) Error!Ast.NatureAttr {
     const name: Ast.StrId = switch (self.peek()) {
         .identifier, .escaped_identifier => try self.expectIdent(),
         .kw_abstol, .kw_access, .kw_units, .kw_ddt_nature, .kw_idt_nature => blk: {
-            const s = try self.file.intern(self.arena, parse_expr.tokenText(self, self.pos));
+            const s = try self.file.intern(self.arena, self.tokenText(self.pos));
             self.pos += 1;
             break :blk s;
         },
@@ -946,7 +946,7 @@ const strength_words = std.StaticStringMap(StrengthWord).initComptime(.{
 /// Both paths end at the spelling, which is what A.2.2.2 is written in.
 pub fn strengthWord(self: *const Parser, i: u32) ?StrengthWord {
     return switch (self.tags[i]) {
-        .kw_reserved, .kw_supply0, .kw_supply1 => strength_words.get(parse_expr.tokenText(self, i)),
+        .kw_reserved, .kw_supply0, .kw_supply1 => strength_words.get(self.tokenText(i)),
         else => null, // else: no other tag can spell a strength
     };
 }

@@ -42,7 +42,7 @@ const Error = parser.Error;
 pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     const open = self.pos;
     self.pos += 1; // `specify`
-    while (!parse_module.reservedIs(self, self.pos, "endspecify")) {
+    while (!self.reservedIs(self.pos, "endspecify")) {
         if (self.peek() == .eof or self.peek() == .kw_endmodule)
             return self.failAt(self.pos, .E0207, "found {s}: no `endspecify` closes the specify block", .{self.found(self.pos)});
         try parseSpecifyItem(self, b);
@@ -68,7 +68,7 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
 fn parseSpecifyItem(self: *Parser, b: *parse_module.Body) Error!void {
     switch (self.peek()) {
         .kw_reserved => {
-            const w = parse_expr.tokenText(self, self.pos);
+            const w = self.tokenText(self.pos);
             // A.2.1.1's declaration, here as a specify_item. The list is
             // DISCARDED rather than appended to the module's parameters:
             // a specparam declared inside the block is scoped to it, and
@@ -163,8 +163,8 @@ fn parsePathDeclaration(self: *Parser, b: *parse_module.Body, cond: Ast.ExprId, 
     const sources = try parseSpecifyTerminalList(self);
     // A.7.4 `polarity_operator ::= + | -`.
     const polarity = eatPolarity(self);
-    const parallel = parse_module.eatSymbol(self, "=>");
-    if (!parallel and !parse_module.eatSymbol(self, "*>")) return self.failAt(
+    const parallel = self.eatSymbol("=>");
+    if (!parallel and !self.eatSymbol("*>")) return self.failAt(
         self.pos,
         .E0207,
         "found {s}: a path description connects its terminals with `=>` or `*>`",
@@ -273,7 +273,7 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
     const tok = self.pos;
     var args: std.ArrayList(Ast.ExprId) = .empty;
     var edges: std.ArrayList(Ast.SpecEdge) = .empty;
-    const arity = timing_checks.get(parse_expr.tokenText(self, tok)) orelse return self.failAt(
+    const arity = timing_checks.get(self.tokenText(tok)) orelse return self.failAt(
         tok,
         .E0207,
         "found {s}: A.7.1 admits only A.7.5.1's twelve timing checks inside a specify block",
@@ -297,20 +297,20 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
         // `controlled_reference_event`, and A.7.5.3's
         // `controlled_timing_check_event` makes its event control
         // MANDATORY, unlike `timing_check_event`'s bracketed one.
-        if (n == 1 and !controlled and controlled_first.has(parse_expr.tokenText(self, tok))) return self.failAt(
+        if (n == 1 and !controlled and controlled_first.has(self.tokenText(tok))) return self.failAt(
             arg,
             .E0207,
             "`{s}` timing check requires an event control (posedge, negedge or edge) on its reference event (A.7.5.3 controlled_timing_check_event)",
-            .{parse_expr.tokenText(self, tok)},
+            .{self.tokenText(tok)},
         );
         // A.7.5.2 `notifier ::= variable_identifier` — the reg a violation
         // toggles. A.7.5.1 puts it first among the optional arguments of
         // every command, except `$width`, whose optional `threshold` comes
         // before it.
-        const notifier: u8 = if (std.mem.eql(u8, parse_expr.tokenText(self, tok), "$width")) 4 else arity[0] + 1;
+        const notifier: u8 = if (std.mem.eql(u8, self.tokenText(tok), "$width")) 4 else arity[0] + 1;
         if (n == notifier and self.pos != arg and
             !(self.pos == arg + 1 and (self.tags[arg] == .identifier or self.tags[arg] == .escaped_identifier)))
-            return self.failAt(arg, .E0207, "found {s}: the notifier argument of `{s}` names a variable (A.7.5.2 notifier ::= variable_identifier)", .{ self.found(arg), parse_expr.tokenText(self, tok) });
+            return self.failAt(arg, .E0207, "found {s}: the notifier argument of `{s}` names a variable (A.7.5.2 notifier ::= variable_identifier)", .{ self.found(arg), self.tokenText(tok) });
         if (!self.eat(.comma)) break;
     };
     _ = try self.expect(.rparen);
@@ -319,7 +319,7 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
         tok,
         .E0207,
         "`{s}` takes {d} to {d} arguments, not {d}",
-        .{ parse_expr.tokenText(self, tok), arity[0], arity[1], n },
+        .{ self.tokenText(tok), arity[0], arity[1], n },
     );
     try b.timing_checks.append(self.arena, .{
         .name = try self.internTok(tok),
@@ -345,7 +345,7 @@ fn parseTimingCheck(self: *Parser, b: *parse_module.Body) Error!void {
 fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Error!bool {
     ev.* = if (self.eat(.kw_posedge)) .posedge else if (self.eat(.kw_negedge)) .negedge else .none;
     var controlled = ev.* != .none;
-    if (!controlled and parse_module.reservedIs(self, self.pos, "edge")) {
+    if (!controlled and self.reservedIs(self.pos, "edge")) {
         controlled = true;
         ev.* = .edge;
         // A.7.5.3 `edge_control_specifier ::= edge [ edge_descriptor
@@ -365,7 +365,7 @@ fn parseTimingCheckArg(self: *Parser, slot: *Ast.ExprId, ev: *Ast.SpecEdge) Erro
     slot.* = try parse_expr.parseExpr(self);
     // A.7.5.3's `&&&`, which is three tokens' worth of `&` in a stream that
     // has no tag for it.
-    if (parse_module.eatSymbol(self, "&&&")) _ = try parse_expr.parseExpr(self);
+    if (self.eatSymbol("&&&")) _ = try parse_expr.parseExpr(self);
     return controlled;
 }
 
