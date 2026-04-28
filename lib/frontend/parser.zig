@@ -210,10 +210,13 @@ pub const Parser = struct {
     // Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1) — parser/specify.zig
     const parse_specify = @import("parser/specify.zig");
 
+    // Annex A.4.1 module instantiation (LRM §6.2.2), A.3 gates and switches, A.6.2 initial/always — parser/inst.zig
+    const parse_inst = @import("parser/inst.zig");
+
     // Annex A.4.2 generate constructs (LRM §6.6) — parser/generate.zig
     const parse_generate = @import("parser/generate.zig");
 
-    // Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6) — parser/decl.zig
+    // Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6), A.2.1.3/A.2.2 port, net and branch declarations — parser/decl.zig
     const parse_decl = @import("parser/decl.zig");
 
     // Annex A.6.4 analog_statement (LRM Clause 5) — parser/stmt.zig
@@ -603,6 +606,7 @@ test {
     _ = Parser.parse_module;
     _ = Parser.parse_specify;
     _ = Parser.parse_generate;
+    _ = Parser.parse_inst;
     _ = Parser.parse_decl;
     _ = Parser.parse_stmt;
     _ = Parser.parse_expr;

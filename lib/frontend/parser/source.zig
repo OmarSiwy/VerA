@@ -13,9 +13,8 @@ const parser = @import("../parser.zig");
 const Parser = parser.Parser;
 const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
-const parse_generate = @import("generate.zig");
 const parse_module = @import("module.zig");
-const parse_specify = @import("specify.zig");
+const parse_inst = @import("inst.zig");
 const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
@@ -322,7 +321,7 @@ fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
     if (!parse_module.reservedIs(self, self.pos, "design")) return self.failAt(self.pos, .E0207, "found {s}: a config_declaration begins with its `design` statement", .{self.found(self.pos)});
     self.pos += 1;
     while (self.peek() != .semicolon) {
-        const cell = self.file.str(try parse_generate.parseDottedName(self, false));
+        const cell = self.file.str(try parse_decl.parseDottedName(self, false));
         const last = if (std.mem.lastIndexOfScalar(u8, cell, '.')) |dot| cell[dot + 1 ..] else cell;
         try cells.append(self.arena, try self.file.intern(self.arena, last));
     }
@@ -356,7 +355,7 @@ fn parseConfigRule(self: *Parser) Error!void {
     if (!is_default and !parse_module.reservedIs(self, tok, "instance") and !parse_module.reservedIs(self, tok, "cell"))
         return self.failAt(tok, .E0207, "found {s}, which begins no A.1.5 config_rule_statement", .{self.found(tok)});
     self.pos += 1;
-    if (!is_default) _ = try parse_generate.parseDottedName(self, false);
+    if (!is_default) _ = try parse_decl.parseDottedName(self, false);
     if (parse_module.reservedIs(self, self.pos, "liblist")) {
         self.pos += 1;
         // `liblist { library_identifier }` — a repetition with no commas,
@@ -364,7 +363,7 @@ fn parseConfigRule(self: *Parser) Error!void {
         while (self.peek() != .semicolon) _ = try self.expectIdent();
     } else if (!is_default and parse_module.reservedIs(self, self.pos, "use")) {
         self.pos += 1;
-        _ = try parse_generate.parseDottedName(self, false);
+        _ = try parse_decl.parseDottedName(self, false);
         // `[ : config ]` — the literal keyword, not a name.
         if (self.eat(.colon) and !parse_module.reservedIs(self, self.pos, "config"))
             return self.failAt(self.pos, .E0207, "found {s}: a use_clause's `:` is followed by the word `config`", .{self.found(self.pos)})
@@ -622,16 +621,16 @@ fn udpBodyName(sequential: bool) []const u8 {
 /// (A.5.3) rather than a keyword, and the table computes a logic value for
 /// an event queue a compiled analog device does not have.
 pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
-    try parse_specify.gateNotModelled(self);
+    try parse_inst.gateNotModelled(self);
     const module = try self.internTok(self.pos);
     self.pos += 1; // the udp_identifier
     var s0: Ast.Strength = .strong;
     var s1: Ast.Strength = .strong;
-    if (self.peek() == .lparen and parse_generate.strengthWord(self, self.pos + 1) != null) try parse_generate.parseDriveStrength(self, &s0, &s1);
+    if (self.peek() == .lparen and parse_decl.strengthWord(self, self.pos + 1) != null) try parse_decl.parseDriveStrength(self, &s0, &s1);
     // A.2.2.3 `delay2` — a `delay3` that stops at two values, which
     // `parseDelay3` already returns for a two-value list.
     const delay_tok = self.pos;
-    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_generate.parseDelay3(self) else .{};
+    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_decl.parseDelay3(self) else .{};
     // `parseDelay3` copies a lone value into `off`; only a written third one differs.
     if (delay.off != .none and delay.off != delay.rise) try self.report(delay_tok, .E0239, "`{s} #(…)`: 3 values", .{self.file.str(module)});
     while (true) {
