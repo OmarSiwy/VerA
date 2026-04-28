@@ -13,14 +13,12 @@ const parser = @import("../parser.zig");
 const Parser = parser.Parser;
 const parse_decl = @import("decl.zig");
 const parse_expr = @import("expr.zig");
-const parse_generate = @import("generate.zig");
 const parse_module = @import("module.zig");
-const parse_specify = @import("specify.zig");
+const parse_inst = @import("inst.zig");
 const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.1.2 source_text
@@ -77,56 +75,21 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
             // same `endmodule` — so it is the same arm, and the ONE thing
             // that distinguishes it is recorded on the decl rather than
             // here: see `Ast.ModuleDecl.is_connect`.
-            .kw_module, .kw_macromodule, .kw_connectmodule => {
-                const m = parse_module.parseModule(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try modules.append(self.arena, m);
-            },
-            .kw_discipline => {
-                const d = parse_decl.parseDiscipline(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try disciplines.append(self.arena, d);
-            },
-            .kw_nature => {
-                const n = parse_decl.parseNature(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try natures.append(self.arena, n);
-            },
+            .kw_module, .kw_macromodule, .kw_connectmodule => try element(self, before, &modules, parse_module.parseModule(self)),
+            .kw_discipline => try element(self, before, &disciplines, parse_decl.parseDiscipline(self)),
+            .kw_nature => try element(self, before, &natures, parse_decl.parseNature(self)),
             // §6.4 / Syntax 6-4 `paramset`, A.1.9 paramset_declaration.
             // Parsed for real now: §6.4 makes a paramset instantiable
             // "exactly like a module", so its parameters and its
             // `.name = expr;` statements are what an instance that names it
             // elaborates to (`ir/elaborate.zig`).
-            .kw_paramset => {
-                const ps = parse_module.parseParamset(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try paramsets.append(self.arena, ps);
-            },
+            .kw_paramset => try element(self, before, &paramsets, parse_module.parseParamset(self)),
             // §7.7 / A.1.8 connectrules_declaration, the last A.1.2
             // description alternative VerA parses. Its content is consumed
             // by annex F.2 discipline resolution (`ir/elaborate.zig`);
             // refusing it here was refusing the one design element step
             // 4.b's third bullet reads.
-            .kw_connectrules => {
-                const cr = parse_module.parseConnectRules(self) catch |e| {
-                    if (e == error.OutOfMemory) return e;
-                    recoverTopLevel(self, before);
-                    continue;
-                };
-                try connectrules.append(self.arena, cr);
-            },
+            .kw_connectrules => try element(self, before, &connectrules, parse_module.parseConnectRules(self)),
             // A.1.2's `description` has three more alternatives, and they
             // share one token tag: annex B reserves `primitive`, `config`,
             // `library` and `include` and this compiler gives none of them
@@ -136,7 +99,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
             // `library`, about a production no version of the subset can
             // ever admit — see E0232).
             .kw_reserved => {
-                const w = parse_expr.tokenText(self, self.pos);
+                const w = self.tokenText(self.pos);
                 const r: Error!void = if (std.mem.eql(u8, w, "primitive")) udp: {
                     const u = parseUdpDecl(self) catch |e| break :udp e;
                     break :udp udps.append(self.arena, u);
@@ -191,7 +154,7 @@ pub fn keywordsDirective(self: *Parser) Error!void {
         return;
     }
     const str = try self.expect(.string_literal);
-    const raw = parse_expr.tokenText(self, str);
+    const raw = self.tokenText(str);
     const spec = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
     const known = token.KeywordSet.fromSpecifier(spec);
     // A 1364 language has no Verilog-AMS specifier to name.
@@ -220,9 +183,20 @@ pub fn outsideDesignElement(self: *Parser, what: []const u8) Error!void {
     return self.failAt(self.pos, .E0202, "{s} inside a {s}", .{ token.Tag.lexeme(t).?, what });
 }
 
+/// Append one parsed design element to `list`, or on a syntax error recover
+/// to the next element and append nothing.
+fn element(self: *Parser, before: u32, list: anytype, parsed: anytype) error{OutOfMemory}!void {
+    const x = parsed catch |e| {
+        if (e == error.OutOfMemory) return error.OutOfMemory;
+        recoverTopLevel(self, before);
+        return;
+    };
+    try list.append(self.arena, x);
+}
+
 /// Skip to the next thing that can start a top-level description (A.1.2),
 /// past any `end*` keyword that closes the construct we bailed out of.
-pub fn recoverTopLevel(self: *Parser, before: u32) void {
+fn recoverTopLevel(self: *Parser, before: u32) void {
     if (self.pos == before) self.pos += 1;
     while (true) : (self.pos += 1) switch (self.peek()) {
         .eof => return,
@@ -241,13 +215,13 @@ pub fn recoverTopLevel(self: *Parser, before: u32) void {
         // A.1.2's other two descriptions close with reserved spellings this
         // compiler gives no tag to. Without them a bad `primitive` swallowed
         // the module after it.
-        .kw_reserved => if (parse_module.reservedIs(self, self.pos, "endprimitive") or
-            parse_module.reservedIs(self, self.pos, "endconfig"))
+        .kw_reserved => if (self.reservedIs(self.pos, "endprimitive") or
+            self.reservedIs(self.pos, "endconfig"))
         {
             self.pos += 1;
             return;
-        } else if (parse_module.reservedIs(self, self.pos, "primitive") or
-            parse_module.reservedIs(self, self.pos, "config"))
+        } else if (self.reservedIs(self.pos, "primitive") or
+            self.reservedIs(self.pos, "config"))
         {
             if (self.pos != before) return;
         },
@@ -285,9 +259,9 @@ pub fn recoverTopLevel(self: *Parser, before: u32) void {
 // files write one — is not a token sequence this lexer can produce, and it
 // should not be asked to: §2.2's token set is `source_text`'s. A library map
 // file needs its own reader, which is the same work E0232 says is absent.
-pub fn parseLibraryDecl(self: *Parser) Error!void {
+fn parseLibraryDecl(self: *Parser) Error!void {
     const kw = self.pos;
-    const is_library = parse_module.reservedIs(self, kw, "library");
+    const is_library = self.reservedIs(kw, "library");
     self.pos += 1;
     if (is_library) _ = try self.expectIdent();
     while (true) {
@@ -298,7 +272,7 @@ pub fn parseLibraryDecl(self: *Parser) Error!void {
     // production has. The `-` and the keyword are two tokens; §2.2 has no
     // production that joins them, so they are matched as two.
     if (is_library and self.eat(.minus)) {
-        if (!parse_module.reservedIs(self, self.pos, "incdir")) return self.failAt(self.pos, .E0207, "found {s}, and `-` begins only A.1.1's `-incdir`", .{self.found(self.pos)});
+        if (!self.reservedIs(self.pos, "incdir")) return self.failAt(self.pos, .E0207, "found {s}, and `-` begins only A.1.1's `-incdir`", .{self.found(self.pos)});
         self.pos += 1;
         while (true) {
             _ = try self.expect(.string_literal);
@@ -306,7 +280,7 @@ pub fn parseLibraryDecl(self: *Parser) Error!void {
         }
     }
     _ = try self.expect(.semicolon);
-    return self.failAt(kw, .E0232, "`{s}` is a library_description, and this file is source_text", .{parse_expr.tokenText(self, kw)});
+    return self.failAt(kw, .E0232, "`{s}` is a library_description, and this file is source_text", .{self.tokenText(kw)});
 }
 
 /// A.1.5 `config_declaration`, which A.1.2 lists as a `description` — so
@@ -337,23 +311,23 @@ pub fn parseLibraryDecl(self: *Parser) Error!void {
 /// and a digital run takes them as its tops (§13.3.1.1); the rules still bind
 /// nothing, which W0253 keeps saying whenever there are any — and always in
 /// an analog compile, which reads no cell list at all.
-pub fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
+fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
     const kw = self.pos;
     self.pos += 1;
     _ = try self.expectIdent();
     _ = try self.expect(.semicolon);
     // `design_statement` is mandatory and first — the production puts it
     // above the repetition, not inside it.
-    if (!parse_module.reservedIs(self, self.pos, "design")) return self.failAt(self.pos, .E0207, "found {s}: a config_declaration begins with its `design` statement", .{self.found(self.pos)});
+    if (!self.reservedIs(self.pos, "design")) return self.failAt(self.pos, .E0207, "found {s}: a config_declaration begins with its `design` statement", .{self.found(self.pos)});
     self.pos += 1;
     while (self.peek() != .semicolon) {
-        const cell = self.file.str(try parse_generate.parseDottedName(self, false));
+        const cell = self.file.str(try parse_decl.parseDottedName(self, false));
         const last = if (std.mem.lastIndexOfScalar(u8, cell, '.')) |dot| cell[dot + 1 ..] else cell;
         try cells.append(self.arena, try self.file.intern(self.arena, last));
     }
     self.pos += 1;
     var rules = false;
-    while (!parse_module.reservedIs(self, self.pos, "endconfig")) {
+    while (!self.reservedIs(self.pos, "endconfig")) {
         if (self.peek() == .eof) return self.failAt(self.pos, .E0207, "found {s}: no `endconfig` closes the configuration", .{self.found(self.pos)});
         try parseConfigRule(self);
         rules = true;
@@ -372,33 +346,33 @@ pub fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!vo
 ///     cell_clause ::= cell [ library_identifier . ] cell_identifier
 ///     liblist_clause ::= liblist { library_identifier }
 ///     use_clause ::= use [ library_identifier . ] cell_identifier [ : config ]
-pub fn parseConfigRule(self: *Parser) Error!void {
+fn parseConfigRule(self: *Parser) Error!void {
     const tok = self.pos;
     // `default` is the one word of A.1.5 that this compiler has a tag for:
     // A.6.7's `case` default takes the same spelling, and annex B reserves
     // it once.
     const is_default = self.peek() == .kw_default;
-    if (!is_default and !parse_module.reservedIs(self, tok, "instance") and !parse_module.reservedIs(self, tok, "cell"))
+    if (!is_default and !self.reservedIs(tok, "instance") and !self.reservedIs(tok, "cell"))
         return self.failAt(tok, .E0207, "found {s}, which begins no A.1.5 config_rule_statement", .{self.found(tok)});
     self.pos += 1;
-    if (!is_default) _ = try parse_generate.parseDottedName(self, false);
-    if (parse_module.reservedIs(self, self.pos, "liblist")) {
+    if (!is_default) _ = try parse_decl.parseDottedName(self, false);
+    if (self.reservedIs(self.pos, "liblist")) {
         self.pos += 1;
         // `liblist { library_identifier }` — a repetition with no commas,
         // and the empty one is legal (it is what clears an inherited list).
         while (self.peek() != .semicolon) _ = try self.expectIdent();
-    } else if (!is_default and parse_module.reservedIs(self, self.pos, "use")) {
+    } else if (!is_default and self.reservedIs(self.pos, "use")) {
         self.pos += 1;
-        _ = try parse_generate.parseDottedName(self, false);
+        _ = try parse_decl.parseDottedName(self, false);
         // `[ : config ]` — the literal keyword, not a name.
-        if (self.eat(.colon) and !parse_module.reservedIs(self, self.pos, "config"))
+        if (self.eat(.colon) and !self.reservedIs(self.pos, "config"))
             return self.failAt(self.pos, .E0207, "found {s}: a use_clause's `:` is followed by the word `config`", .{self.found(self.pos)})
-        else if (parse_module.reservedIs(self, self.pos, "config")) self.pos += 1;
+        else if (self.reservedIs(self.pos, "config")) self.pos += 1;
     } else return self.failAt(
         self.pos,
         .E0207,
         "found {s}: a {s} pairs with `liblist`{s}",
-        .{ self.found(self.pos), parse_expr.tokenText(self, tok), if (is_default) "" else " or `use`" },
+        .{ self.found(self.pos), self.tokenText(tok), if (is_default) "" else " or `use`" },
     );
     _ = try self.expect(.semicolon);
 }
@@ -490,7 +464,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     }
     var rows: std.ArrayList(Ast.UdpRow) = .empty;
     const sequential = try parseUdpTable(self, &rows);
-    if (!parse_module.reservedIs(self, self.pos, "endprimitive"))
+    if (!self.reservedIs(self.pos, "endprimitive"))
         return self.failAt(self.pos, .E0207, "found {s}: no `endprimitive` closes the declaration", .{self.found(self.pos)});
     self.pos += 1;
     return .{
@@ -526,14 +500,14 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
 /// two alternatives both require at least one entry, so `table endtable`
 /// derives from neither and the answer is arbitrary either way.
 pub fn parseUdpTable(self: *Parser, rows: *std.ArrayList(Ast.UdpRow)) Error!bool {
-    if (!parse_module.reservedIs(self, self.pos, "table"))
+    if (!self.reservedIs(self.pos, "table"))
         return self.failAt(self.pos, .E0207, "found {s}: a udp_body is a `table … endtable`", .{self.found(self.pos)});
     self.pos += 1;
     // Which `udp_body` alternative this table is, decided by its FIRST
     // entry and then required of every other one (A.5.3 gives a table one
     // body and not a mixture).
     var sequential: ?bool = null;
-    while (!parse_module.reservedIs(self, self.pos, "endtable")) {
+    while (!self.reservedIs(self.pos, "endtable")) {
         if (self.peek() == .eof)
             return self.failAt(self.pos, .E0207, "found {s}: no `endtable` closes the table", .{self.found(self.pos)});
         try parseUdpEntry(self, &sequential, rows);
@@ -552,7 +526,7 @@ pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast
     var n: usize = 0;
     cols[0].tok = tok;
     while (!self.eat(.semicolon)) {
-        if (self.peek() == .eof or parse_module.reservedIs(self, self.pos, "endtable"))
+        if (self.peek() == .eof or self.reservedIs(self.pos, "endtable"))
             return self.failAt(self.pos, .E0207, "found {s}: a UDP table entry ends with `;`", .{self.found(self.pos)});
         if (self.eat(.colon)) {
             n += 1;
@@ -560,7 +534,7 @@ pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast
             cols[n].tok = self.pos;
             continue;
         }
-        const t = parse_expr.tokenText(self, self.pos);
+        const t = self.tokenText(self.pos);
         if (cols[n].len + t.len > cols[n].text.len)
             return self.failAt(self.pos, .E0233, "a UDP table column of more than {d} symbols", .{cols[n].text.len});
         @memcpy(cols[n].text[cols[n].len..][0..t.len], t);
@@ -623,7 +597,7 @@ pub fn parseUdpEntry(self: *Parser, sequential: *?bool, rows: *std.ArrayList(Ast
     });
 }
 
-pub fn udpBodyName(sequential: bool) []const u8 {
+fn udpBodyName(sequential: bool) []const u8 {
     return if (sequential) "sequential" else "combinational";
 }
 
@@ -647,16 +621,16 @@ pub fn udpBodyName(sequential: bool) []const u8 {
 /// (A.5.3) rather than a keyword, and the table computes a logic value for
 /// an event queue a compiled analog device does not have.
 pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
-    try parse_specify.gateNotModelled(self);
+    try parse_inst.gateNotModelled(self);
     const module = try self.internTok(self.pos);
     self.pos += 1; // the udp_identifier
     var s0: Ast.Strength = .strong;
     var s1: Ast.Strength = .strong;
-    if (self.peek() == .lparen and parse_generate.strengthWord(self, self.pos + 1) != null) try parse_generate.parseDriveStrength(self, &s0, &s1);
+    if (self.peek() == .lparen and parse_decl.strengthWord(self, self.pos + 1) != null) try parse_decl.parseDriveStrength(self, &s0, &s1);
     // A.2.2.3 `delay2` — a `delay3` that stops at two values, which
     // `parseDelay3` already returns for a two-value list.
     const delay_tok = self.pos;
-    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_generate.parseDelay3(self) else .{};
+    const delay: Ast.Delay3 = if (self.peek() == .hash) try parse_decl.parseDelay3(self) else .{};
     // `parseDelay3` copies a lone value into `off`; only a written third one differs.
     if (delay.off != .none and delay.off != delay.rise) try self.report(delay_tok, .E0239, "`{s} #(…)`: 3 values", .{self.file.str(module)});
     while (true) {
@@ -667,7 +641,7 @@ pub fn parseUdpInst(self: *Parser, b: *parse_module.Body) Error!void {
             name = try self.internTok(self.pos);
             self.pos += 1;
             // `name_of_udp_instance ::= udp_instance_identifier [ range ]`
-            if (self.peek() == .lbracket) range = try parse_decl.parseDim(self);
+            range = try parse_decl.optDim(self);
         }
         _ = try self.expect(.lparen);
         var ports: std.ArrayList(Ast.PortConn) = .empty;

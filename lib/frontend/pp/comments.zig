@@ -12,7 +12,6 @@ const Error = Preprocessor.Error;
 const Pp = Preprocessor.Pp;
 const findStop = Preprocessor.findStop;
 const stringStop = Preprocessor.stringStop;
-const isSpace = Preprocessor.isSpace;
 
 // ---------------------------------------------------------------------------
 // §2.4 comments
@@ -52,8 +51,7 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             // opaque up to the next whitespace, so `//` inside cannot start a
             // comment.
             const start = i;
-            i += 1;
-            while (i < src.len and !isSpace(src[i])) i += 1;
+            i = Preprocessor.escapedEnd(src, i + 1);
             out.appendSliceAssumeCapacity(src[start..i]);
             continue;
         }

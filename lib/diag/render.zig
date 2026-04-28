@@ -68,9 +68,9 @@ pub const RenderOptions = struct {
 
 /// Tabs are expanded to this many spaces before a snippet is drawn, so a caret
 /// lands under the character it means. (rustc does the same.)
-pub const tab_width = 4;
+const tab_width = 4;
 
-pub fn displayCol(line: []const u8, byte_col: u32) u32 {
+fn displayCol(line: []const u8, byte_col: u32) u32 {
     var col: u32 = 0;
     const upto = @min(byte_col, line.len);
     for (line[0..upto]) |c| {
@@ -86,14 +86,14 @@ pub fn displayCol(line: []const u8, byte_col: u32) u32 {
     return col;
 }
 
-pub fn writeExpanded(w: *std.Io.Writer, line: []const u8) !void {
+fn writeExpanded(w: *std.Io.Writer, line: []const u8) !void {
     for (line) |c| {
         if (c == '\t') try w.splatByteAll(' ', tab_width) else try w.writeByte(c);
     }
 }
 
 /// One span, resolved all the way to something printable.
-pub const Placed = struct {
+const Placed = struct {
     file: diag_location.FileId,
     /// 1-based line in the ORIGINAL file.
     line: u32,
@@ -107,15 +107,14 @@ pub const Placed = struct {
 /// Renders `bag` to `w`. Entries are sorted into source order first, so the
 /// output of a run is stable regardless of which stage found what.
 pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void {
-    if (bag.list.items.len == 0 and bag.suppressed == 0) return;
+    if (bag.isEmpty() and bag.suppressed == 0) return;
     bag.sort();
 
     const p = opts.palette;
 
-    // Rendering scratch (line indices, the per-entry placed list, the
-    // seen-codes set) is freed here rather than left on `bag.arena`: after
-    // `detach` that arena IS the caller's gpa, so leaving it would leak on
-    // every render of a detached bag.
+    // Rendering scratch (the line indices) is freed here rather than left on
+    // `bag.arena`: after `detach` that arena IS the caller's gpa, so leaving it
+    // would leak on every render of a detached bag.
     var scratch_state = std.heap.ArenaAllocator.init(bag.arena);
     defer scratch_state.deinit();
     const scratch = scratch_state.allocator();
@@ -126,10 +125,10 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
     const indices = try scratch.alloc(?diag_location.LineIndex, n_files);
     @memset(indices, null);
 
-    var explained: std.AutoHashMapUnmanaged(Code, void) = .empty;
+    var explained: std.EnumSet(Code) = .initEmpty();
 
-    for (bag.messages()) |mi| {
-        try renderOne(bag, scratch, w, opts, bag.get(mi), indices, &explained);
+    for (0..bag.count()) |i| {
+        try renderOne(bag, scratch, w, opts, bag.at(i), indices, &explained);
     }
 
     if (bag.suppressed != 0) {
@@ -156,7 +155,7 @@ pub fn render(bag: *diag_bag.Bag, w: *std.Io.Writer, opts: RenderOptions) !void 
 /// derives from an index (line text, columns) is shown to the user, and what
 /// the user recognises is what the user wrote. Offsets go through
 /// `toSourceOffset` before they meet one of these.
-pub fn lineIndexFor(bag: *diag_bag.Bag, scratch: Allocator, indices: []?diag_location.LineIndex, file: diag_location.FileId) !diag_location.LineIndex {
+fn lineIndexFor(bag: *diag_bag.Bag, scratch: Allocator, indices: []?diag_location.LineIndex, file: diag_location.FileId) !diag_location.LineIndex {
     const i = @min(@intFromEnum(file), indices.len - 1);
     if (indices[i]) |idx| return idx;
     const idx = try diag_location.LineIndex.build(scratch, bag.sourceText(file));
@@ -164,14 +163,7 @@ pub fn lineIndexFor(bag: *diag_bag.Bag, scratch: Allocator, indices: []?diag_loc
     return idx;
 }
 
-/// Line number a human should see: the prelude is prepended to the root file's
-/// text but is nobody's source, so its newlines come back off.
-pub fn userLine(bag: *const diag_bag.Bag, file: diag_location.FileId, line: u32) u32 {
-    if (file != .root) return line;
-    return line -| bag.map.prelude_lines;
-}
-
-pub fn place(
+fn place(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     indices: []?diag_location.LineIndex,
@@ -214,14 +206,14 @@ pub fn place(
     };
 }
 
-pub fn renderOne(
+fn renderOne(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
     opts: RenderOptions,
     e: diag_entry.Entry,
     indices: []?diag_location.LineIndex,
-    explained: *std.AutoHashMapUnmanaged(Code, void),
+    explained: *std.EnumSet(Code),
 ) !void {
     const p = opts.palette;
     const sev = p.forSeverity(e.severity);
@@ -240,19 +232,14 @@ pub fn renderOne(
     // --- location: `  --> file.va:12:5` -------------------------------------
     var width: u32 = 1;
     if (primary) |pr| {
-        const shown = userLine(bag, pr.file, pr.line);
-        width = digits(shown);
+        width = digits(pr.line);
         try w.print("{s}{s}-->{s} {s}:{d}:{d}\n", .{
-            spaces(width), p.gutter, p.reset, bag.fileName(pr.file), shown, pr.col + 1,
+            spaces(width), p.gutter, p.reset, bag.fileName(pr.file), pr.line, pr.col + 1,
         });
     }
 
     if (opts.snippets and primary != null) {
-        // One primary plus at most `max_children` labels — the same comptime cap
-        // `Bag.labels` decodes into a caller array for, enforced by `Builder`'s
-        // inline `[max_children]LabelRec`. A bound that is a constant is a stack
-        // array, not an `ArrayList`: this used to be one arena allocation per
-        // rendered diagnostic for at most five elements.
+        // One primary plus at most `max_children` labels.
         var pbuf: [diag_entry.max_children + 1]Placed = undefined;
         pbuf[0] = primary.?;
         var n: usize = 1;
@@ -265,7 +252,7 @@ pub fn renderOne(
         }
         const placed = pbuf[0..n];
         // Widen the gutter to the largest line number that will be printed.
-        for (placed) |q| width = @max(width, digits(userLine(bag, q.file, q.line)));
+        for (placed) |q| width = @max(width, digits(q.line));
         try renderSnippet(bag, scratch, w, opts, indices, placed, e.severity, width);
     }
 
@@ -296,8 +283,8 @@ pub fn renderOne(
 
     // --- `--explain` hint, once per code ------------------------------------
     if (opts.explain_hint) {
-        const gop = try explained.getOrPut(scratch, e.code);
-        if (!gop.found_existing) {
+        if (!explained.contains(e.code)) {
+            explained.insert(e.code);
             try w.print("{s}{s} ={s} {s}help{s}: run `vera --explain {s}` for a detailed explanation\n", .{
                 spaces(width), p.gutter, p.reset, p.help, p.reset, e.code.name(),
             });
@@ -308,7 +295,7 @@ pub fn renderOne(
 
 /// The ` 12 | source text` / `    | ^^^ label` block. Placed spans are grouped
 /// by line; a gap between printed lines becomes `...`, like rustc.
-pub fn renderSnippet(
+fn renderSnippet(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
@@ -341,9 +328,8 @@ pub fn renderSnippet(
 
         const idx = try lineIndexFor(bag, scratch, indices, file);
         const text = idx.lineText(bag.sourceText(file), line);
-        const shown = userLine(bag, file, line);
 
-        try w.print("{s}{d}{s} |{s} ", .{ p.gutter, shown, spaces(width -| digits(shown)), p.reset });
+        try w.print("{s}{d}{s} |{s} ", .{ p.gutter, line, spaces(width -| digits(line)), p.reset });
         try writeExpanded(w, text);
         try w.writeByte('\n');
 
@@ -367,7 +353,7 @@ pub fn renderSnippet(
 
 /// Show a machine-applicable rewrite as the patched line, with `+` under an
 /// insertion and `~` under a replacement.
-pub fn renderFix(
+fn renderFix(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
@@ -388,13 +374,12 @@ pub fn renderFix(
     const src_end = @max(src_off, bag.toSourceOffset(r.file, r.offset + fix.span.len()));
     const loc = idx.loc(src_off);
     const line = idx.lineText(file_text, loc.line);
-    const shown = userLine(bag, r.file, loc.line);
 
     const cut = @min(loc.col - 1, line.len);
     const cut_end = @min(cut + (src_end - src_off), line.len);
 
     try w.print("{s}{s} |{s}\n", .{ spaces(width), p.gutter, p.reset });
-    try w.print("{s}{d}{s} |{s} ", .{ p.gutter, shown, spaces(width -| digits(shown)), p.reset });
+    try w.print("{s}{d}{s} |{s} ", .{ p.gutter, loc.line, spaces(width -| digits(loc.line)), p.reset });
     try writeExpanded(w, line[0..cut]);
     try w.print("{s}{s}{s}", .{ p.good, fix.replacement, p.reset });
     try writeExpanded(w, line[cut_end..]);
@@ -418,20 +403,20 @@ pub fn renderFix(
 /// pointer. One test on the first byte; the citations are the fixed set in
 /// `diag_code.zig` and every one of them starts with either a digit or an
 /// annex letter.
-pub fn annexWord(lrm: []const u8) []const u8 {
+fn annexWord(lrm: []const u8) []const u8 {
     return if (lrm.len != 0 and lrm[0] >= 'A' and lrm[0] <= 'H') "annex " else "";
 }
 
-pub fn digits(n: u32) u32 {
+fn digits(n: u32) u32 {
     var v = n;
     var d: u32 = 1;
     while (v >= 10) : (v /= 10) d += 1;
     return d;
 }
 
-pub const spaces_pad = " " ** 24;
+const spaces_pad = " " ** 24;
 
-pub fn spaces(n: u32) []const u8 {
+fn spaces(n: u32) []const u8 {
     return spaces_pad[0..@min(n, spaces_pad.len)];
 }
 
@@ -461,14 +446,16 @@ pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
     const indices = try scratch.alloc(?diag_location.LineIndex, n_files);
     @memset(indices, null);
 
-    for (bag.messages()) |mi| {
-        const e = bag.get(mi);
+    for (0..bag.count()) |row| {
+        const e = bag.at(row);
         const meta = info(e.code);
         try w.writeAll("{\"code\":\"");
         try w.writeAll(e.code.name());
-        try w.print("\",\"level\":\"{s}\",\"stage\":\"{s}\",\"lrm\":\"{s}\",\"title\":", .{
-            e.severity.word(), @tagName(e.stage), meta.lrm,
+        try w.print("\",\"level\":\"{s}\",\"stage\":\"{s}\",\"lrm\":", .{
+            e.severity.word(), @tagName(e.stage),
         });
+        try writeJsonString(w, meta.lrm);
+        try w.writeAll(",\"title\":");
         try writeJsonString(w, meta.title);
         try w.writeAll(",\"message\":");
         try writeJsonString(w, e.message);
@@ -506,7 +493,7 @@ pub fn renderJson(bag: *diag_bag.Bag, w: *std.Io.Writer) !void {
     }
 }
 
-pub fn writeJsonSpan(
+fn writeJsonSpan(
     bag: *diag_bag.Bag,
     scratch: Allocator,
     w: *std.Io.Writer,
@@ -526,19 +513,10 @@ pub fn writeJsonSpan(
     try w.writeAll("{\"file\":");
     try writeJsonString(w, bag.fileName(r.file));
     try w.print(",\"line\":{d},\"col\":{d},\"byte_start\":{d},\"byte_end\":{d}}}", .{
-        userLine(bag, r.file, loc.line), loc.col, span.start, span.end,
+        loc.line, loc.col, span.start, span.end,
     });
 }
 
-pub fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
-    try w.writeByte('"');
-    for (s) |c| switch (c) {
-        '"' => try w.writeAll("\\\""),
-        '\\' => try w.writeAll("\\\\"),
-        '\n' => try w.writeAll("\\n"),
-        '\r' => try w.writeAll("\\r"),
-        '\t' => try w.writeAll("\\t"),
-        else => if (c < 0x20) try w.print("\\u{x:0>4}", .{c}) else try w.writeByte(c),
-    };
-    try w.writeByte('"');
+fn writeJsonString(w: *std.Io.Writer, s: []const u8) !void {
+    try std.json.Stringify.encodeJsonString(s, .{}, w);
 }

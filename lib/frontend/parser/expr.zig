@@ -15,7 +15,6 @@ const token = @import("../token.zig");
 const lexer = @import("../lexer.zig");
 const Ast = @import("../ast.zig");
 const Error = parser.Error;
-const found = Parser.found;
 
 // -----------------------------------------------------------------------
 // A.8.3 expressions — LRM §4.1, §4.2 (precedence climbing)
@@ -27,7 +26,7 @@ pub fn parseExpr(self: *Parser) Error!Ast.ExprId {
 }
 
 /// Precedence climbing over LRM Table 4-3 (§4.2.2).
-pub fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
+fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
     var lhs = try parseUnary(self);
     while (true) {
         const t = self.peek();
@@ -109,23 +108,20 @@ pub fn parseUnary(self: *Parser) Error!Ast.ExprId {
 /// §3.2.2/§3.4.4 array and part selects: `base[i]`, `base[msb:lsb]`.
 pub fn parsePostfix(self: *Parser) Error!Ast.ExprId {
     var e = try parsePrimary(self);
-    while (self.peek() == .lbracket) {
-        const tok = self.pos;
-        self.pos += 1;
-        var idx = try parseExpr(self);
-        if (self.eat(.colon)) { // A.8.3 analog_range_expression
-            const lsb = try parseExpr(self);
-            idx = try self.file.exprs.add(self.arena, .{
-                .tag = .range,
-                .main_tok = tok,
-                .lhs = idx,
-                .rhs = lsb,
-            });
-        }
-        _ = try self.expect(.rbracket);
-        e = try self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = e, .rhs = idx });
-    }
+    while (self.peek() == .lbracket) e = try parseSelect(self, e);
     return e;
+}
+
+/// One select on `base`, `[i]` or `[msb:lsb]`, the cursor on the `[`.
+pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
+    const tok = try self.expect(.lbracket);
+    var idx = try parseExpr(self);
+    if (self.eat(.colon)) { // A.8.3 analog_range_expression
+        const lsb = try parseExpr(self);
+        idx = try self.file.exprs.add(self.arena, .{ .tag = .range, .main_tok = tok, .lhs = idx, .rhs = lsb });
+    }
+    _ = try self.expect(.rbracket);
+    return self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });
 }
 
 /// A.8.4 analog_primary.
@@ -352,13 +348,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // rides along as part 0 of the path and `Lower.flatName` is where
             // it means something — one site, and it is the site that already
             // knows which module is the root.
-            if (self.peek() == .dot) {
-                var parts: std.ArrayList(Ast.StrId) = .empty;
-                try parts.append(self.arena, name);
-                while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
-                const off = try self.file.exprs.addStrList(self.arena, parts.items);
-                return self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
-            }
+            if (self.eat(.dot)) return hierTerminal(self, &.{name}, tok);
             const args: []const Ast.ExprId = if (self.peek() == .lparen)
                 try parseCallArgs(self)
             else
@@ -406,7 +396,7 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
     return id;
 }
 
-pub inline fn addCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, args: []const Ast.ExprId) Error!Ast.ExprId {
+inline fn addCall(self: *Parser, tag: Ast.ExprTag, tok: u32, name: Ast.StrId, args: []const Ast.ExprId) Error!Ast.ExprId {
     const off = try self.file.exprs.addExprList(self.arena, args);
     return self.file.exprs.add(self.arena, .{
         .tag = tag,
@@ -471,7 +461,7 @@ pub fn parseAccess(self: *Parser, name: Ast.StrId, tok: u32) Error!Ast.ExprId {
 /// The `( < port_identifier > )` alternatives of the production are not
 /// parsed: they name the child's §5.4.3 port flow, which is a different
 /// quantity from a node pair, and nothing asks for them yet.
-pub fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprId {
+fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.ExprId {
     var parts: std.ArrayList(Ast.StrId) = .empty;
     {
         var i = self.pos;
@@ -507,8 +497,10 @@ pub fn parseHierBranchRef(self: *Parser, name: Ast.StrId, tok: u32) Error!?Ast.E
     });
 }
 
-/// One `branch_terminal` of the production above, rewritten onto `prefix`.
-pub fn hierTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!Ast.ExprId {
+/// `prefix . id { . id }` as one `.hier_ident`, the cursor on the first `id`:
+/// a `branch_terminal` of the production above, or any dotted name whose head
+/// is already read.
+fn hierTerminal(self: *Parser, prefix: []const Ast.StrId, tok: u32) Error!Ast.ExprId {
     var parts: std.ArrayList(Ast.StrId) = .empty;
     try parts.appendSlice(self.arena, prefix);
     try parts.append(self.arena, try self.expectIdent());
@@ -549,15 +541,12 @@ pub fn parseNetRef(self: *Parser) Error!Ast.ExprId {
         self.pos += 1;
         break :blk root;
     } else try self.expectIdent();
-    const base = if (self.peek() == .dot) hier: {
-        var parts: std.ArrayList(Ast.StrId) = .empty;
-        try parts.append(self.arena, name);
-        while (self.eat(.dot)) try parts.append(self.arena, try self.expectIdent());
-        const off = try self.file.exprs.addStrList(self.arena, parts.items);
-        // §6.7 + §5.5.2: `V(u.v[1])`, one element of a child's vector net —
-        // the select below applies to the whole path.
-        break :hier try self.file.exprs.add(self.arena, .{ .tag = .hier_ident, .main_tok = tok, .extra = off });
-    } else try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
+    // §6.7 + §5.5.2: `V(u.v[1])`, one element of a child's vector net — the
+    // select below applies to the whole path.
+    const base = if (self.eat(.dot))
+        try hierTerminal(self, &.{name}, tok)
+    else
+        try self.file.exprs.add(self.arena, .{ .tag = .ident, .main_tok = tok, .str = name });
     if (self.peek() != .lbracket) return base;
     self.pos += 1;
     const idx = try parseExpr(self);
@@ -586,7 +575,7 @@ pub fn parseCallArgs(self: *Parser) Error![]const Ast.ExprId {
 }
 
 /// Operator precedence. LRM §4.2.2 Table 4-3, highest binds tightest.
-pub fn binopPrec(op: Ast.BinaryOp) u8 {
+fn binopPrec(op: Ast.BinaryOp) u8 {
     return switch (op) {
         .pow => 12,
         .mul, .div, .mod => 11,
@@ -603,7 +592,7 @@ pub fn binopPrec(op: Ast.BinaryOp) u8 {
 }
 
 /// §4.2.12 `?:` sits below every binary operator (Table 4-3, last row).
-pub const prec_ternary: u8 = 1;
+const prec_ternary: u8 = 1;
 
 /// A.8.6 binary_operator → `Ast.BinaryOp`, null for a token that is not one.
 /// `===`/`!==`/`<<<`/`>>>` are mapped, not rejected: annex C.5 rejection is
@@ -645,7 +634,7 @@ pub fn binOp(tag: token.Tag) ?Ast.BinaryOp {
 /// §2.6.1 integer (incl. sized/based) and §2.6.2 real (exponent + SI scale
 /// factor) literals. Values are computed here because the token stream
 /// stores only {tag,start}.
-pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
+fn parseNumber(self: *Parser) Error!Ast.ExprId {
     const tok = self.pos;
     self.pos += 1;
 
@@ -668,7 +657,7 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
         return self.file.exprs.addLogic(self.arena, tok, lit);
     }
 
-    const text = tokenText(self, tok);
+    const text = self.tokenText(tok);
     // §2.6.2 decoding — `_` removal and the Table 2-1 scale factor — lives
     // in `lexer.parseReal` for the same reason §2.6.1 lives in `integer.parse`:
     // exactly ONE decoder. The second one here computed `mantissa * scale`,
@@ -703,8 +692,8 @@ pub fn parseNumber(self: *Parser) Error!Ast.ExprId {
 /// operator missing between them and keeps that message. `.apostrophe_lbrace`
 /// is deliberately not in the set — `2'{1}` is §4.2.14's assignment
 /// pattern, where the apostrophe is legal and is not a base format.
-pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
-    const text = tokenText(self, tok);
+fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
+    const text = self.tokenText(tok);
     const start = self.starts[tok];
     const next = self.starts[tok + 1]; // the stream always ends in `.eof`
     if (next != start + text.len) return text;
@@ -715,7 +704,7 @@ pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
         // exactly why: §2.6.2's scale_factor alphabet has no `g`, so `1g`
         // "is the integer 1 followed by an identifier" and E0207 is the
         // truth about it.
-        .identifier => for (tokenText(self, tok + 1)) |c| {
+        .identifier => for (self.tokenText(tok + 1)) |c| {
             if (!lexer.isBasedDigit(c, 16)) return text;
         },
         // Only an apostrophe: a stray backtick is the preprocessor's, and
@@ -723,7 +712,7 @@ pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
         .invalid => if (self.src[next] != '\'') return text,
         else => return text, // else: nothing else can be the glued remainder of a based number
     }
-    return self.src[start .. next + tokenText(self, tok + 1).len];
+    return self.src[start .. next + self.tokenText(tok + 1).len];
 }
 
 /// A.8.1, both brace forms at once:
@@ -759,7 +748,7 @@ pub fn gluedNumberText(self: *const Parser, tok: u32) []const u8 {
 /// string (`{i{"Hi"}}`). That one keeps its `.multi_concat` node and
 /// lowering repeats the string. Digital mode keeps every group and count:
 /// flattening would erase zero-replication legality and operand evaluation.
-pub fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
+fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?Ast.ExprId {
     _ = try self.expect(.lbrace);
     if (self.eat(.rbrace)) return null;
 
@@ -812,7 +801,7 @@ pub fn braceOperands(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!?As
 
 /// `braceOperands` for the positions that cannot pass a count upwards: a
 /// nonconstant replication stays ONE operand instead of being returned.
-pub fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
+fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
     const at = self.pos;
     var g: std.ArrayList(Ast.ExprId) = .empty;
     if (try braceOperands(self, &g)) |c| {
@@ -826,7 +815,7 @@ pub fn braceGroup(self: *Parser, items: *std.ArrayList(Ast.ExprId)) Error!void {
 /// `{count{items}}` kept unexpanded for lowering (§3.3's nonconstant
 /// multiplier). `rhs` is the inner `.concat`, exactly as `Ast.ExprTag`
 /// documents the tag.
-pub fn multiConcat(self: *Parser, tok: u32, count: Ast.ExprId, items: []const Ast.ExprId) Error!Ast.ExprId {
+fn multiConcat(self: *Parser, tok: u32, count: Ast.ExprId, items: []const Ast.ExprId) Error!Ast.ExprId {
     const off = try self.file.exprs.addExprList(self.arena, items);
     const inner = try self.file.exprs.add(self.arena, .{ .tag = .concat, .main_tok = tok, .extra = off });
     return self.file.exprs.add(self.arena, .{ .tag = .multi_concat, .main_tok = tok, .lhs = count, .rhs = inner });
@@ -861,7 +850,7 @@ pub fn replCount(self: *const Parser, e: Ast.ExprId) ?u32 {
 /// Only a concatenation's: an A.8.1 assignment pattern is not one, and keeps
 /// `replCount`. A negative real is a unary minus, not a literal, so it
 /// reaches `lowerConcat` exactly as `{-5{a}}` does.
-pub fn concatReplCount(self: *const Parser, e: Ast.ExprId) ?u32 {
+fn concatReplCount(self: *const Parser, e: Ast.ExprId) ?u32 {
     const ex = &self.file.exprs;
     if (ex.tag(e) != .real_literal) return replCount(self, e);
     const r = @round(ex.realValue(e));
@@ -939,7 +928,7 @@ pub fn foldBitConcat(self: *Parser, tok: u32, items: []const Ast.ExprId) Error!?
 /// the live path, so `"\0"` became the character `0` while the lexer's
 /// tested decoder had it right all along.
 pub fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
-    const raw = tokenText(self, tok);
+    const raw = self.tokenText(tok);
     const body = if (raw.len >= 2) raw[1 .. raw.len - 1] else "";
     if (std.mem.indexOfScalar(u8, body, '\\') == null) {
         return self.file.intern(self.arena, body);
@@ -961,21 +950,3 @@ pub fn internString(self: *Parser, tok: u32) Error!Ast.StrId {
     return self.file.intern(self.arena, decoded[0..n]);
 }
 
-/// Source text of a token. `token.Stored` has no length (DOD: recompute,
-/// don't store), so the lexeme is re-scanned from `start` — by the LEXER,
-/// which is what makes it exact: `lexer.tokenEnd` re-runs `next()`, and
-/// `next()` is a pure function of (src, pos) (see lexer.zig's header).
-///
-/// A parser-side copy of the scanners used to live here and it had drifted:
-/// its escaped-identifier arm stopped at white space, where §2.8.1 and
-/// `lexer.lexEscapedIdentifier` stop at any byte outside printable ASCII
-/// 33–126 — so a non-ASCII byte (a UTF-8 comment character pasted into a
-/// name) ended the identifier for the lexer and not for the parser, and the
-/// two disagreed about where the next token began.
-pub fn tokenText(self: *const Parser, i: u32) []const u8 {
-    const lx: lexer.Lexer = .{ .src = self.src };
-    const text = lx.tokenText(self.starts[i]);
-    // §2.8.1: the `\` opens the identifier but is not part of the name.
-    // The terminator is not in the span, so only the head is stripped.
-    return if (self.tags[i] == .escaped_identifier) text[1..] else text;
-}

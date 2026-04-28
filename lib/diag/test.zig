@@ -66,6 +66,21 @@ test "lint levels" {
     try std.testing.expect(!try levels.parseFlag(gpa, "not-a-flag"));
 }
 
+test "bag: dedupe keys on the file of a preprocessor span" {
+    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
+    defer arena_state.deinit();
+    var bag = diag_bag.Bag.init(arena_state.allocator());
+
+    // Offset 0 in two different headers is two places.
+    for ([_]u16{ 1, 2, 2 }) |f| {
+        var b = bag.build(.preprocess, .E0101, .at(0));
+        b.inFile(@enumFromInt(f));
+        try b.emit();
+    }
+    try std.testing.expectEqual(@as(usize, 2), bag.count());
+    try std.testing.expectEqual(@as(u32, 1), bag.deduped);
+}
+
 test "bag: dedupe, cap, level promotion" {
     var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
     defer arena_state.deinit();
@@ -114,7 +129,7 @@ test "bag: the flat records survive a round trip, in order, through a sort" {
     var bag = diag_bag.Bag.init(arena_state.allocator());
 
     // Emitted out of source order, so `sort` has something to do and the
-    // handles have to stay valid across it.
+    // labels and notes have to move with their row.
     var b = bag.build(.lower, .E0313, .{ .start = 50, .end = 52 });
     b.msg("second", .{});
     b.label(.{ .start = 51, .end = 53 }, "one", .{});
@@ -193,7 +208,7 @@ test "render: full diagnostic with label, note, suggestion" {
         \\
     ;
     var bag = diag_bag.Bag.init(arena);
-    try bag.setSingleFile("res.va", src, 0);
+    try bag.setSingleFile("res.va", src);
 
     const k_decl = @as(u32, @intCast(std.mem.indexOf(u8, src, "k = 1.0").?));
     const divisor = @as(u32, @intCast(std.mem.lastIndexOfScalar(u8, src, 'k').?));
@@ -241,7 +256,7 @@ test "render: a gap between labelled lines is elided" {
         \\
     ;
     var bag = diag_bag.Bag.init(arena);
-    try bag.setSingleFile("gap.va", src, 0);
+    try bag.setSingleFile("gap.va", src);
     const k_decl = @as(u32, @intCast(std.mem.indexOf(u8, src, "k = 1.0").?));
     const divisor = @as(u32, @intCast(std.mem.lastIndexOfScalar(u8, src, 'k').?));
 
@@ -261,7 +276,7 @@ test "render: colour is opt-in and structural" {
     const arena = arena_state.allocator();
 
     var bag = diag_bag.Bag.init(arena);
-    try bag.setSingleFile("x.va", "analog begin\n  x = 1;\nend\n", 0);
+    try bag.setSingleFile("x.va", "analog begin\n  x = 1;\nend\n");
     try bag.add(.lower, .E0313, .{ .start = 15, .end = 16 }, "no variable `x`", .{});
     try bag.add(.proof, .W0650, .{ .start = 15, .end = 16 }, "", .{});
 
@@ -269,7 +284,7 @@ test "render: colour is opt-in and structural" {
     try std.testing.expect(std.mem.indexOfScalar(u8, plain, 0x1b) == null);
 
     var bag2 = diag_bag.Bag.init(arena);
-    try bag2.setSingleFile("x.va", "analog begin\n  x = 1;\nend\n", 0);
+    try bag2.setSingleFile("x.va", "analog begin\n  x = 1;\nend\n");
     try bag2.add(.lower, .E0313, .{ .start = 15, .end = 16 }, "no variable `x`", .{});
     try bag2.add(.proof, .W0650, .{ .start = 15, .end = 16 }, "", .{});
     const coloured = try renderToString(&bag2, .{ .palette = .on });
@@ -290,7 +305,7 @@ test "render: tabs expand so carets line up" {
 
     const src = "module m;\n\t\tbadtok\nendmodule\n";
     var bag = diag_bag.Bag.init(arena);
-    try bag.setSingleFile("t.va", src, 0);
+    try bag.setSingleFile("t.va", src);
     const at = @as(u32, @intCast(std.mem.indexOf(u8, src, "badtok").?));
     try bag.add(.parse, .E0207, .{ .start = at, .end = at + 6 }, "", .{});
 
@@ -312,7 +327,7 @@ test "render: multi-byte UTF-8 counts codepoints, not bytes" {
     // byte-counting `displayCol` drew the caret eight columns too far right.
     const src = "µµµµµµµµbadtok\n";
     var bag = diag_bag.Bag.init(arena);
-    try bag.setSingleFile("u.va", src, 0);
+    try bag.setSingleFile("u.va", src);
     const at = @as(u32, @intCast(std.mem.indexOf(u8, src, "badtok").?));
     try bag.add(.parse, .E0207, .{ .start = at, .end = at + 6 }, "", .{});
 
@@ -355,7 +370,7 @@ test "render: json is one object per line and escapes properly" {
     const arena = arena_state.allocator();
 
     var bag = diag_bag.Bag.init(arena);
-    try bag.setSingleFile("j.va", "analog x;\n", 0);
+    try bag.setSingleFile("j.va", "analog x;\n");
     var b = bag.build(.lower, .E0313, .{ .start = 7, .end = 8 });
     b.msg("quote \" and \\ and newline", .{});
     b.help("try `y`", .{});
@@ -372,23 +387,6 @@ test "render: json is one object per line and escapes properly" {
     try std.testing.expect(std.mem.indexOf(u8, out, "\"line\":1,\"col\":8") != null);
     try std.testing.expect(std.mem.indexOf(u8, out, "\"kind\":\"help\"") != null);
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, out, "\n"));
-}
-
-test "render: prelude lines are subtracted from reported line numbers" {
-    var arena_state = std.heap.ArenaAllocator.init(std.testing.allocator);
-    defer arena_state.deinit();
-    const arena = arena_state.allocator();
-
-    // Two lines of annex-D prelude, then the user's first line.
-    const src = "// prelude\n// prelude\nmodule m; endmodule\n";
-    var bag = diag_bag.Bag.init(arena);
-    try bag.setSingleFile("u.va", src, 2);
-    const at = @as(u32, @intCast(std.mem.indexOf(u8, src, "module").?));
-    try bag.add(.parse, .E0205, .{ .start = at, .end = at + 6 }, "", .{});
-
-    const out = try renderToString(&bag, .{ .explain_hint = false, .summary = false });
-    // Physical line 3, user line 1.
-    try std.testing.expect(std.mem.indexOf(u8, out, "u.va:1:1") != null);
 }
 
 test "explain prints the catalogue entry" {
@@ -416,7 +414,7 @@ test "detach survives the compilation arena, and deinit is leak-free" {
 
         bag = diag_bag.Bag.init(arena);
         const src = "module m;\n  analog x = 1;\nendmodule\n";
-        try bag.setSingleFile("owned.va", src, 0);
+        try bag.setSingleFile("owned.va", src);
 
         // Offset 19 is the `x` in `analog x = 1;`.
         var b = bag.build(.lower, .E0313, .{ .start = 19, .end = 20 });
@@ -449,7 +447,7 @@ test "detach on a clean bag allocates nothing" {
     const gpa = std.testing.allocator;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     var bag = diag_bag.Bag.init(arena_state.allocator());
-    try bag.setSingleFile("clean.va", "module m; endmodule\n", 0);
+    try bag.setSingleFile("clean.va", "module m; endmodule\n");
     try bag.detach(gpa);
     arena_state.deinit();
     defer bag.deinit(gpa);

@@ -103,10 +103,6 @@ pub const StripMark = struct { out: u32, src: u32 };
 /// check.
 pub const SourceMap = struct {
     segs: []const Segment = &.{},
-    /// Newlines contributed by the annex-D prelude, which is prepended to the
-    /// text but is not part of anyone's source. Subtracted from every reported
-    /// line of `root`.
-    prelude_lines: u32 = 0,
 
     pub const empty: SourceMap = .{};
 
@@ -122,12 +118,11 @@ pub const SourceMap = struct {
             return .{ .file = .root, .offset = off, .seg = Segment.no_parent };
 
         // Last segment with out_start <= off.
-        var lo: usize = 0;
-        var hi: usize = self.segs.len;
-        while (lo + 1 < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (self.segs[mid].out_start <= off) lo = mid else hi = mid;
-        }
+        const lo = std.sort.partitionPoint(Segment, self.segs, off, struct {
+            fn f(o: u32, sg: Segment) bool {
+                return sg.out_start <= o;
+            }
+        }.f) -| 1;
         const s = self.segs[lo];
         // Inside a macro expansion the output offset has no counterpart in any
         // file; the honest answer is the macro's INVOCATION site, which is what
@@ -172,12 +167,12 @@ pub const LineIndex = struct {
 
     /// 1-based line and column of `off`.
     pub fn loc(self: LineIndex, off: u32) Loc {
-        var lo: usize = 0;
-        var hi: usize = self.starts.len;
-        while (lo + 1 < hi) {
-            const mid = lo + (hi - lo) / 2;
-            if (self.starts[mid] <= off) lo = mid else hi = mid;
-        }
+        // `starts[0]` is 0, so the count is at least 1.
+        const lo = std.sort.partitionPoint(u32, self.starts, off, struct {
+            fn f(o: u32, start: u32) bool {
+                return start <= o;
+            }
+        }.f) - 1;
         return .{ .line = @intCast(lo + 1), .col = off - self.starts[lo] + 1 };
     }
 

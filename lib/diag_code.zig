@@ -9,6 +9,7 @@
 //!   - Codes are STABLE. Fixtures, docs and user build scripts pin them. A code
 //!     is never renumbered and never reused after retirement; retire by leaving
 //!     the enum field in place and marking the title `(retired)`.
+//!   - A code's prose lives in its `infoOf` arm; the enum is names only.
 //!   - The FIRST LETTER carries the severity: `E` = error, `W` = warning.
 //!     `diag.severityOf` reads it from `@tagName`, so there is no second table
 //!     to keep in sync.
@@ -64,11 +65,7 @@ pub const Code = enum(u16) {
     E0111,
     E0112,
     E0113,
-    // E0114 was "unsupported compiler directive". Retired: it had exactly two
-    // subjects left, §10.7's `__FILE__ and `__LINE__, and both are now
-    // expanded (preprocessor.zig `expand`). Every other backtick word VerA
-    // does not know is an undefined MACRO, which is E0115. The number is not
-    // reused.
+    E0114,
     E0115,
     E0116,
     E0117,
@@ -81,11 +78,8 @@ pub const Code = enum(u16) {
     E0124,
     E0125,
     E0126,
-    /// §10.2 Syntax 10-1: the operands of `default_discipline.
     E0127,
-    /// IEEE 1364 §19.7: the operands of `line.
     E0128,
-    /// §10.3 Syntax 10-2: the operand of `default_transition.
     E0129,
     // Lexical (LRM 2) — reported by parser.zig against a lexer `.invalid` token
     // or a `ValueError` from `Lexer.decode*`.
@@ -96,24 +90,14 @@ pub const Code = enum(u16) {
     E0134,
     E0135,
     E0136,
-    // E0137 was "unterminated `begin_keywords". Retired: §10.6 gives the
-    // directive scope "even across source code file boundaries", so an open
-    // pair at end of file is the clause working, not an error. The number is
-    // not reused.
+    E0137,
     E0138,
-    /// §10.4: the macro TEXT may not begin with __VAMS_.
     E0139,
-    /// IEEE 1364 §19.2: the operand of `default_nettype.
     E0140,
-    /// IEEE 1364 §19.10: the operand of `unconnected_drive.
     E0141,
-    /// IEEE 1364 §19.9: the operands of `timescale.
     E0142,
-    /// IEEE 1364 §19.3.1: a `define whose name is a Table 10-1 directive.
     E0143,
-    /// IEEE 1364 §19.5: text after the file name of an `include.
     E0144,
-    /// IEEE 1364 §19.3.1: a macro text that opens a string it does not close.
     E0145,
 
     // ---------------------------------------------------------------- class 2
@@ -135,122 +119,39 @@ pub const Code = enum(u16) {
     E0215,
     E0216,
     E0217,
-    /// §6.2 a port declared in the header's list of port declarations, declared
-    /// a second time in the module body.
     E0218,
-    /// A.6.2/A.6.3, annex G.2.2: a null statement where the grammar has none.
     E0219,
-    /// A.6.5, annex G Table G.2 item 13: `initial_step()`/`final_step()` with
-    /// an empty analysis list.
     E0220,
-    /// Syntax 6-8 / A.4.2: a bare `begin ... end` where a module_or_generate_item
-    /// belongs — a generate_block is only ever the body of a for or an if.
     E0221,
-    /// §7.3.1 Table 7-1: a discrete bit grouping wider than 31 bits. A class-2
-    /// number for a chapter-7 rule because the parser is the only stage that
-    /// ever sees a `reg` declaration — see its entry.
     E0222,
-    /// A.8.1 / §4.2.14: the replication count of an assignment pattern is not
-    /// a literal.
     E0223,
-    /// §4.7.1 bullet list: an analog function with no formal argument.
     E0224,
-    /// §4.7.1 bullet list: a formal argument with no block item declaration
-    /// giving its data type.
     E0225,
-    /// §4.7.1 bullet list: a named block inside an analog function body.
     E0226,
-    /// §4.7.2.2: `return` with no expression inside an analog function.
     E0227,
-    /// §6.6 / A.4.2: a `generate` region below another `generate` — the region
-    /// is a `module_item` and `module_or_generate_item` does not list it.
     E0228,
-    /// §6.6 / Syntax 6-8: a `parameter` declaration inside a generate region or
-    /// block, where `module_or_generate_item` admits only `localparam`.
     E0229,
-    /// §6.6.1/§6.6.2/§6.8: a named generate block's name collides with another
-    /// declaration of the enclosing scope, or with a block of another generate
-    /// construct. A class-2 number for a scope rule on E0222's precedent: the
-    /// parser is the only stage that can tell a `generate_block`'s name from a
-    /// §5.3.2 statement label, so it is the only stage that can judge this.
     E0230,
-    /// A.9.3 `hierarchical_identifier` — a per-segment `[ index ]` that is not
-    /// a constant expression the parser can fold. A class-2 number on E0222's
-    /// precedent: the parser is the only stage that CAN judge it, because it
-    /// spells the index into the interned path text (`u[0].g`), the same string
-    /// elaboration keys its flat names by.
     E0231,
-    /// A.1.1 library map text — a `library_declaration` or an `include_statement`
-    /// — in a file being compiled as A.1.2 `source_text`. Not a subset refusal
-    /// (E0201): the two productions are reachable only from `library_text`, and
-    /// the annex names that as the starting symbol of a different kind of file.
     E0232,
-    /// A.5.3 a UDP table symbol outside the alphabet its column admits.
     E0233,
-    /// A.5.3 a UDP table whose entries do not all derive from ONE `udp_body`
-    /// alternative — an edge indicator in a combinational body, or a mix of
-    /// combinational and sequential entries.
     E0234,
-    /// §6.6 / §6.6.2: a module instance, defparam, discrete block, continuous
-    /// assignment, gate or event declaration inside a generate block. VerA has no generate scope to select or repeat it in,
-    /// so it is refused rather than elaborated once regardless of the scheme.
     E0235,
-    /// IEEE 1364 §19.6: `resetall inside a module.
     E0236,
-    /// §6.4.1: an access function, contribution, event control or named
-    /// block among a paramset's statements.
     E0237,
-    /// A.4.2 / §6.6.1: a loop generate whose index is not a declared genvar.
     E0238,
-    /// A.5.4 / A.2.2.3: a UDP instance whose delay is not a `delay2`. Also
-    /// reported by elaboration, for the NAMED instance only it can tell from
-    /// a module instance.
     E0239,
-    /// A.1.4: text that begins no `module_item` — a syntax error, where E0205
-    /// is a derivable item VerA does not implement.
     E0240,
-    /// Nesting past the parser's depth limit: an engine limit.
     E0241,
-    /// `--std=1364-*`: a Verilog-AMS design element or module item.
     E0242,
-    /// A.6.8 `loop_statement ::= forever statement`: a `forever` whose body
-    /// is a null statement. `statement`, not `statement_or_null`.
     E0296,
-    /// A.4.1 `pass_switchtype pass_switch_instance` — a `tran`/`rtran` instance
-    /// is accepted and stamps nothing. A class-2 number on E0222's precedent:
-    /// the parser is the only stage that ever sees a gate instantiation.
     W0250,
-    /// A.7.1 `specify_block` — read in full and modelled by nothing. The same
-    /// shape as W0250 and for the same reason: the block is legal source (§1.1
-    /// makes 1364's specify section part of the language) whose entire content
-    /// is §8 scheduling, which a compiled analog device has no clock to run.
     W0251,
-    /// A.3.1 a gate or pull primitive in a design element being compiled to an
-    /// ANALOG device, where §8.5.3 leaves it nothing to stamp. W0250's third
-    /// sibling; under `--run`, where the discrete engine executes the gate, it
-    /// is not reported at all.
     W0252,
-    /// A.1.5 a `config_declaration` read, with no library map behind it for the
-    /// design statement to bind through — so the configuration selects nothing
-    /// and every instance resolves by name, as it did before.
     W0253,
 
     // ---------------------------------------------------------------- class 3
     // Declarations, types, disciplines — lower.zig.
-    // E0301 was "vector ports are not supported" and E0302 "vector nets are
-    // not supported". Retired together: §3.6.3 vector nets and §6.5.2 vector
-    // ports now elaborate, scalarised into one node per element, so neither
-    // condition exists to report. Their successors are E0350 (§6.5.2.2 the two
-    // declarations disagree), E0351 and E0352 (the element reference itself).
-    // The numbers are not reused.
-    //
-    // E0304 was "port branches are not supported" and E0305 "branch arrays are
-    // not supported". Retired on the same terms: §3.12.1 `branch (<p>) name;`
-    // now resolves to the §5.4.3 port-flow unknown `I(<p>)` already carries, and
-    // A.2.3 `branch (p,n) pair[0:1];` expands into one branch per element under
-    // the scalarised name `pair[k]`. Neither condition exists to report. Reading
-    // an element out of range is E0352 and reading the bare base name is E0351,
-    // both shared with vector nets. The numbers are not reused.
     E0301,
     E0302,
     E0303,
@@ -282,112 +183,46 @@ pub const Code = enum(u16) {
     E0329,
     E0330,
     E0331,
-    /// §3.6.1/§3.6.1.2 a base nature missing a required attribute.
     E0332,
-    /// §3.6.1.2 a derived nature that defines or changes `units`.
     E0333,
-    /// §3.6.1.2 a derived nature that changes `access`.
     E0334,
-    /// §3.13.2 two base natures claiming the same access function.
     E0335,
-    /// §3.13.1 a nature and a discipline sharing one global-scope identifier.
     E0336,
-    /// §3.6.3/§6.5.2.1 a net with no declared discipline used behaviorally.
     E0337,
-    /// §3.6.2.1 a conservative discipline binding one nature to both halves.
     E0338,
-    /// §3.6.2.2 `domain discrete` on a discipline that binds natures.
     E0339,
-    /// §3.6.1.2/§3.6.1.3 a nature attribute value of the wrong form.
     E0340,
-    /// §3.6.1.2 `idt_nature` naming no nature, or an unrelated one.
     E0341,
-    /// §3.6.1/§3.6.2 a nature or a discipline declared twice.
     E0342,
-    /// §3.6.1.3 the same user attribute declared twice in one nature.
     E0343,
-    /// §3.6.4 `ground` on a net whose discipline is not continuous.
     E0344,
-    /// §3.4.1 a string value on a numeric parameter, or a numeric value on a
-    /// `string` parameter — the one type pairing that gets no conversion.
     E0345,
-    /// §3.4.1/§3.4.4/§3.4.6 an array or string parameter left untyped.
     E0346,
-    /// §3.4.2 a value range whose first bound is not smaller than its second.
     E0347,
-    /// §4.2.10 a reduction operator inside the analog block.
     E0348,
-    /// §3.4/§4.2.14 an array parameter initialised without the `'{ }` pattern.
     E0349,
-    /// §6.5.2.2 a port whose direction and type declarations give ranges that
-    /// do not evaluate to the same value.
     E0350,
-    /// §5.5.2 a bit select of something that is not a vector net, or a whole
-    /// vector net where a scalar signal is required.
     E0351,
-    /// §3.6.3/§5.5.2 a vector index that is not constant, or is outside the
-    /// declared range.
     E0352,
-    /// §3.12 a branch whose two terminals are vectors of different sizes.
     E0353,
-    /// §3.3/§3.4.1 a string value assigned to a numeric variable.
     E0354,
-    /// §3.11/§3.11.1 two nets whose disciplines are incompatible, used as the
-    /// two arguments of an access function (§3.11) or as the two terminals of a
-    /// branch declaration (§3.12).
     E0355,
-    /// §3.2 a reference that supplies fewer or more subscripts than the array's
-    /// declaration has dimensions.
     E0356,
-    /// §2.9 Syntax 2-4 an attribute value that is not a constant expression.
     E0357,
-    /// §2.9.2 a standard attribute (`desc`, `units`, `op`, `multiplicity`) with
-    /// a value outside the domain the clause fixes for it.
     E0358,
-    /// §5.5.3 a nature attribute reference (`n.potential.abstol`) naming an
-    /// attribute whose value is not a constant expression.
     E0359,
-    /// §1.3.4.1/§1.3.4.2 a net of signal-flow discipline bound to an `inout`
-    /// port. The sibling of E0425, which is about the contribution target.
     E0360,
-    /// §3.4.2 an OVERRIDDEN parameter value falls outside its declared
-    /// `from`/`exclude` value range. The sibling of E0347, which judges the
-    /// range's own bounds; this one needs a value somebody supplied, which only
-    /// §6.3 elaboration produces.
     E0361,
-    /// §6.8 one identifier declares two items in one scope.
     E0362,
-    /// §3.4/A.2.4 a parameter default that reads simulation state — `$abstime`,
-    /// `$temperature`, an access function, `$random`, … — where the grammar
-    /// requires a constant_mintypmax_expression.
     E0363,
-    /// Known mixed-signedness shift comparison needs missing context typing.
     E0364,
-    /// §3.6.3.2 a net_decl_assignment whose initializer is not a constant
-    /// expression. The nodeset sibling of E0363, which rules on a parameter
-    /// default: both are "the grammar said constant and this is not one".
     E0365,
-    /// §3.6.3.2 a net_decl_assignment on a net of non-continuous discipline.
-    /// The nodeset sibling of E0344, which refuses `ground` on the same nets
-    /// for the same reason: no nature bound, so no potential to guess.
     E0366,
-    /// §3.6.5 / IEEE 1364 §19.2: an implicit net under `default_nettype none.
-    /// Numbered past the two nodeset codes above: both landed in this release
-    /// and both had claimed E0365 in their own branch.
     E0367,
-    /// §4.2.1.1 an `integer` parameter whose default folds to an infinity or
-    /// a NaN: the conversion is "rounding the real number to the nearest
-    /// integer", and a non-finite real has none.
     E0368,
-    /// §4.2.1 `===`/`!==` with a real operand: Table 4-2 does not list them.
     E0369,
-    /// §3.6.2.5 a discipline overrides an attribute of a half it binds no
-    /// nature to, or one its bound nature does not define.
     E0370,
-    /// A.2.1.3 / §3.6.2 a net declaration whose discipline identifier names
-    /// no declared discipline.
     E0371,
-    /// §3.12.1 a port branch `branch (<x>)` whose x is not a port.
     E0372,
 
     // ---------------------------------------------------------------- class 4
@@ -414,55 +249,23 @@ pub const Code = enum(u16) {
     E0420,
     E0421,
     E0422,
-    /// §1.3.1/§5.4.2.1 both quantities of a probe branch read in one module.
     E0423,
-    /// §7.3.2.1 a contribution whose value folds to an infinity or a NaN.
     E0424,
-    /// §1.3.4.1/§1.3.4.2 a contribution to an `input` signal-flow port.
     E0425,
-    /// §5.9 a contribution inside a `repeat`/`while`/non-genvar `for`.
     E0426,
-    /// §5.8.3 more than one `default` arm in one case statement.
     E0427,
-    /// §6.6 a generate scheme — an if-generate condition or a case-generate
-    /// selector — that is not a constant expression.
     E0428,
-    /// §5.7 a whole-array assignment between arrays that are not assignment
-    /// compatible: a different number of dimensions, a different number of
-    /// elements in one of them, or a different element type.
     E0429,
-    /// §4.7.3/§7.3.7 an analog user-defined function called from the discrete
-    /// context — an `initial` or `always` block.
     E0430,
-    /// §5.2.1 a discrete-owned (digital) value read from an `analog initial`
-    /// block.
     E0431,
-    /// §7.2.2 a variable assigned in BOTH the continuous and the discrete
-    /// context.
     E0432,
-    /// A.6.2 a statement in a digital `initial` block that is not an assignment
-    /// of a constant expression to a module variable — the one shape a compiler
-    /// with no event queue can lower.
     E0433,
-    /// A.6.4 an `-> ev;` event trigger written on the analog spine, outside any
-    /// `@(<event>)`.
     E0434,
-    /// §7.3 a CONTINUOUS net written — contributed to — from the discrete
-    /// context. The read direction is legal and is what §7.3.3 exists for.
     E0435,
-    /// §7.3.7 a DIGITAL function called from the analog context. E0430 is the
-    /// other sentence of the same clause, in the other direction.
     E0436,
-    /// §8.5 a discrete process in a module VerA compiles as a device, where
-    /// executing it needs a mixed-signal kernel feature VerA does not have.
     E0437,
-    /// A.6.1 a continuous assignment whose target is not a net.
     E0438,
-    /// §5.6.8.2 a potential and a flow contribution to one named branch from
-    /// two module instances.
     E0439,
-    /// §5.6.8.1/§5.6.8.2 potential sources from two module instances close a
-    /// loop — the equations are not solvable.
     E0477,
 
     // ---------------------------------------------------------------- class 5
@@ -480,44 +283,19 @@ pub const Code = enum(u16) {
     E0511,
     E0512,
     E0513,
-    /// §5.8.1/§5.9 an analog operator whose branch can change during the solve.
     E0514,
-    /// §4.5 an operator CONTROL argument (delay, rate, initial condition) that
-    /// is neither constant nor an expression over parameters — codegen.zig.
     E0515,
-    /// §4.5.5-§4.5.10 an analog operator control argument outside the bound the
-    /// LRM states for it (modulus, td, rise/fall time, slew rate, direction).
     E0516,
-    /// §5.10.3.1/§5.10.3.2 a `cross`/`above` argument that is the wrong type,
-    /// out of range, or a tolerance with no direction beside it.
     E0517,
-    /// §4.5.12 a Z-filter with a zero transition time contributed straight to a
-    /// branch — the abrupt discontinuity the clause allows in a VARIABLE, put
-    /// where the solver has to differentiate it.
     E0518,
-    /// §4.6.4.3/.4 a `noise_table`/`noise_table_log` argument that is not a
-    /// usable (frequency, power) table — codegen.zig.
     E0519,
-    /// §4.6.4 + §1.3.1.1 a noise generator on a ground-ground branch, which has
-    /// no row and no column to name — codegen.zig.
     E0520,
-    /// §4.6.3/A.8.2 an `ac_stim` analysis name that is not a string literal.
     E0521,
-    /// §4.6.4.2/Syntax 4-4 a `flicker_noise` call with no exponent.
     E0522,
-    /// §2.9 VerA's `vera_lte` attribute with a value that is not a constant
-    /// independent of the model card.
     E0523,
-    /// §2.9 VerA's `vera_interp` attribute with a value other than 1 or 2, or
-    /// one that depends on the model card.
     E0524,
-    /// §4.5.1 a Laplace or Z-transform coefficient argument that is a scalar,
-    /// not an array identifier or an assignment pattern.
     E0572,
-    /// §4.6.4/Syntax 4-4 a noise function's label argument that is not a
-    /// constant string.
     E0573,
-    /// §4.6.1/A.8.2 an `analysis()` call with no argument or a non-literal one.
     E0574,
 
     // ---------------------------------------------------------------- class 6
@@ -531,12 +309,9 @@ pub const Code = enum(u16) {
     E0607,
     E0608,
     E0609,
-    /// The requested finiteness warning. See `Info` below for the full story.
     W0650,
     W0651,
     W0652,
-    /// §4.2.4 an integer `/` whose divisor cannot be proven non-zero: legal,
-    /// and a zero divisor yields 0 at run time. See `Info`.
     W0653,
 
     // ---------------------------------------------------------------- class 7
@@ -547,177 +322,86 @@ pub const Code = enum(u16) {
     E0704,
     E0705,
     E0706,
-    /// §5.8/§5.9/§5.10.3.1 an event control statement that is not on the
-    /// straight-line spine of the analog block.
     E0707,
 
     // ---------------------------------------------------------------- class 8
     // System tasks and functions — lower.zig.
-    /// RETIRED — was "unsupported system function", a capability class whose
-    /// list is now empty. Not reused; see the `explain`.
     E0801,
     E0802,
     E0803,
     E0804,
     E0805,
-    /// §9.2 Tables 9-1/9-2/9-3/9-5/9-6/9-7/9-8 "supported in analog context: No".
     E0806,
-    /// §9.7.2 `$stop` inside an `analog initial` block.
     E0807,
-    /// Annex G Table G.1 the retired OVI Verilog-A v1.0 spelling `$limexp`.
     E0808,
-    /// §9.17.3 a `$limit` call missing the arguments its named algorithm needs.
     E0809,
-    /// §9.4.3 fewer arguments than the format string has consuming specifiers.
     E0810,
-    /// §9.15 `$simparam` on a name this engine does not know, with no fallback.
     E0811,
-    /// §9.20 misuse of `$analog_node_alias` / `$analog_port_alias`.
     E0812,
-    /// §9.5.3/§9.5.4.2 `$swrite`/`$sformat`/`$sscanf` argument or conversion.
     E0813,
-    /// §9.17.3 a `$limit` user-defined limiter with a formal that is not `input`.
     E0814,
-    /// §9.21 a `$table_model` data source, control string or dimensionality that
-    /// VerA cannot compile into a lookup.
     E0815,
-    /// §9.13.1/§9.13.2 a probabilistic distribution argument that breaks one of
-    /// the clause's own rules: the seed's type, an out-of-domain distribution
-    /// parameter, the uniform's start/end order, or the paramset-only
-    /// `type_string`.
     E0816,
-    /// §9.16 a `$simprobe` whose instance/parameter pair resolves to nothing and
-    /// that supplied no fallback expression.
     E0817,
-    /// §9.22/§9.23 a driver access function called outside a connect module.
     E0818,
-    /// §9.4.3 a format conversion whose operand has a type the display path
-    /// cannot render through it: `%s` over a number, `%c` or a real conversion
-    /// over a string.
     E0819,
-    /// §9.4 display task dropped, because the artifact being built is a device.
     W0850,
-    /// §2.8.3/§12.32 an UNREGISTERED system function: a `$name` the language
-    /// defines nowhere, whose meaning §12.32 hands to a VPI host the emitted
-    /// artifact has none of. Reads 0.0, out loud.
     W0852,
 
     // ---------------------------------------------------------------- class 9
     // Hierarchy and elaboration — lower.zig, elaborate.zig.
     E0901,
-    /// §7.4.4/F.2.1 step 3 more than one discipline declaration for one net.
     E0902,
-    /// F.2.1/F.2.2 step 4.b, fourth bullet: a net whose discipline resolution
-    /// came out UNKNOWN — more than one candidate, no matching `resolveto` —
-    /// and which connects through a port to a segment of a different domain.
-    /// Was RESERVED (a hole in this enum) while the multi-candidate arm did
-    /// not exist; the number was promised to the rule the whole time, which is
-    /// why the fixture's `//! reject` line never had to change.
     E0903,
-    /// §6.2.2 an instance names a module (or paramset) the file never declares.
     E0904,
-    /// §6.2.2 a module instantiates itself, directly or through a cycle.
     E0905,
-    /// §6.2.2 the port connections do not match the module's port list.
     E0906,
-    /// §6.3 an override names nothing the instantiated module declares.
     E0907,
-    /// §3.4.7 a parameter and its `aliasparam` are both overridden.
     E0908,
-    /// §6.2.2 an instance array range is not an elaboration-time constant.
     E0909,
-    /// §6.7.1 an analog variable may not be accessed hierarchically.
     E0910,
-    /// §6.4.2 no paramset of an overload set admits an instance's values.
     E0911,
-    /// §6.3.6 a flow contribution is explicitly multiplied by `$mfactor`.
     E0912,
-    /// §7.6/§7.7 a connect module is instantiated by name.
     E0913,
-    /// §6.4.2 more than one paramset is still applicable after the clause's
-    /// tie-breaking rules.
     E0914,
-    /// §7.7.1 a connect insertion statement names no `connectmodule`.
     E0915,
-    /// §7.7.2 a connect resolution statement names no declared discipline.
     E0916,
-    /// §7.7.2 disciplines a `resolveto exclude` rule deems incompatible are
-    /// found on one net.
     E0917,
 
     // --------------------------------------------------------------- class 10
     // Runtime / artifact contract — codegen.zig, root.zig.
     E1001,
     E1002,
-    /// The device's `U` is `enum(u8)`, so it holds at most 256 unknowns.
     E1003,
-    /// §6.3.4 a numeric default cannot be derived after host parameter writes.
     E1004,
-    /// Shared-frontend digital execution boundary.
     E1100,
-    /// IEEE memory-file sequential word count differs from the load range.
     W1150,
-    /// §3.4 a parameter whose default has no compile-time value and no
-    /// `derive()` line either, so the model card field ships as 0.
     W1050,
-    /// §7.7.2.1 multiple discipline resolution rules match.
     W0950,
-    /// §9.17.1 the only permitted negative discontinuity degree is -1.
     E0820,
-    /// §9.2 a task or function whose digital-context cell is No, called from
-    /// an `initial` or `always` block.
     E0821,
-    /// §9.19 a `$param_given`/`$port_connected` argument that is not a
-    /// parameter/port identifier.
     E0822,
-    /// §6.5.3 a real-valued (`wreal`) net has a second driver.
     E0918,
-    /// §3.7 a port joins a `wreal` to a net type other than wire/tri/wreal.
     E0919,
-    /// RETIRED — was "a child instance's digital processes are not supported
-    /// in a mixed-signal design".
     E0920,
-    /// §3.4.4 a parameter array's value is not the size its range declares.
     E0921,
-    /// §7.8.4 a mixed port matches more than one connect statement.
     E0922,
-    /// §7.8 a connect statement's two disciplines are not one discrete and
-    /// one continuous.
     E0923,
-    /// §6.7.1 a parameter declaration makes an out-of-module reference.
     E0924,
-    /// §6.5.7.1 a port and the net connected to it differ in width.
     E0925,
-    /// §3.9 a digital primitive's terminal is a continuous net and no
-    /// `default_discipline` names the primitive side's discipline.
     E0960,
-    /// §7.6 Table 7-2 a connect statement designates a connect module whose
-    /// continuous/discrete port directions are not a supported combination.
     E0982,
-    /// A.6.2 a blocking, nonblocking or procedural `assign`/`deassign`
-    /// statement whose target is a net, not a variable (§8.5.3.2–§8.5.3.4).
     E0482,
-    /// A.3.3 a switch terminal the grammar makes a `net_lvalue` names a
-    /// variable (§8.5.3.5).
     E0483,
-    /// §8.5.1 a digital event control waits on an analog probe that no
-    /// analog event function monitors.
     E0484,
-    /// §9.5/§9.7.1/§9.12 a system task or function called with an argument
-    /// count its syntax does not admit.
     E0887,
-    /// §9.5.1/§9.5.2 a descriptor argument that is a real or a string.
     E0888,
-    /// §9.5.1 Table 9-24 a literal `$fopen` type that is none of its forms.
     E0889,
-    /// §9.18 Table 9-29 a hierarchical system parameter override outside the
-    /// table's "Allowed Values".
     E0890,
     /// §9.17.3 a `$limit` site the device does not honour: the probe is
     /// returned unchanged, which the clause permits.
     W0853,
 
-    /// Rendered spelling — the tag name IS the code, so no name table exists.
     pub fn name(self: Code) []const u8 {
         return @tagName(self);
     }
@@ -899,6 +583,12 @@ fn infoOf(c: Code) Info {
             \\this error is only about the missing name.
             ,
         },
+        .E0114 => retiredInfo(
+            \\"unsupported compiler directive". Retired: it had exactly two
+            \\subjects left, 10.7's `__FILE__ and `__LINE__, and both are now
+            \\expanded. Every other backtick word VerA does not know is an
+            \\undefined macro, which is E0115. The number is not reused.
+        ),
         .E0115 => .{
             .title = "undefined macro",
             .lrm = "10.4",
@@ -1157,6 +847,12 @@ fn infoOf(c: Code) Info {
             \\This one has nothing to pop.
             ,
         },
+        .E0137 => retiredInfo(
+            \\"unterminated `begin_keywords". Retired: 10.6 gives the directive
+            \\scope "even across source code file boundaries", so an open pair
+            \\at end of file is the clause working, not an error. The number is
+            \\not reused.
+        ),
         .E0138 => .{
             .title = "a string literal may not span lines",
             .lrm = "2.7",
