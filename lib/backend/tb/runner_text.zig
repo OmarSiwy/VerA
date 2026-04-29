@@ -324,6 +324,52 @@ pub const runner_body =
     \\        narrowAssert(Dl, "q", true, model, &qRowsOf(Dl, wide, model, inst, t), &qRowsOf(Dl, narrow, model, inst, t));
     \\}
     \\
+    \\/// The family gate (contract ABI 5 preview). A device built with the family
+    \\/// text also answers `abi5.eval`/`abi5.q` for a sparse family, whose each
+    \\/// real carries only the lanes of the unknowns it may depend on, and those
+    \\/// must be `Dual`'s: every value bit for bit, and every lane `deriv_reads`
+    \\/// names equal, a lane the sparse value does not carry reading as zero.
+    \\/// Two escapes, neither a tolerance: zeros match whatever their sign, and
+    \\/// `Dual`'s NaN may stand where the sparse value has no lane — a dense
+    \\/// `0·inf` on a lane that is structurally zero. The columns outside
+    \\/// `deriv_reads` are `narrowCheck`'s.
+    \\fn sparseCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (comptime !@hasDecl(D, "abi5")) return;
+    \\    const Sp = contract.RefFamily(f64, &lane_of, .{ .dense = false });
+    \\    const xd = seed(x);
+    \\    const want = D.eval(Dual, xd, model, inst, t);
+    \\    const got = D.abi5.eval(Sp, x, model, inst, t);
+    \\    inline for (0..n_u) |r| sparseAssert("res", u_names[r], got[r], want[r]);
+    \\    if (comptime @hasDecl(D, "q") and @hasDecl(D.abi5, "q")) {
+    \\        const wq = D.q(Dual, xd, model, inst, t);
+    \\        const gq = D.abi5.q(Sp, x, model, inst, t);
+    \\        inline for (0..n_q) |k| sparseAssert("q site", std.fmt.comptimePrint("{d}", .{k}), gq[k], wq[k]);
+    \\        const both = D.abi5.evalQ(Sp, x, model, inst, t);
+    \\        inline for (0..n_u) |r| sparseAssert("evalQ res", u_names[r], both.res[r], want[r]);
+    \\        inline for (0..n_q) |k| sparseAssert("evalQ q site", std.fmt.comptimePrint("{d}", .{k}), both.q[k], wq[k]);
+    \\    }
+    \\}
+    \\
+    \\fn sparseAssert(what: []const u8, name: []const u8, got: anytype, want: Dual) void {
+    \\    if (@as(u64, @bitCast(got.val())) != @as(u64, @bitCast(want.v))) {
+    \\        std.debug.print("sparse_check FAIL: {s}[{s}]: sparse {e} vs dense {e}\n", .{ what, name, got.val(), want.v });
+    \\        std.process.exit(1);
+    \\    }
+    \\    inline for (0..n_u) |u| {
+    \\        const carried = u < 64 and (@TypeOf(got).mask >> u) & 1 != 0;
+    \\        const g = got.ddxAt(u);
+    \\        const w = want.d[u];
+    \\        const same = @as(u64, @bitCast(g)) == @as(u64, @bitCast(w)) or (g == 0.0 and w == 0.0) or
+    \\            (std.math.isNan(g) and std.math.isNan(w)) or (!carried and std.math.isNan(w));
+    \\        if (hasLane(u) and !same) {
+    \\            std.debug.print("sparse_check FAIL: d{s}[{s}]/dx[{s}]: sparse {e} vs dense {e}{s}\n", .{
+    \\                what, name, u_names[u], g, w, if (carried) "" else " (no sparse lane)",
+    \\            });
+    \\            std.process.exit(1);
+    \\        }
+    \\    }
+    \\}
+    \\
     \\fn hasLane(u: usize) bool {
     \\    return u >= 64 or (contract.derivReads(D) >> @intCast(u)) & 1 != 0;
     \\}
@@ -518,6 +564,7 @@ pub const runner_body =
     \\    fusedCheck(x, t, model, inst);
     \\    patternCheck(x, t, model, inst);
     \\    narrowCheck(x, t, model, inst);
+    \\    sparseCheck(x, t, model, inst);
     \\
     \\    const xd = seed(x);
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a
