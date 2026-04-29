@@ -17,6 +17,7 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_render = @import("render.zig");
+const family = @import("family.zig");
 const gen_unit = @import("unit.zig");
 const gen_setup = @import("setup.zig");
 const Mir = @import("ir").Mir;
@@ -1302,9 +1303,14 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     for (args, 0..) |_, j| try self.b("{s} zs{d}a{d}.val()", .{ if (j == 0) "" else ",", label, j });
     try self.b(" }};\n", .{});
     try self.b("        var zsp: [{d}]f64 = undefined;\n", .{args.len});
-    try self.b("        var zsr = S.con(zsh.call(zsh.ctx, {d}, &zsv, &zsp));\n", .{k});
+    // `Options.family`: `zsr` holds every argument's lanes, the union of theirs.
+    var m: u64 = 0;
+    for (args) |a| m |= family.mask(self, a);
+    const to: []const u8 = if (self.fam) try std.fmt.allocPrint(self.arena, "zTo(S, 0x{x}, ", .{m}) else "";
+    const end: []const u8 = if (self.fam) ")" else "";
+    try self.b("        var zsr = {s}S.con(zsh.call(zsh.ctx, {d}, &zsv, &zsp)){s};\n", .{ to, k, end });
     for (args, 0..) |_, j|
-        try self.b("        zsr = zsr.add(zs{d}a{d}.addC(-zsv[{d}]).scale(zsp[{d}]));\n", .{ label, j, j, j });
+        try self.b("        zsr = {s}zsr.add(zs{d}a{d}.addC(-zsv[{d}]).scale(zsp[{d}])){s};\n", .{ to, label, j, j, j, end });
     try self.b("        break :zs{d} zsr;\n    }}", .{label});
 }
 
@@ -1386,11 +1392,16 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     // `callArgIsValue` still returns false for an operator argument — the
     // value is live because it is a core target, not because this call
     // marked it, which is what keeps the §4.5.2 one-evaluation-per-step rule.
-    const in = if (needs_in)
+    const in0 = if (needs_in)
         try gen_render.renderToArena(self, if (args.len == 0) .f_zero else args[0], .real)
     else
         "";
     self.uses_inst = true;
+    // `Options.family`: a kernel runs at the result's mask `fm`, as
+    // `gen_render.kernelOpen` says; `kS` is its scalar and `in` its input.
+    const fm = family.mask(self, self.mir.instResult(inst));
+    const kS: []const u8 = if (self.fam) try std.fmt.allocPrint(self.arena, "zL(S, 0x{x})", .{fm}) else "S";
+    const in = if (self.fam and needs_in) try std.fmt.allocPrint(self.arena, "zLw(S, 0x{x}, {s})", .{ fm, in0 }) else in0;
     switch (k) {
         // §4.5.11 the cascade reads its sections from Model on every
         // evaluation and is LINEAR in the current input, so the Jacobian
@@ -1403,9 +1414,11 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // saw no Model read — without this the enclosing unit's
             // parameter gets patched to `_` and the device does not compile.
             self.uses_model = true;
-            try self.b("zLaplace(S, {d}, {d}, {s}, {s}__sec(model), inst.dt, &inst.{s}__u, &inst.{s}__y)", .{
-                p.ns, p.deg, in, n, n, n,
+            try opOpen(self, fm);
+            try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), inst.dt, &inst.{s}__u, &inst.{s}__y)", .{
+                kS, p.ns, p.deg, in, n, n, n,
             });
+            try opClose(self);
         },
         // §4.5.12 "acts like a simple sample-and-hold which samples every T
         // seconds and EXHIBITS NO DELAY": between samples the output does
@@ -1422,41 +1435,60 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // Same reason `.laplace` above forces it: `__sec` takes a
             // `*const Model` whatever its coefficients read.
             self.uses_model = true;
+            try opOpen(self, fm);
             try self.b(
-                "zZiEval(S, {0d}, {1d}, {2s}, {3s}__sec(model), inst.dt, inst.{3s}__out, " ++
+                "zZiEval({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), inst.dt, inst.{3s}__out, " ++
                     "inst.abstime, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
-                .{ p.ns, p.deg, in, n, p.period orelse "0.0" },
+                .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS },
             );
+            try opClose(self);
         },
-        .ddt => try self.b("zDdt(S, {s}, inst.{s}__prev, inst.dt)", .{ in, n }),
+        .ddt => {
+            try opOpen(self, fm);
+            try self.b("zDdt({s}, {s}, inst.{s}__prev, inst.dt)", .{ kS, in, n });
+            try opClose(self);
+        },
         // §4.5.4 `idt(expr, ic, assert)`: "idt() returns the initial
         // conditions during DC and IC analyses, and whenever assert is
         // nonzero. Once assert becomes zero, idt() returns the integral of
         // the argument starting from the last instant where assert was
         // nonzero." The reset is a plain select on the accumulator, which
         // `updateState` holds at `ic` for as long as assert is nonzero.
-        .idt => if (args.len >= 3) try self.b(
-            "zIdtReset(S, {s}, inst.{s}__acc, inst.dt, {s}, {s})",
-            .{ in, n, try ctrlEval(self, args, 1, "0.0"), try ctrlEval(self, args, 2, "0.0") },
-        ) else try self.b("zIdt(S, {s}, inst.{s}__acc, inst.dt, {s})", .{
-            in, n, try ctrlEval(self, args, 1, "0.0"),
-        }),
-        .idtmod => try self.b("zIdtmod(S, {s}, inst.{s}__acc, inst.dt, {s}, {s}, {s})", .{
-            in,                                 n,
-            try ctrlEval(self, args, 1, "0.0"), try ctrlEval(self, args, 2, "0.0"),
-            try ctrlEval(self, args, 3, "0.0"),
-        }),
-        .absdelay => try self.b(
-            "{s}(S, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
-            .{
-                if (self.mir.instData(inst).call.callee == .@"absdelay$quad") "zAbsdelayQ" else "zAbsdelay",
-                in,
-                n,
-                n,
-                n,
-                try absdelayTd(self, n, args, false),
-            },
-        ),
+        .idt => {
+            try opOpen(self, fm);
+            if (args.len >= 3) try self.b(
+                "zIdtReset({s}, {s}, inst.{s}__acc, inst.dt, {s}, {s})",
+                .{ kS, in, n, try ctrlEval(self, args, 1, "0.0"), try ctrlEval(self, args, 2, "0.0") },
+            ) else try self.b("zIdt({s}, {s}, inst.{s}__acc, inst.dt, {s})", .{
+                kS, in, n, try ctrlEval(self, args, 1, "0.0"),
+            });
+            try opClose(self);
+        },
+        .idtmod => {
+            try opOpen(self, fm);
+            try self.b("zIdtmod({s}, {s}, inst.{s}__acc, inst.dt, {s}, {s}, {s})", .{
+                kS,                                 in,
+                n,                                  try ctrlEval(self, args, 1, "0.0"),
+                try ctrlEval(self, args, 2, "0.0"), try ctrlEval(self, args, 3, "0.0"),
+            });
+            try opClose(self);
+        },
+        .absdelay => {
+            try opOpen(self, fm);
+            try self.b(
+                "{s}({s}, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
+                .{
+                    if (self.mir.instData(inst).call.callee == .@"absdelay$quad") "zAbsdelayQ" else "zAbsdelay",
+                    kS,
+                    in,
+                    n,
+                    n,
+                    n,
+                    try absdelayTd(self, n, args, false),
+                },
+            );
+            try opClose(self);
+        },
         // §4.5.8 the ramp reads its ORIGIN out of `Instance` — where the
         // output was when the current excursion began, and when that was —
         // and takes its TARGET from the current input, so the companion
@@ -1465,17 +1497,21 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // approximation of it.
         .transition => {
             const t = try transitionTimes(self, args);
+            try opOpen(self, fm);
             try self.b(
-                "zTransition(S, {0s}, inst.{1s}__from, inst.{1s}__to, inst.{1s}__t0, " ++
+                "zTransition({4s}, {0s}, inst.{1s}__from, inst.{1s}__to, inst.{1s}__t0, " ++
                     "inst.abstime, inst.dt, {2s}, {3s})",
-                .{ in, n, t[0], t[1] },
+                .{ in, n, t[0], t[1], kS },
             );
+            try opClose(self);
         },
         .slew => {
             const r = try slewRates(self, args);
-            try self.b("zSlew(S, {s}, inst.{s}__prev, inst.dt, {s}, @abs({s}))", .{
-                in, n, r[0], r[1],
+            try opOpen(self, fm);
+            try self.b("zSlew({s}, {s}, inst.{s}__prev, inst.dt, {s}, @abs({s}))", .{
+                kS, in, n, r[0], r[1],
             });
+            try opClose(self);
         },
         .last_crossing => try self.b("S.con(inst.{s}__t_last)", .{n}),
         // §5.10.3 THE EVENT IS DECIDED HERE, not in `updateState`. The flag
@@ -1492,7 +1528,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // positive `dt` means everywhere else in this file. (§5.10.3.2
         // `above` is the operator that is explicitly exempt from both.)
         .cross => try self.b("S.con(if (inst.analysis_kind == .tran and inst.dt > 0.0 and ({s}) and ({s})) 1.0 else 0.0)", .{
-            try crossTest(self, n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in})),
+            try crossTest(self, n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in0})),
             try enableTest(self, .cross, args),
         }),
         // §5.10.3.3 fires at `start_time` and every `period` after it.
@@ -1520,9 +1556,9 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // cancel the one this timepoint was placed for.
         .timer => try self.b("S.con(if (inst.abstime >= (if (std.math.isNan(inst.{0s}__start)) @max(inst.{0s}__next, ({1s}).val()) else inst.{0s}__next){2s} and ({3s})) 1.0 else 0.0)", .{
             n,
-            in,
+            in0,
             if (timerIsOneShot(self, args))
-                try std.fmt.allocPrint(self.arena, " and ({s}).val() >= 0.0", .{in})
+                try std.fmt.allocPrint(self.arena, " and ({s}).val() >= 0.0", .{in0})
             else
                 "",
             try enableTest(self, .timer, args),
@@ -1542,7 +1578,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // expression crosses zero from below"). The initialisation case is
         // the `__prev = 0.0` initialiser — see `emitInstance`.
         .above => try self.b("S.con(if (inst.{0s}__prev <= 0.0 and ({1s}).val() > 0.0 and ({2s})) 1.0 else 0.0)", .{
-            n, in, try enableTest(self, .above, args),
+            n, in0, try enableTest(self, .above, args),
         }),
         // §9.17 tasks return no value ("It does not return a value").
         // Unreachable in practice — lowering never leaves one in an eval
@@ -1551,6 +1587,15 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         .bound_step, .discontinuity => try self.b("S.con(0.0)", .{}),
         .none => unreachable,
     }
+}
+
+/// `Options.family`: `zLu(S, m, ` around an operator kernel whose scalar is
+/// `zL(S, m)`, and its `)`.
+fn opOpen(self: *Gen, m: u64) Error!void {
+    if (self.fam) try self.b("zLu(S, 0x{x}, ", .{m});
+}
+fn opClose(self: *Gen) Error!void {
+    if (self.fam) try self.b(")", .{});
 }
 
 /// §4.5.8 `transition(expr, td, rise_time, fall_time)`: the two times, as

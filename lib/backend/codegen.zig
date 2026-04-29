@@ -193,6 +193,13 @@ pub const Options = struct {
     /// branch's flow is its row's value, not a solver unknown). Off by
     /// default, so every other device is byte-for-byte what it was.
     vpi_contribs: bool = false,
+    /// Contract ABI 5 phases P2–P4 (`codegen/family.zig`): write every body
+    /// generic over a scalar FAMILY, each real typed by the unknowns it may
+    /// depend on, and add `pub const abi5` (the family entry points) and
+    /// `lane_masks`. The ABI 4 entry points stay and compute what they
+    /// computed. Off by default, so every other device is byte-for-byte what
+    /// it was.
+    family: bool = false,
 };
 
 /// Emit the whole device.zig. LRM §5/§8.3.
@@ -240,6 +247,7 @@ pub fn generate(
         .diags = opts.diags,
         .su = .{ .on = opts.setup },
         .vpi_contribs = opts.vpi_contribs,
+        .fam = opts.family,
     };
     errdefer g.out.deinit(gpa);
     try g.prepare();
@@ -408,10 +416,17 @@ pub const Gen = struct {
     /// Set by `emitStamps` when it wanted a core call. Under `core_hoisted` it
     /// is the only record that one is needed.
     core_wanted: bool = false,
+    /// Did `eval`'s rows read the core? `emitEval`'s answer, kept for the
+    /// `abi5.eval` that `dispatch.emitAbi5` writes after `q` has reused
+    /// `core_wanted`.
+    eval_core: bool = false,
     /// §9.4. `.drop` ⇒ nothing below ever looks at `lower.display_root`.
     display: Display = .drop,
     /// `Options.vpi_contribs`.
     vpi_contribs: bool = false,
+    /// `Options.family`: every body is written for a scalar family — see
+    /// `codegen/family.zig`.
+    fam: bool = false,
     /// `Options.diags` — where E0515 goes, when the caller kept a bag.
     diags: ?*diag.Bag = null,
     /// Free branch flows and collapsible switch branches — `plan/topology.zig`.
@@ -488,6 +503,14 @@ pub const Gen = struct {
     /// each other, so it needs its own text to be self-consistent, not to match
     /// the final text byte for byte.
     hoist_idx: std.ArrayList(u32) = .empty,
+    /// `Options.family`: the mask of each REAL hoist-array element, by its
+    /// index in `h` (`emitUnitBody`), and of each `Lowered.mem_arrays` row's
+    /// storage (`family.arrMask`). Unused otherwise.
+    hoist_mask: std.ArrayList(u64) = .empty,
+    arr_mask: []u64 = &.{},
+    /// `Options.family`: the raw mask of every real declared, for
+    /// `family.emitLaneMasks`.
+    fam_masks: std.ArrayList(u64) = .empty,
     /// Emitted lexical scopes, as half-open output offsets. `sc_open` is the
     /// stack of scopes still being written; `sc_end` their closing offset once
     /// written. Only live during `probing`.
@@ -556,6 +579,16 @@ pub const Gen = struct {
             const arr: Mir.Value = @enumFromInt(self.mir.insts.items(.a)[ii]);
             if (!self.an.dFree(arr)) self.arr_s[self.an.arrOf(arr).?] = true;
         };
+        // `Options.family`: one storage holds every version of its array, so
+        // its elements are typed by the union of their masks.
+        if (self.fam) {
+            self.arr_mask = try self.arena.alloc(u64, self.arr_s.len);
+            @memset(self.arr_mask, 0);
+            if (self.arr_mask.len != 0) for (0..self.an.nv) |v| {
+                const id = self.an.arrOf(@enumFromInt(v)) orelse continue;
+                self.arr_mask[id] |= self.an.unknownDeps(@enumFromInt(v));
+            };
+        }
         self.names = try plan_names.plan(self.input(), self.verdict.unit_modes.len);
         // After `plan_names.plan`, which fills `branch_u` — the claim `freeFlows`
         // subtracts.

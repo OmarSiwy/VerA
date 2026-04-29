@@ -18,6 +18,7 @@ const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_setup = @import("setup.zig");
 const gen_render = @import("render.zig");
+const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
 const Lower = @import("ir").Lower;
@@ -129,7 +130,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     const at_fn = self.out.items.len;
     try self.w("fn {s}(comptime S: type, ", .{self.core.name});
     const at_x = self.out.items.len;
-    try self.w("x: [n_u]S, ", .{});
+    try self.w("x: {s}, ", .{xType(self)});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
@@ -145,6 +146,9 @@ pub fn emitCommon(self: *Gen) Error!void {
         if (self.an.arrOf(v)) |id| {
             const m = self.lowered.mem_arrays.items[id];
             try self.w("    f{d}: [{d}]{s},\n", .{ k, m.len, if (m.ty == .integer) "i64" else "f64" });
+        } else if (self.fam and self.an.vty[@intFromEnum(v)] == .real) {
+            try family.note(self, family.mask(self, v));
+            try self.w("    f{d}: {s},\n", .{ k, try family.ofText(self, family.mask(self, v)) });
         } else try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
     }
     try self.w("}} {{\n", .{});
@@ -241,11 +245,11 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     const at_fn = self.out.items.len;
     try self.w("fn {s}(comptime S: type, ", .{name});
     const at_x = self.out.items.len;
-    try self.w("x: [n_u]S, ", .{});
+    try self.w("x: {s}, ", .{xType(self)});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr) S {{\n", .{});
+    try self.w("inst: InstancePtr) {s} {{\n", .{if (self.fam) try family.ofText(self, family.mask(self, target)) else "S"});
     try self.w("    @setFloatMode(.{s});\n", .{mode});
     self.float.strict = std.mem.eql(u8, mode, "strict");
 
@@ -279,6 +283,12 @@ pub fn patchParam(self: *Gen, at: usize, comptime width: usize) void {
 /// of empty blocks is bounded by nothing syntactic.
 
 // ---- body emission ------------------------------------------------------
+
+/// A body's unknowns: `[n_u]S` from an ABI 4 entry, and under
+/// `Options.family` also `abi5`'s tuple of probes.
+fn xType(self: *const Gen) []const u8 {
+    return if (self.fam) "anytype" else "[n_u]S";
+}
 
 pub fn zigTy(t: VTy) []const u8 {
     return switch (t) {
@@ -323,6 +333,29 @@ pub fn writeSlotRef(self: *Gen, i: usize) Error!void {
     }
     return self.b("t{d}", .{slotNum(self, i)});
 }
+
+/// `Options.family`: the mask of value `i`'s slot when it is an element of the
+/// real hoist array — what a write into it widens to. Null for a `const`.
+pub fn slotMask(self: *Gen, i: usize) ?u64 {
+    if (!self.fam or self.an.vty[i] != .real) return null;
+    if (slotArr(self, i) == null) return null;
+    return self.hoist_mask.items[slotNum(self, i)];
+}
+
+/// Every real hoist element's mask: the union over the values that share it.
+fn hoistMasks(self: *Gen, n: u32) Error!void {
+    self.hoist_mask.clearRetainingCapacity();
+    try self.hoist_mask.appendNTimes(self.arena, 0, n);
+    for (self.plan.live.items) |lv| {
+        const v = @intFromEnum(lv);
+        if (self.an.vty[v] != .real or self.plan.slot[v] == none_u32) continue;
+        const k = self.hoist_idx.items[self.plan.slot[v]];
+        if (k == none_u32) continue;
+        self.hoist_mask.items[k] |= family.mask(self, lv);
+    }
+    for (self.hoist_mask.items) |m| try family.note(self, m);
+}
+
 pub fn slotRefStr(self: *Gen, i: usize) Error![]const u8 {
     if (slotArr(self, i)) |arr| {
         return std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ arr, slotNum(self, i) });
@@ -454,7 +487,7 @@ fn declareArrays(self: *Gen) Error!void {
     for (seen, stored, 0..) |s, st, id| {
         if (!s) continue;
         const len = self.lowered.mem_arrays.items[id].len;
-        const ty = gen_render.arrElemTy(self, @intCast(id));
+        const ty = try gen_render.arrElemTy(self, @intCast(id));
         if (gen_render.cow(self, @intCast(id))) {
             try self.ind(1);
             try self.b("var p{d}: *const [{d}]{s} = undefined;\n", .{ id, len, ty });
@@ -555,17 +588,29 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         const returned = if (self.emitting_common) self.plan.lo_idx[v] != none_u32 else lv == ret;
         if (returned) try seeded.append(self.arena, lv);
     }
+    if (self.fam) try hoistMasks(self, n_hoist[@intFromEnum(VTy.real)]);
     for ([_]VTy{ .real, .int, .str }) |ty| {
         const n = n_hoist[@intFromEnum(ty)];
         if (n == 0) continue;
         try self.ind(1);
+        if (self.fam and ty == .real) {
+            try self.b("var h: zSlots(S, &.{{", .{});
+            for (self.hoist_mask.items, 0..) |m, k| try self.b("{s}0x{x}", .{ if (k == 0) " " else ", ", m });
+            try self.b(" }}) = undefined;\n", .{});
+            continue;
+        }
         try self.b("var {s}: [{d}]{s} = undefined;\n", .{ hoistArray(ty), n, zigTy(ty) });
     }
     for (seeded.items) |lv| {
         const v = @intFromEnum(lv);
         try self.ind(1);
         try writeSlotRef(self, v);
-        try self.b(" = {s};\n", .{zeroOf(self.an.vty[v])});
+        try self.b(" = ", .{});
+        const m = slotMask(self, v);
+        if (m) |k| try family.openTo(self, k);
+        try self.b("{s}", .{zeroOf(self.an.vty[v])});
+        if (m != null) try self.b(")", .{});
+        try self.b(";\n", .{});
     }
     try gen_setup.emitRoot(self, target);
 }

@@ -137,6 +137,47 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     try std.testing.expect(std.mem.indexOf(u8, host, "pub const jac_f32_host = true;") != null);
 }
 
+test "codegen: Options.family types each merge by its unknowns, adds abi5; off, not a byte of it" {
+    // a = 0, c = 1, b = 2: the `if` merges exp(V(a,c)), lanes {a, c}, with
+    // V(b), lane {b}, so the slot both arms write and the field are 0x7.
+    const src =
+        \\module d(a, c, b);
+        \\  inout a, c, b;
+        \\  electrical a, c, b;
+        \\  real i;
+        \\  analog begin
+        \\    if (V(a, c) > 0.5) i = exp(V(a, c)); else i = V(b);
+        \\    I(a, c) <+ i;
+        \\  end
+        \\endmodule
+    ;
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator, src, &h);
+    defer h.deinit();
+    const v = try proof.prove(std.testing.allocator, &h.mir, &h.lowered, &h.bag);
+    defer v.deinit(std.testing.allocator);
+    var fatal = false;
+    const a = h.arena_state.allocator();
+    const off = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{})).text;
+    const on = (try generate(a, a, &h.mir, &h.lowered, v, &fatal, .{ .family = true })).text;
+    for ([_][]const u8{ "abi5", "zOf(", "zTo(", "lane_masks", "zSlots(" }) |s|
+        try std.testing.expect(std.mem.indexOf(u8, off, s) == null);
+    for ([_][]const u8{
+        "fn d__common__core(comptime S: type, x: anytype, ",
+        "    f0: zOf(S, 0x7),\n",
+        "    var h: zSlots(S, &.{ 0x7 }) = undefined;\n",
+        "h[0] = zTo(S, 0x7, x[@intFromEnum(U.b)]);",
+        "        .f0 = zTo(S, 0x7, t",
+        "res[@intFromEnum(U.a)] = zRow(S, .a, res[@intFromEnum(U.a)].add(c));",
+        "pub const abi5 = struct {",
+        "pub const lane_masks = [_]contract.LaneUse{",
+        "    .{ .mask = 0x7, .uses = ",
+    }) |s| if (std.mem.indexOf(u8, on, s) == null) {
+        std.debug.print("missing from the family text: {s}\n", .{s});
+        return error.TestExpectedEqual;
+    };
+}
+
 test "codegen: a core that reads analysis()/sim-state carries core_reads_simstate" {
     // A device-resident host republishes t/dt/kind on the HOST Instance only,
     // so a core reading them there evals stale — the decl is how it knows to
