@@ -231,6 +231,9 @@ carries the machine-readable tags:
 //! bias V(p) = 0.75, V(n) = 0.25
 //! reject E0310     <- a SUBSTRING. A bare `//! reject` matches ANY diagnostic.
 //!                     Always name the code or a distinctive phrase.
+//! warn W0853       <- the fixture still compiles and runs; each substring must
+//!                     match a WARNING. Unnamed warnings pass (W0650 is off
+//!                     unless named). `//! nowarn`: this source warns nothing.
 //! xfail <reason>   <- "the fixture is right and VerA is not". FAILs on XPASS.
 ```
 

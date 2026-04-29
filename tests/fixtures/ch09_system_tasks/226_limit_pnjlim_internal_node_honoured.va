@@ -4,8 +4,8 @@
 // internal net (`a`, behind a series resistance), unconditional, real
 // arguments. The unit test "a declined $limit is W0853 naming why, an honoured
 // one is silent" (lib/backend/codegen/test.zig) asserts this shape compiles to a
-// `limit` clamp with no W0853; the analog harness has no warning directive, so
-// this file asserts what the clause fixes about the answer.
+// `limit` clamp with no W0853; `//! nowarn` pins that here, and the checks
+// assert what the clause fixes about the answer.
 //
 // "When the simulator has converged, the return value of the $limit() function
 // is the value of the access function reference, within appropriate
@@ -20,6 +20,7 @@
 // band is the solver's convergence tolerance, relative 1e-3, as in 27_limit_named.
 //
 //! lrm 9.17.3
+//! nowarn
 //! solve
 //! bias V(p) = 0.7, V(n) = 0
 `include "check.vh"
