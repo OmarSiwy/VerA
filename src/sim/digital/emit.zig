@@ -241,7 +241,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try table(self, "order", order.items);
     if (schedule == .static) {
         try table(self, "comb_start", p.comb_start);
-        try table(self, "comb", p.comb);
+        try self.print("    .comb = &.{{", .{});
+        for (p.comb) |c| try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ c.node, c.word, c.mask });
+        try self.print(" }},\n", .{});
         try self.print("    .nodes = {d},\n", .{p.node_pc.len});
         try table(self, "watch_start", p.watch_start);
         try self.print("    .watchers = &.{{", .{});
@@ -525,6 +527,16 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Ast.ExprId, nonblocking: 
     try self.print("            if (L.pos(L.asInt(", .{});
     const t = try expr.selfDetermined(self, rg);
     try self.print(", {d}, {}), {d}, {d}, {d})) |q{d}| ", .{ t.width, t.signed, range.msb, range.lsb, sw, lb });
+    if (sw > 64 and !nonblocking) {
+        // One bit of a wide vector: the store touches only its word.
+        if (self.watched[at])
+            try self.print("try s.putWord({d}, {d}, q{d} / 64, ", .{ at, self.off[at], lb })
+        else
+            try self.print("s.set({d} + q{d} / 64, ", .{ self.off[at], lb });
+        try self.print("L.up(", .{});
+        try expr.assigned(self, val, .{ .width = 1, .signed = false });
+        return self.print(", q{d} % 64, 64), L.bit(q{d} % 64, 64));\n", .{ lb, lb });
+    }
     try self.store(at, nonblocking);
     try self.print("L.up(", .{});
     try expr.assigned(self, val, .{ .width = 1, .signed = false });
