@@ -101,9 +101,25 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             .wait_level => |x| for (x.slots) |s| {
                 watched[s] = true;
             },
-            else => {}, // else: only these three wait on a slot's value
+            .sample => |x| {
+                const st = r.file.stmt(x.statement).assign;
+                if (st.nonblocking or st.timing_is_delay) continue;
+                ts.clearRetainingCapacity();
+                try terms(self, st.timing, &ts);
+                for (ts.items) |t| watched[t.slot] = true;
+            },
+            else => {}, // else: only these four wait on a slot's value
         }
     };
+    // §17.1.3 a change of a slot the monitor reads asks it to print; a
+    // monitor may sit in any subroutine, so every one is looked at.
+    var mon: std.ArrayList(u32) = .empty;
+    for (r.code.items, 0..) |ins, pc| if (ins == .task and ins.task.task == .monitor) {
+        r.scope = r.code_scope.items[pc];
+        for (ins.task.args) |arg| if (arg != .none and r.file.exprs.tag(arg) != .str_literal)
+            compile.sensitivity(r, arg, &mon) catch return self.refuse("a monitor argument the engine resolves only at run time");
+    };
+    for (mon.items) |s| watched[s] = true;
     if (schedule == .fifo) return .{ .watched = watched, .fan_start = r.fan_start, .fan = r.fan };
 
     // Candidates for a node, with the slots they read and write.
@@ -119,6 +135,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     for (0..r.fan_start.len -| 1) |s| for (r.fan[r.fan_start[s]..r.fan_start[s + 1]]) |pc|
         try reads[proc_of[pc]].append(a, @intCast(s));
     var triggered: u32 = 0;
+    const ranges = try disableRanges(self);
     for (procs, 0..) |*p, i| switch (r.code.items[p.entry]) {
         .continuous => |d| try cands.append(a, .{
             .proc = @intCast(i),
@@ -126,7 +143,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             .outputs = try a.dupe(u32, &.{r.nets[r.drivers[d].net].slot}),
             .bits = try driverBits(self, d),
         }),
-        .wait_event, .wait_slots => if (try fixedWait(self, p.*)) {
+        .wait_event, .wait_slots => if (!disabled(ranges, p.*) and try fixedWait(self, p.*)) {
             p.role = .{ .triggered = triggered };
             triggered += 1;
             if (try combinational(self, p.*)) |io| try cands.append(a, .{
@@ -249,11 +266,32 @@ fn fixedWait(self: *Emitter, p: Proc) Error!bool {
         switch (self.r.code.items[pc]) {
             .restart => |x| if (x.target != p.entry) return false,
             .delay, .wait_event, .wait_slots, .wait_level, .continuous, .stop => return false,
-            .assign, .task, .branch, .jump, .case_select, .repeat_start, .repeat_next, .trigger, .init_var => {},
-            .sample, .deposit, .disable_block, .disable_task, .call, .copy_out, .call_timed, .task_return, .pla_start, .fork, .join_arm, .override_on, .override_eval, .override_off, .switch_ctrl => return false,
+            // A synchronous call runs to completion (`emit.call`).
+            .assign, .task, .branch, .jump, .case_select, .repeat_start, .repeat_next, .trigger, .init_var, .call => {},
+            .sample, .deposit, .disable_block, .disable_task, .copy_out, .call_timed, .task_return, .pla_start, .fork, .join_arm, .override_on, .override_eval, .override_off, .switch_ctrl => return false,
         }
     }
     return true;
+}
+
+const Range = struct { lo: u32, hi: u32 };
+
+/// The pc ranges a `disable` (§10.3) stops: a process reaching into one
+/// keeps the interpreter's queued resumptions, which a disable cancels by pc.
+fn disableRanges(self: *Emitter) Error![]const Range {
+    const r = self.r;
+    var out: std.ArrayList(Range) = .empty;
+    for (r.code.items) |ins| switch (ins) {
+        .disable_block => |b| try out.append(self.arena, .{ .lo = b.start, .hi = b.end }),
+        .disable_task => |idx| for (r.subs.items[idx].ranges.items) |rg| try out.append(self.arena, .{ .lo = rg.start, .hi = rg.end }),
+        else => {}, // else: no other instruction stops another process
+    };
+    return out.items;
+}
+
+fn disabled(ranges: []const Range, p: Proc) bool {
+    for (ranges) |rg| for (p.pcs) |pc| if (pc >= rg.lo and pc < rg.hi) return true;
+    return false;
 }
 
 /// A fixed-wait process that is a node: every term is a plain name (any
@@ -286,7 +324,7 @@ fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, o
                 if (try self.element(x.target)) return null;
                 try outputs.append(self.arena, r.slot(t) catch return null);
             },
-            .task, .trigger, .init_var => return null,
+            .task, .trigger, .init_var, .call => return null,
             else => {}, // else: `fixedWait` already refused every suspension
         }
     }
