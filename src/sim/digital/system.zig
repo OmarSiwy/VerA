@@ -60,47 +60,61 @@ fn now(self: *Run) u64 {
 /// argument of all four, and is always written.
 pub fn queueTask(self: *Run, a: std.mem.Allocator, op: QueueOp, args: []const Ast.ExprId) Error!void {
     const id = try int(self, a, args[0]);
-    const status: i64 = switch (op) {
-        .initialize => blk: {
-            const kind = try int(self, a, args[1]);
-            const max = try int(self, a, args[2]);
-            if (kind != 1 and kind != 2) break :blk bad_type;
-            if (max == null or max.? <= 0) break :blk bad_length;
-            const entry = try self.queues.getOrPut(self.arena, id orelse break :blk undefined_id);
-            if (entry.found_existing) break :blk duplicate_id;
-            entry.value_ptr.* = .{ .lifo = kind == 2, .max = @intCast(max.?) };
-            break :blk ok;
+    const in1: ?i64 = if (op == .initialize or op == .add or op == .exam) try int(self, a, args[1]) else null;
+    const in2: ?i64 = if (op == .initialize or op == .add) try int(self, a, args[2]) else null;
+    const r = try queueStep(&self.queues, self.arena, op, id, in1, in2, now(self));
+    if (r.out[0]) |v| try exec.assignInt(self, a, args[1], v);
+    if (r.out[1]) |v| try exec.assignInt(self, a, args[2], v);
+    try exec.assignInt(self, a, args[3], r.status);
+}
+
+pub const Queues = std.AutoHashMapUnmanaged(i64, Queue);
+
+/// A queue task's status and the values its output arguments take:
+/// `$q_remove`'s job id and information (`out[0]`, `out[1]`), `$q_exam`'s
+/// statistic (`out[1]`).
+pub const QueueResult = struct { status: i64, out: [2]?i64 = .{ null, null } };
+
+/// §17.6 queue task `op` on queue `id` at time `t` (the module's unit):
+/// `in1`/`in2` are its second and third arguments where they are inputs,
+/// each an integer or null for x/z. The one queue engine the interpreter
+/// and a native executable share.
+pub fn queueStep(queues: *Queues, gpa: std.mem.Allocator, op: QueueOp, id: ?i64, in1: ?i64, in2: ?i64, t: u64) std.mem.Allocator.Error!QueueResult {
+    switch (op) {
+        .initialize => {
+            if (in1 != 1 and in1 != 2) return .{ .status = bad_type };
+            if (in2 == null or in2.? <= 0) return .{ .status = bad_length };
+            const entry = try queues.getOrPut(gpa, id orelse return .{ .status = undefined_id });
+            if (entry.found_existing) return .{ .status = duplicate_id };
+            entry.value_ptr.* = .{ .lifo = in1 == 2, .max = @intCast(in2.?) };
+            return .{ .status = ok };
         },
-        .add => blk: {
-            const q = self.queues.getPtr(id orelse break :blk undefined_id) orelse break :blk undefined_id;
-            if (q.jobs.items.len >= q.max) break :blk full;
-            const t = now(self);
+        .add => {
+            const q = queues.getPtr(id orelse return .{ .status = undefined_id }) orelse return .{ .status = undefined_id };
+            if (q.jobs.items.len >= q.max) return .{ .status = full };
             if (q.last_arrival) |last| {
                 q.interarrivals += 1;
                 q.interarrival_sum += t - last;
             }
             q.last_arrival = t;
-            try q.jobs.append(self.arena, .{ .id = (try int(self, a, args[1])) orelse 0, .info = (try int(self, a, args[2])) orelse 0, .arrived = t });
+            try q.jobs.append(gpa, .{ .id = in1 orelse 0, .info = in2 orelse 0, .arrived = t });
             q.peak = @max(q.peak, q.jobs.items.len);
-            break :blk ok;
+            return .{ .status = ok };
         },
-        .remove => blk: {
-            const q = self.queues.getPtr(id orelse break :blk undefined_id) orelse break :blk undefined_id;
-            if (q.jobs.items.len == 0) break :blk empty;
+        .remove => {
+            const q = queues.getPtr(id orelse return .{ .status = undefined_id }) orelse return .{ .status = undefined_id };
+            if (q.jobs.items.len == 0) return .{ .status = empty };
             const job = if (q.lifo) q.jobs.pop().? else q.jobs.orderedRemove(0);
-            const wait = now(self) - job.arrived;
+            const wait = t - job.arrived;
             q.waits += 1;
             q.wait_sum += wait;
             q.wait_min = @min(q.wait_min orelse wait, wait);
-            try exec.assignInt(self, a, args[1], job.id);
-            try exec.assignInt(self, a, args[2], job.info);
-            break :blk ok;
+            return .{ .status = ok, .out = .{ job.id, job.info } };
         },
         // §17.6.4 Table 17-15's statistics codes.
-        .exam => blk: {
-            const q = self.queues.getPtr(id orelse break :blk undefined_id) orelse break :blk undefined_id;
-            const t = now(self);
-            const value: u64 = switch ((try int(self, a, args[1])) orelse 0) {
+        .exam => {
+            const q = queues.getPtr(id orelse return .{ .status = undefined_id }) orelse return .{ .status = undefined_id };
+            const value: u64 = switch (in1 orelse 0) {
                 1 => q.jobs.items.len,
                 2 => if (q.interarrivals == 0) 0 else q.interarrival_sum / q.interarrivals,
                 3 => q.peak,
@@ -111,21 +125,25 @@ pub fn queueTask(self: *Run, a: std.mem.Allocator, op: QueueOp, args: []const As
                     break :longest w;
                 },
                 6 => if (q.waits == 0) 0 else q.wait_sum / q.waits,
-                else => break :blk undefined_id,
+                else => return .{ .status = undefined_id },
             };
-            try exec.assignInt(self, a, args[2], @intCast(value));
-            break :blk ok;
+            return .{ .status = ok, .out = .{ null, @intCast(value) } };
         },
-    };
-    try exec.assignInt(self, a, args[3], status);
+    }
 }
 
 /// §17.6.5 `$q_full(q_id, status)`: 1 when the queue holds its maximum.
 pub fn queueFull(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i64 {
-    const q = if (try int(self, a, args[0])) |id| self.queues.getPtr(id) else null;
-    try exec.assignInt(self, a, args[1], if (q == null) undefined_id else ok);
-    const found = q orelse return 0;
-    return @intFromBool(found.jobs.items.len >= found.max);
+    const r = queueIsFull(&self.queues, try int(self, a, args[0]));
+    try exec.assignInt(self, a, args[1], r.status);
+    return r.full;
+}
+
+/// `$q_full` of queue `id`: its status and whether it holds its maximum.
+pub fn queueIsFull(queues: *const Queues, id: ?i64) struct { status: i64, full: i64 } {
+    const q = if (id) |i| queues.getPtr(i) else null;
+    const found = q orelse return .{ .status = undefined_id, .full = 0 };
+    return .{ .status = ok, .full = @intFromBool(found.jobs.items.len >= found.max) };
 }
 
 // ---- §17.2 file input and output --------------------------------------------
