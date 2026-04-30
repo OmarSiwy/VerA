@@ -76,6 +76,16 @@ pub fn lowerStmt(self: *Lower, id: Ast.StmtId) Oom!void {
     defer if (interp != null) {
         _ = self.interp_stack.pop();
     };
+    // `vera_nodiff`, the same way, for every assignment inside.
+    const nodiff = self.file.stmtLte(id, .vera_nodiff);
+    if (nodiff) |a| try self.nodiff_stack.append(self.arena, try nodiffValue(self, a));
+    defer if (nodiff != null) {
+        _ = self.nodiff_stack.pop();
+    };
+    switch (self.file.stmt(id)) {
+        .contribute, .indirect => if (stopping(self)) return self.err(tok, .E0526, "", .{}),
+        else => {}, // else: only a contribution leaves a branch without a Jacobian
+    }
     switch (self.file.stmt(id)) {
         .empty => {},
         .block => |b| try lowerSeqBlock(self, b), // §5.3
@@ -255,6 +265,34 @@ fn publishBlockLocals(self: *Lower, label: []const u8, b: Ast.SeqBlock) Oom!void
 /// §5.7 procedural assignment. The target is an lvalue expression so array
 /// elements (§3.2.2) work; both sides are coerced to the target's type
 /// (§4.2.1.1/§4.2.1.2).
+/// A `vera_nodiff` value: §2.9's default 1 when absent, otherwise a constant
+/// that folds WITHOUT the model card, since it picks what the device computes.
+/// E0525 otherwise, and the statement keeps its derivatives.
+fn nodiffValue(self: *Lower, a: Ast.LteAttr) Oom!bool {
+    if (a.value == .none) return true;
+    const c = lower_constfold.foldExpr(self, a.value, false) orelse {
+        try self.err(a.main_tok, .E0525, "", .{});
+        return false;
+    };
+    return c.isTrue();
+}
+
+/// Is the innermost enclosing `vera_nodiff` on?
+fn stopping(self: *const Lower) bool {
+    const s = self.nodiff_stack.items;
+    return s.len != 0 and s[s.len - 1];
+}
+
+/// The right-hand side of an assignment: its value, with no derivative under
+/// `vera_nodiff`. Only a real carries one.
+// ponytail: an array-to-array copy (`A = B`, a slice) keeps its elements'
+// derivatives; stop them where they are assigned, or route those copies here.
+fn assignValue(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
+    const tv = try lower_expr.lowerExpr(self, e);
+    if (!stopping(self) or tv.ty != .real) return tv;
+    return .{ .v = try self.emit(.dstop, &.{tv.v}), .ty = .real };
+}
+
 fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
     const ex = &self.file.exprs;
     // §3.2.2 whole-array assignment from an assignment pattern (§4.2.13):
@@ -270,7 +308,7 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
                 if (elem == .none) continue;
                 lower_param.shapeSubscripts(info.dims, k, idx);
                 if (info.mem == null and !self.vars.contains(try lower_param.elemKey(self, &key_buf, name, idx))) continue;
-                const tv = try lower_expr.lowerExpr(self, elem);
+                const tv = try assignValue(self, elem);
                 try lower_param.writeElem(self, name, info, idx, try self.coerceTo(elem, info.ty, tv));
             }
             return;
@@ -306,7 +344,7 @@ fn lowerAssign(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!void {
         _ = try lower_expr.lowerExpr(self, value); // keep collecting errors from the rhs
         return;
     };
-    const tv = try lower_expr.lowerExpr(self, value);
+    const tv = try assignValue(self, value);
     try writeLvalue(self, lv, try self.coerceTo(value, lv.ty, tv));
     // §4.6.4: remember that this name now carries a noise source, so a later
     // `I(a,b) <+ n;` still exports the generator. Recorded AFTER the rhs is
@@ -335,7 +373,7 @@ fn assignRuntimeIndex(self: *Lower, target: Ast.ExprId, value: Ast.ExprId) Oom!b
     // scalar path, which lowers `value` itself, and lowering it twice would
     // run its side effects twice.
     if (!try isRuntimeElem(self, target)) return false;
-    return writeRuntimeIndex(self, target, value, try lower_expr.lowerExpr(self, value));
+    return writeRuntimeIndex(self, target, value, try assignValue(self, value));
 }
 
 /// Is `target` an element of a declared array whose subscript only has a value

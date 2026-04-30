@@ -294,6 +294,8 @@ pub const Code = enum(u16) {
     E0522,
     E0523,
     E0524,
+    E0525,
+    E0526,
     E0572,
     E0573,
     E0574,
@@ -4023,6 +4025,36 @@ fn infoOf(c: Code) Info {
             \\    (* vera_interp *) y = absdelay(V(a), td);        // 1: linear
             \\
             \\The attribute is ignored and the site keeps linear interpolation.
+            ,
+        },
+        .E0525 => .{
+            .title = "vera_nodiff needs a constant value",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_nodiff *)` is VerA's attribute for storing the value of
+            \\every assignment inside a statement with no derivative, the frozen
+            \\coefficient a SPICE load stamps (ngspice's `geq = ag0 * C`). `= 0`
+            \\turns it off inside. The answer decides which derivatives the
+            \\emitted device computes, so it must fold before the model card
+            \\exists and may not name a parameter:
+            \\
+            \\    (* vera_nodiff *) begin capgs = capgs; end   // stopped
+            \\    (* vera_nodiff = 0 *) c = c;                 // not stopped
+            \\
+            \\The attribute is ignored and the statement stores derivatives.
+            ,
+        },
+        .E0526 => .{
+            .title = "vera_nodiff covers a contribution",
+            .lrm = "2.9",
+            .explain =
+            \\`(* vera_nodiff *)` stops the derivative of the ASSIGNMENTS inside
+            \\it. A contribution inside it would leave its branch with no
+            \\Jacobian at all, and Newton cannot move a branch it cannot see.
+            \\Stop the coefficient instead and contribute outside:
+            \\
+            \\    (* vera_nodiff *) c = c;
+            \\    I(p, n) <+ ddt(c * V(p, n));
             ,
         },
         .E0572 => .{
