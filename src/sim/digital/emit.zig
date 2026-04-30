@@ -52,9 +52,10 @@ pub const Program = struct {
 pub const Error = error{ Unsupported, OutOfMemory };
 
 /// The root module of `r`'s executable. `r` is read — and its time-0 queue
-/// drained — never run.
-pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule) std.mem.Allocator.Error!Program {
-    var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena) };
+/// drained — never run. `two_state`: every x or z the design would create
+/// is 0 (`rt.logic.two`); a design where one carries meaning is refused.
+pub fn program(arena: std.mem.Allocator, r: *Run, embed: Embed, schedule: Schedule, two_state: bool) std.mem.Allocator.Error!Program {
+    var e: Emitter = .{ .r = r, .arena = arena, .out = .init(arena), .two_state = two_state };
     if (native(&e, embed.file_name, schedule)) |text| return .{ .text = text, .fallback = null } else |err| switch (err) {
         error.OutOfMemory => return error.OutOfMemory,
         error.Unsupported => return .{ .text = try interpreted(arena, embed, e.why), .fallback = e.why },
@@ -89,6 +90,8 @@ pub const Emitter = struct {
     watched: []const bool = &.{},
     /// The process being emitted.
     role: plan.Role = .general,
+    /// `--two-state` (`program`).
+    two_state: bool = false,
 
     pub fn print(self: *Emitter, comptime f: []const u8, args: anytype) Error!void {
         self.out.writer.print(f, args) catch return error.OutOfMemory;
@@ -193,6 +196,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\const S = rt.State;
         \\
     , .{file_name});
+    if (self.two_state) try self.print("pub const vera_two_state = true;\n", .{});
     const seen = try self.arena.alloc(bool, r.code.items.len);
     @memset(seen, false);
     var procs: std.ArrayList(plan.Proc) = .empty;
@@ -230,10 +234,12 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         , .{});
     } else try self.print("fn dispatch(s: *S, pc: u32) rt.Error!void {{\n    return procs[pc](s, pc);\n}}\n\n", .{});
 
+    // Under `--two-state` an x or z initial value (§3.2) is 0.
     try self.print("const design: rt.Design = .{{\n    .v = &.{{", .{});
-    for (r.values) |v| for (v.values()[0..words(v.width)]) |x| try self.print(" 0x{x},", .{x});
+    for (r.values) |v| for (v.values()[0..words(v.width)], v.unknowns()[0..words(v.width)]) |x, u|
+        try self.print(" 0x{x},", .{if (self.two_state) x & ~u else x});
     try self.print(" }},\n    .x = &.{{", .{});
-    for (r.values) |v| for (v.unknowns()[0..words(v.width)]) |x| try self.print(" 0x{x},", .{x});
+    for (r.values) |v| for (v.unknowns()[0..words(v.width)]) |x| try self.print(" 0x{x},", .{if (self.two_state) 0 else x});
     try self.print(" }},\n    .slots = {d},\n", .{r.values.len});
     try table(self, "fan_start", p.fan_start);
     try table(self, "fan", p.fan);
@@ -423,7 +429,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             } else try self.print("            _ = v;\n", .{});
             for (case.arms, 0..) |arm, i| for (arm.labels) |lb| {
                 try self.print("            if (L.caseMatch(.{t}, v, ", .{case.kind});
-                try expr.value(self, lb, c.ty);
+                try expr.caseLabel(self, lb, c.ty, case.kind);
                 try self.print(")) continue :sw {d};\n", .{r.case_targets.items[c.targets + i]});
             };
             try self.print("            continue :sw {d};\n", .{c.fallback});
@@ -549,8 +555,10 @@ fn delay(self: *Emitter, amount: Ast.ExprId) Error!void {
     const scale = r.timeOf(r.scope).scale;
     const t = try expr.natural(self, amount);
     if (t.width > 64) return self.refuse("a delay wider than 64 bits");
-    if (compile.constantExpression(r, amount)) {
+    if (compile.constantExpression(r, amount)) fold: {
         const v = exec.eval(r, self.arena, amount, 0) catch return self.refuse("a delay the engine does not fold");
+        // `--two-state` computes an unknown constant from its 0-valued leaves.
+        if (self.two_state and v.hasUnknown()) break :fold;
         const ticks = if (v.hasUnknown()) 0 else (if (v.signed) scale.signedDelay(v.asInt().?) else scale.unsignedDelay(v.values()[0])) catch |e|
             return self.print("return s.fail(\"digital delay cannot be represented: {t}\", .{{}})", .{e});
         return self.print("{d}", .{ticks});

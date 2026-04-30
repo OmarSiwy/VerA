@@ -30,6 +30,7 @@ pub const logic = @import("logic.zig");
 const Int = @import("frontend").Integer;
 const W = logic.W;
 const Bit = logic.Bit;
+const two = logic.two;
 
 test {
     _ = logic;
@@ -330,14 +331,17 @@ pub const State = struct {
         e.interface.flush() catch {};
     }
 
+    // Under `--two-state` the x plane stays zero, and a read says so as a
+    // constant, so every operator's x half folds away where it is compiled.
+
     /// The value of at most 64 bits at word `off`.
     pub inline fn get(self: *const State, off: u32) W {
-        return .{ .v = self.v[off], .x = self.x[off] };
+        return .{ .v = self.v[off], .x = if (two) 0 else self.x[off] };
     }
 
     /// The `n`-word value at word `off`.
     pub inline fn getw(self: *const State, off: u32, comptime n: u32) logic.Wide(n) {
-        return .{ .v = self.v[off..][0..n].*, .x = self.x[off..][0..n].* };
+        return .{ .v = self.v[off..][0..n].*, .x = if (two) @splat(0) else self.x[off..][0..n].* };
     }
 
     /// The bits `m` of the value at word `off` become `a`'s, for a slot no
@@ -352,7 +356,7 @@ pub const State = struct {
         }
         const bits: u64 = m;
         self.v[off] = (self.v[off] & ~bits) | (a.v & bits);
-        self.x[off] = (self.x[off] & ~bits) | (a.x & bits);
+        if (!two) self.x[off] = (self.x[off] & ~bits) | (a.x & bits);
     }
 
     /// `exec.store` of the bits `m` of `slot`, whose words start at `off`:
@@ -368,17 +372,16 @@ pub const State = struct {
     /// which only word 0 holds.
     pub inline fn putWord(self: *State, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
         const at = off + j;
-        const ov = self.v[at];
-        const ox = self.x[at];
-        const nv = (ov & ~m) | (a.v & m);
-        const nx = (ox & ~m) | (a.x & m);
-        const d = (nv ^ ov) | (nx ^ ox);
+        const o = self.get(at);
+        const nv = (o.v & ~m) | (a.v & m);
+        const nx = (o.x & ~m) | (a.x & m);
+        const d = (nv ^ o.v) | (nx ^ o.x);
         if (d == 0) return;
-        const before = logic.low(W{ .v = self.v[off], .x = self.x[off] });
+        const before = logic.low(self.get(off));
         self.v[at] = nv;
-        self.x[at] = nx;
+        if (!two) self.x[at] = nx;
         if (self.sensed(slot)) self.diff[at] |= d;
-        try self.wake(slot, before, logic.low(W{ .v = self.v[off], .x = self.x[off] }));
+        try self.wake(slot, before, logic.low(self.get(off)));
     }
 
     fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
