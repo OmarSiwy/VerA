@@ -28,6 +28,8 @@ pub const Scale = @import("../time.zig").Scale;
 pub const fmt = @import("../fmt.zig");
 pub const logic = @import("logic.zig");
 const Int = @import("frontend").Integer;
+const zCReal = @import("kernels").str_kernels.zCReal;
+const system = @import("../digital/system.zig");
 const W = logic.W;
 const Bit = logic.Bit;
 const two = logic.two;
@@ -204,6 +206,8 @@ pub const State = struct {
     mon_site: ?u32 = null,
     mon_on: bool = true,
     mon_pending: bool = false,
+    /// §17.6 the stochastic queues, by `q_id`.
+    queues: system.Queues = .empty,
     time_format: fmt.TimeFormat,
     budget_time: u64 = 0,
     budget_used: u64 = 0,
@@ -435,6 +439,17 @@ pub const State = struct {
         try self.wake(slot, before, logic.low(self.get(off)));
     }
 
+    /// `put` of a real (§4.8, `exec.store`): it changes when its value
+    /// does, so -0.0 over 0.0 is no change and a NaN always is one.
+    pub fn putReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
+        _ = m;
+        if (logic.real(self.get(off)) == logic.real(a)) return;
+        const before = logic.low(self.get(off));
+        self.v[off] = a.v;
+        if (self.sensed(slot)) self.diff[off] = std.math.maxInt(u64);
+        try self.wake(slot, before, logic.low(a));
+    }
+
     fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
         const sv = self.v[off..][0..v.len];
         const sx = self.x[off..][0..v.len];
@@ -456,6 +471,8 @@ pub const State = struct {
 
     /// §9.2.2: schedule the bits `m` of `slot` (words from `off`) to become
     /// `a` in the NBA region.
+    /// ponytail: a real's update is compared by its bits, not its value as
+    /// `putReal` does; only -0.0 over 0.0 and a NaN over itself differ.
     pub fn nba(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
         const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
         const at: u32 = @intCast(self.words.items.len);
@@ -637,6 +654,26 @@ pub const State = struct {
         return scale.unitsAt(self.sched.now);
     }
 
+    /// §17.7.2 `$realtime`: now, in the invoking module's unit, unrounded.
+    pub fn realtime(self: *const State, scale: Scale) f64 {
+        return scale.realAt(self.sched.now);
+    }
+
+    /// §17.6 queue task `op` (`system.queueStep`), at now in `scale`'s unit.
+    pub fn queue(self: *State, op: system.QueueOp, id: ?i64, in1: ?i64, in2: ?i64, scale: Scale) Error!system.QueueResult {
+        return system.queueStep(&self.queues, self.gpa, op, id, in1, in2, self.units(scale));
+    }
+
+    /// §17.6.5 `$q_full` of queue `id`.
+    pub fn queueFull(self: *const State, id: ?i64) @TypeOf(system.queueIsFull(undefined, null)) {
+        return system.queueIsFull(&self.queues, id);
+    }
+
+    /// `exec.delayOf` of a real delay (§9.7.1), rounded to the precision.
+    pub fn realTicks(self: *State, r: f64, scale: Scale) Error!u64 {
+        return scale.realDelay(r) catch |e| self.fail("digital delay cannot be represented: {t}", .{e});
+    }
+
     /// `exec.delayOf` of an integral delay (§9.7.1): x/z reads as 0.
     pub fn ticks(self: *State, a: W, signed: bool, scale: Scale) Error!u64 {
         if (a.x != 0) return 0;
@@ -676,6 +713,16 @@ pub const State = struct {
     pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32) Error!void {
         var buf = logic.planesOf(a);
         try fmt.time(self.out, literal(&buf, w, signed), self.time_format, unit_exp);
+    }
+
+    /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,
+    /// padded on the left to `width`.
+    pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u32) Error!void {
+        // The longest %f of an f64 is 309 integer digits and ".000000".
+        var buf: [512]u8 = undefined;
+        const out = zCReal(&buf, r, conv, 0, 0, precision);
+        if (width) |w| if (out.len < w) try self.out.splatByteAll(' ', w - out.len);
+        try self.out.writeAll(out);
     }
 
     /// One `%s` or `%c` operand (§17.1.1.7).
