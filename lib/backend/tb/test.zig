@@ -317,6 +317,33 @@ test "§4.6.4 a `//! noise` line states the row's contents as well as its place"
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! noise table(a,b)#0 points=1.0\n"));
 }
 
+test "§9.17.3 `//! seed` and `//! limit` state the published cold start and clamp" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try tb_directive.parse(arena,
+        \\//! seed V(si) = -0.7, V(b) = -1.7
+        \\//! seed V(g) = 0
+        \\//! limit V(b) = 0 -> V(b) = 0.1, converged = 0
+        \\//! limit -> V(b) = 1.5
+        \\
+    );
+    try testing.expect(d.asserts_seed);
+    try testing.expectEqual(@as(usize, 3), d.seeds.len);
+    try testing.expectEqualStrings("b", d.seeds[1].name);
+    try testing.expectEqual(@as(usize, 2), d.limits.len);
+    try testing.expectEqual(@as(usize, 1), d.limits[0].old.len);
+    try testing.expectEqualStrings("converged", d.limits[0].want[1].name);
+    try testing.expectEqual(@as(usize, 0), d.limits[1].old.len);
+
+    const none = try tb_directive.parse(arena, "//! seed none\n");
+    try testing.expect(none.asserts_seed and none.seeds.len == 0);
+    // No `->` names no output, and no output is no assertion.
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! limit V(b) = 0\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! limit V(b) = 0 ->\n"));
+}
+
 test "§4.6.3 `//! acstim` states the exported stimulus table" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

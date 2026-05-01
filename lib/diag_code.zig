@@ -5767,7 +5767,7 @@ fn infoOf(c: Code) Info {
             \\decides the calls it can honour:
             \\
             \\  - the string names an algorithm VerA implements: pnjlim, fetlim,
-            \\    limvds, fetlimds, steplim. An unknown name, or none, leaves the
+            \\    limvds, fetlimds, pnjlimds, steplim. An unknown name, or none, leaves the
             \\    choice to the simulator "just as if no string had been
             \\    supplied", and VerA's choice is none;
             \\  - the first argument is a potential probe V(a) or V(a,b): there
@@ -5777,10 +5777,13 @@ fn infoOf(c: Code) Info {
             \\    `$limit(V(b,e), "pnjlim", vte, vcrit, type)`;
             \\  - at least one net is internal: the host never moves a port,
             \\    because other devices share it. A junction straight across
-            \\    two ports (no series resistance) has nothing to correct;
+            \\    two ports (no series resistance) has nothing to correct. A
+            \\    pnjlimds rung is the exception: it writes its bulk, port or not;
             \\  - the arguments the algorithm takes are present and real;
             \\  - a `fetlimds` site is one of two on the same gate, with a
-            \\    `limvds` across the two internal channel nodes.
+            \\    `limvds` across the two internal channel nodes; a `pnjlimds`
+            \\    site is one of two on the same bulk, with a `limvds` across
+            \\    their two channel nodes.
             \\
             \\The help line under the warning names the change for this call.
             \\Silence it for a model that converges without the clamp with
