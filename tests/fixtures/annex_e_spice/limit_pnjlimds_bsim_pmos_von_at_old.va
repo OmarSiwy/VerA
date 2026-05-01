@@ -27,11 +27,16 @@
 //   and pnjlim moved: converged = 0.
 // [1] old = cur: §9.17.3 "When the simulator has converged, the return value
 //   of the $limit() function is the value of the access function reference".
+// At the bias the model evaluates, §9.17.3's "When the simulator has
+// converged, the return value of the $limit() function is the value of the
+// access function reference, within appropriate tolerances" is the CHECK
+// (1e-6: Annex D's `nature Voltage` abstol, as limit_fet.va argues).
 //! lrm 9.17.3
 //! bias V(g) = -1.1, V(si) = 0.0, V(di) = -0.5, V(b) = -1.0
 //! print none
 //! limit V(g) = 0, V(si) = 0, V(di) = 0, V(b) = 1.0 -> V(si) = 0.0, V(di) = -0.5, V(g) = -1.1, V(b) = -0.09222198635284841, converged = 0
 //! limit -> V(si) = 0.0, V(di) = -0.5, V(g) = -1.1, V(b) = -1.0, converged = 1
+`include "check.vh"
 module limit_pnjlimds_bsim_pmos_von_at_old(d, g, s, b);
   inout d, g, s, b; electrical d, g, s, b, di, si;
   parameter real type = -1.0, vth0 = 0.5, vt = 0.025, vcrit = 0.6;
@@ -48,5 +53,6 @@ module limit_pnjlimds_bsim_pmos_von_at_old(d, g, s, b);
     I(di, si) <+ type * 1e-3 * (vds + 0.1 * (vgs + vgd));
     I(b, si) <+ type * 1e-14 * (limexp(vbs / vt) - 1.0);
     I(b, di) <+ type * 1e-14 * (limexp(vbd / vt) - 1.0);
+    `CHECK("$limit returns its access function at the answer", vbs, 1.0, 1e-6);
   end
 endmodule
