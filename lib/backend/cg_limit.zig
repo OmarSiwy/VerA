@@ -84,7 +84,7 @@ fn unionSite(lv: *Live, g: *const Gen, lc: LimitCall) void {
 
 pub fn liveSets(g: *const Gen) Live {
     var lv: Live = .{};
-    // A core re-entry is seeded from EVERY entry of `cur` (`emit`'s `xr` loop),
+    // A core re-entry is seeded from EVERY entry of `old` (`emit`'s `xr` loop),
     // and n_u > 64 has no room in the mask — both answer "all of them".
     if (usesCore(g) or g.names.n_u > 64) lv.reads = ~@as(u64, 0);
     for (g.limits.calls, 0..) |lc, i| switch (lc.alg) {
@@ -223,9 +223,13 @@ pub fn emit(g: *Gen) Error!void {
         if (reads_inst) "inst" else "_",
     });
     const probe_inst = if (needs_core) try g.probeInstance() else "inst";
+    // §9.17.3 leaves the return value to the simulator, and ngspice's loads
+    // take every limiter argument from the PREVIOUS load (mos1load.c:351
+    // fetlims against the `von` stored at :535). So the core that computes
+    // the arguments runs at `old`, the previous iterate's limited point.
     if (needs_core) try g.w(
         \\    var xr: [n_u]R = undefined;
-        \\    for (cur, 0..) |xv, i| xr[i] = R.con(xv);
+        \\    for (old, 0..) |xv, i| xr[i] = R.con(xv);
         \\    const m = core(R, xr, model, {s}{s});
         \\
     , .{ probe_inst, g.heldArg(true) });

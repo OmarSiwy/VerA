@@ -2937,6 +2937,29 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
     try std.testing.expect(std.mem.indexOf(u8, s2, "pub fn limit(") == null);
 }
 
+test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`" {
+    // ngspice fetlims against the `von` its PREVIOUS load stored
+    // (mos1load.c:351, :535), and §9.17.3 leaves the returned value to the
+    // simulator. So `limit` runs the core that computes its arguments at `old`,
+    // the previous iterate's limited point, never at the unlimited `cur`.
+    var h: Harness = undefined;
+    try Harness.run(std.testing.allocator,
+        \\module m(g, s, d);
+        \\  inout g, s, d; electrical g, s, d, si;
+        \\  real von;
+        \\  analog begin
+        \\    von = 0.5 + 0.1 * V(d, si);
+        \\    I(si, s) <+ ($limit(V(g, si), "fetlim", von) - V(s)) / 1.0;
+        \\    I(d, si) <+ V(d, si) / 1e3;
+        \\  end
+        \\endmodule
+    , &h);
+    defer h.deinit();
+    const s = try h.gen(std.testing.allocator);
+    try std.testing.expect(std.mem.indexOf(u8, s, "for (old, 0..) |xv, i| xr[i] = R.con(xv);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "for (cur, 0..)") == null);
+}
+
 /// Does the bag carry a W0853 whose message contains `why`?
 fn limitDeclined(h: *Harness, why: []const u8) bool {
     for (0..h.bag.count()) |i| {
