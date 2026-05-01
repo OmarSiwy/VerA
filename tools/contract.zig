@@ -1025,6 +1025,18 @@ pub fn LimitResult(comptime n: usize) type {
 /// THE RULE FOR A HOST: an unknown outside `limitWrites` was never written by
 /// the device, so its "previously limited" value must come from the host's own
 /// previous iterate, not from the plane `limit` writes into.
+/// The host-rewritten `Instance` fields `D`'s core reads: `D.core_sim_fields`,
+/// else every such field when `D` declares `core_reads_simstate`, else none.
+pub fn coreSimFields(comptime D: type) []const []const u8 {
+    if (@hasDecl(D, "core_sim_fields")) return &D.core_sim_fields;
+    if (@hasDecl(D, "core_reads_simstate") and D.core_reads_simstate) return &core_sim_field_names;
+    return &.{};
+}
+const core_sim_field_names = [_][]const u8{
+    "abstime",           "dt",               "analysis_kind", "is_initial_step",
+    "is_final_step",     "is_analog_initial", "newton_iteration", "limiter_previous",
+};
+
 pub fn limitReads(comptime D: type) u64 {
     return if (@hasDecl(D, "limit_reads")) D.limit_reads else ~@as(u64, 0);
 }
@@ -1376,6 +1388,12 @@ pub fn validate(comptime D: type) void {
         if (!@hasDecl(D, m)) continue;
         if (!@hasDecl(D, "limit")) @compileError(@typeName(D) ++ "." ++ m ++ " without a `limit`");
         if (@TypeOf(@field(D, m)) != u64) @compileError(@typeName(D) ++ "." ++ m ++ " must be a u64 mask over U");
+    }
+    if (@hasDecl(D, "core_sim_fields")) {
+        if (!@hasDecl(D, "core_reads_simstate"))
+            @compileError(name ++ ".core_sim_fields without core_reads_simstate");
+        for (D.core_sim_fields) |f| if (!@hasField(D.Instance, f))
+            @compileError(name ++ ".core_sim_fields names `" ++ f ++ "`, which is not an Instance field");
     }
     if (@hasDecl(D, "limit_writes") and (limitWrites(D) & ~limitReads(D)) != 0)
         @compileError(@typeName(D) ++ ".limit_writes has a bit limit_reads does not");
@@ -1832,6 +1850,12 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // updateState epilogue's `state.t_prev = inst.abstime` latch does not
     // count — nothing in the core reads it back.
     .{ "core_reads_simstate", {} },
+    // The host-rewritten Instance fields the core reads, by name; exact, and
+    // emitted only beside `core_reads_simstate`. A host may run such a core
+    // device-resident if it republishes every listed field to the resident
+    // copy before the next launch after the field changes. Absent: all of
+    // them (`coreSimFields`).
+    .{ "core_sim_fields", {} },
     .{ "mutable_eval", {} },
     // §4.6.4.3's array-parameter table at this card. Optional; see `validate`
     // and `validateHost` — a device that declares it has knots `noise_tables`
@@ -2306,6 +2330,7 @@ const MockAll = struct {
     pub const jac_f32_host = true;
     pub const lane_clean = true;
     pub const core_reads_simstate = true;
+    pub const core_sim_fields = [_][]const u8{ "abstime", "analysis_kind" };
     pub const mutable_eval = false;
 
     pub const Model = struct { g: f32 = 1e-3 };
