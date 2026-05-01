@@ -1359,16 +1359,15 @@ pub fn validate(comptime D: type) void {
     }
 
     // Voltage limiting (pnjlim/fetlim) and cold-start seeding (SPICE
-    // MODEINITJCT). seed returns absolute local voltages written into a
-    // zeroed x before Newton iteration 1; null leaves an unknown untouched
-    // (externally driven terminals). Any device with junction limiting
-    // should also declare seed — limiting from x_old = 0 is what pins
-    // cold-start Newton in the wrong basin.
-    // NOTE: limit corrections are only APPLIED to internal unknowns
-    // (u >= num_ports) — the batch masks external writes, since a limiter
-    // writing a driven/shared node fights sources and other devices.
-    // seed writes are unmasked: they happen once, pre-solve, and the first
-    // linear solve re-imposes every source constraint.
+    // MODEINITJCT). limit's x and seed's values are the instance's PRIVATE
+    // limited image, never the shared x. seed runs once before Newton
+    // iteration 1 and returns non-null only on limit_writes lanes; limit
+    // returns `cur` on a lane it does not clamp. `old` is the previous Newton
+    // iterate's limited point: the image on limit_writes once seed or limit
+    // has run, x_old elsewhere. limit_writes may name a port; a host that
+    // masks ports only loses that clamp, which §9.17.3 permits. Any device
+    // with junction limiting should also declare seed — limiting from
+    // x_old = 0 is what pins cold-start Newton in the wrong basin.
     if (@hasDecl(D, "limit"))
         expectFn(D, "limit", fn (*const D.Model, *const D.Instance, [n]f64, [n]f64) LimitResult(n));
     // The masks are only meaningful next to a `limit`, and `writes ⊆ reads`
