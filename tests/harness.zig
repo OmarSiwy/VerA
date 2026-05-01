@@ -21,7 +21,7 @@
 //! mean one thing for VerA and another for OpenVAF.
 //!
 //! WHAT THIS FILE OWNS, and why each piece is not the runner's business:
-//!   - the fixture format: `//! reject` / `//! lrm` / `//! xfail`, parsed by
+//!   - the fixture format: `//! reject` / `//! warn` / `//! lrm` / `//! xfail`, parsed by
 //!     `vera.tb.parse`, the same parser the fixtures were written against;
 //!   - the assertion lint (`checkAssertions`): a want that is not a numeric
 //!     literal is a FIXTURE defect, and it is one in every compiler;
