@@ -13,11 +13,23 @@ const lower_contrib = @import("contrib.zig");
 const lower_func = @import("func.zig");
 const lower_node = @import("node.zig");
 const lower_sysfunc = @import("sysfunc.zig");
+const lower_expr = @import("expr.zig");
+const Mir = @import("../mir.zig");
 const Ast = @import("frontend").Ast;
 const Oom = Lower.Oom;
 const TypedValue = Lower.TypedValue;
 const call = Lower.call;
 const toReal = Lower.toReal;
+
+/// VerA's `vera_seed` on the string `$limit` call `e` (result `v`): the call's
+/// own suffix, else the nearest enclosing statement's. Its value may read the
+/// model card; §2.9's default is 1.
+pub fn recordSeed(self: *Lower, e: Ast.ExprId, v: Mir.Value) Oom!void {
+    const s = self.seed_stack.items;
+    const a = self.file.exprLte(e, .vera_seed) orelse (if (s.len != 0) s[s.len - 1] else return);
+    const value: Mir.Value = if (a.value == .none) .f_one else try toReal(self, try lower_expr.lowerExpr(self, a.value));
+    try self.out.limit_seeds.append(self.arena, .{ .call = v, .value = value, .tok = a.main_tok });
+}
 
 /// The §4.7 function a `$limit` second argument names, or null when the argument
 /// is not one — Syntax 9-12's other two forms put a string there, or nothing.

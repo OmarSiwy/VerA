@@ -27,6 +27,14 @@ pub const Limits = struct {
     declined: []Decline = &.{},
     /// `Lowered.num_ports` — what `writable` answers from.
     num_ports: usize = 0,
+    /// VerA's `vera_seed` opt-in: any site carries one, or any site is a
+    /// `pnjlimds` leg. Then `seed` is the branch tree `seed_steps` spells;
+    /// otherwise it is the per-junction vcrit bias it always was.
+    seed_tree: bool = false,
+    /// The tree, root first per component, each node after the one it hangs off.
+    seed_steps: []SeedStep = &.{},
+    /// One per `vera_seed` or tree edge that is not applied (W0854).
+    seed_dropped: []Decline = &.{},
 
     /// The ladder `calls[i]` (a `fetlimds` site, either leg) belongs to:
     /// exactly two `fetlimds` sites share its first-named node (the gate), one
@@ -183,6 +191,13 @@ pub const LimitCall = struct {
     /// The algorithm's numeric arguments as MIR values. `buildJobs` queues these
     /// as core jobs, so by emission time each has an `lo_idx` field.
     argv: [max_args]Mir.Value = .{ .f_zero, .f_zero },
+    /// VerA's `vera_seed` value for this site's branch, in the frame of `sign`;
+    /// `.undef` when the site carries none.
+    seed: Mir.Value = .undef,
+    /// The attribute's token, for its diagnostics.
+    seed_tok: u32 = 0,
+    /// The call's result, which `Lowered.limit_seeds` names the site by.
+    res: Mir.Value = .undef,
     /// Optional trailing argument: the FRAME SIGN. All three devsup.c
     /// limiters assume forward = positive; a PNP/PMOS model whose junction is
     /// forward at NEGATIVE probe voltage passes its `type` parameter here and
@@ -254,7 +269,11 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 try at.decline("too few arguments for the algorithm named", try std.fmt.allocPrint(g.arena, "`{t}` takes {d} argument(s) after its name", .{ alg, n }));
                 continue;
             }
-            var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1], .tok = tok };
+            var lc: LimitCall = .{ .alg = alg, .hi = pair[0], .lo = pair[1], .tok = tok, .res = g.mir.instResult(inst) };
+            for (g.lowered.limit_seeds.items) |sd| if (sd.call == lc.res) {
+                lc.seed = sd.value;
+                lc.seed_tok = sd.tok;
+            };
             var bad = false;
             for (0..n) |k| {
                 const v = g.an.rv(d.args[2 + k]);
@@ -314,7 +333,147 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
         lim.calls = out.items[0..w_];
     }
     lim.declined = declined.items;
+    try planSeed(g, u_names, &lim);
     return lim;
+}
+
+/// One node of the `vera_seed` tree: `s[node] = s[from] ± raw(site)`, the
+/// sign picked by which end of `site`'s branch `node` is. `from` is ground
+/// (0 V) when `none_u32`; `site == none_u32` is a component root, set to 0.
+pub const SeedStep = struct { node: u32, from: u32, site: u32 };
+
+/// VerA's `vera_seed` (§2.9) and SPICE `MODEINITJCT` (mos1load.c:397-408):
+/// ngspice starts a device at BRANCH values, vgs = vto, vds = 0, vbs = -1,
+/// and the limited image a host keeps is NODE values. So the branches are the
+/// edges of a graph over their nets: the sites carrying `vera_seed`, and the
+/// pnjlim/pnjlimds legs at their default vcrit. A fetlimds vgd leg and a
+/// pnjlimds vbd leg are derived through vds and are never edges. Two sites on
+/// one net pair are one edge, an explicit seed beating a default; a second
+/// explicit seed, or an edge closing a cycle, is dropped (W0854). Each
+/// component's root is ground if it holds it, else its lowest port, else its
+/// lowest net, at 0 V; every other node follows its edge from the root.
+fn planSeed(g: Input, u_names: []const []const u8, lim: *Limits) Error!void {
+    var dropped: std.ArrayList(Decline) = .empty;
+    // A seed on a site that is not honoured has no branch to start.
+    for (g.lowered.limit_seeds.items) |sd| {
+        for (lim.calls) |lc| {
+            if (lc.res == sd.call) break;
+        } else try dropped.append(g.arena, .{ .tok = sd.tok, .msg = "its `$limit` is not applied (W0853 says why)" });
+    }
+    for (lim.calls) |lc| lim.seed_tree = lim.seed_tree or lc.seed != .undef or lc.alg == .pnjlimds;
+    if (!lim.seed_tree) {
+        lim.seed_dropped = dropped.items;
+        return;
+    }
+    var edges: std.ArrayList(u32) = .empty;
+    for (lim.calls, 0..) |lc, i| {
+        const derived = switch (lc.alg) {
+            .fetlimds => lim.ladderOf(i).?.gd == i,
+            .pnjlimds => lim.rungOf(i).?.bd == i,
+            .pnjlim, .fetlim, .limvds, .steplim => false,
+        };
+        const explicit = lc.seed != .undef;
+        if (derived) {
+            if (explicit) try dropped.append(g.arena, .{
+                .tok = lc.seed_tok,
+                .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) is derived through vds, so it is not seeded on its own", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
+                .help = "seed the leg on the channel's source side instead",
+            });
+            continue;
+        }
+        const default = (lc.alg == .pnjlim or lc.alg == .pnjlimds) and lc.argv[1] != .f_zero;
+        if (!explicit and !default) continue;
+        const k = for (edges.items, 0..) |e, k| {
+            const o = lim.calls[e];
+            if ((o.hi == lc.hi and o.lo == lc.lo) or (o.hi == lc.lo and o.lo == lc.hi)) break k;
+        } else {
+            try edges.append(g.arena, @intCast(i));
+            continue;
+        };
+        if (!explicit) continue; // a default never displaces what is there
+        if (lim.calls[edges.items[k]].seed == .undef) {
+            edges.items[k] = @intCast(i);
+            continue;
+        }
+        try dropped.append(g.arena, .{
+            .tok = lc.seed_tok,
+            .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) is already seeded by an earlier site", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
+        });
+    }
+
+    // Union-find over the unknowns plus ground (`n`), keeping the edges
+    // that join two components.
+    const n = u_names.len;
+    const up = try g.arena.alloc(u32, n + 1);
+    for (up, 0..) |*p, i| p.* = @intCast(i);
+    const find = struct {
+        fn f(parent: []u32, x0: u32) u32 {
+            var x = x0;
+            while (parent[x] != x) x = parent[x];
+            return x;
+        }
+    }.f;
+    const node = struct {
+        fn f(u: u32, gnd: usize) u32 {
+            return if (u == none_u32) @intCast(gnd) else u;
+        }
+    }.f;
+    var tree: std.ArrayList(u32) = .empty;
+    for (edges.items) |e| {
+        const lc = lim.calls[e];
+        const a = find(up, node(lc.hi, n));
+        const b = find(up, node(lc.lo, n));
+        if (a == b) {
+            try dropped.append(g.arena, .{
+                .tok = if (lc.seed != .undef) lc.seed_tok else lc.tok,
+                .msg = try std.fmt.allocPrint(g.arena, "V({s},{s}) closes a loop of seeded branches", .{ uName(u_names, lc.hi), uName(u_names, lc.lo) }),
+                .help = "the other branches of the loop already fix it; drop this seed or one of theirs",
+            });
+            continue;
+        }
+        up[a] = b;
+        try tree.append(g.arena, e);
+    }
+
+    // Roots, then every node in the order it becomes reachable.
+    var steps: std.ArrayList(SeedStep) = .empty;
+    const placed = try g.arena.alloc(bool, n + 1);
+    @memset(placed, false);
+    for (tree.items) |e0| {
+        const lc0 = lim.calls[e0];
+        if (placed[node(lc0.hi, n)]) continue;
+        // This component's root: ground, else its lowest port, else its lowest net.
+        const c = find(up, node(lc0.hi, n));
+        var root: u32 = none_u32;
+        var u: u32 = 0;
+        while (u <= n) : (u += 1) {
+            if (find(up, u) != c) continue;
+            if (u == n) {
+                root = u;
+                break;
+            }
+            if (root == none_u32 or (u < lim.num_ports and root >= lim.num_ports)) root = u;
+        }
+        placed[root] = true;
+        if (root != n) try steps.append(g.arena, .{ .node = root, .from = none_u32, .site = none_u32 });
+        var grew = true;
+        while (grew) {
+            grew = false;
+            for (tree.items) |e| {
+                const lc = lim.calls[e];
+                const hi = node(lc.hi, n);
+                const lo = node(lc.lo, n);
+                if (placed[hi] == placed[lo]) continue;
+                const to = if (placed[hi]) lo else hi;
+                const from = if (placed[hi]) hi else lo;
+                placed[to] = true;
+                grew = true;
+                try steps.append(g.arena, .{ .node = to, .from = if (from == n) none_u32 else from, .site = e });
+            }
+        }
+    }
+    lim.seed_steps = steps.items;
+    lim.seed_dropped = dropped.items;
 }
 
 /// Why `lim.calls[i]` cannot be honoured on its own, and the help line; null
@@ -446,4 +605,36 @@ test "an honoured pnjlim, and the declines that say why" {
     try std.testing.expectEqual(@as(usize, 2), lim.declined.len);
     try std.testing.expect(std.mem.indexOf(u8, lim.declined[0].msg, "§6.5 ports") != null);
     try std.testing.expect(std.mem.indexOf(u8, lim.declined[1].msg, "too few arguments") != null);
+}
+
+test "the vera_seed tree: an explicit seed opts in, a loop edge is dropped, ground roots its component" {
+    var f: Fixture = .{ .arena = .init(std.testing.allocator) };
+    try f.init(&.{ "p", "a", "b", "c" });
+    defer f.deinit();
+    f.lowered.num_ports = 1;
+    const a = f.alloc();
+    const pnj = try f.mir.addStrConst(a, "pnjlim");
+    const vt = try f.mir.addFloatConst(a, 0.025);
+    const vc = try f.mir.addFloatConst(a, 0.6);
+    const pa = try f.probe(1);
+    const pb = try f.probe(2);
+    const pc = try f.probe(3);
+    const ab = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pa, pb }), pnj, vt, vc });
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pb, pc }), pnj, vt, vc });
+    _ = try f.call("$limit", &.{ try f.mir.emit(a, .entry, .fsub, &.{ pa, pc }), pnj, vt, vc }); // closes a-b-c
+    _ = try f.call("$limit", &.{ pc, pnj, vt, vc }); // V(c): c against ground
+    try f.lowered.limit_seeds.append(a, .{ .call = ab, .value = try f.mir.addFloatConst(a, 0.1), .tok = 0 });
+    const an = try f.analysis();
+
+    const lim = try plan(.{ .arena = a, .mir = &f.mir, .an = &an, .lowered = &f.lowered }, &.{ "p", "a", "b", "c" });
+    try std.testing.expect(lim.seed_tree);
+    try std.testing.expectEqual(@as(usize, 1), lim.seed_dropped.len);
+    try std.testing.expect(std.mem.indexOf(u8, lim.seed_dropped[0].msg, "closes a loop") != null);
+    // Ground is the root and writes nothing; c hangs off it, b off c, a off b.
+    const want = [_]SeedStep{
+        .{ .node = 3, .from = none_u32, .site = 3 },
+        .{ .node = 2, .from = 3, .site = 1 },
+        .{ .node = 1, .from = 2, .site = 0 },
+    };
+    try std.testing.expectEqualSlices(SeedStep, &want, lim.seed_steps);
 }

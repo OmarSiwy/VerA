@@ -1,0 +1,32 @@
+// §2.9 VerA's `vera_seed` where two `$limit` sites share one pair of nets: a
+// JFET's gate junction is limited twice, fetlim then pnjlim on V(g, sp)
+// (ngspice jfetload.c; the corpus jfet.va writes both).
+//
+// Two sites on one pair are ONE branch, so they give it one starting value:
+// an explicit `vera_seed` beats the pnjlim's default vcrit, and a second
+// explicit seed on the same pair is dropped with W0854 rather than silently
+// picked. The branch then solves into nodes from the root at 0 V, the lowest
+// seeded port g.
+//
+// U = d, g, s, dp, sp. vgs seeded -1.0 (a reverse-biased gate) on the fetlim
+// site; the pnjlim default (vcrit = 0.6) and the later explicit 0.3 are the
+// same branch and lose:  g - sp = -1.0  ->  sp = 1.0.
+// Were the default applied instead, sp = -0.6; were the later seed, sp = -0.3.
+//! lrm 2.9
+//! lrm 9.17.3
+//! print none
+//! seed V(g) = 0.0, V(sp) = 1.0
+module limit_vera_seed_explicit_beats_default(d, g, s);
+  inout d, g, s; electrical d, g, s, dp, sp;
+  parameter real vto = -2.0, vt = 0.025, vcrit = 0.6;
+  real vgs, vgj, vgk;
+  analog begin
+    (* vera_seed = -1.0 *) vgs = $limit(V(g, sp), "fetlim", vto);
+    vgj = $limit(V(g, sp), "pnjlim", vt, vcrit);
+    (* vera_seed = 0.3 *) vgk = $limit(V(g, sp), "pnjlim", vt, vcrit);
+    I(d, dp) <+ V(d, dp) / 10.0;
+    I(s, sp) <+ V(s, sp) / 10.0;
+    I(dp, sp) <+ 1e-3 * V(dp, sp) * (vgs - vto);
+    I(g, sp) <+ 1e-14 * (limexp(vgj / vt) - 1.0) + 1e-15 * vgk;
+  end
+endmodule

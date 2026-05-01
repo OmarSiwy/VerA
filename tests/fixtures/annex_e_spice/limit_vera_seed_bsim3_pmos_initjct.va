@@ -1,0 +1,43 @@
+// §2.9 VerA's `vera_seed` on a BSIM3-shaped PMOS, with the seed written in
+// both of §2.9's slots: a statement prefix, and a suffix to the function name.
+//
+// ngspice BSIM3 MODEINITJCT (b3ld.c:202-214) starts at different branch
+// values from MOS1, in the device frame:
+//
+//     vbs = 0.0;
+//     vgs = model->BSIM3type * here->BSIM3vth0 + 0.1;
+//     vds = 0.1;
+//
+// §2.9: an attribute_instance "can appear as a suffix to an operator or a
+// Verilog-AMS function name in an expression", so `$limit (* vera_seed = v *)
+// (...)` names the one site; the prefix names the statement's. The seed is in
+// the frame of the site's sign argument, raw = type * seed.
+//
+// U = d, g, s, b, di, si; the lowest seeded port is g, so g = 0. type = -1,
+// vth0 = -0.6, so vgs = (-1)(-0.6) + 0.1 = 0.7:
+//   type (g - si)  = 0.7  ->  si = 0.7
+//   type (di - si) = 0.1  ->  di = 0.6
+//   type (b - si)  = 0    ->  b  = 0.7
+// The seed value reads the card (vth0), which `seed` may: it runs before any
+// solve, but after the card is set.
+//! lrm 2.9
+//! lrm 9.17.3
+//! print none
+//! seed V(g) = 0.0, V(si) = 0.7, V(di) = 0.6, V(b) = 0.7
+module limit_vera_seed_bsim3_pmos_initjct(d, g, s, b);
+  inout d, g, s, b; electrical d, g, s, b, di, si;
+  parameter real type = -1.0, vth0 = -0.6, vt = 0.025, vcrit = 0.6;
+  real vgs, vgd, vds, vbs, vbd;
+  analog begin
+    (* vera_seed = type * vth0 + 0.1 *) vgs = type * $limit(V(g, si), "fetlimds", type * vth0, type);
+    vgd = type * $limit(V(g, di), "fetlimds", type * vth0, type);
+    vds = type * $limit (* vera_seed = 0.1 *) (V(di, si), "limvds", type);
+    vbs = type * $limit (* vera_seed = 0.0 *) (V(b, si), "pnjlimds", vt, vcrit, type);
+    vbd = type * $limit(V(b, di), "pnjlimds", vt, vcrit, type);
+    I(d, di) <+ V(d, di) / 10.0;
+    I(s, si) <+ V(s, si) / 10.0;
+    I(di, si) <+ type * 1e-3 * (vds + 0.1 * (vgs + vgd));
+    I(b, si) <+ type * 1e-14 * (limexp(vbs / vt) - 1.0);
+    I(b, di) <+ type * 1e-14 * (limexp(vbd / vt) - 1.0);
+  end
+endmodule
