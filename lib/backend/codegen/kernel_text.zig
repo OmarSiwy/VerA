@@ -304,6 +304,130 @@ pub const domain_report_txt =
     \\
 ;
 
+/// Contract ABI 5 family preview (`codegen/family.zig`), emitted after
+/// `ops_txt` in a device built with `Options.family`: the helpers every body
+/// and kernel call site reaches a family through. `zdr` is the device's
+/// `deriv_reads` — declared by `family_dev_txt` in device.zig and by the
+/// `h.zig` head — so a mask never names a lane the host was not asked for.
+pub const family_txt =
+    \\// ---- contract ABI 5 family preview ----
+    \\//
+    \\// `S` is a family (`contract.family_fns`) or an ABI 4 scalar. A real is
+    \\// typed `zOf(S, m)`, `m` the unknowns it may depend on; on an ABI 4
+    \\// scalar every helper here is the identity, so one text serves both.
+    \\
+    \\fn zOf(comptime S: type, comptime m: u64) type {
+    \\    @setEvalBranchQuota(1_000_000);
+    \\    return if (@hasDecl(S, "Of")) S.Of(m & zdr) else S;
+    \\}
+    \\/// `a` widened to `zOf(S, m)`: a compile error when `a` carries a lane
+    \\/// `m` does not name.
+    \\fn zTo(comptime S: type, comptime m: u64, a: anytype) zOf(S, m) {
+    \\    return if (comptime @hasDecl(S, "Of")) a.to(m & zdr) else a;
+    \\}
+    \\/// A body's hoisted real slots, one mask each.
+    \\fn zSlots(comptime S: type, comptime ms: []const u64) type {
+    \\    if (!@hasDecl(S, "Of")) return [ms.len]S;
+    \\    @setEvalBranchQuota(1_000_000);
+    \\    var ts: [ms.len]type = undefined;
+    \\    for (ms, &ts) |m, *t| t.* = zOf(S, m);
+    \\    return @Tuple(&ts);
+    \\}
+    \\fn zV(a: anytype) f64 {
+    \\    return a.val();
+    \\}
+    \\/// §4.3.1 "abs(x) is equivalent to (x > 0) x : -x": a family carries no
+    \\/// `abs`, so the conditional is spelled here.
+    \\fn zAbs(comptime S: type, a: anytype) @TypeOf(a) {
+    \\    return if (comptime @hasDecl(S, "Of")) S.sel(S.con(0.0).lt(a), a, a.neg()) else a.abs();
+    \\}
+    \\/// `zOf(S, m)` as one ABI 4 scalar, for the kernels above, which are
+    \\/// written against one: every operation of the kernel runs at mask `m`.
+    \\/// min, max, abs and the slew clamps are §4.3.1's conditionals.
+    \\fn zL(comptime S: type, comptime m: u64) type {
+    \\    if (!@hasDecl(S, "Of")) return S;
+    \\    return struct {
+    \\        v: zOf(S, m),
+    \\        const T = @This();
+    \\        fn w(a: anytype) T { return .{ .v = zTo(S, m, a) }; }
+    \\        pub fn con(c: f64) T { return w(S.con(c)); }
+    \\        pub fn val(a: T) f64 { return a.v.val(); }
+    \\        pub fn ddxAt(a: T, comptime u: usize) f64 { return a.v.ddxAt(u); }
+    \\        pub fn add(a: T, b: T) T { return .{ .v = a.v.add(b.v) }; }
+    \\        pub fn sub(a: T, b: T) T { return .{ .v = a.v.sub(b.v) }; }
+    \\        pub fn mul(a: T, b: T) T { return .{ .v = a.v.mul(b.v) }; }
+    \\        pub fn div(a: T, b: T) T { return .{ .v = a.v.div(b.v) }; }
+    \\        pub fn neg(a: T) T { return .{ .v = a.v.neg() }; }
+    \\        pub fn scale(a: T, c: f64) T { return .{ .v = a.v.scale(c) }; }
+    \\        pub fn addC(a: T, c: f64) T { return .{ .v = a.v.addC(c) }; }
+    \\        pub fn exp(a: T) T { return .{ .v = a.v.exp() }; }
+    \\        pub fn log(a: T) T { return .{ .v = a.v.log() }; }
+    \\        pub fn expm1(a: T) T { return .{ .v = a.v.expm1() }; }
+    \\        pub fn log1p(a: T) T { return .{ .v = a.v.log1p() }; }
+    \\        pub fn sqrt(a: T) T { return .{ .v = a.v.sqrt() }; }
+    \\        pub fn sin(a: T) T { return .{ .v = a.v.sin() }; }
+    \\        pub fn cos(a: T) T { return .{ .v = a.v.cos() }; }
+    \\        pub fn tanh(a: T) T { return .{ .v = a.v.tanh() }; }
+    \\        pub fn sinh(a: T) T { return .{ .v = a.v.sinh() }; }
+    \\        pub fn cosh(a: T) T { return .{ .v = a.v.cosh() }; }
+    \\        pub fn atan(a: T) T { return .{ .v = a.v.atan() }; }
+    \\        pub fn pow(a: T, c: f64) T { return .{ .v = a.v.pow(c) }; }
+    \\        pub fn lt(a: T, b: T) T { return w(a.v.lt(b.v)); }
+    \\        pub fn le(a: T, b: T) T { return w(a.v.le(b.v)); }
+    \\        pub fn eq(a: T, b: T) T { return w(a.v.eq(b.v)); }
+    \\        pub fn sel(c: T, a: T, b: T) T { return .{ .v = S.sel(c.v, a.v, b.v) }; }
+    \\        pub fn min(a: T, b: T) T { return a.lt(b).sel(a, b); }
+    \\        pub fn max(a: T, b: T) T { return b.lt(a).sel(a, b); }
+    \\        pub fn abs(a: T) T { return con(0.0).lt(a).sel(a, a.neg()); }
+    \\        pub fn minC(a: T, c: f64) T { return con(c).lt(a).sel(con(c), a); }
+    \\        pub fn maxC(a: T, c: f64) T { return a.lt(con(c)).sel(con(c), a); }
+    \\    };
+    \\}
+    \\fn zLw(comptime S: type, comptime m: u64, a: anytype) zL(S, m) {
+    \\    return if (comptime @hasDecl(S, "Of")) .{ .v = zTo(S, m, a) } else a;
+    \\}
+    \\fn zLu(comptime S: type, comptime m: u64, a: zL(S, m)) zOf(S, m) {
+    \\    return if (comptime @hasDecl(S, "Of")) a.v else a;
+    \\}
+    \\
+    \\
+;
+
+/// device.zig's half of the family preview: `zdr`, the rows and charge sites
+/// as a family returns them, and the probes `abi5`'s entries seed.
+pub const family_dev_txt =
+    \\const zdr = contract.derivReads(Self);
+    \\fn zRows(comptime S: type) type {
+    \\    return if (@hasDecl(S, "Of")) contract.Rows(Self, S) else [n_u]S;
+    \\}
+    \\fn zSites(comptime S: type) type {
+    \\    return if (@hasDecl(S, "Of")) contract.Sites(Self, S) else [contract.nQ(Self)]S;
+    \\}
+    \\fn zRow(comptime S: type, comptime r: U, a: anytype) zOf(S, contract.rowMask(Self, @intFromEnum(r))) {
+    \\    return zTo(S, contract.rowMask(Self, @intFromEnum(r)), a);
+    \\}
+    \\fn zRowsZero(comptime S: type) zRows(S) {
+    \\    var r: zRows(S) = undefined;
+    \\    inline for (0..n_u) |u| r[u] = zTo(S, contract.rowMask(Self, u), S.con(0.0));
+    \\    return r;
+    \\}
+    \\/// The unknowns as `abi5`'s entries read them: a probe for each lane the
+    \\/// device reads, a constant for every other.
+    \\fn zX(comptime S: type) type {
+    \\    @setEvalBranchQuota(1_000_000);
+    \\    var ts: [n_u]type = undefined;
+    \\    for (&ts, 0..) |*t, u| t.* = zOf(S, @as(u64, 1) << u);
+    \\    return @Tuple(&ts);
+    \\}
+    \\fn zProbe(comptime S: type, x: *const [n_u]f64) zX(S) {
+    \\    var p: zX(S) = undefined;
+    \\    inline for (0..n_u) |u| p[u] = if (comptime (zdr >> u) & 1 != 0) S.probe(u, x[u]) else S.con(x[u]);
+    \\    return p;
+    \\}
+    \\
+    \\
+;
+
 /// §4.5.2 the operator kernels. All take the CURRENT (S-valued) operator input
 /// plus the accepted state, so the Jacobian of the companion model is analytic.
 pub const ops_txt =
@@ -795,6 +919,7 @@ pub fn aliasesOf(comptime src: []const u8) []const u8 {
 
 pub const prelude_math_txt = aliasesOf(math_txt ++ ops_txt);
 pub const prelude_timer_txt = aliasesOf(timer_txt);
+pub const prelude_family_txt = aliasesOf(family_txt);
 pub const prelude_hist_txt = aliasesOf(hist_txt);
 pub const prelude_hist_quad_txt = aliasesOf(hist_quad_txt);
 pub const prelude_arr_txt = aliasesOf(arr_txt);

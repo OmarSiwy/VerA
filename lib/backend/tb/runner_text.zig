@@ -123,77 +123,29 @@ pub const runner_body =
     \\    return @abs(got - want) <= 1e-12 * @abs(want) + 1e-15;
     \\}
     \\
-    \\/// Forward-mode dual: value plus one partial per solver unknown. This is
-    \\/// the same scalar the engine instantiates for the Jacobian, written out
-    \\/// here so the testbench has no dependency beyond the device itself.
+    \\/// Forward-mode dual: value plus one partial per solver unknown. It is the
+    \\/// contract's reference family in its dense layout, so the testbench runs
+    \\/// the numerics every host is held to (`contract.RefFamily`).
     \\/// `collapsed` is the contract's `collapse_applied` trait: the testbench
     \\/// evaluates with `false`, and `narrowCheck` with both.
     \\const Dual = DualC(false);
-    \\fn DualC(comptime collapsed: bool) type { return struct {
-    \\    pub const collapse_applied = collapsed;
-    \\    v: f64,
-    \\    d: [n_u]f64 = @splat(0.0),
-    \\    const T = @This();
-    \\
-    \\    pub fn con(c: f64) T { return .{ .v = c }; }
-    \\    pub fn val(a: T) f64 { return a.v; }
-    \\    pub fn ddxAt(a: T, i: usize) f64 { return a.d[i]; }
-    \\
-    \\    fn map(a: T, v: f64, k: f64) T { // chain rule: k = df/da at a.v
-    \\        var r: T = .{ .v = v };
-    \\        for (0..n_u) |i| r.d[i] = k * a.d[i];
-    \\        return r;
-    \\    }
-    \\    fn map2(a: T, b: T, v: f64, ka: f64, kb: f64) T {
-    \\        var r: T = .{ .v = v };
-    \\        for (0..n_u) |i| r.d[i] = ka * a.d[i] + kb * b.d[i];
-    \\        return r;
-    \\    }
-    \\
-    \\    pub fn add(a: T, b: T) T { return map2(a, b, a.v + b.v, 1.0, 1.0); }
-    \\    pub fn sub(a: T, b: T) T { return map2(a, b, a.v - b.v, 1.0, -1.0); }
-    \\    pub fn mul(a: T, b: T) T { return map2(a, b, a.v * b.v, b.v, a.v); }
-    \\    pub fn div(a: T, b: T) T { return map2(a, b, a.v / b.v, 1.0 / b.v, -a.v / (b.v * b.v)); }
-    \\    pub fn neg(a: T) T { return map(a, -a.v, -1.0); }
-    \\    pub fn scale(a: T, c: f64) T { return map(a, a.v * c, c); }
-    \\    pub fn addC(a: T, c: f64) T { return map(a, a.v + c, 1.0); }
-    \\    pub fn exp(a: T) T { return map(a, @exp(a.v), @exp(a.v)); }
-    \\    pub fn log(a: T) T { return map(a, @log(a.v), 1.0 / a.v); }
-    \\    // §4.3.1 Table 4-14: the C forms, because exp(x)-1 and log(1+x) cancel
-    \\    // for small x. The DERIVATIVES do not cancel, so they stay exp/1÷(1+x).
-    \\    pub fn expm1(a: T) T { return map(a, std.math.expm1(a.v), @exp(a.v)); }
-    \\    pub fn log1p(a: T) T { return map(a, std.math.log1p(a.v), 1.0 / (1.0 + a.v)); }
-    \\    pub fn sqrt(a: T) T { return map(a, @sqrt(a.v), 0.5 / @sqrt(a.v)); }
-    \\    pub fn sin(a: T) T { return map(a, @sin(a.v), @cos(a.v)); }
-    \\    pub fn cos(a: T) T { return map(a, @cos(a.v), -@sin(a.v)); }
-    \\    pub fn tanh(a: T) T { const t = std.math.tanh(a.v); return map(a, t, 1.0 - t * t); }
-    \\    pub fn sinh(a: T) T { return map(a, std.math.sinh(a.v), std.math.cosh(a.v)); }
-    \\    pub fn cosh(a: T) T { return map(a, std.math.cosh(a.v), std.math.sinh(a.v)); }
-    \\    pub fn atan(a: T) T { return map(a, std.math.atan(a.v), 1.0 / (1.0 + a.v * a.v)); }
-    \\    pub fn abs(a: T) T { return map(a, @abs(a.v), if (a.v < 0.0) -1.0 else 1.0); }
-    \\    pub fn pow(a: T, c: f64) T {
-    \\        return map(a, std.math.pow(f64, a.v, c), c * std.math.pow(f64, a.v, c - 1.0));
-    \\    }
-    \\    // §4.3.1 min/max are selections: the derivative is the winner's.
-    \\    // §4.3.1: equality selects the second operand and its derivative.
-    \\    pub fn minC(a: T, c: f64) T { return if (a.v < c) a else con(c); }
-    \\    pub fn maxC(a: T, c: f64) T { return if (a.v > c) a else con(c); }
-    \\    pub fn min(a: T, b: T) T { return if (a.v < b.v) a else b; }
-    \\    pub fn max(a: T, b: T) T { return if (a.v > b.v) a else b; }
-    \\    // Contract masks and select. A comparison is piecewise constant, so
-    \\    // its derivative is zero (`con`); like min/max, `sel` carries the
-    \\    // winner's derivative.
-    \\    pub fn lt(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v < b.v))); }
-    \\    pub fn le(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v <= b.v))); }
-    \\    pub fn eq(a: T, b: T) T { return con(@floatFromInt(@intFromBool(a.v == b.v))); }
-    \\    pub fn sel(c: T, a: T, b: T) T { return if (c.v != 0.0) a else b; }
-    \\}; }
+    \\fn DualC(comptime collapsed: bool) type {
+    \\    return contract.RefFamily(f64, &lane_of, .{ .dense = true, .collapse_applied = collapsed });
+    \\}
+    \\/// Unknown `u` on lane `u`.
+    \\const lane_of = blk: {
+    \\    var l: [n_u]u8 = undefined;
+    \\    for (&l, 0..) |*e, u| e.* = u;
+    \\    break :blk l;
+    \\};
     \\
     \\/// Value-form batch scalar: NL operating points per eval call, one per
     \\/// lane. Only instantiated for a device that declared `lane_clean` —
     \\/// codegen's promise that nothing in eval/q steers on a `.val()` of an
     \\/// x-dependent value, which is what makes `val` returning lane 0 safe:
     \\/// on a lane-clean device it is only ever called on lane-uniform values.
+    \\/// Per lane it computes `Dual`'s values: `contract.RefFamily`'s division
+    \\/// and its §4.3.1 spellings of min, max and abs.
     \\const NL = 4;
     \\const VF = @Vector(NL, f64);
     \\const Vec = struct {
@@ -211,7 +163,7 @@ pub const runner_body =
     \\    pub fn sub(a: T, b: T) T { return .{ .v = a.v - b.v }; }
     \\    pub fn neg(a: T) T { return .{ .v = -a.v }; }
     \\    pub fn mul(a: T, b: T) T { return .{ .v = a.v * b.v }; }
-    \\    pub fn div(a: T, b: T) T { return .{ .v = a.v / b.v }; }
+    \\    pub fn div(a: T, b: T) T { return .{ .v = a.v * (ones / b.v) }; }
     \\    pub fn scale(a: T, c: f64) T { return .{ .v = a.v * @as(VF, @splat(c)) }; }
     \\    pub fn addC(a: T, c: f64) T { return .{ .v = a.v + @as(VF, @splat(c)) }; }
     \\    pub fn exp(a: T) T { return .{ .v = @exp(a.v) }; }
@@ -219,17 +171,17 @@ pub const runner_body =
     \\    pub fn sqrt(a: T) T { return .{ .v = @sqrt(a.v) }; }
     \\    pub fn sin(a: T) T { return .{ .v = @sin(a.v) }; }
     \\    pub fn cos(a: T) T { return .{ .v = @cos(a.v) }; }
-    \\    pub fn abs(a: T) T { return .{ .v = @abs(a.v) }; }
+    \\    pub fn abs(a: T) T { return .{ .v = @select(f64, a.v > zeros, a.v, -a.v) }; }
     \\    pub fn expm1(a: T) T { return map1(a, std.math.expm1); }
     \\    pub fn log1p(a: T) T { return map1(a, std.math.log1p); }
     \\    pub fn tanh(a: T) T { return map1(a, std.math.tanh); }
     \\    pub fn sinh(a: T) T { return map1(a, std.math.sinh); }
     \\    pub fn cosh(a: T) T { return map1(a, std.math.cosh); }
     \\    pub fn atan(a: T) T { return map1(a, std.math.atan); }
-    \\    pub fn minC(a: T, c: f64) T { return .{ .v = @min(a.v, @as(VF, @splat(c))) }; }
-    \\    pub fn maxC(a: T, c: f64) T { return .{ .v = @max(a.v, @as(VF, @splat(c))) }; }
-    \\    pub fn min(a: T, b: T) T { return .{ .v = @min(a.v, b.v) }; }
-    \\    pub fn max(a: T, b: T) T { return .{ .v = @max(a.v, b.v) }; }
+    \\    pub fn minC(a: T, c: f64) T { const k: VF = @splat(c); return .{ .v = @select(f64, k < a.v, k, a.v) }; }
+    \\    pub fn maxC(a: T, c: f64) T { const k: VF = @splat(c); return .{ .v = @select(f64, a.v < k, k, a.v) }; }
+    \\    pub fn min(a: T, b: T) T { return .{ .v = @select(f64, a.v < b.v, a.v, b.v) }; }
+    \\    pub fn max(a: T, b: T) T { return .{ .v = @select(f64, a.v > b.v, a.v, b.v) }; }
     \\    pub fn pow(a: T, c: f64) T {
     \\        var r: VF = undefined;
     \\        inline for (0..NL) |i| r[i] = std.math.pow(f64, a.v[i], c);
@@ -376,6 +328,52 @@ pub const runner_body =
     \\    narrowAssert(Dl, "res", false, model, &D.eval(Dl, wide, model, inst, t), &D.eval(Dl, narrow, model, inst, t));
     \\    if (comptime @hasDecl(D, "q"))
     \\        narrowAssert(Dl, "q", true, model, &qRowsOf(Dl, wide, model, inst, t), &qRowsOf(Dl, narrow, model, inst, t));
+    \\}
+    \\
+    \\/// The family gate (contract ABI 5 preview). A device built with the family
+    \\/// text also answers `abi5.eval`/`abi5.q` for a sparse family, whose each
+    \\/// real carries only the lanes of the unknowns it may depend on, and those
+    \\/// must be `Dual`'s: every value bit for bit, and every lane `deriv_reads`
+    \\/// names equal, a lane the sparse value does not carry reading as zero.
+    \\/// Two escapes, neither a tolerance: zeros match whatever their sign, and
+    \\/// `Dual`'s NaN may stand where the sparse value has no lane — a dense
+    \\/// `0·inf` on a lane that is structurally zero. The columns outside
+    \\/// `deriv_reads` are `narrowCheck`'s.
+    \\fn sparseCheck(x: *const [n_u]f64, t: f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (comptime !@hasDecl(D, "abi5")) return;
+    \\    const Sp = contract.RefFamily(f64, &lane_of, .{ .dense = false });
+    \\    const xd = seed(x);
+    \\    const want = D.eval(Dual, xd, model, inst, t);
+    \\    const got = D.abi5.eval(Sp, x, model, inst, t);
+    \\    inline for (0..n_u) |r| sparseAssert("res", u_names[r], got[r], want[r]);
+    \\    if (comptime @hasDecl(D, "q") and @hasDecl(D.abi5, "q")) {
+    \\        const wq = D.q(Dual, xd, model, inst, t);
+    \\        const gq = D.abi5.q(Sp, x, model, inst, t);
+    \\        inline for (0..n_q) |k| sparseAssert("q site", std.fmt.comptimePrint("{d}", .{k}), gq[k], wq[k]);
+    \\        const both = D.abi5.evalQ(Sp, x, model, inst, t);
+    \\        inline for (0..n_u) |r| sparseAssert("evalQ res", u_names[r], both.res[r], want[r]);
+    \\        inline for (0..n_q) |k| sparseAssert("evalQ q site", std.fmt.comptimePrint("{d}", .{k}), both.q[k], wq[k]);
+    \\    }
+    \\}
+    \\
+    \\fn sparseAssert(what: []const u8, name: []const u8, got: anytype, want: Dual) void {
+    \\    if (@as(u64, @bitCast(got.val())) != @as(u64, @bitCast(want.v))) {
+    \\        std.debug.print("sparse_check FAIL: {s}[{s}]: sparse {e} vs dense {e}\n", .{ what, name, got.val(), want.v });
+    \\        std.process.exit(1);
+    \\    }
+    \\    inline for (0..n_u) |u| {
+    \\        const carried = u < 64 and (@TypeOf(got).mask >> u) & 1 != 0;
+    \\        const g = got.ddxAt(u);
+    \\        const w = want.d[u];
+    \\        const same = @as(u64, @bitCast(g)) == @as(u64, @bitCast(w)) or (g == 0.0 and w == 0.0) or
+    \\            (std.math.isNan(g) and std.math.isNan(w)) or (!carried and std.math.isNan(w));
+    \\        if (hasLane(u) and !same) {
+    \\            std.debug.print("sparse_check FAIL: d{s}[{s}]/dx[{s}]: sparse {e} vs dense {e}{s}\n", .{
+    \\                what, name, u_names[u], g, w, if (carried) "" else " (no sparse lane)",
+    \\            });
+    \\            std.process.exit(1);
+    \\        }
+    \\    }
     \\}
     \\
     \\fn hasLane(u: usize) bool {
@@ -572,6 +570,7 @@ pub const runner_body =
     \\    fusedCheck(x, t, model, inst);
     \\    patternCheck(x, t, model, inst);
     \\    narrowCheck(x, t, model, inst);
+    \\    sparseCheck(x, t, model, inst);
     \\
     \\    const xd = seed(x);
     \\    // §9.4 the model's own transcript. Runs BEFORE the residual print so a

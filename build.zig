@@ -72,7 +72,11 @@ pub fn build(b: *std.Build) void {
     // so it is not in the binary. The module graph is the same either way.
     const Language = enum { verilog, ams };
     const language = b.option(Language, "language", "verilog: an IEEE 1364-2005 `vera` without the analog backend; ams (default): the Verilog-AMS compiler") orelse .ams;
-    const exe = cliExe(b, target, optimize, mods, "vera", language == .ams);
+    // Contract ABI 5 phases P2–P4: the devices this `vera` emits carry the
+    // family-generic text and `pub const abi5` (`codegen.Options.family`).
+    // Off, every device is byte for byte what it was.
+    const abi5 = b.option(bool, "abi5", "emit the contract ABI 5 family preview (devices stay contract_abi 4)") orelse false;
+    const exe = cliExe(b, target, optimize, mods, "vera", language == .ams, abi5);
     b.installArtifact(exe);
 
     const run_cmd = b.addRunArtifact(exe);
@@ -102,7 +106,7 @@ pub fn build(b: *std.Build) void {
     // no test to reach it), so the dependency is on the executable itself —
     // in BOTH languages, since only main.zig reads the option.
     test_step.dependOn(&exe.step);
-    test_step.dependOn(&cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams).step);
+    test_step.dependOn(&cliExe(b, target, optimize, mods, if (language == .ams) "vera-verilog" else "vera-ams", language != .ams, abi5).step);
     // `tests/test_all.zig` is the one compilation that has every module at once,
     // and it owns the claims that span two of them.
     const all_mod = b.createModule(.{
@@ -143,6 +147,9 @@ pub fn build(b: *std.Build) void {
     // runtime evidence. Passed, not copied, so the two cannot disagree.
     o.addOption([]const []const u8, "vpi_runs", &vpi_run_paths);
     o.addOption([]const u8, "zig_exe", b.graph.zig_exe);
+    // Not a path: `-Dabi5`, so the suite compiles its fixtures the way the
+    // `vera` it is handed does (`codegen.Options.family`).
+    o.addOption(bool, "abi5", abi5);
 
     const suite_mod = b.createModule(.{
         .root_source_file = b.path("tests/bench.zig"),
@@ -347,9 +354,11 @@ fn cliExe(
     mods: []const std.Build.Module.Import,
     name: []const u8,
     ams: bool,
+    abi5: bool,
 ) *std.Build.Step.Compile {
     const o = b.addOptions();
     o.addOption(bool, "ams", ams);
+    o.addOption(bool, "abi5", abi5);
     const mod = b.createModule(.{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
