@@ -7,6 +7,9 @@
 #              (the default --schedule=static; SCHEDULE=fifo for the other),
 #              built in a cold cache, then the executable run. A design the
 #              emitter refuses embeds the interpreter; its row says `(interp)`
+#   2-state    the native build again with `--two-state` (every x/z is 0;
+#              not IEEE 1364 4-state): its run time, `refused` for E1101,
+#              and whether its stdout equals the 4-state one
 #   verilator  `verilator --binary -j 0`, then obj/sim
 # Wall time and peak RSS of each build and run (GNU time), executable bytes
 # as built (not stripped), and whether all three stdouts agree (Verilator's
@@ -106,8 +109,8 @@ timed() {
 
 kb() { echo $(( ($(stat -c %s "$1") + 1023) / 1024 )); }
 
-echo "| design | interp run s | interp MB | native build s | native run s | native MB | native KB | verilator build s | verilator run s | verilator MB | verilator KB | outputs agree |"
-echo "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|"
+echo "| design | interp run s | interp MB | native build s | native run s | native MB | native KB | 2-state run s | 2-state same | verilator build s | verilator run s | verilator MB | verilator KB | outputs agree |"
+echo "|---|---:|---:|---:|---:|---:|---:|---:|---|---:|---:|---:|---:|---|"
 for d in "${designs[@]}"; do
   n=$(basename "$d" .v)
   if timed "$W/vera.out" "$VERA" --std=1364-2005 --run "$d"; then vs=$secs vm=$mb; else vs=error vm=-; fi
@@ -119,6 +122,13 @@ for d in "${designs[@]}"; do
     grep -q 'not native (' "$W/err" && nb="$nb (interp)"
     if timed "$W/vn.out" "$nexe"; then nr=$secs nm=$mb nk=$(kb "$nexe"); else nr=error nm=- nk=-; fi
   else nb=error nr=- nm=- nk=-; : > "$W/vn.out"; fi
+  mkdir -p "$W/v2_$n"; tr=- ts=-
+  if timed "$W/v2.path" bash -c 'cd "$1" && "$2" --std=1364-2005 --emit-exe --two-state --schedule="${SCHEDULE:-static}" --optimize=ReleaseFast --zig-backend=llvm --work-dir . "$3"' _ \
+    "$W/v2_$n" "$VERA" "$(realpath "$d")"; then
+    if timed "$W/v2.out" "$W/v2_$n/$(head -1 "$W/v2.path")"; then
+      tr=$secs; diff -q "$W/vn.out" "$W/v2.out" > /dev/null && ts=yes || ts=no
+    else tr=error; fi
+  elif grep -q E1101 "$W/err"; then tr=refused; fi
   if timed /dev/null verilator --binary -j 0 -Wno-fatal --Mdir "$W/obj_$n" -o sim "$d"; then
     bs=$secs
     if timed "$W/vl.out" "$W/obj_$n/sim"; then rs=$secs rm=$mb rk=$(kb "$W/obj_$n/sim"); else rs=error rm=- rk=-; fi
@@ -126,5 +136,5 @@ for d in "${designs[@]}"; do
   if [ "$vs" != error ] && [ "$nr" != error ] && [ "$nr" != - ] && [ "$rs" != error ] && [ "$rs" != - ] &&
     diff -q "$W/vera.out" "$W/vn.out" > /dev/null &&
     diff -q "$W/vera.out" <(grep -v '^- ' "$W/vl.out") > /dev/null; then ok=yes; else ok=NO; fi
-  echo "| $n | $vs | $vm | $nb | $nr | $nm | $nk | $bs | $rs | $rm | $rk | $ok |"
+  echo "| $n | $vs | $vm | $nb | $nr | $nm | $nk | $tr | $ts | $bs | $rs | $rm | $rk | $ok |"
 done
