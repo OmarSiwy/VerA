@@ -447,10 +447,10 @@ pub const Parser = struct {
         };
     }
 
-    /// The last `vera_lte` and `vera_interp` specs in `self.attrs[mark..]`
-    /// (§2.9: "the last attribute value shall be used"), in `lte_kinds` order.
-    pub fn lteSince(self: *const Parser, mark: usize) [2]?Ast.NatureAttr {
-        var out: [2]?Ast.NatureAttr = .{ null, null };
+    /// The last spec of each VerA attribute in `self.attrs[mark..]` (§2.9:
+    /// "the last attribute value shall be used"), in `lte_kinds` order.
+    pub fn lteSince(self: *const Parser, mark: usize) [lte_kinds.len]?Ast.NatureAttr {
+        var out: [lte_kinds.len]?Ast.NatureAttr = @splat(null);
         for (self.attrs.items[mark..]) |a| for (&out, lte_kinds) |*o, k| {
             if (std.mem.eql(u8, self.file.str(a.name), @tagName(k))) o.* = a;
         };
@@ -458,13 +458,13 @@ pub const Parser = struct {
     }
 
     /// Keep `lteSince`'s finds on statement `stmt` or call `expr`.
-    pub fn keepLte(self: *Parser, specs: [2]?Ast.NatureAttr, stmt: Ast.StmtId, expr: Ast.ExprId) error{OutOfMemory}!void {
+    pub fn keepLte(self: *Parser, specs: [lte_kinds.len]?Ast.NatureAttr, stmt: Ast.StmtId, expr: Ast.ExprId) error{OutOfMemory}!void {
         for (specs, lte_kinds) |f, k| if (f) |a| try self.file.lte_attrs.append(
             self.arena,
             .{ .kind = k, .stmt = stmt, .expr = expr, .value = a.value, .main_tok = a.main_tok },
         );
     }
-    const lte_kinds = [_]@FieldType(Ast.LteAttr, "kind"){ .vera_lte, .vera_interp };
+    const lte_kinds = std.enums.values(@FieldType(Ast.LteAttr, "kind"));
 
     fn parseAttributes(self: *Parser) Error!void {
         while (self.peek() == .attr_open) {

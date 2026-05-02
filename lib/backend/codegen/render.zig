@@ -589,6 +589,14 @@ pub fn renderOp(self: *Gen, op: Mir.Opcode, a: Mir.Value, b2: Mir.Value, res_ty:
             try self.b(").val()))", .{});
         },
         .opt_barrier => try renderVal(self, a, res_ty),
+        // VerA's `vera_nodiff` (§2.9): the operand's value with no lanes. The
+        // `.val()` is a scalar decision on an x-varying value.
+        .dstop => {
+            float_lanes.pinLanes(self, a);
+            try self.b("S.con((", .{});
+            try renderVal(self, a, .real);
+            try self.b(").val())", .{});
+        },
         // §5.6.1.2 path-integrated reactive latches: value only, no
         // derivative, FIXED across one Newton attempt (advanced by
         // stateCtl(.commit) at the operating-point exit and per accepted

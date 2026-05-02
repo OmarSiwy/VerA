@@ -49,8 +49,8 @@ pub fn parseStmt(self: *Parser) Error!Ast.StmtId {
     defer self.depth -= 1;
     const mark = self.attrs.items.len;
     try self.skipAttributes();
-    // A.6.4 `{ attribute_instance } <statement>`: VerA's `vera_lte` and
-    // `vera_interp` are the attributes a statement keeps
+    // A.6.4 `{ attribute_instance } <statement>`: VerA's own attributes are
+    // the ones a statement keeps
     // (`Ast.SourceFile.lte_attrs`). Read BEFORE the body, whose own nested
     // statements append their attributes after.
     const lte = self.lteSince(mark);

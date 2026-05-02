@@ -241,14 +241,38 @@ Device-table directives assert what a device PUBLISHES to a host, as
 `got=/want= ok=` lines: `//! noise`, `//! acstim`, and `//! qsite` (one line
 per §5.6.1.2 charge site, `<row><sign>... lte|nolte`, rows in `U` order).
 
-**Vendor attributes.** VerA reads two §2.9 attributes. `vera_lte` is a
+**Vendor attributes.** VerA reads three §2.9 attributes. `vera_lte` is a
 prefix on an analog statement (`(* vera_lte = 0 *) I(b, s) <+ ddt(qbs);`)
 or a suffix on a `ddt` name (`ddt (* vera_lte = 0 *) (q)`, a slot A.8.2 gives
 only analog functions and VerA extends). It leaves those charge sites out of
 the host's truncation-error check (`q_lte`, `contract.QStamp`). Innermost
 wins; the value must fold without the model card (E0523). `vera_interp`, in
 the same slots on `absdelay`, picks 1 = linear (default) or 2 = quadratic (E0524).
-Every other attribute is parsed and ignored.
+`(* vera_nodiff *)`, a statement prefix, stores every assignment inside with
+no derivative (a SPICE frozen coefficient); `= 0` turns it off inside, the
+value folds without the card (E0525), and a contribution inside is E0526.
+Every other attribute is parsed and ignored, and every attribute value is a
+§2.9 constant_expression (E0357).
+
+**`$limit` arguments.** §9.17.3 names the arguments a string "requires" and
+leaves the rest to the implementation. VerA reads, after the algorithm's own,
+an optional frame **sign** (`type`; the clamp runs on `sign·v`) and then an
+optional **seed**: the value the site's branch starts at in `seed` (SPICE
+MODEINITJCT), in the frame of the sign. A seed needs a sign before it (write
+`1` for none); more arguments decline the site (W0853).
+
+| algorithm | full call (1-based position of the seed) |
+|---|---|
+| `pnjlim`, `pnjlimds` | `$limit(V(a,k), "pnjlim", vte, vcrit, sign, seed)` (6) |
+| `fetlim`, `fetlimds` | `$limit(V(g,s), "fetlim", vto, sign, seed)` (5) |
+| `steplim` | `$limit(V(a,b), "steplim", step, sign, seed)` (5) |
+| `limvds` | `$limit(V(d,s), "limvds", sign, seed)` (4) |
+
+Seeded branches are solved into node values from a 0 V root (ground, else the
+lowest port, else the lowest net); a pnjlim/pnjlimds leg with no seed starts at
+its vcrit, and a fetlimds vgd or pnjlimds vbd leg is never seeded. A seed may
+read card-derived variables, never the solution (E0527); one the tree cannot
+take is W0854.
 
 `check.vh` gives you `CHECK` (absolute tol), `CHECKR` (relative), `CHECKX`
 (exact), `CHECKI` (integer), `CHECKEQ` (two VerA expressions against each
