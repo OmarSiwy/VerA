@@ -406,10 +406,10 @@ pub const Gen = struct {
     /// written to during an iterative solve, then the file write operations shall
     /// not be performed unless the iteration is accepted."
     emitting_display: bool = false,
-    /// Does the core read a host-published sim-state `Instance` field? Set by
+    /// The host-published sim-state `Instance` fields the core reads. Set by
     /// `emitCommon` from the core's slice (`gen_call.readsSimState`), emitted
-    /// as `core_reads_simstate`.
-    core_reads_simstate: bool = false,
+    /// as `core_reads_simstate` and `core_sim_fields`.
+    core_sim: gen_call.SimFields = .initEmpty(),
     /// Set while the caller owns the `core` call (`zResidual`'s `m`, `acceptQ`'s
     /// hoisted line), so `emitStamps` must not open its own.
     core_hoisted: bool = false,

@@ -253,6 +253,7 @@ pub fn i64Const(self: *Gen, v0: Mir.Value, depth: u32) Error!?[]const u8 {
                 .fi_cast,
                 .if_cast,
                 .opt_barrier,
+                .dstop,
                 .path_prev,
                 .path_acc,
                 .select,
@@ -641,30 +642,36 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
     return @min(i, self.names.held_names.len -| 1);
 }
 
-/// Does this call, as `emitCall` renders it, read an `Instance` field the HOST
-/// rewrites between evaluations — time, step, analysis pass, the step and
-/// sub-task flags, the Newton iteration and the limiter history? That is the
-/// `core_reads_simstate` question: a host keeping Instance blobs resident on a
-/// device republishes those fields on its own copy only.
+/// An `Instance` field the HOST rewrites between evaluations — time, step,
+/// analysis pass, the step and sub-task flags, the Newton iteration and the
+/// limiter history. The tag is the field's name (`core_sim_fields`).
+pub const SimField = enum { abstime, dt, analysis_kind, is_initial_step, is_final_step, is_analog_initial, newton_iteration, limiter_previous };
+pub const SimFields = std.EnumSet(SimField);
+
+/// Which host-rewritten `Instance` fields this call, as `emitCall` renders it,
+/// reads. That is the `core_reads_simstate`/`core_sim_fields` question: a host
+/// keeping Instance blobs resident on a device republishes those fields on its
+/// own copy only.
 ///
 /// Kept beside `emitCall` because it is a column of the same dispatch: a new
 /// arm there that reads `inst.<field>` of this kind belongs here too.
-pub fn readsSimState(self: *const Gen, inst: Mir.Inst) bool {
+pub fn readsSimState(self: *const Gen, inst: Mir.Inst) SimFields {
     const d = self.mir.instData(inst).call;
     return switch (d.callee) {
         .ddt, .idt, .idtmod, .absdelay, .@"absdelay$quad", .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
         .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
         .@"$bound_step", .@"$discontinuity",
         => opReadsSimState(Mir.callee.opKind(d.callee)),
-        .analog_initial, // inst.is_analog_initial (§5.2.1)
-        .initial_step, .final_step, // inst.is_initial_step / is_final_step
-        .analysis, .ac_stim, // inst.analysis_kind (§4.6.1, §4.6.3)
-        .@"$abstime", .@"$realtime", // inst.abstime
-        .@"$simparam$str", // @tagName(inst.analysis_kind)
-        .@"$limit$old", // inst.limiter_previous (advanceIteration)
-        => true,
+        .analog_initial => .initOne(.is_analog_initial), // §5.2.1
+        // §5.10.2, and `analysisMatch` over the optional analysis list.
+        .initial_step => if (d.args.len != 0) .initMany(&.{ .is_initial_step, .analysis_kind }) else .initOne(.is_initial_step),
+        .final_step => if (d.args.len != 0) .initMany(&.{ .is_final_step, .analysis_kind }) else .initOne(.is_final_step),
+        .analysis, .ac_stim => .initOne(.analysis_kind), // §4.6.1, §4.6.3
+        .@"$abstime", .@"$realtime" => .initOne(.abstime),
+        .@"$simparam$str" => .initOne(.analysis_kind), // @tagName(inst.analysis_kind)
+        .@"$limit$old" => .initOne(.limiter_previous), // advanceIteration
         // §9.15 `$simparam("iteration")`: inst.newton_iteration.
-        .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
+        .@"$simparam" => if (Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse "")) .initOne(.newton_iteration) else .initEmpty(),
         // Constants, Model reads, and Instance fields the host does NOT
         // rewrite between evaluations (`temperature`, `mfactor`, the held and
         // seed latches), and every task, conversion and kernel of its
@@ -691,23 +698,24 @@ pub fn readsSimState(self: *const Gen, inst: Mir.Inst) bool {
         .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
         .@"$rng$poisson_next", .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t",
         .@"$rng$t_next", .@"$rng$erlang", .@"$rng$erlang_next", .systf,
-        => false,
+        => .initEmpty(),
     };
 }
 
 /// The operator half of `readsSimState`, one arm per `OpKind` so a new
-/// operator has to answer it.
-fn opReadsSimState(k: OpKind) bool {
+/// operator has to answer it: the fields `emitOperator` spells.
+fn opReadsSimState(k: OpKind) SimFields {
     return switch (k) {
-        // `inst.dt`, and `inst.abstime`/`inst.analysis_kind` for some.
-        .ddt, .idt, .idtmod, .absdelay, .transition, .slew => true,
-        .laplace, .zi, .cross, .timer => true,
+        .ddt, .idt, .idtmod, .slew, .laplace => .initOne(.dt),
+        .absdelay, .transition, .zi => .initMany(&.{ .abstime, .dt }),
+        .cross => .initMany(&.{ .analysis_kind, .dt }),
+        .timer => .initOne(.abstime),
         // Their own `__t_last`/`__prev` fields only, which `updateState` —
         // a device entry point — writes.
-        .last_crossing, .above => false,
+        .last_crossing, .above => .initEmpty(),
         // A void task read as a value renders the literal zero.
-        .bound_step, .discontinuity => false,
-        .none => false,
+        .bound_step, .discontinuity => .initEmpty(),
+        .none => .initEmpty(),
     };
 }
 

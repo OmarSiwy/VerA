@@ -1025,6 +1025,18 @@ pub fn LimitResult(comptime n: usize) type {
 /// THE RULE FOR A HOST: an unknown outside `limitWrites` was never written by
 /// the device, so its "previously limited" value must come from the host's own
 /// previous iterate, not from the plane `limit` writes into.
+/// The host-rewritten `Instance` fields `D`'s core reads: `D.core_sim_fields`,
+/// else every such field when `D` declares `core_reads_simstate`, else none.
+pub fn coreSimFields(comptime D: type) []const []const u8 {
+    if (@hasDecl(D, "core_sim_fields")) return &D.core_sim_fields;
+    if (@hasDecl(D, "core_reads_simstate") and D.core_reads_simstate) return &core_sim_field_names;
+    return &.{};
+}
+const core_sim_field_names = [_][]const u8{
+    "abstime",           "dt",               "analysis_kind", "is_initial_step",
+    "is_final_step",     "is_analog_initial", "newton_iteration", "limiter_previous",
+};
+
 pub fn limitReads(comptime D: type) u64 {
     return if (@hasDecl(D, "limit_reads")) D.limit_reads else ~@as(u64, 0);
 }
@@ -2096,16 +2108,15 @@ pub fn validate(comptime D: type) void {
     }
 
     // Voltage limiting (pnjlim/fetlim) and cold-start seeding (SPICE
-    // MODEINITJCT). seed returns absolute local voltages written into a
-    // zeroed x before Newton iteration 1; null leaves an unknown untouched
-    // (externally driven terminals). Any device with junction limiting
-    // should also declare seed — limiting from x_old = 0 is what pins
-    // cold-start Newton in the wrong basin.
-    // NOTE: limit corrections are only APPLIED to internal unknowns
-    // (u >= num_ports) — the batch masks external writes, since a limiter
-    // writing a driven/shared node fights sources and other devices.
-    // seed writes are unmasked: they happen once, pre-solve, and the first
-    // linear solve re-imposes every source constraint.
+    // MODEINITJCT). limit's x and seed's values are the instance's PRIVATE
+    // limited image, never the shared x. seed runs once before Newton
+    // iteration 1 and returns non-null only on limit_writes lanes; limit
+    // returns `cur` on a lane it does not clamp. `old` is the previous Newton
+    // iterate's limited point: the image on limit_writes once seed or limit
+    // has run, x_old elsewhere. limit_writes may name a port; a host that
+    // masks ports only loses that clamp, which §9.17.3 permits. Any device
+    // with junction limiting should also declare seed — limiting from
+    // x_old = 0 is what pins cold-start Newton in the wrong basin.
     if (@hasDecl(D, "limit"))
         expectFn(D, "limit", fn (*const D.Model, *const D.Instance, [n]f64, [n]f64) LimitResult(n));
     // The masks are only meaningful next to a `limit`, and `writes ⊆ reads`
@@ -2114,6 +2125,12 @@ pub fn validate(comptime D: type) void {
         if (!@hasDecl(D, m)) continue;
         if (!@hasDecl(D, "limit")) @compileError(@typeName(D) ++ "." ++ m ++ " without a `limit`");
         if (@TypeOf(@field(D, m)) != u64) @compileError(@typeName(D) ++ "." ++ m ++ " must be a u64 mask over U");
+    }
+    if (@hasDecl(D, "core_sim_fields")) {
+        if (!@hasDecl(D, "core_reads_simstate"))
+            @compileError(name ++ ".core_sim_fields without core_reads_simstate");
+        for (D.core_sim_fields) |f| if (!@hasField(D.Instance, f))
+            @compileError(name ++ ".core_sim_fields names `" ++ f ++ "`, which is not an Instance field");
     }
     if (@hasDecl(D, "limit_writes") and (limitWrites(D) & ~limitReads(D)) != 0)
         @compileError(@typeName(D) ++ ".limit_writes has a bit limit_reads does not");
@@ -2570,6 +2587,12 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // updateState epilogue's `state.t_prev = inst.abstime` latch does not
     // count — nothing in the core reads it back.
     .{ "core_reads_simstate", {} },
+    // The host-rewritten Instance fields the core reads, by name; exact, and
+    // emitted only beside `core_reads_simstate`. A host may run such a core
+    // device-resident if it republishes every listed field to the resident
+    // copy before the next launch after the field changes. Absent: all of
+    // them (`coreSimFields`).
+    .{ "core_sim_fields", {} },
     .{ "mutable_eval", {} },
     // §4.6.4.3's array-parameter table at this card. Optional; see `validate`
     // and `validateHost` — a device that declares it has knots `noise_tables`
@@ -3050,6 +3073,7 @@ const MockAll = struct {
     pub const jac_f32_host = true;
     pub const lane_clean = true;
     pub const core_reads_simstate = true;
+    pub const core_sim_fields = [_][]const u8{ "abstime", "analysis_kind" };
     pub const mutable_eval = false;
 
     pub const Model = struct { g: f32 = 1e-3 };

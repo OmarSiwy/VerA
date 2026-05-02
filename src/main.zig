@@ -52,6 +52,8 @@ const usage_text =
     \\  --schedule=static|fifo  a .v executable's order of same-time events:
     \\                          combinational logic levelized (static, the
     \\                          default; IEEE 1364 §11.4.1), or the interpreter's
+    \\  --two-state             a .v executable where every x or z is 0: faster,
+    \\                          and NOT IEEE 1364 4-state logic (E1101)
     \\  --run                   run a .v initial-process program, or an analog testbench
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
@@ -139,6 +141,7 @@ pub fn main(init: std.process.Init) !u8 {
     var zig_backend: ?vera.orchestrator.Backend = null; // null: `Backend.auto`
     var spice_path: ?[]const u8 = null;
     var schedule: digital.emit.Schedule = .static;
+    var two_state = false;
 
     var args = init.minimal.args.iterate();
     _ = args.skip();
@@ -203,6 +206,8 @@ pub fn main(init: std.process.Init) !u8 {
                 try err.print("error: `{s}`: not Debug|ReleaseSafe|ReleaseFast|ReleaseSmall\n", .{arg});
                 return 2;
             };
+        } else if (std.mem.eql(u8, arg, "--two-state")) {
+            two_state = true;
         } else if (std.mem.startsWith(u8, arg, "--schedule=")) {
             schedule = std.meta.stringToEnum(digital.emit.Schedule, arg["--schedule=".len..]) orelse {
                 try err.print("error: `{s}`: not static|fifo\n", .{arg});
@@ -341,7 +346,12 @@ pub fn main(init: std.process.Init) !u8 {
         .auto => (stderr.file.isTty(io) catch false),
     };
 
-    if (std.mem.eql(u8, std.fs.path.extension(in_path), ".v")) {
+    const digital_source = std.mem.eql(u8, std.fs.path.extension(in_path), ".v");
+    if (two_state and (!digital_source or run_exe)) {
+        try err.writeAll("error: --two-state builds a .v design's executable; it takes --emit-exe and a .v file\n");
+        return 2;
+    }
+    if (digital_source) {
         if (exe_flag == null or lint_flag or emit_zig or check or emit_so or out_path != null) {
             try err.writeAll("error: digital .v source takes --run or --emit-exe; no other artifact is implemented\n");
             return 2;
@@ -363,7 +373,7 @@ pub fn main(init: std.process.Init) !u8 {
             .mixed = true,
             .optimize = opt,
             .backend = backend,
-        }, schedule, out, err, json, use_color);
+        }, schedule, two_state, out, err, json, use_color);
         digital.run(arena.allocator(), source, opts, &digital_bag, out) catch |e| {
             try report(&digital_bag, err, json, use_color);
             if (e != error.DigitalFailed) try err.print("error: digital execution failed: {t}\n", .{e});
@@ -643,6 +653,7 @@ fn emitDigital(
     opts: digital.Options,
     build: vera.tb.BuildOptions,
     schedule: digital.emit.Schedule,
+    two_state: bool,
     out: *Io.Writer,
     err: *Io.Writer,
     json: bool,
@@ -660,8 +671,16 @@ fn emitDigital(
         .file_name = opts.file_name,
         .include_dirs = opts.include_dirs,
         .language = opts.language,
-    }, schedule);
-    if (prog.fallback) |why| try err.print("note: {s}: not native ({s})\n", .{ opts.file_name, why });
+    }, schedule, two_state);
+    if (prog.fallback) |why| {
+        if (two_state) {
+            try bag.add(.lower, .E1101, .{ .start = 0, .end = 0 }, "--two-state needs a native design in which no x or z carries meaning: {s}", .{why});
+            try report(bag, err, json, use_color);
+            return 1;
+        }
+        try err.print("note: {s}: not native ({s})\n", .{ opts.file_name, why });
+    }
+    if (two_state) try err.writeAll("note: --two-state is not IEEE 1364 §3.2/§4.1 4-state simulation; output differs wherever an x or z would have arisen\n");
     const built = vera.tb.buildExe(gpa, io, null, prog.text, build) catch |e| {
         try err.print("error: {s}: building the executable failed: {t}\n", .{ opts.file_name, e });
         return 1;
