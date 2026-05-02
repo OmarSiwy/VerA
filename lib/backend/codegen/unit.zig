@@ -160,7 +160,7 @@ pub fn emitCommon(self: *Gen) Error!void {
         const def = self.mir.valueDef(lv);
         if (def != .inst_result or self.mir.instOp(def.inst_result) != .call) continue;
         if (self.plan.isRoot(lv)) continue; // a field read, not a call
-        if (gen_call.readsSimState(self, def.inst_result)) self.core_reads_simstate = true;
+        self.core_sim.setUnion(gen_call.readsSimState(self, def.inst_result));
     }
 
     const body_start = self.out.items.len;

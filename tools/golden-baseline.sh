@@ -9,7 +9,8 @@
 #
 # Captures stdout AND stderr AND the exit status per fixture, because a refactor
 # that touches diagnostics (Phase 1 touches E0515) must be held to the message
-# text too, not only to the generated device.
+# text too, not only to the generated device. stderr goes to its own `.stderr`:
+# vera writes the device at file offset 0, so a shared file loses the warnings.
 #
 # ponytail: a shell loop over `vera --emit-zig`, not a build step. The build
 # graph cannot see fixture contents (bench.zig reads them at run time, see
@@ -36,7 +37,7 @@ snap() {
   # -I both: the shared tests/fixtures/check.vh, and the fixture's own directory
   # for a local `include.
   "$vera" --emit-zig --color=never \
-      -I "$root/tests/fixtures" -I "$(dirname "$f")" "$f" >"$dst" 2>&1
+      -I "$root/tests/fixtures" -I "$(dirname "$f")" "$f" >"$dst" 2>"$out/$rel.stderr"
   echo "exit=$?" >>"$dst"
 }
 export -f snap

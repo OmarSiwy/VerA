@@ -199,8 +199,14 @@ pub fn plan(self: Input, from: From, dyn: anytype) !Jobs {
     // the same insert-tolerance reason: a model that gains a `$limit`
     // appends core fields, it renumbers none.
     for (from.limits) |lc| {
-        for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign }) |v| {
-            if (v == .f_zero) continue;
+        // A literal or parameter seed is written in place (`writeArg`);
+        // queued, it would make every other use of that constant read `c`.
+        const seed: Mir.Value = switch (self.mir.valueDef(self.an.rv(lc.seed))) {
+            .float_const, .int_const, .param_ref, .undef => .undef,
+            .str_const, .block_param, .inst_result => lc.seed,
+        };
+        for ([_]Mir.Value{ lc.argv[0], lc.argv[1], lc.sign, seed }) |v| {
+            if (v == .f_zero or v == .undef) continue;
             try jobs.append(self.arena, .{
                 .kind = .limit_arg,
                 .target = v,
