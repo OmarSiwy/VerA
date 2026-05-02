@@ -114,7 +114,7 @@ pub fn liveSets(g: *const Gen) Live {
     // `seed` corrects the same node `emitClamp` does, but OR it in rather than
     // rely on that: the host initialises `lim_x` through `seed` and reads it
     // back through `limit`, so a bit in one and not the other is a stale slot.
-    // The `vera_seed` tree writes every node it places, its roots included.
+    // The seed tree writes every node it places, its roots included.
     for (g.limits.seed_steps) |st| lv.writes |= ubit(st.node);
     if (!g.limits.seed_tree) for (g.limits.calls) |lc| {
         if (lc.alg != .pnjlim or lc.argv[1] == .f_zero) continue;
@@ -223,7 +223,7 @@ pub fn emit(g: *Gen) Error!void {
     // `seed` runs before any solve, so there is no x for a seed to read.
     for (g.limits.calls) |lc| {
         if (lc.seed == .undef or !g.an.xDep(lc.seed)) continue;
-        if (g.diags) |bag| try bag.add(.codegen, .E0527, g.lowered.tokenSpan(lc.seed_tok), "", .{});
+        if (g.diags) |bag| try bag.add(.codegen, .E0527, g.lowered.tokenSpan(lc.tok), "", .{});
         g.any_fatal = true;
     }
     if (g.limits.calls.len == 0) return;
@@ -623,7 +623,7 @@ fn emitSeed(g: *Gen) Error!void {
     try g.w("    return s;\n}}\n\n", .{});
 }
 
-/// `vera_seed`'s `seed` (plan/limit.zig `planSeed`): the limited image a host
+/// The seed tree's `seed` (plan/limit.zig `planSeed`): the limited image a host
 /// starts from is NODE values, so each seeded branch is solved into them down
 /// the tree, root at 0 V. ngspice MODEINITJCT (mos1load.c:397-408) starts the
 /// branches, not the nodes, at vgs = vto, vds = 0, vbs = -1.
@@ -642,7 +642,7 @@ fn emitSeedTree(g: *Gen) Error!void {
         }
     }
     try g.w(
-        \\/// SPICE `MODEINITJCT` with VerA's `vera_seed`: each seeded branch starts at
+        \\/// SPICE `MODEINITJCT` with `$limit`'s seed argument: each seeded branch starts at
         \\/// its own value (vcrit for a junction that names none), solved into node
         \\/// values from a root at 0 V. These are the instance's private limited
         \\/// image, and every lane written here is in `limit_writes`.
@@ -680,13 +680,13 @@ fn emitSeedTree(g: *Gen) Error!void {
         try writeArg(g, seedValue(lc));
         try g.w("); // V({s},{s}) = {s}\n", .{
             plan_limit.uName(g.names.u_names, lc.hi), plan_limit.uName(g.names.u_names, lc.lo),
-            if (lc.seed != .undef) "vera_seed" else "vcrit",
+            if (lc.seed != .undef) "seed" else "vcrit",
         });
     }
     try g.w("    return s;\n}}\n\n", .{});
 }
 
-/// A tree edge's value: its `vera_seed`, else its junction's vcrit.
+/// A tree edge's value: its seed argument, else its junction's vcrit.
 fn seedValue(lc: LimitCall) Mir.Value {
     return if (lc.seed != .undef) lc.seed else lc.argv[1];
 }

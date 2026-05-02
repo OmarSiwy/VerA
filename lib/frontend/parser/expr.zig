@@ -349,18 +349,11 @@ pub fn parsePrimary(self: *Parser) Error!Ast.ExprId {
             // it means something — one site, and it is the site that already
             // knows which module is the root.
             if (self.eat(.dot)) return hierTerminal(self, &.{name}, tok);
-            // §2.9's name-suffix slot, extended here as for the operators
-            // below: `$limit (* vera_seed = v *) (V(a, b), ...)`.
-            const mark = self.attrs.items.len;
-            if (self.peek() == .attr_open) try self.skipAttributes();
-            const lte = self.lteSince(mark);
             const args: []const Ast.ExprId = if (self.peek() == .lparen)
                 try parseCallArgs(self)
             else
                 &.{};
-            const id = try addCall(self, .sys_call, tok, name, args);
-            try self.keepLte(lte, .none, id);
-            return id;
+            return addCall(self, .sys_call, tok, name, args);
         },
         // A.2.5 value_range_expression `inf` (only meaningful in §3.4.2).
         .kw_inf => {

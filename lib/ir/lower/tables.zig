@@ -191,8 +191,6 @@ mem_arrays: std.ArrayList(Lower.MemArray) = .empty,
 /// §9.17.3 the user-function `$limit` state, one entry per ACCESS FUNCTION.
 /// Collected by `scanCallSites` before the analog block is lowered.
 limit_slots: std.ArrayList(Lower.LimitSlot) = .empty,
-/// VerA's `vera_seed` values, one per string `$limit` site that carries one.
-limit_seeds: std.ArrayList(Lower.LimitSeed) = .empty,
 /// First-call sample counts, one entry per array-source call site.
 table_samples: std.ArrayList(u32) = .empty,
 /// §9.13.1 — how many call sites took the SEEDLESS form (`$random` with no

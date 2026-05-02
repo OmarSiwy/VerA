@@ -404,7 +404,7 @@ pub const Code = enum(u16) {
     /// §9.17.3 a `$limit` site the device does not honour: the probe is
     /// returned unchanged, which the clause permits.
     W0853,
-    /// VerA's `vera_seed` on a branch `seed` does not start: named, never
+    /// A `$limit` seed on a branch `seed` does not start: named, never
     /// silently dropped.
     W0854,
 
@@ -4062,19 +4062,19 @@ fn infoOf(c: Code) Info {
             ,
         },
         .E0527 => .{
-            .title = "vera_seed reads the solution",
-            .lrm = "2.9",
+            .title = "$limit seed reads the solution",
+            .lrm = "9.17.3",
             .explain =
-            \\`(* vera_seed = <value> *)` is VerA's attribute for the value a
-            \\`$limit` site's branch starts at before the first Newton iterate
-            \\(SPICE's MODEINITJCT). VerA lets the value go past 2.9's
-            \\constant_expression, because a SPICE start value is computed from
-            \\the card and the temperature (mos1load.c's `tVto`). It is still
-            \\evaluated before any solution exists, so it may not read a probe
-            \\or anything computed from one:
+            \\A string-form `$limit` takes, after its algorithm's arguments and
+            \\its sign, an optional seed: the value the site's branch starts at
+            \\before the first Newton iterate (SPICE's MODEINITJCT). 9.17.3
+            \\leaves the algorithm's arguments to the implementation. A seed may
+            \\read what the device computes from its card and temperature
+            \\(mos1load.c's `tVto`), but it is evaluated before any solution
+            \\exists, so it may not read a probe or anything computed from one:
             \\
-            \\    (* vera_seed = type * vtox *) vgs = type * $limit(V(g, si), ...);  // ok
-            \\    (* vera_seed = V(d, s) *)     vds = $limit(V(di, si), "limvds");  // no
+            \\    vgs = type * $limit(V(g, si), "fetlimds", type * vonp, type, type * vtox);  // ok
+            \\    vds = $limit(V(di, si), "limvds", 1, V(d, s));                              // no
             ,
         },
         .E0572 => .{
@@ -5811,23 +5811,22 @@ fn infoOf(c: Code) Info {
             ,
         },
         .W0854 => .{
-            .title = "vera_seed is not applied here",
-            .lrm = "2.9",
+            .title = "$limit seed is not applied here",
+            .lrm = "9.17.3",
             .explain =
-            \\VerA's `vera_seed` starts `$limit` BRANCHES at given values (SPICE's
+            \\A `$limit` seed argument starts that site's BRANCH at a value (SPICE's
             \\MODEINITJCT, mos1load.c:397-408), and the host's limited image
             \\holds NODE values. So the seeded branches are solved into nodes as
             \\a tree: each group of connected nets has one root at 0 V (ground,
             \\else its lowest port, else its lowest net), and every other net
             \\follows its branch. A seed that tree cannot take is dropped:
             \\
-            \\  - its `$limit` is not applied at all (see W0853);
             \\  - its branch is the vgd leg of a fetlimds ladder or the vbd leg of
             \\    a pnjlimds rung, which is derived through vds;
             \\  - an earlier site already seeds the same pair of nets;
             \\  - it closes a loop: the other branches already fix both its nets.
             \\
-            \\A junction with no `vera_seed` joins the tree at its vcrit.
+            \\A junction with no seed joins the tree at its vcrit.
             ,
         },
     };

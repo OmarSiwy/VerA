@@ -1108,12 +1108,12 @@ pub const ModuleDecl = struct {
 /// The LRM-defined names are `abstol` (§3.6.1.2, REQUIRED for a base nature),
 /// `access` (§3.6.1.4), `units` (§3.6.1.3), `idt_nature` (§3.6.1.5),
 /// One `(* vera_lte [= constant_expression] *)`, or the same for
-/// `vera_interp`, `vera_nodiff` or `vera_seed` — see `SourceFile.lte_attrs`.
+/// `vera_interp` or `vera_nodiff` — see `SourceFile.lte_attrs`.
 /// Exactly one of `stmt`/`expr` is set. `value == .none` is §2.9's "If a value
 /// is not specifically assigned to the attribute, then its value shall be 1".
 pub const LteAttr = struct {
     /// The attribute's name, which is its tag.
-    kind: enum { vera_lte, vera_interp, vera_nodiff, vera_seed } = .vera_lte,
+    kind: enum { vera_lte, vera_interp, vera_nodiff } = .vera_lte,
     stmt: StmtId = .none,
     expr: ExprId = .none,
     value: ExprId,
@@ -1540,8 +1540,7 @@ pub const SourceFile = struct {
     /// is for "analog primitives", which a netlist-derived wrapper is not.
     netlist_modules: u32 = 0,
 
-    /// VerA's vendor attributes, `vera_lte`, `vera_interp`, `vera_nodiff` and
-    /// `vera_seed` (§2.9
+    /// VerA's vendor attributes, `vera_lte`, `vera_interp` and `vera_nodiff` (§2.9
     /// `attribute_instance`), where one decorates an analog statement (A.6.4)
     /// or suffixes an operator call's name (§2.9's "Verilog-AMS function name"
     /// — A.8.2 draws the slot only for `analog_function_call`, and VerA extends
@@ -1549,9 +1548,8 @@ pub const SourceFile = struct {
     /// `ModuleDecl.attrs` and read by nothing. `vera_lte` decides which
     /// §5.6.1.2 charge sites join the host's truncation-error check
     /// (`contract.QSites`); `vera_interp` which `absdelay` sites interpolate
-    /// quadratically; `vera_nodiff` which assignments store no derivative;
-    /// `vera_seed` which `$limit` sites carry a cold-start value. Few enough
-    /// that a list beats a map.
+    /// quadratically; `vera_nodiff` which assignments store no derivative.
+    /// Few enough that a list beats a map.
     lte_attrs: std.ArrayList(LteAttr) = .empty,
 
     /// The `kind` attribute on statement `id`, if any. Last wins (§2.9).
