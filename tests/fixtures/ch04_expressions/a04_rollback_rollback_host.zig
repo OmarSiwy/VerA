@@ -66,8 +66,8 @@
 //!     and neither is `State.t_prev`.
 //!
 //!     The second omission is the sharp one. `updateState` ends with
-//!     `state.t_prev = inst.abstime`, and the next call computes
-//!     `dt = inst.abstime - state.t_prev`. After a rejected attempt at 2ns has
+//!     `state.t_prev = sim.t`, and the next call computes
+//!     `dt = sim.t - state.t_prev`. After a rejected attempt at 2ns has
 //!     written t_prev = 2ns, the retry at 1ns computes dt = -1ns, and
 //!     `zIdtAcc`'s `if (dt <= 0.0) return ic` reads that as a STATIC ANALYSIS
 //!     and throws the whole integral away. The accepted answer at 1ns comes out
@@ -105,80 +105,27 @@
 //!     b.step("test-a04-rollback", "§4.5 operator state across a rejected step")
 
 const std = @import("std");
+const contract = @import("contract");
 const D = @import("device");
 
 const n_u = @typeInfo(D.U).@"enum".fields.len;
 
-/// The plain-real solver scalar, copied from tests/table_snapshot_host.zig: a
-/// host driving a device directly supplies its own `S`, and this one carries no
-/// derivative because nothing here asks for a Jacobian.
-const S = struct {
-    v: f64,
-    pub fn con(v: f64) S {
-        return .{ .v = v };
-    }
-    pub fn val(a: S) f64 {
-        return a.v;
-    }
-    pub fn add(a: S, b: S) S {
-        return con(a.v + b.v);
-    }
-    pub fn sub(a: S, b: S) S {
-        return con(a.v - b.v);
-    }
-    pub fn neg(a: S) S {
-        return con(-a.v);
-    }
-    pub fn scale(a: S, b: f64) S {
-        return con(a.v * b);
-    }
-    pub fn addC(a: S, b: f64) S {
-        return con(a.v + b);
-    }
-    pub fn abs(a: S) S {
-        return con(@abs(a.v));
-    }
-    pub fn div(a: S, b: S) S {
-        return con(a.v / b.v);
-    }
-    pub fn sel(c: S, a: S, b: S) S {
-        return if (c.v != 0) a else b;
-    }
-    pub fn mul(a: S, b: S) S {
-        return con(a.v * b.v);
-    }
-    pub fn lt(a: S, b: S) S {
-        return con(if (a.v < b.v) 1 else 0);
-    }
-    pub fn le(a: S, b: S) S {
-        return con(if (a.v <= b.v) 1 else 0);
-    }
-    pub fn minC(a: S, b: f64) S {
-        return con(@min(a.v, b));
-    }
-    pub fn maxC(a: S, b: f64) S {
-        return con(@max(a.v, b));
-    }
-};
+/// A value-only family: nothing here asks for a Jacobian.
+const S = contract.LegacyValue;
 
 /// The residual row an operator's contribution lands in, divided back out by
 /// the 1e-3 scale the .va applies, so the assertions read in the operator's own
 /// units.
-fn read(model: *const D.Model, inst: *D.Instance, x: [n_u]S, u: D.U) f64 {
-    return D.eval(S, x, model, inst, inst.abstime)[@intFromEnum(u)].v / 1.0e-3;
+fn read(model: *const D.Model, inst: *D.Instance, x: [n_u]f64, sim: contract.SimState, u: D.U) f64 {
+    const r: [n_u]S = D.eval(S, &x, model, inst, sim);
+    return r[@intFromEnum(u)].v / 1.0e-3;
 }
 
 /// Drive the unknowns the way the .va's ramp asks: V(p) = t/1ns volts.
-fn bias(t_ns: f64) [n_u]S {
-    var x: [n_u]S = @splat(S.con(0.0));
-    x[@intFromEnum(D.U.p)] = S.con(t_ns);
+fn bias(t_ns: f64) [n_u]f64 {
+    var x: [n_u]f64 = @splat(0.0);
+    x[@intFromEnum(D.U.p)] = t_ns;
     return x;
-}
-
-fn real(x: [n_u]S) [n_u]f64 {
-    var out: [n_u]f64 = undefined;
-    for (x, 0..) |v, i| out[i] = v.v;
-    return out;
 }
 
 /// The missing revert hook, behind a shim INSTEAD OF an early `return` at the
@@ -207,51 +154,52 @@ test "§4.5.4 the integral at an accepted time does not depend on rejected attem
     const model: D.Model = .{};
     var inst: D.Instance = .{};
     var state = D.initState(&model, &inst);
+    var sim: contract.SimState = .{};
 
     // ---- the operating point -------------------------------------------
-    inst.abstime = 0.0;
-    inst.dt = 0.0;
+    sim.t = 0.0;
+    sim.dt = 0.0;
     const x0 = bias(0.0);
     // §4.5.4 "When used in DC or IC analyses, idt() returns the initial
     // condition (ic) if specified" — 0.0 here.
-    try std.testing.expectApproxEqAbs(0.0, read(&model, &inst, x0, .p), 1e-12);
+    try std.testing.expectApproxEqAbs(0.0, read(&model, &inst, x0, sim, .p), 1e-12);
     // §4.5.3 "In DC analysis, ddt() returns zero (0)."
-    try std.testing.expectApproxEqAbs(0.0, read(&model, &inst, x0, .q), 1e-12);
-    _ = D.updateState(&model, &inst, real(x0), &state);
+    try std.testing.expectApproxEqAbs(0.0, read(&model, &inst, x0, sim, .q), 1e-12);
+    _ = D.updateState(S, &model, &inst, x0, &state, sim);
     try stateCtl(&model, &inst, &state, .commit);
 
     // ---- a trial step to 2ns that the driver will reject ----------------
-    inst.abstime = 2.0e-9;
-    inst.dt = 2.0e-9;
+    sim.t = 2.0e-9;
+    sim.dt = 2.0e-9;
     const x2 = bias(2.0);
     // 1e9 integrated over 2ns is exactly 2.0; the derivative of a 1 V/ns ramp
     // is exactly 1e9 V/s.
-    try std.testing.expectApproxEqAbs(2.0, read(&model, &inst, x2, .p), 1e-9);
-    try std.testing.expectApproxEqAbs(1.0e9, read(&model, &inst, x2, .q), 1.0);
-    _ = D.updateState(&model, &inst, real(x2), &state);
+    try std.testing.expectApproxEqAbs(2.0, read(&model, &inst, x2, sim, .p), 1e-9);
+    try std.testing.expectApproxEqAbs(1.0e9, read(&model, &inst, x2, sim, .q), 1.0);
+    _ = D.updateState(S, &model, &inst, x2, &state, sim);
 
     // ---- REJECTED. The driver reverts and halves the step. --------------
     try stateCtl(&model, &inst, &state, .revert);
 
-    inst.abstime = 1.0e-9;
-    inst.dt = 1.0e-9;
+    sim.t = 1.0e-9;
+    sim.dt = 1.0e-9;
     const x1 = bias(1.0);
     // THE ASSERTION OF THIS FILE. ∫0..1ns 1e9 dτ = 1.0. Not 2.0 (state left
     // over from the discarded attempt) and not 0.0 (what a negative dt makes
     // `zIdtAcc` return once `state.t_prev` has been advanced to 2ns and never
     // put back).
-    try std.testing.expectApproxEqAbs(1.0, read(&model, &inst, x1, .p), 1e-9);
-    try std.testing.expectApproxEqAbs(1.0e9, read(&model, &inst, x1, .q), 1.0);
-    _ = D.updateState(&model, &inst, real(x1), &state);
+    try std.testing.expectApproxEqAbs(1.0, read(&model, &inst, x1, sim, .p), 1e-9);
+    try std.testing.expectApproxEqAbs(1.0e9, read(&model, &inst, x1, sim, .q), 1.0);
+    _ = D.updateState(S, &model, &inst, x1, &state, sim);
     try stateCtl(&model, &inst, &state, .commit);
 
     // ---- and the run reaches 2ns for real ------------------------------
-    inst.abstime = 2.0e-9;
-    inst.dt = 1.0e-9;
+    sim.t = 2.0e-9;
+    sim.dt = 1.0e-9;
     // Same time, same circuit, different path to it: 1.0 + 1e9·1ns = 2.0, the
     // identical number the rejected attempt produced.
-    try std.testing.expectApproxEqAbs(2.0, read(&model, &inst, x2, .p), 1e-9);
-    try std.testing.expectApproxEqAbs(1.0e9, read(&model, &inst, x2, .q), 1.0);
+    try std.testing.expectApproxEqAbs(2.0, read(&model, &inst, x2, sim, .p), 1e-9);
+    try std.testing.expectApproxEqAbs(1.0e9, read(&model, &inst, x2, sim, .q), 1.0);
 }
 
 test "§4.5.15 a revert leaves no half-advanced operator history behind" {
@@ -264,25 +212,22 @@ test "§4.5.15 a revert leaves no half-advanced operator history behind" {
     const model: D.Model = .{};
     var inst: D.Instance = .{};
     var state = D.initState(&model, &inst);
+    var sim: contract.SimState = .{};
 
-    inst.abstime = 0.0;
-    inst.dt = 0.0;
-    _ = D.updateState(&model, &inst, real(bias(0.0)), &state);
+    sim.t = 0.0;
+    sim.dt = 0.0;
+    _ = D.updateState(S, &model, &inst, bias(0.0), &state, sim);
     try stateCtl(&model, &inst, &state, .commit);
     const accepted = inst;
     const accepted_state = state;
 
     for ([_]f64{ 8.0, 4.0, 2.0 }) |t_ns| { // three rejected attempts, shrinking
-        inst.abstime = t_ns * 1.0e-9;
-        inst.dt = t_ns * 1.0e-9;
-        _ = D.updateState(&model, &inst, real(bias(t_ns)), &state);
+        sim.t = t_ns * 1.0e-9;
+        sim.dt = t_ns * 1.0e-9;
+        _ = D.updateState(S, &model, &inst, bias(t_ns), &state, sim);
         try stateCtl(&model, &inst, &state, .revert);
-        // `abstime`/`dt` are HOST-owned (contract `set_sim_state`), not device
-        // state, so they are put back by hand before the comparison; every
-        // other field of Instance belongs to the device and must be restored
-        // by the revert itself.
-        inst.abstime = 0.0;
-        inst.dt = 0.0;
+        // Every field of Instance belongs to the device and must be restored
+        // by the revert itself; time lives in the host's `SimState`.
         try std.testing.expectEqualDeep(accepted, inst);
         // `State` carries `t_prev`, which is what `dt` is measured against — a
         // revert that leaves it pointing at a discarded trial time makes the

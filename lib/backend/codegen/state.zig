@@ -35,7 +35,7 @@ const enableArgIdx = codegen.enableArgIdx;
 /// What the accepted-step body needs, decided once for `updateState` and
 /// `acceptQ` alike.
 const Accept = struct {
-    /// Some operator steps on `dt = inst.abstime - state.t_prev`.
+    /// Some operator steps on `dt = sim.t - state.t_prev`.
     uses_dt: bool = false,
     /// Some operator input, held variable or path latch is a core field.
     uses_core: bool = false,
@@ -86,26 +86,32 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\    return .{{}};
         \\}}
         \\
-        \\pub fn updateState({0s}: *const Model, inst: *Instance, {1s}: [n_u]f64, {2s}: *State) contract.UpdateResult {{
-        \\
-    , .{
-        // Both go unread when the only accepted-step work is §9.13.1's
-        // internal-seed advance, which is a function of the seed alone.
-        if (uses_core) "model" else "_",
-        if (uses_core) "x" else "_",
-        if (acc.reads_t_prev) "state" else "_",
-    });
-    if (uses_core) try self.w(
-        \\    var xr: [n_u]R = undefined;
-        \\    for (x, 0..) |xv, i| xr[i] = R.con(xv);
-        \\
+        \\pub fn updateState(comptime
     , .{});
+    // Each goes unread when the only accepted-step work is §9.13.1's
+    // internal-seed advance, a function of the seed alone.
+    const at_s = self.out.items.len + 1;
+    try self.w(" S: type, ", .{});
+    const at_model = self.out.items.len;
+    try self.w("model: *const Model, inst: *Instance, ", .{});
+    const at_x = self.out.items.len;
+    try self.w("x: [n_u]f64, ", .{});
+    const at_state = self.out.items.len;
+    try self.w("state: *State, ", .{});
+    const at_sim = self.out.items.len;
+    try self.w("sim: contract.SimState) contract.UpdateResult {{\n", .{});
+    const body = self.out.items.len;
     // ONE core evaluation for every operator's input, not one per operator:
     // the inputs are fields of the same struct, so the accepted-step sweep
     // costs exactly one model evaluation however many operators there are.
     // `model` is always live because that call reads it. `dt` is not.
-    if (uses_core) try self.w("    const m = core(R, xr, model, {s}{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
-    try emitAcceptBody(self, acc, ".v");
+    if (uses_core) try self.w("    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
+    try emitAcceptBody(self, acc);
+    gen_unit.patchUnless(self, at_s, body, "S");
+    gen_unit.patchUnless(self, at_model, body, "model");
+    gen_unit.patchUnless(self, at_x, body, "x");
+    gen_unit.patchUnless(self, at_state, body, "state");
+    gen_unit.patchUnless(self, at_sim, body, "sim");
     try self.w(
         \\    return .ok;
         \\}}
@@ -147,16 +153,16 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     defer self.core_hoisted = false;
     try self.w(
         \\/// §5.6.1.2 + §4.5.2 the accepted-point pass from ONE core evaluation.
-        \\/// Returns `q(S, x, model, inst, t)` and then does what
-        \\/// `updateState(model, inst, <values of x>, state)` does, reading the
-        \\/// same core result; staged values carry `S`'s value semantics.
+        \\/// Returns `q(S, x, model, inst, sim)` and then does what
+        \\/// `updateState(S, model, inst, x.*, state, sim)` does, reading the
+        \\/// same core result.
         \\
     , .{});
     try self.w("pub fn acceptQ(comptime S: type, ", .{});
     const at_x = self.out.items.len;
-    try self.w("x: [n_u]S, ", .{});
+    try self.w("x: *const [n_u]f64, ", .{});
     const at_model = self.out.items.len;
-    try self.w("model: *const Model, inst: *Instance, {s}: *State) [n_q]S {{\n", .{
+    try self.w("model: *const Model, inst: *Instance, {s}: *State, sim: contract.SimState) contract.Sites(Self, S) {{\n", .{
         if (acc.reads_t_prev) "state" else "_",
     });
     const at_core = self.out.items.len;
@@ -165,21 +171,22 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     try self.b("    const qq = ", .{});
     try gen_dispatch.writeSites(self);
     try self.b(";\n", .{});
-    try emitAcceptBody(self, acc, ".val()");
+    try emitAcceptBody(self, acc);
     try self.w("    return qq;\n}}\n\n", .{});
     if (self.core_wanted or acc.uses_core) {
         self.uses_x = true;
         self.uses_model = true;
-        try self.out.insertSlice(self.gpa, at_core, try std.fmt.allocPrint(self.arena, "    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(true)}));
+        try self.out.insertSlice(self.gpa, at_core, try std.fmt.allocPrint(self.arena, "    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});\n", .{self.heldArg(true)}));
     }
     if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
 }
 
-/// The accepted-step body shared by `updateState` (`val` = ".v" on `R`) and
-/// `acceptQ` (".val()" on the host's `S`): stage the path latches, advance
-/// every operator, write the held variables back. Reads the core result `m`.
-fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
+/// The accepted-step body shared by `updateState` and `acceptQ`: stage the
+/// path latches, advance every operator, write the held variables back.
+/// Reads the core result `m`.
+fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
+    const val = ".val()";
     const uses_dt = acc.uses_dt;
     // §5.6.1.2 stage this iterate's path-latch operands. They become the
     // committed base ONLY at stateCtl(.commit): a rejected attempt leaves
@@ -191,7 +198,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
     for (self.core.acc_lo, 0..) |lo, k| {
         try self.w("    inst.wq__{d} = m.f{d}{s}; // path_acc staging\n", .{ k, lo, val });
     }
-    if (uses_dt) try self.w("    const dt = inst.abstime - state.t_prev;\n", .{});
+    if (uses_dt) try self.w("    const dt = sim.t - state.t_prev;\n", .{});
     // §9.17 reset FIRST, unconditionally: a `$bound_step` that only fired on
     // one arm of an `if` last step must not keep bounding this one, and the
     // reset value is also the right answer for a model that never calls the
@@ -246,7 +253,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
                 try gen_call.ctrlStep(self, args, 3, "0.0"),
             }),
             .absdelay => {
-                try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, inst.abstime, in);\n", .{ n, n, n });
+                try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, sim.t, in);\n", .{ n, n, n });
                 // §4.5.7 "the value of td when the absdelay() is first
                 // evaluated shall be used and any future changes to td
                 // shall be ignored" — the static point IS that first
@@ -254,13 +261,13 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
                 // through there, so latching here is before any delayed
                 // value has been answered.
                 if (try gen_call.absdelayFreezes(self, args)) try self.w(
-                    "        if (inst.abstime <= state.t_prev) inst.{s}__td = {s};\n",
+                    "        if (sim.t <= state.t_prev) inst.{s}__td = {s};\n",
                     .{ n, try gen_call.ctrlStep(self, args, 1, "0.0") },
                 );
                 // §4.5.14 a dynamic maxdelay: its value at the start of the
                 // analysis, latched at the same first evaluation.
                 if (try gen_call.absdelayMaxdSampled(self, args)) try self.w(
-                    "        if (inst.abstime <= state.t_prev) inst.{s}__maxd = {s};\n",
+                    "        if (sim.t <= state.t_prev) inst.{s}__maxd = {s};\n",
                     .{ n, try gen_call.ctrlStep(self, args, 2, "0.0") },
                 );
                 // §9.17.2 the same self-defence the §4.5.12 filter mounts
@@ -280,13 +287,13 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
                 const t = try gen_call.transitionTimes(self, args);
                 try self.w(
                     "        zTransStep(in, &inst.{0s}__from, &inst.{0s}__to, &inst.{0s}__t0, " ++
-                        "inst.abstime, dt, {1s}, {2s}, {3s});\n",
+                        "sim.t, dt, {1s}, {2s}, {3s});\n",
                     .{ n, try gen_call.argF64(self, args, 1, "0.0"), t[0], t[1] },
                 );
             },
             .slew => {
                 const r = try gen_call.slewRates(self, args);
-                try self.w("        inst.{s}__prev = zSlew(R, R.con(in), inst.{s}__prev, dt, {s}, @abs({s})).v;\n", .{
+                try self.w("        inst.{s}__prev = zSlew(zL(S, 0), zL(S, 0).con(in), inst.{s}__prev, dt, {s}, @abs({s})).val();\n", .{
                     n, n, r[0], r[1],
                 });
             },
@@ -339,8 +346,8 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
                 \\        const period = {1s};
                 \\        if (inst.{0s}__start != in) {{
                 \\            inst.{0s}__start = in;
-                \\            inst.{0s}__next = zNextTimer(in, period, inst.abstime) orelse z_inf;
-                \\        }} else if (inst.abstime >= inst.{0s}__next) {{
+                \\            inst.{0s}__next = zNextTimer(in, period, sim.t) orelse z_inf;
+                \\        }} else if (sim.t >= inst.{0s}__next) {{
                 \\            inst.{0s}__next = if (period > 0.0) inst.{0s}__next + period else z_inf;
                 \\        }}
                 \\
@@ -391,7 +398,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
                     \\        // which timepoint is a sample instant. A `__next` time re-armed by
                     \\        // `+= zn*T` could and did — three additions of 1e-9 overshoot the
                     \\        // double nearest 3e-9, and the sample at t = 3T was lost for good.
-                    \\        var zi_k = zZiDue(inst.abstime, inst.{0s}__nk, period);
+                    \\        var zi_k = zZiDue(sim.t, inst.{0s}__nk, period);
                     \\        if (zi_k > 0) {{
                     \\            inst.{0s}__nk += @as(f64, @floatFromInt(zi_k));
                     \\            while (zi_k > 0) : (zi_k -= 1)
@@ -441,7 +448,7 @@ fn emitAcceptBody(self: *Gen, acc: Accept, val: []const u8) Error!void {
             }
         }
     }
-    if (acc.reads_t_prev) try self.w("    state.t_prev = inst.abstime;\n", .{});
+    if (acc.reads_t_prev) try self.w("    state.t_prev = sim.t;\n", .{});
 }
 
 /// Called after evaluating a Newton iterate, with that iterate's x.
@@ -455,26 +462,26 @@ fn emitAdvanceIteration(self: *Gen) Error!void {
     var uses_core = false;
     for (self.lowered.limit_slots.items) |slot| uses_core = uses_core or gen_dispatch.coreIdx(self, self.an.rv(slot.final)) != null;
     const uses_inst = uses_core or self.lowered.uses.contains(.newton_iter) or self.lowered.limit_slots.items.len != 0;
-    try self.w("pub fn advanceIteration({s}: *const Model, {s}: *Instance, {s}: [n_u]f64) void {{\n", .{
-        if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_",
+    const core_name = if (uses_core) "S" else "_";
+    try self.w("pub fn advanceIteration(comptime {s}: type, {s}: *const Model, {s}: *Instance, {s}: [n_u]f64, {s}: contract.SimState) void {{\n", .{
+        core_name, if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_", if (uses_core) "sim" else "_",
     });
     if (uses_core) try self.w(
-        "    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n    const m = core(R, xr, model, {s}{s});\n",
+        "    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n",
         .{ try gen_setup.probeInstance(self), self.heldArg(true) },
     );
     for (self.lowered.limit_slots.items, 0..) |slot, k| {
         if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |lo|
-            try self.w("    inst.limiter_previous[{d}] = m.f{d}.v;\n", .{ k, lo })
+            try self.w("    inst.limiter_previous[{d}] = m.f{d}.val();\n", .{ k, lo })
         else
             try self.w("    inst.limiter_previous[{d}] = 0.0;\n", .{k});
     }
     if (self.lowered.uses.contains(.newton_iter)) try self.w("    inst.newton_iteration +|= 1;\n", .{});
     try self.w("}}\n\n", .{});
     if (self.lowered.uses.contains(.reject_iteration)) {
-        try self.w("pub fn checkConvergence(model: *const Model, inst: *const Instance, x: [n_u]f64) bool {{\n", .{});
+        try self.w("pub fn checkConvergence(comptime S: type, model: *const Model, inst: *const Instance, x: [n_u]f64, sim: contract.SimState) bool {{\n", .{});
         const probe_inst = try gen_setup.probeInstance(self);
-        try self.w("    var xr: [n_u]R = undefined;\n    for (x, 0..) |v, i| xr[i] = R.con(v);\n" ++
-            "    return core(R, xr, model, {s}{s}).f{d} == 0;\n}}\n\n", .{ probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
+        try self.w("    return core(S, zVals(S, &x), model, {s}, sim{s}).f{d} == 0;\n}}\n\n", .{ probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
     }
 }
 
@@ -539,9 +546,8 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         \\/// the set cancels on a single slot. Last-write-wins aliasing left the
         \\/// chain's first link dangling — its KVL row landed on a KCL row as
         \\/// ±1 garbage stamps and the "solution" violated the model equations.
-        \\pub fn collapse(model: *const Model, inst: *const Instance) [n_u]?u8 {{
-        \\    var xr: [n_u]R = undefined;
-        \\    for (&xr) |*p| p.* = R.con(0.0);
+        \\pub fn collapse(comptime S: type, model: *const Model, inst: *const Instance) [n_u]?u8 {{
+        \\    const xr: [n_u]zOf(S, 0) = @splat(S.con(0.0));
         \\    // SEEDS ITS OWN SETUP, on a local copy. `collapse` decides
         \\    // TOPOLOGY, so a host must call it while building the matrix —
         \\    // before the batch exists and therefore before the batch runs
@@ -551,13 +557,13 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         \\    // on garbage. `setup` is a pure function of (model, instance), so
         \\    // computing it here is the answer the batch will compute later,
         \\    // and the copy keeps the caller's Instance untouched.
-        \\{s}    const m = core(R, xr, model, {s}{s});
+        \\{s}    const m = core(S, xr, model, {s}, .{{}}{s});
         \\    var parent: [n_u]u8 = undefined;
         \\    for (&parent, 0..) |*p, i| p.* = @intCast(i);
         \\
     , .{
         if (self.su.vals.len != 0)
-            "    var pin = inst.*;\n    setup(R, model, &pin);\n"
+            "    var pin = inst.*;\n    setup(S, model, &pin);\n"
         else if (self.lowered.table_samples.items.len != 0)
             "    var pin = inst.*;\n"
         else
@@ -572,7 +578,7 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         if (self.an.vty[fi] == .int)
             try self.w("    const a{d} = (m.f{d} != 0);", .{ pi, k })
         else
-            try self.w("    const a{d} = (m.f{d}.v != 0.0);", .{ pi, k });
+            try self.w("    const a{d} = (m.f{d}.val() != 0.0);", .{ pi, k });
         try self.w(" // 0 V arm retained: dead short\n", .{});
         try self.w("    if (a{d}) zCollapseUnion(&parent, @intFromEnum(U.{s}), @intFromEnum(U.{s}));\n", .{
             pi, self.names.u_names[p.victim], self.names.u_names[p.target],

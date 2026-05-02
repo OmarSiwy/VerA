@@ -11,8 +11,7 @@
 //!     event operator, a value-collapsing helper, a per-call draw, a host
 //!     crossing) sets `Float.pinned`.
 //!   - `lane_clean`: a device that finishes with `pinned` false gets
-//!     `pub const lane_clean = true;` (`file.zig`), which the testbench's
-//!     wide-vs-narrow batch check keys on.
+//!     `pub const lane_clean = true;` (`file.zig`).
 //!   - `eagerSafe` / `eagerCostly`: under `Float.strict` a real select whose
 //!     inline arms are total and cheap renders as the contract's `sel` mask —
 //!     true per lane — instead of a lazy `if`.

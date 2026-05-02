@@ -532,7 +532,7 @@ pub fn absdelayFreezes(self: *Gen, args: []const Mir.Value) Error!bool {
 }
 
 /// `ctrlStep` is `updateState`'s frame, where the only thing evaluated is
-/// the single `core(R, …)` sweep — so the argument has to be a field of it,
+/// the single value-only core sweep — so the argument has to be a field of it,
 /// which `buildJobs` is what arranges. A dynamic argument with no core
 /// field left is still E0515: that is a planning defect, not a legal
 /// program, and answering it with a wrong number would hide it.
@@ -642,83 +642,6 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
     return @min(i, self.names.held_names.len -| 1);
 }
 
-/// An `Instance` field the HOST rewrites between evaluations — time, step,
-/// analysis pass, the step and sub-task flags, the Newton iteration and the
-/// limiter history. The tag is the field's name (`core_sim_fields`).
-pub const SimField = enum { abstime, dt, analysis_kind, is_initial_step, is_final_step, is_analog_initial, newton_iteration, limiter_previous };
-pub const SimFields = std.EnumSet(SimField);
-
-/// Which host-rewritten `Instance` fields this call, as `emitCall` renders it,
-/// reads. That is the `core_reads_simstate`/`core_sim_fields` question: a host
-/// keeping Instance blobs resident on a device republishes those fields on its
-/// own copy only.
-///
-/// Kept beside `emitCall` because it is a column of the same dispatch: a new
-/// arm there that reads `inst.<field>` of this kind belongs here too.
-pub fn readsSimState(self: *const Gen, inst: Mir.Inst) SimFields {
-    const d = self.mir.instData(inst).call;
-    return switch (d.callee) {
-        .ddt, .idt, .idtmod, .absdelay, .@"absdelay$quad", .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
-        .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
-        .@"$bound_step", .@"$discontinuity",
-        => opReadsSimState(Mir.callee.opKind(d.callee)),
-        .analog_initial => .initOne(.is_analog_initial), // §5.2.1
-        // §5.10.2, and `analysisMatch` over the optional analysis list.
-        .initial_step => if (d.args.len != 0) .initMany(&.{ .is_initial_step, .analysis_kind }) else .initOne(.is_initial_step),
-        .final_step => if (d.args.len != 0) .initMany(&.{ .is_final_step, .analysis_kind }) else .initOne(.is_final_step),
-        .analysis, .ac_stim => .initOne(.analysis_kind), // §4.6.1, §4.6.3
-        .@"$abstime", .@"$realtime" => .initOne(.abstime),
-        .@"$simparam$str" => .initOne(.analysis_kind), // @tagName(inst.analysis_kind)
-        .@"$limit$old" => .initOne(.limiter_previous), // advanceIteration
-        // §9.15 `$simparam("iteration")`: inst.newton_iteration.
-        .@"$simparam" => if (Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse "")) .initOne(.newton_iteration) else .initEmpty(),
-        // Constants, Model reads, and Instance fields the host does NOT
-        // rewrite between evaluations (`temperature`, `mfactor`, the held and
-        // seed latches), and every task, conversion and kernel of its
-        // operands alone.
-        .limexp, .ddx, .white_noise, .flicker_noise, .noise_table, .noise_table_log,
-        .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given", .@"$port_connected",
-        .@"$analog_node_alias", .@"$analog_port_alias", .@"$test$plusargs", .@"$value$plusargs",
-        .@"$xposition", .@"$yposition", .@"$angle", .@"$hflip", .@"$vflip", .@"$rtoi", .@"$itor",
-        .@"$realtobits", .@"$bitstoreal", .@"$clog2", .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln",
-        .@"$ln1p", .@"$log", .@"$log10", .@"$floor", .@"$ceil", .@"$sin", .@"$cos", .@"$tan",
-        .@"$asin", .@"$acos", .@"$atan", .@"$sinh", .@"$cosh", .@"$tanh", .@"$asinh", .@"$acosh",
-        .@"$atanh", .@"$pow", .@"$hypot", .@"$atan2", .@"$display", .@"$displayb", .@"$displayo",
-        .@"$displayh", .@"$write", .@"$writeb", .@"$writeo", .@"$writeh", .@"$strobe", .@"$strobeb",
-        .@"$strobeo", .@"$strobeh", .@"$monitor", .@"$monitoron", .@"$monitoroff", .@"$debug",
-        .@"$fatal", .@"$error", .@"$warning", .@"$info", .@"$finish", .@"$stop", .@"$fopen",
-        .@"$fclose", .@"$fflush", .@"$fdisplay", .@"$fwrite", .@"$fstrobe", .@"$fmonitor",
-        .@"$fdebug", .@"$fgets", .@"$fscanf", .@"$ftell", .@"$fseek", .@"$rewind", .@"$ferror",
-        .@"$feof", .@"$sformat", .@"$sscanf", .@"$limit", .@"$table_model", .@"$held_int",
-        .@"$held_real", .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width",
-        .@"$monitor$arm", .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real",
-        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$plusarg$str", .@"$str$cat", .@"$str$repeat", .@"$rng$auto",
-        .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
-        .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
-        .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
-        .@"$rng$poisson_next", .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t",
-        .@"$rng$t_next", .@"$rng$erlang", .@"$rng$erlang_next", .systf,
-        => .initEmpty(),
-    };
-}
-
-/// The operator half of `readsSimState`, one arm per `OpKind` so a new
-/// operator has to answer it: the fields `emitOperator` spells.
-fn opReadsSimState(k: OpKind) SimFields {
-    return switch (k) {
-        .ddt, .idt, .idtmod, .slew, .laplace => .initOne(.dt),
-        .absdelay, .transition, .zi => .initMany(&.{ .abstime, .dt }),
-        .cross => .initMany(&.{ .analysis_kind, .dt }),
-        .timer => .initOne(.abstime),
-        // Their own `__t_last`/`__prev` fields only, which `updateState` —
-        // a device entry point — writes.
-        .last_crossing, .above => .initEmpty(),
-        // A void task read as a value renders the literal zero.
-        .bound_step, .discontinuity => .initEmpty(),
-        .none => .initEmpty(),
-    };
-}
-
 /// System/environment and operator calls. LRM ch9, §4.5, §4.6.
 ///
 /// ONE switch over `Mir.Callee`, without `else`: a callee lowering learns to
@@ -785,9 +708,9 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
 
         // §5.10.2 global events.
         .initial_step, .final_step => {
-            self.uses_inst = true;
-            const flag = if (c == .initial_step) "is_initial_step" else "is_final_step";
-            try self.b("S.con(if (inst.{s}", .{flag});
+            self.uses_sim = true;
+            const flag = if (c == .initial_step) "initial_step" else "final_step";
+            try self.b("S.con(if (sim.{s}", .{flag});
             if (args.len != 0) {
                 try self.b(" and (", .{});
                 try analysisMatch(self, args);
@@ -799,7 +722,6 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
 
         // §4.6.1 analysis("dc"|"tran"|…).
         .analysis => {
-            self.uses_inst = true;
             try self.b("S.con(if (", .{});
             try analysisMatch(self, args);
             try self.b(") 1.0 else 0.0)", .{});
@@ -830,7 +752,6 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // the reason this is a conditional rather than an export today is that
         // the contract has no complex side to hand it to.
         .ac_stim => {
-            self.uses_inst = true;
             // A.8.2 gives BOTH numeric arguments as `analog_expression`, the
             // same production a contribution's right-hand side uses, and puts
             // `constant_expression` only where it means one (the filters'
@@ -844,10 +765,10 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             const mag = try ctrlEval(self, args, 1, "1.0");
             const phase = try ctrlEval(self, args, 2, "0.0");
             try self.b("S.con(if (", .{});
-            if (args.len == 0)
-                try self.b("inst.analysis_kind == .ac", .{})
-            else
-                try analysisMatch(self, args[0..1]);
+            if (args.len == 0) {
+                self.uses_sim = true;
+                try self.b("sim.kind == .ac", .{});
+            } else try analysisMatch(self, args[0..1]);
             try self.b(") ({s}) * @cos({s}) else 0.0)", .{ mag, phase });
             return;
         },
@@ -912,8 +833,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             return self.b(").scale(8.617333262145179e-5)", .{});
         },
         .@"$abstime", .@"$realtime" => {
-            self.uses_inst = true;
-            return self.b("S.con(inst.abstime)", .{});
+            self.uses_sim = true;
+            return self.b("S.con(sim.t)", .{});
         },
         // §5.10 the retained value of an event-assigned variable. `Lower` put
         // this in the entry block in place of the declared initializer, so
@@ -987,10 +908,10 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
             // elaboration facts, and this function has one flattened module):
             // "module" survives here only for the callers that build a `Gen`
             // with no elaborated unit table.
-            self.uses_inst = true;
+            self.uses_sim = true;
             try self.b("(if (std.mem.eql(u8, ", .{});
             try gen_render.renderValueRef(self, self.an.rv(args[0]));
-            try self.b(", \"analysis_type\")) @tagName(inst.analysis_kind) else if (std.mem.eql(u8, ", .{});
+            try self.b(", \"analysis_type\")) @tagName(sim.kind) else if (std.mem.eql(u8, ", .{});
             try gen_render.renderValueRef(self, self.an.rv(args[0]));
             return self.b(", \"module\")) \"{f}\" else \"\")", .{std.zig.fmtString(self.mir.name)});
         },
@@ -1231,6 +1152,7 @@ pub fn abort(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
 /// §4.6.1 the analysis-name arguments are string constants; the comparison
 /// against the runtime pass is what the host answers.
 pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
+    self.uses_sim = true;
     var first = true;
     for (args) |a| {
         const def = self.mir.valueDef(self.an.rv(a));
@@ -1241,8 +1163,8 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
         if (std.mem.eql(u8, s, "static")) {
             // §4.6.1 "static" is true in any analysis that computes a DC
             // operating point.
-            try self.b("(inst.analysis_kind == .static or inst.analysis_kind == .ic or " ++
-                "inst.analysis_kind == .nodeset or inst.analysis_kind == .dc)", .{});
+            try self.b("(sim.kind == .static or sim.kind == .ic or " ++
+                "sim.kind == .nodeset or sim.kind == .dc)", .{});
         } else if (std.mem.eql(u8, s, "tran")) {
             // §4.6.1 "tran" is true during "the initial DC and time-sweep
             // phases of a transient" — the ic phase counts. This is what
@@ -1250,9 +1172,9 @@ pub fn analysisMatch(self: *Gen, args: []const Mir.Value) Error!void {
             // transient's own operating point evaluates waveform(0) while
             // .op/.dc/.ac bias at the DC value
             // (`analysis("static") && !analysis("tran")`).
-            try self.b("(inst.analysis_kind == .tran or inst.analysis_kind == .ic)", .{});
+            try self.b("(sim.kind == .tran or sim.kind == .ic)", .{});
         } else if (isAnalysisName(s)) {
-            try self.b("inst.analysis_kind == .{s}", .{s});
+            try self.b("sim.kind == .{s}", .{s});
         } else {
             try self.b("false", .{});
         }
@@ -1311,11 +1233,11 @@ fn emitSystfCall(self: *Gen, name: []const u8, args: []const Mir.Value) Error!vo
     for (args, 0..) |_, j| try self.b("{s} zs{d}a{d}.val()", .{ if (j == 0) "" else ",", label, j });
     try self.b(" }};\n", .{});
     try self.b("        var zsp: [{d}]f64 = undefined;\n", .{args.len});
-    // `Options.family`: `zsr` holds every argument's lanes, the union of theirs.
+    // `zsr` holds every argument's lanes, the union of theirs.
     var m: u64 = 0;
     for (args) |a| m |= family.mask(self, a);
-    const to: []const u8 = if (self.fam) try std.fmt.allocPrint(self.arena, "zTo(S, 0x{x}, ", .{m}) else "";
-    const end: []const u8 = if (self.fam) ")" else "";
+    const to = try std.fmt.allocPrint(self.arena, "zTo(S, 0x{x}, ", .{m});
+    const end = ")";
     try self.b("        var zsr = {s}S.con(zsh.call(zsh.ctx, {d}, &zsv, &zsp)){s};\n", .{ to, k, end });
     for (args, 0..) |_, j|
         try self.b("        zsr = {s}zsr.add(zs{d}a{d}.addC(-zsv[{d}]).scale(zsp[{d}])){s};\n", .{ to, label, j, j, j, end });
@@ -1405,11 +1327,16 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     else
         "";
     self.uses_inst = true;
-    // `Options.family`: a kernel runs at the result's mask `fm`, as
-    // `gen_render.kernelOpen` says; `kS` is its scalar and `in` its input.
+    // Every sim-state read below is spelled `sim.<field>`.
+    const at = self.out.items.len;
+    defer if (std.mem.indexOf(u8, self.out.items[at..], "sim.") != null) {
+        self.uses_sim = true;
+    };
+    // A kernel runs at the result's mask `fm`, as `gen_render.kernelOpen`
+    // says; `kS` is its scalar and `in` its input.
     const fm = family.mask(self, self.mir.instResult(inst));
-    const kS: []const u8 = if (self.fam) try std.fmt.allocPrint(self.arena, "zL(S, 0x{x})", .{fm}) else "S";
-    const in = if (self.fam and needs_in) try std.fmt.allocPrint(self.arena, "zLw(S, 0x{x}, {s})", .{ fm, in0 }) else in0;
+    const kS = try std.fmt.allocPrint(self.arena, "zL(S, 0x{x})", .{fm});
+    const in = if (needs_in) try std.fmt.allocPrint(self.arena, "zLw(S, 0x{x}, {s})", .{ fm, in0 }) else in0;
     switch (k) {
         // §4.5.11 the cascade reads its sections from Model on every
         // evaluation and is LINEAR in the current input, so the Jacobian
@@ -1423,7 +1350,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             // parameter gets patched to `_` and the device does not compile.
             self.uses_model = true;
             try opOpen(self, fm);
-            try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), inst.dt, &inst.{s}__u, &inst.{s}__y)", .{
+            try self.b("zLaplace({s}, {d}, {d}, {s}, {s}__sec(model), sim.dt, &inst.{s}__u, &inst.{s}__y)", .{
                 kS, p.ns, p.deg, in, n, n, n,
             });
             try opClose(self);
@@ -1445,15 +1372,15 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             self.uses_model = true;
             try opOpen(self, fm);
             try self.b(
-                "zZiEval({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), inst.dt, inst.{3s}__out, " ++
-                    "inst.abstime, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
+                "zZiEval({5s}, {0d}, {1d}, {2s}, {3s}__sec(model), sim.dt, inst.{3s}__out, " ++
+                    "sim.t, inst.{3s}__nk, {4s}, &inst.{3s}__u, &inst.{3s}__y)",
                 .{ p.ns, p.deg, in, n, p.period orelse "0.0", kS },
             );
             try opClose(self);
         },
         .ddt => {
             try opOpen(self, fm);
-            try self.b("zDdt({s}, {s}, inst.{s}__prev, inst.dt)", .{ kS, in, n });
+            try self.b("zDdt({s}, {s}, inst.{s}__prev, sim.dt)", .{ kS, in, n });
             try opClose(self);
         },
         // §4.5.4 `idt(expr, ic, assert)`: "idt() returns the initial
@@ -1465,16 +1392,16 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         .idt => {
             try opOpen(self, fm);
             if (args.len >= 3) try self.b(
-                "zIdtReset({s}, {s}, inst.{s}__acc, inst.dt, {s}, {s})",
+                "zIdtReset({s}, {s}, inst.{s}__acc, sim.dt, {s}, {s})",
                 .{ kS, in, n, try ctrlEval(self, args, 1, "0.0"), try ctrlEval(self, args, 2, "0.0") },
-            ) else try self.b("zIdt({s}, {s}, inst.{s}__acc, inst.dt, {s})", .{
+            ) else try self.b("zIdt({s}, {s}, inst.{s}__acc, sim.dt, {s})", .{
                 kS, in, n, try ctrlEval(self, args, 1, "0.0"),
             });
             try opClose(self);
         },
         .idtmod => {
             try opOpen(self, fm);
-            try self.b("zIdtmod({s}, {s}, inst.{s}__acc, inst.dt, {s}, {s}, {s})", .{
+            try self.b("zIdtmod({s}, {s}, inst.{s}__acc, sim.dt, {s}, {s}, {s})", .{
                 kS,                                 in,
                 n,                                  try ctrlEval(self, args, 1, "0.0"),
                 try ctrlEval(self, args, 2, "0.0"), try ctrlEval(self, args, 3, "0.0"),
@@ -1484,7 +1411,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         .absdelay => {
             try opOpen(self, fm);
             try self.b(
-                "{s}({s}, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, inst.abstime, inst.dt, {s})",
+                "{s}({s}, {s}, &inst.{s}__t, &inst.{s}__v, inst.{s}__head, sim.t, sim.dt, {s})",
                 .{
                     if (self.mir.instData(inst).call.callee == .@"absdelay$quad") "zAbsdelayQ" else "zAbsdelay",
                     kS,
@@ -1508,7 +1435,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             try opOpen(self, fm);
             try self.b(
                 "zTransition({4s}, {0s}, inst.{1s}__from, inst.{1s}__to, inst.{1s}__t0, " ++
-                    "inst.abstime, inst.dt, {2s}, {3s})",
+                    "sim.t, sim.dt, {2s}, {3s})",
                 .{ in, n, t[0], t[1], kS },
             );
             try opClose(self);
@@ -1516,7 +1443,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         .slew => {
             const r = try slewRates(self, args);
             try opOpen(self, fm);
-            try self.b("zSlew({s}, {s}, inst.{s}__prev, inst.dt, {s}, @abs({s}))", .{
+            try self.b("zSlew({s}, {s}, inst.{s}__prev, sim.dt, {s}, @abs({s}))", .{
                 kS, in, n, r[0], r[1],
             });
             try opClose(self);
@@ -1535,7 +1462,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // transient AND a step has to have been taken, which is what a
         // positive `dt` means everywhere else in this file. (§5.10.3.2
         // `above` is the operator that is explicitly exempt from both.)
-        .cross => try self.b("S.con(if (inst.analysis_kind == .tran and inst.dt > 0.0 and ({s}) and ({s})) 1.0 else 0.0)", .{
+        .cross => try self.b("S.con(if (sim.kind == .tran and sim.dt > 0.0 and ({s}) and ({s})) 1.0 else 0.0)", .{
             try crossTest(self, n, args, try std.fmt.allocPrint(self.arena, "({s}).val()", .{in0})),
             try enableTest(self, .cross, args),
         }),
@@ -1562,7 +1489,7 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
         // evaluation schedules the NEXT event (§5.10.3.3, "the next event
         // will be scheduled based on the latest value") and must not
         // cancel the one this timepoint was placed for.
-        .timer => try self.b("S.con(if (inst.abstime >= (if (std.math.isNan(inst.{0s}__start)) @max(inst.{0s}__next, ({1s}).val()) else inst.{0s}__next){2s} and ({3s})) 1.0 else 0.0)", .{
+        .timer => try self.b("S.con(if (sim.t >= (if (std.math.isNan(inst.{0s}__start)) @max(inst.{0s}__next, ({1s}).val()) else inst.{0s}__next){2s} and ({3s})) 1.0 else 0.0)", .{
             n,
             in0,
             if (timerIsOneShot(self, args))
@@ -1597,13 +1524,13 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
     }
 }
 
-/// `Options.family`: `zLu(S, m, ` around an operator kernel whose scalar is
-/// `zL(S, m)`, and its `)`.
+/// `zLu(S, m, ` around an operator kernel whose scalar is `zL(S, m)`, and
+/// its `)`.
 fn opOpen(self: *Gen, m: u64) Error!void {
-    if (self.fam) try self.b("zLu(S, 0x{x}, ", .{m});
+    try self.b("zLu(S, 0x{x}, ", .{m});
 }
 fn opClose(self: *Gen) Error!void {
-    if (self.fam) try self.b(")", .{});
+    try self.b(")", .{});
 }
 
 /// §4.5.8 `transition(expr, td, rise_time, fall_time)`: the two times, as

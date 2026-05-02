@@ -1,5 +1,5 @@
-//! Contract ABI 5 family preview (`Options.family`): what the emitted text
-//! says differently when every body is generic over a scalar FAMILY.
+//! The scalar family in the emitted text (`contract.family_fns`): every body
+//! is generic over a FAMILY, each real typed by the unknowns it may depend on.
 //!
 //! In: a MIR value's unknown set (`Analysis.unknownDeps`). Out: the mask
 //! literals and the `zTo`/`zOf` wrappers the renderers splice in, and the
@@ -11,9 +11,7 @@
 //! only where values MERGE: a hoisted slot, a lazy `if`'s arms, an array
 //! element, a kernel's result, a returned field, a residual row. `zTo` widens
 //! into the merge and is a compile error on a value whose lanes the mask
-//! misses, so an unsound mask cannot drop a lane silently. On an ABI 4 scalar
-//! every one of these is the identity, and the ABI 4 entry points compute
-//! exactly what they computed.
+//! misses, so an unsound mask cannot drop a lane silently.
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");
@@ -52,8 +50,8 @@ pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
     for (ms) |*m| m.* &= deriv_reads;
     std.mem.sort(u64, ms, {}, std.sort.asc(u64));
     try self.w(
-        \\/// Contract ABI 5 preview: every distinct `Of` mask a real in this
-        \\/// device is declared at, and how many are (`contract.laneMasks`).
+        \\/// Every distinct `Of` mask a real in this device is declared at, and
+        \\/// how many are (`contract.laneMasks`).
         \\pub const lane_masks = [_]contract.LaneUse{{
         \\
     , .{});

@@ -42,7 +42,7 @@ pub fn emitDispatchers(self: *Gen) Error!void {
         @memset(l.*, 0);
     };
 
-    try emitResidual(self, false);
+    try emitEval(self);
     const any_q = anyQ(self);
     if (any_q) {
         qPattern(self);
@@ -56,48 +56,6 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     try emitPattern(self, any_q);
     try emitDisplay(self);
     if (self.vpi_contribs) try emitVpiContribs(self);
-    if (self.fam and self.names.n_u <= 64) try emitAbi5(self, any_q);
-}
-
-/// `Options.family`: `pub const abi5`, the family entry points beside the ABI
-/// 4 ones. Same core, same rows and sites, different `S` and `x`. Above 64
-/// unknowns no mask can name a lane, and there is none.
-fn emitAbi5(self: *Gen, any_q: bool) Error!void {
-    const held = self.heldArg(false);
-    try self.w(
-        \\/// Contract ABI 5 preview (`codegen.Options.family`): the entry points
-        \\/// for a scalar family (`contract.family_fns`). `contract_abi` stays 4;
-        \\/// `x` is the unknowns' values, and each reads as a probe on the lanes
-        \\/// `deriv_reads` names, a constant elsewhere.
-        \\pub const abi5 = struct {{
-        \\    pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, _: f64) contract.Rows(Self, S) {{
-        \\        const xs = zProbe(S, x);
-        \\
-    , .{});
-    if (self.eval_core)
-        try self.w("        return zResidual(S, xs, @call(.always_inline, core, .{{ S, xs, model, inst{s} }}));\n", .{held})
-    else
-        try self.w("        _ = model;\n        _ = inst;\n        return zResidual(S, xs, {{}});\n", .{});
-    try self.w("    }}\n", .{});
-    if (any_q) {
-        try self.w(
-            \\    pub fn q(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, _: f64) contract.Sites(Self, S) {{
-            \\        const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst{s} }});
-            \\        return 
-        , .{held});
-        try writeSites(self);
-        try self.w(
-            \\;
-            \\    }}
-            \\    pub fn evalQ(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, _: f64) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
-            \\        const xs = zProbe(S, x);
-            \\        const m = @call(.always_inline, core, .{{ S, xs, model, inst{s} }});
-            \\        return .{{ .res = zResidual(S, xs, m), .q = 
-        , .{held});
-        try writeSites(self);
-        try self.w(" }};\n    }}\n", .{});
-    }
-    try self.w("}};\n\n", .{});
 }
 
 /// `Options.vpi_contribs`: each §5.6 contribution row's resistive and
@@ -122,14 +80,14 @@ fn emitVpiContribs(self: *Gen) Error!void {
     try self.w(" }};\npub const vpi_contrib_flow_u = [_]i32{{", .{});
     for (self.names.branch_u) |u| try self.w(" {d},", .{if (u == none_u32) @as(i64, -1) else u});
     try self.w(" }};\n", .{});
-    try self.w("pub fn vpiContribs(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr) [{d}][2]f64 {{\n", .{cs.len});
+    try self.w("pub fn vpiContribs(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) [{d}][2]f64 {{\n", .{cs.len});
     const uses_core = for (cs) |c| {
         if (coreIdx(self, self.an.rv(c.resist_val)) != null or coreIdx(self, self.an.rv(c.react_val)) != null) break true;
     } else false;
     if (uses_core)
-        try self.w("    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)})
+        try self.w("    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});\n", .{self.heldArg(false)})
     else
-        try self.w("    _ = x;\n    _ = model;\n    _ = inst;\n", .{});
+        try self.w("    _ = x;\n    _ = model;\n    _ = inst;\n    _ = sim;\n", .{});
     try self.w("    return .{{\n", .{});
     for (cs) |c| {
         try self.w("        .{{ ", .{});
@@ -171,12 +129,11 @@ fn siteField(self: *const Gen, j: usize) u32 {
     return self.core.lo_idx[@intFromEnum(self.an.rv(self.lowered.charge_sites.items[k].final))];
 }
 
-/// `[n_q]S{ m.f<a>, m.f<b>, ... }`: every site's charge, in slot order.
+/// `contract.Sites(Self, S)`: every site's charge, in slot order.
 pub fn writeSites(self: *Gen) Error!void {
-    // `Options.family`: a family's sites are a tuple (`contract.Sites`).
-    try self.b("{s}", .{if (self.fam) "@as(zSites(S), .{" else "[n_q]S{"});
+    try self.b("@as(contract.Sites(Self, S), .{{", .{});
     for (0..self.qs.sites.len) |j| try self.b("{s}m.f{d}", .{ if (j == 0) " " else ", ", siteField(self, j) });
-    try self.b(" }}{s}", .{if (self.fam) ")" else ""});
+    try self.b(" }})", .{});
 }
 
 /// §5.6.1.2 the reactive residual, ONE CHARGE PER SITE (`plan/qsite.zig`):
@@ -186,8 +143,8 @@ fn emitQ(self: *Gen) Error!void {
     try self.w(
         \\/// §5.6.1.2 the charges, one per `ddt` site (`n_q`, `q_stamps`, `q_lte`);
         \\/// the host differentiates each and stamps it into its rows.
-        \\pub fn q(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_q]S {{
-        \\    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});
+        \\pub fn q(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Sites(Self, S) {{
+        \\    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});
         \\
     , .{self.heldArg(false)});
     try self.w("    return ", .{});
@@ -295,42 +252,12 @@ pub fn emitDisplay(self: *Gen) Error!void {
     if (self.jobs.display_name.len == 0) return;
     try self.w(
         \\/// §9.4 run this module's display tasks once, in source order.
-        \\pub fn display(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) void {{
-        \\    _ = {s}(S, x, model, inst);
+        \\pub fn display(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
+        \\    _ = {s}(S, zProbe(S, x), model, inst, sim);
         \\}}
         \\
         \\
     , .{self.jobs.display_name});
-}
-
-pub fn emitResidual(self: *Gen, react: bool) Error!void {
-    if (!react) return emitEval(self);
-    self.uses_x = false;
-    self.uses_model = false;
-    self.uses_inst = false;
-
-    // Same reserve-and-backpatch as `emitUnit`. `res` needs a fourth slot:
-    // with no stamps nothing assigns to it, and Zig rejects a `var` that is
-    // never mutated. Here the shorter spelling is the one that gets padded.
-    try self.w("/// {s}\n", .{
-        if (react) "§5.6.1.2 reactive residual (charge/flux); the host differentiates it" else "§5.6 resistive residual: KCL at every unknown (§1.3.2)",
-    });
-    try self.w("pub fn {s}(comptime S: type, ", .{if (react) "q" else "eval"});
-    const at_x = self.out.items.len;
-    try self.w("x: [n_u]S, ", .{});
-    const at_model = self.out.items.len;
-    try self.w("model: *const Model, ", .{});
-    const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr, _: f64) [n_u]S {{\n    ", .{});
-    const at_mut = self.out.items.len;
-    try self.w("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
-    const stamps = try emitStamps(self, react);
-
-    if (!self.uses_x) gen_unit.patchParam(self, at_x, "x".len);
-    if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
-    if (!self.uses_inst) gen_unit.patchParam(self, at_inst, "inst".len);
-    if (stamps == 0) self.out.items[at_mut..][0.."const".len].* = "const".*;
-    try self.w("    return res;\n}}\n\n", .{});
 }
 
 /// `eval` over `zResidual`: the §5.6 rows, emitted once and shared with
@@ -343,14 +270,11 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("/// §5.6 the resistive rows over the core result `m`: `eval` and `evalQ`.\n", .{});
     try self.w("inline fn zResidual(comptime S: type, ", .{});
     const at_x = self.out.items.len;
-    try self.w("x: {s}, ", .{if (self.fam) "anytype" else "[n_u]S"});
+    try self.w("x: anytype, ", .{});
     const at_m = self.out.items.len;
-    try self.w("m: anytype) {s} {{\n    ", .{if (self.fam) "zRows(S)" else "[n_u]S"});
+    try self.w("m: anytype) contract.Rows(Self, S) {{\n    ", .{});
     const at_mut = self.out.items.len;
-    if (self.fam)
-        try self.w("var   res: zRows(S) = zRowsZero(S);\n", .{})
-    else
-        try self.w("var   res = [_]S{{S.con(0.0)}} ** n_u;\n", .{});
+    try self.w("var   res: contract.Rows(Self, S) = zRowsZero(S);\n", .{});
     const stamps = try emitStamps(self, false);
     self.core_hoisted = false;
     // `uses_x` also counts a row that reads `x` only through the core, so ask
@@ -361,18 +285,18 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("    return res;\n}}\n\n", .{});
 
     try self.w("/// §5.6 resistive residual: KCL at every unknown (§1.3.2)\n", .{});
-    self.eval_core = self.core_wanted;
     if (self.core_wanted) {
         try self.w(
-            \\pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) [n_u]S {{
-            \\    return zResidual(S, x, @call(.always_inline, core, .{{ S, x, model, inst{s} }}));
+            \\pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
+            \\    const xs = zProbe(S, x);
+            \\    return zResidual(S, xs, @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }}));
             \\}}
             \\
             \\
         , .{self.heldArg(false)});
     } else try self.w(
-        \\pub fn eval(comptime S: type, x: [n_u]S, _: *const Model, _: InstancePtr, _: f64) [n_u]S {{
-        \\    return zResidual(S, x, {{}});
+        \\pub fn eval(comptime S: type, x: *const [n_u]f64, _: *const Model, _: InstancePtr, _: contract.SimState) contract.Rows(Self, S) {{
+        \\    return zResidual(S, zProbe(S, x), {{}});
         \\}}
         \\
         \\
@@ -403,7 +327,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         self.uses_model = true;
         self.uses_inst = true;
         self.core_wanted = true;
-        if (!self.core_hoisted) try self.b("    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)});
+        if (!self.core_hoisted) try self.b("    const m = @call(.always_inline, core, .{{ S, x, model, inst, sim{s} }});\n", .{self.heldArg(false)});
         try self.b("    _ = m.f{d};\n", .{coreIdx(self, self.an.rv(self.lowered.table_effect)).?});
     }
 
@@ -463,7 +387,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
                 self.core_wanted = true;
                 if (!self.core_hoisted) {
                     try self.ind(1);
-                    try self.b("const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(false)});
+                    try self.b("const m = @call(.always_inline, core, .{{ S, x, model, inst, sim{s} }});\n", .{self.heldArg(false)});
                 }
             }
         }
@@ -669,12 +593,13 @@ pub fn emitFused(self: *Gen) Error!void {
     try self.w(
         \\/// §5.6 + §5.6.1.2 both residuals from ONE core evaluation.
         \\/// Equivalent to `.{{ .res = eval(...), .q = q(...) }}`, at half the cost.
-        \\pub fn evalQ(comptime S: type, x: [n_u]S, model: *const Model, inst: InstancePtr, _: f64) struct {{ res: [n_u]S, q: [n_q]S }} {{
-        \\    const m = @call(.always_inline, core, .{{ S, x, model, inst{s} }});
+        \\pub fn evalQ(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
+        \\    const xs = zProbe(S, x);
+        \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
         \\
     , .{self.heldArg(false)});
     // §5.6.1.2 the charges, one per site, off the same core.
-    try self.b("    return .{{ .res = zResidual(S, x, m), .q = ", .{});
+    try self.b("    return .{{ .res = zResidual(S, xs, m), .q = ", .{});
     try writeSites(self);
     try self.b(" }};\n}}\n\n", .{});
 }
@@ -922,17 +847,17 @@ pub fn stamp(self: *Gen, depth: u32, node: u16, opx: []const u8, val: []const u8
     try rowEnd(self);
 }
 
-/// `res[@intFromEnum(U.<u>)] = `, and under `Options.family` the opening of
-/// `zRow(S, .<u>, `: row `u` is typed by its pattern (`contract.rowMask`),
-/// so every value assigned to it widens there. `rowEnd` closes it.
+/// `res[@intFromEnum(U.<u>)] = zRow(S, .<u>, `: row `u` is typed by its
+/// pattern (`contract.rowMask`), so every value assigned to it widens there.
+/// `rowEnd` closes it.
 fn rowSet(self: *Gen, u: u32) Error!void {
     const n = self.names.u_names[u];
     try self.b("res[@intFromEnum(U.{s})] = ", .{n});
-    if (self.fam) try self.b("zRow(S, .{s}, ", .{n});
+    try self.b("zRow(S, .{s}, ", .{n});
 }
 
 fn rowEnd(self: *Gen) Error!void {
-    try self.b("{s};\n", .{if (self.fam) ")" else ""});
+    try self.b(");\n", .{});
 }
 
 /// Row `node` gained a term whose derivative lives in `bits`. Ground has no
@@ -1049,7 +974,7 @@ pub fn emitDerivReads(self: *Gen, limit_writes: u64) Error!void {
         try self.w(" }},\n", .{});
     }
     try self.w("}};\n\n", .{});
-    if (self.fam) try family.emitLaneMasks(self, jc.mask);
+    try family.emitLaneMasks(self, jc.mask);
 }
 
 /// The column bit of one unknown. Out of `u64` range answers "every
@@ -1173,7 +1098,7 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
     }
     try self.w("}};\n\n", .{});
 
-    // §4.6.4.1/.2 the PSDs, positionally. One `core(R, …)` sweep at the
+    // §4.6.4.1/.2 the PSDs, positionally. One value-only core sweep at the
     // caller's state vector, exactly like `updateState` — a generator
     // whose declaring statement did not execute at this bias reads back
     // the zero `probeBody` seeds a conditional live-out with, which is
@@ -1182,25 +1107,29 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
         \\/// §4.6.4.1/.2 each generator's PSD at `x`: S(f) = white + flicker/f^ef.
         \\/// Position k belongs to `noise_gens[k]`. A §4.6.4.3/.4 `.table` row
         \\/// reads zero here — its spectrum is `noise_tables[k]` instead.
-        \\pub fn noisePsd(
+        \\pub fn noisePsd(comptime
     , .{});
+    const at_s = self.out.items.len + 1;
+    try self.w(" S: type, ", .{});
     const at_x = self.out.items.len;
     try self.w("x: [n_u]f64, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
-    try self.w("inst: *const Instance) [noise_gens.len]contract.PsdTerm {{\n", .{});
+    try self.w("inst: *const Instance, ", .{});
+    const at_sim = self.out.items.len;
+    try self.w("sim: contract.SimState) [noise_gens.len]contract.PsdTerm {{\n", .{});
     const uses_core = for (self.noise.rows) |nr| {
         if (coreIdx(self, nr.pwr) != null or coreIdx(self, nr.exp) != null or coreIdx(self, nr.coeff) != null) break true;
     } else false;
     if (uses_core) {
-        try self.w("    var xr: [n_u]R = undefined;\n", .{});
-        try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
-        try self.w("    const m = core(R, xr, model, {s}{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
+        try self.w("    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
     } else {
+        gen_unit.patchParam(self, at_s, "S".len);
         gen_unit.patchParam(self, at_x, "x".len);
         gen_unit.patchParam(self, at_model, "model".len);
         gen_unit.patchParam(self, at_inst, "inst".len);
+        gen_unit.patchParam(self, at_sim, "sim".len);
     }
     try self.w("    return .{{\n", .{});
     for (self.noise.rows) |nr| {
@@ -1371,39 +1300,31 @@ pub fn emitAcTable(self: *Gen) Error!void {
     try self.w(
         \\/// §4.6.3 each stimulus' phasor at `x`: mag·e^(j·phase), phase in
         \\/// radians. Position k belongs to `ac_gens[k]`.
-        \\pub fn acStim(
+        \\pub fn acStim(comptime
     , .{});
+    const at_s = self.out.items.len + 1;
+    try self.w(" S: type, ", .{});
     const at_x = self.out.items.len;
     try self.w("x: [n_u]f64, ", .{});
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
-    try self.w("inst: *const Instance) [ac_gens.len]contract.AcPhasor {{\n", .{});
-    if (!uses_core) gen_unit.patchParam(self, at_x, "x".len);
+    try self.w("inst: *const Instance, ", .{});
+    const at_sim = self.out.items.len;
+    try self.w("sim: contract.SimState) [ac_gens.len]contract.AcPhasor {{\n", .{});
+    if (!uses_core) {
+        gen_unit.patchParam(self, at_s, "S".len);
+        gen_unit.patchParam(self, at_x, "x".len);
+        gen_unit.patchParam(self, at_sim, "sim".len);
+    }
     if (!reads_model) gen_unit.patchParam(self, at_model, "model".len);
     if (!reads_inst) gen_unit.patchParam(self, at_inst, "inst".len);
     if (uses_core) {
-        try self.w("    var xr: [n_u]R = undefined;\n", .{});
-        try self.w("    for (x, 0..) |xv, i| xr[i] = R.con(xv);\n", .{});
-        try self.w("    const m = core(R, xr, model, {s}{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
+        try self.w("    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
     }
     try self.w("    return .{{\n", .{});
     for (vals) |v| try self.w("        .{{ .mag = {s}, .phase = {s} }},\n", .{ v[0], v[1] });
     try self.w("    }};\n}}\n\n", .{});
-}
-
-/// Does any §4.6.3 stimulus need `acStim` to sweep the core? Asked before
-/// `emitAcTable` renders anything, because the `R` scalar the sweep runs in
-/// is declared far earlier in the file — same question `noise_rows.len != 0`
-/// answers for `noisePsd`, which always sweeps.
-pub fn acUsesCore(self: *Gen) Error!bool {
-    for (self.noise.ac_rows) |nr| {
-        for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
-            if (v == .f_zero) continue;
-            if (try gen_call.ctrlIsDynamic(self, v)) return true;
-        }
-    }
-    return false;
 }
 
 /// One §4.6.3 magnitude, phase or §4.6.4.6 coefficient in `acStim`'s frame.
@@ -1420,7 +1341,7 @@ fn acRef(self: *Gen, v: Mir.Value, uses_core: *bool) Error!?[]const u8 {
     const k = self.core.lo_idx[@intFromEnum(v)];
     if (k == none_u32) return null;
     uses_core.* = true;
-    return try std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
+    return try std.fmt.allocPrint(self.arena, "m.f{d}.val()", .{k});
 }
 
 /// §4.6.3 a stimulus VerA cannot state, as a `@compileError` VALUE on
@@ -1468,5 +1389,5 @@ fn psdRef(self: *Gen, v: Mir.Value, is_exp: bool) Error![]const u8 {
     // A live-out the planner dropped cannot happen (`buildJobs` queued it),
     // but a zero is the one answer that cannot invent noise.
     if (k == none_u32) return "0";
-    return try std.fmt.allocPrint(self.arena, "m.f{d}.v", .{k});
+    return try std.fmt.allocPrint(self.arena, "m.f{d}.val()", .{k});
 }

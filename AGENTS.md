@@ -187,8 +187,9 @@ deliberately-not-doing.
 
 The three existing `@Vector` uses are the right three and are not touched:
 `frontend/token.zig` (accumulator over the fixed keyword table),
-`frontend/preprocessor.zig` (single-needle byte scan), and `backend/tb/runner_text.zig`
-(`@Vector(NL, f64)` — **in generated code**, and the real one). A 2026-09-23
+`frontend/preprocessor.zig` (single-needle byte scan), and `tools/contract.zig`'s
+`RefFamily` (`@Vector(popcount(mask), L)` derivative lanes — **what every emitted
+device computes on**, and the real one). A 2026-09-23
 re-triage measured the lexer/preprocessor scans again: nothing else pays.
 
 **SIMD-first applies to the emitted device.** The generated `eval` runs millions

@@ -161,8 +161,6 @@ pub const Options = struct {
     /// Also emit `vpiContribs`, the §5.6 contribution rows a Clause 12
     /// analog host reads. See `codegen.Options.vpi_contribs`.
     vpi_contribs: bool = false,
-    /// Emit the contract ABI 5 family preview. See `codegen.Options.family`.
-    family: bool = false,
 };
 
 // ---------------------------------------------------------------------------
@@ -455,7 +453,6 @@ fn compileInArena(
             .jac_f32 = opts.jac_f32,
             .jac_f32_host = opts.jac_f32_host,
             .vpi_contribs = opts.vpi_contribs,
-            .family = opts.family,
             .diags = opts.diags,
         },
     };

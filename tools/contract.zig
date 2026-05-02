@@ -27,81 +27,79 @@
 //! Check the path before you cite it; a pointer to a file nobody can open reads
 //! as evidence that the gap is tracked somewhere.
 //!
-//! This file CHECKS the contract, plus ONE implementation: `gm`, the
-//! device-routed f64 transcendentals emitted scalar helpers call — physics
-//! still never receives a scalar type from here.
-//! Physics is written generic over an opaque scalar S:
+//! This file CHECKS the contract, and carries two implementations a host may
+//! use: `gm`, the device-routed f64 transcendentals, and `RefFamily`, the
+//! reference scalar family.
 //!
-//!   pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, i: *const Instance, t: f64) [n_u]S;
-//!   pub fn q   (comptime S: type, x, m, i, t) [n_q]S;   // optional: one charge per q site
+//! Physics is written generic over a scalar FAMILY `S` (`family_fns`): the
+//! device asks for `S.Of(mask)`, the value type carrying the derivative lanes
+//! of exactly the unknowns `mask` names, and types each value by the unknowns
+//! it may depend on. The unknowns reach the device as values; `S.probe(u, v)`
+//! seeds lane `u` on the unknowns in `derivReads`, `S.con(v)` the rest.
 //!
-//! The engine instantiates S — a plain-f64 value form for residuals, a
-//! derivative-carrying dual for the Jacobian. The S primitive set devices may
-//! use: con addC scale · add sub neg mul div · exp log expm1 log1p sqrt
-//! pow(a,c) · sin cos tanh sinh cosh atan · abs minC maxC min max ·
-//! lt le eq sel · val.
-//! expm1/log1p are primitives and not exp(x)-1 / log(1+x): §4.3.1 Table 4-14
-//! names the C library forms precisely because those two compositions cancel.
+//!   pub fn eval(comptime S: type, x: *const [n_u]f64, m: *const Model, i: InstancePtr, sim: SimState) Rows(Self, S);
+//!   pub fn q   (comptime S: type, x, m, i, sim) Sites(Self, S);   // optional: one charge per q site
 //!
-//! lt/le/eq (§4.2.5/§4.2.7) return an S MASK — 1.0 where the relation holds,
-//! 0.0 elsewhere, PER LANE, derivative zero: a comparison is piecewise
-//! constant. `sel(c, a, b)` (§4.2.12) is `a` where the mask is nonzero and
-//! `b` elsewhere, carrying the winner's derivative — the same selection
-//! semantics §4.3.1 gives min/max. gt/ge are operand swaps and ne swaps
-//! sel's arms, so four primitives close the set. Codegen emits them ONLY for
-//! a conditional that may run BOTH arms: a `.strict` unit whose arms contain
-//! no call and no domain-restricted op, where a dead arm's NaN/inf is
-//! IEEE-defined and the pick discards it. That buys two things — the host's
-//! predictor stops eating a data-dependent branch per Newton iteration, and
-//! a lane-parallel S (one operating point per lane) gets a true per-lane
-//! decision where a `.val()` steer has no single answer. A conditional the
-//! finiteness proof accepted only UNDER its guard (`x > 0 ? ln(x) : 0`)
-//! keeps the lazy Zig `if` instead.
+//! Row `r` of `eval` is `S.Of(rowMask(D, r))`, site `k` of `q` is
+//! `S.Of(siteMask(D, k))`. The value-only entry points (`setup`, `collapse`,
+//! `derive`, `noisePsd`, `acStim`, `updateState`, `limit`, `seed`,
+//! `advanceIteration`, `checkConvergence`) take the same `comptime S`, so
+//! the host decides the arithmetic of every path; a value-only family is one
+//! whose `Of(m)` carries no lanes.
 //!
-//! THE WIDTHS INSIDE S ARE THE HOST'S, NOT THE DEVICE'S. Every member of that
-//! primitive set takes and returns `f64` at the boundary — `con(f64)`,
-//! `scale(f64)`, `addC(f64)`, `val() f64`, `ddxAt(usize) f64` — and physics code
-//! may not open S up, so a host is free to carry the derivative half of a dual
-//! in `f32` while the value half stays `f64`. That is the inexact-Newton
-//! construction: the converged answer is fixed by the accuracy of the RESIDUAL,
-//! and an approximate Jacobian costs iterations rather than correctness. On a
-//! consumer GPU it is the whole game — sm_89 runs f32 at 69x its f64 rate.
+//! What every `Of(m)` carries is `family_primitives`: addC scale · add sub
+//! neg mul div · exp log expm1 log1p sqrt pow(a,c) · sin cos tanh sinh cosh
+//! atan · lt le eq · val ddxAt to. min, max and abs are device text over
+//! lt/sel, spelled as §4.3.1 spells them. expm1/log1p are primitives and not
+//! exp(x)-1 / log(1+x): §4.3.1 Table 4-14 names the C library forms precisely
+//! because those two compositions cancel.
+//!
+//! lt/le/eq (§4.2.5/§4.2.7) return `Of(0)` holding 1.0 where the relation
+//! holds and 0.0 elsewhere: a comparison is piecewise constant. `sel(c, a, b)`
+//! (§4.2.12) is `a` where `c` is nonzero and `b` elsewhere, carrying the
+//! winner's lanes — the same selection semantics §4.3.1 gives min/max. gt/ge
+//! are operand swaps and ne swaps sel's arms. Codegen emits them ONLY for a
+//! conditional that may run BOTH arms: a `.strict` unit whose arms contain no
+//! call and no domain-restricted op, where a dead arm's NaN/inf is
+//! IEEE-defined and the pick discards it. A conditional the finiteness proof
+//! accepted only UNDER its guard (`x > 0 ? ln(x) : 0`) stays a lazy Zig `if`
+//! on a `.val()`.
+//!
+//! THE WIDTHS INSIDE S ARE THE HOST'S, NOT THE DEVICE'S. Every primitive takes
+//! and returns `f64` at the boundary — `con(f64)`, `scale(f64)`, `addC(f64)`,
+//! `val() f64`, `ddxAt(comptime usize) f64` — and physics code may not open a
+//! value up, so a host may carry the lanes in `f32` while the value stays
+//! `f64`: the inexact-Newton construction, where the converged answer is fixed
+//! by the accuracy of the RESIDUAL and an approximate Jacobian costs
+//! iterations rather than correctness.
 //!
 //! A device opts in with `pub const jac_f32 = true` (VerA's `--jac-f32`).
-//! Absent, the host must assume f64: a model whose unknowns span more than
-//! f32's ~7 digits can lose a Newton direction outright, and only the physics
-//! knows that. The permission is per DEVICE for exactly that reason.
+//! Absent, the host must assume f64 lanes: a model whose unknowns span more
+//! than f32's ~7 digits can lose a Newton direction outright, and only the
+//! physics knows that. It is a permission and NOT an order, so it is per
+//! INSTANTIATION: a host may take it in its GPU kernel and decline it on its
+//! CPU path. `pub const jac_f32_host = true` (`--jac-f32-host`) is the
+//! separate, stronger request that the host take it on its CPU instantiation
+//! too; it implies the permission and `validate` refuses it without one.
 //!
-//! It is a permission and NOT an order, so it is also per INSTANTIATION: a host
-//! that compiles the same device twice may take it once and decline it once.
-//! ESPice does exactly that — f32 in the GPU kernel, f64 on the CPU path, one
-//! binary. `pub const jac_f32_host = true` (`--jac-f32-host`) is the separate,
-//! stronger request that the host take it on its CPU instantiation too; it
-//! implies the permission and `validate` refuses it without one.
-//!
-//! Optional scalar trait: `pub const collapse_applied: bool = true` promises
+//! Optional family trait: `pub const collapse_applied: bool = true` promises
 //! the host has applied this device's `collapse()` aliases to its gather and
 //! scatter maps. Generated physics then omits the short's cancelling stamps,
 //! preserving arbitrarily small conductances already in the same matrix slot.
 //! Absent or false retains the full branch equations for standalone evaluation.
-//!
-//! RULES for physics code:
-//!   - Everything not depending on x (param prep, temperature, geometry)
-//!     stays plain f64. Only x-dependent chains use S ops.
-//!   - Never branch on an S with `if` directly; use .val() for topology-level
-//!     decisions, minC/maxC/min/max for clamps, and lt/le/eq + sel for
-//!     value-form conditionals.
 
 const std = @import("std");
 
 /// The device↔host ABI this file specifies. A generated device mirrors it as
 /// `pub const contract_abi`, and `validateHost` refuses a device whose value
 /// differs, so a host pinned to one VerA cannot link another's device and run.
-/// Bump it in every `[ABI BUMP]` commit: 2 = 28d517e8 `setup`, 3 = 0c4d6afc `q` per ddt site, 4 = this check.
-pub const abi_version: u32 = 4;
+/// Bumped by every change a linked host could observe: 5 is the scalar
+/// family, value-typed `x`, `SimState` as an argument and `Rows`/`Sites`.
+pub const abi_version: u32 = 5;
 
 /// Device-routed f64 transcendentals for the SCALAR paths of generated code
-/// (`R`, the §4.5.15 limiters, zLimexp's clamp constant). Those helpers also
+/// (the §4.5.15 limiters, zLimexp's clamp constant) and for `RefFamily`,
+/// `LegacyValue` and every generated kernel. Those helpers also
 /// compile inside GPU kernels (the engine's StateKernel runs `D.limit` /
 /// `D.updateState` on the device), and NVPTX/AMDGCN have no libm — `@exp` /
 /// `@log` on an f64 die at PTX assembly with "no libcall available for
@@ -621,22 +619,23 @@ pub fn stateClass(comptime D: type) StateClass {
 ///   revert — step rejected: working := accepted
 pub const StateCtlOp = enum(u8) { query, commit, revert };
 
-/// §4.6.1 `analysis()`, Table 4-21. Host mirror of the `AnalysisKind` every
-/// generated device declares for itself — the engine converts by ordinal
-/// (`@enumFromInt(@intFromEnum(..))`), same trick as StateCtlOp, so the tag
-/// ORDER here is load-bearing. `validateSimState` enforces the agreement
-/// rather than leaving it to a comment.
+/// §4.6.1 `analysis()`, Table 4-21: the analysis a `SimState` describes.
+/// The tag names are the analysis names `analysis()` compares against.
 pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
 
-/// Host-owned per-pass simulation state (see `Hooks.set_sim_state`).
-/// Everything here is a property of the ANALYSIS, not of the device, so the
-/// host is the only writer:
+/// The analysis in force, passed BY VALUE to every entry point that can read
+/// it. A property of the ANALYSIS, not of the device, so the host is the only
+/// writer and one value serves every instance of a batch:
 ///   t     — §9.10 `$abstime`, the time the solve is targeting
 ///   dt    — §9.10 timestep feeding `ddt`/`idt`; 0 in a static analysis, which
 ///           is what the generated zDdt/zIdt helpers test for
 ///   kind  — §4.6.1 `analysis()`
 ///   initial_step / final_step — §5.10.2 global events
-pub const SimState = struct {
+/// `extern` so its layout is the same on every target a kernel is built for
+/// (24 bytes); a host that ships it to a GPU hashes it with its other
+/// boundary types. The defaults are a DC operating point at t = 0, which is
+/// what `collapse` and `derive` evaluate at.
+pub const SimState = extern struct {
     t: f64 = 0,
     dt: f64 = 0,
     kind: AnalysisKind = .dc,
@@ -651,21 +650,13 @@ pub const UnknownKind = enum {
 };
 
 /// Host-written `Instance` fields. These are NOT decls — the host reaches them
-/// by name (`@hasField`), so a typo used to be a silently-null hook rather than
-/// an error; `temperature` was probed as `"temp"` for a while and was null for
-/// every generated device. Presence stays optional (a hand-written resistor
-/// needs none of them), but the NAME and TYPE are contract now.
-///
-/// `analysis_kind` additionally has to agree with `AnalysisKind` by ordinal,
-/// because the host writes it with `@enumFromInt(@intFromEnum(..))`.
+/// by name (`@hasField`), so a typo would be a silently-null hook rather than
+/// an error. Presence is optional (a hand-written resistor needs none of
+/// them), but the NAME and TYPE are contract.
 const SimStateField = struct { name: []const u8, T: type };
 const sim_state_fields = [_]SimStateField{
     .{ .name = "temperature", .T = f64 }, // §9.15 $temperature, kelvin
-    .{ .name = "abstime", .T = f64 }, // §9.10 $abstime
-    .{ .name = "dt", .T = f64 }, // §9.10 timestep feeding ddt/idt
     .{ .name = "mfactor", .T = f64 }, // §9.15/E.4.1 $mfactor
-    .{ .name = "is_initial_step", .T = bool }, // §5.10.2
-    .{ .name = "is_final_step", .T = bool }, // §5.10.2
     .{ .name = "bound_step", .T = f64 }, // §9.17.2 $bound_step
     // §9.12 / IEEE 1364 §17.10 the command line's arguments, verbatim and in
     // order (`argv[1..]`); only `+` entries are plusargs. Emitted only by a
@@ -881,11 +872,10 @@ pub const Systf = struct {
 /// declares any `systf_calls`.
 ///
 /// WHY VALUE-PLUS-PARTIALS AND NOT `fn (k, args: []S) S`. `eval` is generic
-/// over S and gets instantiated at least twice — a plain f64 for the residual,
-/// a derivative-carrying dual for the Jacobian — and a function POINTER cannot
-/// be generic over S. So the boundary has to be concrete, which means the host
-/// returns the value and its partials separately and the device rebuilds the
-/// dual from them.
+/// over the family and gets instantiated at several lane masks, and a
+/// function POINTER cannot be generic over them. So the boundary has to be
+/// concrete, which means the host returns the value and its partials
+/// separately and the device rebuilds the family value from them.
 ///
 /// That is not a workaround: it is §12.22.1 "Derivatives for analog system
 /// task/functions" and §12.32's `derivtf` / `p_vpi_stf_partials`, arrived at
@@ -1025,18 +1015,6 @@ pub fn LimitResult(comptime n: usize) type {
 /// THE RULE FOR A HOST: an unknown outside `limitWrites` was never written by
 /// the device, so its "previously limited" value must come from the host's own
 /// previous iterate, not from the plane `limit` writes into.
-/// The host-rewritten `Instance` fields `D`'s core reads: `D.core_sim_fields`,
-/// else every such field when `D` declares `core_reads_simstate`, else none.
-pub fn coreSimFields(comptime D: type) []const []const u8 {
-    if (@hasDecl(D, "core_sim_fields")) return &D.core_sim_fields;
-    if (@hasDecl(D, "core_reads_simstate") and D.core_reads_simstate) return &core_sim_field_names;
-    return &.{};
-}
-const core_sim_field_names = [_][]const u8{
-    "abstime",           "dt",               "analysis_kind", "is_initial_step",
-    "is_final_step",     "is_analog_initial", "newton_iteration", "limiter_previous",
-};
-
 pub fn limitReads(comptime D: type) u64 {
     return if (@hasDecl(D, "limit_reads")) D.limit_reads else ~@as(u64, 0);
 }
@@ -1057,11 +1035,11 @@ pub fn limitWrites(comptime D: type) u64 {
 /// port-probe row. The branch-flow unknowns are most of them; bsim4va's
 /// shared core differentiates 11 of its 18.
 ///
-/// THE RULE FOR A HOST: seed derivative lanes only for the unknowns in the
-/// mask, and stamp `jacConst` for the rest. Every unknown still reaches
-/// `eval` with its VALUE; only its lane is gone. The width is the host's to
-/// pad — `Dual(next_pow2(popcount))` measured best — and the device declares
-/// only the mask. `ddxAt` reads a lane by unknown index; see `ddxReads`.
+/// THE RULE FOR A HOST: the device probes only the unknowns in the mask
+/// (`S.probe`) and reads the rest as constants (`S.con`), so the lanes of a
+/// row carry no partial outside it; stamp `jacConst` there. The width is the
+/// host's to choose through `S.Of`, and the device declares only masks.
+/// `ddxAt` reads a lane by unknown index; see `ddxReads`.
 ///
 /// The constant entries stay in `jac_pattern`/`q_pattern` and
 /// `jac_rows`/`q_rows`: their matrix slots exist, only their values are known
@@ -1092,10 +1070,10 @@ pub fn derivReads(comptime D: type) u64 {
 /// it returns is a lane. Defaults to ALL when a device does not declare
 /// `ddx_reads`, and `validate` holds it inside `derivReads` (rule (d)).
 ///
-/// THE RULE FOR A HOST: `ddxAt(col)` must go through the host's own
-/// unknown-to-lane map. On a narrow Dual, lane `col` is some other unknown's
-/// partial, or out of range — a wrong VALUE in the residual, not only a wrong
-/// Jacobian, and nothing downstream notices.
+/// THE RULE FOR A HOST: `ddxAt(comptime col)` must go through the family's
+/// own unknown-to-lane map. Lane `col` read as another unknown's partial is a
+/// wrong VALUE in the residual, not only a wrong Jacobian, and nothing
+/// downstream notices.
 pub fn ddxReads(comptime D: type) u64 {
     return if (@hasDecl(D, "ddx_reads")) D.ddx_reads else ~@as(u64, 0);
 }
@@ -1160,11 +1138,11 @@ pub fn nU(comptime D: type) comptime_int {
 // §5.6.1.2 charge sites: `q` returns one charge per `ddt` site
 // ============================================================================
 //
-// THE LAYOUT. `q(S, x, model, inst, t)` returns `[n_q]S`: one CHARGE per
-// charge site (a `ddt` term of a contribution, after genvar unrolling and
+// THE LAYOUT. `q(S, x, model, inst, sim)` returns `Sites(D, S)`: one CHARGE
+// per charge site (a `ddt` term of a contribution, after genvar unrolling and
 // flattening — static, because §4.5.15 bars analog operators from user
 // functions, runtime loops and runtime conditionals), not one per residual
-// row. `evalQ(...).q` and `acceptQ(...)` return the same `[n_q]S`. The rows are
+// row. `evalQ(...).q` and `acceptQ(...)` return the same `Sites`. The rows are
 // recovered by `q_stamps`: row `r` of the reactive residual is
 //
 //     Σ over entries e with e.row == r:  e.sign · q[e.site]
@@ -1181,8 +1159,8 @@ pub fn nU(comptime D: type) comptime_int {
 // `ddt (* vera_lte = 0 *) (q)` covers one; the innermost wins, and the default
 // is 1 (every site checked).
 //
-// A device that declares none of `n_q`/`q_stamps` has the old layout: `q`
-// returns `[n_u]S` rows, i.e. `n_q = |U|` and site k stamps row k with +1
+// A device that declares none of `n_q`/`q_stamps` has the per-row layout: `q`
+// returns one site per row, i.e. `n_q = |U|` and site k stamps row k with +1
 // (`nQ`, `qStamps`), every one checked (`qLte`).
 //
 // `jac_const`'s `c` and `q_pattern`/`q_rows` stay per ROW: they describe the
@@ -1215,15 +1193,36 @@ pub fn qLte(comptime D: type) [nQ(D)]bool {
     return if (@hasDecl(D, "q_lte")) D.q_lte else @splat(true);
 }
 
+/// The lanes reactive row `r` carries: the union of the `siteMask`s of the
+/// sites `q_stamps` puts on it.
+pub fn qRowMask(comptime D: type, comptime r: usize) u64 {
+    var m: u64 = 0;
+    for (qStamps(D)) |e| {
+        if (@intFromEnum(e.row) == r) m |= siteMask(D, e.site);
+    }
+    return m;
+}
+
+/// What `qRows` returns for family `S`: row `r` as `S.Of(qRowMask(D, r))`.
+pub fn QRows(comptime D: type, comptime S: type) type {
+    @setEvalBranchQuota(1_000_000);
+    var ts: [nU(D)]type = undefined;
+    for (&ts, 0..) |*t, r| t.* = S.Of(qRowMask(D, r));
+    return @Tuple(&ts);
+}
+
 /// The reactive residual's rows from the sites' charges: `Σ sign · q[site]`
-/// per row, in `q_stamps` order.
-pub fn qRows(comptime D: type, comptime S: type, sites: [nQ(D)]S) [nU(D)]S {
-    var rows = [_]S{S.con(0.0)} ** nU(D);
+/// per row, from +0 and in `q_stamps` order.
+pub fn qRows(comptime D: type, comptime S: type, q: Sites(D, S)) QRows(D, S) {
+    @setEvalBranchQuota(1_000_000);
+    var out: QRows(D, S) = undefined;
+    inline for (0..nU(D)) |r| out[r] = S.con(0.0).to(qRowMask(D, r));
     inline for (comptime qStamps(D)) |e| {
         const r = @intFromEnum(e.row);
-        rows[r] = if (e.sign == 1) rows[r].add(sites[e.site]) else if (e.sign == -1) rows[r].sub(sites[e.site]) else rows[r].add(sites[e.site].scale(e.sign));
+        const s = q[e.site];
+        out[r] = if (e.sign == 1) out[r].add(s) else if (e.sign == -1) out[r].sub(s) else out[r].add(s.scale(e.sign));
     }
-    return rows;
+    return out;
 }
 
 /// `validate`'s charge-site rules, returned so each is testable: `n_q` and
@@ -1254,38 +1253,13 @@ fn qSitesError(comptime D: type) ?[]const u8 {
 // Validation
 // ============================================================================
 
-/// The S primitive set, as data — the header's prose list, machine-checkable.
-/// Every scalar a host hands to `eval`/`q` must carry all of these;
-/// `checkScalar` is the one-line way to pin an implementation to the list, so
-/// a primitive added to the contract cannot silently miss a scalar (four
-/// spellings exist today: R in codegen's rscalar_txt, Dual and Vec in tb.zig,
-/// and whatever the embedding host brings).
-pub const s_primitives = [_][]const u8{
-    "con",  "addC", "scale", "add",   "sub",  "neg",  "mul",   "div",
-    "exp",  "log",  "expm1", "log1p", "sqrt", "pow",  "sin",   "cos",
-    "tanh", "sinh", "cosh",  "atan",  "abs",  "minC", "maxC",  "min",
-    "max",  "lt",   "le",    "eq",    "sel",  "val",  "ddxAt",
-};
-
-pub fn checkScalar(comptime S: type) void {
-    if (@hasDecl(S, "collapse_applied") and @TypeOf(S.collapse_applied) != bool)
-        @compileError(@typeName(S) ++ ": scalar collapse_applied must be bool");
-    inline for (s_primitives) |p| {
-        if (!@hasDecl(S, p))
-            @compileError(@typeName(S) ++ ": scalar S is missing contract primitive `" ++ p ++ "`");
-    }
-}
-
 // ============================================================================
-// Scalar families (contract ABI 5, previewed at contract_abi 4)
+// Scalar families
 // ============================================================================
 //
-// ABI 5 replaces the one scalar `S` with a FAMILY: the device asks the host for
-// `S.Of(mask)`, the scalar carrying the derivative lanes of exactly the
-// unknowns `mask` names, and a device's value is typed by the unknowns it can
-// depend on. `abi_version` stays 4 until the flip; a device built with the
-// family preview exposes the new entry points under `pub const abi5` beside
-// its ABI 4 ones.
+// The device asks the host for `S.Of(mask)`, the scalar carrying the
+// derivative lanes of exactly the unknowns `mask` names, and types each value
+// by the unknowns it can depend on.
 //
 // THE NUMERICS, pinned per primitive so every family computes one thing.
 // Values are bit-exact except the transcendentals (exp log expm1 sin cos tanh
@@ -1306,18 +1280,21 @@ pub fn checkScalar(comptime S: type) void {
 //   sel(c, a, b)     c ≠ 0 ? a : b (a NaN c picks a), the winner's lanes widened to both
 //   to(m)            the same value, lanes widened to `m`; the new ones are exactly +0
 //
-// §4.3.1 spells min, max and abs as conditionals, and the reference family's
-// ABI 4 members follow those spellings: min = (x < y) ? x : y, max =
-// (x > y) ? x : y, abs = (x > 0) ? x : −x, minC(a, c) = (c < a) ? c : a,
-// maxC(a, c) = (a < c) ? c : a, each carrying the selected operand's lanes.
+// §4.3.1 spells min, max and abs as conditionals, and so does the device:
+// min = (x < y) ? x : y, max = (x > y) ? x : y, abs = (x > 0) ? x : −x, the
+// slew clamps (c < a) ? c : a and (a < c) ? c : a, each over lt and sel and
+// carrying the selected operand's lanes.
 
-/// The family decls a host passes as `comptime S` (ABI 5): `Of(comptime m:
-/// u64) type`, `con(f64) Of(0)`, `probe(comptime u: usize, f64) Of(1 << u)`,
+/// The family decls a host passes as `comptime S`: `Of(comptime m: u64)
+/// type`, `con(f64) Of(0)`, `probe(comptime u: usize, f64) Of(1 << u)`,
 /// `sel(c, a, b)` joining `a` and `b`. The device calls `probe` only for `u`
-/// in `derivReads`, and names only masks inside it.
+/// in `derivReads`, and names only masks inside it. A host may carry MORE
+/// lanes than a mask names, or map several unknowns to one lane. Above 64
+/// unknowns every mask is all ones and only a family whose `Of` ignores its
+/// mask can serve the device.
 pub const family_fns = [_][]const u8{ "Of", "con", "probe", "sel" };
 
-/// What every `Of(m)` value carries (ABI 5). A binary operation takes any
+/// What every `Of(m)` value carries. A binary operation takes any
 /// `Of(m')` operand and returns `Of(m | m')`; a unary one keeps `Of(m)`;
 /// `lt`/`le`/`eq` return `Of(0)`; `to(comptime m2)` widens and is a compile
 /// error unless `m ⊆ m2`; `ddxAt(comptime u)` is lane `u`, or 0 off the mask.
@@ -1344,9 +1321,9 @@ pub fn checkFamily(comptime S: type) void {
 pub const no_lane: u8 = std.math.maxInt(u8);
 
 pub const RefOptions = struct {
-    /// Every `Of(m)` is one type carrying every lane `lane` maps: the ABI 4
-    /// layout, and itself a complete ABI 4 scalar (`checkScalar`). Otherwise
-    /// `Of(m)` carries exactly `m`'s lanes, in unknown order.
+    /// Every `Of(m)` is one type carrying every lane `lane` maps, its lanes
+    /// an array a host may index at run time. Otherwise `Of(m)` carries
+    /// exactly `m`'s lanes, in unknown order.
     dense: bool,
     collapse_applied: bool = false,
 };
@@ -1507,21 +1484,6 @@ fn RefDense(comptime L: type, comptime lane: []const u8, comptime collapsed: boo
         pub fn sel(c: T, a: T, b: T) T {
             return if (c.v != 0.0) a else b;
         }
-        pub fn min(a: T, b: T) T {
-            return if (a.v < b.v) a else b;
-        }
-        pub fn max(a: T, b: T) T {
-            return if (a.v > b.v) a else b;
-        }
-        pub fn abs(a: T) T {
-            return if (a.v > 0.0) a else a.neg();
-        }
-        pub fn minC(a: T, c: f64) T {
-            return if (c < a.v) con(c) else a;
-        }
-        pub fn maxC(a: T, c: f64) T {
-            return if (a.v < c) con(c) else a;
-        }
     };
 }
 
@@ -1681,10 +1643,11 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
     };
 }
 
-/// The device's value-only scalar `R` as it stands at contract_abi 4, bit for
-/// bit: IEEE `/`, `@abs`, `@min`/`@max`. What a host passes to the value-only
-/// entry points (`setup`, `collapse`, `derive`, `noisePsd`, `updateState`) to
-/// keep their bytes when those become family-generic.
+/// A value-only family with IEEE `/`: every `Of(m)` is one lane-free type.
+/// For a host that runs the value-only entry points (`collapse`, `derive`,
+/// `noisePsd`, `acStim`, `updateState`, `limit`, `seed`) with the arithmetic
+/// contract ABI 4's device-private scalar had, and for the testbench's value
+/// paths.
 pub const LegacyValue = struct {
     v: f64,
     const T = @This();
@@ -1760,21 +1723,6 @@ pub const LegacyValue = struct {
     pub fn atan(a: T) T {
         return .{ .v = gm.atan(a.v) };
     }
-    pub fn abs(a: T) T {
-        return .{ .v = @abs(a.v) };
-    }
-    pub fn minC(a: T, c: f64) T {
-        return .{ .v = @min(a.v, c) };
-    }
-    pub fn maxC(a: T, c: f64) T {
-        return .{ .v = @max(a.v, c) };
-    }
-    pub fn min(a: T, b: T) T {
-        return .{ .v = @min(a.v, b.v) };
-    }
-    pub fn max(a: T, b: T) T {
-        return .{ .v = @max(a.v, b.v) };
-    }
     pub fn pow(a: T, c: f64) T {
         return .{ .v = gm.pow(a.v, c) };
     }
@@ -1820,7 +1768,7 @@ pub fn siteMask(comptime D: type, comptime k: usize) u64 {
     return p & derivReads(D) & unknownsMask(D);
 }
 
-/// What `abi5.eval` returns for family `S`: row `r` as `S.Of(rowMask(D, r))`,
+/// What `eval` returns for family `S`: row `r` as `S.Of(rowMask(D, r))`,
 /// in `U` order.
 pub fn Rows(comptime D: type, comptime S: type) type {
     @setEvalBranchQuota(1_000_000);
@@ -1829,7 +1777,7 @@ pub fn Rows(comptime D: type, comptime S: type) type {
     return @Tuple(&ts);
 }
 
-/// What `abi5.q` returns for family `S`: site `k` as `S.Of(siteMask(D, k))`.
+/// What `q` returns for family `S`: site `k` as `S.Of(siteMask(D, k))`.
 pub fn Sites(comptime D: type, comptime S: type) type {
     @setEvalBranchQuota(1_000_000);
     var ts: [nQ(D)]type = undefined;
@@ -1837,11 +1785,41 @@ pub fn Sites(comptime D: type, comptime S: type) type {
     return @Tuple(&ts);
 }
 
+/// Every unknown `D` reads a lane of, as the one mask a hand-written device
+/// computes at: `S.Of(denseMask(D))` is a whole dense value.
+pub fn denseMask(comptime D: type) u64 {
+    return derivReads(D) & unknownsMask(D);
+}
+
+/// The unknowns as a hand-written device reads them: `probe` on every lane
+/// it reads, widened to `denseMask`, and `con` on the rest.
+pub fn probes(comptime D: type, comptime S: type, x: *const [nU(D)]f64) [nU(D)]S.Of(denseMask(D)) {
+    var p: [nU(D)]S.Of(denseMask(D)) = undefined;
+    inline for (0..nU(D)) |u| p[u] = if (comptime (denseMask(D) >> u) & 1 != 0) S.probe(u, x[u]).to(denseMask(D)) else S.con(x[u]).to(denseMask(D));
+    return p;
+}
+
+/// `Rows(D, S)` from rows a hand-written device computed at `denseMask`. A
+/// compile error when `D` declares a `jac_pattern` narrower than that: the
+/// device must then type each row itself.
+pub fn rows(comptime D: type, comptime S: type, a: [nU(D)]S.Of(denseMask(D))) Rows(D, S) {
+    var r: Rows(D, S) = undefined;
+    inline for (0..nU(D)) |u| r[u] = a[u].to(rowMask(D, u));
+    return r;
+}
+
+/// `Sites(D, S)` from charges a hand-written device computed at `denseMask`,
+/// on the same terms as `rows`.
+pub fn sites(comptime D: type, comptime S: type, a: [nQ(D)]S.Of(denseMask(D))) Sites(D, S) {
+    var r: Sites(D, S) = undefined;
+    inline for (0..nQ(D)) |k| r[k] = a[k].to(siteMask(D, k));
+    return r;
+}
+
 /// Checks family `S` against the numerics table at run time: every primitive
 /// over an edge-value grid against the reference family in f64, the pinned
-/// edge cases of pow, div, the compares and `sel`, the §4.3.1 spellings of
-/// min/max/abs when `S` still carries them, and one mask join per binary
-/// operation. Values must match bit for bit (transcendentals within 1 ulp);
+/// edge cases of pow, div, the compares and `sel`, and one mask join per
+/// binary operation. Values must match bit for bit (transcendentals within 1 ulp);
 /// lanes within 1e-6 relative, which admits f32 lanes and an unfused host,
 /// and only where the operands, the value and the lane are finite and inside
 /// f32's range: past that a dense host's `0·inf` is NaN on a lane a sparse
@@ -1935,43 +1913,6 @@ pub fn expectFamily(comptime S: type) !void {
         std.debug.print("expectFamily: to() gave a new lane that is not +0\n", .{});
         return error.FamilyMismatch;
     }
-
-    // §4.3.1's spellings, where the family still carries ABI 4's members.
-    if (@hasDecl(S.Of(1), "abs")) {
-        const Tri = struct { what: []const u8, x: f64, y: f64, v: f64, d: f64 };
-        const tris = [_]Tri{
-            .{ .what = "min", .x = nan, .y = 1, .v = 1, .d = 0 },
-            .{ .what = "max", .x = nan, .y = 1, .v = 1, .d = 0 },
-            .{ .what = "min", .x = 1, .y = nan, .v = nan, .d = 0 },
-            .{ .what = "min", .x = -0.0, .y = 0.0, .v = 0.0, .d = 0 },
-            .{ .what = "min", .x = 0.0, .y = -0.0, .v = -0.0, .d = 0 },
-            .{ .what = "max", .x = 0.0, .y = -0.0, .v = -0.0, .d = 0 },
-            .{ .what = "abs", .x = 0.0, .y = 0, .v = -0.0, .d = -1 },
-            .{ .what = "abs", .x = -0.0, .y = 0, .v = 0.0, .d = -1 },
-            .{ .what = "abs", .x = -3, .y = 0, .v = 3, .d = -1 },
-            .{ .what = "minC", .x = 2, .y = 2, .v = 2, .d = 1 },
-            .{ .what = "maxC", .x = 2, .y = 2, .v = 2, .d = 1 },
-            .{ .what = "minC", .x = 3, .y = 2, .v = 2, .d = 0 },
-            .{ .what = "maxC", .x = 1, .y = 2, .v = 2, .d = 0 },
-        };
-        for (tris) |t| {
-            const x = S.probe(0, t.x);
-            const r = if (std.mem.eql(u8, t.what, "min"))
-                x.min(S.con(t.y))
-            else if (std.mem.eql(u8, t.what, "max"))
-                x.max(S.con(t.y))
-            else if (std.mem.eql(u8, t.what, "abs"))
-                x.abs()
-            else if (std.mem.eql(u8, t.what, "minC"))
-                x.minC(t.y)
-            else
-                x.maxC(t.y);
-            if (!famSame(r.val(), t.v) or !famSame(r.ddxAt(0), t.d)) {
-                std.debug.print("expectFamily: {s}({e}, {e}) = ({e}, lane {e}), §4.3.1 gives ({e}, lane {e})\n", .{ t.what, t.x, t.y, r.val(), r.ddxAt(0), t.v, t.d });
-                return error.FamilyMismatch;
-            }
-        }
-    }
 }
 
 /// Bits equal, or both NaN.
@@ -2054,7 +1995,7 @@ pub fn validate(comptime D: type) void {
     validateSimState(D);
 
     // Physics: generic over S, so only shape-checkable. eval/q take
-    // (comptime S, [n]S, *const Model, *const Instance, f64).
+    // (comptime S, *const [n_u]f64, *const Model, InstancePtr, SimState).
     validatePhysicsFn(D, "eval");
     if (@hasDecl(D, "q")) validatePhysicsFn(D, "q");
 
@@ -2065,14 +2006,14 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "evalQ")) {
         if (!@hasDecl(D, "q"))
             @compileError(name ++ ".evalQ without q: the fused entry point needs a reactive half");
-        if (genericFnError(D, "evalQ", "struct { res: [n_u]S, q: [n_q]S }")) |m| @compileError(m);
+        if (genericFnError(D, "evalQ", "struct { res: Rows(D, S), q: Sites(D, S) }")) |m| @compileError(m);
     }
     if (qSitesError(D)) |m| @compileError(m);
 
     // §9.4/§9.5 display phase (the clause map lives on `allowed_pub_decls`).
     // Present only in a printing artifact; when present it must be callable
-    // the way tb.zig's generated runner calls it — `D.display(Dual, xd,
-    // model, inst, t)` — which is `eval`'s generic shape returning void.
+    // the way tb.zig's generated runner calls it — `D.display(Dual, &x,
+    // model, inst, sim)` — which is `eval`'s generic shape returning void.
     //
     // §9.7 SIMULATION CONTROL RUNS INSIDE THIS PHASE AND MAY NOT RETURN. A
     // `$finish`/`$stop`/`$fatal` the model reaches terminates the PROCESS at
@@ -2118,7 +2059,7 @@ pub fn validate(comptime D: type) void {
     // with junction limiting should also declare seed — limiting from
     // x_old = 0 is what pins cold-start Newton in the wrong basin.
     if (@hasDecl(D, "limit"))
-        expectFn(D, "limit", fn (*const D.Model, *const D.Instance, [n]f64, [n]f64) LimitResult(n));
+        expectGeneric(D, "limit", 6, "fn (comptime S: type, *const Model, *const Instance, cur: [n_u]f64, old: [n_u]f64, SimState) LimitResult(n_u)");
     // The masks are only meaningful next to a `limit`, and `writes ⊆ reads`
     // because every corrected unknown is one the clamp read a probe from.
     for ([_][]const u8{ "limit_reads", "limit_writes" }) |m| {
@@ -2126,23 +2067,17 @@ pub fn validate(comptime D: type) void {
         if (!@hasDecl(D, "limit")) @compileError(@typeName(D) ++ "." ++ m ++ " without a `limit`");
         if (@TypeOf(@field(D, m)) != u64) @compileError(@typeName(D) ++ "." ++ m ++ " must be a u64 mask over U");
     }
-    if (@hasDecl(D, "core_sim_fields")) {
-        if (!@hasDecl(D, "core_reads_simstate"))
-            @compileError(name ++ ".core_sim_fields without core_reads_simstate");
-        for (D.core_sim_fields) |f| if (!@hasField(D.Instance, f))
-            @compileError(name ++ ".core_sim_fields names `" ++ f ++ "`, which is not an Instance field");
-    }
     if (@hasDecl(D, "limit_writes") and (limitWrites(D) & ~limitReads(D)) != 0)
         @compileError(@typeName(D) ++ ".limit_writes has a bit limit_reads does not");
     // The narrow-lane pair and its three rules — see `derivReads`.
     if (derivReadsError(D, n)) |m| @compileError(m);
     if (@hasDecl(D, "seed"))
-        expectFn(D, "seed", fn (*const D.Model, *const D.Instance) [n]?f64);
+        expectGeneric(D, "seed", 4, "fn (comptime S: type, *const Model, *const Instance, SimState) [n_u]?f64");
     // Node collapse (ngspice setup): for each internal unknown, return the
     // port index it collapses onto when its separating parasitic R is 0, or
     // null to keep a private node. Consulted once at build time.
     if (@hasDecl(D, "collapse"))
-        expectFn(D, "collapse", fn (*const D.Model, *const D.Instance) [n]?u8);
+        expectGeneric(D, "collapse", 3, "fn (comptime S: type, *const Model, *const Instance) [n_u]?u8");
     // The same map with every retention flag set, comptime. A host uses it to
     // size a reduced derivative basis for the instances whose per-instance
     // `collapse` equals it, so the two invariants it relies on are checked
@@ -2185,7 +2120,7 @@ pub fn validate(comptime D: type) void {
         // — a compiler does not need a digital scheduler to ask its simulator a
         // question. Not a State field, and not this hook.
         expectFn(D, "initState", fn (*const D.Model, *D.Instance) D.State);
-        expectFn(D, "updateState", fn (*const D.Model, *D.Instance, [n]f64, *D.State) UpdateResult);
+        expectGeneric(D, "updateState", 6, "fn (comptime S: type, *const Model, *Instance, [n_u]f64, *State, SimState) UpdateResult");
         if (@hasDecl(D, "stateCtl"))
             expectFn(D, "stateCtl", fn (*const D.Model, *D.Instance, *D.State, StateCtlOp) bool);
     }
@@ -2219,17 +2154,15 @@ pub fn validate(comptime D: type) void {
     if (@hasDecl(D, "acceptQ")) {
         if (!@hasDecl(D, "q") or !@hasDecl(D, "updateState"))
             @compileError(name ++ ".acceptQ requires q and updateState");
-        const info = @typeInfo(@TypeOf(D.acceptQ));
-        if (info != .@"fn" or info.@"fn".params.len != 5 or info.@"fn".params[0].type != type)
-            @compileError(name ++ ".acceptQ: expected fn (comptime S: type, [n_u]S, *const Model, *Instance, *State) [n_q]S");
+        expectGeneric(D, "acceptQ", 6, "fn (comptime S: type, *const [n_u]f64, *const Model, *Instance, *State, SimState) Sites(D, S)");
     }
 
     if (@hasDecl(D, "beginSolve")) expectFn(D, "beginSolve", fn (*D.Instance) void);
     // §9.15/§9.17.3 iteration state is separate from accepted-time history.
     if (@hasDecl(D, "advanceIteration"))
-        expectFn(D, "advanceIteration", fn (*const D.Model, *D.Instance, [n]f64) void);
+        expectGeneric(D, "advanceIteration", 5, "fn (comptime S: type, *const Model, *Instance, [n_u]f64, SimState) void");
     if (@hasDecl(D, "checkConvergence"))
-        expectFn(D, "checkConvergence", fn (*const D.Model, *const D.Instance, [n]f64) bool);
+        expectGeneric(D, "checkConvergence", 5, "fn (comptime S: type, *const Model, *const Instance, [n_u]f64, SimState) bool");
 
     // Convergence aids. Only the 2-arg attempt form exists — batch.zig:616
     // calls it unconditionally; a 3-arg variant would never be invoked.
@@ -2328,7 +2261,7 @@ pub fn validate(comptime D: type) void {
     requireWith(D, "vpiContribs", "vpi_contrib_lo");
     requireWith(D, "vpiContribs", "vpi_contrib_flow_u");
     if (@hasDecl(D, "noisePsd"))
-        expectFn(D, "noisePsd", fn ([n]f64, *const D.Model, *const D.Instance) [D.noise_gens.len]PsdTerm);
+        expectGeneric(D, "noisePsd", 5, "fn (comptime S: type, [n_u]f64, *const Model, *const Instance, SimState) [noise_gens.len]PsdTerm");
 
     // §4.6.4.3/.4 the tabulated PSDs, and the `kind`/`table` pairing that says
     // which generator reads one. Checked HERE and not left to the host: the
@@ -2374,7 +2307,7 @@ pub fn validate(comptime D: type) void {
     expectArray(D, "ac_gens", AcGen(D));
     requireWith(D, "acStim", "ac_gens");
     if (@hasDecl(D, "acStim"))
-        expectFn(D, "acStim", fn ([n]f64, *const D.Model, *const D.Instance) [D.ac_gens.len]AcPhasor);
+        expectGeneric(D, "acStim", 5, "fn (comptime S: type, [n_u]f64, *const Model, *const Instance, SimState) [ac_gens.len]AcPhasor");
 
     // §2.8.3/§12.32 unresolved `$name`s. There is no device-side hook to pair
     // this table with — the implementation is the HOST's, which is the whole
@@ -2401,7 +2334,7 @@ pub fn validate(comptime D: type) void {
     // such parameter, which is the common case — a literal default is still
     // just a field initializer.
     if (@hasDecl(D, "derive"))
-        expectFn(D, "derive", fn (*D.Model) void);
+        expectGeneric(D, "derive", 2, "fn (comptime S: type, *Model) void");
 
     // §3.4 SHAPE parameters: parameters "modified at compilation time", folded
     // into an array bound, a replication count or the generate structure (a
@@ -2570,38 +2503,15 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // ...and the host-side request laid on it (`--jac-f32-host`). Checked in
     // `validate` beside the permission, which it implies.
     .{ "jac_f32_host", {} },
-    // Lane-parallel permission: eval/q instantiated with a vector S (one
-    // operating point per lane) is exact per lane — no `.val()` steering, no
-    // per-call scalar draw, no value-collapsing helper on an x-dependent
-    // chain. Emitted by codegen only when nothing in the device pinned lanes;
-    // the generated testbench's batch differential check asserts the claim on
-    // every fixture that carries it. Absent means batching is NOT sound.
+    // Nothing in eval/q steers on a `.val()` of an x-dependent value, draws a
+    // per-call scalar, or collapses an x-dependent chain to its value. Emitted
+    // by codegen only when nothing in the device pinned lanes.
     .{ "lane_clean", {} },
-    // The CORE (physics units) reads a host-published sim-state Instance
-    // field (analysis()/$abstime/ddt-family `inst.dt` and friends). A host
-    // that keeps Instance blobs device-resident republishes those fields on
-    // the HOST copy only, so such a core must not run device-resident
-    // (ARPice engine.gpuEligible keys off this). Emitted by codegen from the
-    // calls in the core's slice: abstime, dt, analysis_kind, the step and
-    // `analog initial` flags, newton_iteration and limiter_previous. The
-    // updateState epilogue's `state.t_prev = inst.abstime` latch does not
-    // count — nothing in the core reads it back.
-    .{ "core_reads_simstate", {} },
-    // The host-rewritten Instance fields the core reads, by name; exact, and
-    // emitted only beside `core_reads_simstate`. A host may run such a core
-    // device-resident if it republishes every listed field to the resident
-    // copy before the next launch after the field changes. Absent: all of
-    // them (`coreSimFields`).
-    .{ "core_sim_fields", {} },
     .{ "mutable_eval", {} },
     // §4.6.4.3's array-parameter table at this card. Optional; see `validate`
     // and `validateHost` — a device that declares it has knots `noise_tables`
     // states only the declared defaults of.
     .{ "noiseTablePoints", {} },
-    // Runtime analysis kind exported by generated devices for the analysis()
-    // builtin; the host engine sets Instance.analysis_kind per pass. Its
-    // ordinals are checked against `AnalysisKind` by `validateSimState`.
-    .{ "AnalysisKind", {} },
     // LRM 9.4 display tasks AND LRM 9.5 file I/O: the device's per-accepted-point
     // SIDE-EFFECT phase, and the whole of the optional I/O interface a host may
     // provide. Present ONLY in a device built with `--display=emit` (FastVAF's
@@ -2677,11 +2587,7 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     .{ "vpi_contrib_hi", {} },
     .{ "vpi_contrib_lo", {} },
     .{ "vpi_contrib_flow_u", {} },
-    // Contract ABI 5 preview (`codegen.Options.family`): the family entry
-    // points beside the ABI 4 ones, and the masks their reals are declared
-    // at (`laneMasks`). Transitional: the flip to abi_version 5 replaces the
-    // ABI 4 entries with these.
-    .{ "abi5", {} },
+    // The masks a device's reals are declared at (`laneMasks`).
     .{ "lane_masks", {} },
 });
 
@@ -2709,11 +2615,11 @@ fn rejectStrayPubDecls(comptime D: type) void {
     }
 }
 
-/// eval/q: fn (comptime S: type, [n]S, *const Model, *const Instance, f64) [n]S.
-/// Generic over S, so the concrete signature is checked by instantiation:
-/// here only arity + comptime-type first param.
+/// eval/q: fn (comptime S, *const [n_u]f64, *const Model, InstancePtr,
+/// SimState) Rows/Sites. Generic over S, so the concrete signature is checked
+/// by instantiation: here only arity + comptime-type first param.
 fn validatePhysicsFn(comptime D: type, comptime fn_name: []const u8) void {
-    if (genericFnError(D, fn_name, "[n_u]S")) |m| @compileError(m);
+    if (genericFnError(D, fn_name, if (std.mem.eql(u8, fn_name, "q")) "Sites(D, S)" else "Rows(D, S)")) |m| @compileError(m);
 }
 
 /// The shape shared by every generic-over-S entry point (`eval`, `q`,
@@ -2725,8 +2631,16 @@ fn genericFnError(comptime D: type, comptime fn_name: []const u8, comptime ret: 
     const info = @typeInfo(@TypeOf(@field(D, fn_name)));
     if (info != .@"fn" or info.@"fn".params.len != 5 or info.@"fn".params[0].type != type)
         return @typeName(D) ++ "." ++ fn_name ++
-            ": expected fn (comptime S: type, [n_u]S, *const Model, *const Instance, f64) " ++ ret;
+            ": expected fn (comptime S: type, *const [n_u]f64, *const Model, InstancePtr, SimState) " ++ ret;
     return null;
+}
+
+/// A generic entry point: `params` parameters, the first `comptime S: type`.
+/// `shape` names the whole expected signature in the complaint.
+fn expectGeneric(comptime D: type, comptime fn_name: []const u8, comptime params: usize, comptime shape: []const u8) void {
+    const info = @typeInfo(@TypeOf(@field(D, fn_name)));
+    if (info != .@"fn" or info.@"fn".params.len != params or info.@"fn".params[0].type != type)
+        @compileError(@typeName(D) ++ "." ++ fn_name ++ ": expected " ++ shape);
 }
 
 fn expectFn(comptime D: type, comptime fn_name: []const u8, comptime Expected: type) void {
@@ -2853,9 +2767,8 @@ fn hasFloatField(comptime T: type, comptime name: []const u8) bool {
 }
 
 /// The host-written `Instance` fields (see `sim_state_fields`). Presence is
-/// optional; the name and type are not. Without this check a renamed or
-/// retyped field is a silently-null hook — `$abstime` pins to 0 and every
-/// waveform in the circuit collapses to its t=0 value with no diagnostic.
+/// optional; the name and type are not, since a renamed or retyped field is a
+/// silently-null hook.
 fn validateSimState(comptime D: type) void {
     const name = @typeName(D);
     for (sim_state_fields) |f| {
@@ -2865,21 +2778,11 @@ fn validateSimState(comptime D: type) void {
                 @typeName(f.T));
     }
 
-    if (!@hasField(D.Instance, "analysis_kind")) return;
-    const K = @FieldType(D.Instance, "analysis_kind");
-    if (@typeInfo(K) != .@"enum")
-        @compileError(name ++ ".Instance.analysis_kind must be an enum");
-    // The host writes this field with @enumFromInt(@intFromEnum(host_kind)),
-    // so the device's tag ORDER is load-bearing, not just its tag set.
-    const want = @typeInfo(AnalysisKind).@"enum".fields;
-    const got = @typeInfo(K).@"enum".fields;
-    if (got.len != want.len)
-        @compileError(name ++ ".Instance.analysis_kind: enum must have exactly " ++
-            std.fmt.comptimePrint("{d}", .{want.len}) ++ " tags, matching contract.AnalysisKind");
-    for (want, got) |w, g| {
-        if (!std.mem.eql(u8, w.name, g.name) or w.value != g.value)
-            @compileError(name ++ ".Instance.analysis_kind: tag `" ++ g.name ++
-                "` must be `" ++ w.name ++ "` at the same ordinal — the host converts by ordinal");
+    // `SimState` carries these, so an Instance field of the same name is one
+    // no host writes: a device built for an earlier contract.
+    for ([_][]const u8{ "abstime", "dt", "analysis_kind", "is_initial_step", "is_final_step" }) |f| {
+        if (@hasField(D.Instance, f))
+            @compileError(name ++ ".Instance." ++ f ++ ": the host passes it in `contract.SimState`, not in Instance");
     }
 }
 
@@ -2968,9 +2871,10 @@ const MockR = struct {
 
     pub const Instance = struct {};
 
-    pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, _: *const Instance, _: f64) [n_u]S {
-        const ir = x[0].sub(x[1]).scale(model.g);
-        return .{ ir, ir.neg() };
+    pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, _: *const Instance, _: SimState) Rows(@This(), S) {
+        const p = probes(@This(), S, x);
+        const ir = p[0].sub(p[1]).scale(model.g);
+        return rows(@This(), S, .{ ir, ir.neg() });
     }
 };
 
@@ -2991,17 +2895,18 @@ const MockSw = struct {
         closed: bool = false,
     };
 
-    pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, inst: *const Instance, _: f64) [n_u]S {
+    pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: *const Instance, _: SimState) Rows(@This(), S) {
         const g = if (inst.closed) model.gon else model.goff;
-        const ir = x[0].sub(x[1]).scale(g);
-        return .{ ir, ir.neg() };
+        const p = probes(@This(), S, x);
+        const ir = p[0].sub(p[1]).scale(g);
+        return rows(@This(), S, .{ ir, ir.neg() });
     }
 
     pub fn initState(_: *const Model, _: *Instance) State {
         return .{};
     }
 
-    pub fn updateState(_: *const Model, inst: *Instance, x: [n_u]f64, s: *State) UpdateResult {
+    pub fn updateState(comptime _: type, _: *const Model, inst: *Instance, x: [n_u]f64, s: *State, _: SimState) UpdateResult {
         const want = (x[0] - x[1]) > 0.5;
         if (want != inst.closed) {
             inst.closed = want;
@@ -3016,7 +2921,7 @@ const MockSw = struct {
         return m;
     }
 
-    pub fn limit(_: *const Model, _: *const Instance, x_new: [n_u]f64, _: [n_u]f64) LimitResult(n_u) {
+    pub fn limit(comptime _: type, _: *const Model, _: *const Instance, x_new: [n_u]f64, _: [n_u]f64, _: SimState) LimitResult(n_u) {
         return .{ .x = x_new, .converged = true };
     }
 };
@@ -3028,10 +2933,6 @@ const MockTline = struct {
     pub const num_ports: usize = 2;
     const n_u = nU(@This());
 
-    // A generated device declares its own mirror of contract.AnalysisKind; the
-    // host converts by ordinal, so the order must match exactly.
-    pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
-
     pub const Model = struct {
         z0: f32 = 50,
         td: f32 = 1e-9,
@@ -3039,19 +2940,17 @@ const MockTline = struct {
 
     pub const Instance = struct {
         // Host-written; name and type are contract (see sim_state_fields).
-        abstime: f64 = 0,
-        dt: f64 = 0,
         bound_step: f64 = std.math.inf(f64),
-        analysis_kind: Self.AnalysisKind = .dc,
     };
 
     pub const mc_param = "z0";
     pub const u_kinds = [n_u]UnknownKind{ .voltage, .voltage };
     pub const noise_gens = [_]NoiseGen(@This()){.{ .row = 0, .col = 1, .kind = .thermal }};
 
-    pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, _: *const Instance, _: f64) [n_u]S {
+    pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, _: *const Instance, _: SimState) Rows(Self, S) {
         const y0 = 1.0 / @as(f64, model.z0);
-        return .{ x[0].scale(y0), x[1].scale(y0) };
+        const p = probes(Self, S, x);
+        return rows(Self, S, .{ p[0].scale(y0), p[1].scale(y0) });
     }
 };
 
@@ -3067,24 +2966,16 @@ const MockAll = struct {
     pub const U = enum(u8) { p, n };
     pub const num_ports: usize = 2;
     pub const contract_abi = abi_version;
-    pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
     pub const jac_f32_host = true;
     pub const lane_clean = true;
-    pub const core_reads_simstate = true;
-    pub const core_sim_fields = [_][]const u8{ "abstime", "analysis_kind" };
     pub const mutable_eval = false;
 
     pub const Model = struct { g: f32 = 1e-3 };
     pub const Instance = struct {
         temperature: f64 = 300.15,
-        abstime: f64 = 0,
-        dt: f64 = 0,
         mfactor: f64 = 1,
-        analysis_kind: Self.AnalysisKind = .dc,
-        is_initial_step: bool = false,
-        is_final_step: bool = false,
         bound_step: f64 = std.math.inf(f64),
         systf: ?*const SystfHost = null,
         su: Setup = .{},
@@ -3182,43 +3073,44 @@ const MockAll = struct {
     pub const q_lte = [n_q]bool{ true, false };
     pub const q_site_pattern = [n_q]u64{ 0b01, 0b10 };
 
-    pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
-        const i = x[0].sub(x[1]).scale(@as(f64, m.g));
-        return .{ i, i.neg() };
+    pub fn eval(comptime S: type, x: *const [n_u]f64, m: *const Model, _: *const Instance, _: SimState) Rows(Self, S) {
+        const p = probes(Self, S, x);
+        const i = p[0].sub(p[1]).scale(@as(f64, m.g));
+        return rows(Self, S, .{ i, i.neg() });
     }
-    pub fn evalQ(comptime S: type, x: [n_u]S, m: *const Model, i: *const Instance, t: f64) struct { res: [n_u]S, q: [n_q]S } {
-        return .{ .res = eval(S, x, m, i, t), .q = q(S, x, m, i, t) };
+    pub fn evalQ(comptime S: type, x: *const [n_u]f64, m: *const Model, i: *const Instance, sim: SimState) struct { res: Rows(Self, S), q: Sites(Self, S) } {
+        return .{ .res = eval(S, x, m, i, sim), .q = q(S, x, m, i, sim) };
     }
-    pub fn q(comptime S: type, x: [n_u]S, _: *const Model, _: *const Instance, _: f64) [n_q]S {
-        return .{ x[0].scale(1e-12), x[1].scale(-1e-12) };
+    pub fn q(comptime S: type, x: *const [n_u]f64, _: *const Model, _: *const Instance, _: SimState) Sites(Self, S) {
+        return .{ S.probe(0, x[0]).scale(1e-12), S.probe(1, x[1]).scale(-1e-12) };
     }
-    pub fn limit(_: *const Model, _: *const Instance, cur: [n_u]f64, _: [n_u]f64) LimitResult(n_u) {
+    pub fn limit(comptime _: type, _: *const Model, _: *const Instance, cur: [n_u]f64, _: [n_u]f64, _: SimState) LimitResult(n_u) {
         return .{ .x = cur, .converged = true };
     }
-    pub fn seed(_: *const Model, _: *const Instance) [n_u]?f64 {
+    pub fn seed(comptime _: type, _: *const Model, _: *const Instance, _: SimState) [n_u]?f64 {
         return .{ 0.6, null };
     }
-    pub fn collapse(_: *const Model, _: *const Instance) [n_u]?u8 {
+    pub fn collapse(comptime _: type, _: *const Model, _: *const Instance) [n_u]?u8 {
         return .{ null, null };
     }
     pub const collapse_full: [n_u]?u8 = .{ null, 0 };
     pub fn initState(_: *const Model, _: *Instance) State {
         return .{};
     }
-    pub fn updateState(_: *const Model, _: *Instance, _: [n_u]f64, s: *State) UpdateResult {
+    pub fn updateState(comptime _: type, _: *const Model, _: *Instance, _: [n_u]f64, s: *State, _: SimState) UpdateResult {
         s.flips += 1;
         return .ok;
     }
     pub const state_class: StateClass = .history;
-    pub fn acceptQ(comptime S: type, x: [n_u]S, m: *const Model, inst: *Instance, s: *State) [n_q]S {
+    pub fn acceptQ(comptime S: type, x: *const [n_u]f64, m: *const Model, inst: *Instance, s: *State, sim: SimState) Sites(Self, S) {
         s.flips += 1;
-        return q(S, x, m, inst, 0);
+        return q(S, x, m, inst, sim);
     }
     pub fn beginSolve(_: *Instance) void {}
 
-    pub fn advanceIteration(_: *const Model, _: *Instance, _: [n_u]f64) void {}
+    pub fn advanceIteration(comptime _: type, _: *const Model, _: *Instance, _: [n_u]f64, _: SimState) void {}
 
-    pub fn checkConvergence(_: *const Model, _: *const Instance, _: [n_u]f64) bool {
+    pub fn checkConvergence(comptime _: type, _: *const Model, _: *const Instance, _: [n_u]f64, _: SimState) bool {
         return true;
     }
 
@@ -3230,15 +3122,15 @@ const MockAll = struct {
         out.g *= @floatCast(lambda);
         return out;
     }
-    pub fn noisePsd(_: [n_u]f64, m: *const Model, _: *const Instance) [noise_gens.len]PsdTerm {
+    pub fn noisePsd(comptime _: type, _: [n_u]f64, m: *const Model, _: *const Instance, _: SimState) [noise_gens.len]PsdTerm {
         // Row 1 is the table's, and its parametric part is zero: the table IS
         // its spectrum, so anything else here would be added to it.
         return .{ .{ .white = 4 * 1.38e-23 * 300.15 * @as(f64, m.g) }, .{ .white = 0 } };
     }
-    pub fn acStim(_: [n_u]f64, _: *const Model, _: *const Instance) [ac_gens.len]AcPhasor {
+    pub fn acStim(comptime _: type, _: [n_u]f64, _: *const Model, _: *const Instance, _: SimState) [ac_gens.len]AcPhasor {
         return .{.{ .mag = 1, .phase = 0 }};
     }
-    pub fn derive(_: *Model) void {}
+    pub fn derive(comptime _: type, _: *Model) void {}
     pub fn checkShape(m: *const Model) ?[]const u8 {
         return if (m.g != 1e-3) "g" else null;
     }
@@ -3252,28 +3144,17 @@ const MockAll = struct {
     pub fn delays(_: *const Model) [1]f64 {
         return .{1e-9};
     }
-    /// The shape tb.zig's generated runner actually calls — `D.display(Dual,
-    /// xd, model, inst, t)` — and codegen emits: `pub fn display(comptime S:
-    /// type, x: [n_u]S, model: *const Model, inst: *const Instance, _: f64)
-    /// void`. This used to be a 2-arg `(Model, Instance)` fn, which no caller
-    /// anywhere has ever used; `validate` now refuses that shape.
-    pub fn display(comptime S: type, _: [n_u]S, _: *const Model, _: *const Instance, _: f64) void {}
+    /// The shape tb.zig's generated runner calls and codegen emits.
+    pub fn display(comptime _: type, _: *const [n_u]f64, _: *const Model, _: *const Instance, _: SimState) void {}
     /// `codegen.Options.vpi_contribs`: one flow row from p to n.
     pub const vpi_contrib_access = [_]u8{1};
     pub const vpi_contrib_hi = [_]i32{0};
     pub const vpi_contrib_lo = [_]i32{1};
     pub const vpi_contrib_flow_u = [_]i32{-1};
-    pub fn vpiContribs(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance) [1][2]f64 {
-        return .{.{ x[0].sub(x[1]).val() * m.g, 0.0 }};
+    pub fn vpiContribs(comptime _: type, x: *const [n_u]f64, m: *const Model, _: *const Instance, _: SimState) [1][2]f64 {
+        return .{.{ (x[0] - x[1]) * m.g, 0.0 }};
     }
-    /// Contract ABI 5 preview: the resistor's rows for a family.
     pub const lane_masks = [_]LaneUse{.{ .mask = 0b11, .uses = 1 }};
-    pub const abi5 = struct {
-        pub fn eval(comptime S: type, x: *const [n_u]f64, m: *const Model, _: *const Instance, _: f64) Rows(Self, S) {
-            const i = S.probe(0, x[0]).sub(S.probe(1, x[1])).scale(m.g);
-            return .{ i.to(rowMask(Self, 0)), i.neg().to(rowMask(Self, 1)) };
-        }
-    };
 };
 
 test "validate: minimal resistor" {
@@ -3291,11 +3172,9 @@ test "validate: every contract member at once (allowlist cannot drift)" {
 }
 
 test "display shapes: the generic 5-param form, wrong arities refused" {
-    // The exact shape that used to slip through: MockAll's display was a
-    // 2-arg `(Model, Instance)` fn no caller has ever used — tb.zig calls
-    // `D.display(Dual, xd, model, inst, t)`, and a device declaring the
-    // 2-arg form fails in the RUNNER's build, three cache steps from the
-    // device that caused it. Refused at the definition instead.
+    // A 2-arg `(Model, Instance)` display fails in the RUNNER's build, three
+    // cache steps from the device that caused it, so it is refused at the
+    // definition.
     const Bad = struct {
         pub const Model = struct {};
         pub const Instance = struct {};
@@ -3303,10 +3182,10 @@ test "display shapes: the generic 5-param form, wrong arities refused" {
         pub fn eval(_: f64) void {} // not generic: first param is not `type`
     };
     try testing.expect(comptime (genericFnError(Bad, "display", "void") != null));
-    try testing.expect(comptime (genericFnError(Bad, "eval", "[n_u]S") != null));
+    try testing.expect(comptime (genericFnError(Bad, "eval", "Rows(D, S)") != null));
     // The real shapes pass: MockAll.display mirrors codegen's emitted decl.
     try testing.expect(comptime (genericFnError(MockAll, "display", "void") == null));
-    try testing.expect(comptime (genericFnError(MockAll, "eval", "[n_u]S") == null));
+    try testing.expect(comptime (genericFnError(MockAll, "eval", "Rows(D, S)") == null));
 }
 
 test "jac_rows: an empty pattern row may still be written; a live one may not be unwritten" {
@@ -3354,23 +3233,9 @@ const MockVsrc = struct {
         .{ .row = .br, .col = .p, .g = 1, .c = 0 },
         .{ .row = .br, .col = .n, .g = -1, .c = 0 },
     };
-    pub fn eval(comptime S: type, x: [n_u]S, m: *const Model, _: *const Instance, _: f64) [n_u]S {
-        return .{ x[2], x[2].neg(), x[0].sub(x[1]).addC(-m.vdc) };
-    }
-};
-
-/// The smallest f64 scalar `eval` accepts, for checking a mock's table
-/// against the function it describes.
-const F = struct {
-    v: f64,
-    fn addC(a: F, c: f64) F {
-        return .{ .v = a.v + c };
-    }
-    fn sub(a: F, b: F) F {
-        return .{ .v = a.v - b.v };
-    }
-    fn neg(a: F) F {
-        return .{ .v = -a.v };
+    pub fn eval(comptime S: type, x: *const [n_u]f64, m: *const Model, _: *const Instance, _: SimState) Rows(@This(), S) {
+        const p = probes(@This(), S, x);
+        return rows(@This(), S, .{ p[2], p[2].neg(), p[0].sub(p[1]).addC(-m.vdc) });
     }
 };
 
@@ -3380,12 +3245,12 @@ test "deriv_reads/jac_const: a linear device needs no lane, and the table is its
     // exactly the entry's `g` — a finite difference with no truncation error,
     // because every term the column enters is linear.
     const m: MockVsrc.Model = .{};
-    const base = [3]F{ .{ .v = 0.25 }, .{ .v = -0.5 }, .{ .v = 2e-3 } };
-    const r0 = MockVsrc.eval(F, base, &m, &.{}, 0);
+    const base = [3]f64{ 0.25, -0.5, 2e-3 };
+    const r0: [3]LegacyValue = MockVsrc.eval(LegacyValue, &base, &m, &.{}, .{});
     for (0..3) |col| {
         var xs = base;
-        xs[col].v += 1.0;
-        const r1 = MockVsrc.eval(F, xs, &m, &.{}, 0);
+        xs[col] += 1.0;
+        const r1: [3]LegacyValue = MockVsrc.eval(LegacyValue, &xs, &m, &.{}, .{});
         for (0..3) |row| {
             var want: f64 = 0;
             for (jacConst(MockVsrc)) |e| {
@@ -3412,10 +3277,10 @@ test "q sites: rows are the signed sums of the stamps, and the table's rules ref
         pub const q_lte = [n_q]bool{ true, false };
     };
     try testing.expect(comptime (qSitesError(Two) == null));
-    const rows = qRows(Two, F2, .{ .{ .v = 2.0 }, .{ .v = 0.5 } });
-    try testing.expectEqual(@as(f64, 2.5), rows[0].v);
-    try testing.expectEqual(@as(f64, -2.0), rows[1].v);
-    try testing.expectEqual(@as(f64, -0.5), rows[2].v);
+    const qr = qRows(Two, LegacyValue, .{ LegacyValue.con(2.0), LegacyValue.con(0.5) });
+    try testing.expectEqual(@as(f64, 2.5), qr[0].v);
+    try testing.expectEqual(@as(f64, -2.0), qr[1].v);
+    try testing.expectEqual(@as(f64, -0.5), qr[2].v);
     try testing.expectEqual([2]bool{ true, false }, qLte(Two));
     // No declaration: the per-row layout, identity stamps, every site checked.
     try testing.expectEqual(@as(usize, 3), qStamps(struct {
@@ -3439,23 +3304,6 @@ test "q sites: rows are the signed sums of the stamps, and the table's rules ref
         pub const n_q: usize = 1;
     }) != null));
 }
-
-/// A value-only scalar with the four ops `qRows` uses.
-const F2 = struct {
-    v: f64,
-    fn con(c: f64) F2 {
-        return .{ .v = c };
-    }
-    fn add(a: F2, b: F2) F2 {
-        return .{ .v = a.v + b.v };
-    }
-    fn sub(a: F2, b: F2) F2 {
-        return .{ .v = a.v - b.v };
-    }
-    fn scale(a: F2, c: f64) F2 {
-        return .{ .v = a.v * c };
-    }
-};
 
 test "deriv_reads: the four rules each refuse their own mistake" {
     // (a) the mask is one u64.
@@ -3594,8 +3442,8 @@ const MockNoPorts = struct {
     pub const Model = struct { g: f64 = 1.0 };
     pub const Instance = struct {};
 
-    pub fn eval(comptime S: type, x: [n_u]S, model: *const Model, _: *const Instance, _: f64) [n_u]S {
-        return .{x[0].scale(model.g)};
+    pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, _: *const Instance, _: SimState) Rows(@This(), S) {
+        return rows(@This(), S, .{probes(@This(), S, x)[0].scale(model.g)});
     }
 };
 
@@ -3616,7 +3464,7 @@ test "updateState mutates Instance" {
     var inst: MockSw.Instance = .{};
     var s: MockSw.State = .{};
     const m: MockSw.Model = .{};
-    _ = MockSw.updateState(&m, &inst, .{ 1.0, 0.0 }, &s);
+    _ = MockSw.updateState(LegacyValue, &m, &inst, .{ 1.0, 0.0 }, &s, .{});
     try testing.expect(inst.closed);
     try testing.expectEqual(@as(u32, 1), s.flips);
 }
@@ -3624,7 +3472,7 @@ test "updateState mutates Instance" {
 test "limit reports its own convergence verdict" {
     const m: MockSw.Model = .{};
     const i: MockSw.Instance = .{};
-    const r = MockSw.limit(&m, &i, .{ 1.0, 0.0 }, .{ 0.0, 0.0 });
+    const r = MockSw.limit(LegacyValue, &m, &i, .{ 1.0, 0.0 }, .{ 0.0, 0.0 }, .{});
     try testing.expect(r.converged);
     try testing.expectEqual(@as(f64, 1.0), r.x[0]);
 }
@@ -3701,9 +3549,6 @@ test "RefFamily meets the numerics table: dense and sparse, f64 and f32 lanes" {
     try expectFamily(RefFamily(f64, &lane, .{ .dense = true }));
     try expectFamily(RefFamily(f32, &lane, .{ .dense = false }));
     try expectFamily(RefFamily(f32, &lane, .{ .dense = true }));
-    // Dense is a whole ABI 4 scalar too; LegacyValue is one, and a family.
-    checkScalar(RefFamily(f64, &lane, .{ .dense = true }));
-    checkScalar(LegacyValue);
     checkFamily(LegacyValue);
 }
 
@@ -3728,14 +3573,19 @@ test "RefFamily sparse: Of(m) carries exactly m's lanes, joins on binary ops" {
     try testing.expectEqual(@as(u64, 0), @as(u64, @bitCast(s.ddxAt(0))));
 }
 
-test "abi5 preview: a family's rows carry the pattern's lanes" {
+test "a family's rows carry the pattern's lanes" {
     const S = RefFamily(f64, &.{ 0, 1 }, .{ .dense = false });
-    const r = MockAll.abi5.eval(S, &.{ 2.0, 1.0 }, &.{ .g = 0.5 }, &.{}, 0.0);
+    const r = MockAll.eval(S, &.{ 2.0, 1.0 }, &.{ .g = 0.5 }, &.{}, .{});
     try testing.expect(@TypeOf(r[0]) == S.Of(rowMask(MockAll, 0)));
     try testing.expectEqual(@as(f64, 0.5), r[0].val());
     try testing.expectEqual(@as(f64, -0.5), r[1].ddxAt(0));
     try testing.expectEqual(@as(f64, 0.5), r[1].ddxAt(1));
     try testing.expectEqual(@as(usize, 1), laneMasks(MockAll).len);
+    // `q_site_pattern` narrows each charge to its own unknown.
+    const qs = MockAll.q(S, &.{ 2.0, 1.0 }, &.{}, &.{}, .{});
+    try testing.expect(@TypeOf(qs[1]) == S.Of(0b10));
+    const qr = qRows(MockAll, S, qs);
+    try testing.expectEqual(@as(f64, -1e-12), qr[1].ddxAt(1));
 }
 
 test "RefFamily dense: one type, lanes where `lane` puts them" {
