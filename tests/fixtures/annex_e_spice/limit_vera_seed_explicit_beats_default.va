@@ -18,6 +18,7 @@
 // (1e-6: Annex D's `nature Voltage` abstol, as limit_fet.va argues).
 //! lrm 2.9
 //! lrm 9.17.3
+//! warn W0854
 //! bias V(g) = 0.0, V(sp) = 1.0
 //! print none
 //! seed V(g) = 0.0, V(sp) = 1.0

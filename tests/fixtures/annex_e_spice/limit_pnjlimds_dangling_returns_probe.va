@@ -18,6 +18,7 @@
 // access function reference, within appropriate tolerances" is the CHECK
 // (1e-6: Annex D's `nature Voltage` abstol, as limit_fet.va argues).
 //! lrm 9.17.3
+//! warn W0853
 //! bias V(si) = 0.0, V(di) = 0.5, V(b) = 1.5
 //! print none
 //! limit V(si) = 0, V(di) = 0, V(b) = 0 -> V(b) = 1.5, V(di) = 0.5, converged = 1
