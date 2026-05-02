@@ -642,6 +642,58 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
     return @min(i, self.names.held_names.len -| 1);
 }
 
+/// Does this call, as `emitCall` renders it, read something the HOST changes
+/// between evaluations with `x` held — the `SimState`, an operator's accepted
+/// history, the §5.2.1 sub-task flag, the Newton iteration, the limiter
+/// history or a §9.13.1 seed latch? A value built on one is not a constant of
+/// the card, which is what `family.constant` needs to know.
+///
+/// Kept beside `emitCall` because it is a column of the same dispatch: a new
+/// arm there that reads such a field belongs here too.
+pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
+    const d = self.mir.instData(inst).call;
+    return switch (d.callee) {
+        .ddt, .idt, .idtmod, .absdelay, .@"absdelay$quad", .transition, .slew, .last_crossing, .laplace_zd, .laplace_zp,
+        .laplace_nd, .laplace_np, .zi_zd, .zi_zp, .zi_nd, .zi_np, .cross, .above, .timer,
+        .@"$bound_step", .@"$discontinuity",
+        // §5.2.1, §5.10.2, §4.6.1, §4.6.3, §9.10: the SimState or the
+        // sub-task flag; `$limit$old` reads the limiter history.
+        .analog_initial, .initial_step, .final_step, .analysis, .ac_stim,
+        .@"$abstime", .@"$realtime", .@"$simparam$str", .@"$limit$old",
+        // §9.13.1 the seedless draw reads the latch `updateState` advances;
+        // a VPI application may answer from any state it keeps.
+        // §5.10 a held value is what the last accepted step left.
+        .@"$rng$auto", .systf, .@"$held_real", .@"$held_int",
+        => true,
+        // §9.15 `$simparam("iteration")`: inst.newton_iteration.
+        .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
+        // Constants, Model reads, and Instance fields fixed with the card and
+        // the instance (`temperature`, `mfactor`), and every task,
+        // conversion and kernel of its operands alone.
+        .limexp, .ddx, .white_noise, .flicker_noise, .noise_table, .noise_table_log,
+        .@"$temperature", .@"$vt", .@"$mfactor", .@"$param_given", .@"$port_connected",
+        .@"$analog_node_alias", .@"$analog_port_alias", .@"$test$plusargs", .@"$value$plusargs",
+        .@"$xposition", .@"$yposition", .@"$angle", .@"$hflip", .@"$vflip", .@"$rtoi", .@"$itor",
+        .@"$realtobits", .@"$bitstoreal", .@"$clog2", .@"$sqrt", .@"$exp", .@"$expm1", .@"$ln",
+        .@"$ln1p", .@"$log", .@"$log10", .@"$floor", .@"$ceil", .@"$sin", .@"$cos", .@"$tan",
+        .@"$asin", .@"$acos", .@"$atan", .@"$sinh", .@"$cosh", .@"$tanh", .@"$asinh", .@"$acosh",
+        .@"$atanh", .@"$pow", .@"$hypot", .@"$atan2", .@"$display", .@"$displayb", .@"$displayo",
+        .@"$displayh", .@"$write", .@"$writeb", .@"$writeo", .@"$writeh", .@"$strobe", .@"$strobeb",
+        .@"$strobeo", .@"$strobeh", .@"$monitor", .@"$monitoron", .@"$monitoroff", .@"$debug",
+        .@"$fatal", .@"$error", .@"$warning", .@"$info", .@"$finish", .@"$stop", .@"$fopen",
+        .@"$fclose", .@"$fflush", .@"$fdisplay", .@"$fwrite", .@"$fstrobe", .@"$fmonitor",
+        .@"$fdebug", .@"$fgets", .@"$fscanf", .@"$ftell", .@"$fseek", .@"$rewind", .@"$ferror",
+        .@"$feof", .@"$sformat", .@"$sscanf", .@"$limit", .@"$table_model", .@"$limit$uf", .@"$idx", .@"$idx$int", .@"$idx$str", .@"$display$width",
+        .@"$monitor$arm", .@"$fgets$str", .@"$ferror$str", .@"$fscanf$int", .@"$fscanf$real",
+        .@"$fscanf$str", .@"$sscanf$int", .@"$sscanf$real", .@"$sscanf$str", .@"$plusarg$str", .@"$str$cat", .@"$str$repeat", .@"$rng$check", .@"$rng$rand", .@"$rng$rand_next", .@"$rng$i_uniform",
+        .@"$rng$i_uniform_next", .@"$rng$uniform", .@"$rng$uniform_next", .@"$rng$normal",
+        .@"$rng$normal_next", .@"$rng$exponential", .@"$rng$exponential_next", .@"$rng$poisson",
+        .@"$rng$poisson_next", .@"$rng$chi_square", .@"$rng$chi_square_next", .@"$rng$t",
+        .@"$rng$t_next", .@"$rng$erlang", .@"$rng$erlang_next",
+        => false,
+    };
+}
+
 /// System/environment and operator calls. LRM ch9, §4.5, §4.6.
 ///
 /// ONE switch over `Mir.Callee`, without `else`: a callee lowering learns to

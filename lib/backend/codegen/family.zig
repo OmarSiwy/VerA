@@ -16,6 +16,8 @@
 const std = @import("std");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
+const gen_call = @import("call.zig");
+const gen_dispatch = @import("dispatch.zig");
 const Mir = @import("ir").Mir;
 const Error = codegen.Error;
 
@@ -63,4 +65,126 @@ pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
         i = j;
     }
     try self.w("}};\n\n", .{});
+}
+
+/// `contract.Constant`: `.g` when ∂eval/∂x cannot depend on x, `.c` when
+/// ∂q/∂x cannot, both over every x, for the card and instance the host holds
+/// and at every analysis point. False is always sound.
+///
+/// A value is AFFINE in x when its lanes are a function of the card alone: a
+/// probe, a card constant, a sum or negation of affine values, an affine value
+/// times or divided by a card constant, or a select or join on a card
+/// constant over affine arms. A CARD CONSTANT varies with neither x nor
+/// anything the host rewrites between evaluations (`gen_call.readsHostState`):
+/// `$abstime * V` has a constant partial at every x and a different one at
+/// every time. `.g` holds when every contribution's resistive value is affine
+/// and its retention flag a card constant, `.c` the same for every charge.
+pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
+    const nv = self.an.nv;
+    const host = try self.arena.alloc(bool, nv);
+    @memset(host, false);
+    var steered = false;
+    for (0..self.mir.insts.len) |i| {
+        const inst: Mir.Inst = @enumFromInt(i);
+        if (self.mir.instOp(inst) == .branch and self.an.xDep(self.mir.instData(inst).branch.cond)) steered = true;
+    }
+    // The host-state cone, then the affine set: both monotone, so each
+    // fixpoint settles in at most (longest chain) sweeps.
+    var changed = true;
+    while (changed) {
+        changed = false;
+        for (0..nv) |v| {
+            if (host[v] or !hostStep(self, @enumFromInt(v), host)) continue;
+            host[v] = true;
+            changed = true;
+        }
+    }
+    const aff = try self.arena.alloc(bool, nv);
+    @memset(aff, true);
+    changed = true;
+    while (changed) {
+        changed = false;
+        for (0..nv) |v| {
+            if (!aff[v] or affineStep(self, @enumFromInt(v), aff, host, steered)) continue;
+            aff[v] = false;
+            changed = true;
+        }
+    }
+    const k: Lattice = .{ .g = self, .aff = aff, .host = host };
+    var g = self.lowered.table_effect == .f_zero;
+    var c = gen_dispatch.anyQ(self);
+    for (self.lowered.contributions.items) |ct| {
+        g = g and k.affine(ct.resist_val) and k.card(ct.wrote_val);
+        c = c and k.affine(ct.react_val) and k.card(ct.wrote_val);
+    }
+    for (self.qs.sites) |s| c = c and k.affine(self.lowered.charge_sites.items[s].final);
+    return .{ .g = g, .c = c };
+}
+
+const Lattice = struct {
+    g: *const Gen,
+    aff: []const bool,
+    host: []const bool,
+    fn affine(k: Lattice, v: Mir.Value) bool {
+        return k.aff[@intFromEnum(k.g.an.rv(v))];
+    }
+    fn card(k: Lattice, v: Mir.Value) bool {
+        return !k.g.an.xDep(v) and !k.host[@intFromEnum(k.g.an.rv(v))];
+    }
+};
+
+/// One step of the host-state cone: a call that reads host state, or any
+/// operand in the cone.
+fn hostStep(self: *const Gen, v: Mir.Value, host: []const bool) bool {
+    const in = struct {
+        fn f(g: *const Gen, h: []const bool, o: Mir.Value) bool {
+            return h[@intFromEnum(g.an.rv(o))];
+        }
+    }.f;
+    const def = self.mir.valueDef(self.an.rv(v));
+    if (def != .inst_result) return false;
+    const inst = def.inst_result;
+    return switch (self.mir.instData(inst)) {
+        .call => |c| gen_call.readsHostState(self, inst) or for (c.args) |a| {
+            if (in(self, host, a)) break true;
+        } else false,
+        .unary => |u| in(self, host, u.operand),
+        .binary => |b| in(self, host, b.lhs) or in(self, host, b.rhs),
+        .ternary => |t| in(self, host, t.cond) or in(self, host, t.then_val) or in(self, host, t.else_val),
+        .phi => |d| for (0..d.count) |j| {
+            if (in(self, host, self.mir.phiPair(inst, @intCast(j)).value)) break true;
+        } else false,
+        .load => |l| in(self, host, l.arr) or in(self, host, l.index),
+        .store => |s| in(self, host, s.arr) or in(self, host, s.index) or in(self, host, s.value),
+        .anew, .branch, .jump => false,
+    };
+}
+
+/// One step of the affine set, given the current answer for the operands.
+fn affineStep(self: *const Gen, v: Mir.Value, aff: []const bool, host: []const bool, steered: bool) bool {
+    const k: Lattice = .{ .g = self, .aff = aff, .host = host };
+    if (k.card(v)) return true;
+    const def = self.mir.valueDef(self.an.rv(v));
+    switch (def) {
+        .block_param => return true,
+        .undef, .float_const, .int_const, .str_const, .param_ref => return true,
+        .inst_result => |inst| return switch (self.mir.instData(inst)) {
+            // `dstop`'s lanes are zero at every x.
+            .unary => |u| if (u.op == .fneg) k.affine(u.operand) else u.op == .dstop,
+            .binary => |b| if (b.op == .fadd or b.op == .fsub)
+                k.affine(b.lhs) and k.affine(b.rhs)
+            else if (b.op == .fmul)
+                (k.card(b.lhs) and k.affine(b.rhs)) or (k.card(b.rhs) and k.affine(b.lhs))
+            else if (b.op == .fdiv)
+                k.affine(b.lhs) and k.card(b.rhs)
+            else
+                false,
+            .ternary => |t| k.card(t.cond) and k.affine(t.then_val) and k.affine(t.else_val),
+            // A join is a select on the branch that reached it.
+            .phi => |d| !steered and for (0..d.count) |j| {
+                if (!k.affine(self.mir.phiPair(inst, @intCast(j)).value)) break false;
+            } else true,
+            .call, .load, .store, .anew, .branch, .jump => false,
+        },
+    }
 }

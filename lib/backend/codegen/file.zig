@@ -18,6 +18,7 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_render = @import("render.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
+const gen_family = @import("family.zig");
 const gen_setup = @import("setup.zig");
 const opdb = @import("op_zig.zig");
 const Analysis = @import("ir").Analysis;
@@ -176,6 +177,14 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_state.emitNextBreakpoint(self);
     try gen_state.emitDelays(self);
     try gen_dispatch.emitDerivReads(self, if (self.limits.calls.len != 0) cg_limit.liveSets(self).writes else 0);
+    const k = try gen_family.constant(self);
+    if (k.g or k.c) try self.w(
+        \\/// ∂eval/∂x (`g`) and ∂q/∂x (`c`) do not depend on x: a host may build
+        \\/// those stamps once per card and instance (`contract.Constant`).
+        \\pub const constant: contract.Constant = .{{ .g = {}, .c = {} }};
+        \\
+        \\
+    , .{ k.g, k.c });
     // Lane-parallel permission (see `float/lanes.zig`): eval/q of this device
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.
