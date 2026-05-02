@@ -1643,11 +1643,11 @@ fn RefSparse(comptime L: type, comptime lane: []const u8, comptime collapsed: bo
     };
 }
 
-/// A value-only family with IEEE `/`: every `Of(m)` is one lane-free type.
-/// For a host that runs the value-only entry points (`collapse`, `derive`,
-/// `noisePsd`, `acStim`, `updateState`, `limit`, `seed`) with the arithmetic
-/// contract ABI 4's device-private scalar had, and for the testbench's value
-/// paths.
+/// A value-only family with IEEE `/`: every `Of(m)` is one lane-free type,
+/// `ddxAt` is 0 and `to` is the identity. What a host passes to the
+/// value-only entry points (`collapse`, `derive`, `noisePsd`, `acStim`,
+/// `updateState`, `limit`, `seed`, the iteration hooks) when it wants their
+/// values without lanes; the testbench does.
 pub const LegacyValue = struct {
     v: f64,
     const T = @This();
@@ -2133,16 +2133,17 @@ pub fn validate(comptime D: type) void {
         if (D.state_class == .path_latch and !@hasDecl(D, "stateCtl"))
             @compileError(name ++ ".state_class = .path_latch requires stateCtl");
     }
-    // The solve-invariant slice. `setup(V, model, inst)` fills `inst.su` (a
+    // The solve-invariant slice. `setup(S, model, inst)` fills `inst.su` (a
     // `Setup`) once per card, instance, temperature or `setup_simparams`
-    // write, with the host's VALUE scalar `V`; eval reads the fields as
-    // constants. The three come together or not at all.
+    // write, with a family whose values are the ones `eval` computes with;
+    // eval reads the fields as constants. The three come together or not at
+    // all.
     if (@hasDecl(D, "Setup") != @hasDecl(D, "setup") or @hasDecl(D, "setup") != @hasDecl(D, "setup_simparams"))
         @compileError(name ++ ": Setup, setup and setup_simparams come together");
     if (@hasDecl(D, "setup")) {
         const info = @typeInfo(@TypeOf(D.setup));
         if (info != .@"fn" or info.@"fn".params.len != 3 or info.@"fn".params[0].type != type)
-            @compileError(name ++ ".setup: expected fn (comptime V: type, *const Model, *Instance) void");
+            @compileError(name ++ ".setup: expected fn (comptime S: type, *const Model, *Instance) void");
         if (!@hasField(D.Instance, "su") or @FieldType(D.Instance, "su") != D.Setup)
             @compileError(name ++ ".Instance must carry `su: Setup`");
         const sp = @typeInfo(@TypeOf(D.setup_simparams));
