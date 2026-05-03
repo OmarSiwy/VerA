@@ -119,7 +119,9 @@ fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !I
     return value;
 }
 
-/// IEEE 1364-2005 §17.2.9 `$readmemb` / `$readmemh`.
+/// IEEE 1364-2005 §17.2.9 `$readmemb` / `$readmemh` over a memory file's
+/// text: each `next` is one word to store, in file order. The one load walk
+/// the interpreter and a native executable share.
 ///
 /// The clause's four rules, and all four are observable:
 ///   - the file holds white space, comments and numbers in the task's radix;
@@ -131,6 +133,114 @@ fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !I
 /// With a start and a finish the load runs from one toward the other, which
 /// is DOWNWARD when start > finish — the direction is the argument order
 /// and not the declaration's.
+pub const MemLoad = struct {
+    it: MemTokens,
+    radix: Radix,
+    /// Every element's width, and the array's declared index range.
+    width: u32,
+    low: i64,
+    high: i64,
+    at: i64,
+    last: i64,
+    down: bool,
+    /// A start argument was given: a file address must lie in the range.
+    bounded: bool,
+    range_low: i64,
+    range_high: i64,
+    words: u128 = 0,
+    addressed: bool = false,
+    exhausted: bool = false,
+
+    /// One word: element `index` (from the lowest declared address) takes
+    /// `value`, `width` bits wide.
+    pub const Word = struct { index: u32, value: Int.Literal };
+
+    pub const Failure = error{ BadAddress, AddressOutOfRange, BadWord } || std.mem.Allocator.Error;
+
+    /// `given` is how many of the start and finish arguments the call has;
+    /// `start`/`finish` are their values, null where x or z.
+    pub fn init(text: []const u8, radix: Radix, width: u32, low: i64, high: i64, given: u2, start: ?i64, finish: ?i64) MemLoad {
+        // §17.2.9: default traversal is lowest to highest, independent of
+        // the declaration's direction.
+        const at = if (given >= 1) start orelse low else low;
+        const last = if (given == 2) finish orelse high else high;
+        // With start alone, finish defaults to the highest address and the
+        // walk stays upward, including after a file address specification.
+        return .{
+            .it = .{ .text = text },
+            .radix = radix,
+            .width = width,
+            .low = low,
+            .high = high,
+            .at = at,
+            .last = last,
+            .down = given == 2 and last < at,
+            .bounded = given >= 1,
+            .range_low = @min(at, last),
+            .range_high = @max(at, last),
+        };
+    }
+
+    /// The next word to store, or null at the end of the file. A word
+    /// outside the declared range is dropped.
+    pub fn next(self: *MemLoad, a: std.mem.Allocator) Failure!?Word {
+        while (self.it.next()) |token| {
+            if (token[0] == '@') {
+                self.addressed = true;
+                self.at = std.fmt.parseInt(i64, token[1..], 16) catch return error.BadAddress;
+                if (self.bounded and (self.at < self.range_low or self.at > self.range_high)) return error.AddressOutOfRange;
+                self.exhausted = false;
+                continue;
+            }
+            self.words += 1;
+            // Continue scanning after the final word: a later address both
+            // suppresses count warnings and may restart loading in the range.
+            if (self.exhausted) {
+                // Stopping assignments does not legalize malformed file data.
+                // Validate without allocating a destination-sized value.
+                validateMemWord(token, self.radix) catch return error.BadWord;
+                continue;
+            }
+            const at = self.at;
+            if (self.down) {
+                if (self.at <= self.last) self.exhausted = true else self.at -= 1;
+            } else {
+                if (self.at >= self.last) self.exhausted = true else self.at += 1;
+            }
+            // Outside the declared range the word has nowhere to go. Not an
+            // error: a file longer than the memory is the clause's own
+            // "more data than the range" case.
+            if (at < self.low or at > self.high) continue;
+            // `filled` fails only for want of memory.
+            const value = memWord(a, token, self.radix, self.width) catch |e|
+                return if (e == error.BadDigit) error.BadWord else error.OutOfMemory;
+            return .{ .index = @intCast(at - self.low), .value = value };
+        }
+        return null;
+    }
+
+    /// Once `next` returned null: the words found and the range expected
+    /// when they differ with no address in the file, which §17.2.9 says
+    /// warrants a warning (W1150).
+    pub fn mismatch(self: *const MemLoad) ?struct { found: u128, expected: u128 } {
+        const expected: u128 = @intCast(@as(i128, self.range_high) - self.range_low + 1);
+        if (self.addressed or self.words == expected) return null;
+        return .{ .found = self.words, .expected = expected };
+    }
+
+    pub fn message(e: Failure) []const u8 {
+        return switch (e) {
+            error.BadAddress => "the memory file has a malformed `@` address",
+            error.AddressOutOfRange => "memory file address is outside the requested load range",
+            error.BadWord => "the memory file has a malformed data word",
+            error.OutOfMemory => "out of memory",
+        };
+    }
+
+    pub const mismatch_text = "memory file data word count does not match load range: found {d}, expected {d}";
+};
+
+/// The interpreter's `$readmemb` / `$readmemh` (`MemLoad`).
 pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, radix: Radix) Error!void {
     const ex = &self.file.exprs;
     const base = try self.slot(args[1]);
@@ -138,66 +248,17 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
     const name = self.file.str(ex.strOf(args[0]));
     const text = readSideFile(self, a, name) catch
         return self.exprFail(args[0], "the memory file cannot be read");
-
-    // §17.2.9: default traversal is lowest to highest, independent of
-    // the declaration's direction.
-    var at: i64 = arr.low;
-    var last: i64 = arr.high;
-    if (args.len >= 3)
-        at = (try exec.eval(self, a, args[2], 0)).asInt() orelse arr.low;
-    if (args.len == 4)
-        last = (try exec.eval(self, a, args[3], 0)).asInt() orelse arr.high;
-    // With start alone, finish defaults to the highest address and the
-    // walk stays upward, including after a file address specification.
-    const down = args.len == 4 and last < at;
-    const first = at;
-    const range_low = @min(first, last);
-    const range_high = @max(first, last);
-    const expected: u128 = @intCast(@as(i128, range_high) - range_low + 1);
-    var words: u128 = 0;
-    var addressed = false;
-    var exhausted = false;
-
-    var it = MemTokens{ .text = text };
-    while (it.next()) |token| {
-        if (token[0] == '@') {
-            addressed = true;
-            at = std.fmt.parseInt(i64, token[1..], 16) catch
-                return self.exprFail(args[0], "the memory file has a malformed `@` address");
-            if (args.len >= 3 and (at < range_low or at > range_high))
-                return self.exprFail(args[0], "memory file address is outside the requested load range");
-            exhausted = false;
-            continue;
-        }
-        words += 1;
-        // Continue scanning after the final word: a later address both
-        // suppresses count warnings and may restart loading in the range.
-        if (exhausted) {
-            // Stopping assignments does not legalize malformed file data.
-            // Validate without allocating a destination-sized value.
-            validateMemWord(token, radix) catch
-                return self.exprFail(args[0], "the memory file has a malformed data word");
-            continue;
-        }
-        // Outside the declared range the word has nowhere to go. Not an
-        // error: a file longer than the memory is the clause's own
-        // "more data than the range" case.
-        if (at >= arr.low and at <= arr.high) {
-            const dest = self.values[base + @as(u32, @intCast(at - arr.low))];
-            const value = memWord(a, token, radix, dest.width) catch
-                return self.exprFail(args[0], "the memory file has a malformed data word");
-            try exec.store(self, base + @as(u32, @intCast(at - arr.low)), value.planes);
-        }
-        if (down) {
-            if (at <= last) exhausted = true else at -= 1;
-        } else {
-            if (at >= last) exhausted = true else at += 1;
-        }
-    }
-    if (!addressed and words != expected) {
+    const start = if (args.len >= 3) (try exec.eval(self, a, args[2], 0)).asInt() else null;
+    const finish = if (args.len == 4) (try exec.eval(self, a, args[3], 0)).asInt() else null;
+    var load: MemLoad = .init(text, radix, self.values[base].width, arr.low, arr.high, @intCast(args.len - 2), start, finish);
+    while (load.next(a) catch |e| switch (e) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => |f| return self.fail(ex.mainTok(args[0]), "{s}", .{MemLoad.message(f)}),
+    }) |w| try exec.store(self, base + w.index, w.value.planes);
+    if (load.mismatch()) |m| {
         const tok = ex.mainTok(args[0]);
-        const start = self.starts[@min(tok, self.starts.len - 1)];
-        try self.bag.add(.lower, .W1150, .{ .start = start, .end = start }, "memory file data word count does not match load range: found {d}, expected {d}", .{ words, expected });
+        const at = self.starts[@min(tok, self.starts.len - 1)];
+        try self.bag.add(.lower, .W1150, .{ .start = at, .end = at }, MemLoad.mismatch_text, .{ m.found, m.expected });
     }
 }
 
@@ -205,10 +266,14 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
 /// a fixture self-contained. The working directory is tried second, so a
 /// path written relative to where the simulator was launched still works.
 pub fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const u8 {
-    const io = self.io orelse return error.NoIo;
+    return sideFile(self.io orelse return error.NoIo, a, self.file_name, name);
+}
+
+/// `readSideFile` for the source `file_name`.
+pub fn sideFile(io: std.Io, a: std.mem.Allocator, file_name: []const u8, name: []const u8) ![]const u8 {
     const limit: usize = 1 << 22;
     const cwd = std.Io.Dir.cwd();
-    if (std.fs.path.dirname(self.file_name)) |dir| {
+    if (std.fs.path.dirname(file_name)) |dir| {
         const joined = try std.fs.path.join(a, &.{ dir, name });
         if (cwd.readFileAlloc(io, joined, a, .limited(limit))) |text| return text else |_| {}
     }
@@ -216,7 +281,6 @@ pub fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const
 }
 
 // ---- the task table (§9.4.1 Table 9-1, §17.3) -------------------------------
-
 
 const Radix = fmt.Radix;
 
