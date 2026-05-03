@@ -376,6 +376,45 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try emit.assignInt(self, args[1], try std.fmt.allocPrint(self.arena, "f{d}.status", .{lb}));
                     try self.print("            break :qf{d} L.k(@bitCast(f{d}.full), 0);\n            }}, 64, {d}, {})", .{ lb, lb, w, sg });
                 },
+                // §17.2 on the executable's descriptor table.
+                .fopen => {
+                    try self.print("L.rs(L.k(@as(u32, @truncate(@as(u64, @bitCast(try s.fopen(\"{f}\", ", .{std.zig.fmtString(r.file_name)});
+                    const n = try selfDetermined(self, args[0]);
+                    try self.print(", {d}, ", .{n.width});
+                    if (args.len == 1) try self.print("null, 0", .{}) else {
+                        const m = try selfDetermined(self, args[1]);
+                        try self.print(", {d}", .{m.width});
+                    }
+                    try self.print("))))), 0), 32, {d}, {})", .{ w, sg });
+                },
+                .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof => |f| {
+                    try self.print("L.rs(L.k(@as(u32, @truncate(@as(u64, @bitCast(s.fileOp(.{t}", .{f});
+                    for (0..3) |i| {
+                        try self.print(", ", .{});
+                        if (i < args.len) try emit.int64(self, args[i]) else try self.print("null", .{});
+                    }
+                    try self.print("))))), 0), 32, {d}, {})", .{ w, sg });
+                },
+                // §17.2.4.3: each output argument as the scan reaches it.
+                .sscanf => {
+                    if (self.two_state) return self.refuse("`$sscanf`, which answers EOF for an x or z in its input or format");
+                    const lb = self.label();
+                    try self.print("L.rs(sc{d}: {{\n            var c{d} = try s.scan(", .{ lb, lb });
+                    const in = try selfDetermined(self, args[0]);
+                    try self.print(", {d}, ", .{in.width});
+                    const fm = try selfDetermined(self, args[1]);
+                    try self.print(", {d}, {d});\n", .{ fm.width, args.len - 2 });
+                    try self.print("            while (c{d}.next()) |x{d}| switch (x{d}.arg) {{\n", .{ lb, lb, lb });
+                    for (args[2..], 0..) |arg, k| {
+                        try self.print("            {d} => switch (x{d}.value) {{\n            .int => |v{d}| {{\n", .{ k, lb, lb });
+                        try emit.assignInt(self, arg, try std.fmt.allocPrint(self.arena, "v{d}", .{lb}));
+                        try self.print("            }},\n            .chars => |t{d}| {{\n", .{lb});
+                        try emit.assignChars(self, arg, try std.fmt.allocPrint(self.arena, "t{d}", .{lb}));
+                        try self.print("            }},\n            }},\n", .{});
+                    }
+                    try self.print("            else => unreachable,\n            }};\n", .{});
+                    try self.print("            break :sc{d} L.k(@as(u32, @truncate(@as(u64, @bitCast(c{d}.result)))), 0);\n            }}, 32, {d}, {})", .{ lb, lb, w, sg });
+                },
                 // §17.9, which writes its seed argument back.
                 .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => |f| {
                     if (args.len == 0) return self.print("L.rs(L.k(@as(u32, @bitCast(s.random())), 0), 32, {d}, {})", .{ w, sg });
@@ -399,7 +438,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     const t = try selfDetermined(self, args[0]);
                     try self.print(", {d}), 0), 32, {d}, {})", .{ t.width, w, sg });
                 },
-                else => return self.refuse("a §17.2 file, §17.6 queue, VAMS driver or real system function"), // else: files, queues, driver access and the real functions stay with the interpreter
+                else => return self.refuse("a VAMS driver or real system function"), // else: driver access stays with the interpreter; a real function is `real`'s
             }
         },
         .concat => {
@@ -439,10 +478,13 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     }
 }
 
-/// Does `e` call a function?
+/// Does `e` call a function, or a system function that may have an effect?
 fn calls(self: *Emitter, e: Ast.ExprId) bool {
     const ex = &self.r.file.exprs;
     if (ex.tag(e) == .call) return true;
+    // A system function that is not constant may write (`$random`'s seed,
+    // a file position) or reads the clock, which is harmless to count.
+    if (ex.tag(e) == .sys_call) if (self.r.sys_calls[@intFromEnum(e)]) |f| if (!f.constant()) return true;
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (c != .none and calls(self, c)) return true;
     return false;
