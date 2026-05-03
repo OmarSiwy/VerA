@@ -1,4 +1,5 @@
-//! The runner's fixed text: the Newton solver and the differential gates it runs at every point.
+//! The runner's fixed text: the Newton solver, the differential gates it runs at every point, and
+//! the `@Vector(NL, f64)` batch family one of them drives.
 //!
 //! Zig source text, a template emitted into every generated testbench. Nothing here runs in the
 //! compiler.
@@ -139,12 +140,110 @@ pub const runner_body =
     \\    break :blk l;
     \\};
     \\/// The value family of the value-only entry points (`updateState`,
-    \\/// `noisePsd`, `limit`, `seed`, `collapse`, `derive`, the iteration hooks).
-    \\const Val = contract.LegacyValue;
+    \\/// `noisePsd`, `limit`, `seed`, `collapse`, `derive`, the iteration hooks):
+    \\/// the reference family with no lanes, so every path runs the arithmetic
+    \\/// `eval` does.
+    \\const Val = contract.RefFamily(f64, &(.{contract.no_lane} ** n_u), .{ .dense = true });
+    \\
+    \\/// A batch family: `V` is NL operating points, one per vector element, and
+    \\/// every value is lane-free. Per element it computes what `Val` does:
+    \\/// `contract.RefFamily`'s reciprocal division, `gm` transcendentals.
+    \\/// Instantiated only for a device that declares `lane_clean` — codegen's
+    \\/// promise that nothing steers on a `.val()` of an x-dependent value,
+    \\/// which is what makes `val` answering element 0 safe.
+    \\const NL = 4;
+    \\const VF = @Vector(NL, f64);
+    \\const Batch = struct {
+    \\    pub const V = VF;
+    \\    pub fn Of(comptime _: u64) type { return B; }
+    \\    pub fn con(c: f64) B { return .{ .v = @splat(c) }; }
+    \\    pub fn lift(v: VF) B { return .{ .v = v }; }
+    \\    pub fn probe(comptime _: usize, v: VF) B { return .{ .v = v }; }
+    \\    pub fn sel(c: B, a: B, b: B) B { return .{ .v = @select(f64, c.v != zeros, a.v, b.v) }; }
+    \\    const zeros: VF = @splat(0.0);
+    \\    const ones: VF = @splat(1.0);
+    \\    const B = struct {
+    \\        v: VF,
+    \\        fn map1(a: B, comptime f: anytype) B {
+    \\            var r: VF = undefined;
+    \\            inline for (0..NL) |i| r[i] = f(a.v[i]);
+    \\            return .{ .v = r };
+    \\        }
+    \\        pub fn to(a: B, comptime _: u64) B { return a; }
+    \\        pub fn val(a: B) f64 { return a.v[0]; }
+    \\        pub fn ddxAt(_: B, comptime _: usize) f64 { return 0.0; }
+    \\        pub fn add(a: B, b: B) B { return .{ .v = a.v + b.v }; }
+    \\        pub fn sub(a: B, b: B) B { return .{ .v = a.v - b.v }; }
+    \\        pub fn neg(a: B) B { return .{ .v = -a.v }; }
+    \\        pub fn mul(a: B, b: B) B { return .{ .v = a.v * b.v }; }
+    \\        pub fn div(a: B, b: B) B { return .{ .v = a.v * (ones / b.v) }; }
+    \\        pub fn scale(a: B, c: f64) B { return .{ .v = a.v * @as(VF, @splat(c)) }; }
+    \\        pub fn addC(a: B, c: f64) B { return .{ .v = a.v + @as(VF, @splat(c)) }; }
+    \\        pub fn exp(a: B) B { return map1(a, contract.gm.exp); }
+    \\        pub fn log(a: B) B { return map1(a, contract.gm.log); }
+    \\        pub fn expm1(a: B) B { return map1(a, contract.gm.expm1); }
+    \\        pub fn log1p(a: B) B { return map1(a, std.math.log1p); }
+    \\        pub fn sqrt(a: B) B { return .{ .v = @sqrt(a.v) }; }
+    \\        pub fn sin(a: B) B { return map1(a, contract.gm.sin); }
+    \\        pub fn cos(a: B) B { return map1(a, contract.gm.cos); }
+    \\        pub fn tanh(a: B) B { return map1(a, contract.gm.tanh); }
+    \\        pub fn sinh(a: B) B { return map1(a, contract.gm.sinh); }
+    \\        pub fn cosh(a: B) B { return map1(a, contract.gm.cosh); }
+    \\        pub fn atan(a: B) B { return map1(a, contract.gm.atan); }
+    \\        pub fn pow(a: B, c: f64) B {
+    \\            var r: VF = undefined;
+    \\            inline for (0..NL) |i| r[i] = contract.gm.pow(a.v[i], c);
+    \\            return .{ .v = r };
+    \\        }
+    \\        pub fn lt(a: B, b: B) B { return .{ .v = @select(f64, a.v < b.v, ones, zeros) }; }
+    \\        pub fn le(a: B, b: B) B { return .{ .v = @select(f64, a.v <= b.v, ones, zeros) }; }
+    \\        pub fn eq(a: B, b: B) B { return .{ .v = @select(f64, a.v == b.v, ones, zeros) }; }
+    \\    };
+    \\};
     \\
     \\comptime {
     \\    contract.checkFamily(Dual);
     \\    contract.checkFamily(Val);
+    \\    contract.checkFamily(Batch);
+    \\}
+    \\
+    \\/// The batch gate (ref/SIMD-Strategies T8): one `eval` over NL perturbed
+    \\/// copies of the operating point, one per element of `Batch.V`, must agree
+    \\/// with NL scalar evals, element by element. Bit equality is the
+    \\/// expectation — the same IEEE ops run in the same order per element —
+    \\/// with a 1e-12 relative escape for a vectorizer that contracts
+    \\/// differently than the scalar pipeline. Silent on success.
+    \\fn laneCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
+    \\    if (comptime !(@hasDecl(D, "lane_clean") and D.lane_clean)) return;
+    \\    var xs: [NL][n_u]f64 = undefined;
+    \\    var xv: [n_u]VF = undefined;
+    \\    for (0..NL) |k| {
+    \\        const s = 1.0 + 1.0e-3 * @as(f64, @floatFromInt(k));
+    \\        for (0..n_u) |i| xs[k][i] = x[i] * s + 1.0e-3 * @as(f64, @floatFromInt(k));
+    \\    }
+    \\    for (0..n_u) |i| {
+    \\        // Through an array: a vector index must be comptime-known.
+    \\        var lanes: [NL]f64 = undefined;
+    \\        for (0..NL) |k| lanes[k] = xs[k][i];
+    \\        xv[i] = lanes;
+    \\    }
+    \\    const rv: [n_u]Batch.B = D.eval(Batch, &xv, model, inst, sim_state);
+    \\    const qv: [n_u]Batch.B = if (comptime @hasDecl(D, "q")) qRowsOf(Batch, &xv, model, inst) else undefined;
+    \\    for (0..NL) |k| {
+    \\        const rs: [n_u]Val = D.eval(Val, &xs[k], model, inst, sim_state);
+    \\        for (0..n_u) |i| laneAssert("res", i, k, @as([NL]f64, rv[i].v)[k], rs[i].v);
+    \\        if (comptime @hasDecl(D, "q")) {
+    \\            const qs = qRowsOf(Val, &xs[k], model, inst);
+    \\            for (0..n_u) |i| laneAssert("q", i, k, @as([NL]f64, qv[i].v)[k], qs[i].v);
+    \\        }
+    \\    }
+    \\}
+    \\
+    \\fn laneAssert(what: []const u8, i: usize, k: usize, a: f64, b: f64) void {
+    \\    if (@as(u64, @bitCast(a)) == @as(u64, @bitCast(b))) return;
+    \\    if (@abs(a - b) <= 1.0e-12 * @max(@abs(a), @abs(b))) return;
+    \\    std.debug.print("lane_check FAIL: {s}[{s}] lane {d}: batch {e} vs scalar {e}\n", .{ what, u_names[i], k, a, b });
+    \\    std.process.exit(1);
     \\}
     \\
     \\/// The analysis in force, as every entry point reads it.
@@ -361,7 +460,8 @@ pub const runner_body =
     \\/// reactive residual's rows through `q_stamps`.
     \\const n_q = contract.nQ(D);
     \\
-    \\fn qRowsOf(comptime Sc: type, x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) [n_u]Sc {
+    \\/// For a family whose `Of(_)` is one type (all of this file's).
+    \\fn qRowsOf(comptime Sc: type, x: *const [n_u]Sc.V, model: *const D.Model, inst: contract.InstancePtr(D)) [n_u]Sc.Of(0) {
     \\    return contract.qRows(D, Sc, D.q(Sc, x, model, inst, sim_state));
     \\}
     \\
@@ -431,17 +531,20 @@ pub const runner_body =
     \\fn stepPost(model: *const D.Model, inst: *D.Instance, x: *const [n_u]f64, state: *State, solved: bool) void {
     \\    acceptCheck(model, inst, x, state);
     \\    commitCharge(model, inst, x);
-    \\    if (@hasDecl(D, "advanceIteration")) if (!solved) {
-    \\        // Forced-point fixtures sample both lifetimes. Both updates must
-    \\        // read the same evaluated state, even when their inputs depend
-    \\        // on one another. These two fields are owned by iteration hooks.
-    \\        var next = inst.*;
-    \\        D.advanceIteration(Val, model, &next, x.*, sim_state);
-    \\        step(model, inst, x, state);
-    \\        if (@hasField(D.Instance, "limiter_previous")) inst.limiter_previous = next.limiter_previous;
-    \\        if (@hasField(D.Instance, "newton_iteration")) inst.newton_iteration = next.newton_iteration;
-    \\        return;
-    \\    };
+    \\    if (!solved) {
+    \\        // Forced-point fixtures sample both lifetimes, and a forced point
+    \\        // is one Newton iteration of an unbroken solve. Both updates read
+    \\        // the same evaluated state, even when their inputs depend on one
+    \\        // another; `limiter_previous` is the iteration hook's.
+    \\        defer sim_state.iteration +|= 1;
+    \\        if (@hasDecl(D, "advanceIteration")) {
+    \\            var next = inst.*;
+    \\            D.advanceIteration(Val, model, &next, x.*, sim_state);
+    \\            step(model, inst, x, state);
+    \\            if (@hasField(D.Instance, "limiter_previous")) inst.limiter_previous = next.limiter_previous;
+    \\            return;
+    \\        }
+    \\    }
     \\    step(model, inst, x, state);
     \\}
     \\
@@ -472,6 +575,7 @@ pub const runner_body =
     \\    }
     \\
     \\    // Differential gates — silent on success, fail the run loudly.
+    \\    laneCheck(x, model, inst);
     \\    fusedCheck(x, model, inst);
     \\    patternCheck(x, model, inst);
     \\    narrowCheck(x, model, inst);
@@ -603,13 +707,16 @@ pub const runner_body =
     \\    for (forced) |f| {
     \\        if (f == null) break;
     \\    } else return false;
-    \\    if (@hasDecl(D, "beginSolve")) D.beginSolve(inst);
+    \\    sim_state.iteration = 1;
     \\    var previous = x.*;
     \\    var worst: usize = 0;
     \\    var worst_dx: f64 = 0.0;
     \\    var iter: usize = 0;
     \\    while (iter < solve_max_iter) : (iter += 1) {
-    \\        if (@hasDecl(D, "advanceIteration")) if (iter != 0) D.advanceIteration(Val, model, inst, previous, sim_state);
+    \\        if (iter != 0) {
+    \\            if (@hasDecl(D, "advanceIteration")) D.advanceIteration(Val, model, inst, previous, sim_state);
+    \\            sim_state.iteration +|= 1;
+    \\        }
     \\        previous = x.*;
     \\        var r = withConst(Dual, D.eval(Dual, x, model, inst, sim_state), model, false);
     \\        // §5.6.1.2 backward Euler — see the header. Value and derivative

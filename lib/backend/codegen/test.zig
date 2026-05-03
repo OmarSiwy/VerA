@@ -166,7 +166,7 @@ test "codegen: the family text types each merge by its unknowns" {
         "h[0] = zTo(S, 0x7, x[@intFromEnum(U.b)]);",
         "        .f0 = zTo(S, 0x7, t",
         "res[@intFromEnum(U.a)] = zRow(S, .a, res[@intFromEnum(U.a)].add(c));",
-        "pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {",
+        "pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {",
         "pub const lane_masks = [_]contract.LaneUse{",
         "    .{ .mask = 0x7, .uses = ",
     }) |s| if (std.mem.indexOf(u8, on, s) == null) {
@@ -642,7 +642,7 @@ test "codegen: evalQ fuses both residuals onto ONE core call" {
     try std.testing.expect(std.mem.indexOf(u8, fused, "struct { res: contract.Rows(Self, S), q: contract.Sites(Self, S) }") != null);
     // §5.6.1.2 the reactive half is the charge sites, read off the same core.
     try std.testing.expect(std.mem.indexOf(u8, fused, "return .{ .res = zResidual(S, xs, m), .q = @as(contract.Sites(Self, S), .{ m.f") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {\n    const xs = zProbe(S, x);\n    return zResidual(S, xs, @call(") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {\n    const xs = zProbe(S, x);\n    return zResidual(S, xs, @call(") != null);
     // The one `ddt` site stamps +p and −n (§1.3.1.2).
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const n_q: usize = 1;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".{ .site = 0, .row = .p, .sign = 1.0 },\n    .{ .site = 0, .row = .n, .sign = -1.0 },") != null);

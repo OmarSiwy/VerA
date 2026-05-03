@@ -80,7 +80,7 @@ fn emitVpiContribs(self: *Gen) Error!void {
     try self.w(" }};\npub const vpi_contrib_flow_u = [_]i32{{", .{});
     for (self.names.branch_u) |u| try self.w(" {d},", .{if (u == none_u32) @as(i64, -1) else u});
     try self.w(" }};\n", .{});
-    try self.w("pub fn vpiContribs(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) [{d}][2]f64 {{\n", .{cs.len});
+    try self.w("pub fn vpiContribs(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) [{d}][2]f64 {{\n", .{cs.len});
     const uses_core = for (cs) |c| {
         if (coreIdx(self, self.an.rv(c.resist_val)) != null or coreIdx(self, self.an.rv(c.react_val)) != null) break true;
     } else false;
@@ -143,7 +143,7 @@ fn emitQ(self: *Gen) Error!void {
     try self.w(
         \\/// §5.6.1.2 the charges, one per `ddt` site (`n_q`, `q_stamps`, `q_lte`);
         \\/// the host differentiates each and stamps it into its rows.
-        \\pub fn q(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Sites(Self, S) {{
+        \\pub fn q(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Sites(Self, S) {{
         \\    const m = @call(.always_inline, core, .{{ S, zProbe(S, x), model, inst, sim{s} }});
         \\
     , .{self.heldArg(false)});
@@ -252,7 +252,7 @@ pub fn emitDisplay(self: *Gen) Error!void {
     if (self.jobs.display_name.len == 0) return;
     try self.w(
         \\/// §9.4 run this module's display tasks once, in source order.
-        \\pub fn display(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
+        \\pub fn display(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) void {{
         \\    _ = {s}(S, zProbe(S, x), model, inst, sim);
         \\}}
         \\
@@ -287,7 +287,7 @@ fn emitEval(self: *Gen) Error!void {
     try self.w("/// §5.6 resistive residual: KCL at every unknown (§1.3.2)\n", .{});
     if (self.core_wanted) {
         try self.w(
-            \\pub fn eval(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
+            \\pub fn eval(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) contract.Rows(Self, S) {{
             \\    const xs = zProbe(S, x);
             \\    return zResidual(S, xs, @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }}));
             \\}}
@@ -295,7 +295,7 @@ fn emitEval(self: *Gen) Error!void {
             \\
         , .{self.heldArg(false)});
     } else try self.w(
-        \\pub fn eval(comptime S: type, x: *const [n_u]f64, _: *const Model, _: InstancePtr, _: contract.SimState) contract.Rows(Self, S) {{
+        \\pub fn eval(comptime S: type, x: *const [n_u]S.V, _: *const Model, _: InstancePtr, _: contract.SimState) contract.Rows(Self, S) {{
         \\    return zResidual(S, zProbe(S, x), {{}});
         \\}}
         \\
@@ -593,7 +593,7 @@ pub fn emitFused(self: *Gen) Error!void {
     try self.w(
         \\/// §5.6 + §5.6.1.2 both residuals from ONE core evaluation.
         \\/// Equivalent to `.{{ .res = eval(...), .q = q(...) }}`, at half the cost.
-        \\pub fn evalQ(comptime S: type, x: *const [n_u]f64, model: *const Model, inst: InstancePtr, sim: contract.SimState) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
+        \\pub fn evalQ(comptime S: type, x: *const [n_u]S.V, model: *const Model, inst: InstancePtr, sim: contract.SimState) struct {{ res: contract.Rows(Self, S), q: contract.Sites(Self, S) }} {{
         \\    const xs = zProbe(S, x);
         \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
         \\

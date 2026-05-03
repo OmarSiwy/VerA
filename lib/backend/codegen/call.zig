@@ -665,7 +665,7 @@ pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
         // §5.10 a held value is what the last accepted step left.
         .@"$rng$auto", .systf, .@"$held_real", .@"$held_int",
         => true,
-        // §9.15 `$simparam("iteration")`: inst.newton_iteration.
+        // §9.15 `$simparam("iteration")`: sim.iteration.
         .@"$simparam" => Lower.simparamIsRuntime(strArg(self, d.args, 0) orelse ""),
         // Constants, Model reads, and Instance fields fixed with the card and
         // the instance (`temperature`, `mfactor`), and every task,
@@ -753,8 +753,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         // parameter sweep, and Table 5-1's initial_step is the first point of the
         // whole analysis. See `Lower.lowerModule`.
         .analog_initial => {
-            self.uses_inst = true;
-            try self.b("S.con(if (inst.is_analog_initial) 1.0 else 0.0)", .{});
+            self.uses_sim = true;
+            try self.b("S.con(if (sim.analog_initial) 1.0 else 0.0)", .{});
             return;
         },
 
@@ -921,8 +921,8 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$simparam" => {
             const nm = strArg(self, args, 0) orelse "";
             if (Lower.simparamIsRuntime(nm)) {
-                self.uses_inst = true;
-                return self.b("S.con(@floatFromInt(inst.newton_iteration))", .{});
+                self.uses_sim = true;
+                return self.b("S.con(@floatFromInt(sim.iteration))", .{});
             }
             // Host-published first: `simparamValue` also answers `tnom`, but
             // only as the DECLARED default (`Lower.simparamHostField`).

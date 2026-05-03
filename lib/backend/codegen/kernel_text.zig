@@ -409,9 +409,9 @@ pub const family_dev_txt =
     \\    for (&ts, 0..) |*t, u| t.* = zOf(S, if (u < 64) @as(u64, 1) << u else ~@as(u64, 0));
     \\    return @Tuple(&ts);
     \\}
-    \\fn zProbe(comptime S: type, x: *const [n_u]f64) zX(S) {
+    \\fn zProbe(comptime S: type, x: *const [n_u]S.V) zX(S) {
     \\    var p: zX(S) = undefined;
-    \\    inline for (0..n_u) |u| p[u] = if (comptime u >= 64 or (zdr >> u) & 1 != 0) S.probe(u, x[u]) else S.con(x[u]);
+    \\    inline for (0..n_u) |u| p[u] = if (comptime u >= 64 or (zdr >> u) & 1 != 0) S.probe(u, x[u]) else if (S.V == f64) S.con(x[u]) else S.lift(x[u]);
     \\    return p;
     \\}
     \\/// The unknowns as values only, for the entry points that read the core
