@@ -146,6 +146,79 @@ pub fn queueIsFull(queues: *const Queues, id: ?i64) struct { status: i64, full: 
     return .{ .status = ok, .full = @intFromBool(found.jobs.items.len >= found.max) };
 }
 
+// ---- §17.9 probabilistic distribution functions -----------------------------
+
+const rng = @import("kernels").rng_kernels;
+
+/// §17.9.3 Table 17-17: `$random` and the seven `$dist_*` functions.
+pub const Dist = enum { random, uniform, normal, exponential, poisson, chi_square, t, erlang };
+
+/// A draw's value and the seed its inout argument is written back with.
+pub const Draw = struct { value: i32, seed: i32 };
+
+/// §17.9.3's `rtl_dist_*` over the listing's 32-bit `long` seed; `a` and `b`
+/// are the arguments after the seed. Null where the listing prints its
+/// "must have positive" warning instead of drawing: the value is 0 and the
+/// seed is left as it was (§17.9.2: mean, degree_of_freedom and k_stage
+/// "shall be greater than 0").
+pub fn dist(f: Dist, seed: i32, a: i32, b: i32) ?Draw {
+    const bad = switch (f) {
+        .random, .uniform, .normal => false,
+        .exponential, .poisson, .chi_square, .t => a <= 0,
+        .erlang => a <= 0 or b <= 0,
+    };
+    if (bad) return null;
+    const s: i64 = seed;
+    const x: f64 = @floatFromInt(a);
+    const y: f64 = @floatFromInt(b);
+    // Each kernel is a pure function of the seed; its `Next` twin replays
+    // the same draw for the written-back seed.
+    const r: f64, const next: f64 = switch (f) {
+        .random => .{ rng.zRngRand(s), rng.zRngRandNext(s) },
+        .uniform => .{ rng.zRngIUniform(s, x, y), rng.zRngIUniformNext(s, x, y) },
+        .normal => .{ rng.zRngNormal(s, x, y), rng.zRngNormalNext(s, x, y) },
+        .exponential => .{ rng.zRngExponential(s, x), rng.zRngExponentialNext(s, x) },
+        .poisson => .{ rng.zRngPoisson(s, x), rng.zRngPoissonNext(s, x) },
+        .chi_square => .{ rng.zRngChiSquare(s, x), rng.zRngChiSquareNext(s, x) },
+        .t => .{ rng.zRngT(s, x), rng.zRngTNext(s, x) },
+        .erlang => .{ rng.zRngErlang(s, x, y), rng.zRngErlangNext(s, x, y) },
+    };
+    // The listing's `(long)(r + 0.5)`, mirrored for a negative r; the
+    // integer-valued draws are unchanged by it.
+    const m = @trunc(@abs(r) + 0.5);
+    return .{ .value = std.math.lossyCast(i32, if (r >= 0) m else -m), .seed = @intFromFloat(next) };
+}
+
+/// The seed or integer argument `e` as the listing's 32-bit `long`: its
+/// low 32 bits, 0 when it holds an x or z bit.
+fn long(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!i32 {
+    return @truncate(try int(self, a, e) orelse 0);
+}
+
+/// §17.9 one call of `$random` or a `$dist_*` function. A seed argument is
+/// read and written back (§17.9.1, §17.9.2: "an inout argument"); a
+/// seedless `$random` advances `Run.random_seed`.
+pub fn random(self: *Run, a: std.mem.Allocator, f: Dist, args: []const Ast.ExprId, tok: u32) Error!i32 {
+    if (args.len == 0) {
+        const d = dist(.random, self.random_seed, 0, 0).?;
+        self.random_seed = d.seed;
+        return d.value;
+    }
+    const seed = try long(self, a, args[0]);
+    const x = if (args.len > 1) try long(self, a, args[1]) else 0;
+    const y = if (args.len > 2) try long(self, a, args[2]) else 0;
+    const d = dist(f, seed, x, y) orelse {
+        const start = self.starts[@min(tok, self.starts.len - 1)];
+        try self.bag.add(.lower, .W1151, .{ .start = start, .end = start }, dist_warning, .{});
+        return 0;
+    };
+    try exec.assignInt(self, a, args[0], d.seed);
+    return d.value;
+}
+
+/// The text of the listing's `print_error` for a non-positive argument.
+pub const dist_warning = "a $dist_ mean, degree of freedom or k_stage is not positive: the result is 0 and the seed is unchanged";
+
 // ---- §17.2 file input and output --------------------------------------------
 
 const contract = @import("contract");
@@ -481,4 +554,13 @@ test "§17.5 a synchronous PLA evaluates only when called, an asynchronous one t
         \\end
         \\endmodule
     , "11 11\n");
+}
+
+test "§17.9.1 a seedless $random is the listing's stream from seed 0" {
+    try expectRun(
+        \\module m;
+        \\integer a, b;
+        \\initial begin a = $random; b = $random; $display("%0d %0d", a, b); end
+        \\endmodule
+    , "303379748 -1064739199\n");
 }

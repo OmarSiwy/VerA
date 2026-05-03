@@ -623,9 +623,10 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
                 v.values()[0] = @bitCast(try evalReal(self, a, ex.args(e)[0]));
                 return normalize(a, v, ty);
             },
-            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => |f| {
+            .time, .stime, .clog2, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf, .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => |f| {
                 const natural = compile.typeOf(self, e);
                 const raw: u64 = switch (f) {
+                    .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => @as(u32, @bitCast(try @import("system.zig").random(self, a, f.dist().?, ex.args(e), ex.mainTok(e)))),
                     .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => @bitCast(try @import("system.zig").fileCall(self, a, switch (f) {
                         .fopen => .fopen,
                         .fgetc => .fgetc,
