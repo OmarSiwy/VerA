@@ -98,6 +98,8 @@ pub const Design = struct {
     joins: u32 = 0,
     /// `Run.subs.len`: the tasks and functions (§10).
     subs: u32 = 0,
+    /// Some `assign` or `force` (§9.3) can hold a slot.
+    overrides: bool = false,
 };
 
 /// Node `node` reads the bits `mask` of plane word `word`.
@@ -150,6 +152,10 @@ const monitor_payload: u32 = nba_payload | 2;
 pub const show_base: u32 = 1 << 30;
 /// `late_base + k`: delayed nonblocking update `late[k]` (§9.2.2 `<= #d`).
 const late_base: u32 = 3 << 30;
+
+/// `root.Overrides`: the process ranges of a slot's `assign` and `force`.
+const Layers = struct { assign: ?Range = null, force: ?Range = null };
+const Range = struct { start: u32, end: u32 };
 
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
@@ -211,6 +217,11 @@ pub const State = struct {
     queues: system.Queues = .empty,
     /// `Run.random_seed`.
     random_seed: i32 = 0,
+    /// §9.3 per slot (empty when the design has no `assign` or `force`):
+    /// the pc ranges of the procedural continuous assignments holding it.
+    /// While one does, only its own process (`overriding`) writes the slot.
+    layers: []Layers,
+    overriding: bool = false,
     /// `capture`'s buffer, and `scan`'s characters.
     cap: std.Io.Writer.Allocating,
     scratch: std.heap.ArenaAllocator,
@@ -248,6 +259,7 @@ pub const State = struct {
             .monitored = try gpa.alloc(bool, d.slots),
             .time_format = .{ .units = time_units },
             .cap = .init(gpa),
+            .layers = try gpa.alloc(Layers, if (d.overrides) d.slots else 0),
             .scratch = .init(gpa),
             .stdout = undefined,
             .out = undefined,
@@ -266,6 +278,7 @@ pub const State = struct {
         @memset(self.joins, 0);
         @memset(self.active, 0);
         @memset(self.monitored, false);
+        @memset(self.layers, .{});
         for (d.order) |pc| try self.run(pc, null);
     }
 
@@ -434,6 +447,7 @@ pub const State = struct {
     /// touches one word. An edge is its least significant bit's (§9.7.2),
     /// which only word 0 holds.
     pub inline fn putWord(self: *State, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
+        if (self.held(slot)) return;
         const at = off + j;
         const o = self.get(at);
         const nv = (o.v & ~m) | (a.v & m);
@@ -451,6 +465,7 @@ pub const State = struct {
     /// does, so -0.0 over 0.0 is no change and a NaN always is one.
     pub fn putReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
         _ = m;
+        if (self.held(slot)) return;
         if (logic.real(self.get(off)) == logic.real(a)) return;
         const before = logic.low(self.get(off));
         self.v[off] = a.v;
@@ -459,6 +474,7 @@ pub const State = struct {
     }
 
     fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
+        if (self.held(slot)) return;
         const sv = self.v[off..][0..v.len];
         const sx = self.x[off..][0..v.len];
         const before = logic.low(W{ .v = sv[0], .x = sx[0] });
@@ -512,13 +528,59 @@ pub const State = struct {
     /// every suspension and queued resumption inside it is dropped, and if
     /// there was one, its process continues at `end` (`exec.disableRange`).
     pub fn disable(self: *State, lo: u32, hi: u32, end: u32) Error!void {
+        if (try self.stop(lo, hi)) try self.run(end, null);
+    }
+
+    /// `exec.stopRange`: end every process suspended or queued in pcs
+    /// [lo, hi); whether there was one.
+    fn stop(self: *State, lo: u32, hi: u32) Error!bool {
         var hit = false;
         for (self.susps.items, 0..) |sp, id| if (sp.alive and sp.pc >= lo and sp.pc < hi) {
             self.retire(@intCast(id));
             hit = true;
         };
         if (self.sched.cancelRange(lo, hi) catch |e| return self.schedFail(e)) hit = true;
-        if (hit) try self.run(end, null);
+        return hit;
+    }
+
+    /// §9.3: an `assign` or `force` holds `slot` and blocks every write but
+    /// its own process's (`exec.store`'s guard; an `assign` holds only a
+    /// variable, which `compile` ensures).
+    inline fn held(self: *const State, slot: u32) bool {
+        if (self.layers.len == 0 or self.overriding) return false;
+        const l = self.layers[slot];
+        return l.assign != null or l.force != null;
+    }
+
+    /// `exec` `.override_on`: the `assign` (or `force`) whose process is pcs
+    /// [start, end) now holds `slot`, replacing the one before it.
+    pub fn overrideOn(self: *State, slot: u32, force: bool, start: u32, end: u32) Error!void {
+        const l = &self.layers[slot];
+        const layer = if (force) &l.force else &l.assign;
+        if (layer.*) |old| _ = try self.stop(old.start, old.end);
+        layer.* = .{ .start = start, .end = end };
+        try self.run(start, null);
+    }
+
+    /// Is `slot` forced? An `assign` under a force keeps tracking but does
+    /// not write (`exec` `.override_eval`).
+    pub fn forced(self: *const State, slot: u32) bool {
+        return self.layers[slot].force != null;
+    }
+
+    /// `exec.release`: §9.3 `deassign` (`force` false) or `release` of
+    /// `slot`; releasing what is not held is a no-op. A released variable
+    /// held by an `assign` is that assign's again; true when a released net
+    /// must be re-resolved from its drivers, which the design does.
+    pub fn release(self: *State, slot: u32, force: bool) Error!bool {
+        const l = &self.layers[slot];
+        if (l.assign == null and l.force == null) return false;
+        const layer = if (force) &l.force else &l.assign;
+        if (layer.*) |old| _ = try self.stop(old.start, old.end);
+        layer.* = null;
+        if (!force) return false;
+        if (l.assign) |a| try self.run(a.start, null);
+        return true;
     }
 
     /// §10.2.2 a synchronous activation of subroutine `sub` begins. An
