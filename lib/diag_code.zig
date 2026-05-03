@@ -5744,7 +5744,8 @@ fn infoOf(c: Code) Info {
             \\A design is refused where an x or z carries meaning, which a run
             \\without them cannot keep: `===` or `!==` against an x or z, a `case`
             \\label with an x or z bit, `$sscanf` (an x or z in its input is EOF,
-            \\IEEE 1364-2005 §17.2.4.3), and any design the native code generator
+            \\IEEE 1364-2005 §17.2.4.3), a §17.5.4 plane PLA (a z personality bit
+            \\ignores its input), and any design the native code generator
             \\does not compile (strength and multi-driver nets, gates, switches
             \\and the rest run only in the 4-state interpreter). Drop
             \\`--two-state` to run it with 4-state logic.

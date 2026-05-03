@@ -522,21 +522,27 @@ pub const pla_tasks = blk: {
     break :blk list;
 };
 
-/// §17.5 one evaluation: row k of the personality memory (lowest address
-/// first) computes output bit k; within a row, bit j of the personality
-/// governs input j, both counted from the left. An unknown input selected by
-/// a row makes it unknown unless the row's controlling value decides it.
-/// ponytail: rows are taken lowest address first, which is the declaration
-/// order of the ascending memories §17.5's examples use.
+/// §17.5 one evaluation in the interpreter (`plaEval`).
 pub fn pla(self: *Run, a: std.mem.Allocator, p: Pla, args: []const Ast.ExprId) Error!void {
     const base = try self.slot(args[0]);
     const arr = self.arrays.get(base).?; // compile proved it is an array
     const in = try exec.eval(self, a, args[1], 0);
-    const tt = try exec.targetType(self, args[2]);
-    const out = try filled(a, tt.width, false, .x);
+    const out = try filled(a, (try exec.targetType(self, args[2])).width, false, .x);
+    plaEval(p, self.values[base..][0..arr.count], in, out);
+    try exec.assign(self, a, args[2], out);
+}
+
+/// §17.5 one evaluation into `out`, which starts all x: row k of the
+/// personality `rows` (lowest address first) computes output bit k; within
+/// a row, bit j of the personality governs input j, both counted from the
+/// left. An unknown input selected by a row makes it unknown unless the
+/// row's controlling value decides it.
+/// ponytail: rows are taken lowest address first, which is the declaration
+/// order of the ascending memories §17.5's examples use.
+pub fn plaEval(p: Pla, rows: []const Int.Literal, in: Int.Literal, out: Int.Literal) void {
     const and_like = p.logic == .@"and" or p.logic == .nand;
-    for (0..@min(arr.count, tt.width)) |k| {
-        const row = self.values[base + @as(u32, @intCast(k))];
+    for (0..@min(rows.len, out.width)) |k| {
+        const row = rows[k];
         var unknown = false;
         var decided = false;
         for (0..@min(row.width, in.width)) |j| {
@@ -555,13 +561,12 @@ pub fn pla(self: *Run, a: std.mem.Allocator, p: Pla, args: []const Ast.ExprId) E
         }
         const value: Int.Bit = if (decided) (if (and_like) .zero else .one) else if (unknown) .x else (if (and_like) .one else .zero);
         const inverted = p.logic == .nand or p.logic == .nor;
-        setBit(out, @intCast(tt.width - 1 - k), if (!inverted) value else switch (value) {
+        setBit(out, @intCast(out.width - 1 - k), if (!inverted) value else switch (value) {
             .zero => .one,
             .one => .zero,
             else => .x,
         });
     }
-    try exec.assign(self, a, args[2], out);
 }
 
 // ---- tests ------------------------------------------------------------------
