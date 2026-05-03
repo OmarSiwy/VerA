@@ -1710,8 +1710,6 @@ const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool 
 
 /// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
 fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
-    // An `//! xfail` names a 4-state gap, which a two-state report does not judge.
-    if (std.mem.eql(u8, schedule, "--two-state")) return nativeCase(arena, io, vera_exe, schedule, case, w);
     const src =try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
         return nativeCase(arena, io, vera_exe, schedule, case, w);
