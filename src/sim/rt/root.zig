@@ -18,6 +18,10 @@
 //! whose body never suspends waits on a static per-slot watcher list, not on
 //! a suspension record. Both are orders §11.4.1 leaves to the simulator.
 //!
+//! A net resolved from several drivers, strengths, gates, UDPs, switches
+//! or delays (§7.9, §6.1.3) resolves in `net.zig`, on `digital/net.zig`'s
+//! tables.
+//!
 //! `interpret` is the executable of a design `digital/emit.zig` did not make
 //! native: the embedded source through the interpreter, exactly `vera --run`.
 const std = @import("std");
@@ -27,6 +31,7 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 pub const Scale = @import("../time.zig").Scale;
 pub const fmt = @import("../fmt.zig");
 pub const logic = @import("logic.zig");
+pub const net = @import("net.zig");
 pub const vcd = @import("../digital/vcd.zig");
 const Int = @import("frontend").Integer;
 const zCReal = @import("kernels").str_kernels.zCReal;
@@ -38,6 +43,7 @@ const two = logic.two;
 
 test {
     _ = logic;
+    _ = net;
     std.testing.refAllDecls(State);
 }
 
@@ -103,6 +109,11 @@ pub const Design = struct {
     overrides: bool = false,
     /// What a `$dumpvars` (§18) can select; null when the design has none.
     vcd: ?*const vcd.Catalog = null,
+    /// §7.9 the nets resolved from their drivers, those drivers, and the
+    /// §8 UDPs among them.
+    nets: []const net.Net = &.{},
+    drivers: []const net.Driver = &.{},
+    udps: []const net.Udp = &.{},
 };
 
 /// Node `node` reads the bits `mask` of plane word `word`.
@@ -232,6 +243,8 @@ pub const State = struct {
     dump: vcd.Vcd = .{},
     catalog: ?*const vcd.Catalog,
     dumped: []bool,
+    /// §7.9 resolution state (`net.zig`).
+    nets: net.Nets,
     /// `capture`'s buffer, and `scan`'s characters.
     cap: std.Io.Writer.Allocating,
     scratch: std.heap.ArenaAllocator,
@@ -272,6 +285,7 @@ pub const State = struct {
             .layers = try gpa.alloc(Layers, if (d.overrides) d.slots else 0),
             .catalog = d.vcd,
             .dumped = try gpa.alloc(bool, if (d.vcd != null) d.slots else 0),
+            .nets = try .init(gpa, d.nets, d.drivers, d.udps),
             .scratch = .init(gpa),
             .stdout = undefined,
             .out = undefined,
@@ -326,6 +340,10 @@ pub const State = struct {
                 self.changed.clearRetainingCapacity();
                 self.settle = .running;
                 return settle_pc;
+            }
+            if (event.payload >= net.drive_base and event.payload < nba_payload) {
+                try net.arrive(self, event.payload);
+                continue;
             }
             if (event.payload != nba_payload) return event.payload;
             for (self.rows.items, 0..) |row, i| {
@@ -490,7 +508,16 @@ pub const State = struct {
         try self.wake(slot, before, logic.low(a));
     }
 
-    fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
+    pub const drive = net.drive;
+    pub const gate = net.gate;
+    pub const udp = net.udp;
+    pub const mos = net.mos;
+    pub const bridge = net.bridge;
+    pub const pull = net.pull;
+    pub const resolve = net.resolve;
+
+    /// `put` of the bits `m` of an `n`-word value at runtime width.
+    pub fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
         if (self.held(slot)) return;
         const sv = self.v[off..][0..v.len];
         const sx = self.x[off..][0..v.len];
@@ -664,8 +691,12 @@ pub const State = struct {
             self.sched.schedule(.active, pc) catch |e| return self.schedFail(e));
     }
 
-    fn schedFail(self: *State, e: Scheduler.Error) Error {
+    pub fn schedFail(self: *State, e: Scheduler.Error) Error {
         return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital scheduling failure: {t}", .{e});
+    }
+
+    pub fn timeFail(self: *State, e: Scheduler.Error) Error {
+        return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("digital timing failure: {t}", .{e});
     }
 
     /// `exec.wake`: the continuous drivers reading `slot` first, then the

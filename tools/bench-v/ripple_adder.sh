@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# usage: ripple_adder.sh W VECTORS > ripple_adder.v
+# usage: ripple_adder.sh W VECTORS [gates] > ripple_adder.v
 # A W-bit ripple-carry adder of W full-adder instances on scalar nets, so each
 # vector ripples through W carry events, fed VECTORS LFSR operand pairs. One
 # checksum line. Generated because VerA's digital path assigns whole nets only.
-W=${1:-64} V=${2:-1000}
-awk -v W="$W" -v V="$V" 'BEGIN {
+# `gates`: each full adder is five §7 gate primitives instead of two assigns,
+# with the same checksum.
+W=${1:-64} V=${2:-1000} G=${3:-}
+awk -v W="$W" -v V="$V" -v G="$G" 'BEGIN {
   print "module fa(a, b, ci, s, co);\n  input a, b, ci;\n  output s, co;"
-  print "  assign s = a ^ b ^ ci;\n  assign co = (a & b) | (ci & (a ^ b));\nendmodule\n"
+  if (G == "gates") print "  wire p, g, t;\n  xor x1(p, a, b), x2(s, p, ci);\n  and a1(g, a, b), a2(t, ci, p);\n  or o1(co, g, t);\nendmodule\n"
+  else print "  assign s = a ^ b ^ ci;\n  assign co = (a & b) | (ci & (a ^ b));\nendmodule\n"
   print "module ripple_adder;\n  reg [" W-1 ":0] a, b;\n  reg [31:0] x, sum;\n  integer i, k;\n  wire c0 = 1'"'"'b0;"
   for (g = 0; g < W; g++) printf "  wire s%d, c%d;\n  fa f%d(a[%d], b[%d], c%d, s%d, c%d);\n", g, g+1, g, g, g, g, g, g+1
   printf "  wire [31:0] lo = {"; for (g = 31; g >= 0; g--) printf "s%d%s", g % W, g ? ", " : "};\n"
