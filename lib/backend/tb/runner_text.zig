@@ -147,7 +147,7 @@ pub const runner_body =
     \\
     \\/// A batch family: `V` is NL operating points, one per vector element, and
     \\/// every value is lane-free. Per element it computes what `Val` does:
-    \\/// `contract.RefFamily`'s reciprocal division, `gm` transcendentals.
+    \\/// `contract.RefFamily`'s IEEE division, `gm` transcendentals.
     \\/// Instantiated only for a device that declares `batch_ok` — codegen's
     \\/// promise that nothing steers on a `.val()` of an x-dependent value,
     \\/// which is what makes `val` answering element 0 safe.
@@ -176,7 +176,7 @@ pub const runner_body =
     \\        pub fn sub(a: B, b: B) B { return .{ .v = a.v - b.v }; }
     \\        pub fn neg(a: B) B { return .{ .v = -a.v }; }
     \\        pub fn mul(a: B, b: B) B { return .{ .v = a.v * b.v }; }
-    \\        pub fn div(a: B, b: B) B { return .{ .v = a.v * (ones / b.v) }; }
+    \\        pub fn div(a: B, b: B) B { return .{ .v = a.v / b.v }; }
     \\        pub fn scale(a: B, c: f64) B { return .{ .v = a.v * @as(VF, @splat(c)) }; }
     \\        pub fn addC(a: B, c: f64) B { return .{ .v = a.v + @as(VF, @splat(c)) }; }
     \\        pub fn exp(a: B) B { return map1(a, contract.gm.exp); }
