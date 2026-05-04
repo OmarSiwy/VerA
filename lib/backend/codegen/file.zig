@@ -188,7 +188,7 @@ pub fn emitFile(self: *Gen) Error!void {
     // Lane-parallel permission (see `float/lanes.zig`): eval/q of this device
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.
-    if (!self.float.pinned) try self.w("pub const lane_clean = true;\n\n", .{});
+    if (!self.float.pinned) try self.w("pub const batch_ok = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 

@@ -1307,7 +1307,7 @@ fn qSitesError(comptime D: type) ?[]const u8 {
 /// whose `Of` ignores its mask can serve the device.
 ///
 /// A `V` other than `f64` is sound only for a device that declares
-/// `lane_clean`: every other one steers on `val()`, which answers for one
+/// `batch_ok`: every other one steers on `val()`, which answers for one
 /// operating point.
 pub const family_fns = [_][]const u8{ "Of", "V", "con", "probe", "sel" };
 
@@ -2436,7 +2436,7 @@ const allowed_pub_decls = std.StaticStringMap(void).initComptime(.{
     // an x-dependent chain to its value. Emitted by codegen only when nothing
     // in the device pinned lanes; the testbench's batch check asserts it on
     // every fixture that carries it. Absent means batching is NOT sound.
-    .{ "lane_clean", {} },
+    .{ "batch_ok", {} },
     .{ "mutable_eval", {} },
     // §4.6.4.3's array-parameter table at this card. Optional; see `validate`
     // and `validateHost` — a device that declares it has knots `noise_tables`
@@ -2899,7 +2899,7 @@ const MockAll = struct {
     pub const State = struct { flips: u32 = 0 };
     pub const jac_f32 = true;
     pub const jac_f32_host = true;
-    pub const lane_clean = true;
+    pub const batch_ok = true;
     pub const mutable_eval = false;
 
     pub const Model = struct { g: f32 = 1e-3 };

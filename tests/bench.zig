@@ -260,7 +260,7 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 /// shape.
 /// Contract ABI 5 (the scalar family's helpers, `SimState` arguments, masked
 /// value types, the `constant` decl, and the Instance fields SimState took)
-/// adds 4362 bytes to the one-contribution shape.
+/// adds 4360 bytes to the one-contribution shape.
 /// A fused chain deeper than `max_inline_depth` (256) keeps a statement every
 /// 256 links, which is what moves the n = 512 and n = 4096 points; before it
 /// the n = 4096 points overflowed the stack in the recursive renderer.
@@ -268,25 +268,25 @@ fn genSource(gpa: Allocator, axis: Axis, n: u32) ![]const u8 {
 const Shape = struct { device: usize, defs: usize, insts: usize };
 const expected = std.enums.directEnumArrayDefault(Axis, [sweep.len]Shape, null, 0, .{
     .contrib = .{
-        .{ .device = 28742, .defs = 8, .insts = 5 },
-        .{ .device = 29097, .defs = 35, .insts = 26 },
-        .{ .device = 31840, .defs = 258, .insts = 194 },
-        .{ .device = 54243, .defs = 2050, .insts = 1538 },
-        .{ .device = 236823, .defs = 16386, .insts = 12290 },
+        .{ .device = 28740, .defs = 8, .insts = 5 },
+        .{ .device = 29095, .defs = 35, .insts = 26 },
+        .{ .device = 31838, .defs = 258, .insts = 194 },
+        .{ .device = 54241, .defs = 2050, .insts = 1538 },
+        .{ .device = 236821, .defs = 16386, .insts = 12290 },
     },
     .vals = .{
-        .{ .device = 28742, .defs = 8, .insts = 5 },
-        .{ .device = 28924, .defs = 24, .insts = 19 },
-        .{ .device = 30380, .defs = 136, .insts = 131 },
-        .{ .device = 42085, .defs = 1032, .insts = 1027 },
-        .{ .device = 135846, .defs = 8200, .insts = 8195 },
+        .{ .device = 28740, .defs = 8, .insts = 5 },
+        .{ .device = 28922, .defs = 24, .insts = 19 },
+        .{ .device = 30378, .defs = 136, .insts = 131 },
+        .{ .device = 42083, .defs = 1032, .insts = 1027 },
+        .{ .device = 135844, .defs = 8200, .insts = 8195 },
     },
     .inst = .{
-        .{ .device = 28742, .defs = 8, .insts = 5 },
-        .{ .device = 29946, .defs = 50, .insts = 40 },
-        .{ .device = 39794, .defs = 386, .insts = 320 },
-        .{ .device = 120328, .defs = 3074, .insts = 2560 },
-        .{ .device = 778113, .defs = 24578, .insts = 20480 },
+        .{ .device = 28740, .defs = 8, .insts = 5 },
+        .{ .device = 29944, .defs = 50, .insts = 40 },
+        .{ .device = 39792, .defs = 386, .insts = 320 },
+        .{ .device = 120326, .defs = 3074, .insts = 2560 },
+        .{ .device = 778111, .defs = 24578, .insts = 20480 },
     },
 });
 

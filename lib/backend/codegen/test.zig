@@ -3221,7 +3221,7 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
 }
 
 test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
-    // The `lane_clean` promise is only as good as its pins, and the pins are
+    // The `batch_ok` promise is only as good as its pins, and the pins are
     // hand-placed at emission sites — fixture 158 (zPow) proved a forgotten
     // one ships a false promise. This binds the two mechanically: any helper
     // in the emitted math/ops templates whose BODY reads `.val(` must appear

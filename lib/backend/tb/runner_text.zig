@@ -148,7 +148,7 @@ pub const runner_body =
     \\/// A batch family: `V` is NL operating points, one per vector element, and
     \\/// every value is lane-free. Per element it computes what `Val` does:
     \\/// `contract.RefFamily`'s reciprocal division, `gm` transcendentals.
-    \\/// Instantiated only for a device that declares `lane_clean` — codegen's
+    \\/// Instantiated only for a device that declares `batch_ok` — codegen's
     \\/// promise that nothing steers on a `.val()` of an x-dependent value,
     \\/// which is what makes `val` answering element 0 safe.
     \\const NL = 4;
@@ -214,7 +214,7 @@ pub const runner_body =
     \\/// with a 1e-12 relative escape for a vectorizer that contracts
     \\/// differently than the scalar pipeline. Silent on success.
     \\fn laneCheck(x: *const [n_u]f64, model: *const D.Model, inst: contract.InstancePtr(D)) void {
-    \\    if (comptime !(@hasDecl(D, "lane_clean") and D.lane_clean)) return;
+    \\    if (comptime !(@hasDecl(D, "batch_ok") and D.batch_ok)) return;
     \\    var xs: [NL][n_u]f64 = undefined;
     \\    var xv: [n_u]VF = undefined;
     \\    for (0..NL) |k| {

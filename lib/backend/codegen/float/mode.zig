@@ -21,7 +21,7 @@ pub const Float = struct {
     strict: bool = false,
     /// True once any residual/charge unit steered on an x-dependent value
     /// through a scalar — see `lanes.pinLanes`. A device that finishes with
-    /// this still false gets `pub const lane_clean = true;`: eval/q on a
+    /// this still false gets `pub const batch_ok = true;`: eval/q on a
     /// family whose `V` holds several operating points is then exact per
     /// point, which the testbench's batch check asserts. Display units never
     /// set it — they are not part of the residual.

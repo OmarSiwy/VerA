@@ -196,17 +196,17 @@ make fast. The device's SIMD is the scalar family's DERIVATIVE lanes: every
 value is `S.Of(mask)`, carrying exactly the lanes of the unknowns it depends
 on, and `tools/contract.zig`'s `RefFamily` runs them as
 `@Vector(popcount(mask), L)`. The lane decisions — `pinLanes`, `lane_pinned`,
-`lane_clean`, `jac_f32`, `cur_strict` — live in `lib/backend/codegen/float/`
+`batch_ok`, `jac_f32`, `cur_strict` — live in `lib/backend/codegen/float/`
 (`mode.zig`, `lanes.zig`), whose header says what makes a lane dirty and what
-`lane_clean` promises: a family whose value type `V` is a vector of operating
-points evaluates a `lane_clean` device exactly per point, which the
+`batch_ok` promises: a family whose value type `V` is a vector of operating
+points evaluates a `batch_ok` device exactly per point, which the
 testbench's batch family (`tb/runner_text.zig`, `@Vector(NL, f64)`) asserts.
 
 Measured and not built (2026-09):
-- Instance lanes (several operating points per SIMD register, `lane_clean`):
-  on AVX2, hand-converted diode and mos1 at W = 4/8 ran 1.07–1.22× and
-  0.78–0.86× — not worth it alone. Re-evaluation with sparse lanes and
-  AVX-512 is pending; the ABI keeps `S.V` and `lane_clean` for it.
+- Instance lanes (several operating points per SIMD register, `batch_ok`):
+  measured on AVX2, not worth it alone (hand-converted diode and mos1 at
+  W = 4/8: 1.07–1.22× and 0.78–0.86×); re-evaluation with sparse lanes +
+  AVX-512 pending, so the ABI keeps `S.V` and `batch_ok` for it.
 - Liveness-coloured hoist slots: bsim4 33% slower (they defeat SROA).
 - A no-inline core on the GPU: eval 2× slower.
 - `strict` → `optimized` float mode: 0%.
