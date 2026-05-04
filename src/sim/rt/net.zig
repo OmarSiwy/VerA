@@ -265,6 +265,12 @@ pub fn gate(s: *State, i: u32, comptime kind: Ast.GateKind, ins: []const Bit) Er
     return driveBit(s, i, s.nets.drivers[i].source.gate, o.bit, o.or_z);
 }
 
+/// A logic gate's §7.8.5 output alone, for the one driver of a plain net.
+pub inline fn gateValue(comptime kind: Ast.GateKind, ins: []const Bit) logic.W {
+    const b = @intFromEnum(dnet.gateBit(kind, @ptrCast(ins)).bit);
+    return .{ .v = b & 1, .x = b >> 1 };
+}
+
 /// §8 UDP driver `i` over its input bits (`exec.udpValue`).
 pub fn udp(s: *State, i: u32, ins: []const Bit) Error!void {
     const t = &s.nets;
