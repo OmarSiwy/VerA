@@ -26,6 +26,7 @@ const display = @import("display.zig");
 const fmt = @import("../fmt.zig");
 const expr = @import("emit_expr.zig");
 const plan = @import("plan.zig");
+const vcd = @import("vcd.zig");
 const Type = compile.Type;
 pub const Schedule = plan.Schedule;
 
@@ -387,6 +388,7 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try table(self, "fan", p.fan);
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
     for (r.code.items) |ins| if (ins == .override_on) break try self.print("    .overrides = true,\n", .{});
+    if (dumps(r)) try self.print("    .vcd = &vcd_catalog,\n", .{});
     try table(self, "order", order.items);
     if (schedule == .static) {
         try table(self, "comb_start", p.comb_start);
@@ -399,9 +401,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         for (p.watchers) |w| try self.print(" .{{ .proc = {d}, .pc = {d}, .edge = .{t} }},", .{ w.proc, w.pc, w.edge });
         try self.print(" }},\n    .triggered = {d},\n", .{p.triggered});
     }
+    try self.print("}};\n\n", .{});
+    if (dumps(r)) try catalog(self);
     try self.print(
-        \\}};
-        \\
         \\pub fn main(init: std.process.Init) u8 {{
         \\    var s: S = undefined;
         \\    s.init(init, &design, {d}) catch |e| return s.exit(e);
@@ -411,6 +413,24 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{r.finest});
     return self.out.written();
+}
+
+/// Does the design call a §18 dump task?
+pub fn dumps(r: *const Run) bool {
+    for (r.code.items) |ins| if (ins == .task and ins.task.task == .dump) return true;
+    return false;
+}
+
+/// `vcd_catalog`: `vcd.catalog` of the design, with each slot's plane word.
+fn catalog(self: *Emitter) Error!void {
+    const c = vcd.catalog(self.r, self.arena, self.off) catch return self.refuse("a §18 dump catalog the engine cannot build");
+    try self.print("const vcd_catalog: rt.vcd.Catalog = .{{\n    .scopes = &.{{", .{});
+    for (c.scopes) |sc| try self.print("\n        .{{ .line = \"{f}\", .parent = {d}, .lexical = {}, .child = {} }},", .{ std.zig.fmtString(sc.line), sc.parent, sc.lexical, sc.child });
+    try self.print("\n    }},\n", .{});
+    try table(self, "var_start", c.var_start);
+    try self.print("    .vars = &.{{", .{});
+    for (c.vars) |v| try self.print("\n        .{{ .slot = {d}, .off = {d}, .width = {d}, .real = {}, .head = \"{f}\", .tail = \"{f}\" }},", .{ v.slot, v.off, v.width, v.real, std.zig.fmtString(v.head), std.zig.fmtString(v.tail) });
+    try self.print("\n    }},\n    .finest = {d},\n}};\n\n", .{c.finest});
 }
 
 /// `fn show`: the line of `$strobe` or `$monitor` site k, printed when its
@@ -682,7 +702,33 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try show(self, t.args[1..], sh);
                     try assignChars(self, t.args[0], "s.captured()");
                 },
-                .dump => return self.refuse("a §18 value change dump task"),
+                // §18.1: the arguments are read now; the targets were
+                // resolved at elaboration.
+                .dump => |op| switch (op) {
+                    .file => if (t.args.len == 1) {
+                        try self.print("            try s.dumpFile(", .{});
+                        const n = try expr.selfDetermined(self, t.args[0]);
+                        try self.print(", {d});\n", .{n.width});
+                    },
+                    .vars => {
+                        try self.print("            try s.dumpVars(", .{});
+                        if (t.args.len == 0) try self.print("0, &.{{.{{ .scope = 0 }}}});\n", .{}) else {
+                            try int64(self, t.args[0]);
+                            try self.print(", &.{{", .{});
+                            for (t.args[1..]) |e| switch (vcd.target(r, e) catch return self.refuse("a $dumpvars target the engine resolves only at run time")) {
+                                .scope => |sc| try self.print(" .{{ .scope = {d} }},", .{sc}),
+                                .slot => |sl| try self.print(" .{{ .slot = {d} }},", .{sl}),
+                            };
+                            try self.print(" }});\n", .{});
+                        }
+                    },
+                    .limit => {
+                        try self.print("            s.dump.limit = std.math.lossyCast(u64, ", .{});
+                        try int(self, t.args[0]);
+                        try self.print(");\n", .{});
+                    },
+                    .off, .on, .all, .flush => try self.print("            try s.dumpControl(.{t});\n", .{op}),
+                },
             }
             try self.print("            continue :sw {d};\n", .{next});
         },
