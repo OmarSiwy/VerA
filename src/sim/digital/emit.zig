@@ -26,6 +26,7 @@ const display = @import("display.zig");
 const fmt = @import("../fmt.zig");
 const expr = @import("emit_expr.zig");
 const plan = @import("plan.zig");
+const vcd = @import("vcd.zig");
 const Type = compile.Type;
 pub const Schedule = plan.Schedule;
 
@@ -386,6 +387,8 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try table(self, "fan_start", p.fan_start);
     try table(self, "fan", p.fan);
     try self.print("    .code_len = {d},\n    .repeats = {d},\n    .joins = {d},\n    .subs = {d},\n", .{ r.code.items.len, r.repeats.items.len, r.joins.items.len, r.subs.items.len });
+    for (r.code.items) |ins| if (ins == .override_on) break try self.print("    .overrides = true,\n", .{});
+    if (dumps(r)) try self.print("    .vcd = &vcd_catalog,\n", .{});
     try table(self, "order", order.items);
     if (schedule == .static) {
         try table(self, "comb_start", p.comb_start);
@@ -398,9 +401,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         for (p.watchers) |w| try self.print(" .{{ .proc = {d}, .pc = {d}, .edge = .{t} }},", .{ w.proc, w.pc, w.edge });
         try self.print(" }},\n    .triggered = {d},\n", .{p.triggered});
     }
+    try self.print("}};\n\n", .{});
+    if (dumps(r)) try catalog(self);
     try self.print(
-        \\}};
-        \\
         \\pub fn main(init: std.process.Init) u8 {{
         \\    var s: S = undefined;
         \\    s.init(init, &design, {d}) catch |e| return s.exit(e);
@@ -410,6 +413,24 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
         \\
     , .{r.finest});
     return self.out.written();
+}
+
+/// Does the design call a §18 dump task?
+pub fn dumps(r: *const Run) bool {
+    for (r.code.items) |ins| if (ins == .task and ins.task.task == .dump) return true;
+    return false;
+}
+
+/// `vcd_catalog`: `vcd.catalog` of the design, with each slot's plane word.
+fn catalog(self: *Emitter) Error!void {
+    const c = vcd.catalog(self.r, self.arena, self.off) catch return self.refuse("a §18 dump catalog the engine cannot build");
+    try self.print("const vcd_catalog: rt.vcd.Catalog = .{{\n    .scopes = &.{{", .{});
+    for (c.scopes) |sc| try self.print("\n        .{{ .line = \"{f}\", .parent = {d}, .lexical = {}, .child = {} }},", .{ std.zig.fmtString(sc.line), sc.parent, sc.lexical, sc.child });
+    try self.print("\n    }},\n", .{});
+    try table(self, "var_start", c.var_start);
+    try self.print("    .vars = &.{{", .{});
+    for (c.vars) |v| try self.print("\n        .{{ .slot = {d}, .off = {d}, .width = {d}, .real = {}, .head = \"{f}\", .tail = \"{f}\" }},", .{ v.slot, v.off, v.width, v.real, std.zig.fmtString(v.head), std.zig.fmtString(v.tail) });
+    try self.print("\n    }},\n    .finest = {d},\n}};\n\n", .{c.finest});
 }
 
 /// `fn show`: the line of `$strobe` or `$monitor` site k, printed when its
@@ -499,10 +520,12 @@ fn reach(self: *Emitter, entry: u32, seen: []bool) Error![]const u32 {
                 for (r.subs.items[idx].ranges.items) |rg| if (pc >= rg.start and pc < rg.end) try work.append(self.arena, rg.end);
             },
             .call_timed, .task_return => return self.refuse("a §10.2.3 timed task that reaches itself"),
-            .pla_start => return self.refuse("a §17.5 PLA task"),
+            .pla_start => |loop| try work.appendSlice(self.arena, &.{ next, loop }),
             .fork => |f| try work.appendSlice(self.arena, if (f.arms.len == 0) &.{f.end} else f.arms),
             .join_arm => |j| try work.append(self.arena, j.end),
-            .override_on, .override_eval, .override_off => return self.refuse("a §9.3 procedural continuous assignment"),
+            // §9.3 the held slot's own process, started by its `.override_on`.
+            .override_on => |o| try work.appendSlice(self.arena, &.{ next, o.start }),
+            .override_eval, .override_off => try work.append(self.arena, next),
             .switch_ctrl => return self.refuse("a §7.6 pass switch"),
         }
     }
@@ -613,7 +636,19 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print("            if (s.monitorEnable(true)) |k| try show(s, k);\n", .{})
                 else
                     try self.print("            _ = s.monitorEnable(false);\n", .{}),
-                .readmem => return self.refuse("$readmemb/$readmemh"),
+                // §17.2.9: the bounds are read now; the file when the task runs.
+                .readmem => |radix| {
+                    const base = try self.slot(t.args[1]);
+                    const arr = r.arrays.get(base).?;
+                    const name = r.file.str(r.file.exprs.strOf(t.args[0]));
+                    try self.print("            try s.readmem(\"{f}\", \"{f}\", .{t}, ", .{ std.zig.fmtString(r.file_name), std.zig.fmtString(name), radix });
+                    try self.print("{d}, {d}, {d}, {d}, {d}, {d}", .{ try self.slotWidth(base), base, self.off[base], arr.low, arr.high, t.args.len - 2 });
+                    for (2..4) |k| {
+                        try self.print(", ", .{});
+                        if (k < t.args.len) try int64(self, t.args[k]) else try self.print("null", .{});
+                    }
+                    try self.print(");\n", .{});
+                },
                 // §17.6: inputs read, the shared queue engine, then each
                 // output written as `exec.assignInt` writes it, status last.
                 .queue => |op| {
@@ -633,10 +668,67 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     };
                     try assignInt(self, t.args[3], try std.fmt.allocPrint(self.arena, "q{d}.status", .{lb}));
                 },
-                .pla => return self.refuse("a §17.5 PLA task"),
-                .fclose, .fshow => return self.refuse("a §17.2 file task"),
-                .sshow => return self.refuse("$swrite or $sformat"),
-                .dump => return self.refuse("a §18 value change dump task"),
+                // §17.5: the outputs through a cell as wide as they are.
+                .pla => |p| {
+                    const base = try self.slot(t.args[0]);
+                    const ty = try targetType(self, t.args[2]);
+                    if (ty.real) return self.refuse("a §17.5 PLA writing a real");
+                    if (self.two_state and p.plane) return self.refuse("a §17.5.4 plane PLA, whose z personality bits mean \"ignore this input\"");
+                    const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
+                    try self.print("            try s.pla(.{{ .logic = .@\"{t}\", .plane = {}, .async_ = false }}, {d}, {d}, {d}, ", .{
+                        p.logic, p.plane, self.off[base], r.arrays.get(base).?.count, try self.slotWidth(base),
+                    });
+                    const in = try expr.selfDetermined(self, t.args[1]);
+                    try self.print(", {d}, {d}, {d});\n", .{ in.width, at, ty.width });
+                    try assignment(self, t.args[2], .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
+                },
+                .fclose => {
+                    try self.print("            s.fclose(", .{});
+                    try int64(self, t.args[0]);
+                    try self.print(");\n", .{});
+                },
+                // §17.2.2: the descriptor is read first; an x or z one
+                // prints nothing.
+                .fshow => |sh| {
+                    const lb = self.label();
+                    try self.print("            if (", .{});
+                    try int64(self, t.args[0]);
+                    try self.print(") |d{d}| {{\n            s.capture();\n", .{lb});
+                    try show(self, t.args[1..], sh);
+                    try self.print("            try s.fshow(d{d});\n            }}\n", .{lb});
+                },
+                .sshow => |sh| {
+                    try self.print("            s.capture();\n", .{});
+                    try show(self, t.args[1..], sh);
+                    try assignChars(self, t.args[0], "s.captured()");
+                },
+                // §18.1: the arguments are read now; the targets were
+                // resolved at elaboration.
+                .dump => |op| switch (op) {
+                    .file => if (t.args.len == 1) {
+                        try self.print("            try s.dumpFile(", .{});
+                        const n = try expr.selfDetermined(self, t.args[0]);
+                        try self.print(", {d});\n", .{n.width});
+                    },
+                    .vars => {
+                        try self.print("            try s.dumpVars(", .{});
+                        if (t.args.len == 0) try self.print("0, &.{{.{{ .scope = 0 }}}});\n", .{}) else {
+                            try int64(self, t.args[0]);
+                            try self.print(", &.{{", .{});
+                            for (t.args[1..]) |e| switch (vcd.target(r, e) catch return self.refuse("a $dumpvars target the engine resolves only at run time")) {
+                                .scope => |sc| try self.print(" .{{ .scope = {d} }},", .{sc}),
+                                .slot => |sl| try self.print(" .{{ .slot = {d} }},", .{sl}),
+                            };
+                            try self.print(" }});\n", .{});
+                        }
+                    },
+                    .limit => {
+                        try self.print("            s.dump.limit = std.math.lossyCast(u64, ", .{});
+                        try int(self, t.args[0]);
+                        try self.print(");\n", .{});
+                    },
+                    .off, .on, .all, .flush => try self.print("            try s.dumpControl(.{t});\n", .{op}),
+                },
             }
             try self.print("            continue :sw {d};\n", .{next});
         },
@@ -680,6 +772,8 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         .wait_slots => |slots| {
             if (try waitFixed(self)) return;
+            // An `assign` or `force` of a constant waits on nothing.
+            if (slots.len == 0) return self.print("            _ = try s.park({d});\n            return;\n", .{next});
             try self.print("            const id = try s.park({d});\n", .{next});
             for (slots) |at| try self.print("            try s.watch(id, {d}, .any);\n", .{at});
             try self.print("            return;\n", .{});
@@ -764,7 +858,29 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             try self.print("            return;\n", .{});
         },
         .join_arm => |j| try self.print("            s.joins[{d}] -= 1;\n            if (s.joins[{d}] == 0) try s.run({d}, null);\n            return;\n", .{ j.join, j.join, j.end }),
-        .call_timed, .task_return, .pla_start, .override_on, .override_eval, .override_off, .switch_ctrl => unreachable, // `reach` refused each of these by name
+        // §17.5 an asynchronous array's own process starts now.
+        .pla_start => |loop| try self.print("            try s.run({d}, null);\n            continue :sw {d};\n", .{ loop, next }),
+        .override_on => |o| try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
+        // An `assign` under a `force` keeps tracking but does not write.
+        .override_eval => |o| {
+            try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
+            try self.store(o.slot, .blocking);
+            try expr.assigned(self, o.value, try slotType(self, o.slot));
+            try self.print(", {f});\n            }}\n            continue :sw {d};\n", .{ full(try self.slotWidth(o.slot)), next });
+        },
+        // §9.3.2: a released net is its driver's again, at once.
+        .override_off => |o| {
+            if (r.net_of.get(o.slot)) |net| {
+                const drivers = r.nets[net].drivers;
+                if (drivers.len != 1) return self.refuse("releasing a net without exactly one driver");
+                const at = for (r.code.items, 0..) |ins, i| {
+                    if (ins == .continuous and ins.continuous == drivers[0]) break i;
+                } else return self.refuse("releasing a net whose driver is not a process");
+                try self.print("            if (try s.release({d}, true)) try procs[{d}](s, {d});\n", .{ o.slot, at, at });
+            } else try self.print("            _ = try s.release({d}, {});\n", .{ o.slot, o.force });
+            try self.print("            continue :sw {d};\n", .{next});
+        },
+        .call_timed, .task_return, .switch_ctrl => unreachable, // `reach` refused each of these by name
     }
 }
 
@@ -922,6 +1038,17 @@ pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     const at = try cellOf(self, std.math.maxInt(u32), 64);
     try self.print("            s.set({d}, L.k(@bitCast(@as(i64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
+}
+
+/// `system.stringValue` of the Zig `[]const u8` `v` assigned to `target`,
+/// through a scratch cell as wide as the target (§17.2.3: "the string
+/// assignment to variable rules").
+pub fn assignChars(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
+    const ty = try targetType(self, target);
+    if (ty.real) return self.refuse("characters assigned to a real");
+    const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
+    try self.print("            s.setChars({d}, {d}, {s});\n", .{ at, ty.width, v });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
 }
 
 /// `exec.eval(e, 0).asInt()` as a Zig `?i64`.

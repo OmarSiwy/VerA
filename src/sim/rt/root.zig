@@ -27,9 +27,11 @@ const Scheduler = @import("../scheduler.zig").Scheduler;
 pub const Scale = @import("../time.zig").Scale;
 pub const fmt = @import("../fmt.zig");
 pub const logic = @import("logic.zig");
+pub const vcd = @import("../digital/vcd.zig");
 const Int = @import("frontend").Integer;
 const zCReal = @import("kernels").str_kernels.zCReal;
 const system = @import("../digital/system.zig");
+const display = @import("../digital/display.zig");
 const W = logic.W;
 const Bit = logic.Bit;
 const two = logic.two;
@@ -97,6 +99,10 @@ pub const Design = struct {
     joins: u32 = 0,
     /// `Run.subs.len`: the tasks and functions (§10).
     subs: u32 = 0,
+    /// Some `assign` or `force` (§9.3) can hold a slot.
+    overrides: bool = false,
+    /// What a `$dumpvars` (§18) can select; null when the design has none.
+    vcd: ?*const vcd.Catalog = null,
 };
 
 /// Node `node` reads the bits `mask` of plane word `word`.
@@ -144,11 +150,17 @@ const nba_payload: u32 = 1 << 31;
 const settle_payload: u32 = nba_payload | 1;
 /// The payload of the one §17.1.3 monitor event of a timestep.
 const monitor_payload: u32 = nba_payload | 2;
+/// The payload of the one §18 dump event of a timestep.
+const vcd_payload: u32 = nba_payload | 3;
 /// `show_base + k`: the display of `$strobe` or `$monitor` site k, which
 /// `next` returns for the design to print. Every payload below is a pc.
 pub const show_base: u32 = 1 << 30;
 /// `late_base + k`: delayed nonblocking update `late[k]` (§9.2.2 `<= #d`).
 const late_base: u32 = 3 << 30;
+
+/// `root.Overrides`: the process ranges of a slot's `assign` and `force`.
+const Layers = struct { assign: ?Range = null, force: ?Range = null };
+const Range = struct { start: u32, end: u32 };
 
 /// `root.max_events_per_tick`.
 const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
@@ -208,6 +220,21 @@ pub const State = struct {
     mon_pending: bool = false,
     /// §17.6 the stochastic queues, by `q_id`.
     queues: system.Queues = .empty,
+    /// `Run.random_seed`.
+    random_seed: i32 = 0,
+    /// §9.3 per slot (empty when the design has no `assign` or `force`):
+    /// the pc ranges of the procedural continuous assignments holding it.
+    /// While one does, only its own process (`overriding`) writes the slot.
+    layers: []Layers,
+    overriding: bool = false,
+    /// §18 the dump, the design's catalog, and per slot (empty without a
+    /// catalog) whether a change is dumped.
+    dump: vcd.Vcd = .{},
+    catalog: ?*const vcd.Catalog,
+    dumped: []bool,
+    /// `capture`'s buffer, and `scan`'s characters.
+    cap: std.Io.Writer.Allocating,
+    scratch: std.heap.ArenaAllocator,
     time_format: fmt.TimeFormat,
     budget_time: u64 = 0,
     budget_used: u64 = 0,
@@ -241,6 +268,11 @@ pub const State = struct {
             .active = try gpa.alloc(u32, d.subs),
             .monitored = try gpa.alloc(bool, d.slots),
             .time_format = .{ .units = time_units },
+            .cap = .init(gpa),
+            .layers = try gpa.alloc(Layers, if (d.overrides) d.slots else 0),
+            .catalog = d.vcd,
+            .dumped = try gpa.alloc(bool, if (d.vcd != null) d.slots else 0),
+            .scratch = .init(gpa),
             .stdout = undefined,
             .out = undefined,
             .io = init_.io,
@@ -258,6 +290,8 @@ pub const State = struct {
         @memset(self.joins, 0);
         @memset(self.active, 0);
         @memset(self.monitored, false);
+        @memset(self.layers, .{});
+        @memset(self.dumped, false);
         for (d.order) |pc| try self.run(pc, null);
     }
 
@@ -273,6 +307,10 @@ pub const State = struct {
                 try self.store(row.slot, row.off, row.words[0..row.n], row.words[row.n..][0..row.n], row.words[2 * row.n ..]);
                 self.gpa.free(row.words);
                 try self.free_late.append(self.gpa, k);
+                continue;
+            }
+            if (event.payload == vcd_payload) {
+                try self.dumpTick();
                 continue;
             }
             if (event.payload == monitor_payload) {
@@ -426,6 +464,7 @@ pub const State = struct {
     /// touches one word. An edge is its least significant bit's (§9.7.2),
     /// which only word 0 holds.
     pub inline fn putWord(self: *State, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
+        if (self.held(slot)) return;
         const at = off + j;
         const o = self.get(at);
         const nv = (o.v & ~m) | (a.v & m);
@@ -443,6 +482,7 @@ pub const State = struct {
     /// does, so -0.0 over 0.0 is no change and a NaN always is one.
     pub fn putReal(self: *State, slot: u32, off: u32, a: W, m: u64) Error!void {
         _ = m;
+        if (self.held(slot)) return;
         if (logic.real(self.get(off)) == logic.real(a)) return;
         const before = logic.low(self.get(off));
         self.v[off] = a.v;
@@ -451,6 +491,7 @@ pub const State = struct {
     }
 
     fn store(self: *State, slot: u32, off: u32, v: []const u64, x: []const u64, m: []const u64) Error!void {
+        if (self.held(slot)) return;
         const sv = self.v[off..][0..v.len];
         const sx = self.x[off..][0..v.len];
         const before = logic.low(W{ .v = sv[0], .x = sx[0] });
@@ -504,13 +545,59 @@ pub const State = struct {
     /// every suspension and queued resumption inside it is dropped, and if
     /// there was one, its process continues at `end` (`exec.disableRange`).
     pub fn disable(self: *State, lo: u32, hi: u32, end: u32) Error!void {
+        if (try self.stop(lo, hi)) try self.run(end, null);
+    }
+
+    /// `exec.stopRange`: end every process suspended or queued in pcs
+    /// [lo, hi); whether there was one.
+    fn stop(self: *State, lo: u32, hi: u32) Error!bool {
         var hit = false;
         for (self.susps.items, 0..) |sp, id| if (sp.alive and sp.pc >= lo and sp.pc < hi) {
             self.retire(@intCast(id));
             hit = true;
         };
         if (self.sched.cancelRange(lo, hi) catch |e| return self.schedFail(e)) hit = true;
-        if (hit) try self.run(end, null);
+        return hit;
+    }
+
+    /// §9.3: an `assign` or `force` holds `slot` and blocks every write but
+    /// its own process's (`exec.store`'s guard; an `assign` holds only a
+    /// variable, which `compile` ensures).
+    inline fn held(self: *const State, slot: u32) bool {
+        if (self.layers.len == 0 or self.overriding) return false;
+        const l = self.layers[slot];
+        return l.assign != null or l.force != null;
+    }
+
+    /// `exec` `.override_on`: the `assign` (or `force`) whose process is pcs
+    /// [start, end) now holds `slot`, replacing the one before it.
+    pub fn overrideOn(self: *State, slot: u32, force: bool, start: u32, end: u32) Error!void {
+        const l = &self.layers[slot];
+        const layer = if (force) &l.force else &l.assign;
+        if (layer.*) |old| _ = try self.stop(old.start, old.end);
+        layer.* = .{ .start = start, .end = end };
+        try self.run(start, null);
+    }
+
+    /// Is `slot` forced? An `assign` under a force keeps tracking but does
+    /// not write (`exec` `.override_eval`).
+    pub fn forced(self: *const State, slot: u32) bool {
+        return self.layers[slot].force != null;
+    }
+
+    /// `exec.release`: §9.3 `deassign` (`force` false) or `release` of
+    /// `slot`; releasing what is not held is a no-op. A released variable
+    /// held by an `assign` is that assign's again; true when a released net
+    /// must be re-resolved from its drivers, which the design does.
+    pub fn release(self: *State, slot: u32, force: bool) Error!bool {
+        const l = &self.layers[slot];
+        if (l.assign == null and l.force == null) return false;
+        const layer = if (force) &l.force else &l.assign;
+        if (layer.*) |old| _ = try self.stop(old.start, old.end);
+        layer.* = null;
+        if (!force) return false;
+        if (l.assign) |a| try self.run(a.start, null);
+        return true;
     }
 
     /// §10.2.2 a synchronous activation of subroutine `sub` begins. An
@@ -587,6 +674,7 @@ pub const State = struct {
     /// A change of a slot the monitor watches asks for its line (§17.1.3).
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
         if (self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
+        if (self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
         if (slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
             self.armed[pc] = false;
             try self.run(pc, null);
@@ -669,6 +757,204 @@ pub const State = struct {
         return system.queueIsFull(&self.queues, id);
     }
 
+    /// §17.2.1 `system.fopen` of the characters of `name` (`nw` bits) with
+    /// the type in `mode` (`mw` bits), or `mode` null for a multichannel
+    /// descriptor; `source` is the design's file, which a read looks beside.
+    pub fn fopen(self: *State, source: []const u8, name: anytype, comptime nw: u32, mode: anytype, comptime mw: u32) Error!i64 {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const mcd = @TypeOf(mode) == @TypeOf(null);
+        const m = if (mcd) null else try chars(a, mode, mw);
+        return system.fopen(system.own, a, source, try chars(a, name, nw), m, mcd);
+    }
+
+    /// `system.text` of a `w`-bit value.
+    fn chars(a: std.mem.Allocator, v: anytype, comptime w: u32) Error!?[]const u8 {
+        var buf = logic.planesOf(v);
+        return system.text(a, literal(&buf, w, false)) catch error.OutOfMemory;
+    }
+
+    /// `system.fileOp`.
+    pub fn fileOp(_: *const State, f: system.FileFn, x: ?i64, y: ?i64, z: ?i64) i64 {
+        return system.fileOp(system.own, f, x, y, z);
+    }
+
+    /// §17.2.7 `$fclose`.
+    pub fn fclose(_: *const State, d: ?i64) void {
+        _ = system.own.close((d orelse return) & 0xffff_ffff);
+    }
+
+    /// §17.2.4.3 `$sscanf` over the characters of `input` and `format`;
+    /// the scan's slices live until the next call.
+    pub fn scan(self: *State, input: anytype, comptime iw: u32, format: anytype, comptime fw: u32, outs: usize) Error!system.Scan {
+        _ = self.scratch.reset(.retain_capacity);
+        const a = self.scratch.allocator();
+        return .init(try chars(a, input, iw), try chars(a, format, fw), outs);
+    }
+
+    /// Everything printed until `captured` or `fshow` goes to a buffer.
+    pub fn capture(self: *State) void {
+        self.cap.clearRetainingCapacity();
+        self.out = &self.cap.writer;
+    }
+
+    /// Ends a `capture`: the bytes printed since, valid until the next one.
+    pub fn captured(self: *State) []const u8 {
+        self.out = &self.stdout.interface;
+        return self.cap.written();
+    }
+
+    /// §17.2.2: ends a `capture`, sending its bytes to descriptor `d`'s
+    /// channels (`system.channels`).
+    pub fn fshow(self: *State, d: i64) Error!void {
+        const bytes = self.captured();
+        try system.channels(system.own, self.io, self.out, d & 0xffff_ffff, bytes);
+    }
+
+    /// The characters `bytes` in the `w`-bit cell at word `off`, the last
+    /// one in the low byte, truncated or zero-filled on the left.
+    pub fn setChars(self: *State, off: u32, comptime w: u32, bytes: []const u8) void {
+        const n = comptime logic.words(w);
+        const v = self.v[off..][0..n];
+        @memset(v, 0);
+        @memset(self.x[off..][0..n], 0);
+        for (0..@min(bytes.len, n * 8)) |k| v[k / 8] |= @as(u64, bytes[bytes.len - 1 - k]) << @intCast(8 * (k % 8));
+        v[n - 1] &= logic.mask(w - 64 * (n - 1));
+    }
+
+    /// §17.5 `system.plaEval` of the `nrows` `rw`-bit rows from word `off`
+    /// over the `iw`-bit `in`, into the `ow`-bit cell at word `cell`.
+    pub fn pla(self: *State, p: system.Pla, off: u32, nrows: u32, comptime rw: u32, in: anytype, comptime iw: u32, cell: u32, comptime ow: u32) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const n = comptime logic.words(rw);
+        const rows = try a.alloc(Int.Literal, nrows);
+        for (rows, 0..) |*row, k| {
+            const planes = try a.alloc(u64, 2 * n);
+            @memcpy(planes[0..n], self.v[off + k * n ..][0..n]);
+            @memcpy(planes[n..], self.x[off + k * n ..][0..n]);
+            if (two) @memset(planes[n..], 0);
+            row.* = literal(planes, rw, false);
+        }
+        var ib = logic.planesOf(in);
+        const out = @import("../digital/net.zig").filled(a, ow, false, .x) catch return error.OutOfMemory;
+        system.plaEval(p, rows, literal(&ib, iw, false), out);
+        const on = comptime logic.words(ow);
+        for (self.v[cell..][0..on], self.x[cell..][0..on], out.values(), out.unknowns()) |*v, *x, ov, ox| {
+            // `--two-state`: an output no row decides is 0.
+            v.* = if (two) ov & ~ox else ov;
+            x.* = if (two) 0 else ox;
+        }
+    }
+
+    /// §18.1 `$dumpfile` of the characters of a `w`-bit `name`.
+    pub fn dumpFile(self: *State, name: anytype, comptime w: u32) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        self.dump.setFile(self.gpa, try chars(arena.allocator(), name, w)) catch |e| return self.dumpFail(e);
+    }
+
+    /// §18.1.2 one `$dumpvars` (`vcd.Vcd.select`); its dump starts at the
+    /// end of the step.
+    pub fn dumpVars(self: *State, levels: ?i64, targets: []const vcd.Target) Error!void {
+        self.dump.select(self.gpa, self.sched.now, 0, std.math.lossyCast(u32, levels orelse 0), targets) catch |e| return self.dumpFail(e);
+        try self.requestDump();
+    }
+
+    /// `$dumpoff`, `$dumpon`, `$dumpall`, `$dumpflush` (`vcd.Vcd.control`).
+    pub fn dumpControl(self: *State, op: vcd.Op) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        self.dump.control(arena.allocator(), self.io, self.catalog.?, self, self.sched.now, op) catch |e| return self.dumpFail(e);
+    }
+
+    fn dumpTick(self: *State) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        self.dump.tick(self.gpa, arena.allocator(), self.io, self.catalog.?, self, self.sched.now) catch |e| return self.dumpFail(e);
+    }
+
+    /// One dump event per step however many dumped values moved.
+    fn requestDump(self: *State) Error!void {
+        if (self.dump.pending) return;
+        self.dump.pending = true;
+        _ = self.sched.schedule(.monitor, vcd_payload) catch |e| return self.schedFail(e);
+    }
+
+    fn dumpFail(self: *State, e: vcd.Failure) Error {
+        return switch (e) {
+            error.OutOfMemory => error.OutOfMemory,
+            error.DumpvarsTime => self.fail(vcd.message(error.DumpvarsTime), .{}),
+            inline else => |f| self.fail(comptime vcd.message(f), .{self.dump.name}),
+        };
+    }
+
+    /// `vcd.Vcd`'s value source: catalog variable `v`'s planes.
+    pub fn dumpPlanes(self: *const State, v: vcd.Var, out: []u64) void {
+        const n = out.len / 2;
+        @memcpy(out[0..n], self.v[v.off..][0..n]);
+        if (two) @memset(out[n..], 0) else @memcpy(out[n..], self.x[v.off..][0..n]);
+    }
+
+    /// `vcd.Vcd`'s hook: a change of `slot` asks for a dump event.
+    pub fn dumpSlot(self: *State, slot: u32) void {
+        self.dumped[slot] = true;
+    }
+
+    /// §17.9 `system.dist`, with the interpreter's W1151 warning where the
+    /// listing prints one.
+    pub fn dist(self: *State, f: system.Dist, seed: i32, a: i32, b: i32) ?system.Draw {
+        return system.dist(f, seed, a, b) orelse {
+            self.warn("W1151", system.dist_warning, .{});
+            return null;
+        };
+    }
+
+    /// A run-time warning in `vera --run`'s words, on stderr.
+    fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
+        self.out.flush() catch {};
+        var buf: [512]u8 = undefined;
+        var e = std.Io.File.stderr().writer(self.io, &buf);
+        e.interface.print("warning[" ++ code ++ "]: " ++ message ++ "\n", args) catch {};
+        e.interface.flush() catch {};
+    }
+
+    /// §17.2.9 `$readmemb`/`$readmemh` of the file `name` beside `source`
+    /// (`display.MemLoad`) into the array whose lowest address is `slot`,
+    /// at word `off`, each element `width` bits. `given` is how many of the
+    /// start and finish addresses `first`/`last` the call has (null: x or z).
+    pub fn readmem(self: *State, source: []const u8, name: []const u8, radix: fmt.Radix, width: u32, slot: u32, off: u32, low: i64, high: i64, given: u2, first: ?i64, last: ?i64) Error!void {
+        var arena: std.heap.ArenaAllocator = .init(self.gpa);
+        defer arena.deinit();
+        const a = arena.allocator();
+        const file = display.sideFile(self.io, a, source, name) catch return self.fail("the memory file cannot be read", .{});
+        var load: display.MemLoad = .init(file, radix, width, low, high, given, first, last);
+        const n = (width + 63) / 64;
+        const m = try a.alloc(u64, n);
+        @memset(m, std.math.maxInt(u64));
+        m[n - 1] = @as(u64, std.math.maxInt(u64)) >> @intCast(64 * n - width);
+        while (load.next(a) catch |e| return if (e == error.OutOfMemory) error.OutOfMemory else self.fail("{s}", .{display.MemLoad.message(e)})) |w| {
+            const v = w.value.values();
+            const x = w.value.unknowns();
+            // `--two-state`: an x or z digit loads 0.
+            if (two) for (v, x) |*bv, *bx| {
+                bv.* &= ~bx.*;
+                bx.* = 0;
+            };
+            try self.store(slot + w.index, off + w.index * n, v, x, m);
+        }
+        if (load.mismatch()) |mm| self.warn("W1150", display.MemLoad.mismatch_text, .{ mm.found, mm.expected });
+    }
+
+    /// §17.9.1 a seedless `$random`.
+    pub fn random(self: *State) i32 {
+        const d = system.dist(.random, self.random_seed, 0, 0).?;
+        self.random_seed = d.seed;
+        return d.value;
+    }
+
     /// `exec.delayOf` of a real delay (§9.7.1), rounded to the precision.
     pub fn realTicks(self: *State, r: f64, scale: Scale) Error!u64 {
         return scale.realDelay(r) catch |e| self.fail("digital delay cannot be represented: {t}", .{e});
@@ -692,6 +978,8 @@ pub const State = struct {
     /// §17.4.1 `$finish`: end the run after this process step.
     pub fn finish(self: *State, verbose: bool, file: []const u8, byte: u32) Error!void {
         if (verbose) try self.out.print("$finish at tick {d}, {s} byte {d}\n", .{ self.sched.now, file, byte });
+        // §18: what this step changed is still part of the dump.
+        if (self.dump.pending) try self.dumpTick();
         self.sched.finish();
     }
 

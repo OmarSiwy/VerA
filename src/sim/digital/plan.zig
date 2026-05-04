@@ -108,6 +108,8 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| watched[t.slot] = true;
             },
+            // A held slot is never `set`: the store must meet `rt`'s guard.
+            .override_eval => |x| watched[x.slot] = true,
             else => {}, // else: only these four wait on a slot's value
         }
     };
@@ -120,6 +122,10 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             compile.sensitivity(r, arg, &mon) catch return self.refuse("a monitor argument the engine resolves only at run time");
     };
     for (mon.items) |s| watched[s] = true;
+    // §18: which slots a `$dumpvars` selects is known only at run time, and
+    // a dumped change must reach `rt`'s hook, which `set` bypasses.
+    // ponytail: every slot of a dumping design; the catalog's alone if it matters.
+    if (emit.dumps(r)) @memset(watched, true);
     if (schedule == .fifo) return .{ .watched = watched, .fan_start = r.fan_start, .fan = r.fan };
 
     // Candidates for a node, with the slots they read and write.
@@ -296,7 +302,9 @@ fn disabled(ranges: []const Range, p: Proc) bool {
 
 /// A fixed-wait process that is a node: every term is a plain name (any
 /// change), its body writes only whole vectors or selects of them, and it
-/// prints nothing. Its inputs are its terms; its outputs what it writes.
+/// prints nothing. Its inputs are its terms; its outputs what it writes. A
+/// system function that writes (`$random`'s seed) would write what is not
+/// an output, so a body that calls one is no node.
 fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, outputs: []const u32 } {
     const r = self.r;
     const ex = &r.file.exprs;
@@ -319,12 +327,16 @@ fn combinational(self: *Emitter, p: Proc) Error!?struct { inputs: []const u32, o
         r.scope = r.code_scope.items[pc];
         switch (r.code.items[pc]) {
             .assign => |x| {
+                if (expr.effects(self, x.value) or expr.effects(self, x.target)) return null;
                 const t = if (ex.tag(x.target) == .index) ex.lhs(x.target) else x.target;
                 if (ex.tag(t) != .ident and ex.tag(t) != .hier_ident) return null;
                 if (try self.element(x.target)) return null;
                 try outputs.append(self.arena, r.slot(t) catch return null);
             },
             .task, .trigger, .init_var, .call => return null,
+            .branch => |b| if (expr.effects(self, b.condition)) return null,
+            .case_select => |c| if (expr.effects(self, r.file.stmt(c.statement).case_stmt.scrutinee)) return null,
+            .repeat_start => |x| if (expr.effects(self, x.count)) return null,
             else => {}, // else: `fixedWait` already refused every suspension
         }
     }

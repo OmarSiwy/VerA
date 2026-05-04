@@ -380,6 +380,7 @@ pub const Code = enum(u16) {
     E1100,
     E1101,
     W1150,
+    W1151,
     W1050,
     W0950,
     E0820,
@@ -5742,7 +5743,9 @@ fn infoOf(c: Code) Info {
             \\
             \\A design is refused where an x or z carries meaning, which a run
             \\without them cannot keep: `===` or `!==` against an x or z, a `case`
-            \\label with an x or z bit, and any design the native code generator
+            \\label with an x or z bit, `$sscanf` (an x or z in its input is EOF,
+            \\IEEE 1364-2005 §17.2.4.3), a §17.5.4 plane PLA (a z personality bit
+            \\ignores its input), and any design the native code generator
             \\does not compile (strength and multi-driver nets, gates, switches
             \\and the rest run only in the 4-state interpreter). Drop
             \\`--two-state` to run it with 4-state logic.
@@ -5752,6 +5755,11 @@ fn infoOf(c: Code) Info {
             .title = "memory file word count mismatch",
             .lrm = "IEEE 1364-2005 17.2.9",
             .explain = "Without address specifications in the memory file, a data-word count different from the requested load range requires a warning. Available words are loaded within the range; missing words leave existing memory contents unchanged. This warning does not refuse the load.",
+        },
+        .W1151 => .{
+            .title = "probabilistic distribution argument not positive",
+            .lrm = "IEEE 1364-2005 17.9.2",
+            .explain = "The mean of $dist_exponential, $dist_poisson and $dist_erlang, the degree of freedom of $dist_chi_square and $dist_t, and the k_stage of $dist_erlang shall be greater than 0. The 17.9.3 reference listing prints a warning for such a call and returns 0 without drawing, so the seed argument is not written.",
         },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",
