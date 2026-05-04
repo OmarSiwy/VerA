@@ -1110,7 +1110,7 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     const w = &stderr.interface;
     defer w.flush() catch {};
 
-    const cases = try digitalCases(gpa, io, dirs);
+    const cases = try digitalCases(gpa, io, dirs, native != null);
     defer {
         for (cases) |c| gpa.free(c);
         gpa.free(cases);
@@ -1563,7 +1563,9 @@ fn diff(w: *Io.Writer, what: []const u8, want: []const u8, got: []const u8) !boo
 /// Digital transcript cases and explicitly opted-in diagnostic cases, sorted
 /// so two runs report in the same order. Support files are not cases.
 /// Case names are fixture-root-relative stems, `ieee1364/05_expressions/control`.
-fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8) ![]const []const u8 {
+/// `vcd`: also the `//! expect vcd` fixtures, whose `--run` the .va suite
+/// judges (`harness.judgeVcd`) and whose executable `--native` does.
+fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8, vcd: bool) ![]const []const u8 {
     var list: std.ArrayList([]const u8) = .empty;
     errdefer {
         for (list.items) |c| gpa.free(c);
@@ -1585,7 +1587,8 @@ fn digitalCases(gpa: Allocator, io: Io, dirs: []const []const u8) ![]const []con
             const has_golden = if (dir.access(io, golden, .{})) |_| true else |_| false;
             const source = try dir.readFileAlloc(io, entry.path, gpa, .limited(1 << 20));
             defer gpa.free(source);
-            if (!harness.digitalCaseSelected(has_golden, source)) continue;
+            const dumps = vcd and !has_golden and harness.vcdExpectation(source) != null;
+            if (!dumps and !harness.digitalCaseSelected(has_golden, source)) continue;
             try list.append(gpa, try std.fmt.allocPrint(gpa, "{s}/{s}", .{ sub, stem }));
         }
     }
@@ -1713,8 +1716,6 @@ const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool 
 
 /// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
 fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
-    // An `//! xfail` names a 4-state gap, which a two-state report does not judge.
-    if (std.mem.eql(u8, schedule, "--two-state")) return nativeCase(arena, io, vera_exe, schedule, case, w);
     const src =try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
         return nativeCase(arena, io, vera_exe, schedule, case, w);
@@ -1829,9 +1830,34 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const 
         try w.print("FAIL {s}: successful digital run has missing warning evidence or error diagnostics\n{s}\n", .{ case, stderr });
         return .{ .pass = false, .fallback = fallback };
     }
+    if (harness.vcdExpectation(source)) |v| return .{ .pass = try vcdDiff(arena, io, w, case, work, v, two_state), .fallback = fallback };
     const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
     if (two_state) return .{ .pass = try twoStateDiff(w, case, want, ran.stdout), .fallback = fallback };
     return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback };
+}
+
+/// A `//! expect vcd` case: the file the executable wrote in `work` against
+/// the golden beside the fixture, both normalised (`harness.vcdTokens`).
+/// Under `--two-state` a token may differ where the golden's shows an x or z
+/// digit, `twoStateDiff`'s rule.
+fn vcdDiff(arena: Allocator, io: Io, w: *Io.Writer, case: []const u8, work: []const u8, v: harness.VcdExpect, two_state: bool) !bool {
+    const got_text = Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ work, v.produced }), arena, .limited(1 << 24)) catch {
+        try w.print("FAIL {s}: the executable wrote no `{s}`\n", .{ case, v.produced });
+        return false;
+    };
+    const dir = std.fs.path.dirname(try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case })).?;
+    const want_text = try Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ dir, v.golden }), arena, .limited(1 << 24));
+    const got = try harness.vcdTokens(arena, got_text);
+    const want = try harness.vcdTokens(arena, want_text);
+    for (0..@max(got.len, want.len)) |i| {
+        const g = if (i < got.len) got[i] else "<end of file>";
+        const e = if (i < want.len) want[i] else "<end of file>";
+        if (std.mem.eql(u8, g, e)) continue;
+        if (two_state and std.mem.indexOfAny(u8, e, "xXzZ") != null) continue;
+        try w.print("FAIL {s}: VCD token {d} is `{s}`, the golden has `{s}`\n", .{ case, i, g, e });
+        return false;
+    }
+    return true;
 }
 
 /// `--native=two-state`'s judgement: every line of `got` that differs from

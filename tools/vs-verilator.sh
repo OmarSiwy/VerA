@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # VerA against Verilator 5 (`--binary`) on the same .v designs: six
-# self-contained digital fixtures plus the two scalable benchmarks in
-# tools/bench-v/. Three engines per design, one Markdown row:
+# self-contained digital fixtures plus the scalable benchmarks in
+# tools/bench-v/ (the ripple adder twice: assigns, then gate primitives). Three engines per design, one Markdown row:
 #   interp     `vera --run`: parse + elaborate + interpret, one process
 #   native     `vera --emit-exe --optimize=ReleaseFast --zig-backend=llvm`
 #              (the default --schedule=static; SCHEDULE=fifo for the other),
@@ -94,6 +94,9 @@ done
 for wv in 64:1000 512:10000; do
   f=$W/ripple_adder_${wv/:/x}.v
   tools/bench-v/ripple_adder.sh "${wv%:*}" "${wv#*:}" > "$f"
+  designs+=("$f")
+  f=$W/gate_adder_${wv/:/x}.v
+  tools/bench-v/ripple_adder.sh "${wv%:*}" "${wv#*:}" gates > "$f"
   designs+=("$f")
 done
 

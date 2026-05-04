@@ -15,6 +15,7 @@ const Ast = Front.Ast;
 const exec = @import("exec.zig");
 const display = @import("display.zig");
 const driver = @import("driver.zig");
+const system = @import("system.zig");
 const Error = @import("root.zig").Error;
 const Run = @import("root.zig").Run;
 const SpecExpr = @import("root.zig").SpecExpr;
@@ -187,6 +188,15 @@ pub const SysFn = enum {
     pow,
     atan2,
     hypot,
+    /// §17.9 `$random` and the `$dist_*` functions (`system.dist`).
+    random,
+    dist_uniform,
+    dist_normal,
+    dist_exponential,
+    dist_poisson,
+    dist_chi_square,
+    dist_t,
+    dist_erlang,
 
     /// Is a call a constant expression when its arguments are? A clock query
     /// never is, however constant its (absent) arguments — which a
@@ -195,6 +205,7 @@ pub const SysFn = enum {
     fn constant(self: SysFn) bool {
         return switch (self) {
             .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
+            .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => false,
             .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => false,
             else => true, // else: a pure function of its arguments
         };
@@ -207,6 +218,31 @@ pub const SysFn = enum {
             .pow, .atan2, .hypot => 2,
             .ln, .log10, .exp, .sqrt, .floor, .ceil, .sin, .cos, .tan, .asin, .acos, .atan, .sinh, .cosh, .tanh, .asinh, .acosh, .atanh => 1,
             else => null, // else: not a math function
+        };
+    }
+
+    /// Does a call change state besides giving its value: an argument it
+    /// writes back, `$random`'s seed, a file's position or table?
+    pub fn effects(self: SysFn) bool {
+        return switch (self) {
+            .q_full, .sscanf, .fopen, .fgetc, .ungetc, .fseek, .rewind => true,
+            .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => true,
+            else => false, // else: a function of its arguments, the clock or the design alone
+        };
+    }
+
+    /// The §17.9 distribution a call draws from, or null for any other.
+    pub fn dist(self: SysFn) ?system.Dist {
+        return switch (self) {
+            .random => .random,
+            .dist_uniform => .uniform,
+            .dist_normal => .normal,
+            .dist_exponential => .exponential,
+            .dist_poisson => .poisson,
+            .dist_chi_square => .chi_square,
+            .dist_t => .t,
+            .dist_erlang => .erlang,
+            else => null, // else: not a §17.9 function
         };
     }
 };
@@ -262,6 +298,14 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$pow", .pow },
     .{ "$atan2", .atan2 },
     .{ "$hypot", .hypot },
+    .{ "$random", .random },
+    .{ "$dist_uniform", .dist_uniform },
+    .{ "$dist_normal", .dist_normal },
+    .{ "$dist_exponential", .dist_exponential },
+    .{ "$dist_poisson", .dist_poisson },
+    .{ "$dist_chi_square", .dist_chi_square },
+    .{ "$dist_t", .dist_t },
+    .{ "$dist_erlang", .dist_erlang },
 });
 
 // ---- expression typing (§5.5.1 Table 5-22, §5.1.14) -------------------------
@@ -544,6 +588,28 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                         break :blk .{ .width = 32, .signed = true };
                     },
                     .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => break :blk try driver.infer(self, e, driver.of(f).?),
+                    // §17.9: `$random [ ( seed ) ]` and `$dist_*( seed, ... )`,
+                    // every argument an integer and the result a signed
+                    // 32-bit integer (§17.9.1).
+                    .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => {
+                        const want: usize = switch (f) {
+                            .random => @min(args.len, 1),
+                            .dist_uniform, .dist_normal, .dist_erlang => 3,
+                            else => 2, // else: the one-parameter distributions
+                        };
+                        if (args.len != want) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
+                        for (args, 0..) |arg, i| {
+                            if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.9 distribution function");
+                            const t = try inferValue(self, arg, depth + 1);
+                            if (i == 0) {
+                                // §17.9.1: "The seed argument shall be either a
+                                // reg, an integer, or a time variable."
+                                if (ex.tag(arg) != .ident or t.real) return self.exprFail(arg, "§17.9.1: the seed argument shall be a reg, integer or time variable");
+                                try checkTarget(self, arg);
+                            } else if (t.real) return self.exprFail(arg, "§17.9.2: the arguments of a $dist_ function are integer values");
+                        }
+                        break :blk .{ .width = 32, .signed = true };
+                    },
                     // §17.11.2: every argument is read as a real and the
                     // result is real.
                     else => {
