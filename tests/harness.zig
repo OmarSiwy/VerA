@@ -1,53 +1,14 @@
-//! The conformance harness — everything about running `tests/fixtures/**/*.va`
-//! that is NOT about a particular compiler.
-//!
-//! It exists because the suite stopped being about VerA. A fixture states what
-//! the LRM requires, so the same 1102 files are a conformance suite for ANY
-//! Verilog-AMS compiler — and "how did compiler X do?" is only a useful
-//! question if X and VerA are judged by identical rules. Sharing the judge is
-//! the only way to be sure they are:
-//!
-//!   tests/harness.zig    the format, the verdict algebra, the report  (here)
-//!   tests/torture.zig    plugs in VerA — compile, build a testbench, RUN it
-//!   tests/external.zig   plugs in any compiler that takes a .va path and
-//!                        exits nonzero when it refuses one (OpenVAF, …)
-//!   tests/bench.zig      the one binary that owns `main` and drives all three
-//!
-//! WHAT A RUNNER SUPPLIES is one function: given a fixture, did the compiler do
-//! what the fixture says it must? That boundary is where the two sides genuinely
-//! differ — VerA is called in-process and can run the model, an external
-//! compiler is a subprocess that can only accept or refuse — and it is ALL they
-//! differ by. Everything downstream of the answer is here, so an xfail cannot
-//! mean one thing for VerA and another for OpenVAF.
-//!
-//! WHAT THIS FILE OWNS, and why each piece is not the runner's business:
-//!   - the fixture format: `//! reject` / `//! warn` / `//! lrm` / `//! xfail`, parsed by
-//!     `vera.tb.parse`, the same parser the fixtures were written against;
-//!   - the assertion lint (`checkAssertions`): a want that is not a numeric
-//!     literal is a FIXTURE defect, and it is one in every compiler;
-//!   - the verdict algebra: xfail inverts a failure into `xfail` and a success
-//!     into a hard FAIL, `--strict` fails on anything that is not a pass;
-//!   - the parallel walk, the slot buffering, the tally, `--coverage`.
-//!
-//! Comparing two runs is `diff`: the walk is sorted, the report names each
-//! fixture by path, and only the verdict lines vary. There is deliberately no
-//! machine-readable side channel — a second output format is a second thing to
-//! keep true, and the text already is one.
-//!
-//!   zig build benchmark                          # VerA, every fixture, timed
-//!   zig build benchmark -- --against-openvaf     # the head-to-head
-//!   zig build benchmark -- ch04                  # only paths matching `ch04`
-//!   zig build benchmark -- --strict              # unasserted and xfail FAIL
-//!   zig build benchmark -- --coverage            # LRM clauses cited and uncited
-//!   zig build benchmark -- -j1                   # one at a time; for debugging
-//!   zig build benchmark -- --fixture-root=tests/pending   # the tree meant to fail
+//! The conformance harness: `tests/fixtures/**/*.va` and a plugged-in
+//! `Compiler` -> one verdict per fixture and a report. Everything that is not
+//! about a particular compiler lives here: the fixture format, the assertion
+//! lint, the verdict algebra (`judge`), the parallel walk and `--coverage`.
+//! Plugs: `torture.zig` (VerA, runs the model) and `external.zig` (any
+//! compiler, accept/refuse only). `bench.zig` owns `main`.
 
 const std = @import("std");
 const vera = @import("vera");
-/// `fixture_root` and `docs_root`, from `build.zig`. They are the SUITE's and
-/// not a runner's: both runners walk the same fixtures and cite the same LRM,
-/// so a runner that could disagree about either would be judging a different
-/// suite while reporting under the same verdict vocabulary.
+/// `fixture_root` and `docs_root`, from `build.zig`; shared by every runner so
+/// all compilers are judged on the same fixtures against the same LRM.
 const options = @import("suite_options");
 
 const Io = std.Io;
@@ -60,32 +21,23 @@ pub const Fixture = struct {
     stem: []const u8,
     /// `tests/fixtures/ch04_expressions`
     dir: []const u8,
-    /// The suite root this fixture was collected from — `tests/fixtures`, or
-    /// `tests/pending` under `--fixture-root=`. A runner needs it as a second
-    /// include dir (`check.vh` lives at the root, not beside the fixture) and
-    /// as the scratch namespace, and taking it from the fixture rather than
-    /// from `suite_options` is what lets one binary walk either tree.
+    /// The suite root this fixture was collected from (`tests/fixtures`, or
+    /// `tests/pending` under `--fixture-root=`): the second include dir, since
+    /// `check.vh` lives there, and the scratch namespace.
     root: []const u8,
     /// `ch04_expressions_01_arithmetic` — the scratch directory name.
     ///
-    /// NOT the stem: three stems (`analog_event`, `discrete_discipline`,
-    /// `multiple_analog_blocks`) appear in more than one chapter, and two
-    /// fixtures sharing a scratch directory overwrite each other's output.
-    /// Sequentially that is merely wasteful; in parallel it is a race that
-    /// decides the verdict.
+    /// Not the stem: stems repeat across chapters, and fixtures sharing a
+    /// scratch directory race in parallel.
     slug: []const u8,
 };
 
 /// What the compiler under test did with one fixture, in the only vocabulary
 /// both sides can speak.
 ///
-/// It is not "accepted / rejected", because that answer alone does not say
-/// whether the fixture is satisfied — a `//! reject` fixture wants a refusal and
-/// every other fixture wants a compile, and only the runner knows how close its
-/// compiler came. So a runner answers the question the harness actually asks —
-/// did it do what the fixture says? — and writes the DETAIL to its report
-/// writer. The harness may suppress that detail (see `xfail`), so a runner must
-/// never print anywhere else.
+/// The question is "did it do what the fixture says?", not accepted/rejected.
+/// A runner writes its detail only to the report writer, which the harness may
+/// suppress (for an xfail).
 pub const Result = union(enum) {
     /// Did what the fixture says it must.
     met,
@@ -101,28 +53,17 @@ pub const Result = union(enum) {
 pub const Compiler = struct {
     /// Names the compiler in the report — `vera`, `openvaf-r`.
     name: []const u8,
-    /// Does this compiler RUN a fixture, or only accept or refuse it?
-    ///
-    /// Accept/reject is the part of a fixture that travels: "must not compile,
-    /// per §5.8" is a claim any compiler can be held to. The `ok=1` columns are
-    /// not — they need a host that stamps the device and prints a transcript.
-    /// Set false and the harness stops asking for what cannot be answered: a
-    /// fixture that asserts nothing is not held against the compiler, and the
-    /// summary says which of the two questions the numbers answer.
+    /// Whether this compiler runs a fixture or only accepts or refuses it. When
+    /// false, an unasserted fixture is not held against it and the summary says
+    /// no `ok=` column was checked.
     runs: bool,
-    /// Is `//! xfail` a statement about THIS compiler?
-    ///
-    /// The marker means "the fixture is right and the compiler does not meet it
-    /// yet", and a fixture can only carry one such claim — VerA's, since VerA is
-    /// what the suite is developed against. Honouring it for anyone else
-    /// INVERTS the fixture in both directions: a compiler that fails the rule is
-    /// excused as XFAIL, and one that MEETS the rule is failed as an XPASS.
-    /// Ignore it instead, and the fixture says exactly what the LRM says.
+    /// Whether `//! xfail` describes this compiler. Markers record VerA's gaps;
+    /// honouring them for another compiler would excuse its failures and fail
+    /// its passes as XPASS.
     owns_xfail: bool,
-    /// Passed back to the two callbacks. `*anyopaque` and not a comptime type
-    /// parameter so that `run` is one function and not one per runner.
+    /// Passed back to `check`; type-erased so `run` is one function.
     ctx: *anyopaque,
-    /// THE plug. Judge one fixture; write any detail to `w`.
+    /// Judges one fixture; writes any detail to `w` and nowhere else.
     check: *const fn (
         ctx: *anyopaque,
         gpa: std.mem.Allocator,
@@ -135,51 +76,36 @@ pub const Compiler = struct {
     ) anyerror!Result,
 };
 
-/// Every knob the SUITE has, parsed once by `tests/bench.zig` and handed to
-/// everything that needs one.
-///
-/// It is a value and not a per-runner argument callback because there is one
-/// run of the suite now and up to three compilers inside it: the VerA plug, the
-/// same plug reduced to accept/reject, and the foreign compiler. A filter or a
-/// `--fixture-root` that reached one of them and not the others would be a
-/// head-to-head over two different fixture sets.
+/// Every suite knob, parsed once by `tests/bench.zig` and shared by all the
+/// compilers in a run, so a head-to-head never walks two fixture sets.
 pub const Config = struct {
-    /// `tests/pending` is the approved-but-unimplemented tree: the same rules,
-    /// fixtures VerA does not meet yet, and a nonzero exit is its expected
-    /// state. A run-time path and not a second options module, because one
-    /// binary would otherwise need a second copy of itself to walk a second
-    /// directory.
+    /// The fixture tree to walk. `tests/pending` holds approved fixtures VerA
+    /// does not meet yet; a nonzero exit is its expected state.
     root: []const u8 = options.fixture_root,
     /// A plain substring over the whole path.
     filter: ?[]const u8 = null,
     strict: bool = false,
     coverage: bool = false,
-    /// One thread per core, because a fixture is a whole compilation and that
-    /// is where the runtime goes. `-j1` is the escape hatch: it prints as it
-    /// goes, which is the only way to see WHICH fixture a run is stuck on.
+    /// Worker threads, default one per core. `-j1` prints as it goes, which
+    /// shows the fixture a run is stuck on.
     jobs: usize = 0,
-    /// `-Doptimize` builds the RUNNER; this builds the per-fixture testbench
-    /// binaries the runner spawns a `zig build-exe` for. Two different
-    /// programs, so two different defaults — and Debug is right for the
-    /// fixtures, see the fixture-opt note in tests/torture.zig.
-    ///
-    /// Debug LITERALLY and not through a build option: `-Dfixture-optimize`
-    /// could not pass an enum (`addOption` emits its own copy of the type,
-    /// which is then a different type from `std.builtin.OptimizeMode` here), so
-    /// it went across as the tag name and came back through `stringToEnum`
-    /// with an `.?` on the end. Three moving parts for a default nobody moved.
+    /// Optimize mode of the per-fixture testbench binaries (`-Doptimize` builds
+    /// the runner). Debug: a testbench compiles for seconds and runs for
+    /// microseconds, and safety checks make a codegen bug trap instead of
+    /// printing a plausible wrong number. Zig floats are strict IEEE in every
+    /// mode, so `--fixture-opt=ReleaseFast` asks only about optimization.
     fixture_opt: std.builtin.OptimizeMode = .Debug,
     /// `--fixture-backend=llvm|native`; null is `Backend.auto(fixture_opt, <host>)`.
     fixture_backend: ?vera.orchestrator.Backend = null,
 
+    /// Returns the defaults, with `jobs` set to the CPU count.
     pub fn init() Config {
         return .{ .jobs = std.Thread.getCpuCount() catch 1 };
     }
 };
 
-/// Consume one argument if it is the suite's; false leaves it to the caller.
-/// The unrecognised word is the filter, and that decision stays with
-/// `tests/bench.zig` so a typo'd flag of ITS own is not silently a filter.
+/// Consumes one argument if it is the suite's; false leaves it to the caller,
+/// which decides whether it is a filter. Exits 2 on a malformed value.
 pub fn takeArg(cfg: *Config, a: []const u8) bool {
     if (std.mem.eql(u8, a, "--strict")) cfg.strict = true //
     else if (std.mem.eql(u8, a, "--coverage")) cfg.coverage = true //
@@ -201,6 +127,7 @@ pub fn takeArg(cfg: *Config, a: []const u8) bool {
     return true;
 }
 
+/// A fixture's outcome after the verdict algebra.
 pub const Verdict = enum {
     /// Behaved as the fixture said it would.
     pass,
@@ -213,18 +140,11 @@ pub const Verdict = enum {
     /// with `//! xfail`. The rule is real, this compiler does not meet it yet.
     /// Not a pass either.
     ///
-    /// ONE reason only, and that is deliberate. A second used to be admitted — a
-    /// fixture whose clause is CONDITIONAL on something false for this tool, so
-    /// the requirement never bound it, with Annex E's SPICE-netlist family
-    /// (E.1.1: "if a simulator is also able to read SPICE netlists") as the whole
-    /// of that set. Those three fixtures pass now: VerA reads `.MODEL` and
-    /// `.SUBCKT` cards (lib/frontend/spice_cards.zig), which made the antecedent
-    /// true instead of arguing about whom it bound. Nothing else in the suite was
-    /// ever in that category, so an xfail here means one thing: a real
-    /// requirement this compiler does not meet yet.
+    /// This is the only meaning an xfail has.
     xfail,
 };
 
+/// Tally of verdicts over one run.
 pub const Counts = struct {
     passed: usize = 0,
     failed: usize = 0,
@@ -252,9 +172,8 @@ const Slot = struct {
 
 /// The work queue, shared by every worker.
 ///
-/// The unit of work is one whole fixture, and fixtures share nothing: separate
-/// source, separate scratch directory (`Fixture.slug`), separate output slot. So
-/// the only synchronisation needed is which one to take next.
+/// Fixtures share nothing (source, scratch directory, output slot), so the only
+/// synchronisation is which one to take next.
 const Job = struct {
     gpa: std.mem.Allocator,
     io: Io,
@@ -304,11 +223,8 @@ fn numeric(a: []const u8, prefix: []const u8) ?usize {
     return std.fmt.parseInt(usize, a[prefix.len..], 10) catch null;
 }
 
-/// The judged pass: every fixture, this compiler, the report on stderr.
-///
-/// `tally` receives the counts the summary prints, because the head-to-head
-/// table wants them as a row and re-deriving them would be a second place for
-/// "how many passed" to be computed.
+/// The judged pass: every fixture through this compiler, the report on stderr.
+/// `tally` receives the counts the summary prints, for the head-to-head table.
 pub fn run(
     init: std.process.Init,
     compiler: Compiler,
@@ -342,8 +258,7 @@ pub fn run(
     const strict = cfg.strict;
     var counts: Counts = .{};
     if (cfg.jobs <= 1) {
-        // The sequential path, kept working on purpose: it prints as it goes,
-        // which is the only way to see WHICH fixture a run is stuck on.
+        // Sequential: prints as it goes, showing the fixture a run is stuck on.
         for (fixtures) |f| {
             counts.add(try judge(gpa, io, arena, compiler, f, strict, w));
             try w.flush();
@@ -416,42 +331,21 @@ fn summarize(compiler: Compiler, c: Counts, total: usize, w: *Io.Writer) !void {
     );
 }
 
-/// `--coverage`: the cited set, the UNCITED set, and the cites that name no
-/// clause at all — all three against `docs/*.html`, which is the LRM this suite
-/// is written from.
+/// `--coverage`: the cited clauses, the uncited ones, and cites that name no
+/// clause, all against the table of contents read from `docs/*.html`.
 ///
-/// This used to be the cited half alone, and said so: "it cannot say a clause is
-/// UNcited — nothing here has the LRM's table of contents, and inventing one
-/// would be a second document to drift." The objection was right and the
-/// conclusion was not. `docs/` IS the specification; reading the contents page
-/// out of it at run time invents nothing and cannot drift, because there is no
-/// second copy to keep true. Without it "the suite is comprehensive" is an
-/// opinion — a citation list can only ever be evidence about the questions
-/// somebody already thought to ask.
-///
-/// A cite carries its fixture's declared POLARITY. This is a static inventory:
-/// no compilation or execution happens here. Neither a positive citation nor
-/// a rejection citation proves the cited rule. In particular, an XFAIL still
-/// contributes a citation and a rejection can pin an implementation limitation.
-/// Conforming to a clause by only ever refusing it is the
-/// failure mode a cited/uncited count cannot see, and it is not hypothetical
-/// here — `$simprobe`, the `zi_*` non-zero-tau forms and the whole §9.22 family
-/// are diagnosed and never implemented. So the report separates `+` from `-`
-/// and names the one-sided clauses.
-///
-/// A one-sided clause is NOT automatically a gap: a clause that states no error
-/// has nothing to reject, and one that only forbids has nothing to run. Which is
-/// why this prints the list and does not score it — the judgement is per clause
-/// and belongs to whoever reads the LRM sentence.
+/// A static inventory: nothing is compiled or run, so a cite proves nothing
+/// (an XFAIL still cites). Each cite carries its fixture's declared polarity,
+/// and the report separates `+` from `-` and lists one-sided clauses, because
+/// refusing a construct is not implementing it. One-sided is listed, not
+/// scored: a clause that states no error has nothing to reject.
 ///
 /// The `.c` VPI fixtures cite with the same `//! lrm` lines (`cCites`), with
 /// per-line polarity, and count only when `build.zig` runs them: a `.c` that
 /// only compiles is listed as `~` and moves no number.
 ///
-/// Returns whether every cite resolved. An unresolved cite is a FIXTURE defect
-/// of the same family the format already fails on (a cite that is not a section
-/// number), so it is the one thing here that decides an exit code. An uncited or
-/// one-sided clause is a work item, not a defect, and does not.
+/// Returns whether every cite resolved; an unresolved cite is a fixture defect.
+/// Uncited and one-sided clauses are work items and do not affect the result.
 fn reportCoverage(
     arena: std.mem.Allocator,
     io: Io,
@@ -815,10 +709,9 @@ fn cFixtureRuns(path: []const u8) bool {
 ///   //! lrm 12.16          a result this clause requires is asserted
 ///   //! lrm-reject 12.34   a refusal (error return, vpi_chk_error) is asserted
 ///
-/// Neither counts unless the fixture RUNS (`runs`): compiler acceptance is not
-/// runtime evidence (`AGENTS.md §2`), so a compile-only fixture's cites become
-/// `.compiled` — listed, never counted. Any other `//!` key is a malformed
-/// tag, reported rather than skipped.
+/// Neither counts unless the fixture runs (`runs`): a compile-only fixture's
+/// cites become `.compiled`, listed and never counted. Any other `//!` key is
+/// a malformed tag, reported rather than skipped.
 fn cCites(
     arena: std.mem.Allocator,
     out: *std.ArrayList(Cite),
@@ -878,13 +771,9 @@ pub const Clause = struct {
 
 /// The LRM's table of contents, read out of `docs/*.html` at run time.
 ///
-/// Headings are recovered from the RENDERED TEXT and not from an `id=` anchor,
-/// because the chapters do not agree on markup and the anchors are not
-/// complete: ch4 tags every heading (`<h3 id="s4-2-1">4.2.1 …</h3>`), ch5
-/// carries its headings as bare lines and has three anchors in the whole file,
-/// and Annex A prefixes its ids with `a-` instead of `s`. Text is the one form
-/// all of them share. MEASURED on this tree: text alone finds 616 clauses,
-/// anchors alone find 475, and the union finds nothing text does not.
+/// Headings are recovered from the rendered text, not `id=` anchors: the
+/// chapters disagree on markup and the anchors are incomplete, while text finds
+/// every clause the anchors do.
 fn lrmClauses(
     arena: std.mem.Allocator,
     io: Io,
@@ -931,14 +820,9 @@ fn lrmClauses(
 /// Which chapter or annex a file declares: `ch9-system.html` -> `9`,
 /// `annex-a-syntax.html` -> `A`. Null for a file that declares neither.
 ///
-/// A heading declares a clause of ITS OWN file, and requiring that is what
-/// separates a heading from a cross-reference that happens to open a paragraph.
-/// Two families of false clause were reaching the report without it, and
-/// neither is a spelling problem a looser line test could have caught: ch9
-/// opens a paragraph with "§17.9.3 of IEEE Std 1364 Verilog contains the
-/// C-code…", which is a clause of a DIFFERENT STANDARD, and Annex G's change
-/// tables list ch7 subclause numbers with "(subclause deleted in v2.3)" where a
-/// title would go.
+/// A heading declares a clause of its own file; requiring that rejects
+/// cross-references that open a paragraph (ch9 cites IEEE 1364 §17.9.3; Annex
+/// G's change tables list ch7 subclauses).
 fn clausePrefix(basename: []const u8) ?[]const u8 {
     if (std.mem.startsWith(u8, basename, "ch")) {
         const dash = std.mem.indexOfScalar(u8, basename, '-') orelse return null;
@@ -1127,32 +1011,19 @@ fn sectionLessThan(a: []const u8, b: []const u8) bool {
 /// `.va` is unconditional. `.v` is the awkward one, because three different
 /// things share that extension in `tests/fixtures/{ieee1364,digital}/`:
 ///
-///   1. 66 files with a `<stem>.expected.txt` beside them. Those belong to
-///      `zig build test-devices`, which runs `vera --run` and diffs the
-///      transcript (`bench.zig`'s `digitalCases`). Judging them here as well
-///      would score one fixture twice, under two different questions.
-///   2. 12 files carrying a directive and no golden — ten `//! reject` rows
-///      plus two `//! expect vcd`. **These were read by nothing at all**, which
-///      is what this function exists to fix. The ten are ordinary accept/reject
-///      fixtures and the verdict algebra already handles them; the two VCD ones
-///      are judged by `judgeVcd`, which runs them and compares the dump file.
-///   3. `p02_design.v`, `p02_systf.v`, `p02_scales.v` — VPI support material
-///      with no directives at all. A design a test loads is not a fixture, and
-///      counting one as `unasserted` would be dishonest in the other direction.
+///   1. Files with a `<stem>.expected.txt` beside them belong to `zig build
+///      test-devices` (`bench.zig`'s `digitalCases`), not here.
+///   2. Files with a directive and no golden are judged here: `//! reject`
+///      rows by the usual algebra, `//! expect vcd` rows by `judgeVcd`.
+///   3. Files with no directive (VPI support designs such as `p02_design.v`)
+///      are not fixtures.
 ///
 /// So: a `.v` joins this legacy walk when it carries a directive and has no
 /// golden, unless explicitly opted into the digital-negative runner below.
 /// Legacy negative results are analog compilation results, NOT evidence that
 /// the digital executor diagnosed the intended rule.
 ///
-/// **The whole file is scanned, and the line rule is `tb.parse`'s own** — a
-/// line whose trimmed form starts with `//!`. Neither shortcut works here. A
-/// byte bound does not, because `AGENTS.md §6` has the header quote the LRM and
-/// derive the value by hand *before* the machine-readable tags, which puts the
-/// first directive between 1.5 KB and 4.4 KB into these twelve files; a 512-byte
-/// header scan found none of them. A plain substring does not, because `//!`
-/// inside a string literal is not a directive. Membership has to agree with the
-/// parser that reads them, or a fixture is collected and then asserts nothing.
+/// The whole file is scanned with `tb.parse`'s line rule (see `hasDirective`).
 fn fixtureExt(arena: std.mem.Allocator, io: Io, dir: Io.Dir, rel: []const u8) ?[]const u8 {
     if (std.mem.endsWith(u8, rel, ".va")) return ".va";
     if (!std.mem.endsWith(u8, rel, ".v")) return null;
@@ -1163,8 +1034,8 @@ fn fixtureExt(arena: std.mem.Allocator, io: Io, dir: Io.Dir, rel: []const u8) ?[
     if (dir.access(io, golden, .{})) |_| return null else |_| {}
 
     const source = dir.readFileAlloc(io, rel, arena, .limited(1 << 20)) catch return null;
-    // Explicit digital negatives belong exclusively to bench's --run runner.
-    // Legacy unmarked .v rejects retain their historical analog compile route.
+    // Explicit digital negatives belong to bench's `--run` runner; unmarked
+    // `.v` rejects take the analog compile route.
     if (digitalNegative(source)) return null;
     return if (hasDirective(source)) ".v" else null;
 }
@@ -1190,6 +1061,8 @@ pub fn digitalStd(source: []const u8) ?[]const u8 {
     return null;
 }
 
+/// Whether a `.v` is a digital transcript case: it has a golden or opts into
+/// the digital reject runner. Anything else is support material.
 pub fn digitalCaseSelected(has_golden: bool, source: []const u8) bool {
     return has_golden or digitalNegative(source);
 }
@@ -1275,10 +1148,10 @@ pub var vera_exe: ?[]const u8 = null;
 /// `//! expect vcd <produced> == <golden>`: `vera --run` of the `.v` writes
 /// `<produced>` (relative to the run's working directory), which must equal
 /// `<golden>` (relative to the fixture) once both are normalised (`vcdTokens`).
-/// Null when the fixture says no such thing — or says it malformed, which then
-/// reaches `tb.parse` and fails there as the unknown directive it is.
 pub const VcdExpect = struct { produced: []const u8, golden: []const u8 };
 
+/// Returns the fixture's `//! expect vcd` line, slices into `source`. Null when
+/// there is none, or it is malformed (then `tb.parse` fails it as unknown).
 pub fn vcdExpectation(source: []const u8) ?VcdExpect {
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
@@ -1452,10 +1325,8 @@ fn hasDirective(source: []const u8) bool {
 }
 
 test "a directive is found after the hand-derivation, not just in a header" {
-    // The bug this pins: a 512-byte header scan found none of the twelve `.v`
-    // fixtures, because AGENTS.md §6 puts the LRM quote and the by-hand
-    // derivation BEFORE the machine-readable tags. In the real files the first
-    // directive lands between 1.5 KB and 4.4 KB in.
+    // Directives follow the header's LRM quote and derivation, often kilobytes
+    // into the file, so the whole file must be scanned.
     var prose: [4096]u8 = @splat('x');
     const late = try std.fmt.allocPrint(
         std.testing.allocator,
@@ -1521,16 +1392,9 @@ pub fn collect(arena: std.mem.Allocator, io: Io, root: []const u8, filter: ?[]co
 // The verdict algebra — the whole reason both runners share this file
 // ---------------------------------------------------------------------------
 
-/// One fixture, from source text to verdict.
-///
-/// The runner answers `met` / `unmet`; everything that turns that into a verdict
-/// is here, so `//! xfail` cannot mean one thing for VerA and another for the
-/// compiler it is being compared against.
-///
-/// `pub` because the head-to-head table in `tests/bench.zig` needs a verdict
-/// PER FIXTURE for two compilers rather than a tally for one, and reaching for
-/// this rather than writing a second comparison is the whole point of the file:
-/// the two columns are the same function, called twice.
+/// One fixture, from source text to verdict. The runner answers met/unmet;
+/// the rest (xfail, strict, the assertion lint) is here, so every compiler is
+/// judged alike. The head-to-head in `tests/bench.zig` calls it per fixture.
 pub fn judge(
     gpa: std.mem.Allocator,
     io: Io,
@@ -1580,11 +1444,9 @@ fn decide(
     strict: bool,
     w: *Io.Writer,
 ) !Verdict {
-    // A malformed assertion is the FIXTURE's defect, in every compiler, and no
-    // `//! xfail` may launder it: a marker on a fixture whose want is an
-    // expression would be carried forever and prove nothing on the day the gap
-    // closes. Checked before the fixture costs a compile — and not on a `//!
-    // reject` fixture, which is not expected to reach a transcript at all.
+    // A malformed assertion is the fixture's defect in every compiler, and no
+    // `//! xfail` excuses it. Checked before compiling; not on a `//! reject`
+    // fixture, which never reaches a transcript.
     const lint = if (d.reject.len != 0) .ok else checkAssertions(source);
     switch (lint) {
         .ok => {},
@@ -1620,10 +1482,8 @@ fn decide(
         },
     }
 
-    // The runner's detail is buffered, not streamed: for an xfail it is not news
-    // — WHAT the compiler does not do belongs on the `//! xfail` line, where it
-    // can be triaged without rerunning — and every other verdict emits it
-    // verbatim.
+    // Buffered: an xfail suppresses it (its reason is on the `//! xfail`
+    // line); every other verdict emits it verbatim.
     var aw: Io.Writer.Allocating = .init(gpa);
     defer aw.deinit();
     const result = try compiler.check(compiler.ctx, gpa, io, arena, f, source, d, &aw.writer);
@@ -1653,17 +1513,8 @@ fn decide(
             try w.writeAll(aw.written());
             return .fail;
         },
-        // Not a conformance answer, so the marker does not touch it: `unasserted`
-        // proves nothing, so it cannot show a gap is closed. It keeps its own
-        // report.
-        //
-        // There used to be a third verdict beside it, `cannot_run` — the fixture
-        // is right, the compiler is right, and the HOST still will not run it. It
-        // is gone because it had exactly one producer, the device contract's
-        // refusal of a module with no port list (§6.2 makes the port list
-        // optional), and that refusal was a stale guard rather than a real
-        // limitation. Nothing in either runner can report a host limitation
-        // today; re-add the verdict when something can, not before.
+        // Not a conformance answer, so the xfail marker does not touch it:
+        // `unasserted` proves nothing and cannot show a gap is closed.
         .unasserted => {
             try w.writeAll(aw.written());
             return .unasserted;
@@ -1675,6 +1526,7 @@ fn decide(
 // The assertion lint — the mechanical half of "restricting and true"
 // ---------------------------------------------------------------------------
 
+/// The assertion lint's finding for one source.
 pub const AssertionCheck = union(enum) {
     /// At least one assertion, and every one of them can fail.
     ok,
@@ -1686,13 +1538,10 @@ pub const AssertionCheck = union(enum) {
     computed_want: []const u8,
 };
 
-/// Run on RAW source, before the fixture costs a compile.
-///
-/// TRUE cannot be mechanised — whether `0.479425538604203` really is sin(0.5) is
-/// a human's job, once, at review. What CAN be mechanised is the thing that made
-/// the deleted snapshots worthless: the want must be a literal a human typed,
-/// never an expression the compiler under test evaluates. `CHECK("sin", sin(0.5),
-/// sin(0.5), 1e-15)` passes in any compiler, correct or not, and this rejects it.
+/// Lints the `CHECK*` calls in raw source: every want must be a literal a
+/// human typed, never an expression the compiler under test evaluates.
+/// `CHECK("sin", sin(0.5), sin(0.5), 1e-15)` passes in any compiler; this
+/// rejects it. Whether the literal is right is the reviewer's job.
 pub fn checkAssertions(source: []const u8) AssertionCheck {
     var found = false;
     var scan: MacroScan = .{ .src = source };
@@ -1729,24 +1578,10 @@ pub fn checkAssertions(source: []const u8) AssertionCheck {
     return if (found) .ok else .none;
 }
 
-/// Finds each `CHECK*` macro CALL at CODE level — outside comments and outside
-/// string literals. It exists because the two-`indexOf` scan it replaces was
-/// wrong in two ways that both let unrelated text decide a fixture's verdict:
-///
-///   - it took the next `(` ANYWHERE downstream of the macro name, so a `CHECK`
-///     with no argument list at all borrowed the parenthesis of whatever came
-///     next — including prose. Wave 5 flipped six fixtures' verdicts merely by
-///     lengthening an `//! xfail` string, which is a scanner defect and not a
-///     fixture one;
-///   - it did not know what a comment was, and 35 fixtures name these macros in
-///     their header paragraphs ("so this is `CHECKX` and not a tolerance").
-///     Those mentions were scanned as invocations, and one of them — the
-///     `CHECKEQ(..., code, $fseek(fd,0,0), 0)` quoted in ch09/051_rewind.va —
-///     has four arguments, so it reached the literal rule.
-///
-/// §10.3's usage is `` `identifier ``, and an actual-argument list belongs to
-/// that token: the `(` follows the name with at most horizontal white space
-/// between. That is the whole grammar of a call, and nothing else is one.
+/// Finds each `CHECK*` macro call outside comments and string literals. A call
+/// is §10.3's `` `identifier `` followed by `(` with at most horizontal white
+/// space between; a name with no argument list is not a call, so it cannot
+/// borrow a later `(` from unrelated text.
 const MacroScan = struct {
     src: []const u8,
     i: usize = 0,
@@ -1813,8 +1648,7 @@ fn isIdentChar(c: u8) bool {
 }
 
 /// Drop redundant outer parentheses, so `(V(a,b))` and `V(a,b)` compare equal.
-/// Without this, wrapping one side of an assertion in parens is enough to hide
-/// a tautology from the check below — which is exactly how one got written.
+/// Otherwise parens around one side would hide a tautology.
 fn stripParens(s: []const u8) []const u8 {
     var t = std.mem.trim(u8, s, " \t\r\n");
     while (t.len >= 2 and t[0] == '(' and matchParen(t, 0) == t.len - 1) {
@@ -2027,9 +1861,7 @@ test "an assertion whose want is the got cannot fail" {
 }
 
 test "the assertion lint reads code, not prose" {
-    // THE DEFECT: the name with no argument list borrowed a `(` from downstream,
-    // so a fixture's verdict depended on unrelated text after it. Both of these
-    // used to read as one four-argument call spanning the whole snippet.
+    // A name with no argument list must not borrow a `(` from later text.
     try std.testing.expect(checkAssertions(
         \\// so this assertion is `CHECKX and not a tolerance.
         \\I(p, n) <+ ddt(V(p, n), 1.0);
@@ -2038,8 +1870,8 @@ test "the assertion lint reads code, not prose" {
         \\// An earlier revision wrote `CHECKEQ(y, expected_y) here.
         \\`CHECKX("real", V(p, n), 0.5);
     ) == .ok);
-    // A comment naming the macro is not an invocation even when it does quote a
-    // full argument list — 35 fixtures do this in their headers.
+    // A comment naming the macro is not an invocation even when it quotes a
+    // full argument list.
     try std.testing.expect(checkAssertions(
         \\// It WAS `CHECKEQ("x", code, $fseek(fd, 0, 0), 0), which asserted nothing.
     ) == .none);
