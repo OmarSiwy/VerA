@@ -1,9 +1,7 @@
-//! §2.4 comments: `//` and `/* */` removed, newlines kept.
-//!
-//! In: source bytes. Out: the same bytes with comments blanked and a mark table mapping the
-//! stripped text back to source offsets for diagnostics.
-//!
-//! LRM clauses this file's code cites: §2.2, §2.4, §2.7, §2.8.1.
+//! Comment stripping: source bytes in, the bytes with each comment replaced by
+//! its newlines (or one space) out, plus marks mapping stripped offsets back
+//! to source offsets for diagnostics.
+//! LRM §2.2, §2.4, §2.7, §2.8.1.
 
 const std = @import("std");
 const Preprocessor = @import("../preprocessor.zig");
@@ -17,19 +15,19 @@ const stringStop = Preprocessor.stringStop;
 // §2.4 comments
 // ---------------------------------------------------------------------------
 
+/// `stripComments`' result, arena-owned.
 pub const Stripped = struct { text: []const u8, marks: []const diag.StripMark };
 
-/// Replace `//`- and `/* */`-comments with nothing, keeping every newline they
-/// contained so line numbers survive. String literals (§2.7) are opaque.
-/// Block comments do NOT nest (§2.4) — `/* a /* b */` ends at the first `*/`.
+/// Removes `//` and `/* */` comments, keeping the newlines they contained so
+/// line numbers survive; a single-line block comment leaves one space, since
+/// §2.2 makes a comment a token separator. String literals (§2.7) and escaped
+/// identifiers (§2.8.1) are opaque. Block comments do not nest (§2.4).
 ///
-/// Also returns one `diag.StripMark` per comment collapsed — the stripped→
-/// original offset map the renderer needs to put a caret on the line the user
-/// WROTE. LINES already agree between the two texts (that is the newline
-/// contract above); what a comment shifts is every COLUMN after it, and every
-/// absolute offset below it, in ways only the stripper knows.
+/// Also returns one `diag.StripMark` per comment: lines agree between the two
+/// texts, but a comment shifts every column after it, and the renderer maps
+/// back through the marks. An unterminated block comment is E0102.
 pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
-    // Fast path: most sources shrink, none grow.
+    // The output never grows, so every append below fits.
     var out: std.ArrayList(u8) = .empty;
     try out.ensureTotalCapacity(pp.arena, src.len);
     var marks: std.ArrayList(diag.StripMark) = .empty;
@@ -56,11 +54,10 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             continue;
         }
         if (c == '/' and i + 1 < src.len and src[i + 1] == '/') {
-            // §2.4: to the end of the line. `indexOfScalarPos` IS vectorized in
-            // the stdlib (`std/mem.zig:1241`), unlike the set-valued `findAnyPos`.
+            // §2.4: to the end of the line. A single-needle search is vectorized.
             i = std.mem.indexOfScalarPos(u8, src, i, '\n') orelse src.len;
-            // The output stood still while the input advanced: from here the
-            // two run in lockstep again, which is exactly one mark.
+            // The output stood still while the input advanced; from here the
+            // two run in lockstep again, which is one mark.
             try marks.append(pp.arena, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
             continue;
         }
@@ -71,15 +68,9 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             // Offsets here index `src`, which runFile registered before this
             // call precisely so this span resolves.
             if (i + 1 >= src.len) return pp.fail(pp.spanAt(start, start + 2), .E0102, "", .{});
-            // §2.2: "spaces and newlines shall not be syntactically significant
-            // other than being token separators", and the same list makes a
-            // comment one of the seven lexical tokens — so a comment SEPARATES
-            // the tokens around it. Re-emitting only the newlines is enough for
-            // a multi-line comment and silently WELDS a single-line one:
-            // `1/*c*/2` used to lex as the integer 12 and `<` `/*c*/` `=` as the
-            // operator `<=`, both with no diagnostic. One byte of whitespace
-            // fixes both, and it always fits: the comment it replaces is at
-            // least the four bytes of `/**/`.
+            // §2.2 makes a comment a token separator. A multi-line comment
+            // separates through its newlines; a single-line one leaves a space,
+            // or `1/*c*/2` would lex as 12. It fits: `/**/` is four bytes.
             const lines = std.mem.count(u8, src[start..i], "\n");
             if (lines == 0) {
                 out.appendAssumeCapacity(' ');
@@ -88,18 +79,12 @@ pub fn stripComments(pp: *Pp, src: []const u8) Error!Stripped {
             }
             i += 2;
             // After the replacement bytes, so the lockstep run the mark opens
-            // starts at the first byte AFTER the comment on both sides.
+            // starts at the first byte after the comment on both sides.
             try marks.append(pp.arena, .{ .out = @intCast(out.items.len), .src = @intCast(i) });
             continue;
         }
-        // Ordinary text: copy the whole run up to the next byte the branches
-        // above care about, in one `appendSlice`. Same chain-outside /
-        // scan-inside split as `scan`.
-        //
-        // `src[i]` is neither `"` nor `\` — both `continue` above — but it CAN
-        // be a `/` that starts neither comment: at end of file, or before an
-        // ordinary byte. That is the `end == i` case, and stepping one byte is
-        // cheaper than teaching the stop set to exclude it.
+        // Ordinary text up to the next byte the branches above care about.
+        // `end == i` is a '/' that starts no comment; step over it.
         const end = findStop(src, i, "\"\\/");
         if (end == i) {
             out.appendAssumeCapacity(c);

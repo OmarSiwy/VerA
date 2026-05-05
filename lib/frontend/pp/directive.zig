@@ -1,9 +1,6 @@
-//! `include (§10.3), §10.2 `default_discipline and friends, IEEE 1364 §19.7 `line.
-//!
-//! In: one compiler directive. Out: the included text, or the directive's effect recorded in
-//! the side tables lowering reads (default discipline, transition, timescale).
-//!
-//! LRM clauses this file's code cites: §1, §2.6, §2.8.2, §4.5.8, §7.4, §9.15.
+//! Directives with operands: one directive's text in, the included file scanned
+//! or a `Directives` event recorded out.
+//! LRM §10.2, §10.3; IEEE 1364 §19.2, §19.5, §19.7, §19.9, §19.10.
 
 const std = @import("std");
 const diag = @import("diag");
@@ -24,6 +21,8 @@ const isSpace = Preprocessor.isSpace;
 // `include
 // ---------------------------------------------------------------------------
 
+/// Reads and scans the file an IEEE 1364 §19.5 `include names. `rest` is the
+/// line after the word, starting at offset `off`; `at` is the '`'.
 pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     // The directive word, for the errors that have nothing better to point at.
     const sp = pp.spanAt(at, off);
@@ -71,20 +70,20 @@ pub fn handleInclude(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!voi
 
     try pp.includes.append(pp.arena, path);
     defer _ = pp.includes.pop();
-    // Registered under the OPENED path, so `__FILE__` and every diagnostic
+    // Registered under the opened path, so `__FILE__` and every diagnostic
     // inside the file name the file that was read (§10.7).
     try pp.runFile(inc.text, inc.path, null);
     // `scan` resyncs the map back to the parent file when `directive` returns.
 }
 
-/// Search order: caller include dirs (in order), then the built-in annex D
-/// files by basename. Returns null if nothing matched.
-/// The bytes of an `include, and the path they were opened by. §10.7 makes
-/// that path what `__FILE__` expands to inside the file: "the path by which a
-/// tool opened the file, not the short name specified in `include". A
-/// built-in annex D file is opened by no path, so it keeps the name written.
+/// The bytes of an `include and the path they were opened by, which §10.7
+/// makes `__FILE__`: "the path by which a tool opened the file, not the short
+/// name specified in `include". A built-in annex D file keeps the name written.
 pub const Included = struct { text: []const u8, path: []const u8 };
 
+/// Returns the `include file for `path`: an absolute path as written, else
+/// the first hit in the include dirs, else a built-in annex D file by
+/// basename. Null if nothing matched. The bytes are arena-owned.
 pub fn readInclude(pp: *Pp, path: []const u8) Error!?Included {
     // IEEE 1364 §19.5: a full path name is opened as written; `join` skips
     // the empty base.
@@ -107,25 +106,18 @@ pub fn readInclude(pp: *Pp, path: []const u8) Error!?Included {
 }
 
 // ---------------------------------------------------------------------------
-// §10.2 `default_discipline, IEEE 1364 §19.7 `line
+// Directives recorded as `Directives` events, and `line
 // ---------------------------------------------------------------------------
 
-/// §10.2 Syntax 10-1. `rest` is everything after the word on one logical line;
-/// `off` is the offset `rest` starts at.
-///
-/// Nothing is applied here — the directive's effect is §7.4 discipline
-/// resolution, which needs the module's declarations and so cannot run in a
-/// text stage. What this does is PARSE it (a wrong qualifier is a syntax error
-/// the front end owes the user, and it is exactly the typo the closed list
-/// exists to catch, two adjacent identifiers being easy to duplicate) and
-/// record the event with the output offset it takes effect from.
+/// Parses a §10.2 Syntax 10-1 `default_discipline and records its event;
+/// §7.4 discipline resolution applies it. `rest` is everything after the word
+/// on one logical line, starting at offset `off`.
 pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
-    // Both operands are optional; the bare form WITHDRAWS the default. The
-    // discipline_identifier is an A.9.3 `identifier`, simple OR escaped —
-    // annex D.1 itself declares `discipline \logic ;`, so the escaped spelling
-    // is the only way to name that one here. The qualifier stays `ident()`:
-    // Syntax 10-1 closes it over fifteen KEYWORDS, and §2.8.2 makes an escaped
+    // Both operands are optional; the bare form withdraws the default. The
+    // discipline_identifier is simple or escaped (A.9.3); annex D.1 declares
+    // `discipline \logic ;`, which only the escaped spelling can name. The
+    // qualifier is one of fifteen keywords, and §2.8.2 makes an escaped
     // identifier never a keyword.
     const disc = r.escapedIdent() orelse r.ident() orelse "";
     const word = if (disc.len == 0) "" else r.ident() orelse "";
@@ -147,22 +139,16 @@ pub fn handleDefaultDiscipline(pp: *Pp, rest: []const u8, off: usize) Error!void
     });
 }
 
-/// §10.3 Syntax 10-2:
+/// Parses a §10.3 Syntax 10-2 `default_transition and records its event.
 ///
 ///   default_transition_directive ::= `default_transition transition_time
 ///   transition_time ::= constant_expression
 ///
-/// No brackets round the operand, so it is MANDATORY — see E0129 for why the
-/// bare form is a diagnostic rather than a request for the simulator default.
+/// The operand is mandatory (E0129) and must be a finite, non-negative time.
 ///
-/// `constant_expression` in full is a parser's job and this is a text stage, so
-/// what is read here is one §2.6 number, scale factor included: `4n`, `4e-9`,
-/// `0.000000004`. That is every `default_transition anyone writes, and the
-/// alternative — deferring the directive to the parser the way §10.6
-/// `begin_keywords is deferred — buys an expression grammar for an operand the
-/// LRM only ever illustrates as a literal.
-/// ponytail: upgrade path is emitting the directive verbatim and letting the
-/// parser fold it, the day a model writes `default_transition tr*2.
+/// ponytail: reads one §2.6 number with scale factor (`4n`, `4e-9`), not a
+/// full constant_expression. Upgrade path: emit the directive verbatim and let
+/// the parser fold it, once a model writes `default_transition tr*2.
 pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     r.skipSpace();
@@ -189,24 +175,12 @@ pub fn handleDefaultTransition(pp: *Pp, rest: []const u8, off: usize) Error!void
     try pp.mark(&pp.transitions, t);
 }
 
-/// IEEE Std 1364 §19.9 `` `timescale <unit> / <precision> ``.
-///
-/// Both operands are on Table 19-1's closed grid — a magnitude of 1, 10 or 100
-/// and one of six unit names — so a hand-written table of six exponents is the
-/// whole conversion, and nothing here has to parse a general real.
-///
-/// EVERY way of getting it wrong is E0142. §19.9 gives the directive a closed
-/// grammar and one semantic constraint ("The time precision shall be at least
-/// as precise as the time unit"), and a stream that breaks either wrote a
-/// directive with no reading — there is no second interpretation to fall back
-/// to. Until this code existed a malformed operand left the timescale UNSET,
-/// which pushed the mistake to §9.15's "not known" (E0811) at the far end of
-/// the compilation, or to the digital executor, or nowhere at all when the
-/// model never asked.
+/// Parses an IEEE 1364 §19.9 `` `timescale <unit> / <precision> `` and records
+/// its event. Each operand is on Table 19-1's grid (1, 10 or 100 and one of
+/// six units). Every malformed form, and a precision coarser than the unit,
+/// is E0142.
 pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
-    // The digital consumer must distinguish malformed timing from no directive.
-    // Kept, even though a malformed directive now fails the compilation: a
-    // `resetall writes the same null, and `resetall is not an error.
+    // Marked null first and filled in on success; a `resetall also writes null.
     const event = pp.timescale_events.items.len;
     try pp.mark(&pp.timescale_events, null);
     var r: Rest = .{ .s = rest };
@@ -229,9 +203,8 @@ pub fn handleTimescale(pp: *Pp, rest: []const u8, off: usize) Error!void {
     pp.timescale_events.items[event].value = .{ .unit = unit, .precision = precision };
 }
 
-/// E0142 at the cursor, naming what §19.9's grammar wanted there. `r.i` is
-/// undefined after a failed `timeLiteral`, so the span is the whole operand
-/// list — which is the thing the user has to rewrite anyway.
+/// Emits E0142 naming what §19.9's grammar wanted. `r.i` is undefined after a
+/// failed `timeLiteral`, so the span is the whole operand list.
 fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
     const wrote = std.mem.trim(u8, r.s, " \t\r");
     var b = pp.failWith(pp.spanAt(off, off + r.s.len), .E0142);
@@ -246,23 +219,16 @@ fn badTimescale(pp: *Pp, off: usize, r: *const Rest, wanted: []const u8) Error {
     return error.PreprocessFailed;
 }
 
-/// IEEE Std 1364 §19.2:
+/// Parses an IEEE 1364 §19.2 `default_nettype and records its region.
 ///
 ///   default_nettype_compiler_directive ::= `default_nettype default_nettype_value
 ///   default_nettype_value ::= wire | tri | tri0 | tri1 | wand | triand
 ///                           | wor | trior | trireg | uwire | none
 ///
-/// A CLOSED alternation with no brackets round it, so the operand is mandatory
-/// and anything off the list is a syntax error — the same shape as §10.2's
-/// `qualifier`, and E0140 says so the same way E0127 does. The two lists are
-/// NOT the same list: §10.2 admits `integer`, `real`, `reg`, `wreal`, `supply0`
-/// and `supply1`, none of which §19.2 lets an implicit net be, and §19.2 admits
-/// `uwire` and `none`, which are not qualifiers.
-///
-/// Nothing is applied here. §19.2 decides what happens to an UNDECLARED name
-/// used as a net, which is a question only name resolution can ask, so what
-/// this does is parse the directive and publish the region it opens —
-/// `Lower.nodeOf` and `Elaborate.walkInstances` are the two places that ask.
+/// The operand is mandatory and anything off the list is E0140. This is not
+/// §10.2's qualifier list: that admits `integer`, `real`, `reg`, `wreal`,
+/// `supply0` and `supply1` and lacks `uwire` and `none`. Name resolution
+/// applies the region to undeclared names used as nets.
 pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     const word = r.ident() orelse "";
@@ -281,15 +247,14 @@ pub fn handleDefaultNettype(pp: *Pp, rest: []const u8, off: usize) Error!void {
     try pp.mark(&pp.nettypes, value);
 }
 
-/// IEEE Std 1364 §19.10 `` `unconnected_drive pull1 | pull0 ``. The operand is
-/// a two-way alternation and it is mandatory; the directive that takes none is
-/// spelled `` `nounconnected_drive `` and is a different row of Table 10-1.
+/// Parses an IEEE 1364 §19.10 `` `unconnected_drive pull1 | pull0 `` and
+/// records its region. The operand is mandatory (E0141); the operand-less
+/// form is `` `nounconnected_drive ``.
 pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
     const word = r.ident() orelse "";
-    // `.float` is `nounconnected_drive's value and has no spelling here, so it
-    // is excluded rather than looked up — `unconnected_drive float` is not a
-    // directive.
+    // Not a `stringToEnum`: `.float` is `nounconnected_drive's value, and
+    // `unconnected_drive float` is not a directive.
     const value: Drive = if (std.mem.eql(u8, word, "pull0"))
         .pull0
     else if (std.mem.eql(u8, word, "pull1"))
@@ -309,8 +274,8 @@ pub fn handleUnconnectedDrive(pp: *Pp, rest: []const u8, off: usize) Error!void 
     try pp.mark(&pp.drives, value);
 }
 
-/// `code` if anything but white space is left on the directive line: the
-/// operand, named by `what`, was the last thing `syntax` allows.
+/// Fails with `code` if anything but white space is left on the directive
+/// line: the operand, named by `what`, is the last thing `syntax` allows.
 fn expectEnd(pp: *Pp, r: *Rest, off: usize, code: diag.Code, what: []const u8, syntax: []const u8) Error!void {
     r.skipSpace();
     if (r.i == r.s.len) return;
@@ -321,9 +286,9 @@ fn expectEnd(pp: *Pp, r: *Rest, off: usize, code: diag.Code, what: []const u8, s
     return error.PreprocessFailed;
 }
 
-/// One IEEE 1364 Table 19-1 time literal — `1`, `10` or `100` glued to one of
-/// `s ms us ns ps fs` — as a count of SECONDS, which is the unit §9.15
-/// Table 9-27 asks for. Null (cursor undefined) on anything else.
+/// Reads one IEEE 1364 Table 19-1 time literal (`1`, `10` or `100` glued to
+/// one of `s ms us ns ps fs`) as seconds, the unit §9.15 Table 9-27 asks for.
+/// Null, with the cursor undefined, on anything else.
 fn timeLiteral(r: *Rest) ?f64 {
     r.skipSpace();
     const start = r.i;
@@ -338,10 +303,8 @@ fn timeLiteral(r: *Rest) ?f64 {
         .{ "s", 0 },   .{ "ms", -3 },  .{ "us", -6 },
         .{ "ns", -9 }, .{ "ps", -12 }, .{ "fs", -15 },
     });
-    // Composed as ONE decimal literal and not as magnitude × unit: 100 * 1e-6
-    // is 9.999999999999999e-5, and a §9.15 reader comparing against the 1e-4
-    // it wrote would be one ulp out for a reason that is arithmetic, not
-    // timekeeping. The grid is 18 wide, so the table IS the multiplication.
+    // A table of exact decimal literals, not magnitude * unit: 100 * 1e-6 is
+    // 9.999999999999999e-5, one ulp off the 1e-4 a §9.15 reader expects.
     const decades = [_]f64{
         1e-15, 1e-14, 1e-13, 1e-12, 1e-11, 1e-10, 1e-9, 1e-8, 1e-7,
         1e-6,  1e-5,  1e-4,  1e-3,  1e-2,  1e-1,  1e0,  1e1,  1e2,
@@ -349,17 +312,14 @@ fn timeLiteral(r: *Rest) ?f64 {
     return decades[@intCast(mag + (units.get(unit) orelse return null) + 15)];
 }
 
-/// IEEE Std 1364 §19.7 `line <number> "<file>" <level>, which §10.7 names as
-/// the way `__LINE__` (and possibly `__FILE__`) is remapped. The number is
-/// that of the line FOLLOWING the directive. "All parameters in the `line
-/// directive are required": the number "shall be a positive integer", the
-/// level "shall be 0, 1, or 2", and "only white space may appear on the same
-/// line".
+/// Parses an IEEE 1364 §19.7 `line <number> "<file>" <level> and remaps §10.7
+/// `__LINE__` and `__FILE__` from the following line on. "All parameters in
+/// the `line directive are required": the number "shall be a positive
+/// integer", the level "shall be 0, 1, or 2", and nothing else may follow
+/// (E0128). The level is checked and dropped, since VerA keeps the real
+/// include stack.
 ///
-/// The level is checked and dropped: it says whether the remap enters, leaves
-/// or stays in a file, which only matters to a tool that reconstructs an
-/// include stack out of `line directives. VerA has the real one.
-/// ponytail: §19.7 also forbids a COMMENT on the line; comments are stripped
+/// ponytail: §19.7 also forbids a comment on the line; comments are stripped
 /// before directives are read, so that one is not diagnosed.
 pub fn handleLine(pp: *Pp, rest: []const u8, at: usize, off: usize) Error!void {
     var r: Rest = .{ .s = rest };
