@@ -1,12 +1,9 @@
-//! Annex A.4.2 generate constructs (LRM §6.6).
+//! Annex A.4.2 generate constructs (LRM §6.6): generate regions, loop and
+//! conditional generates -> an `Ast.AnalogBlock` whose body is the `for`/`if`,
+//! which lowering unrolls (§6.6.1).
 //!
-//! In: generate regions, loop and conditional generates. Out: an `Ast.AnalogBlock` whose body
-//! is the `for`/`if`, which lowering unrolls (§6.6.1).
-//!
-//! LRM clauses this file's code cites: §2.8, §3.4.6, §3.5, §5.2.1, §5.9.2, §5.10.4, §6.5, §6.6, §6.6.1, §6.6.2, §6.6.3, §6.8, §6.9.1, §12.4.2.
-//!
-//! Cut verbatim from `parser.zig`. Functions take `self: *Parser` and are called
-//! directly, `parse_generate.f(self, ...)`; `parser.zig` aliases only what other modules call.
+//! LRM clauses cited: §2.8, §3.4.6, §3.5, §5.2.1, §5.9.2, §5.10.4, §6.5, §6.6,
+//! §6.6.1, §6.6.2, §6.6.3, §6.8, §6.9.1, §12.4.2.
 
 const std = @import("std");
 const parser = @import("../parser.zig");
@@ -19,31 +16,24 @@ const Ast = @import("../ast.zig");
 const Error = parser.Error;
 
 // -----------------------------------------------------------------------
-// A.4.2 generate constructs — LRM §6.6
+// A.4.2 generate constructs: LRM §6.6
 //
-// A generate construct is turned into ONE `Ast.AnalogBlock` whose body is
-// the `for`/`if` statement, with the generated blocks spliced in as
-// statements. That is not a shortcut around elaboration, it is where
-// elaboration already lives: `Lower.tryUnrollFor` unrolls a genvar `for` at
-// compile time with the genvar bound as a constant for the duration of each
-// copy — §6.6.1's implicit localparam, "whose value is the genvar value at
-// the time the instance was elaborated" — and a constant `if` is folded the
-// same way. §6.9.1 is what makes the splice faithful rather than merely
-// convenient: every analog block in a module is concatenated in source
-// order anyway, and unrolling order is source order, so a generated block
-// occupies exactly the slot it would have occupied written out by hand.
+// A generate construct becomes one `Ast.AnalogBlock` whose body is the
+// `for`/`if` statement, with the generated blocks spliced in as statements.
+// `Lower.tryUnrollFor` unrolls a genvar `for` with the genvar bound as
+// §6.6.1's implicit localparam, and folds a constant `if` the same way.
+// §6.9.1 concatenates a module's analog blocks in source order, and
+// unrolling order is source order, so a generated block lands in the slot
+// it would occupy written out by hand.
 // -----------------------------------------------------------------------
 
-/// Enter/leave one generate CONSTRUCT. `gen_construct` is bumped only on the
-/// outermost one, and that is what makes §6.6.2's two naming rules one test:
-/// "it is permissible for more than one block within a single conditional
-/// generate construct to have the same name (since at most one is
-/// instantiated)" — those arms share the id — while "named generate blocks
-/// may not have the same name as blocks in any other generate construct in
-/// the same scope" gets a different one. §6.6.2's direct-nesting exception
-/// falls out too: an `else if` chain is an if_generate_construct nested in
-/// the outer construct's block, so it inherits the id rather than starting
-/// a new one.
+/// Parses one generate construct (`kind` is `for`, `if` or `case`) and
+/// appends it to `b.analog`. `gen_construct` is bumped only on the outermost
+/// construct, which makes §6.6.2's two naming rules one test: arms of one
+/// conditional construct "may have the same name" and share the id, while
+/// blocks of "any other generate construct in the same scope" get another.
+/// An `else if` chain nests in the outer construct's block, so it inherits
+/// the id, which is §6.6.2's direct-nesting exception.
 pub fn parseGenerate(self: *Parser, b: *parse_module.Body, comptime kind: token.Tag) Error!void {
     if (self.gen_construct_depth == 0) self.gen_construct += 1;
     b.gen_count += 1; // §6.6.3 this construct's number in its scope
@@ -66,15 +56,13 @@ pub fn parseGenerate(self: *Parser, b: *parse_module.Body, comptime kind: token.
 /// Syntax 6-8 `loop_generate_construct ::= for ( genvar_initialization ;
 /// genvar_expression ; genvar_iteration ) generate_block`.
 ///
-/// The three parts are the same shape as §5.9.2's `for`, and the same node
-/// carries them: lowering tells the two apart by looking the loop variable
-/// up in `ModuleDecl.genvars` (§3.5), not by which parser produced it. That
-/// is also why the non-constant scheme diagnostics (E0417 init, E0418
-/// condition, E0419 iteration, E0420 non-terminating) need nothing here —
-/// and why the §6.6 scheme rule the if/case forms carry (E0428) does not
-/// apply to this node: for a `for` it is those four codes instead.
-/// `gen` is either a module Body pointer or comptime null for a statement.
-/// Inline specialization shares the grammar without a runtime dispatch.
+/// The parts have the shape of §5.9.2's `for`, and the same node carries
+/// them: lowering tells the two apart by looking the loop variable up in
+/// `ModuleDecl.genvars` (§3.5). Lowering also owns the non-constant scheme
+/// diagnostics (E0417 to E0420), which replace the if/case forms' E0428.
+///
+/// `gen` is a `*parse_module.Body` for a generate construct, or comptime
+/// `null` for an analog `for` statement; `inline` specializes each.
 pub inline fn parseFor(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
     self.pos += 1; // 'for'
     _ = try self.expect(.lparen);
@@ -101,9 +89,10 @@ pub inline fn parseFor(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
 /// Syntax 6-8 `if_generate_construct ::= if ( constant_expression )
 /// generate_block [ else generate_block ]`.
 ///
-/// `else if` needs no arm of its own: an if_generate_construct is itself a
-/// module_or_generate_item, so the chain is a one-item generate_block in
-/// the `else`, which `parseGenerateBlock` reaches through `parseModuleItem`.
+/// `gen` is as for `parseFor`. `else if` needs no arm of its own: an
+/// if_generate_construct is itself a module_or_generate_item, so the chain is
+/// a one-item generate_block that `parseGenerateBlock` reaches through
+/// `parseModuleItem`.
 pub inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
     self.pos += 1; // 'if'
     _ = try self.expect(.lparen);
@@ -134,12 +123,11 @@ pub inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
 /// Syntax 6-8 `generate_block ::= module_or_generate_item | begin
 /// [ : generate_block_identifier ] { module_or_generate_item } end`.
 ///
-/// The items are collected into a scratch `Body` and then split by what
-/// scope they belong to. §6.6 gives the block its own scope, so its
-/// parameters and variables become the `SeqBlock`'s — which is also what
-/// the old statement-shaped parse produced, so nothing that already
-/// depended on them moves. Everything else (nets, branches, genvars,
-/// analog functions) is hoisted to the module.
+/// The items are collected into a scratch `Body` and split by scope. §6.6
+/// gives the block its own scope, so its parameters and variables become the
+/// `SeqBlock`'s; nets, branches, genvars and analog functions are hoisted to
+/// the module. Items whose existence the scheme decides but that have no
+/// home yet are refused with E0235.
 ///
 /// ponytail: hoisting is right for a conditional generate, which elaborates
 /// at most once, and short of the LRM for a loop generate, which should get
@@ -162,18 +150,17 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     var gb: parse_module.Body = .{};
     // §6.6.2 direct nesting (IEEE 1364-2005 §12.4.2): a generate block that is
     // one conditional generate construct with no begin/end "is not treated as a
-    // separate scope", and its construct's blocks are named as the enclosing
-    // construct's (§6.6.3) — so the inner construct takes the outer number.
+    // separate scope", and its blocks are named as the enclosing construct's
+    // (§6.6.3), so the inner construct takes the outer number.
     var direct = false;
     if (self.eat(.kw_begin)) {
         if (self.eat(.colon)) {
             const name_tok = self.pos;
             blk.name = try self.expectIdent();
-            // §6.6.1: "If the generate block is named, IT IS A DECLARATION
-            // OF AN ARRAY of generate block instances"; §6.6.2: "its name
-            // declares a generate block instance and is the name for the
-            // scope it creates". Either way the identifier lands in the
-            // ENCLOSING scope, and `checkGenBlockNames` is what enforces it.
+            // §6.6.1: a named generate block "is a declaration of an array of
+            // generate block instances"; §6.6.2: "its name declares a generate
+            // block instance". Either way the name is declared in the
+            // enclosing scope; `checkGenBlockNames` enforces it.
             try b.gen_blocks.append(self.arena, .{
                 .name = blk.name,
                 .tok = name_tok,
@@ -198,11 +185,10 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     }
 
     var body: std.ArrayList(Ast.StmtId) = .empty;
-    // ponytail: `analog initial` (§5.2.1) inside a generate block is
-    // spliced onto the ordinary spine like any other analog construct, so
-    // it loses its initialization-only scheduling. Give `Ast.SeqBlock` an
-    // is_initial statement, or hand the block back to `b.analog`, when a
-    // model needs one — neither is free, and nothing asks yet.
+    // ponytail: `analog initial` (§5.2.1) inside a generate block is spliced
+    // onto the ordinary spine like any other analog construct, so it loses its
+    // initialization-only scheduling. Give `Ast.SeqBlock` an is_initial flag,
+    // or hand the block back to `b.analog`, when a model needs one.
     for (gb.analog.items) |ab| try body.append(self.arena, ab.body);
     blk.params = gb.params.items;
     blk.vars = gb.vars.items;
@@ -213,30 +199,23 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     try b.nets.appendSlice(self.arena, gb.nets.items);
     try b.branches.appendSlice(self.arena, gb.branches.items);
     // §6.6: a generate block "brings the objects, behavioral constructs, and
-    // module instances within the block into existence" — a conditional
-    // generate for at most one block of its alternatives, a loop generate once
-    // per iteration. Hoisting a module instance, a defparam or an
-    // `initial`/`always` to the module elaborated it exactly once WHATEVER the
-    // scheme said: the unselected arm's instance was built too. The analog
-    // bodies above stay under the scheme; these have nowhere to go until a
-    // generate block keeps its own items for elaboration to select or unroll,
-    // so they are refused (E0235) instead of silently misplaced, and not
-    // hoisted, so an enclosing block does not report them again.
-    // ponytail: interim. Per-block items selected/unrolled in elaboration
-    // replace this refusal. Nothing a block holds may be dropped silently:
-    // every Body list is either hoisted above, kept under `blk`, or refused.
-    // A digital parse keeps the instances on the block, whose scheme the
-    // digital engine decides (`src/sim/digital/root.zig`, `generate`).
-    // An analog one too: elaboration gates an if-generate's instances by the
-    // scheme and refuses (E0235) the rest (`Flatten.genInstances`).
+    // module instances within the block into existence" only as its scheme
+    // selects. Hoisted to the module, a defparam or an `initial`/`always`
+    // would exist exactly once whatever the scheme said, so these are refused
+    // (E0235), and not hoisted, so an enclosing block does not report them
+    // again. Instances stay on the block: the digital engine decides their
+    // scheme (`src/sim/digital/root.zig`), and analog elaboration gates an
+    // if-generate's instances and refuses the rest (`Flatten.genInstances`).
+    // ponytail: interim. Per-block items selected or unrolled in elaboration
+    // replace this refusal. Every Body list is hoisted, kept under `blk`, or
+    // refused; none may be dropped silently.
     blk.instances = gb.instances.items;
     for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
     for (gb.discrete.items) |d|
         try self.report(d.main_tok, .E0235, "an `{s}` block", .{if (d.is_always) "always" else "initial"});
-    // The same for the three the body used to DROP outright, with no message:
-    // a continuous assignment (A.6.1) and a gate (A.3.1) are drivers the
-    // scheme decides the existence of exactly as it does an instance's, and a
-    // named event (§5.10.4) is a declaration of the block's scope.
+    // A continuous assignment (A.6.1), a gate (A.3.1) or a switch is a driver
+    // whose existence the scheme decides, and a named event (§5.10.4) is a
+    // declaration of the block's scope.
     for (gb.assigns.items) |a| try self.report(a.main_tok, .E0235, "a continuous assignment", .{});
     for (gb.gates.items) |g| try self.report(g.main_tok, .E0235, "a gate instance", .{});
     for (gb.pulls.items) |g| try self.report(g.main_tok, .E0235, "a pull gate instance", .{});
@@ -245,16 +224,13 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     if (gb.events.items.len != 0) try self.report(tok, .E0235, "an event declaration (`{s}`)", .{self.file.str(gb.events.items[0])});
     try b.genvars.appendSlice(self.arena, gb.genvars.items);
     try b.functions.appendSlice(self.arena, gb.functions.items);
-    // A nested generate construct's block names are declarations of the
-    // scope they sit in and this one is not it — §6.6.2's rule is about "the
-    // same scope", and VerA has no generate scope to hold them, so they ride
-    // up to the module with the nets. That is what makes the §6.6.2
-    // direct-nesting permission work: `construct` already says which
-    // construct each came from.
+    // Nested block names ride up to the module with the nets: VerA has no
+    // generate scope to hold them, and each entry's `construct` already says
+    // which construct it came from, which is all §6.6.2's check needs.
     try b.gen_blocks.appendSlice(self.arena, gb.gen_blocks.items);
     try b.gen_loops.appendSlice(self.arena, gb.gen_loops.items);
     if (direct) {
-        // Not a scope: the inner construct's blocks are named in OURS.
+        // Not a scope: the inner construct's blocks are named in this one.
         try b.gen_auto.appendSlice(self.arena, gb.gen_auto.items);
     } else {
         try nameGenBlocks(self, &gb);
@@ -265,11 +241,11 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     return id;
 }
 
-/// §6.6.3 External names for unnamed generate blocks: "All unnamed generate
-/// blocks are given the name genblk<n> where <n> is the assigned number. If such
-/// a name would conflict with an explicitly declared name, leading zeroes are
-/// added until the name does not conflict." Run when `b`'s scope is complete,
-/// so a declaration written after the construct still counts.
+/// Names `b`'s unnamed generate blocks per §6.6.3: "genblk<n> where <n> is the
+/// assigned number. If such a name would conflict with an explicitly declared
+/// name, leading zeroes are added until the name does not conflict." Call it
+/// once `b`'s scope is complete, so a later declaration still counts. Gives up
+/// adding zeroes after eight.
 pub fn nameGenBlocks(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!void {
     for (b.gen_auto.items) |g| {
         var zeros: usize = 0;
@@ -283,8 +259,8 @@ pub fn nameGenBlocks(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!vo
     b.gen_auto.clearRetainingCapacity();
 }
 
-/// Is `name` explicitly declared in the scope `b` collected? The declaration
-/// spaces `checkGenBlockNames` reads, plus instances and named events.
+/// Whether `name` is explicitly declared in the scope `b` collected: the
+/// declaration spaces `checkGenBlockNames` reads, plus instances and events.
 fn declaredIn(b: *const parse_module.Body, name: Ast.StrId) bool {
     for (b.gen_blocks.items) |g| if (g.name == name) return true;
     for (b.instances.items) |i| if (i.name == name) return true;
@@ -292,9 +268,9 @@ fn declaredIn(b: *const parse_module.Body, name: Ast.StrId) bool {
         std.mem.indexOfScalar(Ast.StrId, b.events.items, name) != null;
 }
 
-/// Is `name` in one of the module's ordinary declaration spaces? A port is
-/// listed as well as a net: §6.5's header names are declarations too, and
-/// §3.4.6 an aliasparam's own identifier is a declaration.
+/// Whether `name` is in one of the module's ordinary declaration spaces. Ports
+/// count (§6.5's header names are declarations), and so does an aliasparam's
+/// own identifier (§3.4.6).
 /// ponytail: stdlib membership over interned IDs; index declarations if large
 /// modules make these linear scans hot.
 fn inDeclSpaces(b: *const parse_module.Body, name: Ast.StrId) bool {
@@ -308,31 +284,19 @@ fn inDeclSpaces(b: *const parse_module.Body, name: Ast.StrId) bool {
         std.mem.indexOfScalar(Ast.StrId, b.genvars.items, name) != null;
 }
 
-/// §6.6.1/§6.6.2/§6.8: a named generate block's name is a DECLARATION in
-/// the enclosing scope — "it shall be an error if the name of a generate
-/// block instance array conflicts with any other declaration, including any
-/// other generate block instance array" (§6.6.1), "named generate blocks may
-/// not have the same name as any other declaration in the same scope … or as
-/// blocks in any other generate construct in the same scope, EVEN IF NOT
-/// SELECTED FOR INSTANTIATION" (§6.6.2). §6.8 states the general rule and
-/// adds that it applies "regardless of whether the generate block is
-/// instantiated", which is why nothing here consults the scheme.
+/// Reports E0238 for a loop generate whose variable is not a declared genvar,
+/// and E0230 for a named generate block whose name clashes with another
+/// declaration in the scope (§6.6.1, §6.6.2, §6.8). A block name is a
+/// declaration whether or not the scheme selects the block, so the scheme is
+/// not consulted. Call it once at the end of the module, since a clashing
+/// declaration may follow the construct. Reports and carries on; only OOM
+/// propagates.
 ///
-/// Run once at the end of the module, not at the `begin : name` itself: a
-/// declaration may follow the generate construct in the text, and the clause
-/// is about one SCOPE, not about source order.
-///
-/// Diagnosed and carried on (`report`, like the E0222 width check) so that
-/// a second, unrelated mistake in the same module is still reported;
-/// `self.failed` is what refuses the file.
-///
-/// ponytail: two named blocks collide only across different OUTERMOST
-/// constructs. §6.6.2 permits arms of one conditional construct to share a
-/// name and extends that through direct nesting, and `gen_construct` keys on
-/// the root of the nest — so a loop generate nested inside one arm is let off
-/// as well, which the clause does not license. Key on the construct itself
-/// rather than its root the day a fixture asks; that needs generate blocks to
-/// be real scope objects, which is also what §6.6.3 hierarchical names want.
+/// ponytail: two named blocks collide only across different outermost
+/// constructs, so a loop generate nested inside one arm of a conditional is
+/// let off too, which §6.6.2 does not license. Keying on the construct itself
+/// needs generate blocks to be real scope objects, which §6.6.3 hierarchical
+/// names want as well.
 pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemory}!void {
     // A.4.2 `genvar_initialization ::= genvar_identifier = constant_expression`,
     // and a genvar_identifier is what a `genvar_declaration` introduces.
@@ -352,9 +316,8 @@ pub fn checkGenBlockNames(self: *Parser, b: *parse_module.Body) error{OutOfMemor
     }
 }
 
-/// Is `name` the name of one of `decls`? One helper for eight declaration
-/// slices, which all carry a `.name: StrId` — and a StrId comparison is a
-/// name comparison because §2.8 identifiers are interned.
+/// Whether `name` is the `.name` of one of `decls`. Comparing `StrId`s
+/// compares names because identifiers are interned.
 fn nameIn(comptime T: type, decls: []const T, name: Ast.StrId) bool {
     for (decls) |d| if (d.name == name) return true;
     return false;

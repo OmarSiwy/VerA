@@ -1,33 +1,20 @@
-//! Class 1 — Lexical tokens. LRM ch2 (§2.5 operators, §2.6 numbers, §2.7
-//! strings, §2.8 identifiers/keywords/system-names), annex B (keywords).
-//!
-//! DOD: a token stored is only `{tag: Tag, start: u32}` (5 bytes). The end
-//! offset is RECOMPUTED on demand by re-lexing from `start` — never stored.
-//! Token streams live in a MultiArrayList (SoA), owned by the lexer's arena.
-//!
-//! Layout invariant: `Tag` is ordered `invalid, eof, <literals>, <symbols>,
-//! <keywords>` and the keyword block is CONTIGUOUS AND LAST. `isKeyword` is a
-//! single `>=` compare because of that. Do not interleave.
-//!
-//! Naming invariant: every keyword tag is `kw_` ++ its exact source spelling.
-//! `keyword_map` is derived from the enum at comptime, so a tag and its lexeme
-//! can never drift apart — add the tag and the keyword is live.
+//! Token kinds, the keyword table and the §10.6 reserved-word sets (LRM §2.5-§2.8, §10.6, annex B).
+//! A stored token is `{tag, start}`; its end is recomputed by re-lexing from `start`.
+//! `Tag` is ordered `invalid, eof, literals, symbols, keywords`, keywords contiguous and last,
+//! so `isKeyword` is one compare. Every keyword tag is `kw_` ++ its source spelling and
+//! `keyword_map` is derived from the enum, so adding the tag makes the keyword live.
 
 const std = @import("std");
 
-/// Every lexical token kind. LRM §2.5 (operators), §2.8.2/annex B (keywords).
-///
-/// Scope: the Verilog-A analog subset (annex C). Annex B reserves ~215
-/// keywords; ~135 of them are in scope and get a tag here. The remaining
-/// reserved-but-out-of-scope keywords (digital primitives, specify blocks,
-/// config files, and the annex C.16 exclusion list) all lex to the single
-/// `kw_reserved` tag: they are still reserved words (never identifiers, per
-/// annex B), but the parser rejects them with one shared diagnostic.
+/// Every lexical token kind (LRM §2.5, §2.8.2, annex B).
+/// Keywords VerA parses get their own tag. The other annex B keywords (specify,
+/// config, switch primitives, the annex C.16 list) all lex to `kw_reserved`: never
+/// an identifier, and dispatched by spelling where the parser accepts them.
 pub const Tag = enum(u8) {
     invalid,
     eof,
 
-    // ---- literals & identifiers — §2.6, §2.7, §2.8 --------------------------
+    // ---- literals and identifiers: §2.6, §2.7, §2.8 ------------------------
     identifier, // §2.8
     escaped_identifier, // §2.8.1  (\literally.anything<ws>)
     system_identifier, // §2.8.3  ($name)
@@ -35,7 +22,7 @@ pub const Tag = enum(u8) {
     real_literal, // §2.6.2  (incl. exponent and SI scale suffix)
     string_literal, // §2.7
 
-    // ---- operators — §2.5, table 4-1 ---------------------------------------
+    // ---- operators: §2.5, table 4-1 -----------------------------------------
     // arithmetic §4.2.4
     plus,
     minus,
@@ -95,28 +82,26 @@ pub const Tag = enum(u8) {
     attr_open, // '(*'  attribute instance §2.9
     attr_close, // '*)'  §2.9
 
-    // ---- the two directives the preprocessor hands to the parser — §10.6 ----
-    // Every other compiler directive dies in the preprocessor. These two do
-    // not: they select the reserved-keyword set for the design elements that
-    // follow, and §10.6 requires them to sit outside a design element — a fact
-    // only the parser can check. See `KeywordSet`.
+    // ---- directives the preprocessor passes to the parser ------------------
+    // The §10.6 pair selects the reserved-keyword set for the design elements
+    // that follow and must sit outside a design element, which only the parser
+    // can check. See `KeywordSet`.
     dir_begin_keywords, // '`begin_keywords'
     dir_end_keywords, // '`end_keywords'
-    /// IEEE 1364 §19.6 `resetall, passed through only so the parser can
-    /// refuse one "within a module or UDP declaration".
+    /// IEEE 1364 §19.6 `resetall, passed through so the parser can refuse one
+    /// "within a module or UDP declaration".
     dir_resetall, // '`resetall'
 
-    // ---- keywords — §2.8.2 / annex B ---------------------------------------
-    // FIRST KEYWORD. Everything from here to the end of the enum is a keyword;
-    // `isKeyword` depends on it. Tag name = "kw_" ++ source spelling, always.
+    // ---- keywords: §2.8.2, annex B -------------------------------------------
+    // Everything from here to the end of the enum is a keyword (`isKeyword`
+    // depends on it), and each name is "kw_" ++ its source spelling.
 
     // module & source-text structure §6.2, §6.4, annex A.1
     kw_module,
     kw_macromodule,
     // A.1.2 `module_keyword ::= module | macromodule | connectmodule`. §7.6
-    // gives a connect module the module_declaration production and nothing
-    // else, so its terminator is `endmodule` like the other two spellings —
-    // annex B reserves `endconnectrules` and there is no `endconnectmodule`.
+    // gives a connect module the module_declaration production, so it ends
+    // with `endmodule`; annex B has no `endconnectmodule`.
     kw_connectmodule,
     kw_endmodule,
     kw_paramset,
@@ -128,31 +113,24 @@ pub const Tag = enum(u8) {
     // A.6.2 `always_construct ::= always statement`.
     kw_always,
     // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]
-    // list_of_net_assignments ;` — the structural driver of a net (§6.1). It
-    // gets a tag instead of staying `.kw_reserved` for the same reason `reg`
-    // and `initial` did: the digital executor runs it. Everywhere else it is
-    // still refused, by `parseModuleItem`'s E0205 outside a digital run and by
-    // A.6.4 offering no analog statement production for the procedural form.
+    // list_of_net_assignments ;`, the structural driver of a net (§6.1). Tagged
+    // because the digital executor runs it; outside a digital run
+    // `parseModuleItem` refuses it (E0205), and A.6.4 has no analog procedural form.
     kw_assign,
     kw_begin,
     kw_end,
-    // A.6.5 `wait_statement ::= wait ( expression ) statement_or_null`. It gets
-    // a tag for the same reason `assign` did: the digital executor runs it.
-    // Outside a digital run it is still refused — A.6.4 offers no analog
-    // statement production for it, so `parseStmt` reports it as before.
+    // A.6.5 `wait_statement ::= wait ( expression ) statement_or_null`. Tagged
+    // because the digital executor runs it; A.6.4 has no analog statement
+    // production for it, so `parseStmt` refuses it in an analog block.
     kw_wait,
     kw_generate, // §6.9
     kw_endgenerate,
     kw_defparam, // §6.3.1 parameter_override (A.1.4)
 
-    // connect specifications §7.7, annex A.1.8 — the `connectrules` design
-    // element (an A.1.2 description alternative) and the keywords of its two
-    // item forms. All six are Verilog-AMS-only words — none is on
-    // an IEEE 1364 list — so `isReserved` defaults them to `.vams_2_3`,
-    // which is exactly what the same spellings answered from the reserved
-    // list; §10.6 membership is keyed by spelling and does not move.
-    // `exclude` (A.1.8 discipline_identifier_or_exclude) already has a tag:
-    // §3.4.2 value ranges spend the same keyword, see `kw_exclude` below.
+    // connect specifications §7.7, annex A.1.8: the `connectrules` design element
+    // and the keywords of its two item forms. None is on an IEEE 1364 list, so
+    // `isReserved` puts all six in `.vams_2_3`. A.1.8's `exclude` shares
+    // `kw_exclude` with the §3.4.2 value ranges.
     kw_connectrules,
     kw_endconnectrules,
     kw_connect,
@@ -196,22 +174,18 @@ pub const Tag = enum(u8) {
     kw_vectored,
 
     // A.4.1 `pass_switchtype ::= tran | rtran`, the unconditional bidirectional
-    // switch. Both stay reserved — they are on the
-    // 1364-1995 list, which `keyword_intro` keys by spelling.
+    // switch.
     kw_tran,
     kw_rtran,
 
     // A.3.4 `n_input_gatetype ::= and | nand | or | nor | xor | xnor`,
     // `n_output_gatetype ::= buf | not`, `enable_gatetype ::= bufif0 | bufif1 |
-    // notif0 | notif1`. These compute a logic value, so they get tags now that
-    // the digital executor has §7.8.5's tables to compute it WITH. `or` is
-    // `kw_or` already — §5.10.1 spends the same spelling on the event `or`.
+    // notif0 | notif1`. The digital executor computes these from §7.8.5's
+    // tables. `or` is `kw_or`, shared with the §5.10.1 event `or`.
     //
-    // A.3.1's OTHER arms — `pullup`/`pulldown` and A.3.4's eight remaining
-    // `*_switchtype` spellings — stay `.kw_reserved` and are dispatched by
-    // SPELLING (`Parser.reservedIs`, `Parser.switch_arms`). They are not E0205
-    // any more; a tag would buy nothing, because neither `Ast.GateKind` nor
-    // anything else in the AST has a slot to put them in.
+    // A.3.1's `pullup`/`pulldown` and A.3.4's other `*_switchtype` spellings
+    // stay `.kw_reserved` and are dispatched by spelling (`Parser.reservedIs`,
+    // `Parser.switch_arms`): no AST node has a slot a tag could select.
     kw_and,
     kw_nand,
     kw_nor,
@@ -231,7 +205,7 @@ pub const Tag = enum(u8) {
     kw_endnature,
     kw_domain, // §3.6.2.2
     kw_continuous, // §3.6.2.2
-    kw_discrete, // §3.6.2.2 — an error in Verilog-A (annex C.4), still lexed
+    kw_discrete, // §3.6.2.2; an error in Verilog-A (annex C.4), still lexed
     kw_potential, // §3.6.2.1
     kw_flow,
     kw_abstol, // §3.9.1
@@ -250,7 +224,7 @@ pub const Tag = enum(u8) {
     kw_if,
     kw_else,
     kw_case,
-    kw_casex, // not supported in Verilog-A (annex C.7) — lexed, then rejected
+    kw_casex, // not supported in Verilog-A (annex C.7); lexed, then rejected
     kw_casez, // ditto
     kw_endcase,
     kw_default,
@@ -264,24 +238,23 @@ pub const Tag = enum(u8) {
     kw_disable,
 
     // event expressions §5.10
-    kw_or, // '@(a or b)' — event or; also the digital gate type
+    kw_or, // '@(a or b)' event or; also the digital gate type
     kw_initial_step,
     kw_final_step,
     kw_cross, // §5.10.3
     kw_above, // §5.10.4
     kw_timer, // §5.10.5
     kw_absdelta, // §5.10.6
-    // A.6.5 `event_expression ::= … | driver_update expression` — a DIGITAL
-    // event, so it is not in `isEventFunction` and never reachable from an
-    // analog block; §9.22.4 defines it, and §9.22 paragraph 3 confines the
-    // whole family to a connect module.
+    // A.6.5 `event_expression ::= … | driver_update expression`: a digital
+    // event, so not in `isEventFunction`. §9.22.4 defines it and §9.22
+    // confines the family to a connect module.
     kw_driver_update,
-    // §5.10.1 digital edges. Like `driver_update` above, they are legal only
-    // inside an `event_expression`, so they are not `isEventFunction` members.
+    // §5.10.1 digital edges, legal only inside an `event_expression`, so not
+    // `isEventFunction` members.
     kw_posedge,
     kw_negedge,
 
-    // analog operators & filters §4.5
+    // analog operators and filters §4.5
     kw_ddt,
     kw_ddx, // §4.5.9
     kw_idt,
@@ -313,7 +286,7 @@ pub const Tag = enum(u8) {
     kw_pow,
     kw_sqrt,
     kw_exp,
-    kw_limexp, // §4.5.13 — bounded-derivative exp (a FILTER, A.8.2); never synthesized by us
+    kw_limexp, // §4.5.13 bounded-derivative exp; a filter per A.8.2, not a math builtin
     kw_ln,
     kw_log,
     kw_expm1,
@@ -335,17 +308,16 @@ pub const Tag = enum(u8) {
     kw_acosh,
     kw_atanh,
 
-    /// Any annex B reserved keyword that is out of the analog subset's scope
-    /// (digital primitives, specify/table, config files, and the annex C.16
-    /// exclusions). Reserved — never an identifier — but not parseable. The
-    /// spelling is not recoverable from the tag; slice the source at `start`.
+    /// Any annex B keyword without its own tag (see `reserved_keywords`). Never
+    /// an identifier. The spelling is not recoverable from the tag; slice the
+    /// source at `start`.
     kw_reserved,
 
-    /// First keyword tag. Keeps `isKeyword` a single compare (see file header).
+    /// First keyword tag; `isKeyword` compares against it.
     const first_keyword: Tag = .kw_module;
 
-    /// Source spelling, for diagnostics. `null` when the text is not implied by
-    /// the tag (identifiers, literals, `kw_reserved`) — slice the source then.
+    /// Returns the source spelling, for diagnostics. `null` when the tag does not
+    /// imply the text (identifiers, literals, `kw_reserved`); slice the source then.
     pub fn lexeme(tag: Tag) ?[]const u8 {
         return switch (tag) {
             .invalid, .eof, .kw_reserved => null,
@@ -414,10 +386,8 @@ pub const Tag = enum(u8) {
         };
     }
 
-    /// `lexeme` in backticks — what a diagnostic prints when it has to name the
-    /// character the user must type. Derived from `lexeme` at comptime, through
-    /// `inline else`, so the two spellings cannot drift apart and no second
-    /// table exists to forget.
+    /// Returns `lexeme` in backticks, for a diagnostic that names what the user
+    /// must type. Comptime-derived from `lexeme`, so the two cannot drift.
     pub fn quoted(tag: Tag) ?[]const u8 {
         return switch (tag) {
             inline else => |t| comptime blk: {
@@ -428,52 +398,38 @@ pub const Tag = enum(u8) {
     }
 };
 
-/// SoA row. Keep it 5 bytes; do not add fields (recompute, don't store).
+/// One token as stored: 5 bytes of payload. Anything else is recomputed from
+/// `start`, so do not add fields.
 pub const Stored = struct {
     tag: Tag,
     start: u32,
 };
 
-/// Keyword lookup. LRM §2.8.2 / annex B. Comptime-built, no allocation.
-/// Derived from `Tag` — see the naming invariant in the file header.
-///
-/// NOT O(1), and not a hash map: read `std/static_string_map.zig`. It buckets
-/// the keys by LENGTH (`len_indexes[str.len]`, and a `min_len`/`max_len`
-/// prefilter before that) and then LINEARLY SCANS the bucket, comparing
-/// byte-at-a-time. With 215 keywords the five-byte bucket holds 39 of them, so
-/// an ordinary five-byte identifier is compared against all 39 before the miss
-/// is known. So this is the DEFINITION and the reference; `lookupKeyword` is
-/// what the lexer calls, and it reaches the same keys through their first byte.
+/// Every annex B keyword spelling and its tag (LRM §2.8.2), built at comptime
+/// from `Tag` and `reserved_keywords`.
+/// This is the reference definition. `get` scans a whole length bucket linearly,
+/// so the lexer calls `lookupKeyword`, which must agree with it.
 pub const keyword_map = std.StaticStringMap(Tag).initComptime(keyword_kvs);
 
-/// Lane count for the bucket scan, from the target — never hardcoded. `null`
-/// on a target with no useful `u8` vector, and then the scalar loop is the
-/// whole implementation.
+/// Lane count for the bucket scan, from the target. `null` on a target with no
+/// useful `u8` vector, which then uses the scalar loop only.
 const kw_lanes = std.simd.suggestVectorLength(u8);
 
-/// The FIRST BYTE of each keyword, in `keyword_map.keys()` order — 215 bytes,
-/// four cache lines, against the 3,472 bytes of `[]const u8` headers the map's
-/// own scan walks to read the same information.
+/// The first byte of each keyword, in `keyword_map.keys()` order. A few cache
+/// lines, where the map's own scan walks a slice header per key.
 ///
-/// MEASURED from the table itself: 215 keywords, lengths 2..19, 23 distinct
-/// first bytes, 117 of the 23×18 (first byte, length) pairs occupied, at most 6
-/// keywords in any one pair. `StaticStringMap` already buckets by length, so
-/// the first byte is the dimension it is missing and this is the whole of it.
-///
-/// Padded by one lane with 0, which no keyword starts with, so a full-width
-/// load at any index below `keys().len` is in bounds and the extra lanes cannot
-/// match. That is what lets the chunk loop below run past a bucket's end and
-/// mask, instead of needing a second scalar loop for every bucket's tail.
+/// Padded by one lane of 0, which no keyword starts with, so a full-width load
+/// at any index below `keys().len` is in bounds and the extra lanes cannot
+/// match. The chunk loop can then run past a bucket's end and mask it.
 const kw_first: [keyword_map.keys().len + (kw_lanes orelse 1)]u8 = blk: {
     var t = [_]u8{0} ** (keyword_map.keys().len + (kw_lanes orelse 1));
     for (keyword_map.keys(), 0..) |k, i| t[i] = k[0];
     break :blk t;
 };
 
-/// Longest keyword, from the table. `kw_len_start[L]..kw_len_start[L+1]` is the
-/// run of keys of length L, which exists only because `StaticStringMap` sorts
-/// its keys by length — the loop below `@compileError`s if a stdlib change ever
-/// stops it doing that, rather than silently mis-slicing the runs.
+/// Longest keyword. `kw_len_start[L]..kw_len_start[L+1]` is the run of keys of
+/// length L, which relies on `StaticStringMap` sorting its keys by length; the
+/// table below fails to compile if it stops doing so.
 const kw_max_len: usize = keyword_map.max_len;
 
 const kw_len_start: [kw_max_len + 2]u16 = blk: {
@@ -489,45 +445,9 @@ const kw_len_start: [kw_max_len + 2]u16 = blk: {
     break :blk t;
 };
 
-/// LRM §2.8.2 / annex B. What the lexer calls: `keyword_map.get(name)`, reached
-/// through the first byte instead of by walking the whole length bucket.
-///
-/// `keyword_map` stays the reference — the tags and spellings come out of it,
-/// the index into `kw_first` IS its key index, and the differential test below
-/// asserts this function agrees with `get` on every keyword, every near miss of
-/// one, and 20,000 random spellings.
-///
-/// WHY THIS IS HAND-ROLLED and not `std.mem.indexOfScalarPos`. That is the
-/// stdlib's SIMD scan and it was tried first (rung 3 of the ladder), but it
-/// cannot reach its vector path here: `findScalarPos` needs `2*block_len < len`
-/// — >64 bytes on AVX2 — and the biggest bucket is 39, so it runs its byte loop,
-/// which is no cheaper than the map's own walk over ~13 keys. One masked block
-/// is. MEASURED, three implementations over identical work (callgrind, total Ir,
-/// `vera --lint` on `annex_e_spice/primitive_vsine.va` WITHOUT `-I`, which stops
-/// at the missing `check.vh` and therefore lexes the prelude and nothing else —
-/// a lexer microbenchmark with no parser in it):
-///
-///     keyword_map.get                              2,240,522
-///     + a (first byte, length) bitmask in front    2,191,152   −2.2%
-///     std.mem.indexOfScalarPos over the bucket     2,163,929   −3.4%
-///     the masked block below                       2,092,721   −6.6%
-///
-/// The bitmask is the cheap idea and it is the one that failed: the prelude's
-/// identifiers are mostly keywords or keyword-shaped, so ~80% of them passed the
-/// filter and paid for it. A filter only helps misses; shortening the walk helps
-/// hits too, and the prelude is nearly all hits.
-///
-/// MEASURED on a WHOLE compilation (callgrind, ReleaseFast -Dcpu=x86_64_v3,
-/// `vera --emit-zig -I tests/fixtures annex_e_spice/primitive_vpulse.va`):
-/// 7,911,240 → 7,618,237 Ir, −3.7%, of which the lookup itself is 501,720 →
-/// 208,663 (−58%: 87,246 here, 42,083 more inside `Lexer.next`, 79,334 in
-/// `std.mem.eql` — that last is now the biggest half and is where the next
-/// bite is, if there is ever a reason to take it). Before this it was the
-/// single largest entry in the profile at 6.34%.
-///
-/// MEASURED end to end (`zig build benchmark -Doptimize=ReleaseFast -- fixtures`,
-/// min of 25, best of 3 runs): `lint` 181.2 → 170.6 ms, `codegen` 199.4 → 188.0
-/// ms, both −5.8%; `pp` unchanged, as it must be — it never lexes.
+/// Returns the keyword tag spelled `name`, or null (LRM §2.8.2, annex B).
+/// Same answer as `keyword_map.get(name)`, found by matching first bytes within
+/// the length bucket; the differential test below holds the two together.
 pub fn lookupKeyword(name: []const u8) ?Tag {
     // One compare rejects the empty string and everything longer than the
     // longest keyword; `name[0]` is in bounds after it.
@@ -557,9 +477,8 @@ pub fn lookupKeyword(name: []const u8) ?Tag {
     return lookupKeywordScalar(name, lo, hi);
 }
 
-/// The reference implementation, and the fallback on a target with no vectors.
-/// Kept because the vector loop above is only correct if it agrees with this on
-/// every input — which is what the differential test checks.
+/// Scalar form of `lookupKeyword`'s bucket scan: the fallback on a target with
+/// no vectors, and the second reference in the differential test.
 fn lookupKeywordScalar(name: []const u8, lo: usize, hi: usize) ?Tag {
     for (kw_first[lo..hi], lo..) |first, i| {
         if (first == name[0] and std.mem.eql(u8, keyword_map.keys()[i], name)) {
@@ -569,26 +488,18 @@ fn lookupKeywordScalar(name: []const u8, lo: usize, hi: usize) ?Tag {
     return null;
 }
 
-// ---- §10.6 `begin_keywords: which words are RESERVED ----------------------
+// ---- §10.6 `begin_keywords: which words are reserved ---------------------
 
-/// LRM §10.6 version_specifier: "specifies the valid set of reserved keywords
-/// in effect when a design unit is parsed". The five specifiers an
-/// implementation "must also support" form a chain, oldest first:
+/// A §10.6 version_specifier: "the valid set of reserved keywords in effect
+/// when a design unit is parsed". The five sets form a chain, oldest first
+/// (1364-1995 ⊂ 1364-2001 ⊂ 1364-2005 ⊂ VAMS-2.3 ⊂ VAMS-2023), so a word is
+/// reserved in set `s` iff `keyword_intro` dates it no later than `s`.
 ///
-///     1364-1995 ⊂ 1364-2001 ⊂ 1364-2005 ⊂ VAMS-2.3 ⊂ VAMS-2023
-///
-/// so one `keyword_intro` datum per keyword decides membership in all five:
-/// a word is reserved in set `s` iff it was introduced no later than `s`.
-///
-/// SCOPE (§10.6, verbatim): "The `begin_keywords and `end_keywords directives
-/// only specify the set of identifiers that are reserved as keywords. The
-/// directives do not affect the semantics, tokens, and other aspects of the
-/// Verilog-AMS language." So the LEXER IS UNAFFECTED — `sin` keeps lexing to
-/// `kw_sin` under every set. What changes is whether the parser will accept
-/// that token where an identifier is expected (`Parser.identLike`). That is
-/// also the only reading under which the §10.6 worked example composes: a
-/// module using `analog` (a VAMS-only annex B keyword) under
-/// `begin_keywords "1364-2005" still parses, while `input sin;` becomes legal.
+/// §10.6: the directives "do not affect the semantics, tokens, and other
+/// aspects" of the language. So the lexer ignores the set (`sin` is always
+/// `kw_sin`); the parser decides whether the token may stand as an identifier
+/// (`Parser.identLike`). Under `begin_keywords "1364-2005", `input sin;` is
+/// legal and `analog` still parses.
 pub const KeywordSet = enum(u8) {
     v1364_1995,
     v1364_2001,
@@ -596,13 +507,12 @@ pub const KeywordSet = enum(u8) {
     vams_2_3,
     vams_2023,
 
-    /// §10.6 version_specifier string → set. `null` for anything else; the LRM
-    /// names exactly these five, so an unknown specifier is an error.
+    /// Parses a §10.6 version_specifier. `null` for any other string; the LRM
+    /// names exactly these five, so the caller reports an unknown one.
     pub fn fromSpecifier(text: []const u8) ?KeywordSet {
         return specifier_map.get(text);
     }
 
-    /// Inverse of `fromSpecifier`.
     pub fn specifier(self: KeywordSet) []const u8 {
         return switch (self) {
             .v1364_1995 => "1364-1995",
@@ -626,28 +536,23 @@ const specifier_map = std.StaticStringMap(KeywordSet).initComptime(.{
     .{ "VAMS-2023", KeywordSet.vams_2023 },
 });
 
-/// LRM §10.6 / annex B. Is the keyword spelled `name` a reserved word under
-/// `set`? Only meaningful for a spelling that is in `keyword_map` at all.
+/// Returns whether the keyword spelled `name` is reserved under `set` (LRM §10.6,
+/// annex B). Only meaningful for a spelling in `keyword_map`.
 pub fn isReserved(name: []const u8, set: KeywordSet) bool {
     return @intFromEnum(keyword_intro.get(name) orelse .vams_2_3) <= @intFromEnum(set);
 }
 
 // ---- predicates the lexer/parser want ------------------------------------
 
-/// LRM §2.8.2 / annex B. Escaped identifiers are never keywords (§2.8.1); the
-/// lexer must not consult `keyword_map` for them.
+/// Returns whether `tag` is a keyword (LRM §2.8.2). Escaped identifiers are
+/// never keywords (§2.8.1), so the lexer does not look them up.
 pub fn isKeyword(tag: Tag) bool {
     return @intFromEnum(tag) >= @intFromEnum(Tag.first_keyword);
 }
 
-/// LRM §4.3.2/§4.3.3 — built-in math functions. EXACTLY annex A.8.2
-/// `analog_built_in_function_name` (26 names); the parser turns these into
-/// `Ast.ExprTag.builtin_call`. These are the tags whose domains `proof.zig`
-/// must discharge at compile time (invariant 5).
-///
-/// NOTE `limexp` is NOT here: A.8.2 lists it under
-/// `analog_filter_function_call` (§4.5.13), so it is a filter function —
-/// see `isFilterFunction`.
+/// Returns whether `tag` is an annex A.8.2 `analog_built_in_function_name`
+/// (LRM §4.3.2, §4.3.3), which the parser turns into `Ast.ExprTag.builtin_call`.
+/// `limexp` is not one: A.8.2 lists it as a filter (§4.5.13).
 pub fn isMathFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_abs,
@@ -681,12 +586,9 @@ pub fn isMathFunction(tag: Tag) bool {
     };
 }
 
-/// LRM §4.5 — analog filter operators. EXACTLY annex A.8.2
-/// `analog_filter_function_call` (17 names, `limexp` included); the parser
-/// turns these into `Ast.ExprTag.filter_call`. Each occurrence owns runtime
-/// state (§4.5.1).
-/// Filters and small-signal functions may not appear in a conditional/loop
-/// whose controlling expression is not constant (§4.5.1, §5.8.4).
+/// Returns whether `tag` is an annex A.8.2 `analog_filter_function_call`
+/// (LRM §4.5, `limexp` included), which the parser turns into
+/// `Ast.ExprTag.filter_call`. Each occurrence owns runtime state (§4.5.1).
 pub fn isFilterFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_ddt,
@@ -697,7 +599,7 @@ pub fn isFilterFunction(tag: Tag) bool {
         .kw_transition,
         .kw_slew,
         .kw_last_crossing,
-        .kw_limexp, // §4.5.13 — A.8.2 lists it here, not with the math builtins
+        .kw_limexp, // §4.5.13: A.8.2 lists it here, not with the math builtins
         .kw_laplace_zd,
         .kw_laplace_zp,
         .kw_laplace_nd,
@@ -711,10 +613,9 @@ pub fn isFilterFunction(tag: Tag) bool {
     };
 }
 
-/// LRM §4.6 — small-signal / noise sources. EXACTLY annex A.8.2
-/// `analog_small_signal_function_call` minus `analysis` (which A.8.2 gives its
-/// own production and which the parser folds into `Ast.ExprTag.sys_call`).
-/// These become `Ast.ExprTag.noise_call`.
+/// Returns whether `tag` is an annex A.8.2 `analog_small_signal_function_call`
+/// (LRM §4.6) other than `analysis`; these become `Ast.ExprTag.noise_call`.
+/// The parser folds `analysis` into `Ast.ExprTag.sys_call`.
 pub fn isSmallSignalFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_ac_stim,
@@ -727,14 +628,10 @@ pub fn isSmallSignalFunction(tag: Tag) bool {
     };
 }
 
-/// LRM §5.10.3 — EXACTLY annex A.6.5 `analog_event_functions` (4 names), legal
-/// only inside an `@( ... )` event control. These become
-/// `Ast.ExprTag.event_function`.
-///
-/// NOTE `initial_step`/`final_step` are NOT here: A.6.5 gives them their own
-/// `analog_event_expression` alternatives (an optional list of *string*
-/// analysis names, not expressions) and the AST gives them their own tags
-/// `event_initial_step` / `event_final_step`.
+/// Returns whether `tag` is an annex A.6.5 `analog_event_functions` name
+/// (LRM §5.10.3), legal only inside `@( ... )`; these become
+/// `Ast.ExprTag.event_function`. `initial_step`/`final_step` are not: A.6.5
+/// gives them their own alternatives and the AST its own tags.
 pub fn isEventFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_cross,
@@ -746,9 +643,8 @@ pub fn isEventFunction(tag: Tag) bool {
     };
 }
 
-/// A keyword that starts a call-like expression: `name ( args )`. Union of the
-/// math (§4.3), filter (§4.5), small-signal (§4.6) and event (§5.10.3) groups
-/// plus `analysis` (§4.6.1) and the §5.10.2 step events.
+/// A keyword that starts a call-like expression `name ( args )`: the four
+/// groups above plus `analysis` (§4.6.1) and the §5.10.2 step events.
 fn isBuiltinFunction(tag: Tag) bool {
     return switch (tag) {
         .kw_analysis, .kw_initial_step, .kw_final_step => true,
@@ -760,71 +656,39 @@ fn isBuiltinFunction(tag: Tag) bool {
 
 const KV = struct { []const u8, Tag };
 
-/// Annex B keywords that are reserved but out of the analog subset's scope:
-/// IEEE 1364 digital primitives/gates, specify + table, config-file keywords,
-/// and the annex C.16 "not used by Verilog-A" list. All lex to `.kw_reserved`.
-/// Keeping them in the map is what makes them unusable as identifiers (annex B).
+/// Annex B keywords without their own tag: IEEE 1364 primitives, specify and
+/// table, config-file keywords, and the annex C.16 "not used by Verilog-A" list.
+/// All lex to `.kw_reserved`; being in the map keeps them out of identifiers.
+/// A spelling here must not also have a `kw_` tag (checked in `keyword_kvs`).
 const reserved_keywords = [_][]const u8{
-    // annex C.16 — not used by Verilog-A. `wreal` (§3.7) declares a discrete
-    // real net there is no digital kernel to drive.
+    // annex C.16. `wreal` (§3.7) declares a discrete real net there is no
+    // digital kernel to drive.
     //
-    // TWO SPELLINGS LEFT THIS LIST BECAUSE THE 2023 TABLE B.1 DOES NOT HAVE
-    // THEM, and §2.8.2 ("Annex B lists all defined Verilog-AMS HDL keywords")
-    // plus Annex B's own "Verilog-AMS reserves the keywords listed in Table
-    // B.1" make that table the whole reservation:
-    //
-    //   `net_resolution` — Annex G Table G.7 item 5027, verbatim "Removed
-    //   unused keyword net_resolution | B.1, C.16". C.16's list is nine words
-    //   in 2023 (connect, connectmodule, connectrules, driver_update,
-    //   endconnectrules, merged, resolveto, split, wreal) and this is not one
-    //   of them. It WAS reserved under "VAMS-2.3" and `isReserved` can no
-    //   longer say so — the five sets are modelled as a nesting chain with an
-    //   introduction date per spelling, which cannot express a word that
-    //   leaves. A word removed by a later edition needs a retirement date
-    //   beside the introduction one; nothing in the suite asks for one.
-    //
-    //   `assert` — never in the 2023 table at all; the run reads `asinh`,
-    //   `assign`, with nothing between. It was carried here from the 2.4
-    //   printing, which reserved the spelling and spent it on nothing: no
-    //   statement, no system function, no production in annex A. §10.6's own
-    //   closing example makes the same point about a word of the same
-    //   pedigree — "Note that the word "logic" is not a keyword in
-    //   Verilog-AMS 2023, whereas it is a keyword in the IEEE Std 1800
-    //   SystemVerilog." A keyword set assembled by unioning every list a
-    //   standard has ever printed is not the set the standard defines.
-    //
-    // ch10_directives/d10_11 and d10_12 pin both as ordinary identifiers.
+    // §2.8.2 makes annex B Table B.1 the whole reservation, and it has neither
+    // `net_resolution` (removed by annex G Table G.7 item 5027) nor `assert`
+    // (the run reads `asinh`, `assign`), so both are ordinary identifiers
+    // (ch10_directives/d10_11, d10_12). `isReserved` models each set by an
+    // introduction date only, so it cannot say `net_resolution` was reserved
+    // under "VAMS-2.3"; that needs a retirement date as well.
     "wreal",
-    // digital behavior / structural §IEEE1364
-    //
-    // `assign` left this list when A.6.1 got a tag (`kw_assign`) — §10.6
-    // membership is keyed by spelling, so it is still reserved everywhere it
-    // was, and `keyword_intro` still finds it through `kw_1364_1995`.
-    // A.3.4's twelve computing gate types are no longer here either: they have
-    // tags (`kw_and` … `kw_notif1`) now that §7.8.5's tables are implemented.
-    // Reserved-word membership is keyed by spelling, so `keyword_intro` still
-    // finds every one of them through `kw_1364_1995`.
+    // IEEE 1364 digital behavior and structure. Tagged spellings (`assign`,
+    // `wait`, the A.3.4 gate types, `posedge`/`negedge`) are not listed here;
+    // `keyword_intro` still dates them through `kw_1364_1995`.
     "automatic",
     "cmos",               "deassign",      "edge",
     "endprimitive",       "endspecify",    "endtable",     "endtask",
     "force",              "fork",          "highz0",       "highz1",
     "ifnone",             "join",          "large",        "medium",
-    // `posedge`/`negedge` are no longer here: §5.10.1 gives them their own
-    // tags, because an event expression has to tell the two apart.
     "nmos",
     "noshowcancelled",
     "pmos",               "primitive",     "pull0",
     "pull1",              "pulldown",      "pullup",       "pulsestyle_ondetect",
     "pulsestyle_onevent", "rcmos",         "release",      "rnmos",
-    // The `tranif`/`rtranif` spellings below stay here — a pass ENABLE switch
-    // is a three-terminal gate
-    // whose conduction is a logic value, which is a different construct.
+    // `tranif`/`rtranif` stay untagged: a pass enable switch is a three-terminal
+    // gate whose conduction is a logic value, a different construct from `tran`.
     "rpmos",              "rtranif0",      "rtranif1",
     "showcancelled",      "small",         "specify",      "specparam",
     "strong0",            "strong1",       "table",        "task",
-    // `wait` left this list when A.6.5's `wait_statement` got a tag
-    // (`kw_wait`) — §10.6 membership is keyed by spelling, so it is still
-    // reserved everywhere it was, through `kw_1364_1995`.
     "tranif0",            "tranif1",
     "weak0",              "weak1",
     // configuration / library (IEEE 1364 clause 13)
@@ -881,7 +745,7 @@ const kw_1364_2005 = [_][]const u8{"uwire"};
 /// tables G.6 (v2.3.1→v2.4) and G.7 (v2.4→VAMS-2023): `$noise_table_log`
 /// (G.6 item 4349), `absdelta` (G.6 item 4803), `return`/`break`/`continue`
 /// (G.7 item 830) and `expm1`/`ln1p` (G.7 item 7780). Every other VAMS keyword
-/// defaults to `.vams_2_3` — see `isReserved`.
+/// defaults to `.vams_2_3` (see `isReserved`).
 const kw_vams_2023 = [_][]const u8{
     "absdelta", "break", "continue", "expm1", "ln1p", "noise_table_log", "return",
 };
@@ -908,7 +772,7 @@ const intro_kvs = kvs: {
 
 /// One entry per spelling. A spelling listed twice (a tagged keyword left in
 /// `reserved_keywords`) would make `lookupKeyword`'s answer depend on the
-/// order `StaticStringMap`'s UNSTABLE sort leaves the two in, so it is a
+/// order `StaticStringMap`'s unstable sort leaves the two in, so it is a
 /// compile error here.
 const keyword_kvs = kvs: {
     @setEvalBranchQuota(20_000);
@@ -973,7 +837,7 @@ test "keyword_map: spelling round-trips through lexeme" {
 test "lookupKeyword: differential against keyword_map, which stays the reference" {
     // Every spelling is checked three ways: the vector loop that ships, the
     // scalar reference next to it, and `keyword_map.get`, which is §2.8.2's
-    // actual definition. A miscompare here is a silent miscompile — a keyword
+    // actual definition. A miscompare here is a silent miscompile: a keyword
     // read as an identifier, or the reverse.
     const check = struct {
         fn all(s: []const u8) !void {
@@ -988,14 +852,14 @@ test "lookupKeyword: differential against keyword_map, which stays the reference
     }.all;
 
     // 1. Every keyword is still found. This is the only way the scan can be
-    //    WRONG in the direction that matters: a missed keyword changes the
+    //    wrong in the direction that matters: a missed keyword changes the
     //    parse of legal source.
     for (keyword_map.keys()) |key| try check(key);
 
     // 2. Random spellings. Lengths sweep 0 .. 3× the lane count (32 lanes on
     //    x86_64_v3 → 0..96), so every bucket boundary, the empty case and
     //    everything past the longest keyword are exercised.
-    var prng: std.Random.DefaultPrng = .init(0x2820); // §2.8, §2.0
+    var prng: std.Random.DefaultPrng = .init(0x2820);
     const rand = prng.random();
     var buf: [3 * 64 + 2]u8 = undefined;
     const max_len = 3 * (kw_lanes orelse 32);

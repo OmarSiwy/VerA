@@ -1,28 +1,9 @@
-//! Class 2 — Parsing. LRM annex A (normative grammar), ch3 declaration syntax,
-//! §4.2.2 operator precedence, §6.8 scope rules.
+//! Parser: token stream -> `Ast.SourceFile` (SoA stores addressed by u32 handles),
+//! by recursive descent with precedence climbing for expressions.
+//! LRM annex A (grammar), §4.2.2 (precedence), §6.8 (scopes).
 //!
-//! Transformation: token stream → ast.SourceFile (SoA stores).
-//!
-//! DOD: append nodes into the SoA ExprStore / statement pool and return u32
-//! handles (ExprId/StmtId). Recursive-descent + precedence climbing for exprs.
-//! No pointer tree is ever built.
-//!
-//! Ownership: everything (AST stores, decl slices) is allocated from `arena`
-//! and freed by `arena.deinit()`. `src`, `tags` and `starts` are BORROWED and
-//! must outlive the produced `Ast.SourceFile` — every interned name is a
-//! substring of `src`.
-//!
-//! Diagnostics: errors are COLLECTED into the shared `diag.Bag`, not thrown.
-//! `error.ParseError` is the internal unwind signal to the nearest recovery
-//! point (module item / statement / top-level declaration); each recovery point
-//! resynchronizes on `;` or a closing keyword and keeps parsing.
-//! `parseSourceFile` returns `error.ParseError` at the end iff anything was
-//! reported — the AST is then partial and MUST NOT be lowered.
-//!
-//! Token text: `token.Stored` carries only {tag,start} (end is recomputed, not
-//! stored), so this file re-scans identifier/number/string lexemes from `start`.
-//! It has to anyway: literal *values* (§2.6 bases, SI scale factors) are the
-//! parser's job.
+//! The grammar is split across `parser/*.zig`; each sub-file holds free functions
+//! taking `self: *Parser`. This file owns the cursor, token text and diagnostics.
 
 const std = @import("std");
 const token = @import("token.zig");
@@ -30,13 +11,17 @@ const lexer = @import("lexer.zig");
 const Ast = @import("ast.zig");
 const diag = @import("diag");
 
+/// `ParseError` unwinds to the nearest recovery point (module item, statement or
+/// top-level declaration); its diagnostic is already in the bag.
 pub const Error = error{ OutOfMemory, ParseError };
 
-/// E0241's nesting limit. A Debug build's parser overflows an 8 MB stack
-/// between 3000 and 5000 nested parentheses, and the later tree walks
-/// recurse too.
+/// E0241's nesting limit. A Debug build overflows an 8 MB stack somewhere
+/// between 3000 and 5000 nested parentheses, and later tree walks recurse too.
 pub const max_depth = 1024;
 
+/// Parser state for one token stream. Every allocation comes from `arena`;
+/// `src`, `tags` and `starts` are borrowed and must outlive the produced
+/// `Ast.SourceFile`, because every interned name is a slice of `src`.
 pub const Parser = struct {
     arena: std.mem.Allocator,
     src: []const u8,
@@ -48,69 +33,64 @@ pub const Parser = struct {
     file: Ast.SourceFile = .empty,
     /// Shared collector. The cap, the dedupe and the rendering all live there.
     bag: *diag.Bag,
-    /// Did THIS parse report anything? The bag is shared across stages and
-    /// drops entries to the cap and the dedupe set, so its length cannot answer.
+    /// Whether this parse reported an error. The bag is shared across stages and
+    /// drops entries at its cap and dedupe set, so its length cannot answer.
     failed: bool = false,
     /// §3.6.1.4 nature `access` names. `name(...)` is a branch probe (§4.4.1)
     /// iff the name is in here, otherwise it is a user function call (§4.7).
     /// Seeded with V/I (disciplines.vams, annex D) and grown by every
     /// `access = X;` nature attribute parsed ahead of the module.
     access_names: std.StringHashMapUnmanaged(void) = .empty,
-    /// §10.6 reserved-keyword set in effect, and the open `begin_keywords
-    /// directives it was pushed by. See `keywordsDirective` / `identLike`.
+    /// §10.6 reserved-keyword set in effect, and the sets saved by each open
+    /// `begin_keywords directive. See `keywordsDirective` and `identLike`.
     kw_set: token.KeywordSet = token.default_keyword_set,
     kw_stack: std.ArrayList(token.KeywordSet) = .empty,
     /// The language this parse accepts (`vera --std=`), which is also §10.6's
     /// "implementation's default set of reserved keywords". Unlike `kw_set` it
-    /// does change semantics: under a 1364 set a Verilog-AMS construct is
-    /// E0242, because IEEE 1364-2005 annex A has no production for it. Set it
-    /// with `setLanguage`.
+    /// changes what parses: under a 1364 set a Verilog-AMS construct is E0242,
+    /// because IEEE 1364-2005 annex A has no production for it. Set it with
+    /// `setLanguage`.
     language: token.KeywordSet = token.default_keyword_set,
     /// Inside an `analog function` body (§4.7.1). Two of that clause's bullets
-    /// are restrictions on statements the ordinary statement parser also parses
-    /// for module scope, so the position is the only thing that tells them
-    /// apart. See `parseFuncDecl`, E0226 and E0227.
+    /// restrict statements the ordinary statement parser also accepts at
+    /// module scope, so only the position tells them apart (E0226, E0227).
     in_analog_fn: bool = false,
-    /// Opt-in shared grammar for the digital source executor.
+    /// Parsing for the digital executor (`--run`): admits the digital-only
+    /// forms everywhere and keeps digital expression shapes unfolded.
     digital: bool = false,
     /// Inside the body of an `initial` or `always` block (§7.2.2's discrete
-    /// context). A.6.2/A.6.5 give that body the digital statement forms — a
-    /// `#` delay, `wait`, a nonblocking `<=`, an intra-assignment timing
-    /// control — in ANY module, analog or not. So those four are admitted by
-    /// position here, not by file extension; an `analog` block still has none
-    /// of them (A.6.4). See `discreteGrammar`.
+    /// context). A.6.2/A.6.5 give that body the digital statement forms (a `#`
+    /// delay, `wait`, a nonblocking `<=`, intra-assignment timing) in any
+    /// module, so they are admitted by position, not by file extension. An
+    /// `analog` block has none of them (A.6.4). See `discreteGrammar`.
     in_discrete: bool = false,
-    /// Inside a §7.6 `connectmodule` body. Two things read it: `parseDiscrete`,
-    /// because a connect module is the one design element whose body has the
-    /// discrete context LEGALLY (§7.2.2), so E0205 must not fire there; and
-    /// `parseEventTerm`, because A.6.5's `driver_update` is a digital event and
-    /// §9.22 paragraph 3 puts the whole driver family inside a connect module.
+    /// Inside a §7.6 `connectmodule` body. `parseEventTerm` reads it: A.6.5's
+    /// `driver_update` is a digital event, and §9.22 paragraph 3 puts the
+    /// driver family inside a connect module.
     in_connect_module: bool = false,
-    /// §6.6 nesting depth of generate REGIONS and generate CONSTRUCT bodies,
-    /// counted together because the two grammar gates it feeds care about the
-    /// same thing — being anywhere below a `generate`. Syntax 6-8's
-    /// `module_or_generate_item` has neither `generate_region` (§6.6: "Generate
-    /// regions do not nest, and they may only occur directly within a module")
-    /// nor `parameter_declaration` (§6.6: a generate block "may not contain
-    /// port declarations, parameter declarations, specify blocks, or specparam
-    /// declarations"), so `> 0` refuses both: E0228 and E0229.
+    /// §6.6 nesting depth of generate regions and generate construct bodies,
+    /// counted together because both gates it feeds only ask "below a
+    /// `generate`?". Syntax 6-8's `module_or_generate_item` has no
+    /// `generate_region` ("Generate regions do not nest") and no
+    /// `parameter_declaration`, so a nonzero depth refuses both (E0228, E0229).
     gen_depth: u32 = 0,
-    /// How many generate CONSTRUCTS (loop/if/case, not regions) enclose the
-    /// cursor, and an identity for the outermost one. Together they are the
-    /// §6.6.2 name space key — see `checkGenBlockNames`.
+    /// How many generate constructs (loop/if/case, not regions) enclose the
+    /// cursor, and an identity for the outermost one. Together they key §6.6.2's
+    /// block name space; see `checkGenBlockNames`.
     gen_construct_depth: u32 = 0,
     gen_construct: u32 = 0,
     /// Set by a loop generate for the one `parseGenerateBlock` call that reads
-    /// its body: §6.6.2's direct nesting is a CONDITIONAL construct's, so a loop
-    /// body is a scope even when it is one bare `if`.
+    /// its body. §6.6.2's direct nesting applies to conditional constructs only,
+    /// so a loop body is a scope even when it is one bare `if`.
     gen_loop_body: bool = false,
-    /// §2.9 every `attr_spec` of the module being parsed, flattened. Moved into
-    /// the `ModuleDecl` at `endmodule` and cleared — see `parseAttributes`.
+    /// Every §2.9 `attr_spec` of the module being parsed, flattened. Moved into
+    /// the `ModuleDecl` at `endmodule` and cleared; see `parseAttributes`.
     attrs: std.ArrayList(Ast.NatureAttr) = .empty,
-    /// Are we inside an attribute VALUE? §2.9's nesting ban is the only rule
-    /// that needs to know.
+    /// Nonzero inside an attribute value, where §2.9 bans a nested attribute
+    /// instance (E0357).
     attr_depth: u32 = 0,
 
+    /// Asserts `tags` and `starts` have equal length and end in `.eof`.
     pub fn init(
         arena: std.mem.Allocator,
         src: []const u8,
@@ -129,37 +109,32 @@ pub const Parser = struct {
         };
     }
 
-    /// Everything a parse of a leading run of tokens leaves behind, so a later
-    /// parse of a longer token stream that BEGINS WITH THAT RUN can resume from
-    /// it instead of redoing it. Built once per process for the annex D/E
-    /// prelude — see `Preprocessor.preludeAst`, which owns the snapshot, states
-    /// why the prelude is always that leading run, and asserts that the fields
-    /// NOT listed here are all still at their `init` values when the prefix
-    /// parse ends (`kw_set`, `kw_stack`, `attrs`, the three flags and the two
-    /// depths: a design element that opened one has closed it by `endmodule`).
+    /// The state a parse of a leading run of tokens leaves behind, so a parse
+    /// of a longer stream that begins with that run can resume instead of
+    /// redoing it. Built once per process for the annex D/E prelude by
+    /// `Preprocessor.preludeAst`, which asserts that every field not listed
+    /// here is back at its `init` value when the prefix parse ends.
     ///
-    /// A field added to `Parser` that a prefix parse can leave dirty is a field
-    /// that must be added here too; the equivalence test at the bottom of
-    /// `preprocessor.zig` is what catches the omission.
+    /// A new `Parser` field that a prefix parse can leave dirty must be added
+    /// here too; the prelude AST equivalence test in `pp/test.zig` catches the
+    /// omission.
     pub const Seed = struct {
         /// Stores and decl lists. See `Ast.SourceFile.seedFrom` for which half
         /// is copied and which is borrowed, and why the borrow is sound.
         file: Ast.SourceFile,
-        /// §3.6.1.4 access names in effect at the seam. A list rather than the
-        /// map itself: the set is 16 names, and re-`put`ting 16 keys is cheaper
-        /// than cloning a hash map (MEASURED: cloning the 154-entry interner
-        /// map is 3.4 µs, i.e. ~22 ns/entry, ReleaseFast, min of 500).
+        /// §3.6.1.4 access names in effect at the seam. A list, not the map:
+        /// re-inserting a handful of keys is cheaper than cloning a hash map.
         access_names: []const []const u8,
-        /// Token index the prefix parse stopped on — its `.eof`, which is the
+        /// Token index the prefix parse stopped on: its `.eof`, which is the
         /// first token of the resumed parse.
         pos: u32,
         /// §6.6.2 outermost-construct identity, monotonic over the whole file.
         gen_construct: u32,
     };
 
-    /// `init`, then resume from `seed` instead of from nothing. `null` seed is
-    /// exactly `init` (the `--no-std-defs` path, and every direct caller in the
-    /// tests).
+    /// `init`, then resumes from `seed`. A null `seed` is exactly `init` (the
+    /// `--no-std-defs` path). Precondition: `tags` begins with the token run
+    /// `seed` was parsed from.
     pub fn initSeeded(
         arena: std.mem.Allocator,
         src: []const u8,
@@ -170,8 +145,7 @@ pub const Parser = struct {
     ) std.mem.Allocator.Error!Parser {
         var p = init(arena, src, tags, starts, bag);
         const s = seed orelse return p;
-        // The caller promises `tags` begins with the run `s` was parsed from —
-        // `root.zig` gets that from the same `Prelude` that seeded the lexer.
+        // `root.zig` guarantees the shared prefix: the same `Prelude` seeded the lexer.
         std.debug.assert(s.pos < tags.len);
         p.pos = s.pos;
         p.gen_construct = s.gen_construct;
@@ -180,7 +154,7 @@ pub const Parser = struct {
         return p;
     }
 
-    /// Parse as `set`'s language: it becomes the §10.6 default keyword set and
+    /// Parses as `set`'s language: it becomes the §10.6 default keyword set and
     /// the ceiling on `begin_keywords` and on Verilog-AMS constructs (E0242).
     pub fn setLanguage(self: *Parser, set: token.KeywordSet) void {
         self.language = set;
@@ -200,68 +174,66 @@ pub const Parser = struct {
         try self.report(self.pos, .E0242, "`{s}` under \"{s}\"", .{ w, self.language.specifier() });
     }
 
-    // Annex A.1.2 source_text, A.1.1 library source text, A.1.5 configurations, A.5 UDPs — parser/source.zig
+    // Annex A.1.2 source_text, A.1.1 library source text, A.1.5 configurations, A.5 UDPs
     const parse_source = @import("parser/source.zig");
+    /// Parses the whole stream. Returns `error.ParseError` at the end if anything
+    /// was reported; the AST is then partial and must not be lowered.
     pub const parseSourceFile = parse_source.parseSourceFile;
 
-    // Annex A.1.2 module_declaration and A.1.4 module_item (LRM §6.2, Clause 3) — parser/module.zig
+    // Annex A.1.2 module_declaration and A.1.4 module_item (LRM §6.2, Clause 3)
     const parse_module = @import("parser/module.zig");
 
-    // Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1) — parser/specify.zig
+    // Annex A.7 specify blocks (IEEE 1364 Clause 14, inherited through LRM §1.1)
     const parse_specify = @import("parser/specify.zig");
 
-    // Annex A.4.1 module instantiation (LRM §6.2.2), A.3 gates and switches, A.6.2 initial/always — parser/inst.zig
+    // Annex A.4.1 module instantiation (LRM §6.2.2), A.3 gates and switches, A.6.2 initial/always
     const parse_inst = @import("parser/inst.zig");
 
-    // Annex A.4.2 generate constructs (LRM §6.6) — parser/generate.zig
+    // Annex A.4.2 generate constructs (LRM §6.6)
     const parse_generate = @import("parser/generate.zig");
 
-    // Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6), A.2.1.3/A.2.2 port, net and branch declarations — parser/decl.zig
+    // Annex A.2.1.1 parameters (§3.4), A.2.6 analog functions (§4.7.1), A.1.6/A.1.7 natures and disciplines (§3.6), A.2.1.3/A.2.2 port, net and branch declarations
     const parse_decl = @import("parser/decl.zig");
 
-    // Annex A.6.4 analog_statement (LRM Clause 5) — parser/stmt.zig
+    // Annex A.6.4 analog_statement (LRM Clause 5)
     const parse_stmt = @import("parser/stmt.zig");
 
-    // Annex A.8.3 expressions (§4.1, §4.2 precedence climbing), and literals (§2.6 numbers, §2.7 strings, §2.8 identifiers) — parser/expr.zig
+    // Annex A.8.3 expressions (§4.1, §4.2 precedence climbing), and literals (§2.6 numbers, §2.7 strings, §2.8 identifiers)
     const parse_expr = @import("parser/expr.zig");
 
     // -----------------------------------------------------------------------
-    // Token access — LRM §2.2 (the stream), §2.8 (identifiers)
+    // Token access: LRM §2.2 (the stream), §2.8 (identifiers)
     // -----------------------------------------------------------------------
 
-    /// The A.6.5 statement forms an analog statement does not have — `#`,
-    /// `wait`, `<=`, intra-assignment timing — are grammar here: a digital
-    /// source, or the body of an `initial`/`always` block anywhere.
+    /// Whether the A.6.5 forms an analog statement lacks (`#`, `wait`, `<=`,
+    /// intra-assignment timing) parse here: in a digital source, or in the
+    /// body of an `initial`/`always` block anywhere.
     pub fn discreteGrammar(self: *const Parser) bool {
         return self.digital or self.in_discrete;
     }
 
+    /// Returns the tag at the cursor without consuming it.
     pub fn peek(self: *const Parser) token.Tag {
         return self.tags[self.pos];
     }
 
+    /// Returns the tag `n` tokens ahead, clamped to the final `.eof`.
     pub fn peekAt(self: *const Parser, n: u32) token.Tag {
         const i = self.pos + n;
         return self.tags[@min(i, self.tags.len - 1)];
     }
 
+    /// Consumes the next token if it is `t`; returns whether it did.
     pub fn eat(self: *Parser, t: token.Tag) bool {
         if (self.peek() != t) return false;
         self.pos += 1;
         return true;
     }
 
-    /// Source text of a token. `token.Stored` has no length (DOD: recompute,
-    /// don't store), so the lexeme is re-scanned from `start` — by the LEXER,
-    /// which is what makes it exact: `lexer.tokenEnd` re-runs `next()`, and
-    /// `next()` is a pure function of (src, pos) (see lexer.zig's header).
-    ///
-    /// A parser-side copy of the scanners used to live here and it had drifted:
-    /// its escaped-identifier arm stopped at white space, where §2.8.1 and
-    /// `lexer.lexEscapedIdentifier` stop at any byte outside printable ASCII
-    /// 33–126 — so a non-ASCII byte (a UTF-8 comment character pasted into a
-    /// name) ended the identifier for the lexer and not for the parser, and the
-    /// two disagreed about where the next token began.
+    /// Returns the source text of token `i`, without the leading `\` of an
+    /// escaped identifier. Tokens store no length, so the lexer re-scans the
+    /// lexeme from its start; that is exact because the lexer's `next()` is a
+    /// pure function of (src, pos). Cost: one token scan per call.
     pub fn tokenText(self: *const Parser, i: u32) []const u8 {
         const lx: lexer.Lexer = .{ .src = self.src };
         const text = lx.tokenText(self.starts[i]);
@@ -270,18 +242,16 @@ pub const Parser = struct {
         return if (self.tags[i] == .escaped_identifier) text[1..] else text;
     }
 
-    /// Is the token at `i` the reserved spelling `w`? Annex B's out-of-subset
-    /// keywords share one tag, so every grammar that needs one of them by name
-    /// asks here.
+    /// Whether token `i` is the reserved spelling `w`. Annex B's out-of-subset
+    /// keywords share the `.kw_reserved` tag, so a grammar that needs one of
+    /// them by name asks here.
     pub fn reservedIs(self: *const Parser, i: u32, w: []const u8) bool {
         return self.tags[i] == .kw_reserved and std.mem.eql(u8, self.tokenText(i), w);
     }
 
-    /// `=>`, `*>` and `&&&` — A.7's three operators, which the lexer already
-    /// recognises as single tokens and tags `.invalid`, because outside a
-    /// specify block none of them is an operator at all (`lexer.zig` spells
-    /// exactly that at each of the three). So the spelling is the test, and
-    /// the tag is what keeps them from meaning anything anywhere else.
+    /// Consumes `w` if it is the next token; one of A.7's `=>`, `*>` and `&&&`.
+    /// The lexer tags them `.invalid` because outside a specify block none is
+    /// an operator, so the spelling is the test.
     pub fn eatSymbol(self: *Parser, w: []const u8) bool {
         if (self.peek() != .invalid or !std.mem.eql(u8, self.tokenText(self.pos), w)) return false;
         self.pos += 1;
@@ -289,12 +259,9 @@ pub const Parser = struct {
     }
 
     /// Byte just past the previous token: where a missing terminator has to be
-    /// typed, and so where `expect`'s machine-applicable insertion is anchored.
-    ///
-    /// `token.Stored` carries no length (DOD: recompute, don't store), so the
-    /// lexeme is measured. Two tags need care: `tokenText` strips the `\` of an
-    /// escaped identifier from the NAME though it is part of the source span,
-    /// and `.eof` has no text at all.
+    /// typed, and so where `expect`'s insertion fix is anchored. `tokenText`
+    /// strips an escaped identifier's `\` though it is in the source span,
+    /// and `.eof` has no text.
     fn endOfPrev(self: *const Parser) u32 {
         if (self.pos == 0) return self.starts[0];
         const i = self.pos - 1;
@@ -303,6 +270,9 @@ pub const Parser = struct {
         return self.starts[i] + backslash + @as(u32, @intCast(self.tokenText(i).len));
     }
 
+    /// Consumes a `t` token and returns its index. Otherwise reports E0207,
+    /// with an insertion fix when `t` is a terminator, and returns
+    /// `error.ParseError` with the cursor unmoved.
     pub fn expect(self: *Parser, t: token.Tag) Error!u32 {
         if (self.peek() != t) {
             // The title is only "unexpected token", so the caret carries what
@@ -310,13 +280,9 @@ pub const Parser = struct {
             var d = self.failWith(self.pos, .E0207);
             d.msg("found {s}", .{self.found(self.pos)});
             d.point("expected {s}", .{tagDesc(t)});
-            // A missing TERMINATOR is never missing where it is reported: the
-            // previous construct ended, nobody wrote the token, and the caret
-            // lands on whatever came next — often on the following line. E0207's
-            // own `--explain` says so ("look at the end of the previous
-            // statement first"); the machine-applicable fix says it in the one
-            // place a reader is already looking, and points at the column where
-            // the character has to be typed.
+            // A missing terminator belongs after the previous construct, but
+            // the caret lands on whatever came next, often on the next line.
+            // The fix points at the column where it has to be typed.
             if (isTerminator(t)) if (token.Tag.lexeme(t)) |text| {
                 const at = self.endOfPrev();
                 d.suggest(
@@ -333,19 +299,13 @@ pub const Parser = struct {
         return i;
     }
 
-    /// Can the token at `i` stand where the grammar wants an identifier?
+    /// Whether token `i` can stand where the grammar wants an identifier.
     ///
-    /// §2.8/§2.8.1 identifiers always can. So can a KEYWORD that the active
-    /// §10.6 keyword set does not reserve: "the version_specifier specifies
-    /// the valid set of reserved keywords in effect when a design unit is
-    /// parsed", and §10.6's worked example turns exactly on this — under
-    /// `begin_keywords "1364-2005", `input sin;` is "OK since sin is not a
-    /// keyword in 1364-2005". §10.6 also says the directive does "not affect
-    /// the … tokens", which is why this is a parser rule and not a lexer one:
-    /// `analog` stays `kw_analog` in the very same module.
-    ///
-    /// Escaped identifiers (§2.8.1) never reach `keyword_map` in the first
-    /// place, so nothing is applied to them twice.
+    /// §2.8/§2.8.1 identifiers always can, and so can a keyword the active
+    /// §10.6 set does not reserve: under `begin_keywords "1364-2005",
+    /// `input sin;` is "OK since sin is not a keyword in 1364-2005". §10.6
+    /// also says the directive does "not affect the ... tokens", which is why
+    /// this is a parser rule: `analog` stays `kw_analog` in the same module.
     pub fn identLike(self: *const Parser, i: u32) bool {
         const j = @min(i, self.tags.len - 1);
         return switch (self.tags[j]) {
@@ -357,7 +317,8 @@ pub const Parser = struct {
         };
     }
 
-    /// §2.8/§2.8.1 identifier or escaped identifier, interned.
+    /// Consumes a §2.8/§2.8.1 identifier (or a keyword `identLike` frees) and
+    /// returns it interned. Reports E0208 otherwise.
     pub fn expectIdent(self: *Parser) Error!Ast.StrId {
         if (!self.identLike(self.pos))
             return self.failAt(self.pos, .E0208, "found {s}", .{self.found(self.pos)});
@@ -375,34 +336,16 @@ pub const Parser = struct {
         return s;
     }
 
-    /// Intern a token's text as a NAME — and the one place §2.8.1 is normalized
-    /// away, which is why the period substitution belongs here and nowhere else.
-    ///
-    /// `tokenText` already drops the leading backslash because it is not part of
-    /// the name. The other thing an escaped identifier smuggles into a name is a
-    /// PERIOD: §2.8.1 ends the identifier at white space and admits every
-    /// printable character before it, so `\x.y ` is the identifier `x.y`. That
-    /// collides head-on with `Elaborate.sep`, which is a period, and four places
-    /// downstream read a period as a path separator without being able to check
-    /// — `Elaborate.isOoc` (a dot means an Annex F.2.1 out-of-context
-    /// declaration), `parseDottedName`'s join, `Flatten.join`, `Lower.flatName`.
-    /// Left raw, `\x.y` declared inside instance `u` flattens to `u.x.y`, the
-    /// same string as net `y` inside instance `x` inside `u`: two nets, one node,
-    /// silently.
-    ///
-    /// A SPACE is the substitute because §2.8.1's own terminator is white space:
-    /// it is the one byte that cannot already be inside an identifier, which
-    /// makes the substitution injective — no unescaped name can be mistaken for
-    /// an escaped one. `naming.sanitize` turns it into `Z20` before it reaches
-    /// the emitted `U`. What it costs is readability, in exactly the case that
-    /// was previously wrong and nowhere else: a name with no period is interned
-    /// byte-for-byte as before, with no allocation.
-    ///
-    /// After this point, a period in a name means "path separator", full stop.
+    /// Interns token `i`'s text as a name. Each period in an escaped identifier
+    /// (§2.8.1: `\x.y ` is the identifier `x.y`) becomes a space, so that after
+    /// this point a period in a name always means a hierarchy separator
+    /// (`Elaborate.sep`). Without it, `\x.y` inside instance `u` and net `y`
+    /// inside `u.x` would flatten to the same `u.x.y`. A space cannot occur in
+    /// an identifier, so the mapping is injective; `naming.sanitize` later
+    /// spells it `Z20`. Allocates only for an escaped name with a period.
     pub fn internTok(self: *Parser, i: u32) Error!Ast.StrId {
-        // The two bytes are spelled out rather than imported from `ir/`, for the
-        // same reason `parseDottedName`'s `.` is: the frontend owns the source
-        // half of a two-sided convention and does not depend on the IR.
+        // The bytes are spelled out, not imported from `ir/`: the frontend owns
+        // the source half of this convention and does not depend on the IR.
         const text = self.tokenText(i);
         if (self.tags[i] != .escaped_identifier) return self.file.intern(self.arena, text);
         if (std.mem.indexOfScalar(u8, text, '.') == null)
@@ -417,25 +360,18 @@ pub const Parser = struct {
     ///     attribute_instance ::= (* attr_spec { , attr_spec } *)
     ///     attr_spec          ::= attr_name [ = constant_expression ]
     ///
-    /// Every spec is COLLECTED, into `self.attrs`, which `parseModule` hands to
-    /// the enclosing module. Nothing downstream reads an attribute's value — the
-    /// list exists so §2.9's "constant_expression" and §2.9.2's value domains can
-    /// be checked at all, and both are properties of the attr_spec alone, so the
-    /// item it decorated does not have to be recorded with it.
+    /// Parses any attribute instances at the cursor and appends every spec to
+    /// `self.attrs`, which `parseModule` hands to the enclosing module. The
+    /// decorated item is not recorded: §2.9's constant_expression rule and
+    /// §2.9.2's value domains are properties of the spec alone.
     ///
-    /// It used to be a token scan, which is why it is still named for skipping:
-    /// the caller's cursor lands past the instance either way, and 14 call sites
-    /// depend on that. The value is now a real `parseExpr`, so a malformed one is
-    /// a diagnostic where it used to be silently swallowed.
+    /// A malformed attribute is reported and the cursor resynchronized past its
+    /// `*)`, so the caller always lands past the instance. Only OOM propagates.
     pub fn skipAttributes(self: *Parser) error{OutOfMemory}!void {
         self.parseAttributes() catch |e| {
-            // OOM is never recoverable — swallowing
-            // it here would resume parsing with whatever half-built state the
-            // allocator refused to finish.
             if (e == error.OutOfMemory) return error.OutOfMemory;
-            // A parse error inside an attribute has already been reported. The
-            // cursor is resynchronized to the closing `*)` so ONE bad attribute
-            // does not turn the decorated declaration into a second diagnostic.
+            // Already reported. Resynchronize past the closing `*)` so one bad
+            // attribute does not also cost the decorated declaration a diagnostic.
             while (true) : (self.pos += 1) switch (self.peek()) {
                 .eof => return,
                 .attr_close => {
@@ -457,7 +393,7 @@ pub const Parser = struct {
         return out;
     }
 
-    /// Keep `lteSince`'s finds on statement `stmt` or call `expr`.
+    /// Records `lteSince`'s finds against statement `stmt` or call `expr`.
     pub fn keepLte(self: *Parser, specs: [lte_kinds.len]?Ast.NatureAttr, stmt: Ast.StmtId, expr: Ast.ExprId) error{OutOfMemory}!void {
         for (specs, lte_kinds) |f, k| if (f) |a| try self.file.lte_attrs.append(
             self.arena,
@@ -468,13 +404,10 @@ pub const Parser = struct {
 
     fn parseAttributes(self: *Parser) Error!void {
         while (self.peek() == .attr_open) {
-            // §2.9: "Nesting of attribute instances is disallowed. It shall be
-            // illegal to specify the value of an attribute with a constant
-            // expression that contains an attribute instance." Checked HERE
-            // because an attribute value is a full `parseExpr`, and A.8.3 gives
-            // an operator its own `{ attribute_instance }` slot — so without this
-            // counter `(* outer = (1 + (* inner *) 2) *)` would parse cleanly, the
-            // inner instance being legal in every position but this one.
+            // §2.9: "Nesting of attribute instances is disallowed." An attribute
+            // value is a full `parseExpr`, and A.8.3 gives an operator its own
+            // `{ attribute_instance }` slot, so without this check
+            // `(* outer = (1 + (* inner *) 2) *)` would parse cleanly.
             if (self.attr_depth != 0) {
                 var d = self.failWith(self.pos, .E0357);
                 d.msg("the value contains an attribute instance", .{});
@@ -488,15 +421,14 @@ pub const Parser = struct {
             while (true) {
                 const tok = self.pos;
                 // `attr_name ::= identifier`, but §2.9.2's own `units` is an
-                // annex B keyword and so arrives as one (`kw_units`) — the same
-                // collision `parseNatureAttr` handles. In this position no
-                // keyword can be anything else, so every keyword is a name.
+                // annex B keyword (`kw_units`). No keyword means anything else
+                // here, so every keyword is taken as a name.
                 if (!self.identLike(tok) and !token.isKeyword(self.peek()))
                     return self.failAt(tok, .E0208, "found {s}", .{self.found(tok)});
                 const name = try self.internTok(tok);
                 self.pos += 1;
-                // "[ = constant_expression ]" — §2.9's own default: "If the
-                // value is not specified, then ... the default value is 1."
+                // §2.9: "If the value is not specified, then ... the default
+                // value is 1." `.none` stands for that default.
                 const value: Ast.ExprId = if (self.eat(.assign_eq))
                     try parse_expr.parseExpr(self)
                 else
@@ -536,8 +468,7 @@ pub const Parser = struct {
     // -----------------------------------------------------------------------
 
     /// `failAt` for a site that reports and carries on: the file is refused
-    /// (`failed`) and parsing continues, but running out of memory still
-    /// aborts. `failAt(..) catch {}` swallowed that OOM along with ParseError.
+    /// (`failed`) and parsing continues. Only OOM propagates.
     pub fn report(self: *Parser, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) error{OutOfMemory}!void {
         switch (self.failAt(tok, code, fmt, args)) {
             error.ParseError => {},
@@ -553,6 +484,10 @@ pub const Parser = struct {
         self.depth += 1;
     }
 
+    /// Marks the parse failed, adds `code` at token `tok` to the bag, and returns
+    /// `error.ParseError` for the caller to propagate (`error.OutOfMemory` if the
+    /// bag cannot grow). An unterminated string at `tok` is reported as E0138
+    /// instead of `code`.
     pub fn failAt(self: *Parser, tok: u32, code: diag.Code, comptime fmt: []const u8, args: anytype) Error {
         self.failed = true;
         const span = lexer.tokenSpan(self.src, self.starts, tok);
@@ -563,13 +498,10 @@ pub const Parser = struct {
         return error.ParseError;
     }
 
-    /// §2.7: a string that runs off its line reaches the parser as one
-    /// `.invalid` token, and whichever context happens to catch it says only
-    /// "found invalid token" — naming neither the rule nor the fix. Handled in
-    /// the funnel rather than at the `.E0209` call site because the same token
-    /// is equally reachable from statement and module-item position.
-    /// Returns true when it emitted; the classification lives in
-    /// `lexer.stringRunaway`.
+    /// Reports E0138 when the `.invalid` token at `span` is a §2.7 string that
+    /// runs off its line, which would otherwise read only "found invalid token".
+    /// Checked here in the funnel because the token is reachable from both
+    /// statement and module-item position. Returns whether it emitted.
     fn failRunawayString(self: *Parser, span: diag.Span) Error!bool {
         const kind = lexer.stringRunaway(self.src, span);
         if (kind == .none) return false;
@@ -588,8 +520,9 @@ pub const Parser = struct {
         return true;
     }
 
-    /// Same diagnostic, opened for a label / note / suggestion. The call site
-    /// still has to `return error.ParseError` after `emit`.
+    /// `failAt`'s diagnostic, opened for labels, notes and suggestions. Marks
+    /// the parse failed; the caller must `emit` and then return
+    /// `error.ParseError` itself.
     pub fn failWith(self: *Parser, tok: u32, code: diag.Code) diag.Builder {
         self.failed = true;
         return self.bag.build(.parse, code, lexer.tokenSpan(self.src, self.starts, tok));
@@ -613,13 +546,9 @@ pub const Parser = struct {
     }
 };
 
-/// Name of an expected token in a diagnostic.
-///
-/// Punctuation is spelled as the CHARACTER the user has to type, in backticks:
-/// "expected `)`" is a repair instruction, "expected r_paren" is a puzzle about
-/// our `token.Tag` field names. The categories that have no fixed spelling stay
-/// prose. `token.Tag.lexeme` is the single source for every spelling, so an
-/// operator added there needs no entry here.
+/// Name of an expected token in a diagnostic. Punctuation is spelled as the
+/// character to type, in backticks (from `token.Tag.quoted`); categories with
+/// no fixed spelling stay prose.
 fn tagDesc(t: token.Tag) []const u8 {
     return switch (t) {
         .eof => "end of file",
@@ -634,9 +563,8 @@ fn tagDesc(t: token.Tag) []const u8 {
     };
 }
 
-/// Tokens that CLOSE something: when one is missing, the place to type it is
-/// the end of the construct before it, not the token the parser choked on.
-/// Drives the machine-applicable insertion in `expect`.
+/// Tokens that close something: when one is missing, the place to type it is
+/// the end of the construct before it. Drives the insertion fix in `expect`.
 fn isTerminator(t: token.Tag) bool {
     return switch (t) {
         .semicolon, .comma, .rparen, .rbracket, .rbrace => true,
@@ -644,7 +572,7 @@ fn isTerminator(t: token.Tag) bool {
     };
 }
 
-// Parser self-checks: the real lexer drives the real parser — parser/test.zig
+// Parser self-checks: the real lexer drives the real parser.
 const parse_test = @import("parser/test.zig");
 
 test {

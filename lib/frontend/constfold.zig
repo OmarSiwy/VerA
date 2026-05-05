@@ -1,20 +1,8 @@
-//! §4.2 constant_expression: the one place its typing rules are written.
-//!
-//! In: an expression AST (or, for the MIR folder, one operator and its folded
-//! operands). Out: a `Const`, or null when the expression is not constant.
-//! Pure: no allocation, no symbol table. What the structure cannot answer — an
-//! identifier, and `>>>`'s signedness — is asked of the caller's `env`.
-//!
-//! The rules, and the clause each comes from:
-//!   §4.2.1.3  an operator is integer iff BOTH operands are integer.
-//!   §3.2      integer `+ - *` (and `<<`, `**`) wrap at 32 bits: `wrap32`;
-//!             unary `-` and `abs` of a 32-bit operand too: `wrapFrom`.
-//!   §4.2.4    integer `/` truncates toward zero; a zero divisor declines.
-//!   Table 3-3 string relations compare bytes; a mixed pair declines.
-//!   §4.2.12   `?:` is lazy: only the taken arm must fold.
-//!
-//! Lives in the frontend because it imports nothing but the AST, so the
-//! parser, elaboration, lowering and the proof can all share it.
+//! The §4.2 constant_expression folder: an expression AST (or one MIR operator
+//! and its folded operands) in, a `Const` out, or null when the expression is
+//! not constant. Pure: no allocation and no symbol table; identifiers and
+//! `>>>`'s signedness come from the caller's `env`. Implements §3.2's 32-bit
+//! integer wrap, §4.2.1.3, §4.2.4, §4.2.11, §4.2.12, §4.3 and Table 3-3.
 
 const std = @import("std");
 const Ast = @import("ast.zig");
@@ -26,6 +14,7 @@ pub const Const = union(enum) {
     real: f64,
     str: []const u8,
 
+    /// Returns the value as a real; a string is 0.
     pub fn asReal(c: Const) f64 {
         return switch (c) {
             .int => |i| @floatFromInt(i),
@@ -33,13 +22,10 @@ pub const Const = union(enum) {
             .str => 0,
         };
     }
-    /// §4.2.1.1 real→integer rounds, ties away from zero — and says nothing
-    /// about a real that has no nearest integer, because it never contemplates
-    /// one. A NaN, an infinity, and anything past i64 are all in that hole.
-    ///
-    /// Returns null there rather than inventing a value. Any caller holding a
-    /// real the USER wrote must go through this and diagnose; `asInt` below is
-    /// only for operands already known to be in range.
+    /// Returns the value as an integer, rounding a real to nearest with ties
+    /// away from zero (LRM §4.2.1.1). Null for a NaN, an infinity or a real
+    /// outside i64, which §4.2.1.1 gives no value; a string is 0. A caller
+    /// holding a real the user wrote must use this and diagnose the null.
     pub fn asIntExact(c: Const) ?i64 {
         return switch (c) {
             .int => |i| i,
@@ -55,20 +41,19 @@ pub const Const = union(enum) {
             .str => 0,
         };
     }
+    /// `asIntExact`, saturating out-of-range reals and mapping NaN to 0. Never
+    /// panics. Only for operands already known to be in range; a real the
+    /// user wrote goes through `asIntExact`.
     pub fn asInt(c: Const) i64 {
-        // Saturating, NaN to zero. This MUST NOT be able to panic: a bare
-        // `@intFromFloat` on an out-of-range double is illegal behavior, and it
-        // used to abort the whole compilation — no diagnostic, and every other
-        // error in the file lost with it — whenever a folded subscript or a
-        // `$discontinuity` degree reached it as an infinity. The two paths that
-        // can see such a value now call `asIntExact` and report; this fallback
-        // is what remains for operands a range check has already passed.
+        // A bare `@intFromFloat` on an out-of-range double is illegal behavior,
+        // so this saturates instead.
         return c.asIntExact() orelse blk: {
             const r = c.asReal();
             if (std.math.isNan(r)) break :blk 0;
             break :blk if (r > 0) std.math.maxInt(i64) else std.math.minInt(i64);
         };
     }
+    /// Returns the truth value: nonzero, or a non-empty string.
     pub fn isTrue(c: Const) bool {
         return switch (c) {
             .int => |i| i != 0,
@@ -78,28 +63,20 @@ pub const Const = union(enum) {
     }
 };
 
-/// §3.2, two sentences and one width: an `integer` "can hold values ranging from
-/// -2^31 to 2^31-1", and "arithmetic operations performed on integer variables
-/// produce 2's complement results". So the answer to `2147483647 + 1` is
-/// -2147483648, and a 64-bit type is wrong at both ends of the range.
+/// Truncates an integer arithmetic result to §3.2's 32-bit two's complement
+/// and widens it back: an `integer` "can hold values ranging from -2^31 to
+/// 2^31-1", so `2147483647 + 1` is -2147483648 (LRM §3.2).
 ///
-/// The width is imposed on the OPERATION, not on the storage: an `integer` stays
-/// in an i64 slot (one machine word, and every ch9 status return and array
-/// index already fits) and every integer arithmetic result is truncated to 32
-/// bits and widened back. That is exact rather than approximate, because both
-/// operands of an integer operation are themselves in range — either literals
-/// §2.5.1 keeps in range or the output of another wrapped operation — so
-/// truncating the 64-bit result is bit-for-bit the 32-bit result.
+/// The width is imposed on the operation, not the storage: an `integer` stays
+/// in an i64 slot. This is exact because both operands of an integer operation
+/// are already in range (a §2.5.1 literal or another wrapped result).
 ///
-/// THREE SITES MUST AGREE and this is the only definition of the rule: this
-/// file's `binary` (§4.2 constant expressions), `analysis.foldConst` (parameter
-/// defaults and §4.5 operator control arguments) and `codegen.intBin` (the
-/// device). A fold that disagreed with the runtime would make one expression
-/// answer differently depending on whether it landed in a parameter default.
+/// Three sites must agree: this file's `binary`, `analysis.foldConst` and
+/// codegen's `intBin32`. Otherwise one expression would answer differently
+/// in a parameter default than at run time.
 ///
-/// NOT applied to a literal: §2.5.1's `-2147483648` is `ineg` of the in-range-
-/// as-unsigned 2147483648, and wrapping the operand first would make the
-/// negation of it positive.
+/// Not applied to a literal: §2.5.1's `-2147483648` negates the unsigned
+/// 2147483648, and wrapping the operand first would make the result positive.
 pub fn wrap32(x: i64) i64 {
     return @as(i32, @truncate(x));
 }
@@ -116,7 +93,7 @@ fn wrapFrom(a: i64, r: i64) i64 {
 /// operand is determined before the operator is applied", and with neither
 /// real that type is integer. IEEE 1364-2005 §5.1.5 supplies the values: for
 /// n >= 0 the power at §3.2's 32-bit width ("The result value is 1 if the
-/// second operand is zero"), and for n < 0 Table 5-6's row — 1 for base 1,
+/// second operand is zero"), and for n < 0 Table 5-6's row: 1 for base 1,
 /// ±1 by parity for base -1, 0 for every other base (the true value lies
 /// strictly between -1 and 1 and an integer truncates it). A zero base under a
 /// negative exponent is Table 5-6's 'bx, which an analog integer cannot hold:
@@ -156,17 +133,14 @@ test "ipow32 is IEEE 1364-2005 Table 5-6 at 32 bits" {
     try std.testing.expectEqual(@as(?i64, 0), ipow32(2, 32));
 }
 
-/// Table 3-3's string operators, folded. "Equality. Checks whether the two
+/// Folds Table 3-3's string operators. "Equality. Checks whether the two
 /// strings are equal. Result is 1 if they are equal and 0 if they are not" and
 /// "Relational operators return 1 if the corresponding condition is true using
 /// the lexicographical ordering of the two strings".
 ///
-/// A MIXED pair declines to fold. §2.7 does make a string operand "unsigned
-/// integer constants" for an arithmetic context, but the conversion is
-/// `lowerBinary`'s (`strNum`) and duplicating it here to answer a constant
-/// expression is not worth a second copy of the rule; declining leaves the
-/// runtime path — which is correct — to answer, at the cost of a "not a
-/// constant expression" on a shape nothing in the suite writes.
+/// A mixed string/number pair declines to fold. §2.7 makes a string operand
+/// "unsigned integer constants" in an arithmetic context, but that conversion
+/// is lowering's (`strNum`), and declining leaves the runtime path to answer.
 fn strBinary(op: Ast.BinaryOp, a: Const, b: Const) ?Const {
     if (a != .str or b != .str) return null;
     const c = std.mem.order(u8, a.str, b.str);
@@ -183,8 +157,9 @@ fn strBinary(op: Ast.BinaryOp, a: Const, b: Const) ?Const {
     };
 }
 
-/// A unary operator over a folded operand. The reductions need the operand's
-/// WIDTH, which a `Const` does not carry: `fold` answers them from the literal.
+/// Folds a unary operator over a folded operand. Returns null for the
+/// reductions, which need a width a `Const` does not carry; `fold` answers
+/// them from the literal.
 pub fn unary(op: Ast.UnaryOp, a: Const) ?Const {
     return switch (op) {
         .plus => a,
@@ -200,35 +175,32 @@ pub fn unary(op: Ast.UnaryOp, a: Const) ?Const {
     };
 }
 
-/// A binary operator over two folded operands. `lhs_signed` is the left
-/// operand's signedness, read only by `>>>` (IEEE 1364-2005 §5.1.12); null
-/// makes `>>>` decline.
+/// Folds a binary operator over two folded operands, or returns null when the
+/// result has no constant value (zero divisor, string mix, out-of-range
+/// shift). `lhs_signed` is the left operand's signedness, read only by `>>>`
+/// (IEEE 1364-2005 §5.1.12); null makes `>>>` decline.
 pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
-    // Table 3-3, before anything numeric touches a string. `Const.asReal` is 0
-    // for EVERY string, so `"slow" == "fast"` folded as `0 == 0` and came out
-    // TRUE — silently, and only in the folder: `lowerBinary` compares strings
-    // properly at runtime, so the same expression answered differently
-    // depending on whether it was a constant expression. A `for` bound over
-    // `(mode == "fast") ? 3 : 1` ran three times with `mode` at "slow".
+    // Strings first: `asReal` is 0 for every string, so a numeric compare
+    // would make `"slow" == "fast"` true.
     if (a == .str or b == .str) return strBinary(op, a, b);
-    // §4.2.1 integer arithmetic only when BOTH operands are integer.
+    // §4.2.1 integer arithmetic only when both operands are integer.
     const int = a == .int and b == .int;
     const x = a.asReal();
     const y = b.asReal();
-    // §3.2's 32-bit 2's complement result — see `wrap32`. `%` needs none: a
+    // §3.2's 32-bit two's complement result (`wrap32`). `%` needs none: a
     // remainder is never wider than its operands.
     return switch (op) {
         .add => if (int) Const{ .int = wrap32(a.asInt() +% b.asInt()) } else Const{ .real = x + y },
         .sub => if (int) Const{ .int = wrap32(a.asInt() -% b.asInt()) } else Const{ .real = x - y },
         .mul => if (int) Const{ .int = wrap32(a.asInt() *% b.asInt()) } else Const{ .real = x * y },
-        // A literal can occupy the full i64 carrier before assignment. Its
-        // minInt/-1 quotient needs 65 bits before the current MIR's wrap32.
+        // A literal can occupy the full i64 carrier, and its minInt/-1
+        // quotient needs 65 bits before the wrap.
         .div => if (int)
             (if (b.asInt() == 0) null else Const{ .int = @as(i32, @truncate(@divTrunc(@as(i65, a.asInt()), @as(i65, b.asInt())))) })
         else
             Const{ .real = x / y },
         // §4.2.4: "It shall be an error to pass zero (0) as the second
-        // argument to the modulus operator" — for either type, so a zero
+        // argument to the modulus operator", for either type, so a zero
         // divisor has no value to fold to; the prover's E0601 reports it.
         .mod => if (int)
             (if (b.asInt() == 0) null else Const{ .int = @intCast(@rem(@as(i65, a.asInt()), @as(i65, b.asInt()))) })
@@ -257,9 +229,8 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
             // `1 << 31` negative and `1 << 32` zero rather than 2^31 and 2^32.
             if (op == .shl) break :blk Const{ .int = wrap32(a.asInt() << @as(u6, @intCast(sh))) };
             // §4.2.11 `>>` fills the vacated positions with zeroes, over
-            // §3.2.1's 32-bit `integer` — same rule codegen's `shrLogical`
-            // emits, and the fold has to agree with it or a constant and a
-            // computed operand give different answers.
+            // §3.2.1's 32-bit `integer`. Must agree with codegen's
+            // `shrLogical`, or a constant and a computed operand differ.
             if (sh == 0) break :blk a;
             if (sh > 31) break :blk Const{ .int = 0 };
             const lo: u32 = @bitCast(@as(i32, @truncate(a.asInt())));
@@ -268,7 +239,7 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
         // §4.2.11 keeps `<<<`/`>>>` out of the analog BLOCK only; a constant
         // expression outside it is IEEE 1364-2005 §5.1.12's: `<<<` is `<<`,
         // and `>>>` fills with the sign bit "if the result type is signed",
-        // with zeroes otherwise — so an operand of unknown signedness declines.
+        // with zeroes otherwise, so an operand of unknown signedness declines.
         .ashl, .ashr => blk: {
             if (!int) break :blk null;
             const sh = b.asInt();
@@ -280,7 +251,7 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
             if (sh > 31) break :blk Const{ .int = 0 };
             break :blk Const{ .int = @as(u32, @bitCast(v)) >> @as(u5, @intCast(sh)) };
         },
-        // §4.2.5 case equality on two-state operands IS `==`/`!=` (x and z
+        // §4.2.5 case equality on two-state operands is `==`/`!=` (x and z
         // cannot occur), which is how lowering lowers it (VAMS §7.3.2). A real
         // operand is refused there (E0369), so it does not fold here either.
         .case_eq => if (int) Const{ .int = @intFromBool(a.int == b.int) } else null,
@@ -288,7 +259,7 @@ pub fn binary(op: Ast.BinaryOp, a: Const, b: Const, lhs_signed: ?bool) ?Const {
     };
 }
 
-/// §4.3 Table 4-14 and Table 4-15: the built-in math functions, by their
+/// The built-in math functions of §4.3 Tables 4-14 and 4-15, named by their
 /// source spelling. `log` is the decimal logarithm (§4.3.1); `ln` the natural.
 pub const MathFn = enum {
     abs,
@@ -330,9 +301,10 @@ pub const MathFn = enum {
     }
 };
 
-/// A §4.3 function over folded arguments. §4.3.1: `abs`, `min` and `max` are
-/// integer when every argument is; every other function is real, `pow`
-/// included (§4.2.1.3's integer power is the OPERATOR `**`). Out-of-domain
+/// Folds a §4.3 function over folded arguments, or returns null on a wrong
+/// arity or a string argument. §4.3.1: `abs`, `min` and `max` are integer
+/// when every argument is; every other function is real, `pow` included
+/// (§4.2.1.3's integer power is the operator `**`). Out-of-domain
 /// arguments fold to what IEEE arithmetic gives (NaN, ±inf); the prover, not
 /// the folder, rules on domains.
 pub fn math(f: MathFn, args: []const Const) ?Const {
@@ -374,8 +346,9 @@ pub fn math(f: MathFn, args: []const Const) ?Const {
     };
 }
 
-/// Fold `e` over `file`'s expression store: literals, the A.2.5 infinities,
-/// the unary/binary operators, a lazy `?:`, and §4.3's math functions.
+/// Folds `e` over `file`'s expression store, or returns null when it is not
+/// constant. Covers literals, the A.2.5 infinities, the unary and binary
+/// operators, a lazy `?:`, and §4.3's math functions.
 ///
 /// `env` answers what the structure cannot, as three methods:
 ///   leaf(e) ?Const     any tag this walk does not fold itself (an identifier)
@@ -438,16 +411,16 @@ pub const LiteralEnv = struct {
     }
 };
 
-/// IEEE 1364-2005 §5.1.11: "The unary reduction operators shall perform a
-/// bitwise operation on a single operand to produce a single-bit result", over
-/// the operand's bits — so the answer depends on the operand's WIDTH, which a
-/// `Const` does not carry. It is known for a literal: its size, and §3.2's 32
-/// bits for an unsized one. Any other operand declines rather than guessing a
-/// width. §4.2.10 bars these operators from the analog BLOCK, not from a
-/// parameter declaration.
 // ponytail: literal operands only. A parameter's width is 32 unless A.2.1.1's
 // `[ range ]` sized it, and an expression's is §5.4's sizing rules; carry a
 // width beside `Const` if a model ever reduces either.
+
+/// IEEE 1364-2005 §5.1.11: "The unary reduction operators shall perform a
+/// bitwise operation on a single operand to produce a single-bit result", so
+/// the answer depends on the operand's width, which a `Const` does not carry.
+/// A literal has one (its size, or §3.2's 32 bits unsized); any other operand
+/// declines. §4.2.10 bars these operators from the analog block, not from a
+/// parameter declaration.
 fn reduction(ex: *const Ast.ExprStore, op: Ast.UnaryOp, operand: Ast.ExprId, a: Const) ?Const {
     if (a != .int) return null;
     if (ex.tag(operand) != .int_literal) return null;

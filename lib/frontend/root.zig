@@ -1,16 +1,7 @@
-//! Frontend — text to AST, and the top of this layer's file DAG.
-//!
-//! Re-export only. The leaves below import each other and `diag` directly and
-//! never this file, so the pipeline order stays readable on disk:
-//!
-//!   .va text
-//!     → Preprocessor  (class 1)  text → text, `include + SPICE card synthesis
-//!     → Lexer/token   (class 1)  text → tokens (SoA {tag, start})
-//!     → Parser/Ast    (class 2)  tokens → AST (SoA, u32 handles)
-//!
-//! The layer depends on `diag` and nothing else in the engine: `ir/` and
-//! `backend/` import THIS, never the reverse, which is the split that lets a
-//! second frontend lower into the same MIR.
+//! The frontend's public API: Verilog-AMS source text in, AST out
+//! (preprocessor, lexer, parser; LRM clauses 2 to 10 and annexes D and E).
+//! Depends only on `diag`; `ir/` and `backend/` import this layer, never the
+//! reverse.
 
 pub const Integer = @import("integer.zig");
 pub const token = @import("token.zig");
@@ -19,12 +10,12 @@ pub const Lexer = @import("lexer.zig");
 pub const Ast = @import("ast.zig");
 pub const Parser = @import("parser.zig");
 
-/// §4.2 constant_expression: the one folder every stage shares.
+/// The §4.2 constant_expression folder every stage shares.
 pub const constfold = @import("constfold.zig");
 
-/// SPICE `.MODEL`/`.SUBCKT` card synthesis. Reached through `Preprocessor`
-/// in the pipeline; exported so its tests have a name and a caller can
-/// synthesize without running the preprocessor.
+/// SPICE `.MODEL`/`.SUBCKT` card synthesis (annex E.2). The pipeline reaches
+/// it through `Preprocessor`; exported so a caller can synthesize without
+/// running the preprocessor.
 pub const spice_cards = @import("spice_cards.zig");
 
 /// §3.7/§6.5.3 structural `wreal` rules, shared by the elaborator and the

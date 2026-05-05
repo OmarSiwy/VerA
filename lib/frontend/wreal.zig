@@ -1,25 +1,18 @@
-//! §3.7 and §6.5.3, the two `wreal` rules about STRUCTURE rather than value.
-//!
-//! In: a parsed source file. Out: E0918 (a wreal net with a second driver in
-//! its module) and E0919 (a port joining a wreal to a net type other than
-//! wire/tri/wreal) in the bag.
-//!
-//! An AST query with no stage state, so it lives at the bottom of the stack
-//! both of its callers import: the elaborator (`ir`, a `.va` design, §7.4.2
-//! "the real-value nets shall obey the rules imposed by 3.7") and the digital
-//! runner (`sim`, a `.v` design). One copy of the rule for both.
-//!
-//! LRM clauses this file's code cites: §3.7, §6.5.3, §7.4.2.
+//! The two structural `wreal` rules (LRM §3.7, §6.5.3; §7.4.2 applies §3.7 to
+//! real-value nets): parsed source file in, E0918 (a wreal net with a second
+//! driver in its module) and E0919 (a port joining a wreal to a net type other
+//! than wire/tri/wreal) out. Shared by the compiler and the digital runner.
 
 const std = @import("std");
 const diag = @import("diag");
 const Ast = @import("ast.zig");
 
-/// Checked on the parsed file, before elaboration, so a file that breaks one
-/// hears the LRM's reason.
 // ponytail: drivers are counted per module (assigns and the declaration's
 // own `=`); a driver arriving through a port is not. Counting those needs the
 // elaborated net, which `declare` builds after this.
+
+/// Reports every E0918 and E0919 in `file` into `bag`. Runs on the parsed file,
+/// before elaboration, so a violation gets the LRM's reason.
 pub fn check(file: *const Ast.SourceFile, starts: []const u32, bag: *diag.Bag) std.mem.Allocator.Error!void {
     const ex = &file.exprs;
     for (file.modules) |*m| {
