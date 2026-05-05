@@ -10,9 +10,9 @@
 //!     scalar decision (a `.val()` comparison, a lazy `if`, an int cast, an
 //!     event operator, a value-collapsing helper, a per-call draw, a host
 //!     crossing) sets `Float.pinned`.
-//!   - `lane_clean`: a device that finishes with `pinned` false gets
-//!     `pub const lane_clean = true;` (`file.zig`), which the testbench's
-//!     wide-vs-narrow batch check keys on.
+//!   - `batch_ok`: a device that finishes with `pinned` false gets
+//!     `pub const batch_ok = true;` (`file.zig`), the batch permission
+//!     the testbench's `laneCheck` asserts.
 //!   - `eagerSafe` / `eagerCostly`: under `Float.strict` a real select whose
 //!     inline arms are total and cheap renders as the contract's `sel` mask —
 //!     true per lane — instead of a lazy `if`.

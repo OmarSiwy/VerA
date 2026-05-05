@@ -262,7 +262,7 @@ fn finishLevel(g: *Gen, args: []const Mir.Value) i64 {
 /// testbench artifact keeps no CPU/memory bookkeeping to report, so 2 is 1
 /// until a host that measures asks. (§9.7.1's dc-sweep-variable and
 /// analog-initial variants of the time field are likewise not distinguished:
-/// the artifact reports `inst.abstime`, which is the time the runner set.)
+/// the artifact reports `sim.t`, which is the time the runner set.)
 ///
 /// `$finish` exits 0 — ending the run is its defined behaviour, not a failure
 /// (§9.7.1 "the simulator shall exit after the current solution is complete";
@@ -276,8 +276,8 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
     const level = finishLevel(g, args);
     try g.b("zd: {{ ", .{});
     if (level >= 1) {
-        g.uses_inst = true;
-        try g.b("std.debug.print(\"{s}: t={{d}} ({f})\\n\", .{{inst.abstime}}); ", .{
+        g.uses_sim = true;
+        try g.b("std.debug.print(\"{s}: t={{d}} ({f})\\n\", .{{sim.t}}); ", .{
             name, std.zig.fmtString(g.mir.name),
         });
     }

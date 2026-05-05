@@ -185,18 +185,31 @@ table where a `@Vector` attempt **loses** at every size up to 24578.
 `ARCHITECTURE.md §7` lists adding SIMD to the compiler as
 deliberately-not-doing.
 
-The three existing `@Vector` uses are the right three and are not touched:
-`frontend/token.zig` (accumulator over the fixed keyword table),
-`frontend/preprocessor.zig` (single-needle byte scan), and `backend/tb/runner_text.zig`
-(`@Vector(NL, f64)` — **in generated code**, and the real one). A 2026-09-23
-re-triage measured the lexer/preprocessor scans again: nothing else pays.
+The compiler's two `@Vector` uses are the right two and are not touched:
+`frontend/token.zig` (accumulator over the fixed keyword table) and
+`frontend/preprocessor.zig` (single-needle byte scan). A 2026-09-23 re-triage
+measured those scans again: nothing else pays.
 
 **SIMD-first applies to the emitted device.** The generated `eval` runs millions
 of times inside a host Newton loop; that is the hot loop this project exists to
-make fast. The lane decisions — `pinLanes`, `lane_pinned`, `lane_clean`,
-`jac_f32`, `cur_strict` — live in `lib/backend/codegen/float/` (`mode.zig`,
-`lanes.zig`), whose header says what makes a lane dirty and what `lane_clean`
-promises.
+make fast. The device's SIMD is the scalar family's DERIVATIVE lanes: every
+value is `S.Of(mask)`, carrying exactly the lanes of the unknowns it depends
+on, and `tools/contract.zig`'s `RefFamily` runs them as
+`@Vector(popcount(mask), L)`. The lane decisions — `pinLanes`, `lane_pinned`,
+`batch_ok`, `jac_f32`, `cur_strict` — live in `lib/backend/codegen/float/`
+(`mode.zig`, `lanes.zig`), whose header says what makes a lane dirty and what
+`batch_ok` promises: a family whose value type `V` is a vector of operating
+points evaluates a `batch_ok` device exactly per point, which the
+testbench's batch family (`tb/runner_text.zig`, `@Vector(NL, f64)`) asserts.
+
+Measured and not built (2026-09):
+- Instance lanes (several operating points per SIMD register, `batch_ok`):
+  measured on AVX2, not worth it alone (hand-converted diode and mos1 at
+  W = 4/8: 1.07–1.22× and 0.78–0.86×); re-evaluation with sparse lanes +
+  AVX-512 pending, so the ABI keeps `S.V` and `batch_ok` for it.
+- Liveness-coloured hoist slots: bsim4 33% slower (they defeat SROA).
+- A no-inline core on the GPU: eval 2× slower.
+- `strict` → `optimized` float mode: 0%.
 
 **The hardware knobs stay.** `--unknown-bound=`, `jac_f32` and the `abstol`
 table are physical-world tuning. Do not simplify them away. (`--outline-chunk`

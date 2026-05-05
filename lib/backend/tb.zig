@@ -381,7 +381,7 @@ pub const renderVpiLib = tb_runner.renderVpiLib;
 pub const mixedPlan = tb_runner.mixedPlan;
 pub const shapeOverrides = tb_runner.shapeOverrides;
 
-// The runner's fixed text: the Newton solver and the `@Vector(NL, f64)` lanes it drives — tb/runner_text.zig
+// The runner's fixed text: the Newton solver, the differential gates and the batch family — tb/runner_text.zig
 const tb_runner_text = @import("tb/runner_text.zig");
 
 // Building the executable: device.zig + runner into one `zig build-exe` — tb/exe.zig

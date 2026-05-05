@@ -18,6 +18,7 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_render = @import("render.zig");
 const gen_state = @import("state.zig");
 const gen_unit = @import("unit.zig");
+const gen_family = @import("family.zig");
 const gen_setup = @import("setup.zig");
 const opdb = @import("op_zig.zig");
 const Analysis = @import("ir").Analysis;
@@ -32,7 +33,7 @@ const none_u32 = codegen.none_u32;
 /// `tools/contract.zig`'s `abi_version`, which `backend` cannot import. Every
 /// device the torture suite runs meets the testbench's `validateHost`, so the
 /// two cannot drift past one run.
-const contract_abi = 4;
+const contract_abi = 5;
 const VTy = codegen.VTy;
 const hist_len = codegen.hist_len;
 const OpKind = codegen.OpKind;
@@ -65,7 +66,6 @@ const prelude_rng_txt = gen_kernel_text.prelude_rng_txt;
 const prelude_file_txt = gen_kernel_text.prelude_file_txt;
 const prelude_str_txt = gen_kernel_text.prelude_str_txt;
 const display_txt = gen_kernel_text.display_txt;
-const rscalar_txt = gen_kernel_text.rscalar_txt;
 
 // =======================================================================
 // File assembly
@@ -122,10 +122,8 @@ pub fn emitFile(self: *Gen) Error!void {
     try self.out.appendSlice(self.gpa, math_txt);
     try self.out.appendSlice(self.gpa, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
     try self.out.appendSlice(self.gpa, ops_txt);
-    if (self.fam) {
-        try self.out.appendSlice(self.gpa, gen_kernel_text.family_txt);
-        try self.out.appendSlice(self.gpa, gen_kernel_text.family_dev_txt);
-    }
+    try self.out.appendSlice(self.gpa, gen_kernel_text.family_txt);
+    try self.out.appendSlice(self.gpa, gen_kernel_text.family_dev_txt);
     if (f.timer) try self.out.appendSlice(self.gpa, timer_txt);
     if (f.hist) try self.out.appendSlice(self.gpa, hist_txt);
     if (f.hist_quad) try self.out.appendSlice(self.gpa, hist_quad_txt);
@@ -152,24 +150,9 @@ pub fn emitFile(self: *Gen) Error!void {
     if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, limit_txt);
     if (self.lowered.uses.contains(.plusargs)) try self.out.appendSlice(self.gpa, plusarg_txt);
     try self.out.appendSlice(self.gpa, "\n");
-    // §4.5.15 `limit`/`seed` evaluate the core on a plain solution too, so
-    // they need `R` for the same reason `updateState` does. It stays out of
-    // `buildPrelude`/`h.zig`: no UNIT body can reach these, because `$limit`
-    // renders as the identity inside one. `collapse` reads the core the
-    // same way, so it opens `R` too — and so does §4.6.4 `noisePsd`, which
-    // is `updateState`'s shape exactly: one value-only core sweep at a
-    // state vector the caller hands in.
     // `emitSwitchRow` splits exactly these branches; `prepare` planned them
     // (`plan/topology.zig`) before any residual is emitted.
     const cpairs = self.topo.cpairs;
-    if (f.stateful or cg_limit.needsR(self) or cpairs.len != 0 or pathLatches(self) or
-        self.noise.rows.len != 0 or try gen_dispatch.acUsesCore(self))
-    {
-        try self.out.appendSlice(self.gpa, rscalar_txt);
-        // Pinned to the contract's primitive list, same as tb.zig's
-        // Dual/Vec — a primitive added there cannot silently miss R.
-        try self.out.appendSlice(self.gpa, "comptime {\n    contract.checkScalar(R);\n}\n\n");
-    }
 
     try emitTopology(self);
     try emitModel(self);
@@ -194,18 +177,18 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_state.emitNextBreakpoint(self);
     try gen_state.emitDelays(self);
     try gen_dispatch.emitDerivReads(self, if (self.limits.calls.len != 0) cg_limit.liveSets(self).writes else 0);
+    const k = try gen_family.constant(self);
+    if (k.g or k.c) try self.w(
+        \\/// ∂eval/∂x (`g`) and ∂q/∂x (`c`) do not depend on x: a host may build
+        \\/// those stamps once per card and instance (`contract.Constant`).
+        \\pub const constant: contract.Constant = .{{ .g = {}, .c = {} }};
+        \\
+        \\
+    , .{ k.g, k.c });
     // Lane-parallel permission (see `float/lanes.zig`): eval/q of this device
     // instantiated with a vector S is exact per lane. The testbench's
     // batch differential check keys on it, and a batching host may.
-    if (!self.float.pinned) try self.w("pub const lane_clean = true;\n\n", .{});
-    if (self.core_sim.count() != 0) {
-        try self.w("pub const core_reads_simstate = true;\n", .{});
-        try self.w("pub const core_sim_fields = [_][]const u8{{", .{});
-        var it = self.core_sim.iterator();
-        var first = true;
-        while (it.next()) |sf| : (first = false) try self.w("{s}\"{t}\"", .{ if (first) " " else ", ", sf });
-        try self.w(" }};\n\n", .{});
-    }
+    if (!self.float.pinned) try self.w("pub const batch_ok = true;\n\n", .{});
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 
@@ -227,7 +210,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     var p: std.ArrayList(u8) = .empty;
     try p.appendSlice(self.arena, prelude_head_txt);
     try p.appendSlice(self.arena, prelude_math_txt);
-    if (self.fam) try p.appendSlice(self.arena, gen_kernel_text.prelude_family_txt);
+    try p.appendSlice(self.arena, gen_kernel_text.prelude_family_txt);
     if (f.timer) try p.appendSlice(self.arena, prelude_timer_txt);
     if (f.hist) try p.appendSlice(self.arena, prelude_hist_txt);
     if (f.hist_quad) try p.appendSlice(self.arena, gen_kernel_text.prelude_hist_quad_txt);
@@ -238,7 +221,6 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.files) try p.appendSlice(self.arena, prelude_file_txt);
     if (f.tbl) try p.appendSlice(self.arena, prelude_table_txt);
     if (f.rng) try p.appendSlice(self.arena, prelude_rng_txt);
-    if (f.stateful) try p.appendSlice(self.arena, "const R = zh.R;\n");
     // The shared core is a unit file like any other and sits beside the
     // units that call it; device.zig's own alias for it is private to
     // device.zig, so it is not in scope here. The alias is spelled `core`
@@ -255,10 +237,8 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     try publish(self.arena, &hz, math_txt);
     try publish(self.arena, &hz, if (self.display == .emit) domain_report_txt else domain_quiet_txt);
     try publish(self.arena, &hz, ops_txt);
-    if (self.fam) {
-        try hz.appendSlice(self.arena, "const zdr = contract.derivReads(@import(\"device.zig\"));\n");
-        try publish(self.arena, &hz, gen_kernel_text.family_txt);
-    }
+    try hz.appendSlice(self.arena, "const zdr = contract.derivReads(@import(\"device.zig\"));\n");
+    try publish(self.arena, &hz, gen_kernel_text.family_txt);
     if (f.timer) try publish(self.arena, &hz, timer_txt);
     if (f.hist) try publish(self.arena, &hz, hist_txt);
     if (f.hist_quad) try publish(self.arena, &hz, hist_quad_txt);
@@ -269,7 +249,6 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.files) try publish(self.arena, &hz, file_txt);
     if (f.tbl) try publish(self.arena, &hz, table_txt);
     if (f.rng) try publish(self.arena, &hz, rng_txt);
-    if (f.stateful) try publish(self.arena, &hz, rscalar_txt);
     self.helpers = hz.items;
 }
 
@@ -322,7 +301,7 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
 /// `State` + `initState` + `updateState` as a set, which `emitStateMachine`
 /// emits together.
 pub fn hasStatefulOps(self: *const Gen) bool {
-    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter) or self.lowered.uses.contains(.reject_iteration)) return true;
+    if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.reject_iteration)) return true;
     for (self.names.units) |u| {
         if (u.role == .analog_op and opHasState(u.op)) return true;
     }
@@ -420,12 +399,6 @@ pub fn emitTopology(self: *Gen) Error!void {
     }
     try self.w("}};\n\n", .{});
     try emitNodesets(self);
-    try self.w(
-        \\/// §4.6.1 analysis() / §5.10.2 global events. The host sets this per pass.
-        \\pub const AnalysisKind = enum(u8) {{ static, ic, nodeset, dc, tran, ac, noise }};
-        \\
-        \\
-    , .{});
 }
 
 /// §3.6.3.2 net discipline initial (nodeset) values, as one optional table
@@ -596,9 +569,10 @@ pub fn emitDerive(self: *Gen) Error!void {
         \\/// writing the model card and before the first solve: the fields below
         \\/// are defined by expressions over other parameters, so they are not
         \\/// valid until the parameters they read have their final values.
-        \\pub fn derive(model: *Model) void {{
+        \\pub fn derive(comptime S: type, model: *Model) void {{
         \\
     , .{});
+    const at_s = self.out.items.len - "S: type, model: *Model) void {\n".len;
     const body = self.out.items.len;
     // §3.4.7 first, and that order is the rule and not a convenience: an
     // override written through the alias has to be the original's value
@@ -644,7 +618,7 @@ pub fn emitDerive(self: *Gen) Error!void {
             .str => unreachable,
         }
     }
-    try deriveFlags(self);
+    if (!try deriveFlags(self)) gen_unit.patchParam(self, at_s, "S".len);
     if (self.out.items.len == body) return self.out.shrinkRetainingCapacity(at);
     try self.w("}}\n\n", .{});
 }
@@ -688,30 +662,28 @@ fn emitShapeCheck(self: *Gen) Error!void {
 /// Instance, exactly as `collapse` reads the same flags — exact, since a
 /// card-only flag reads neither x nor the Instance. After the parameter
 /// writes above, which it reads.
-// ponytail: evaluated with `R`, like `collapse`, not with the host's value
-// scalar. A flag is a comparison of card values; a knife-edge one could round
-// apart from eval's. Upgrade path: a flag field eval itself reads.
-fn deriveFlags(self: *Gen) Error!void {
+/// Returns whether it read the core, i.e. named `S`.
+fn deriveFlags(self: *Gen) Error!bool {
     var any = false;
     for (self.topo.cpairs) |p| any = any or p.card;
-    if (!any) return;
+    if (!any) return false;
     try self.w(
         \\    // §5.6.5 the published retention flags (`contract.JacWhen`).
-        \\    var xr: [n_u]R = undefined;
-        \\    for (&xr) |*p| p.* = R.con(0.0);
+        \\    const xr: [n_u]zOf(S, 0) = @splat(S.con(0.0));
         \\    var pin: Instance = .{{}};
         \\
     , .{});
-    if (self.su.vals.len != 0) try self.w("    setup(R, model, &pin);\n", .{}) else try self.w("    _ = &pin;\n", .{});
-    try self.w("    const m = core(R, xr, model, &pin{s});\n", .{self.heldArg(true)});
+    if (self.su.vals.len != 0) try self.w("    setup(S, model, &pin);\n", .{}) else try self.w("    _ = &pin;\n", .{});
+    try self.w("    const m = core(S, xr, model, &pin, .{{}}{s});\n", .{self.heldArg(true)});
     for (self.topo.cpairs, 0..) |p, k| {
         if (!p.card) continue;
         const f = self.core.lo_idx[@intFromEnum(self.an.rv(p.flag))];
         if (self.an.vty[@intFromEnum(self.an.rv(p.flag))] == .int)
             try self.w("    model.{s} = @floatFromInt(m.f{d});\n", .{ try gen_dispatch.guardField(self, @intCast(k)), f })
         else
-            try self.w("    model.{s} = m.f{d}.v;\n", .{ try gen_dispatch.guardField(self, @intCast(k)), f });
+            try self.w("    model.{s} = m.f{d}.val();\n", .{ try gen_dispatch.guardField(self, @intCast(k)), f });
     }
+    return true;
 }
 
 /// W1050 — the one place a parameter whose default VerA never computes is
@@ -857,28 +829,11 @@ const plusarg_txt =
 pub fn emitInstance(self: *Gen) Error!void {
     try self.w(
         \\/// Per-instance state. The host owns every field above the operator
-        \\/// block: `abstime`/`dt` per timestep (§9.10), `analysis_kind` per pass
-        \\/// (§4.6.1), `temperature` in kelvin (§9.10), `mfactor` (§6.3.6).
+        \\/// block: `temperature` in kelvin (§9.10) and `mfactor` (§6.3.6). Time,
+        \\/// step and analysis reach every entry point as `contract.SimState`.
         \\pub const Instance = struct {{
         \\    temperature: f64 = 300.15,
-        \\    abstime: f64 = 0.0,
-        \\    dt: f64 = 0.0,
         \\    mfactor: f64 = 1.0,
-        \\    analysis_kind: AnalysisKind = .dc,
-        \\    is_initial_step: bool = false,
-        \\    is_final_step: bool = false,
-        \\    /// §5.2.1 is this evaluation an `analog initial` pass? The host
-        \\    /// sets it on the first evaluation of every SUB-TASK — each point
-        \\    /// of a parameter sweep — which is what that clause's "shall be
-        \\    /// re-executed" asks for, and clears it in between.
-        \\    ///
-        \\    /// Defaults to TRUE, unlike the two events above, because §5.2.1
-        \\    /// forbids access functions and analog operators inside the block:
-        \\    /// its body is a function of parameters and $temperature alone, so
-        \\    /// a host that does not know this field re-computes the same values
-        \\    /// a few times over instead of skipping the seed entirely and
-        \\    /// reading every one of them as its declaration default.
-        \\    is_analog_initial: bool = true,
         \\    /// §9.17.2 `$bound_step`: upper bound the model asks for on the
         \\    /// NEXT timestep, in seconds. `inf` = unconstrained. Written by
         \\    /// `updateState`; the host reads it after every accepted step and
@@ -909,10 +864,6 @@ pub fn emitInstance(self: *Gen) Error!void {
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
-    );
-    if (self.lowered.uses.contains(.newton_iter)) try self.w(
-        "    newton_iteration: u32 = 1,\n",
-        .{},
     );
     // §9.13.1's "internal seed", one slot per seedless call site. The
     // DEFAULT is the seed "the simulator picks" — a fixed value, not a clock
@@ -1146,7 +1097,7 @@ pub fn pathLatches(self: *const Gen) bool {
 /// advance on. They contribute nothing to `query` — the base moving is
 /// the integrator's business, not a step-reject condition.
 pub fn emitsStateCtl(self: *const Gen) bool {
-    return fsmStateCtl(self) or pathLatches(self) or self.lowered.uses.contains(.newton_iter) or self.lowered.limit_slots.items.len != 0;
+    return fsmStateCtl(self) or pathLatches(self) or self.lowered.limit_slots.items.len != 0;
 }
 
 /// The hook body. `query` compares the HELD (discrete) state only; the
@@ -1164,7 +1115,7 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         \\pub fn stateCtl(_: *const Model, inst: *Instance, {s}: *State, op: contract.StateCtlOp) bool {{
         \\    if (op == .query) {{
         \\        return
-    , .{if (self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.newton_iter)) "state" else "_"});
+    , .{if (self.lowered.limit_slots.items.len != 0) "state" else "_"});
     var first = true;
     for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
         if (!fsm) break;
@@ -1187,10 +1138,6 @@ pub fn emitStateCtl(self: *Gen) Error!void {
         "        state.limiter_previous = inst.limiter_previous;\n",
         .{},
     );
-    if (self.lowered.uses.contains(.newton_iter)) try self.w(
-        "        state.newton_iteration = inst.newton_iteration;\n",
-        .{},
-    );
     for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
     for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
     if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
@@ -1205,10 +1152,6 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     try self.w("    }} else {{\n", .{});
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        inst.limiter_previous = state.limiter_previous;\n",
-        .{},
-    );
-    if (self.lowered.uses.contains(.newton_iter)) try self.w(
-        "        inst.newton_iteration = state.newton_iteration;\n",
         .{},
     );
     if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });

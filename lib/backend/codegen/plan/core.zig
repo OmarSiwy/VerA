@@ -145,7 +145,7 @@ pub fn plan(in: Input, jobs: []const Job) Error!Core {
         try vals.append(a, v);
     }
     // Path-latch operands ride the same live-out queue: `updateState`'s
-    // single core(R) sweep is where their staged values come from.
+    // single value-only core sweep is where their staged values come from.
     {
         var pv: std.ArrayList(Mir.Value) = .empty;
         var pl: std.ArrayList(u32) = .empty;

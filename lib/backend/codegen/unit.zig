@@ -92,6 +92,7 @@ pub fn emitCommon(self: *Gen) Error!void {
     self.uses_x = false;
     self.uses_model = false;
     self.uses_inst = false;
+    self.uses_sim = false;
     // §3.6.2.2 a refusal visible from ANY unit's declaration poisons the one
     // body they now share. That is not a widening: `eval` stamps every
     // contribution, so a `@compileError` in any single unit already failed
@@ -116,15 +117,16 @@ pub fn emitCommon(self: *Gen) Error!void {
         \\
         \\/// Inlined at every host-scalar site (`@call(.always_inline, ...)` in
         \\/// `eval`/`q`/`evalQ`), which destructure the returned struct at
-        \\/// once: behind a call boundary the `[n_u]S` argument and the
+        \\/// once: behind a call boundary the unknowns argument and the
         \\/// {d}-field result both go to memory, the host's Dual derivative
         \\/// vectors spill instead of staying in registers, and no live-out the
         \\/// caller drops can be dead-coded. Measured on ARPice
         \\/// devices/mos6_inverter: 45.3 ms inline vs 64.9 ms out-of-line
         \\/// (+43%), tran/fourbitadder +40%, scaling/parallel_inverters_500
-        \\/// +51%. NOT `inline fn`, so the value-only `core(R, ...)` sites —
-        \\/// updateState, noisePsd, collapse, limit, seed — share ONE
-        \\/// out-of-line instantiation instead of each inlining the model.
+        \\/// +51%. NOT `inline fn`, so the value-only `core(S, zVals(...))`
+        \\/// sites — updateState, noisePsd, collapse, limit, seed — share ONE
+        \\/// out-of-line instantiation per family instead of each inlining the
+        \\/// model.
         \\
     , .{ self.jobs.list.len, self.jobs.list.len });
     const at_fn = self.out.items.len;
@@ -134,7 +136,9 @@ pub fn emitCommon(self: *Gen) Error!void {
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr", .{});
+    try self.w("inst: InstancePtr, ", .{});
+    const at_sim = self.out.items.len;
+    try self.w("sim: contract.SimState", .{});
     // §5.10 whether the caller keeps the held arrays' end-of-block values —
     // see `Gen.heldArg`.
     self.uses_held = false;
@@ -146,7 +150,7 @@ pub fn emitCommon(self: *Gen) Error!void {
         if (self.an.arrOf(v)) |id| {
             const m = self.lowered.mem_arrays.items[id];
             try self.w("    f{d}: [{d}]{s},\n", .{ k, m.len, if (m.ty == .integer) "i64" else "f64" });
-        } else if (self.fam and self.an.vty[@intFromEnum(v)] == .real) {
+        } else if (self.an.vty[@intFromEnum(v)] == .real) {
             try family.note(self, family.mask(self, v));
             try self.w("    f{d}: {s},\n", .{ k, try family.ofText(self, family.mask(self, v)) });
         } else try self.w("    f{d}: {s},\n", .{ k, zigTy(self.an.vty[@intFromEnum(v)]) });
@@ -156,16 +160,6 @@ pub fn emitCommon(self: *Gen) Error!void {
     // explains why the join has to absorb `.strict`.
     try self.w("    @setFloatMode(.{t});\n", .{self.core.mode});
     self.float.strict = self.core.mode == .strict;
-
-    // Off the slice, not the text: every call the core computes is in
-    // `plan.live`, and `gen_call.readsSimState` is the one list of which of
-    // them render a read of a host-published sim-state field.
-    for (self.plan.live.items) |lv| {
-        const def = self.mir.valueDef(lv);
-        if (def != .inst_result or self.mir.instOp(def.inst_result) != .call) continue;
-        if (self.plan.isRoot(lv)) continue; // a field read, not a call
-        self.core_sim.setUnion(gen_call.readsSimState(self, def.inst_result));
-    }
 
     const body_start = self.out.items.len;
     // `Setup` defaults its reals to NaN, which a missed `setup` call turns
@@ -182,12 +176,14 @@ pub fn emitCommon(self: *Gen) Error!void {
         self.uses_x = false;
         self.uses_model = false;
         self.uses_inst = false;
+        self.uses_sim = false;
         self.uses_held = false;
         try self.b("    @compileError(\"{s}\");\n", .{msg});
     }
     if (!self.uses_x) patchParam(self, at_x, "x".len);
     if (!self.uses_model) patchParam(self, at_model, "model".len);
     if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
+    if (!self.uses_sim) patchParam(self, at_sim, "sim".len);
     if (self.core.held_only.len != 0 and !self.uses_held) patchParam(self, at_held, "held".len);
     try self.w("}}\n\n", .{});
     try gen_file.recordUnitFile(self, self.core.name, lo, at_fn);
@@ -237,6 +233,7 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     self.uses_x = false;
     self.uses_model = false;
     self.uses_inst = false;
+    self.uses_sim = false;
     self.fatal = self.pre_fatal;
     self.plan.display_unit = self.emitting_display;
     try self.plan.analyze(target, self.emitting_common);
@@ -249,7 +246,9 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
     const at_model = self.out.items.len;
     try self.w("model: *const Model, ", .{});
     const at_inst = self.out.items.len;
-    try self.w("inst: InstancePtr) {s} {{\n", .{if (self.fam) try family.ofText(self, family.mask(self, target)) else "S"});
+    try self.w("inst: InstancePtr, ", .{});
+    const at_sim = self.out.items.len;
+    try self.w("sim: contract.SimState) {s} {{\n", .{try family.ofText(self, family.mask(self, target))});
     try self.w("    @setFloatMode(.{s});\n", .{mode});
     self.float.strict = std.mem.eql(u8, mode, "strict");
 
@@ -261,11 +260,13 @@ pub fn emitUnit(self: *Gen, name: []const u8, target: Mir.Value, mode: []const u
         self.uses_x = false;
         self.uses_model = false;
         self.uses_inst = false;
+        self.uses_sim = false;
         try self.b("    @compileError(\"{s}\");\n", .{msg});
     }
     if (!self.uses_x) patchParam(self, at_x, "x".len);
     if (!self.uses_model) patchParam(self, at_model, "model".len);
     if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
+    if (!self.uses_sim) patchParam(self, at_sim, "sim".len);
     try self.w("}}\n\n", .{});
     return at_fn;
 }
@@ -276,6 +277,24 @@ pub fn patchParam(self: *Gen, at: usize, comptime width: usize) void {
     self.out.items[at..][0..width].* = ("_" ++ " " ** (width - 1)).*;
 }
 
+/// `patchParam` the slot at `at` unless the body text from `from` names
+/// `ident` as a whole identifier. For a body with no string literal in it.
+pub fn patchUnless(self: *Gen, at: usize, from: usize, comptime ident: []const u8) void {
+    var it = std.mem.indexOfPos(u8, self.out.items, from, ident);
+    while (it) |i| : (it = std.mem.indexOfPos(u8, self.out.items, i + 1, ident)) {
+        const t = self.out.items;
+        // Not a field (`m.sim`), not part of a longer name.
+        const before = i == 0 or !(isIdent(t[i - 1]) or t[i - 1] == '.');
+        const after = i + ident.len >= t.len or !isIdent(t[i + ident.len]);
+        if (before and after) return;
+    }
+    patchParam(self, at, ident.len);
+}
+
+fn isIdent(c: u8) bool {
+    return std.ascii.isAlphanumeric(c) or c == '_';
+}
+
 // ---- slicing: what this unit actually has to compute -------------------
 
 /// What taking `from → to` reduces to for this unit, or null when the edge
@@ -284,10 +303,9 @@ pub fn patchParam(self: *Gen, at: usize, comptime width: usize) void {
 
 // ---- body emission ------------------------------------------------------
 
-/// A body's unknowns: `[n_u]S` from an ABI 4 entry, and under
-/// `Options.family` also `abi5`'s tuple of probes.
-fn xType(self: *const Gen) []const u8 {
-    return if (self.fam) "anytype" else "[n_u]S";
+/// A body's unknowns: a tuple, each unknown typed by the lanes it carries.
+fn xType(_: *const Gen) []const u8 {
+    return "anytype";
 }
 
 pub fn zigTy(t: VTy) []const u8 {
@@ -334,10 +352,10 @@ pub fn writeSlotRef(self: *Gen, i: usize) Error!void {
     return self.b("t{d}", .{slotNum(self, i)});
 }
 
-/// `Options.family`: the mask of value `i`'s slot when it is an element of the
-/// real hoist array — what a write into it widens to. Null for a `const`.
+/// The mask of value `i`'s slot when it is an element of the real hoist
+/// array — what a write into it widens to. Null for a `const`.
 pub fn slotMask(self: *Gen, i: usize) ?u64 {
-    if (!self.fam or self.an.vty[i] != .real) return null;
+    if (self.an.vty[i] != .real) return null;
     if (slotArr(self, i) == null) return null;
     return self.hoist_mask.items[slotNum(self, i)];
 }
@@ -515,8 +533,9 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         self.uses_x = true;
         self.uses_model = true;
         self.uses_inst = true;
+        self.uses_sim = true;
         try self.ind(1);
-        try self.b("const c = @call(.always_inline, core, .{{ S, x, model, inst{s} }});\n", .{self.heldArg(true)});
+        try self.b("const c = @call(.always_inline, core, .{{ S, x, model, inst, sim{s} }});\n", .{self.heldArg(true)});
     }
     try declareArrays(self);
     if (self.plan.straight) {
@@ -588,12 +607,12 @@ pub fn emitUnitBody(self: *Gen, target: Mir.Value) Error!void {
         const returned = if (self.emitting_common) self.plan.lo_idx[v] != none_u32 else lv == ret;
         if (returned) try seeded.append(self.arena, lv);
     }
-    if (self.fam) try hoistMasks(self, n_hoist[@intFromEnum(VTy.real)]);
+    try hoistMasks(self, n_hoist[@intFromEnum(VTy.real)]);
     for ([_]VTy{ .real, .int, .str }) |ty| {
         const n = n_hoist[@intFromEnum(ty)];
         if (n == 0) continue;
         try self.ind(1);
-        if (self.fam and ty == .real) {
+        if (ty == .real) {
             try self.b("var h: zSlots(S, &.{{", .{});
             for (self.hoist_mask.items, 0..) |m, k| try self.b("{s}0x{x}", .{ if (k == 0) " " else ", ", m });
             try self.b(" }}) = undefined;\n", .{});
