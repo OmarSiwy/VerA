@@ -1,13 +1,8 @@
-//! `deriv_reads` and `jac_const`: which derivative lanes `eval`/`q` read, and
-//! the exact constant partials of every column they do not.
-//!
-//! PURE (ARCHITECTURE.md §2): the emitter ACCUMULATES the evidence while it
-//! writes — every `x[u]` `renderValueRef` spells, every `.ddxAt(u)`, every
-//! dispatcher row's constant coefficients (`lin`) — and `plan` turns that
-//! evidence into the two tables. `dispatch.emitDerivReads` only formats them.
-//!
-//! Why the derivation is sound is argued at `emitDerivReads`; this is the
-//! arithmetic half of it, cut from there verbatim.
+//! `deriv_reads` and `jac_const`: the evidence the emitter accumulates while
+//! writing (every `x[u]` and `.ddxAt(u)` it spells, every dispatcher row's
+//! constant coefficients) -> which derivative lanes `eval`/`q` read, and the
+//! exact constant partials of every column they do not. Soundness is argued
+//! at `dispatch.emitDerivReads`, which formats the result.
 
 const std = @import("std");
 
@@ -17,6 +12,7 @@ const std = @import("std");
 /// and the host has not collapsed it (`contract.JacWhen`).
 pub const Entry = struct { row: u32, col: u32, g: f64, c: f64, when: ?u32 = null };
 
+/// The two emitted tables.
 pub const JacConst = struct {
     /// The emitted `deriv_reads`: every lane `eval`/`q` may read.
     mask: u64,
@@ -24,16 +20,17 @@ pub const JacConst = struct {
     entries: []Entry,
 };
 
+/// Returns the emitted `deriv_reads` mask and the constant-partial table, or
+/// null above 64 unknowns (neither decl is emitted and the defaults, every
+/// lane and no table, are correct). `entries` is owned by `arena`.
+///
 /// `lin[react][row * n_u + col]` is the exact coefficient of `x[col]` in
 /// `res[row]` as far as the stamps are linear. `guarded` are the stamps that
-/// hold only under a collapse guard, one entry per (row, col, pair). `ddx_reads`
-/// and `limit`'s writes are ORed into the mask for `contract`'s rules. Null
-/// above 64 unknowns, where neither decl is emitted and the defaults — every
-/// lane, no table — are correct.
-///
-/// A (row, col) the table would have to state twice — unguarded and guarded,
-/// or under two guards — has no single entry to be, so its column keeps its
-/// lane instead: `contract` wants (row, col) unique.
+/// hold only under a collapse guard, one entry per (row, col, pair).
+/// `ddx_reads` and `limit`'s writes are ORed into the mask for `contract`'s
+/// rules. A (row, col) the table would have to state twice (unguarded and
+/// guarded, or under two guards) keeps its lane instead: `contract` wants
+/// (row, col) unique.
 pub fn plan(
     arena: std.mem.Allocator,
     n_u: u32,

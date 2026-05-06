@@ -1,74 +1,6 @@
-//! Per-unit state for one emitted declaration: what this unit has to compute,
-//! how many times each value is read, what gets inlined, and which local slot
-//! each surviving value lands in.
-//!
-//! Transformation (per unit): a target `Mir.Value` → a backward slice over the
-//! shared CFG, use counts, inline decisions, dead-branch marks and slot
-//! assignments.
-//!
-//! NOT purely a plan, and the name is generous on purpose. `analyze` computes
-//! the slice and the counts up front, but `slot`/`n_slots` are filled by the
-//! EMITTER as it walks (`emitUnitBody`, and `probeBody`'s dry run of it) —
-//! placement depends on the order the text comes out in.
-//!
-//! ## CORPUS — where every measured number in this file comes from
-//!
-//! `hisimhv_va` (HiSIM_HV) and `bsimsoi_va` (the public Berkeley BSIM-SOI) are
-//! two of the 38 foundry models in the ARPice host repo, at
-//! `../ARPice/src/devices/models` — `VERA_MODELS` overrode that path for the
-//! `baseline.sh` oracle these were taken with. NONE is vendored here, and no
-//! fixture is remotely their shape. So every ratio below is real and none of
-//! it is reproducible from this tree alone: check the models out before you
-//! re-measure, and do not re-derive a replacement from a fixture.
-//!
-//! ## RESET IS FULL
-//!
-//! `analyze` clears every per-value table with one `@memset` each. It used to
-//! clear only the cells the PREVIOUS unit's `live` set named, which made every
-//! field added here a "MUST be cleared in the same loop" hazard with no test
-//! behind it. That scheme paid for itself when ~105 units each called
-//! `analyze`; since the core merge a compilation calls it at most a handful of
-//! times (setup, the core, the §9.4 display unit), so a full clear costs
-//! a few × nv × 14 bytes of stores and the hazard is gone.
-//!
-//! ## THE SIDE TABLES STAY `[]bool` — MEASURED; do not pack them into a bitset
-//!
-//! Same run, sampling `nb`/`nv` at every `analyzeUnitOnce`:
-//!
-//!     nb (blocks) median 1   mean 3.0   p99 25    max 103
-//!     nv (values) median 38  mean 49.5  p99 213   max 929
-//!
-//! `loop_recompute`, `blk_work`, `blk_phi` and `dead_branch` are therefore ONE
-//! BYTE long in the median compilation and 103 bytes at the largest fixture in
-//! the tree. `needed` and `inlined` are 38 bytes and 929 bytes. Every read of
-//! all six is a random probe by block or value index; the only whole-array
-//! operations are the `@memset(.., false)` clears, and there is no set union or
-//! intersection over any of them — which is the one thing a bitset does for
-//! free. Converting them buys 87 bytes at the worst block table and charges a
-//! shift and a mask on every probe in the emitter's hottest walk.
-//!
-//! A bitset would not have made the old partial reset unnecessary either:
-//! three of the five per-value tables (`eager_use`, `arm_use`, `slot`) are
-//! `[]u32`, so a full clear costs the same no matter how `needed` and
-//! `inlined` are stored.
-//!
-//! Where a whole-array clear IS the cost, the tool is a generation stamp, not a
-//! bitset — `proof.verdict` already does this: `seen[i] == u` reuses the slice
-//! index as the stamp and clears the array once instead of once per
-//! contribution. That works on `[]u32` too, which a bitset does not.
-//!
-//! ## `analyze` IS A FIXPOINT, NOT A PASS
-//!
-//! `markRecomputedLoops` can discover that a §5.9 loop this unit re-runs owns
-//! values it must recompute rather than read from the core. That changes the
-//! slice, which can mark further loops. Marking only ever ADDS, so it is monotone
-//! and converges — in practice after one extra round.
-//!
-//! ## `in_common` IS AN ARGUMENT, NOT A FIELD
-//!
-//! It used to be `Gen.emitting_common`, read from four places in here — analysis
-//! silently depending on which emission phase the caller was in. It is now a
-//! parameter of `analyze`, so the dependency is in the signature.
+//! Per-unit plan for one emitted declaration: a target `Mir.Value` -> its
+//! backward slice over the shared CFG, use counts, inline and dead-branch
+//! decisions, and unit-local slots (§4.2.12 lazy arms, §5.9 loops).
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -84,6 +16,7 @@ pub const UnitPlan = @This();
 
 /// How a CFG edge leaves its block, for the emitter's structured reconstruction.
 pub const Act = union(enum) { cont: u32, brk: u32 };
+/// Every fallible call here fails only on allocation.
 pub const Error = std.mem.Allocator.Error;
 
 const none_u32 = std.math.maxInt(u32);
@@ -91,34 +24,34 @@ const none_u32 = std.math.maxInt(u32);
 arena: std.mem.Allocator,
 mir: *const Mir,
 an: *const Analysis,
-/// §9.4 — `addUses`/`markOperands` need it to know whether a display task's
-/// operand is a value the slice must reach.
+/// §9.4 artifact mode: decides whether a display task's operand is a value
+/// the slice must reach.
 display: Display,
 /// Is the unit being analyzed the §9.4/§9.5 display unit? Set by the emitter
 /// before `analyze`, and read only through `dispHere`.
 ///
-/// The artifact mode above is not enough on its own: a §9.5 call's VALUE is live
-/// in the residual (`I(p,n) <+ V(p,n) + code`) while the descriptor operation
-/// itself may only happen in the display unit, so its operands are a live slice
-/// there and dead everywhere else. Marking them everywhere emitted locals the
-/// residual's rendering never reads, which Zig rejects outright.
+/// The artifact mode alone is not enough: a §9.5 call's value is live in the
+/// residual (`I(p,n) <+ V(p,n) + code`) while the descriptor operation itself
+/// runs only in the display unit, so its operands are a live slice there and
+/// dead everywhere else. Marking them everywhere would emit unread locals,
+/// which Zig rejects.
 display_unit: bool = false,
-/// §9.5 values that carry a file call's RESULT, through any operand or phi.
+/// §9.5 values that carry a file call's result, through any operand or phi.
 /// Only the display unit performs the call; every other unit reads the result
-/// the display unit last produced (`emitFileCallDropped`), which inside one
-/// point is the PREVIOUS point's. So in the display unit such a value is never
-/// a cache read: `fd = $fopen(..)` under `@(initial_step)` then `$ftell(fd)`
-/// has to see the descriptor the open just returned, not the core's copy of
-/// it. Empty under `.drop`, where no unit performs a file call at all.
+/// it last produced (`emitFileCallDropped`), which inside one point is the
+/// previous point's. So in the display unit such a value is never a cache
+/// read: `fd = $fopen(..)` under `@(initial_step)` then `$ftell(fd)` must see
+/// the descriptor the open just returned. Empty under `.drop`.
 file_dep: []bool = &.{},
-/// The shared core's dedup index, from `plan/core.zig`. Stable for the whole
-/// compilation; a value with an entry here is read out of the core rather than
+/// The shared core's dedup index, from `plan/core.zig`, stable for the whole
+/// compilation. A value with an entry is read out of the core rather than
 /// recomputed, unless this unit re-runs the loop that defines it.
 lo_idx: []const u32 = &.{},
+/// The core's live-out values, in `lo_idx` order.
 lo_vals: []const Mir.Value = &.{},
-/// The setup roots (codegen/setup.zig `planSetup`): value → its `Instance.su`
-/// index, or `none_u32`. A root is a LEAF here exactly like a core-cached
-/// value — computed outside every body, read as a field — valid in ALL units
+/// The setup roots (codegen/setup.zig `planSetup`): value -> its `Instance.su`
+/// index, or `none_u32`. A root is a leaf here like a core-cached value:
+/// computed outside every body, read as a field, valid in all units
 /// including the core.
 su_idx: []const u32 = &.{},
 /// False while `setup` itself is planned (there the roots are the targets
@@ -127,28 +60,34 @@ su_on: bool = false,
 /// Planning `setup`: only branches on an invariant condition are tested
 /// (`sinv`); every other one is taken `then` without reading its condition.
 setup_mode: bool = false,
+/// Per value: solve-invariant, while planning `setup`.
 sinv: []const bool = &.{},
-/// While planning `setup`: value → the block `setup` computes it in when that
+/// While planning `setup`: value -> the block `setup` computes it in when that
 /// is not its own (`Sinv.home`).
 su_home: []const u32 = &.{},
 /// Set by `analyze`: did this unit end up reading the core? Drives the one
 /// `const c = <module>__common__core(...)` line the emitter puts at the top.
 uses_cache: bool = false,
-/// Which emission phase the caller is in — see the header. Set by `analyze`.
+/// Whether the unit being analyzed is the common declaration itself. Set by
+/// `analyze` from its argument.
 in_common: bool = false,
 
-/// PER UNIT, indexed by loop header: does the unit being analyzed run this
-/// loop itself, so its values must be recomputed rather than read from the
-/// core? Reset and refilled by `analyzeUnit`.
+/// Per loop header: does this unit run the loop itself, so its values must be
+/// recomputed rather than read from the core? Reset and refilled by `analyze`.
 loop_recompute: []bool = &.{},
 // ---- per-unit scratch ----
+// Plain `[]bool` rather than bitsets: every access is a random probe and no
+// set operation is ever taken over them.
+/// Per value: in this unit's slice.
 needed: []bool = &.{},
-/// The values `mark` reached for this unit, sorted ascending. Everything
-/// per-unit iterates this instead of `0..nv` — a unit touches a small slice
-/// of a 600 K-line model's values, and there are hundreds of units.
+/// The values `mark` reached for this unit, sorted ascending. Every per-unit
+/// sweep iterates this instead of `0..nv`, since a unit touches a small slice.
 live: std.ArrayList(Mir.Value) = .empty,
+/// Per value: reads in eager positions.
 eager_use: []u32 = &.{},
+/// Per value: reads in lazy `select` arm positions (§4.2.12).
 arm_use: []u32 = &.{},
+/// Per value: rendered inside its user instead of getting a slot.
 inlined: []bool = &.{},
 /// Per value: the longest chain of inlined operands rendering it recurses
 /// through. Written by `boundInlineDepth` for the values it visits.
@@ -159,15 +98,15 @@ straight: bool = false,
 /// Per-block, per-unit; `planDeadBranches` is the only reader.
 blk_work: []bool = &.{},
 blk_phi: []bool = &.{},
-/// A `branch` whose two arms are indistinguishable to THIS unit: it neither
+/// A `branch` whose two arms are indistinguishable to this unit: it neither
 /// defines anything nor copies a phi on either side before they reconverge.
-/// The condition is then never marked live, never slotted and never
-/// emitted — see `planDeadBranches`.
+/// The condition is then never marked live, slotted or emitted.
 dead_branch: []bool = &.{},
-/// Local slot of a needed value, or `none_u32`. UNIT-LOCAL — never a MIR
-/// index; naming.zig's ABSOLUTE RULE says why a MIR index in a name renumbers
+/// Local slot of a needed value, or `none_u32`. Unit-local, never a MIR
+/// index: naming.zig's ABSOLUTE RULE says why a MIR index in a name renumbers
 /// every downstream declaration.
 slot: []u32 = &.{},
+/// Number of slots `analyze` assigned.
 n_slots: u32 = 0,
 
 /// The §9.4 mode as the unit being analyzed sees it: a task's operands are a
@@ -176,6 +115,9 @@ inline fn dispHere(self: *const UnitPlan) Display {
     return if (self.display_unit) self.display else .drop;
 }
 
+/// Returns a plan with every per-value and per-block table allocated from
+/// `arena` (which owns them) but not yet cleared; `analyze` clears them. Under
+/// `.emit` it also computes `file_dep` once for the compilation.
 pub fn init(
     arena: std.mem.Allocator,
     mir: *const Mir,
@@ -190,9 +132,7 @@ pub fn init(
     self.inlined = try arena.alloc(bool, an.nv);
     self.inl_depth = try arena.alloc(u16, an.nv);
     self.slot = try arena.alloc(u32, an.nv);
-    // Cleared by `analyzeUnitOnce`, which every read is behind.
-    // Per-BLOCK, not per-value: a whole `@memset` of these per unit is a few KB,
-    // nothing like the `0..nv` per-unit sweeps that were deleted.
+    // Per-block tables, cleared by `planDeadBranches` before every read.
     self.blk_work = try arena.alloc(bool, an.nb);
     self.blk_phi = try arena.alloc(bool, an.nb);
     self.dead_branch = try arena.alloc(bool, an.nb);
@@ -242,8 +182,8 @@ inline fn fileDep(self: *const UnitPlan, v: Mir.Value) bool {
     return self.file_dep[@intFromEnum(self.an.rv(v))];
 }
 
-/// Is this Value a setup root HERE? Unlike `cached` it is true inside the
-/// common declaration too — `setup` writes the field before any solve, so
+/// Is this Value a setup root here? Unlike `cached` it is true inside the
+/// common declaration too: `setup` writes the field before any solve, so
 /// every body may read it.
 pub inline fn isRoot(self: *const UnitPlan, v: Mir.Value) bool {
     if (!self.su_on) return false;
@@ -269,7 +209,7 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
     if (self.in_common or self.lo_idx[@intFromEnum(v)] == none_u32) return false;
     if (self.display_unit and self.file_dep.len != 0 and self.file_dep[@intFromEnum(v)]) return false;
     // §5.9 A unit that re-materializes a loop must not read that loop's values
-    // out of the cache — see `analyze`'s fixpoint.
+    // out of the cache (see `analyze`).
     const blk = self.an.def_block[@intFromEnum(v)];
     if (blk != none_u32) {
         const l = self.an.loop_of[blk];
@@ -278,6 +218,12 @@ pub inline fn cached(self: *const UnitPlan, v: Mir.Value) bool {
     return true;
 }
 
+/// Plans the unit that computes `target`, or with `in_common` the core's whole
+/// live-out set `lo_vals` (then `target` is ignored). Overwrites every
+/// per-unit table, including `slot` and `n_slots`.
+///
+/// A fixpoint: a §5.9 loop the unit must re-run changes the slice, which can
+/// mark further loops. Marking only adds, so it converges.
 pub fn analyze(self: *UnitPlan, target: Mir.Value, in_common: bool) Error!void {
     self.in_common = in_common;
     @memset(self.loop_recompute, false);
@@ -287,23 +233,15 @@ pub fn analyze(self: *UnitPlan, target: Mir.Value, in_common: bool) Error!void {
     }
 }
 
-/// §5.9 Which loops must this unit run for itself?
+/// §5.9 Marks the loops this unit must run itself; returns whether any were
+/// newly marked.
 ///
-/// The common declaration runs a loop to completion and publishes ONE
-/// snapshot of it. A unit with a private value inside the same loop
-/// re-materializes the loop around that snapshot — and then reads its
-/// counter and its exit condition from a cache already holding their FINAL
-/// values, so the copy runs zero times. (`102_loops` printed
-/// `for sums 1..5 got=0 want=15`.)
-///
-/// The fix is per UNIT, not per model: a unit that runs a loop locally uses
-/// only local values of it, and every other unit keeps reading the core.
-/// Refusing to hoist loop values at all is sound too and costs 2-5x the
-/// generated output on the models that have loops (hisimhv_va: 17 MB → 78 MB;
-/// CORPUS in the header — no fixture in this tree has that shape).
-///
-/// Monotone — marking a loop only ADDS private values, which can only mark
-/// more loops — so the fixpoint converges; in practice after one extra round.
+/// The common declaration runs a loop to completion and publishes one
+/// snapshot. A unit with a private value inside that loop re-runs it, and
+/// reading its counter and exit condition from the cache (their final values)
+/// would run the copy zero times. So such a unit uses only local values of the
+/// loop, and every other unit keeps reading the core. Not hoisting loop values
+/// at all is also sound, but measured 2-5x larger output on models with loops.
 fn markRecomputedLoops(self: *UnitPlan) bool {
     if (self.in_common) return false;
     var grew = false;
@@ -321,6 +259,9 @@ fn markRecomputedLoops(self: *UnitPlan) bool {
 }
 
 fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
+    // A full clear: `analyze` runs a handful of times per compilation (setup,
+    // the core, the §9.4 display unit), so there is no partial reset to keep
+    // in sync with every new table.
     @memset(self.needed, false);
     @memset(self.eager_use, 0);
     @memset(self.arm_use, 0);
@@ -331,31 +272,26 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
 
     var work: std.ArrayList(Mir.Value) = .empty;
     defer work.deinit(self.arena);
-    // The common declaration has many targets — its whole live-out set —
-    // and `target` is ignored. One entry point, so the slicing, the use
-    // counting and the CFG reconstruction below are shared verbatim.
+    // The common declaration's targets are its whole live-out set and
+    // `target` is ignored, so slicing, use counting and CFG reconstruction
+    // are shared.
     if (self.in_common) {
         for (self.lo_vals) |v| try self.mark(&work, v);
     } else {
         try self.mark(&work, target);
     }
     try self.closeSlice(&work);
-    // Whether the unit needs the CFG at all is decided from the target's
-    // own slice; only then do the branch conditions become live (emitting a
-    // condition the unit never branches on would declare a local nothing
-    // reads — a hard error in Zig).
+    // Whether the unit needs the CFG is decided from the target's own slice;
+    // only then do branch conditions become live (a condition the unit never
+    // branches on would be a local nothing reads, a hard error in Zig).
     self.straight = self.isStraightLine();
     if (!self.straight) {
-        // Only the branches this unit can OBSERVE. Hoisting the shared core
-        // leaves most units with a handful of private values scattered
-        // through a CFG of hundreds of blocks, and reconstructing all of it
-        // was, measured on `bsimsoi_va`, 754 of the 5 431 lines of every
-        // unit being `if (c) { break :B } else { break :B }` (CORPUS: the
-        // public Berkeley BSIM-SOI release — see this file's CORPUS header).
-        //
-        // Marking is monotone — a newly live condition can only ADD work to
-        // a block, which can only revive a branch — so this converges, and
-        // in practice after two rounds.
+        // Only the branches this unit can observe: most units hold a few
+        // private values scattered through a CFG of hundreds of blocks, and
+        // rebuilding all of it emits empty `if (c) { break :B } else
+        // { break :B }` scaffolding. Marking is monotone (a newly live
+        // condition only adds work to a block, which can only revive a
+        // branch), so this converges.
         while (true) {
             self.planDeadBranches();
             var grew = false;
@@ -389,14 +325,12 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         const v = @intFromEnum(self.live.items[k]);
         if (v < Mir.Value.first_dynamic) break; // sentinels sort first
         if (self.eager_use[v] != 0 or self.arm_use[v] == 0) continue;
-        // Read at MORE than one arm position: a slot, computed once where it
-        // is defined. Inlined, its whole backward slice was re-rendered at
-        // every use, in every select sharing it — including values the source
-        // computed before the `if`, whose only readers happen to be arms.
+        // Read at more than one arm position: a slot, computed once where it
+        // is defined, rather than re-rendering its whole slice at every arm.
         // Eager is sound here: proof.markSelectArms guards only a slice owned
-        // through use-count-1 links, so a value with two uses — and whatever
-        // it alone reads — was proved on EVERY path, guard or not. And ifconv
-        // keeps an arm holding a domain-restricted op as a CFG diamond, so no
+        // through use-count-1 links, so a value with two uses (and whatever it
+        // alone reads) was proved on every path. And ifconv keeps an arm
+        // holding a domain-restricted op as a CFG diamond, so no
         // ln/sqrt/pow/integer `/` reaches here from under a guard (§4.2.12).
         // One arm position stays inlined: laziness that costs nothing.
         if (self.arm_use[v] > 1) continue;
@@ -425,17 +359,17 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
     self.boundInlineDepth();
 
     // Slots for everything that survives as a statement, in ascending value
-    // order — a UNIT-LOCAL dense index, never a MIR value index.
+    // order: a unit-local dense index, never a MIR value index.
     self.uses_cache = false;
     for (self.live.items) |lv| {
         const v = @intFromEnum(lv);
         if (v < Mir.Value.first_dynamic or self.inlined[v]) continue;
-        // An Instance-field read needs no statement, no slot, and no core
-        // call — it is valid in every body including the core itself.
+        // An Instance-field read needs no statement, slot or core call; it
+        // is valid in every body including the core itself.
         if (self.isRoot(lv)) continue;
-        // A cache read is a field access, as cheap as a parameter read, and
-        // it is valid anywhere in the body — it needs no statement and no
-        // slot. This is also what lets most units come out straight-line.
+        // A cache read is a field access valid anywhere in the body, so it
+        // needs no statement and no slot. This is what lets most units come
+        // out straight-line.
         if (self.cached(lv)) {
             self.uses_cache = true;
             continue;
@@ -446,21 +380,20 @@ fn analyzeUnitOnce(self: *UnitPlan, target: Mir.Value) Error!void {
         if (self.an.arrOf(lv) != null) continue;
         const def = self.mir.valueDef(lv);
         if (def != .inst_result) continue;
-        // §4.5 an operator's INPUT is not a `mark`ed operand — `callArgIsValue`
-        // deliberately says no, so the §4.5.2 one-evaluation-per-step rule
-        // holds — but `emitOperator` still renders it, and outside the core
-        // that rendering is a cache read. Without this the §9.4 display unit
-        // (the one unit not folded into the core) emits `c.f1` with no `c`.
+        // §4.5 an operator's input is not a marked operand (`callArgIsValue`
+        // says no, so the §4.5.2 one-evaluation-per-step rule holds), but
+        // `emitOperator` still renders it, and outside the core that is a
+        // cache read. Without this the §9.4 display unit, the one unit not
+        // folded into the core, emits `c.f1` with no `c`.
         const d = self.mir.instData(def.inst_result);
         if (d == .call and cg.opNeedsInput(Mir.callee.opKind(d.call.callee)) and d.call.args.len != 0 and
             self.cached(self.an.rv(d.call.args[0]))) self.uses_cache = true;
-        // §4.6.3 the same hole, for `ac_stim`'s magnitude and phase. A.8.2
-        // gives both as `analog_expression` and `emitCall` renders them
-        // through `ctrlEval`; `callArgIsValue` still says no, because the
-        // constant spelling every model writes is consumed at codegen time.
-        // A solve-computed one is a core live-out, so outside the core it is
-        // a cache read this loop would otherwise never see. Argument 0 is the
-        // analysis NAME and is never rendered.
+        // §4.6.3 the same for `ac_stim`'s magnitude and phase (A.8.2
+        // `analog_expression`s that `emitCall` renders through `ctrlEval`).
+        // `callArgIsValue` says no because the usual constant spelling is
+        // consumed at codegen time; a solve-computed one is a core live-out,
+        // so outside the core it is a cache read. Argument 0 is the analysis
+        // name and is never rendered.
         if (d == .call and d.call.callee == .ac_stim) {
             for (d.call.args, 0..) |a, ai| {
                 if (ai != 0 and self.cached(self.an.rv(a))) self.uses_cache = true;
@@ -476,10 +409,9 @@ fn mark(self: *UnitPlan, work: *std.ArrayList(Mir.Value), v0: Mir.Value) Error!v
     if (self.needed[@intFromEnum(v)]) return;
     self.needed[@intFromEnum(v)] = true;
     try self.live.append(self.arena, v);
-    // A value read out of the common declaration's cache — or out of a
-    // setup root's Instance field — is a LEAF here: its operands were
-    // computed there, and pulling them in is exactly the duplication the
-    // hoist removes.
+    // A value read from the core's cache or from a setup root's Instance
+    // field is a leaf here: its operands were computed there, and pulling
+    // them in is the duplication the hoist removes.
     if (self.cached(v) or self.isRoot(v)) return;
     try work.append(self.arena, v);
 }
@@ -549,7 +481,7 @@ fn countUses(self: *UnitPlan, target: Mir.Value) void {
         if (self.mir.instOp(t) != .branch) continue;
         // A dead branch emits no `if`, so its condition has no use here. It
         // must not be counted, or the value would be slotted and assigned
-        // with nothing reading it — which Zig rejects.
+        // with nothing reading it, which Zig rejects.
         if (self.dead_branch[bi]) continue;
         const cond = self.an.rv(self.mir.instData(t).branch.cond);
         if (!self.tested(cond)) continue;
@@ -642,30 +574,15 @@ fn boundInlineDepth(self: *UnitPlan) void {
     }
 }
 
-/// A value read EXACTLY ONCE, by the very next statement of its own block,
-/// is rendered inside that statement instead of getting a `const` of its
-/// own. `renderValueRef` already falls through to `renderInst` for anything
-/// without a slot, so clearing the slot IS the fusion — no new rendering
-/// path, and chains collapse transitively because the fallthrough recurses.
+/// Fuses a value read exactly once, by a later statement of its own block,
+/// into that statement instead of giving it a `const`. Clearing the slot is
+/// the fusion: `renderValueRef` falls through to `renderInst` for anything
+/// without a slot, so chains collapse transitively.
 ///
-/// Measured on the emitted text before writing this: 14,930 of 16,242 `const
-/// tN` temps (92%) have exactly one use, and 11,366 of those are consumed on
-/// the very next line. (CORPUS: emitted device.zig from the corpus in this
-/// file's header. WHICH model was not recorded — 22df456 introduced the count
-/// and does not say — so re-derive before quoting the ratio for one model.)
-/// That adjacency is the whole safety argument and the reason this is not the
-/// same pass as the lazy-arm inlining above:
-///
-///   - ONE use, so the expression is rendered once — no duplicated work.
-///     `eager_use == 1 and arm_use == 0` is exactly that, since an arm use
-///     is re-rendered per arm by design.
-///   - the use is the NEXT statement in `stmt_pool`, so the computation
-///     moves later by one statement, inside the same block. Nothing can be
-///     hoisted into a loop body or sunk past a side effect, which is what a
-///     general "def dominates use" rule would have to reason about.
-///
-/// So this must NOT undo eager uses: the operands stay eager because the
-/// expression is still evaluated exactly once, eagerly, one statement later.
+/// Sound because the use is single (`eager_use == 1 and arm_use == 0`; an arm
+/// use is re-rendered per arm) and only pure statements lie between, so
+/// nothing moves into a loop or past a side effect. Eager uses are not undone:
+/// the expression still runs once, eagerly, a little later.
 fn fuseSingleUse(self: *UnitPlan) void {
     for (0..self.an.nb) |bi| {
         const stmts = self.an.stmt_pool[self.an.stmt_off[bi]..self.an.stmt_off[bi + 1]];
@@ -681,20 +598,17 @@ fn fuseSingleUse(self: *UnitPlan) void {
             if (self.in_common and self.lo_idx[v] != none_u32) continue;
             if (self.cached(@enumFromInt(v))) continue;
             const op = self.mir.instOp(inst);
-            // `call` is an operator/function evaluated once per step (§4.5),
-            // `phi` is materialised as a `var` — neither is an expression.
+            // `call` is an operator/function evaluated once per step (§4.5)
+            // and `phi` is materialised as a `var`; neither is an expression.
             if (op == .call or op == .phi) continue;
             // §3.2.2 a load may move later only past what cannot store.
             const is_load = Mir.opClass(op) == .load;
-            // The user may sit further down the SAME block as long as every
-            // statement in between is a pure expression (unary/binary/
-            // ternary): a pure op reads only SSA values, so sliding another
-            // pure expression past it changes nothing — the original
-            // adjacent-statement rule is the k == si + 1 case. A `call` or
-            // `phi` stops the scan: §4.5 operators and §9.4 prints are the
-            // side effects the adjacency rule existed to not cross. This is
-            // what lets ifconv's spliced arms sit between a comparison and
-            // the select that consumes it without costing the fusion.
+            // The user may sit further down the same block as long as every
+            // statement in between is pure: a pure op reads only SSA values,
+            // so sliding another past it changes nothing. A `call` or `phi`
+            // stops the scan, because §4.5 operators and §9.4 prints are side
+            // effects the value must not cross. This lets ifconv's spliced
+            // arms sit between a comparison and the select that consumes it.
             for (stmts[si + 1 ..]) |next| {
                 if (self.eagerlyUses(next, @enumFromInt(v))) {
                     self.inlined[v] = true;
@@ -714,11 +628,11 @@ fn fuseSingleUse(self: *UnitPlan) void {
     }
 }
 
-/// Does `inst` read `v` in an EAGER position? Mirrors `addUses`, including
-/// its two exclusions — a folded constant exponent is never materialised,
-/// and a non-value call argument is not an operand — so that the counts this
-/// is checked against and the answer here cannot drift apart. A `ternary`'s
-/// arms are lazy positions, which is `arm_use`, not this.
+/// Does `inst` read `v` in an eager position? Mirrors `addUses`, including
+/// its two exclusions (a folded constant exponent is never materialised, and
+/// a non-value call argument is not an operand), so the counts it is checked
+/// against cannot drift from this answer. A `ternary`'s arms are lazy
+/// positions, counted in `arm_use`.
 fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
     return switch (self.mir.instData(inst)) {
         .unary => |d| self.an.rv(d.operand) == v,
@@ -737,30 +651,23 @@ fn eagerlyUses(self: *const UnitPlan, inst: Mir.Inst, v: Mir.Value) bool {
 /// §4.3.1 `pow(x, k)` with a constant exponent goes through the scalar's
 /// `pow(S, f64)`, so the exponent is never materialised as a value.
 ///
-/// `resolve_params = false`, the exact mirror of `Gen.renderOp`'s `.pow` arm:
-/// a PARAMETER exponent is a value the model card owns, so it is marked live
-/// here (and the unit's `model` stays named) and rendered `S.con(model.<p>)`
-/// there. Folding through the declared default on either side — this one used
-/// `true` — freezes an overridden exponent at its default.
+/// `resolve_params = false` mirrors `Gen.renderOp`'s `.pow` arm: a parameter
+/// exponent belongs to the model card, so it stays live and renders as
+/// `S.con(model.<p>)`. Folding through its declared default would freeze an
+/// overridden exponent at that default.
 fn foldedExponent(self: *const UnitPlan, d: anytype) bool {
     return d.op == .pow and self.an.foldConst(d.rhs, false) != null;
 }
 
-/// True when the slice lives entirely in the entry block and uses no phi —
-/// the common case (no `if` on the path to this contribution), and worth a
-/// special case because it emits flat, readable `const` code.
-///
-/// Iterates `live`, not `0..nv`: it is called once per unit, and `live` is
-/// the small set `mark` actually reached — the same reason every other
-/// per-unit sweep iterates it.
+/// Returns true when the slice lives entirely in the entry block and uses no
+/// phi, so the unit emits flat `const` code. Valid after `analyze` marked the
+/// slice.
 pub fn isStraightLine(self: *const UnitPlan) bool {
     for (self.live.items) |lv| {
         const v = @intFromEnum(lv);
         if (v < Mir.Value.first_dynamic) continue;
         // A cache or Instance-field read is a field of a value the body
-        // already holds, so it has no block of its own — which is what
-        // collapses most units to a flat body once the shared core is
-        // hoisted out of them.
+        // already holds, so it has no block of its own.
         if (self.cached(lv) or self.isRoot(lv)) continue;
         const db = self.homeBlock(v);
         if (db != none_u32 and db != 0) return false;
@@ -770,14 +677,12 @@ pub fn isStraightLine(self: *const UnitPlan) bool {
     return true;
 }
 
-/// Which `branch`es this unit cannot tell apart.
+/// Marks in `dead_branch` every `branch` this unit cannot tell apart.
 ///
-/// A branch is dead here when both of its edges reduce to the SAME control
-/// action once the empty blocks between are skipped, and neither copies a
-/// phi on the way: the unit then computes the same values and reaches the
-/// same place whichever arm runs, so the condition is unobservable and the
-/// whole `if` can go. This is the per-unit half of the hoist — the shared
-/// core takes the values, this takes the scaffolding that held them.
+/// A branch is dead here when both edges reduce to the same control action
+/// once the empty blocks between are skipped, and neither copies a phi on the
+/// way. The unit then computes the same values and reaches the same place
+/// whichever arm runs, so the condition is unobservable and the `if` goes.
 pub fn planDeadBranches(self: *UnitPlan) void {
     @memset(self.blk_work, false);
     @memset(self.blk_phi, false);
@@ -786,14 +691,11 @@ pub fn planDeadBranches(self: *UnitPlan) void {
         if (v < Mir.Value.first_dynamic) continue;
         const db = self.homeBlock(v);
         if (db == none_u32) continue;
-        // A phi marks its block EVEN WHEN CACHED. `blk_phi` means "the two
-        // arms disagree at this SSA join", which is a property of the CFG
-        // and the value — not of whether this unit happens to read the
-        // result out of the cache. Measured: with a `cached` skip here,
-        // `hisimhv_va` moved 4 000 of 128 000 residual entries (CORPUS in
-        // the header: not in this tree).
-        // A setup root's value is the same whichever way the unit goes —
-        // `setup` decided every branch it depends on — so neither its phi
+        // A phi marks its block even when cached: `blk_phi` means "the two
+        // arms disagree at this SSA join", a property of the CFG and the
+        // value, not of whether this unit reads the result from the cache.
+        // A setup root's value is the same whichever way the unit goes
+        // (`setup` decided every branch it depends on), so neither its phi
         // copies nor its block are work here.
         if (self.isRoot(lv)) continue;
         const def = self.mir.valueDef(lv);
@@ -819,6 +721,11 @@ pub fn planDeadBranches(self: *UnitPlan) void {
     }
 }
 
+/// Returns the control action the edge `from0 -> to0` reduces to once empty
+/// inline blocks are skipped, or null when the edge copies a phi, does work
+/// this unit observes, or nests deeper than the walk tracks. Reads
+/// `blk_work`/`blk_phi`/`dead_branch`, so it is valid only inside
+/// `planDeadBranches` or after it.
 pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
     var from = from0;
     var to = to0;
@@ -841,12 +748,9 @@ pub fn edgeAct(self: *const UnitPlan, from0: u32, to0: u32) ?Act {
         // §5.9 and NOT inside a loop, even when empty. "Empty of values
         // this unit computes" is not "no effect" on a back edge: the arms
         // decide which loop-carried phi values get copied on the way round,
-        // and `blk_phi` only guards a phi's OWN block — a loop-carried phi
-        // the unit reads from the cache leaves it clear, so the two arms are
-        // NOT interchangeable. It is the same hazard `markRecomputedLoops`
-        // re-materializes a loop for. Measured: without this clause,
-        // `hisimhv_va` moved 4 000 of 128 000 residual entries (CORPUS in
-        // the header: not in this tree).
+        // and `blk_phi` only guards a phi's own block. A loop-carried phi the
+        // unit reads from the cache leaves it clear, so the two arms are not
+        // interchangeable (the hazard `markRecomputedLoops` handles).
         if (self.an.is_loop[to] or self.an.inLoop(to) or self.blk_work[to]) return null;
         const labels = self.an.mk_pool[self.an.mk_off[to]..self.an.mk_off[to + 1]];
         if (n_open + labels.len > opened.len) return null;
