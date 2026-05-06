@@ -1,58 +1,9 @@
-//! Class 11/12 — the VPI object model and the C routines over it.
-//! LRM §11.6 (the data model diagrams), §12.2–§12.35 (the routines),
-//! §12.33.2 (`vlog_startup_routines`).
-//!
-//! WHAT THIS IS FOR. Everything above this file compiles Verilog-AMS into one
-//! device. An application — a waveform viewer, a testbench driver, a
-//! parameter-extraction tool — could not ask that device what the design
-//! CONTAINS, because the only C surface VerA had was `contract.SystfHost`: an
-//! opaque ctx and one `call(ctx, k, args, partials) -> f64`. That is a hook for
-//! a system function, not an interface to a design, and §11.3.1's whole subject
-//! is the second thing. This file is the second thing.
-//!
-//! WHAT IT IS BUILT OVER, and the one design decision worth arguing. §11.2.2
-//! says VPI access is INSTANCE-UNIQUE: `m1.w` and `m2.w` are two objects. That
-//! is the elaborated design, which is `ir/elaborate.zig`'s output — and that
-//! output is FLAT, deliberately (read that file's header). A flat design still
-//! carries the whole hierarchy, in two places:
-//!
-//!   - every flattened declaration is named by its §6.7 path (`u.v.r`), because
-//!     `Elaborate.sep` makes the mangling BE the path; and
-//!   - `Lowered.hier_names` resolves a path to the entity it denotes, which is
-//!     how a child port that was collapsed into its parent's net is still
-//!     reachable by the name the source wrote.
-//!
-//! So the scope tree here is not a second elaboration. It is the instance tree
-//! read back out: the SHAPE is `Lowered.unit_paths`, the row elaboration
-//! publishes per inlined instance together with the definition it came from —
-//! §11.6.1's `vpiDefName`, the one fact flattening erases — and the CONTENTS
-//! of each scope come from the elaborated module, split at the last
-//! `Elaborate.sep`. Both halves are elaboration's answer; nothing here decides
-//! which module an instance names.
-//!
-//! HANDLES. §12.3 says handle equivalence "can not be determined with a C `==`
-//! comparison", which licenses an implementation to hand out a fresh pointer
-//! per query. VerA does the opposite: every object is materialized once at
-//! `open` into one array that is never resized, and a handle is a pointer into
-//! it. Two lookups of the same object therefore give the same pointer, and
-//! `vpi_compare_objects` is a pointer compare. That is not laziness about the
-//! contract — it is what makes the contract CHEAP AND CHECKABLE. An application
-//! may still not use `==`, and nothing here promises it will keep working.
-//!
-//! The reason the fixed array matters is the trust boundary. Handles crossing
-//! this boundary come from C, so every one of them is arbitrary memory until
-//! proven otherwise. A pointer is ours iff it lands inside `objects` on an
-//! element boundary, or iff it is a live iterator we allocated. Nothing else is
-//! ever dereferenced. An `ArrayList` that could reallocate under a handle an
-//! application is holding would make that test a lie.
-//!
-//! NOT HERE, and each is a later plan item rather than an omission:
-//!   - values (§12.16 `vpi_get_value`, §12.30 `vpi_put_value`, §12.10's analog
-//!     family). `s_vpi_value` is declared in `vpi_user.h`; no routine takes one.
-//!   - callbacks (§12.31) and system task/function registration (§12.32,
-//!     §12.33). `vlog_startup_routines` IS called — an object model with no
-//!     moment to be walked in is not usable — but what an entry can do in it
-//!     today is walk the design, not register a systf.
+//! The VPI object model and its C routines (LRM §11.6, §12.2-§12.35,
+//! §12.33.2): an elaborated flat design, read back as its instance tree
+//! (`Lowered.unit_paths`, `hier_names`) -> one fixed array of `Obj` rows that
+//! every `vpiHandle` points into. Siblings: value.zig (§12.16/§12.30),
+//! callback.zig (§12.31), systf.zig (§12.32/§12.33), analog.zig (§12.7-§12.10),
+//! run.zig (the digital run), code.zig (behavioural objects), print.zig.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -95,14 +46,10 @@ const Elaborate = @import("ir").Elaborate;
 // ---------------------------------------------------------------------------
 // vpi_user.h, from the other side.
 //
-// These MUST agree with src/vpi/vpi_user.h, which is IEEE 1364-2005 Annex G's
-// numbering (Verilog-AMS §12.2 and §12.31 both defer to it for the header
-// listing). Nothing mechanical enforces the agreement — a `.h` and a `.zig`
-// have no shared source of truth — so the acceptance test enforces it instead:
-// tests/vpi_app.c is compiled against the HEADER and asserts, for example,
-// `vpi_get(vpiType, m) == vpiModule`. Every constant the C program names is
-// checked that way, which is why the C program is the acceptance test and a
-// Zig unit test could not be.
+// These must agree with src/vpi/vpi_user.h (IEEE 1364-2005 Annex G's
+// numbering, which §12.2 and §12.31 defer to). Nothing shares a source of
+// truth between the two; tests/vpi_app.c, compiled against the header,
+// asserts every constant it names (e.g. `vpi_get(vpiType, m) == vpiModule`).
 // ---------------------------------------------------------------------------
 
 // §11.6 object types.
@@ -205,15 +152,7 @@ pub const ErrorInfo = extern struct {
 // The object model
 // ---------------------------------------------------------------------------
 
-/// The five object classes P01 answers: §11.6.1 module, §11.6.4 ports,
-/// §11.6.8 nets, §11.6.9 regs, §11.6.12 parameter.
-///
-/// §11.6.5 NODES are not a sixth entry, and that is a judgement rather than an
-/// oversight: in the elaborated design an `electrical` declaration and a `wire`
-/// declaration are the same `Ast.NetDecl` row, so splitting them here would be
-/// a distinction this compiler's IR does not make. Both are reported as
-/// `vpiNet`. The day a node earns its own class is the day `vpiDomain` or a
-/// discipline handle is answerable, which is P02's neighbourhood.
+/// The object classes the model answers; `typeOf` maps each to its `vpiType`.
 const Kind = enum(u8) {
     module,
     port,
@@ -309,11 +248,10 @@ fn typeName(t: c_int) []const u8 {
 /// One VPI object. Materialized once at `open`; a `vpiHandle` is a pointer to
 /// one of these.
 ///
-/// ONE STRUCT FOR FIVE CLASSES rather than a tagged union: the per-class fields
-/// are four scalars, the whole table is a few hundred rows in a design of any
-/// realistic size, and the alternative costs every `vpi_get` arm a switch on
-/// the payload before it can switch on the property. The fields a class does
-/// not use hold their defaults and are never read; each names its owner.
+/// One struct for every class rather than a tagged union, so a `vpi_get` arm
+/// switches on the property without first switching on a payload. Fields a
+/// class does not use hold their defaults and are never read; each names its
+/// owner.
 pub const Obj = struct {
     kind: Kind,
     /// §11.6's "one-to-one relationship back to module": the SCOPE INDEX this
@@ -343,12 +281,11 @@ pub const Obj = struct {
     is_signed: bool = true,
     /// The digital engine's storage slot for this object's value, when the
     /// design is a running digital one (`openDigital`). Null in the analog
-    /// model, whose values live in a compiled device this process never sees.
+    /// model, whose values come from analog.zig's solution.
     slot: ?u32 = null,
     /// `.parameter` of the analog model: the constant lowering folded for it
-    /// (`Lowered.consts`), copied. §11.6.12 NOTE 1 gives a parameter "the value
-    /// of the parameter" as a value, and this is the only value an analog
-    /// compile holds without running the device.
+    /// (`Lowered.consts`), copied; §11.6.12 NOTE 1's "the value of the
+    /// parameter".
     value: ?Lower.Const = null,
     /// An element (word, var select, array member module): the array object
     /// it belongs to — §11.6.11's `vpiParent`, §6.2.2's `vpiModuleArray`.
@@ -429,18 +366,15 @@ pub const Obj = struct {
 };
 
 /// One module instance, with the §11.6.1 one-to-many sets it is the reference
-/// object of. The sets hold object INDICES rather than pointers so that
-/// building them cannot be invalidated by the object array being sized; after
-/// `open` they are read-only.
+/// object of, as object indices; read-only after `open`.
 ///
-/// INVARIANT, relied on by every traversal: scope `i`'s own `vpiModule` object
-/// is `objects[i]`. Modules are appended first and in scope order, which is
-/// what makes an object's `owner` scope index also its owner's object index.
+/// Invariant, relied on by every traversal: scope `i`'s own `vpiModule` object
+/// is `objects[i]` (modules are appended first, in scope order), so an
+/// object's `owner` scope index is also its owner's object index.
 const Scope = struct {
     parent: ?u32,
-    /// §11.6.1 `vpiDefName` — the module definition this is an instance of.
-    /// The one property the flattened design cannot answer, which is why the
-    /// scope tree is walked from the definitions rather than from flat names.
+    /// §11.6.1 `vpiDefName`: the module definition this is an instance of,
+    /// which the flattened design does not carry.
     def_name: []const u8,
     /// The §6.7 path relative to the top, `""` at the root. The key the flat
     /// declarations are bucketed by.
@@ -460,9 +394,8 @@ const Scope = struct {
     lists: []const code.List = &.{},
 };
 
-/// §12.23's iterator. Individually allocated so that a pointer VerA did not
-/// hand out cannot be mistaken for one: `Design.iters` is the set of live ones,
-/// and membership is the whole validity test.
+/// §12.23's iterator. Individually allocated; a handle is a live iterator iff
+/// it is a key of `Design.iters`.
 const Iter = struct {
     /// Object indices, in §11.6's order, which is source order.
     items: []const u32,
@@ -472,15 +405,17 @@ const Iter = struct {
     handles: ?[]vpiHandle = null,
 };
 
+/// The installed object model (`design`). Owns everything it reports: strings
+/// are copied out of the compilation, so a `CompileResult` may be freed while
+/// an application still holds handles.
 pub const Design = struct {
     gpa: std.mem.Allocator,
-    /// Owns every name string and every slice below. The design's strings are
-    /// COPIED out of the compilation arena on purpose: a `CompileResult` may be
-    /// freed while an application still holds handles, and a handle into freed
-    /// memory is the failure mode this whole file exists to make impossible.
+    /// Owns every name string and every slice below.
     arena: std.heap.ArenaAllocator,
-    /// FIXED allocation — see the file header. A handle points into this, so it
-    /// may never move.
+    /// Allocated once and never resized: every object handle points into it,
+    /// and `object` accepts a pointer only if it lands here on an element
+    /// boundary. One object always yields one pointer, but applications must
+    /// still compare with `vpi_compare_objects` (§12.3).
     objects: []Obj,
     scopes: []Scope,
     /// §11.6.1 NOTE 1 — what `vpi_iterate(vpiModule, NULL)` walks. One entry:
@@ -499,6 +434,7 @@ pub const Design = struct {
     /// The live iterators, keyed by handle value.
     iters: std.AutoHashMapUnmanaged(usize, *Iter),
 
+    /// Frees the model and every live iterator; all handles become invalid.
     pub fn deinit(self: *Design) void {
         var it = self.iters.valueIterator();
         while (it.next()) |p| {
@@ -517,21 +453,18 @@ pub const Design = struct {
 // ---------------------------------------------------------------------------
 // The global design
 //
-// ponytail: ONE design per process, in a global. The VPI is a global C
-// namespace by construction — §12.33.2's `vlog_startup_routines` is itself a
-// link-time global, and no routine in Clause 12 takes a context argument — so a
-// per-design context would be a parameter no conforming application could pass.
-// Upgrade path, if a host ever elaborates two designs at once: give `Design` a
-// name, keep a registry, and select with a VerA-specific entry point the
-// standard routines read. Not speculatively built.
-//
-// Not thread-safe, for the same reason and with the same upgrade: the interface
-// has no thread parameter either.
+// ponytail: one design per process, in a global, and not thread-safe. No
+// Clause 12 routine takes a context or thread argument, so a per-design
+// context is a parameter no conforming application could pass. Upgrade path
+// for two designs at once: name `Design`s in a registry and select with a
+// VerA-specific entry point the standard routines read.
 // ---------------------------------------------------------------------------
 
+/// The installed model; null until `open`/`openDigital`, and after `close`.
 pub var design: ?Design = null;
 
-/// Build the object model over one elaborated design and install it.
+/// Builds the object model over one elaborated design and installs it,
+/// closing any previous one.
 ///
 /// `lowered` is what `Lower.lowerFile` produced: `lowered.module` is the
 /// elaborated top (`Elaborate.Design.top`) and `lowered.hier_names` its §6.7
@@ -542,6 +475,8 @@ pub fn open(gpa: std.mem.Allocator, lowered: *const Lowered) !void {
     design = try build(gpa, lowered);
 }
 
+/// Frees the installed model and resets every sibling registry (run,
+/// callbacks, values, systfs) and the error status. Invalidates every handle.
 pub fn close() void {
     if (design) |*d| d.deinit();
     design = null;
@@ -552,36 +487,26 @@ pub fn close() void {
     clearError();
 }
 
-/// §12.33.2. Call each entry of the application's `vlog_startup_routines` once,
-/// in order, stopping at the 0 terminator.
+/// Calls each entry of the application's `vlog_startup_routines` once, in
+/// order, stopping at the 0 terminator (§12.33.2).
 ///
-/// THE REFERENCE IS STRONG, and that is the clause's own arrangement rather
-/// than a limitation: "This C function shall be provided with a VPI-compliant
-/// product. Entries in the array shall be added by the user. The location of
-/// vlog_startup_routines and the procedure for linking vlog_startup_routines
-/// with a software product shall be defined by the product vendor." The array
-/// and the application are one link unit — the LRM's own example writes the
-/// definition into "a vendor product file" alongside `extern` declarations of
-/// the user's routines — so a binary that CALLS this must link one.
-///
-/// A binary that does not call it does not need one: the `@extern` is inside
-/// this body, so a build of VerA with no VPI application attached never
-/// references the symbol. `tests/vpi_host.zig` is the binary that does; the
-/// module's own tests drive `runStartupTable` instead, which is this function
-/// with the table handed to it.
+/// A binary that calls this must link a `vlog_startup_routines` (a strong
+/// reference; §12.33.2 makes the array and the application one link unit).
+/// The `@extern` is inside this body, so a binary that never calls it needs
+/// none. Tests use `runStartupTable`.
 pub fn runStartupRoutines() void {
     runStartupTable(@extern(?[*]const ?StartupFn, .{ .name = "vlog_startup_routines" }));
 }
 
-/// The loop half of §12.33.2, separated from the symbol so it is reachable
-/// without one. A null table is a no-op and not an error: an application that
-/// registers nothing at startup is a legal application.
+/// The loop of `runStartupRoutines` over a given table. A null table is a
+/// no-op: an application that registers nothing at startup is legal.
 pub fn runStartupTable(table: ?[*]const ?StartupFn) void {
     const entries = table orelse return;
     var i: usize = 0;
     while (entries[i]) |f| : (i += 1) f();
 }
 
+/// One `vlog_startup_routines` entry.
 pub const StartupFn = *const fn () callconv(.c) void;
 
 // ---------------------------------------------------------------------------
@@ -626,9 +551,8 @@ const Building = struct {
     }
 };
 
-/// `lowered` carries no elaborated top to model. Not a diagnostic: a caller
-/// that hands over a `Lowered` no `lowerFile` produced has a bug in its own
-/// sequencing.
+/// `NotElaborated`: `lowered` carries no elaborated top, a sequencing bug in
+/// the caller rather than a diagnostic.
 pub const Error = error{ OutOfMemory, NotElaborated };
 
 fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
@@ -649,14 +573,11 @@ fn build(gpa: std.mem.Allocator, lowered: *const Lowered) Error!Design {
     const top_name = try arena.dupe(u8, file.str(flat.name));
 
     // --- the scope tree ----------------------------------------------------
-    // §11.6.1's `vpiInternalScope`, READ from elaboration rather than walked
-    // again. `Lowered.unit_paths` is one row per inlined instance, depth first in
-    // source order, and each row carries the definition it was inlined from —
-    // `vpiDefName`, the one fact flattening erases. Instance arrays, §6.4.2
-    // paramset selection and chains, and Annex E.2.1's netlist match were all
-    // decided there, once; a second walk here was a second set of rules, and
-    // it drifted. A tree of one publishes no rows (`Elaborate` hands the parsed
-    // module over by pointer), so it is its own single row.
+    // §11.6.1's `vpiInternalScope`, read from elaboration rather than walked
+    // again: `Lowered.unit_paths` is one row per inlined instance, depth first
+    // in source order, with the definition it came from (`vpiDefName`).
+    // Instance arrays, §6.4.2 paramsets and Annex E.2.1 were decided there. A
+    // tree of one publishes no rows, so it is its own single row.
     const units = if (lowered.unit_paths.len != 0) lowered.unit_paths else &[_]Elaborate.UnitPath{
         .{ .module = top_name, .path = "", .decl = flat },
     };
@@ -1273,13 +1194,11 @@ fn literalDim(file: *const Ast.SourceFile, dim: Ast.Dim) ?struct { low: i64, hig
 // ---------------------------------------------------------------------------
 // The model over a running digital design
 //
-// `open` models an ANALOG compile, whose values live in a device this process
-// never runs. A digital design runs HERE, in `src/sim`'s engine, so its model
-// can carry values: every net, reg and integer object is bound to the engine
-// slot that stores it (`Obj.slot`), which is what §12.16/§12.30 and
-// cbValueChange read and write through.
+// A digital design runs in `src/sim`'s engine, so every net, reg and integer
+// object is bound to the engine slot that stores it (`Obj.slot`), which
+// §12.16/§12.30 and cbValueChange read and write through.
 //
-// The SHAPE is the engine's own elaboration, read back rather than redone:
+// The shape is the engine's own elaboration, read back rather than redone:
 // every instance is a non-lexical row of `Run.scope_info`, in depth-first
 // pre-order with the root at 0, and `Run.names` keys each declared name by
 // that row's engine scope id. Task frames, named-block scopes and
@@ -1287,8 +1206,8 @@ fn literalDim(file: *const Ast.SourceFile, dim: Ast.Dim) ?struct { low: i64, hig
 // iteration is a component of the path of an instance inside it.
 // ---------------------------------------------------------------------------
 
-/// Build the object model over an elaborated digital run and install it. The
-/// run must outlive the model: object values are read from `run.values`.
+/// Builds the object model over an elaborated digital run and installs it.
+/// The run must outlive the model: object values are read from `run.values`.
 pub fn openDigital(gpa: std.mem.Allocator, r: *sim.digital.Run) !void {
     if (design != null) close();
     design = try buildDigital(gpa, r);
@@ -1514,14 +1433,10 @@ fn vectorSize(lowered: *const Lowered, flat_name: []const u8) u32 {
 
 /// §11.6.9's `vpiSize` for a `reg [msb:lsb]`.
 ///
-/// ponytail: LITERAL BOUNDS ONLY — which is what `src/sim/digital/root.zig`
-/// already requires of the same declaration ("declaration bounds must be
-/// literal integers"). A packed range over a parameter folds nowhere this
-/// file can reach: `Lowered.vectors` holds nets and ports, not regs. Reporting 1
-/// for a width the design knows would be a wrong answer, so a non-literal range
-/// reports 0 and `vpi_get(vpiSize, …)` turns that into `vpiUndefined` plus an
-/// error. Upgrade path: lowering interns packed regs into `vectors` the way it
-/// interns nets, and this function disappears.
+/// ponytail: literal bounds only (`Lowered.vectors` holds nets and ports, not
+/// regs). A non-literal range returns 0, which `vpi_get(vpiSize, ...)` reports
+/// as `vpiUndefined` plus an error. Upgrade path: lowering interns packed regs
+/// into `vectors` as it does nets, and this function disappears.
 fn packedWidth(file: *const Ast.SourceFile, v: Ast.VarDecl) u32 {
     const range = v.packed_range orelse return 1;
     if (file.exprs.tag(range.msb) != .int_literal or file.exprs.tag(range.lsb) != .int_literal) return 0;
@@ -1583,22 +1498,19 @@ var err_len: usize = 0;
 /// Figure 12-1's `product`. Static, NUL-terminated, never rewritten.
 var product_name = "VerA".*;
 
+/// Resets the §12.2 error status; every routine but `vpi_chk_error` calls it.
 pub fn clearError() void {
     err_level = 0;
     err_len = 0;
     err_code = "";
 }
 
-/// Record one error. The caller returns its own documented failure value.
+/// Records one error; the caller returns its own documented failure value.
+/// `err` is a short stable token (`s_vpi_error_info.code`). Both it and the
+/// message live in static storage until the next VPI call (Figure 12-1).
 ///
-/// `code` is a short stable token — the application's `s_vpi_error_info.code` —
-/// and the message is the human half. Both live in static storage until the
-/// next VPI call, which is the lifetime Figure 12-1 gives them.
-///
-/// ponytail: a fixed 512-byte message, truncating. The message is diagnostic
-/// text; an application being told it passed an invalid handle needs the code
-/// and the first clause far more than the last few words, and a heap allocation
-/// on the error path is a second thing that can fail while reporting a failure.
+/// ponytail: a fixed 512-byte message, truncating, so the error path never
+/// allocates.
 pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
     err_level = vpiError;
     err_code = err;
@@ -1611,24 +1523,20 @@ pub fn fail(err: [:0]const u8, comptime fmt: []const u8, args: anytype) void {
 // ---------------------------------------------------------------------------
 // Handle validation — the trust boundary
 //
-// Every `vpiHandle` below arrived from C. None is dereferenced until it has
-// been shown to be one VerA issued:
+// Every `vpiHandle` arrived from C and is not dereferenced until shown to be
+// one VerA issued:
 //
 //   an object   lands inside `objects`, on an element boundary
-//   an iterator is a key of `iters` — the set of ones we allocated and have
-//               not freed
+//   an iterator is a key of `iters` (allocated and not yet freed)
 //
-// A stale OBJECT handle, one whose design has been closed and reopened, is
-// caught by the first test: the array it pointed into was freed and the new one
-// is a different allocation. A stale ITERATOR handle is caught by the second,
-// because `vpi_scan` and `vpi_free_object` remove the key before destroying the
-// object. Neither path reads through the pointer first.
-//
-// This is deliberately not a magic number in a header struct: a magic number
-// has to be READ, and reading is the thing an arbitrary pointer must not have
-// done to it.
+// `vpi_scan` and `vpi_free_object` remove an iterator's key before destroying
+// it. A stale object handle from a closed design is rejected only when the new
+// `objects` is a different allocation. No magic-number header: checking one
+// would read through an arbitrary pointer.
 // ---------------------------------------------------------------------------
 
+/// Returns `h` as an object of the installed design, or null. Never reads
+/// through `h`.
 pub fn asObj(h: vpiHandle) ?*Obj {
     const d = &(design orelse return null);
     const p = h orelse return null;
@@ -2045,9 +1953,8 @@ fn newIter(d: *Design, items: []const u32) vpiHandle {
 /// can not be used again" (§12.35), and §12.4 spells out the consequence: "The
 /// iterator object shall automatically be freed when vpi_scan() returns NULL".
 ///
-/// So exhaustion FREES, and the freed handle is then exactly the invalid handle
-/// the validation above rejects. That is the point of doing it this way: an
-/// application that scans a dead iterator gets an error, not a use-after-free.
+/// So exhaustion frees the iterator, and scanning it again is an invalid-handle
+/// error rather than a use-after-free.
 pub export fn vpi_scan(itr: vpiHandle) vpiHandle {
     const d = enter("vpi_scan") orelse return null;
     const it = asIter(itr) orelse {
@@ -2190,8 +2097,8 @@ pub export fn vpi_get(prop: c_int, obj: vpiHandle) c_int {
             return @intFromBool(o.is_local);
         },
         // §11.6.12 `vpiConstType` over §3.4.1's parameter types. `.unspecified`
-        // is a `parameter p = <expr>;` whose type lowering derives from the
-        // default — a question about a VALUE, which is P02's.
+        // is a `parameter p = <expr>;` whose type follows its value, which
+        // this property does not read.
         vpiConstType => {
             if (o.kind == .constant) {
                 if (o.const_type == 0) {
@@ -2253,10 +2160,10 @@ pub const AnalogValue = extern struct {
 /// (node or branch) quantity objects. The value shall be placed in an
 /// s_vpi_analog_value structure, which has been allocated by the user."
 ///
-/// So an object that is not a quantity has no analog value, and a NULL
-/// structure is not one the user allocated: both refused. A quantity's value
-/// is a solution's, and this process solves nothing — refused as well, with
-/// a code (NOANALYSIS) that says so instead of a number that would be made up.
+/// A non-quantity object or a NULL structure is refused. The value is the
+/// current solution of analog.zig's analysis; with none, the error is
+/// NOANALYSIS, and a flow shared with a parallel instance is SHARED. Every
+/// imaginary part is 0 (no small-signal analysis runs).
 pub export fn vpi_get_analog_value(obj: vpiHandle, value_p: ?*AnalogValue) void {
     _ = enter("vpi_get_analog_value") orelse return;
     const o = object("vpi_get_analog_value", obj) orelse return;
@@ -2391,12 +2298,10 @@ pub const vpiEndFrequency: c_int = 746;
 /// real ... This function is available to analog tasks and functions only.
 /// Should an error occur, vpi_get_real() shall return vpiUndefined."
 ///
-/// So outside the callbacks of an analog system task or function — the only
-/// moment an application routine IS an analog task or function — the answer
-/// is the error. Inside one (the build-time compiletf/derivtf,
-/// `systf.buildCalls`), the five properties are the analysis's, asked of a
-/// NULL object; this process sets up no analysis, so each is still an error
-/// rather than an invented number.
+/// So it answers only inside a callback of an analog system task or function
+/// (`systf.active`). There the five properties are the analysis's
+/// (`analog_run.analysis`), asked of a NULL object; with no analysis, or for
+/// the AC-only frequencies, the answer is the error.
 pub export fn vpi_get_real(prop: c_int, obj: vpiHandle) f64 {
     clearError();
     const undef: f64 = @floatFromInt(vpiUndefined);
@@ -2450,12 +2355,8 @@ fn propFail(prop: c_int, o: *const Obj) c_int {
 /// every call to this routine. If the string is to be used after a subsequent
 /// call, the string needs to be copied to another location."
 ///
-/// One buffer, reused, exactly as written — which is also why the model stores
-/// names unterminated: the copy into this buffer is required whatever the
-/// storage is, so a second NUL would buy nothing.
-///
-/// A failing call returns NULL. §12.12 does not say so in as many words; it is
-/// the only value that is not a string an application would go on to print.
+/// One buffer, reused, so the model stores names unterminated. A failing call
+/// returns NULL, the one value an application would not go on to print.
 pub export fn vpi_get_str(prop: c_int, obj: vpiHandle) [*c]u8 {
     const d = enter("vpi_get_str") orelse return null;
     const o = object("vpi_get_str", obj) orelse return null;
@@ -2507,11 +2408,8 @@ var str_buf: [name_buf_len]u8 = undefined;
 
 /// "Handle equivalence can not be determined with a C `==` comparison."
 ///
-/// In VerA it happens to be determinable that way — objects are materialized
-/// once — but this routine is what an application is ALLOWED to rely on, and an
-/// implementation that interned handles differently would pass the same tests
-/// through it. Two invalid handles are not "the same object": that is FALSE
-/// plus an error, not TRUE.
+/// Two invalid handles are not "the same object": that is FALSE plus an
+/// error, not TRUE.
 pub export fn vpi_compare_objects(obj1: vpiHandle, obj2: vpiHandle) c_int {
     clearError();
     const a = issued(obj1) orelse {
@@ -2542,11 +2440,9 @@ fn issued(h: vpiHandle) ?*anyopaque {
 /// This routine can also optionally be used for implementations which have to
 /// allocate memory for objects."
 ///
-/// Freeing an ITERATOR is real work: an application that broke out of a scan
-/// loop early leaks one otherwise, which is the case §12.4 is written for.
-/// Freeing an OBJECT is a no-op returning TRUE — objects are owned by the
-/// design and live as long as it does — because an application is entitled to
-/// call this on one and must not be told it failed.
+/// Freeing an iterator frees it and invalidates the handle. Freeing an object
+/// is a no-op returning TRUE: objects live as long as the design, and an
+/// application is entitled to call this on one.
 pub export fn vpi_free_object(obj: vpiHandle) c_int {
     clearError();
     if (asIter(obj)) |it| {
@@ -2566,10 +2462,8 @@ pub export fn vpi_free_object(obj: vpiHandle) c_int {
     return 0;
 }
 
-/// IEEE 1364-2005's later spelling of `vpi_free_object`, introduced because
-/// "free object" reads as though it destroyed the design object rather than the
-/// handle to it. Same contract, and deliberately the same body rather than a
-/// second one that could drift from it.
+/// IEEE 1364-2005's later spelling of `vpi_free_object`; same contract, same
+/// body.
 pub export fn vpi_release_handle(obj: vpiHandle) c_int {
     return vpi_free_object(obj);
 }
@@ -2583,10 +2477,9 @@ pub export fn vpi_release_handle(obj: vpiHandle) c_int {
 /// shall be reset by any VPI routine call except vpi_chk_error(). Calling
 /// vpi_chk_error() shall have no effect on the error status."
 ///
-/// So this is the one routine that does NOT clear the status, and it is
-/// idempotent: an application may call it twice and get the same answer.
-/// "If the error information is not needed, a NULL can be passed to the
-/// routine."
+/// So this is the one routine that does not clear the status, and it is
+/// idempotent. "If the error information is not needed, a NULL can be passed
+/// to the routine."
 pub export fn vpi_chk_error(error_info_p: ?*ErrorInfo) c_int {
     if (error_info_p) |info| {
         info.* = .{
@@ -2663,13 +2556,9 @@ pub export fn vpi_get_vlog_info(vlog_info_p: ?*VlogInfo) c_int {
 // ---------------------------------------------------------------------------
 // Tests
 //
-// These check the MODEL: that the scope tree, the names and the sets come out
-// of an elaborated design correctly, and that the routines' failure paths are
-// failure paths. They are NOT the acceptance test. The ABI, the header's
-// constants and real C object lifetimes are `zig build test-vpi`, which
-// compiles tests/vpi_app.c against src/vpi/vpi_user.h and links it against the
-// exports above; a Zig test calling `vpi_handle` only proves that this file
-// agrees with itself.
+// These check the model and the routines' failure paths. The ABI, the
+// header's constants and C object lifetimes are `zig build test-vpi`
+// (tests/vpi_app.c against src/vpi/vpi_user.h).
 // ---------------------------------------------------------------------------
 
 const vera = @import("vera");
@@ -3023,9 +2912,8 @@ test "vpi_handle_by_index reports the unsupported class rather than guessing" {
 }
 
 test "handles survive the compilation they were built from" {
-    // The §11.2.2 lifetime claim in the file header, as a test: every string
-    // the model reports is copied, so freeing the CompileResult leaves the
-    // handles valid.
+    // `Design` copies every string it reports, so freeing the CompileResult
+    // leaves the handles valid.
     var res = try openSource(nested_src);
     defer close();
     const leaf = vpi_handle_by_name("top.u.v", null);

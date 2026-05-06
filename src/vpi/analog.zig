@@ -1,41 +1,10 @@
-//! §12.7 vpi_get_analog_delta, §12.8 vpi_get_analog_freq, §12.9
-//! vpi_get_analog_time, §12.10 vpi_get_analog_value, and the analysis
-//! §12.31.3's analog callbacks are delivered from.
+//! The analog analysis a VPI application watches: a compiled device library
+//! (`tb.renderVpiLib`, loaded by the host) -> §12.31.3 callbacks, §12.7-§12.10
+//! analog time and values, and §12.32 calltf per device system function call.
 //!
-//! WHAT RUNS. A Verilog-AMS device is compiled Zig; this process cannot
-//! evaluate one from the object model. The host (`tests/vpi_host.zig`) builds
-//! the design's device and the fixed solver as a shared library
-//! (`tb.renderVpiLib`), loads it, and hands this file its entry points
-//! (`attach`). The TIME WALK is here, not in the library, because §12.31.3
-//! gives the application a say in it: acbAbsTime and acbElapsedTime "shall
-//! force a solution at that time", and acbConvergenceTest may reject one
-//! and "backup to an earlier time". A fixed grid decided when the library
-//! was generated could honour neither.
-//!
-//! THE WALK, for `tran <start> <stop>`:
-//!
-//!   t = start, dt = 0: the time zero transient solution (§12.7/§12.9 "shall
-//!                      return zero (0) during DC or the time zero transient
-//!                      solution")
-//!   repeat until t = stop:
-//!     target = the nearest of the next grid point (start + k·max_step), stop,
-//!              and the earliest acbAbsTime/acbElapsedTime after t
-//!     solve tentatively at target, dt = target − t
-//!     acbConvergenceTest ("prior acceptance"); any rejection halves dt and
-//!              solves again — strictly earlier, as §12.31.3 says
-//!     accept:  acbInitialStep (first) · acbAbsTime/acbElapsedTime due ·
-//!              acbAcceptedPoint (all but the first) · acbFinalStep (last)
-//!
-//! `op` is the one DC solution, first and last at once. Nothing is committed
-//! before acceptance (`vera_vpi_accept` is the only writer of history), so a
-//! rejected solution leaves no trace but the attempt.
-//!
-//! FLOWS. §12.10 reads a branch's flow or potential. A potential is the
-//! difference of two unknowns. A flow is an unknown only for a potential
-//! source; a flow source's current is its §5.6 row's value, which the device
-//! publishes on request (`codegen.Options.vpi_contribs`) — the resistive
-//! half plus the time derivative of the reactive half, backward Euler over
-//! the step being solved, exactly as the solver forms it.
+//! The time walk lives here, not in the library, because §12.31.3 lets the
+//! application force solution times (acbAbsTime, acbElapsedTime) and reject a
+//! solution to "backup to an earlier time" (acbConvergenceTest).
 
 const std = @import("std");
 const root = @import("root.zig");
@@ -63,6 +32,7 @@ pub const Lib = struct {
 /// The C function the library forwards `contract.SystfHost.call` to.
 pub const HostCall = *const fn (usize, [*]const f64, usize, [*]f64) callconv(.c) f64;
 
+/// The analyses a host can run: a DC operating point or a transient.
 pub const Kind = enum { op, tran };
 
 /// One `analysis` line: §12.18's vpiStartTime/vpiEndTime/vpiTransientMaxStep
@@ -122,14 +92,13 @@ pub fn rejectStep() bool {
 
 const gpa = std.heap.smp_allocator;
 
-/// Bind the loaded library. Its row table is read once: it is a property of
-/// the compiled device, not of an analysis.
+/// Binds the loaded library and reads its row table and system-function call
+/// names. Precondition: a design is open (`root.design`).
 pub fn attach(l: Lib) error{OutOfMemory}!void {
     lib = l;
-    // §12.32: the device's user system function calls, each bound to the
-    // one call object of that name — `systf_calls` is keyed by NAME, so a
-    // name with two call sites cannot say which of them is running, and is
-    // refused when called rather than handed to the wrong one.
+    // The library names its calls, not their sites, so a name with two call
+    // objects cannot say which is running: it binds to none and is refused
+    // when called rather than handed to the wrong one.
     const n_calls = l.n_systf();
     call_obj = try gpa.alloc(?u32, n_calls);
     for (call_obj, 0..) |*c, k| {
@@ -157,6 +126,7 @@ pub fn attach(l: Lib) error{OutOfMemory}!void {
     }
 }
 
+/// Unbinds the library and frees everything `attach` and the analyses built.
 pub fn detach() void {
     lib = null;
     gpa.free(call_obj);
@@ -205,7 +175,13 @@ pub fn sameTime(a: f64, b: f64) bool {
 
 pub const Error = error{ NoLibrary, DidNotConverge, BackupExhausted };
 
-/// Run one analysis to its end, delivering every §12.31.3 callback.
+/// Runs one analysis to its end, delivering every §12.31.3 callback.
+///
+/// `tran` walks a grid of `max_step` (default (stop - start)/50) plus every
+/// forced time; each tentative solution passes acbConvergenceTest before it is
+/// accepted, and a rejection (or §12.36 vpiRejectTransientStep) halves the step from the last accepted point.
+/// `op` is one DC solution, first and last at once. A rejected solution
+/// leaves no history. `BackupExhausted`: 60 rejections of one step.
 pub fn run(a: Analysis) Error!void {
     const l = lib orelse return error.NoLibrary;
     l.open(kindOrdinal(a.kind));
@@ -261,14 +237,10 @@ fn accept(l: Lib, first: bool, last: bool) void {
     refreshRows(l);
     l.accept();
     t_accepted = t_now;
-    // §12.31.3 names two reasons for the first solution's acceptance —
-    // acbInitialStep "upon acceptance of the first analog solution" and
-    // acbAcceptedPoint "upon acceptance of the solution at the given time" —
-    // and does not say whether the first is also the second. VerA delivers
-    // the first solution as acbInitialStep only, so the accepted points an
-    // application sees are the ones the analysis ADVANCED to, each strictly
-    // later than the last (p03_02 pins that reading). The final solution is
-    // an advance: it is an accepted point, then acbFinalStep.
+    // §12.31.3 does not say whether the first solution (acbInitialStep) is
+    // also an acbAcceptedPoint. VerA says no, so accepted points strictly
+    // advance (p03_02 pins this reading); the final one is an accepted point,
+    // then acbFinalStep.
     if (first) callback.fireAnalog(callback.acbInitialStep);
     callback.fireTimed(t_accepted);
     if (!first) callback.fireAnalog(callback.acbAcceptedPoint);
@@ -295,10 +267,16 @@ fn unknownU16(x: [*]const f64, row: u16) f64 {
     return if (row == @import("ir").Lower.ground) 0 else x[row];
 }
 
+/// `NoAnalysis`: no library or no solution yet. `Unknowable`: a flow the
+/// device does not publish.
 pub const ValueError = error{ NoAnalysis, Unknowable };
 
-/// The real part of quantity `q`'s value — §11.6.7's "real value". This
-/// process runs no small-signal analysis, so every imaginary part is 0.
+/// Returns the real part of quantity `q`'s value (§11.6.7); no small-signal
+/// analysis runs here, so the imaginary part is always 0. A potential is the
+/// difference of two unknowns. A flow is an unknown for a potential source,
+/// and for a flow source the §5.6 row the device publishes
+/// (`codegen.Options.vpi_contribs`): resistive part plus the backward-Euler
+/// derivative of the reactive part over the step being solved.
 pub fn quantityValue(q: *const root.Obj) ValueError!f64 {
     const l = lib orelse return error.NoAnalysis;
     if (!have_solution) return error.NoAnalysis;
@@ -365,7 +343,7 @@ pub export fn vpi_get_analog_freq() f64 {
 /// or more than one.
 var call_obj: []?u32 = &.{};
 
-/// The call being evaluated: §12.32's calltf is running for it.
+/// The call whose §12.32 calltf is running.
 const Active = struct { obj: u32, result: f64, partials: []f64 };
 var active_call: ?*Active = null;
 
@@ -375,12 +353,11 @@ var active_call: ?*Active = null;
 /// §12.32.3 sampler reads its expression from an acbAbsTime callback.
 var arg_values: std.AutoHashMapUnmanaged(u32, f64) = .empty;
 
-/// `contract.SystfHost.call`, for the library. §12.32.1: calltf is called
+/// `contract.SystfHost.call`, for the library: runs the registration's calltf
 /// "each time the system task or function is invoked during simulation
-/// execution", with the registration's user_data, and inside it
-/// `vpi_handle(vpiSysTfCall, NULL)` is this call. The returned value is what
-/// calltf put on the call (§12.30 "system function calls"); the partials are
-/// what it put on §12.22.1's derivative objects, 0 where it put none.
+/// execution" (§12.32.1), with `vpi_handle(vpiSysTfCall, NULL)` naming this
+/// call. Returns what calltf put on the call (§12.30); `partials` receives
+/// what it put on §12.22.1 derivative objects, 0 elsewhere.
 fn deviceCall(k: usize, args: [*]const f64, n: usize, partials: [*]f64) callconv(.c) f64 {
     @memset(partials[0..n], 0);
     const at = if (k < call_obj.len) call_obj[k] else null;
@@ -437,6 +414,8 @@ pub const Deriv = struct { call: u32, of: c_int, wrt: c_int, value: f64 = 0 };
 var derivs: [64]Deriv = undefined;
 var n_derivs: usize = 0;
 
+/// Returns `h` as a derivative handle, or null unless it points at one handed
+/// out; never dereferences a foreign pointer.
 pub fn asDeriv(h: vpiHandle) ?*Deriv {
     const p = @intFromPtr(h orelse return null);
     const lo = @intFromPtr(&derivs[0]);
@@ -456,6 +435,10 @@ fn position(obj: u32, h: vpiHandle) ?c_int {
     return null;
 }
 
+/// §12.22.1 `vpi_handle_multi(vpiDerivative, ref1, ref2)`: the partial of
+/// the running call's result or argument `ref1` with respect to argument
+/// `ref2`, if derivtf declared it (§12.32.2). Null, with an error, outside a
+/// calltf or for an undeclared pair. At most 64 until `detach`.
 pub fn derivative(ref1: vpiHandle, ref2: vpiHandle) vpiHandle {
     const st = active_call orelse {
         root.fail("NOCALL", "vpi_handle_multi(vpiDerivative): no analog system task or function call is running", .{});

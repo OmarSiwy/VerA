@@ -1,15 +1,9 @@
-//! `zig build test-1364 -- --coverage`: the IEEE 1364-2005 clause inventory.
+//! `zig build test-1364 -- --coverage`: `tests/fixtures/ieee1364/CLAUSES.tsv`
+//! and every `.v` under `ieee1364/` -> the AMS coverage report's work lists
+//! and summary, over IEEE 1364-2005 clauses, plus one row per chapter.
 //!
-//! in:  `tests/fixtures/ieee1364/CLAUSES.tsv` (every heading of the 1364-2005
-//!      table of contents, classified) and every `.v` under `ieee1364/`.
-//! out: the AMS `--coverage` report's work lists and summary line, over
-//!      1364's clauses, plus one row per clause chapter.
-//!
-//! A static inventory, like its AMS twin in `harness.zig`: nothing is compiled
-//! or run here, so a cite says what a fixture claims, not that it passes.
-//! A fixture's cites are its `//! inherited IEEE 1364-2005 <clause>...` lines;
-//! it is a rejection fixture when it opts into the digital reject runner or
-//! carries a `//! reject` line, otherwise a positive one.
+//! Static: nothing is compiled or run, so a cite (`//! inherited IEEE 1364-2005
+//! <clause>`) says what a fixture claims, not that it passes.
 
 const std = @import("std");
 const harness = @import("harness.zig");
@@ -40,6 +34,8 @@ const Chapter = struct {
     classified: usize = 0,
 };
 
+/// Prints the report to stderr. Returns exit code 1 when a cite names no
+/// clause in the table or a CLAUSES.tsv row is rejected, else 0.
 pub fn coverage(init: std.process.Init) !u8 {
     const io = init.io;
     var arena_state: std.heap.ArenaAllocator = .init(init.gpa);

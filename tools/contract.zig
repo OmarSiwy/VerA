@@ -8,24 +8,9 @@
 //! member may be declared here before the engine consumes it. A member with no
 //! LRM justification and no consumer is not a roadmap item — it is deleted.
 //!
-//! What is tracked, and where:
-//!   - a member declared here and not yet consumed says so in ITS OWN comment,
-//!     at the declaration, naming the clause that requires it. That is the only
-//!     place the fact cannot drift away from;
-//!   - the rules the COMPILER does not carry are the `//! xfail` lines in
-//!     tests/fixtures/**.va, which the torture run prints and which FAIL the run
-//!     the day they come true — a ledger that cannot go stale, unlike a table;
-//!   - the ceilings the waves shipped DELIBERATELY, which no xfail line can
-//!     state because no fixture fails on them, are /TODO.md;
-//!   - the wave/epic history those xfails were worked off in is `git log`.
-//!
-//! Three earlier revisions of this header each cited a register that did not
-//! exist — first a `VerA/TODO.md`, then a `tests/lrm-rules/*.tsv` with a `zig
-//! build ledger` step, then a `docs/conformance-plan.md` — and a fourth claimed
-//! no register existed at all, which had stopped being true: /TODO.md was
-//! committed in wave 1 and is the file the first of those was reaching for.
-//! Check the path before you cite it; a pointer to a file nobody can open reads
-//! as evidence that the gap is tracked somewhere.
+//! A member declared here and not yet consumed says so in its own comment,
+//! naming the clause that requires it. Rules the compiler does not yet carry
+//! are the `//! xfail` lines in tests/fixtures/**.va.
 //!
 //! This file CHECKS the contract, and carries two implementations a host may
 //! use: `gm`, the device-routed f64 transcendentals, and `RefFamily`, the

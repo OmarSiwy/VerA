@@ -1,21 +1,12 @@
-//! §12.31 vpi_register_cb, §12.34 vpi_remove_cb, §12.6 vpi_get_cb_info — the
-//! simulation-callback registry, and the dispatch a host drives it through.
+//! The simulation-callback registry: §12.31 vpi_register_cb, §12.34
+//! vpi_remove_cb, §12.6 vpi_get_cb_info, and dispatch. Hosts fire the §12.31.4
+//! action reasons (`endOfCompile` and siblings); `run.zig` fires the time and
+//! value-change reasons and `analog.zig` the §12.31.3 analog ones.
 //!
-//! WHO FIRES WHAT. This file owns the registry and the three action reasons
-//! a host reaches by existing (§12.31.4: cbEndOfCompile, cbStartOfSimulation,
-//! cbEndOfSimulation, via `endOfCompile`/`startOfSimulation`/
-//! `endOfSimulation`). The time and value-change reasons are fired by
-//! `run.zig`, which drives the digital engine: it asks this file which
-//! callbacks are due (`nextDue`, `fireDue`, `fireChange`) and this file calls
-//! them.
-//!
-//! HANDLES. A callback handle is a pointer to a heap `Cb`, valid while it is a
-//! key of `live` — the iterator rule from root.zig, for the same reason: the
-//! pointer came from C and is not read until membership proves it is ours.
-//! §12.34 "after vpi_remove_cb() is called with a handle to the callback, the
-//! handle is no longer valid", so removal deletes the key FIRST. The `Cb`
-//! itself outlives the key while any dispatch is on the stack (a callback may
-//! remove itself, p02_07), and is freed by the next sweep at depth zero.
+//! A handle is a heap `Cb` pointer, valid while it is a key of `live`: C
+//! pointers are never read until membership proves them ours. Removal deletes
+//! the key first (§12.34: the handle "is no longer valid"); the `Cb` survives
+//! until a sweep at dispatch depth zero, so a callback may remove itself.
 
 const std = @import("std");
 const root = @import("root.zig");
@@ -84,8 +75,8 @@ pub const cbStartOfSimulation: c_int = 11;
 pub const cbEndOfSimulation: c_int = 12;
 
 // §12.31.3 the analog reasons. Verilog-AMS names them and numbers none; the
-// numbers are the ones tests/fixtures/ch12_vpi_routines/p03_vpi_analog.h
-// allocated, now vpi_user.h's.
+// numbers are VerA's, shared by vpi_user.h and
+// tests/fixtures/ch12_vpi_routines/p03_vpi_analog.h.
 pub const acbInitialStep: c_int = 701;
 pub const acbFinalStep: c_int = 702;
 pub const acbAbsTime: c_int = 703;
@@ -93,6 +84,7 @@ pub const acbElapsedTime: c_int = 704;
 pub const acbConvergenceTest: c_int = 705;
 pub const acbAcceptedPoint: c_int = 706;
 
+/// Whether `r` is one of the §12.31.3 analog reasons.
 pub fn isAnalogReason(r: c_int) bool {
     return r >= acbInitialStep and r <= acbAcceptedPoint;
 }
@@ -106,6 +98,7 @@ pub const vpiSuppressVal: c_int = 13;
 // The registry
 // ---------------------------------------------------------------------------
 
+/// One registration, owned by this file; see the header for its lifetime.
 pub const Cb = struct {
     reason: c_int,
     rtn: Routine,
@@ -114,8 +107,8 @@ pub const Cb = struct {
     index: c_int,
     /// The registered `time->type`, or vpiSuppressTime when none was given.
     time_type: c_int,
-    /// The registered time structure, COPIED: the application's may be on its
-    /// stack (audit_vpi_event_handles.c registers from one).
+    /// A copy of the registered time structure: the application's may be on
+    /// its stack.
     time: Time,
     /// The registered `value->format`, or vpiSuppressVal.
     value_format: c_int,
@@ -139,13 +132,15 @@ var live: std.AutoHashMapUnmanaged(usize, *Cb) = .empty;
 /// How many dispatches are on the stack; a sweep only runs at zero.
 var depth: u32 = 0;
 
+/// Returns `h` as a live callback, or null; never dereferences a foreign
+/// pointer.
 pub fn asCb(h: vpiHandle) ?*Cb {
     const p = h orelse return null;
     return live.get(@intFromPtr(p));
 }
 
-/// Forget every callback. `root.close()` calls this: callbacks are part of the
-/// session a design was opened for.
+/// Frees every callback and invalidates every handle. `root.close()` calls
+/// it: callbacks belong to the session a design was opened for.
 pub fn reset() void {
     for (cbs.items) |cb| gpa.destroy(cb);
     cbs.clearAndFree(gpa);
@@ -514,10 +509,9 @@ pub fn fireAnalog(reason: c_int) void {
 /// time and backup to an earlier time)". Every callback runs; the solution
 /// is rejected if ANY returned non-zero.
 ///
-/// IMPLEMENTATION-DEFINED, and documented here and in p03_SPEC.md: the LRM
-/// types `cb_rtn` as returning `int` and gives this reason the power to
-/// reject without spelling the encoding. 0 accepts, as 0 is the uneventful
-/// return of every other callback; anything else rejects.
+/// Implementation-defined (also in p03_SPEC.md): the LRM does not say which
+/// `int` rejects. 0 accepts, as 0 is every other callback's uneventful return;
+/// anything else rejects.
 pub fn convergenceRejected() bool {
     var rejected = false;
     const n = cbs.items.len;

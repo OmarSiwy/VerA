@@ -1,30 +1,9 @@
-//! §12.33 vpi_register_systf, §12.32 vpi_register_analog_systf, §12.14
-//! vpi_get_systf_info, §12.13 vpi_get_analog_systf_info, and §12.22's
-//! vpi_handle_multi — the user system task/function registry.
-//!
-//! WHAT IS HERE: the registry, whole. Registration validates what §12.32/
-//! §12.33 constrain — "first character shall be `$`", the type and
-//! sysfunctype constants, and §12.32's uniqueness rule, "The task or function
-//! name shall be unique in the domain in which it is registered. That is, the
-//! same name can be shared by two sets of callbacks, provided that one set is
-//! registered in the digital domain and the other is registered in the
-//! analog" — and hands back a vpiUserSystf handle whose registration the info
-//! routines read back and `vpi_iterate(vpiUserSystf, NULL)` walks.
-//!
-//! THE BUILD-TIME CALLBACKS run: at the end of the build (`buildCalls`,
-//! from cbEndOfCompile's dispatch) every call site of a registered name in
-//! the object model gets its compiletf, sizetf and derivtf, with that call
-//! as §11.6.16 NOTE 1's `vpi_handle(vpiSysTfCall, NULL)`.
-//!
-//! WHAT IS NOT, and why, stated once: CALLTF, the per-evaluation callback.
-//!   - the digital engine refuses a user `$name` call at elaboration (it has
-//!     no user-systf call form), so no digital call site ever exists; and
-//!   - an analog call site is evaluated inside a compiled device, which a
-//!     host binds through `contract.SystfHost` in its own process — not this
-//!     one.
-//! So outside the build there is no active call, and
-//! `vpi_handle_multi(vpiDerivative, …)` — whose handles "can be retrieved"
-//! during the call_tf phase (§12.32.2) — has none to give.
+//! The user system task/function registry: §12.33 vpi_register_systf, §12.32
+//! vpi_register_analog_systf, §12.14/§12.13 their info routines, and §12.22
+//! vpi_handle_multi. Registrations -> vpiUserSystf handles, build-time
+//! compiletf/sizetf/derivtf calls (`buildCalls`), and the lookup `analog.zig`
+//! uses to run an analog calltf per device evaluation. A digital calltf never
+//! runs: the digital engine refuses a user `$name` call at elaboration.
 
 const std = @import("std");
 const root = @import("root.zig");
@@ -44,7 +23,7 @@ pub const vpiSizedFunc: c_int = 4;
 pub const vpiSizedSignedFunc: c_int = 5;
 
 // §12.32.1. Verilog-AMS names these and numbers none of them; the numbers are
-// VerA's, the ones p03_vpi_analog.h allocated before them.
+// VerA's, shared with p03_vpi_analog.h.
 pub const vpiAnalogSysTask: c_int = 740;
 pub const vpiAnalogSysFunc: c_int = 741;
 pub const vpiDerivative: c_int = 730;
@@ -64,6 +43,8 @@ pub const SystfData = extern struct {
     user_data: [*c]u8,
 };
 
+/// §12.32.2 `t_vpi_stf_partials`, what derivtf returns: `count` pairs of
+/// (derivative_of, derivative_wrt), 0 = returned value, 1 = first argument.
 pub const Partials = extern struct {
     count: c_int,
     derivative_of: [*c]c_int,
@@ -82,6 +63,7 @@ pub const AnalogSystfData = extern struct {
     user_data: [*c]u8,
 };
 
+/// A registration's domain; a name is unique within one (§12.32).
 pub const Domain = enum { digital, analog };
 
 /// §11.6.16's call properties. Annex G numbers vpiSysFuncType as vpiFuncType.
@@ -95,6 +77,7 @@ pub fn find(name: []const u8, domain: Domain) ?*Systf {
     return null;
 }
 
+/// One registration, owned by this file until `reset`.
 pub const Systf = struct {
     domain: Domain,
     /// The registration as given, with `tfname` pointing at this record's own
@@ -109,30 +92,24 @@ const gpa = std.heap.smp_allocator;
 var regs: std.ArrayList(*Systf) = .empty;
 var live: std.AutoHashMapUnmanaged(usize, *Systf) = .empty;
 
+/// Returns `h` as a registration, or null unless it is a live one; never
+/// dereferences a foreign pointer.
 pub fn asSystf(h: vpiHandle) ?*Systf {
     const p = h orelse return null;
     return live.get(@intFromPtr(p));
 }
 
-/// The call site whose compiletf, sizetf or derivtf is running — §11.6.16
-/// NOTE 1's `vpi_handle(vpiSysTfCall, NULL)` — as an object index into the
-/// open design. Null outside one.
+/// The call site whose compiletf, sizetf, derivtf or calltf is running, as an
+/// object index into the open design: §11.6.16 NOTE 1's
+/// `vpi_handle(vpiSysTfCall, NULL)`. Null outside one.
 pub var active: ?u32 = null;
 
-/// §12.32.1 / §12.33.1: "Callbacks to the applications pointed to by the
-/// compiletf and sizetf fields shall occur when the simulation data
-/// structure is compiled or built", and §12.32.2's derivtf "can be called
-/// during the build process (similar to sizetf)". A host calls this once,
-/// after the startup routines have registered what they will and before
-/// cbEndOfCompile: for each call site of a registered name, in source order,
-/// compiletf, then (a digital vpiSizedFunc only, §12.33.1) sizetf, then
-/// derivtf — each with the registration's user_data (§12.32.1 "shall be
-/// passed back to the compiletf, sizetf, derivtf, and calltf applications").
-///
-/// Only the analog model has call sites to visit: the digital engine
-/// refuses a user `$name` call at elaboration. calltf is NOT called here:
-/// it runs "each time the system task or function is invoked during
-/// simulation execution", and this process runs no analysis.
+/// Runs the build-time callbacks: for each call site of a registered name, in
+/// source order, compiletf, then sizetf (digital vpiSizedFunc only, §12.33.1),
+/// then derivtf (analog, §12.32.2), each with the registration's user_data.
+/// A host calls this once, after the startup routines and before
+/// cbEndOfCompile. calltf is not called here; `analog.zig` runs it per
+/// evaluation.
 pub fn buildCalls() void {
     const d = &(root.design orelse return);
     for (d.objects, 0..) |o, i| {
@@ -177,6 +154,7 @@ pub fn partialsOf(call: u32) []const Pair {
     return declared.get(call) orelse &.{};
 }
 
+/// Frees every registration and declared partial; handles become invalid.
 pub fn reset() void {
     active = null;
     var dit = declared.valueIterator();

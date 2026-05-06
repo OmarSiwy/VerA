@@ -1,8 +1,4 @@
-//! Diagnostic self-checks.
-//!
-//! Run on std.testing.allocator.
-//!
-//! Cut verbatim from `diag.zig`.
+//! Tests for the diagnostic system, run on std.testing.allocator.
 
 const std = @import("std");
 const diag = @import("../diag.zig");
@@ -323,8 +319,7 @@ test "render: multi-byte UTF-8 counts codepoints, not bytes" {
     defer arena_state.deinit();
     const arena = arena_state.allocator();
 
-    // Eight two-byte µ before the token: sixteen BYTES, eight columns. A
-    // byte-counting `displayCol` drew the caret eight columns too far right.
+    // Eight two-byte µ before the token: sixteen bytes, eight columns.
     const src = "µµµµµµµµbadtok\n";
     var bag = diag_bag.Bag.init(arena);
     try bag.setSingleFile("u.va", src);
