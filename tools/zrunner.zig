@@ -1,44 +1,16 @@
-//! zrunner - is a simple test runner for zig with detailed report
-//!           and support of selective running tests in modules.
-//!
-//! Usage:
-//!
-//!   If the build step to run tests is named "test":
-//!   zig build test -- [options]
+//! zrunner: the test runner for every module's test artifact (`zig build
+//! test -- [options]`); runs the tests and prints a per-module report. Set
+//! `CLICOLOR_FORCE` for colour when the build captures the output.
 //!
 //! Options:
-//!
-//!   -m <str>, --modules-only=<str>    Run only tests from modules whose names contain a given substring <str>.
-//!   -t <str>, --tests-only=<str>      Run only tests  whose names contain a given substring <str>.
-//!   --failed-only                     Include in the report only failed tests.
-//!   --no-stack-trace                  Do not print a stack trace of failed tests.
-//!   --colors=<zon>                    Parses <zon> as `FileReporter.Colors` and uses them printing test report.
-//!                                     See the source code of `FileReporter.Colors` for more details.
-//!   --no-colors                       Do not use ascii escape code to make output colorful.
-//!                                     Ignore the '--colors' option.
-//!   --stdout                          Print output to the stdout. Default.
-//!   --stderr                          Print output to the stderr.
-//!   --file=<file path>                Create and open a file <file path> to print an output to it.
-//!
-//! Configuration example:
-//! ```zig
-//!   // Prepare zrunner
-//!   const test_runner = std.Build.Step.Compile.TestRunner{
-//!       .path = b.path("zrunner.zig"),
-//!       .mode = .simple,
-//!   };
-//!   const tests_module = b.addTest(.{
-//!       .name = "my module", // this name is used in the test report
-//!       .root_module = my_module,
-//!       .test_runner = test_runner,
-//!   });
-//!   const run_module_tests = b.addRunArtifact(tests_module);
-//!   // this forces using colors in some cases when they would be omitted otherwise
-//!   run_module_tests.setEnvironmentVariable("CLICOLOR_FORCE", "true");
-//! ```
-//!
-//! Version: 1.0.0
-//!
+//!   -m <str>, --modules-only=<str>  only modules whose names contain <str>
+//!   -t <str>, --tests-only=<str>    only tests whose names contain <str>
+//!   --failed-only                   report only failed tests
+//!   --no-stack-trace                no stack trace for failed tests
+//!   --colors=<zon>                  `FileReporter.Colors` as ZON
+//!   --no-colors                     no escape codes; ignores `--colors`
+//!   --stdout (default), --stderr, --file=<path>   where the report goes
+
 const std = @import("std");
 const builtin = @import("builtin");
 const TestFn = std.builtin.TestFn;
@@ -232,7 +204,7 @@ fn writeTestResults(
     }
 }
 
-/// Meta information about a single test
+/// One test and the namespace it was declared in.
 const Test = struct {
     /// A name of the test
     name: []const u8 = undefined,
@@ -261,7 +233,7 @@ const Test = struct {
         return instance;
     }
 
-    /// Runs the test and builds the result. Marks a test thrown the error.SkipZigTest as skipped.
+    /// Runs the test and returns its result; `error.SkipZigTest` reports as skipped.
     fn run(
         self: Test,
         arena: *std.heap.ArenaAllocator,
@@ -318,7 +290,7 @@ const Test = struct {
     }
 };
 
-/// A report about run a single test
+/// The outcome of one test.
 pub const TestResult = union(enum) {
     passed: struct { @"test": Test, duration: Duration, is_mem_leak: bool },
     failed: struct { @"test": Test, duration: Duration, err: anyerror, stack_trace: []const u8, is_mem_leak: bool },
@@ -349,15 +321,11 @@ pub const TestResult = union(enum) {
     }
 };
 
-/// A report about run of all tests.
+/// The outcome of every test in one artifact.
 const Report = struct {
     process_name: []const u8,
     test_results: []TestResult,
-    // Widths: `u16`. These count the tests in ONE compilation artifact, and
-    // the analysis module passed 255 the day the last analysis kinds were
-    // registered, which a `u8` met by overflowing the runner rather than by
-    // reporting anything. A `u16` covers 65535 tests in one artifact, which is
-    // two orders above the largest here.
+    // `u16`: counts per artifact; one module already has more than 255 tests.
     passed_count: u16 = 0,
     failed_count: u16 = 0,
     skipped_count: u16 = 0,
@@ -365,7 +333,7 @@ const Report = struct {
     is_mem_leak: bool = false,
 };
 
-/// A representation of the time duration with human readable format.
+/// A duration that formats in human-readable units.
 const Duration = struct {
     minutes: u6 = 0,
     seconds: u6 = 0,
@@ -429,7 +397,7 @@ const Duration = struct {
     }
 };
 
-/// Writes to a file a tests report as an optionally colored text.
+/// Writes the test report to a file, optionally coloured.
 const FileReporter = struct {
     const Color = std.Io.Terminal.Color;
 
