@@ -1,8 +1,5 @@
-//! Building the executable: device.zig + runner into one `zig build-exe`.
-//!
-//! In: the device and runner text. Out: a path to the built testbench, or the compiler's error.
-//!
-//! Cut verbatim from `tb.zig`.
+//! Testbench build: device.zig and runner text in, one `zig build-exe` (or
+//! `build-lib`) out, as the binary's path or the compiler's stderr.
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -11,42 +8,39 @@ const orchestrator = @import("../orchestrator.zig");
 const Io = tb.Io;
 const Allocator = tb.Allocator;
 
-// ---------------------------------------------------------------------------
-// Building the executable
-// ---------------------------------------------------------------------------
-
+/// How `buildExe` builds and where it writes.
 pub const BuildOptions = struct {
     /// Scratch: `device.zig` and `tb.zig` are written here, and the binary
     /// lands here too unless `out_path` says otherwise.
     work_dir: []const u8,
     /// Root of the `contract` module the generated device imports.
     contract: []const u8,
-    /// Artifact name — the module name, so the binary is `./<module>`.
+    /// Artifact name: the module name, so the binary is `./<module>`.
     name: []const u8,
     out_path: ?[]const u8 = null,
     zig_exe: []const u8 = "zig",
-    /// `-O` for the testbench. Debug by default; see `buildExe` for why that is
-    /// not the timid choice.
+    /// `-O` for the testbench. Debug by default: see `buildExe`.
     optimize: std.builtin.OptimizeMode = .Debug,
     /// Null is `Backend.auto(optimize, <this host>)`.
     backend: ?orchestrator.Backend = null,
-    /// The runner is `renderMixed`'s: it imports the digital engine (`sim`) and
-    /// `diag`, which are compiled from the VerA source tree the contract sits
-    /// in (`<root>/tools/contract.zig`). Only mixed-signal testbenches pay the
-    /// extra build; every other one is byte-for-byte the build it always was.
+    /// The runner is `renderMixed`'s: it imports `sim` and `diag`, compiled
+    /// from the VerA tree `contract` sits in (`<root>/tools/contract.zig`).
     mixed: bool = false,
     /// Build `renderVpiLib`'s runner as a shared library for a Clause 12
     /// analog host to load, instead of an executable.
     shared_lib: bool = false,
 };
 
+/// Outcome of `buildExe`. Either payload is owned by the `gpa` passed to
+/// `buildExe`; release it with `deinit`.
 pub const BuildResult = union(enum) {
-    /// Path of the built binary (borrowed from the caller's allocator).
+    /// Path of the built binary.
     ok: []const u8,
     /// `zig`'s stderr, verbatim. Generated code that does not compile is an
-    /// ENGINE bug, and the only useful report is what the compiler said.
+    /// engine bug, and this is the report.
     failed: []const u8,
 
+    /// Frees the payload; `gpa` must be the allocator `buildExe` was given.
     pub fn deinit(self: BuildResult, gpa: Allocator) void {
         switch (self) {
             .ok, .failed => |p| gpa.free(p),
@@ -54,22 +48,15 @@ pub const BuildResult = union(enum) {
     }
 };
 
-/// device.zig + runner.zig → one native binary. A null `device_zig` builds
-/// `runner_zig` alone over `sim` and `diag` (`opts.mixed` must be set): an
-/// IEEE 1364 design's executable, which has no analog device.
+/// Builds device.zig and the runner into one native binary under
+/// `opts.work_dir`. A null `device_zig` builds `runner_zig` alone over `sim`
+/// and `diag` (an IEEE 1364 design); `opts.mixed` must then be set.
+/// Spawns `opts.zig_exe` and blocks until it exits.
 ///
-/// `build-exe` directly rather than through orchestrator.zig: that path exists
-/// to produce a hot-reloadable `.so` with a generation counter and an incremental
-/// resident compiler, and none of that applies to a testbench that is built once
-/// and run once.
-///
-/// `opts.optimize` defaults to Debug, and NOT because floats would move: Zig has
-/// no `-ffast-math`, so float arithmetic is strict IEEE in every optimize mode
-/// unless the code itself asks for `@setFloatMode(.optimized)`, which generated
-/// devices do not. The two real reasons are that a testbench runs for
-/// microseconds and compiles for seconds — so compile time is the whole cost —
-/// and that Debug keeps the safety checks on, which turns a codegen bug into a
-/// loud trap instead of a plausible wrong number.
+/// Calls `build-exe` directly: orchestrator.zig's `.so` path serves hot
+/// reload, which a build-once testbench does not need. Debug is the default
+/// because compile time dominates and safety checks turn a codegen bug into a
+/// trap instead of a plausible wrong number.
 pub fn buildExe(
     gpa: Allocator,
     io: Io,
@@ -82,9 +69,7 @@ pub fn buildExe(
     var dir = try cwd.openDir(io, opts.work_dir, .{});
     defer dir.close(io);
 
-    // One arena for the command line. Every element of it is a `-M`, a `-O` or
-    // a path join whose lifetime is this call, so a matching `defer free` per
-    // string buys nothing over freeing the lot at once.
+    // Every argv string lives for this call only.
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -162,9 +147,9 @@ pub fn buildExe(
     return .{ .ok = bin };
 }
 
-/// Write one module's source into the work directory and return the `-M` that
-/// binds it. The file is `<name>.<suffix>.zig` so two hosts sharing a work root
-/// cannot overwrite each other's device.
+/// Writes one module's source to `<name>.<suffix>.zig` in `dir` and returns
+/// the `-M<binding>=<path>` flag, allocated in `arena`. The name-qualified file
+/// keeps two artifacts sharing a work root from overwriting each other.
 pub fn bind(
     arena: Allocator,
     io: Io,
