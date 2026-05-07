@@ -1,10 +1,7 @@
-//! Directive parsing: a fixture's `//!` header (analysis, bias, time, sweep, noise, ...).
-//!
-//! In: the fixture source. Out: the testbench plan (analyses, stimuli, expected rows).
-//!
-//! LRM clauses this file's code cites: §1.3.1.1, §2.4, §2.6, §3.6.3, §4.6.3, §4.6.4.3, §4.6.4.4, §4.6.4.6, §5.4.2, §5.4.3, §6.5.2.
-//!
-//! Cut verbatim from `tb.zig`.
+//! Fixture `//!` directive parsing: raw .va source in, `tb.Directives` out
+//! (analysis, bias, time, sweeps, expected noise/acstim/qsite tables, ...).
+//! LRM: §1.3.1.1, §2.4, §2.6, §3.6.3, §4.6.3, §4.6.4.3, §4.6.4.4, §4.6.4.6,
+//! §5.4.2, §5.4.3, §6.5.2.
 
 const std = @import("std");
 const tb = @import("../tb.zig");
@@ -20,13 +17,9 @@ const Directives = tb.Directives;
 const NoiseWant = tb.NoiseWant;
 const AcWant = tb.AcWant;
 
-// ---------------------------------------------------------------------------
-// Directive parsing
-// ---------------------------------------------------------------------------
-
-/// Read the `//!` lines out of RAW source — before the preprocessor, which
-/// deletes comments (§2.4). Lines that are not directives are ignored, so this
-/// is safe to run over any .va.
+/// Parses the `//!` lines of RAW source, before the preprocessor deletes
+/// comments (§2.4). Other lines are ignored, so any .va is valid input.
+/// Every slice in the result is allocated in `arena`.
 pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var d: Directives = .{};
     var params: std.ArrayList(Binding) = .empty;
@@ -107,10 +100,8 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
                 try plusargs.append(arena, try arena.dupe(u8, arg));
             }
         } else if (std.mem.eql(u8, kw, "reject")) {
-            // The whole rest of the line is ONE substring, verbatim: the
-            // expectations being migrated are message fragments like
-            // `module instantiation is not supported`, which contain spaces and
-            // commas and must not be split on either.
+            // The whole rest of the line is ONE substring, verbatim: message
+            // fragments contain spaces and commas.
             if (rest.len == 0) return error.BadSyntax;
             try reject.append(arena, try arena.dupe(u8, rest));
         } else if (std.mem.eql(u8, kw, "warn")) {
@@ -161,15 +152,13 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             if (!validSection(rest)) return error.BadLrmSection;
             try lrm.append(arena, try arena.dupe(u8, rest));
         } else if (std.mem.eql(u8, kw, "inherited")) {
-            // `IEEE 1364-2005 18.1 (...)` — a clause §1.1 inherits whole, in
-            // the spelling the digital fixtures already use. NOT an `lrm`
-            // cite: `--coverage` counts clauses of THIS LRM, and 1364's are
-            // not (`harness.zig`'s `clausePrefix`). Checked, then dropped;
-            // measure B is hand-read, so nothing consumes it yet.
+            // `IEEE 1364-2005 18.1 (...)`: a clause §1.1 inherits whole. Not
+            // an `lrm` cite, since `--coverage` counts this LRM's clauses only.
+            // Checked here, then dropped: tests/ieee1364.zig reads these lines
+            // from raw source for measure B (`zig build test-1364 -- --coverage`).
             if (!validInherited(rest)) return error.BadLrmSection;
         } else if (std.mem.eql(u8, kw, "xfail")) {
-            // The whole rest of the line is the reason, verbatim — it is prose
-            // a human reads out of a failing run, not an operand.
+            // The whole rest of the line is the reason: prose for a human.
             if (rest.len == 0) return error.BadSyntax;
             d.xfail = try arena.dupe(u8, rest);
         } else if (std.mem.eql(u8, kw, "print")) {
@@ -207,11 +196,9 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     return d;
 }
 
-/// Is this a `//! lrm` cite — `5.8`, `4.5.11`, `A.8.3`, `B`?
-///
-/// A chapter number or an annex letter, then dotted numbers. Loose on purpose:
-/// nothing here has the LRM's table of contents, so this catches a typo or an
-/// empty cite, not a section that does not exist.
+/// Returns whether `s` is a `//! lrm` cite: a chapter number or annex letter,
+/// then dotted numbers (`5.8`, `A.8.3`, `B`). Syntax only: a well-formed
+/// section the LRM does not have still passes.
 pub fn validSection(s: []const u8) bool {
     var it = std.mem.splitScalar(u8, s, '.');
     const first = it.first();
@@ -221,9 +208,8 @@ pub fn validSection(s: []const u8) bool {
     return true;
 }
 
-/// Is this an `//! inherited` cite — `IEEE 1364-2005 17.2.9`, optionally
-/// followed by more clauses or a parenthesised note? Only the first clause is
-/// checked, with `validSection`'s own looseness.
+/// Returns whether `s` is an `//! inherited` cite (`IEEE 1364-2005 17.2.9`,
+/// optionally more clauses or a note). Only the first clause is checked.
 fn validInherited(s: []const u8) bool {
     const std_name = "IEEE 1364-2005 ";
     if (!std.mem.startsWith(u8, s, std_name)) return false;
@@ -231,24 +217,20 @@ fn validInherited(s: []const u8) bool {
     return validSection(rest[0 .. std.mem.indexOfAny(u8, rest, " ,") orelse rest.len]);
 }
 
+/// Returns whether `s` is a nonempty run of ASCII decimal digits.
 pub fn digits(s: []const u8) bool {
     if (s.len == 0) return false;
     for (s) |c| if (c < '0' or c > '9') return false;
     return true;
 }
 
-/// Is this a `//! noise` entry — `thermal(p,n)`, `flicker(d,s)`?
-///
-/// The KIND is checked and the node names are not. A misspelled kind is a
-/// fixture that can never pass and whose failure would say nothing about the
-/// model, so it is worth catching at parse time; a misspelled node is a fixture
-/// whose `want` genuinely differs from the table, which is the assertion doing
-/// its job. Nothing here could check a node anyway — directives are read out of
-/// raw source, before the compiler has been told what unknowns exist.
+/// Returns whether `s` is a `//! noise` topology such as `thermal(p,n)#0`.
+/// The kind is checked; node names are not, since directives are parsed before
+/// the unknowns exist and a misspelled node fails the assertion anyway.
 fn validNoiseEntry(s: []const u8) bool {
     const open = std.mem.indexOfScalar(u8, s, '(') orelse return false;
-    // `#<source>` after the branch is §4.6.4.6's correlation id — see the
-    // `noise` directive doc. `#null` is a row with no identity declared.
+    // `#<source>` after the branch is §4.6.4.6's correlation id; `#null` is
+    // a row with no identity declared.
     const hash = std.mem.indexOfScalarPos(u8, s, open, '#') orelse return false;
     if (hash == 0 or s[hash - 1] != ')') return false;
     const src = s[hash + 1 ..];
@@ -267,12 +249,9 @@ fn validNoiseEntry(s: []const u8) bool {
         std.mem.trim(u8, inner[comma + 1 ..], " \t").len != 0;
 }
 
-/// One `//! noise` line: the topology, then whatever `key=value` fields follow.
-///
-/// The topology is taken as the run from the start of the line to the first
-/// space AFTER the `#`, not to the first space anywhere, because the branch may
-/// be written `thermal(p, n)#0` — `validNoiseEntry` already trims inside the
-/// parentheses, so splitting on any space would cut a legal entry in half.
+/// Parses one `//! noise` line: the topology, then `key=value` fields.
+/// The topology ends at the first space after the `#`, because the branch may
+/// contain spaces (`thermal(p, n)#0`).
 fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
     const hash = std.mem.indexOfScalar(u8, s, '#') orelse return error.BadSyntax;
     var end = hash + 1;
@@ -313,15 +292,9 @@ fn parseNoiseEntry(arena: Allocator, s: []const u8) Error!NoiseWant {
     return w;
 }
 
-/// One `//! acstim` line: the branch, then whatever `key=value` fields follow.
-///
-/// Simpler than `parseNoiseEntry` because §4.6.3 has less to say: there is no
-/// kind tag (a stimulus has exactly one form) and no `#source` (§4.6.4.6's
-/// correlation is a property of noise generators, and two stimuli at the same
-/// phase are not "correlated", they are two sources). So the topology is the
-/// parenthesised branch alone, and it is CANONICALISED rather than compared
-/// verbatim — `(p, n)` and `(p,n)` are the same want, and the device's own
-/// spelling has no space in it.
+/// Parses one `//! acstim` line (§4.6.3): the branch, then `key=value` fields.
+/// A stimulus has no kind tag and no `#source`. The branch is canonicalised to
+/// `(p,n)`, the device's spelling, so `(p, n)` compares equal.
 fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
     if (s.len == 0 or s[0] != '(') return error.BadSyntax;
     const close = std.mem.indexOfScalar(u8, s, ')') orelse return error.BadSyntax;
@@ -350,64 +323,26 @@ fn parseAcEntry(arena: Allocator, s: []const u8) Error!AcWant {
     return w;
 }
 
-/// `V(a)`, `x[a]` and a bare `a` all name the unknown `a`. The first two are
-/// how a Verilog-A author already writes it and how the runner indexes it; both
-/// are accepted so a fixture is not forced to learn a third spelling.
+/// Returns the emitted `U` enum member a directive name refers to.
+/// `V(a)`, `x[a]` and `a` all name node `a`. `I(a)` is the §5.4.2 flow
+/// `flow(a,gnd)` (§1.3.1.1: every ground is `gnd`), `I(a,b)` is `flow(a,b)`
+/// and `I(<p>)` the §5.4.3 port flow `flow(<p>)`. A name that is not a Zig
+/// identifier goes through `naming.sanitize`, as codegen spells `U`; a legal
+/// identifier is taken as written, so an escaped member (`flowZ28pZ2cnZ29`)
+/// is not escaped twice. Fails with `error.BadUnknownName` for a branch
+/// potential `V(a,b)`, which is not an unknown. Result may alias `raw` or be
+/// allocated in `arena`.
 ///
-/// `I(...)` is NOT the same unknown as `V(...)` and does not strip to the bare
-/// name. §5.4.2 makes a flow its OWN unknown — lower.zig `flowUnknown` interns
-/// it as `flow(hi,lo)`, `portFlowUnknown` as `flow(<p>)` — so `I(a)` is the
-/// branch (a, ground) flow, spelled `flow(a,gnd)` because §1.3.1.1 collapses
-/// every ground onto the one reference node named `gnd`, and `I(<a>)` is the
-/// §5.4.3 port flow. Stripping to `a` bound the node POTENTIAL instead, which is
-/// a different quantity that happens to have a name in scope: silently the wrong
-/// number rather than a miss `ix()` could report.
-///
-/// `ix()` looks the result up in the emitted `U` enum, whose members codegen
-/// built with `naming.sanitize`, so a name that is not a legal Zig identifier
-/// has to go through the same function — a §3.6.3 vector element is `p[0]` in
-/// the source and `pZ5b0Z5d` in the enum.
-///
-/// A name that IS already a legal identifier is taken as written, and that is
-/// not an optimisation: a §5.4.2 branch-flow unknown has no source spelling at
-/// all, so a fixture that biases one writes the escaped form directly
-/// (`flowZ28pZ2cnZ29`), and sanitizing that again would escape its `Z`s.
-/// `isValidId` also rejects Zig keywords, so a net called `fn` still gets its
-/// trailing `Z`.
-///
-/// WHY THIS STAYS A TEXT→TEXT MAPPING, after wave 11 keyed the unknowns on
-/// `{kind, node pair}` and took the same re-derivation out of `codegen`. There
-/// is no `Lower` here to ask: `parse` runs on the fixture's `//!` lines with an
-/// arena and nothing else (its tests call it on a string), and the answer is
-/// consumed by `ix()`, which resolves a name against the emitted `U` enum at the
-/// runner's COMPILE time. So this file cannot hold a node index, only a member
-/// name, and the convention above is the whole interface. What pins the two ends
-/// together is codegen.zig's "the `U` block is the SPELLING contract" test and
-/// this file's own §5.4.2 test, which spell the same members from both sides.
-///
-/// One residual, and it is the directive language's, not lowering's: `I(a)` on a
-/// module that ALSO has a plain net called `gnd` is ambiguous here, because
-/// `flow(a,gnd)` is what both (a, reference) and (a, gnd) print before
-/// `uniqueSpelling` suffixes the later one. Such a fixture writes the member as
-/// `emitTopology` prints it. See `ch05_analog_behavior/
-/// net_named_gnd_is_not_ground.va`, which reads both currents in the model
-/// instead and needs no binding at all.
+/// This is a text mapping because `ix()` resolves it against `U` at the
+/// runner's compile time. `I(a)` is ambiguous on a module with a net named
+/// `gnd`; such a fixture writes the member as `emitTopology` prints it.
 pub fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     var s = std.mem.trim(u8, raw, " \t");
     if (std.mem.startsWith(u8, s, "V(") and std.mem.endsWith(u8, s, ")")) {
         s = std.mem.trim(u8, s[2 .. s.len - 1], " \t");
-        // §5.4.2's branch POTENTIAL is not a solver unknown. `node_voltages`
-        // holds nets; a branch potential is V(a) - V(b), derived from two of
-        // them, so there is no row to pin and `//! bias V(a,c) = 0.6` is asking
-        // for something that does not exist.
-        //
-        // Diagnosed HERE, at directive-parse time, because of what used to
-        // happen instead: the name fell through to `naming.sanitize`, `a, c`
-        // became the identifier `aZ2cZ20c`, and the generated testbench failed
-        // to build with `//! names unknown aZ2cZ20c` — which `torture.zig`
-        // reports as "an ENGINE bug", since a testbench that will not compile
-        // normally is one. A fixture's typo was indistinguishable from a
-        // compiler defect.
+        // §5.4.2's branch potential V(a,c) is derived from two nets and has
+        // no row to pin. Refused here: sanitized into an identifier, it would
+        // fail the testbench build, which the harness reports as an engine bug.
         if (std.mem.indexOfScalar(u8, s, ',') != null) return error.BadUnknownName;
     }
     if (std.mem.startsWith(u8, s, "I(") and std.mem.endsWith(u8, s, ")")) {
@@ -426,19 +361,9 @@ pub fn unknownName(arena: Allocator, raw: []const u8) Error![]const u8 {
     return naming.sanitize(buf, s) catch unreachable;
 }
 
-/// `name = value` pairs, split on TOP-LEVEL commas.
-///
-/// Top-level, because §5.4.2's two-terminal branch flow is spelled `I(a,b)` and
-/// its comma separates the access function's ARGUMENTS, not two bindings. A
-/// plain `splitScalar(',')` cut it in half, so `//! bias I(a,b) = 0.25` was
-/// `error.BadSyntax` while `//! sweep I(a,b) = 0.25` — which splits on the first
-/// `=` and never sees the comma — worked. That asymmetry was a consequence of
-/// this parser, not a decision about the directive language: `bias` and `sweep`
-/// now spell an unknown the same way.
-///
-/// Only `(` nests. A `//!` name is an access function over identifiers, and the
-/// one other bracket a fixture writes — a §6.5.2 element, `d[1]` — cannot
-/// contain a comma.
+/// Appends the `name = value` pairs in `rest`, split on top-level commas so
+/// the comma in §5.4.2's `I(a,b)` stays inside its name. Only `(` nests: a
+/// §6.5.2 element `d[1]` holds no comma. Names are resolved by `unknownName`.
 pub fn parseBindings(arena: Allocator, rest: []const u8, out: *std.ArrayList(Binding)) Error!void {
     var depth: u32 = 0;
     var start: usize = 0;
@@ -478,22 +403,16 @@ fn parseNumbers(arena: Allocator, rest: []const u8) Error![]const f64 {
     return out.items;
 }
 
-/// A directive number. §2.6's engineering suffixes are accepted because a
-/// Verilog-A author writes `1u`, not `1e-6`, three lines below in the source.
+/// Parses a directive number, accepting §2.6 scale factors (`1u`).
 pub fn number(raw: []const u8) Error!f64 {
     const t = std.mem.trim(u8, raw, " \t");
     if (t.len == 0) return error.BadNumber;
     const exp = Lexer.scaleExp(t[t.len - 1]) orelse
         return std.fmt.parseFloat(f64, t) catch error.BadNumber;
 
-    // The suffix is folded into the EXPONENT and parsed once, which is what
-    // `Lexer.scaleExp` exists to make possible and what the model's own lexer
-    // does with the same spelling. This used to multiply by 1e-6 instead, and
-    // `200 * 1e-6` is 1.9999999999999998e-4 where `200e-6` is 2.0e-4 — so a
-    // `//! time 200u` point compared LESS THAN a `200u` written in the model,
-    // and every `($abstime < 200u) || <claim>` guard was true at 200u. The
-    // fixtures that use that idiom to fire an assertion at their last timepoint
-    // were asserting nothing there.
+    // The suffix becomes an exponent and the text is parsed once, as the
+    // model's lexer does: `200 * 1e-6` is not `200e-6`, and a `//! time 200u`
+    // point must equal `200u` written in the model.
     const head = std.mem.trim(u8, t[0 .. t.len - 1], " \t");
     if (head.len == 0) return error.BadNumber;
     var buf: [64]u8 = undefined;

@@ -1,16 +1,8 @@
-//! The scalar family in the emitted text (`contract.family_fns`): every body
-//! is generic over a FAMILY, each real typed by the unknowns it may depend on.
-//!
-//! In: a MIR value's unknown set (`Analysis.unknownDeps`). Out: the mask
-//! literals and the `zTo`/`zOf` wrappers the renderers splice in, and the
-//! per-device `lane_masks` table. The helpers the text calls are
-//! `kernel_text.family_txt` and `family_dev_txt`.
-//!
-//! A real value is typed `zOf(S, m)`, `m` the unknowns it may depend on. Zig
-//! infers every other value's type from its expression, so a mask is written
-//! only where values MERGE: a hoisted slot, a lazy `if`'s arms, an array
-//! element, a kernel's result, a returned field, a residual row. `zTo` widens
-//! into the merge and is a compile error on a value whose lanes the mask
+//! Scalar family text (`contract.family_fns`): a MIR value's unknown set
+//! (`Analysis.unknownDeps`) in, the mask literals, `zTo`/`zOf` wrappers and
+//! the per-device `lane_masks` table out. A mask is written only where values
+//! merge (hoisted slot, lazy `if` arms, array element, kernel result, returned
+//! field, residual row); `zTo` fails to compile on a value whose lanes the mask
 //! misses, so an unsound mask cannot drop a lane silently.
 
 const std = @import("std");
@@ -21,32 +13,31 @@ const gen_dispatch = @import("dispatch.zig");
 const Mir = @import("ir").Mir;
 const Error = codegen.Error;
 
-/// The unknowns `v` may depend on: its mask before `zdr` cuts it.
+/// Returns the unknowns `v` may depend on: its mask before `zdr` cuts it.
 pub fn mask(self: *const Gen, v: Mir.Value) u64 {
     return self.an.unknownDeps(v);
 }
 
-/// `zTo(S, 0x<m>, ` — the caller writes the value and the closing `)`.
+/// Writes `zTo(S, 0x<m>, `; the caller writes the value and the closing `)`.
 pub fn openTo(self: *Gen, m: u64) Error!void {
     try self.b("zTo(S, 0x{x}, ", .{m});
 }
 
-/// `zOf(S, 0x<m>)`, as text for a `{s}` slot.
+/// Returns `zOf(S, 0x<m>)` as text for a `{s}` slot, allocated in the arena.
 pub fn ofText(self: *Gen, m: u64) Error![]const u8 {
     return std.fmt.allocPrint(self.arena, "zOf(S, 0x{x})", .{m});
 }
 
-/// One real the shared core declares at mask `m`, for `lane_masks`: the
-/// values a host's `eval` and `q` carry. `setup` runs on the value scalar,
-/// and the dry run of a body (`probeBody`) declares nothing.
+/// Records one real the shared core declares at mask `m`, for `lane_masks`.
+/// Ignored in `setup` (value scalar) and in a `probeBody` dry run.
 pub fn note(self: *Gen, m: u64) Error!void {
     if (self.probing or !self.emitting_common or self.su.mode) return;
     try self.fam_masks.append(self.arena, m);
 }
 
-/// `lane_masks`: every distinct mask a real was declared at, cut to the
-/// emitted `deriv_reads`, with how many were. A host sizes its lane types
-/// from it; the device fixes no width.
+/// Writes `lane_masks`: every distinct mask a real was declared at, cut to
+/// `deriv_reads`, with its use count. A host sizes its lane types from it.
+/// Sorts `fam_masks` in place.
 pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
     const ms = self.fam_masks.items;
     for (ms) |*m| m.* &= deriv_reads;
@@ -67,18 +58,15 @@ pub fn emitLaneMasks(self: *Gen, deriv_reads: u64) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// `contract.Constant`: `.g` when ∂eval/∂x cannot depend on x, `.c` when
-/// ∂q/∂x cannot, both over every x, for the card and instance the host holds
-/// and at every analysis point. False is always sound.
+/// Returns `contract.Constant`: `.g` when ∂eval/∂x cannot depend on x, `.c`
+/// when ∂q/∂x cannot, at every x and analysis point. False is always sound.
 ///
-/// A value is AFFINE in x when its lanes are a function of the card alone: a
-/// probe, a card constant, a sum or negation of affine values, an affine value
-/// times or divided by a card constant, or a select or join on a card
-/// constant over affine arms. A CARD CONSTANT varies with neither x nor
-/// anything the host rewrites between evaluations (`gen_call.readsHostState`):
-/// `$abstime * V` has a constant partial at every x and a different one at
-/// every time. `.g` holds when every contribution's resistive value is affine
-/// and its retention flag a card constant, `.c` the same for every charge.
+/// A value is affine in x when its lanes depend on the card alone: a probe, a
+/// card constant, a sum or negation of affine values, an affine value times or
+/// divided by a card constant, or a select or join on a card constant over
+/// affine arms. A card constant varies with neither x nor host-rewritten state
+/// (`gen_call.readsHostState`): `$abstime * V` has a constant partial at every
+/// x and a different one at every time.
 pub fn constant(self: *Gen) Error!struct { g: bool, c: bool } {
     const nv = self.an.nv;
     const host = try self.arena.alloc(bool, nv);

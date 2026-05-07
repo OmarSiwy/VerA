@@ -1,25 +1,9 @@
-//! Setup: the solve-invariant slice of the model, computed once.
-//!
-//! In: `plan/setup.zig`'s answer (which values are the same at every Newton
-//! iterate and time point) and the core's plan. Out: which of those the
-//! per-eval core reads (the setup ROOTS), `pub const Setup`, and `pub fn
-//! setup` computing them into `Instance.su` once per model card, instance
-//! and temperature.
-//!
-//! NOT a pure plan: the roots are the core's slice with every candidate a
-//! leaf, which is `UnitPlan.analyze`, and `setup` is emitted through the same
-//! relooper as the core. The classifier is `plan/setup.zig`.
-//!
-//! LRM clauses this file's code cites: §4.4, §5.10.2, §9.4, §9.15.
-//!
-//! ROOTS. A candidate is an invariant, non-constant `inst_result` of real or
-//! integer type defined outside every loop (a loop value is per iteration).
-//! The roots are exactly the candidates the core's slice — and the §9.4
-//! display unit's — reaches when candidates are leaves: what eval reads,
-//! nothing more. Reals first, then integers, each by ascending value.
-//!
-//! Functions take `self: *Gen` and are called directly, `gen_setup.f(self,
-//! ...)`; `codegen.zig` aliases only what other modules call.
+//! `plan/setup.zig`'s solve-invariant values + the core's plan -> the setup
+//! roots (the invariant values the per-eval core and §9.4 display unit read),
+//! `pub const Setup`, and `pub fn setup` computing them into `Instance.su` once
+//! per model card, instance and temperature. `setup` is emitted through the
+//! same slicer and relooper as the core.
+//! LRM: §4.4, §5.10.2, §9.4, §9.15.
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");
@@ -34,7 +18,7 @@ const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
 
-/// The roots and the emission state of `setup` — one `Gen` field (`Gen.su`).
+/// The roots and the emission state of `setup` (`Gen.su`).
 pub const Setup = struct {
     /// Value → index in `Setup.r` (reals) or `Setup.i` (integers), or
     /// `none_u32`. Every body but `setup` reads a root as a leaf
@@ -44,10 +28,12 @@ pub const Setup = struct {
     /// `real` of them are reals and `int` integers. A root with the same op
     /// and operands as an earlier one is not listed: its `idx` is that one's.
     vals: []Mir.Value = &.{},
+    /// How many of `vals` are reals.
     real: u32 = 0,
+    /// How many of `vals` are integers.
     int: u32 = 0,
     /// `Options.setup`: `false` emits the un-split device, every value
-    /// computed in eval — the bit-for-bit oracle the split is checked against.
+    /// computed in eval.
     on: bool = true,
     /// Set while `setup` is being emitted: `emitReturn` stores the roots and
     /// `emitTerm` takes a per-eval branch `then`.
@@ -56,31 +42,33 @@ pub const Setup = struct {
     stop: bool = false,
     /// Emitting text only a false `zs_stop` reaches: a per-eval branch's
     /// `else` arm, or the body of the loop a stop precedes. It never runs,
-    /// so its exits store nothing — on `hisimhv_va` each of 155 dead exits
-    /// repeated all 418 root stores, 5 of the file's 7 MB.
+    /// so its exits store nothing.
     dead: bool = false,
-    /// Live exits `emitStores` reached in the last probe, the bytes their
-    /// stores took, and the lines of the probed body. When the repeated
-    /// stores outweigh re-indenting the body one level, `merge` is set: each
-    /// exit then leaves the `zs_done` block and the roots are stored once
-    /// after it (`emitRoot`) — on `hisimhv_va` 14 copies of 418 stores.
+    /// Live exits `emitStores` reached in the last probe.
     exits: u32 = 0,
+    /// Bytes one copy of the root stores took in the last probe.
     store_bytes: usize = 0,
+    /// Lines of the last probed body.
     lines: usize = 0,
+    /// Set when the repeated stores outweigh re-indenting the body one level
+    /// (`mergePays`): each exit leaves the `zs_done` block and the roots are
+    /// stored once after it (`emitRoot`).
     merge: bool = false,
 };
 
-/// Auxiliary core sweeps must not initialize first-call state at a trial bias.
+/// Returns the instance expression an auxiliary core sweep passes: `inst`,
+/// or a declared copy when the device has §9.21 tables, whose first-call
+/// state must not be initialized at a trial bias.
 pub fn probeInstance(self: *Gen) Error![]const u8 {
     if (self.lowered.table_samples.items.len == 0) return "inst";
     try self.w("    var table_probe = inst.*;\n", .{});
     return "&table_probe";
 }
 
-/// Classify (`plan/setup.zig`), then decide the roots: run the core's (and
-/// the display unit's) slice with every candidate a leaf, and keep the
-/// candidates it reaches. Must run after the core is planned and before
-/// anything is emitted — `emitInstance` sizes `Setup` from the roots.
+/// Decides the roots: runs the core's (and the display unit's) slice with
+/// every `plan/setup.zig` candidate a leaf and keeps the candidates it
+/// reaches. Must run after the core is planned and before anything is
+/// emitted, since `emitInstance` sizes `Setup` from the roots.
 pub fn planSetup(self: *Gen) Error!void {
     const a = self.arena;
     const nv = self.an.nv;
@@ -140,7 +128,7 @@ pub fn planSetup(self: *Gen) Error!void {
     self.plan.su_on = vals.items.len != 0;
 }
 
-/// 0 real, 1 integer, 2 a 0/1 flag: which of `Setup`'s arrays holds `v`.
+/// Returns which of `Setup`'s arrays holds `v`: 0 real, 1 integer, 2 a 0/1 flag.
 fn rootGroup(self: *const Gen, v: Mir.Value) u2 {
     const i = @intFromEnum(v);
     if (self.an.vty[i] == .real) return 0;
@@ -148,11 +136,10 @@ fn rootGroup(self: *const Gen, v: Mir.Value) u2 {
     return if (def == .inst_result and Mir.opcode.get(self.mir.instOp(def.inst_result)).bool01) 2 else 1;
 }
 
-/// Value → an earlier candidate with the same pure op over the same operands,
-/// computed in a block that dominates this one's, so `setup` has it whenever
-/// it has this one (itself if none). Lowering does not number values, so a
-/// card expression written twice is two roots without this. `x != 0` over a
-/// 0/1 flag `x` is `x`.
+/// Maps each value to an earlier candidate with the same pure op over the
+/// same operands, placed so `setup` has it wherever it has this one (itself
+/// if none). Lowering does not number values, so a card expression written
+/// twice would otherwise be two roots. `x != 0` over a 0/1 flag `x` is `x`.
 fn valueNumbers(self: *Gen) Error![]Mir.Value {
     const Opnd = struct { tag: enum(u8) { none, val, f, i, param }, x: u64 };
     const Key = struct { op: Mir.Opcode, a: Opnd, b: Opnd, c: Opnd };
@@ -206,7 +193,7 @@ fn valueNumbers(self: *Gen) Error![]Mir.Value {
     return same;
 }
 
-/// Does `setup` compute `a` wherever it computes `b`?
+/// Returns whether `setup` computes `a` wherever it computes `b`.
 fn placedOver(self: *const Gen, a: Mir.Value, b: Mir.Value) bool {
     return self.an.dominates(placeOf(self, a), placeOf(self, b));
 }
@@ -216,7 +203,8 @@ fn placeOf(self: *const Gen, v: Mir.Value) u32 {
     return if (h != none_u32) h else self.an.def_block[@intFromEnum(v)];
 }
 
-/// A root's field, as an f64 (`as_f64`) or in its own type.
+/// Returns the text reading root `v`'s `Setup` field, as an f64 (`as_f64`)
+/// or in its own type. Arena-owned.
 pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
     const i = @intFromEnum(v);
     const k = self.su.idx[i];
@@ -232,7 +220,7 @@ pub fn rootRef(self: *Gen, v: Mir.Value, as_f64: bool) Error![]const u8 {
     return std.fmt.allocPrint(self.arena, "inst.su.r[{d}]", .{k});
 }
 
-/// `pub const Setup`, ahead of `Instance`.
+/// Emits `pub const Setup`, ahead of `Instance`.
 pub fn emitSetupDecl(self: *Gen) Error!void {
     if (self.su.vals.len == 0) return;
     const n_flag = self.su.vals.len - self.su.real - self.su.int;
@@ -251,8 +239,8 @@ pub fn emitSetupDecl(self: *Gen) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// §9.15 `$simparam`s `setup` reads, so a host knows which writes need a new
-/// `setup` call. Collected while `emitSetup` plans its slice.
+/// Emits the §9.15 `$simparam`s `setup` reads, so a host knows which writes
+/// need a new `setup` call. Collected while `emitSetup` plans its slice.
 fn emitSimparams(self: *Gen) Error!void {
     var names: std.ArrayList([]const u8) = .empty;
     for (self.plan.live.items) |lv| {
@@ -274,12 +262,11 @@ fn emitSimparams(self: *Gen) Error!void {
     try self.w("{s}}};\n\n", .{if (names.items.len == 0) "" else " "});
 }
 
-/// `pub fn setup`: the invariant slice, emitted through the same plan and
-/// relooper as the core with the roots as its targets. Per-eval branches are
-/// taken `then` without testing them (nothing on either arm is setup work,
-/// and the §5.10.2 initial-step arm is exactly what setup must compute), and
-/// the walk stops at the first loop that is not invariant — nothing after it
-/// is placeable.
+/// Emits `pub fn setup`: the invariant slice, through the same plan and
+/// relooper as the core, with the roots as its targets. Per-eval branches
+/// are taken `then` untested (neither arm is setup work, and the §5.10.2
+/// initial-step arm is what setup must compute), and the walk stops at the
+/// first loop that is not invariant, since nothing after it is placeable.
 pub fn emitSetup(self: *Gen) Error!void {
     if (self.su.vals.len == 0) return;
     const save_idx = self.plan.lo_idx;
@@ -352,7 +339,7 @@ pub fn emitSetup(self: *Gen) Error!void {
     std.debug.assert(self.fatal == null);
 }
 
-/// Does emitted text use the identifier `S`?
+/// Returns whether emitted text uses the identifier `S`.
 fn namesS(text: []const u8) bool {
     for (text, 0..) |c, i| {
         if (c != 'S') continue;
@@ -363,10 +350,10 @@ fn namesS(text: []const u8) bool {
     return false;
 }
 
-/// `emitReturn` inside `setup`: store every root, from wherever the body
-/// holds it, and leave — unconditionally at an exit block, on the runtime
-/// `zs_stop` flag at a per-eval loop (`emitTree`). In dead text (`dead`)
-/// only the leaving remains.
+/// Emits `emitReturn` inside `setup`: stores every root from wherever the
+/// body holds it, then leaves, unconditionally at an exit block or on the
+/// runtime `zs_stop` flag at a per-eval loop (`emitTree`). In dead text
+/// (`dead`) only the leaving remains.
 pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
     if (self.su.dead) {
         try self.ind(depth);
@@ -402,14 +389,15 @@ pub fn emitStores(self: *Gen, depth: u32, stop: []const u8) Error!void {
     try self.b("{s}return;\n", .{stop});
 }
 
-/// After a probe without `merge`: would merging shrink `setup`? One copy of
-/// the stores stays; every body line gains four spaces.
+/// Returns whether merging the exits would shrink `setup`, judged after a
+/// probe without `merge`: one copy of the stores stays, and every body line
+/// gains four spaces.
 pub fn mergePays(self: *const Gen) bool {
     const su = self.su;
     return su.mode and su.exits > 1 and su.store_bytes - su.store_bytes / su.exits > 4 * su.lines;
 }
 
-/// The unit body's root tree. Under `merge`, `setup`'s exits leave one
+/// Emits the unit body's root tree. Under `merge`, `setup`'s exits leave one
 /// labelled block and the roots are stored once after it; a root read there
 /// that was defined in an inner scope is hoisted like any other slot read
 /// outside its block (`probeBody`), so every exit stores the same bits.

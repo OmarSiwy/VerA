@@ -1,30 +1,24 @@
-//! Backend — proven MIR to a loadable device, and the top of this layer's
-//! file DAG.
-//!
-//! Re-export only. The leaves import each other directly and mutually:
-//! `codegen.zig` calls into `cg_display`/`cg_filters`/`cg_limit`/`codegen/plan/unit.zig`
-//! and each of them reads `codegen.Gen` back. That cycle is why this is ONE
-//! module — the same reasoning as `ir`, where the boundary goes around the
-//! cycle rather than pretending it is absent.
-//!
-//!   MIR
-//!     → naming.zig + codegen.zig   MIR → device.zig
-//!     → codegen/plan/unit.zig, cg_* per-unit emission strategy
-//!     → tb.zig                     the Verilog-A testbench artifact
-//!     → orchestrator.zig           (§8.3 ABI) device.zig → .so + GPU kernels
-//!
-//! Depends on `ir`, `frontend`, `diag` and `kernels`. The kernel files are
-//! `@embedFile`d into the emitted device AND `@import`ed by codegen's tests
-//! through the `kernels` module, so what the tests check is byte-for-byte what
-//! the device runs — and the file still belongs to exactly one module.
+//! Backend module root: proven MIR in, device.zig, testbench and loadable `.so` out.
+//! Re-export only. The files import each other mutually (`codegen.zig` calls
+//! `cg_*` and `codegen/plan/unit.zig`, which read `codegen.Gen` back), so the
+//! module boundary goes around that cycle. Depends on `ir`, `frontend`, `diag`
+//! and `kernels`.
 
+/// Stable declaration names and the source-unit tracker.
 pub const naming = @import("naming.zig");
+/// MIR to device.zig source.
 pub const codegen = @import("codegen.zig");
+/// Per-unit slice, use counts and slot plan for one emitted declaration.
 pub const UnitPlan = @import("codegen/plan/unit.zig");
+/// §9.4 display and §9.7.3 severity tasks to `std.debug.print`.
 pub const cg_display = @import("cg_display.zig");
+/// §4.5.11 `laplace_*` and §4.5.12 `zi_*` filter planning and emission.
 pub const cg_filters = @import("cg_filters.zig");
+/// §4.5.15 `$limit` to the contract's `limit` and `seed` hooks.
 pub const cg_limit = @import("cg_limit.zig");
+/// device.zig to a versioned `.so` (§8.3 device-side ABI).
 pub const orchestrator = @import("orchestrator.zig");
+/// The self-checking testbench artifact built from `//!` directives.
 pub const tb = @import("tb.zig");
 
 test {
