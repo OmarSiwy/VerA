@@ -1,12 +1,8 @@
-//! File assembly: the device.zig skeleton (§1.3.1 `U`, §3.4 `Model`, §4.5 `Instance`).
-//!
-//! In: the unit list and plans. Out: imports, prelude kernels, `U`, `Model`, `Instance`, the
-//! host-facing tables, and the contract validation block.
-//!
-//! LRM clauses this file's code cites: §1.3.4.2, §3.4, §3.6.1.2, §4.5, §4.5.7, §4.5.12, §4.5.15, §5.4.2, §5.10, §6.3.4, §9.10, §9.13.1.
-//!
-//! Cut verbatim from `codegen.zig`. Functions take `self: *Gen` and are called
-//! directly, `gen_file.f(self, ...)`; `codegen.zig` aliases only what other modules call.
+//! Unit list and plans -> the device.zig skeleton: imports, kernel text, §1.3.1
+//! `U`, §3.4 `Model`, §4.5 `Instance`, the host-facing tables and the contract
+//! validation block, plus the unit-file prologue and `h.zig`.
+//! LRM: §1.3.4.2, §3.4, §3.6.1.2, §4.5, §4.5.7, §4.5.12, §4.5.15, §5.4.2, §5.10,
+//! §6.3.4, §9.10, §9.13.1.
 
 const std = @import("std");
 const plan_topo = @import("plan/topology.zig");
@@ -31,8 +27,7 @@ const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 
 /// `tools/contract.zig`'s `abi_version`, which `backend` cannot import. Every
-/// device the torture suite runs meets the testbench's `validateHost`, so the
-/// two cannot drift past one run.
+/// testbench runs `validateHost`, which compares the two.
 const contract_abi = 5;
 const VTy = codegen.VTy;
 const hist_len = codegen.hist_len;
@@ -87,6 +82,8 @@ const Features = struct {
     arrs: bool,
 };
 
+/// Writes the whole device.zig into `self.out` and builds `self.prelude` and
+/// `self.helpers`. Requires `Gen.prepare` to have run.
 pub fn emitFile(self: *Gen) Error!void {
     const f: Features = .{
         .stateful = hasStatefulOps(self),
@@ -94,15 +91,11 @@ pub fn emitFile(self: *Gen) Error!void {
         .hist_quad = usesQuad(self),
         .filt = usesOp(self, .laplace) or usesOp(self, .zi),
         .timer = usesOp(self, .timer),
-        // §9.5.3/§9.5.4.2. Set at the call in lowering, because by the time the
-        // MIR is sliced into units the formatter's call may sit in any of them.
-        //
-        // `display == .emit` joins it because §9.4.3's real conversions live in
-        // the same file: Table 9-23 grants them "the full formatting
-        // capabilities available in the C language", and `zCReal` is that C —
-        // so a printing artifact needs the string kernels whether or not the
-        // model ever names `$sformat`. This is the same condition `display_txt`
-        // has always carried, now spelled once.
+        // §9.5.3/§9.5.4.2. Set at the call in lowering, because once the MIR
+        // is sliced the formatter's call may sit in any unit. A printing
+        // artifact needs the string kernels too: §9.4.3's real conversions
+        // (Table 9-23, "the full formatting capabilities available in the C
+        // language") are `zCReal`, which lives in the same file.
         .strs = self.lowered.uses.contains(.str_tasks) or self.display == .emit,
         // §9.21, set at the call for the same reason `strs` is: the lookup may
         // land in any unit once the MIR is sliced.
@@ -110,9 +103,8 @@ pub fn emitFile(self: *Gen) Error!void {
         // §9.13, set at the call for the same reason: `lowerRandom` runs long
         // before the MIR is sliced into units.
         .rng = self.lowered.uses.contains(.rng),
-        // §9.5 the descriptor table. `display == .emit` is the second condition
-        // and not a convenience: it is the artifact whose host runs the per-point
-        // side-effect phase these kernels have to be sequenced in.
+        // §9.5 the descriptor table. Only a `display == .emit` artifact has a
+        // host that runs the per-point side-effect phase these kernels need.
         .files = self.display == .emit and self.lowered.uses.contains(.file_tasks),
         // §3.2.2 set in lowering: a runtime-indexed array is one storage.
         .arrs = self.lowered.mem_arrays.items.len != 0,
@@ -128,17 +120,13 @@ pub fn emitFile(self: *Gen) Error!void {
     if (f.hist) try self.out.appendSlice(self.gpa, hist_txt);
     if (f.hist_quad) try self.out.appendSlice(self.gpa, hist_quad_txt);
     if (f.arrs) try self.out.appendSlice(self.gpa, arr_txt);
-    // §4.5.11/§4.5.12 the filter kernels are embedded from a real Zig file,
-    // so they arrive already `pub` — which is right for `h.zig` and wrong
-    // here: `contract.rejectStrayPubDecls` allows only contract-recognized
-    // names to be public, so a model using `laplace_nd` or `zi_nd` failed
-    // `--check`/`--emit-so` on `stray pub decl \`zBilin\``. Every other
-    // helper block is written private and made public by `publish`; this one
-    // has to go the other way.
+    // The embedded kernel files arrive already `pub`, which is right for
+    // `h.zig` and wrong here: `contract.rejectStrayPubDecls` allows only
+    // contract-recognized public names. So they are depublished; every other
+    // helper block is written private and made public by `publish`.
     if (f.filt) try depublish(self.gpa, &self.out, filt_txt);
-    // §9.4.3's padding helper serves §9.5.3 too — `$sformat` is the same
-    // formatter — so a device that never prints still needs it if it formats
-    // into a string.
+    // §9.4.3's padding helper serves §9.5.3 too (`$sformat` is the same
+    // formatter), so a device that never prints still needs it to format.
     if (f.strs) try self.out.appendSlice(self.gpa, display_txt);
     if (f.strs) try depublish(self.gpa, &self.out, str_txt);
     if (f.files) try depublish(self.gpa, &self.out, file_txt);
@@ -169,8 +157,8 @@ pub fn emitFile(self: *Gen) Error!void {
     try gen_dispatch.emitAcTable(self);
     try gen_call.emitSystfTable(self);
     // §4.5.2's accepted-step sweep also carries §9.13.1's internal-seed
-    // advance, which is the ONLY place a stream may move: a per-iteration draw
-    // makes the residual non-deterministic and Newton never converges.
+    // advance, the only place a stream may move: a per-iteration draw makes
+    // the residual non-deterministic and Newton never converges.
     if (f.stateful or self.lowered.rng_auto_sites != 0 or pathLatches(self)) try gen_state.emitStateMachine(self);
     try cg_limit.emit(self);
     try gen_state.emitCollapse(self, cpairs);
@@ -192,20 +180,10 @@ pub fn emitFile(self: *Gen) Error!void {
     try self.w("comptime {{\n    contract.validate(Self);\n}}\n", .{});
 }
 
-/// `Output.prelude` (the file-scope prologue of a `u/<key>.zig`) and
-/// `Output.helpers` (`h.zig`).
-///
-/// The unit file ALIASES the helpers rather than re-emitting them per unit.
-/// Re-emitting is what a naive split does, and it multiplies by the unit
-/// count exactly the AstGen + Sema work this split exists to remove; an
-/// alias is one declaration `zig` analyses once. The aliases mirror what a
-/// unit body can name (§4.3 math, §4.5 operators, §4.5.7 history,
-/// §4.5.11/12 filters, the topology types) and are gated on the same
-/// conditions `emitFile` uses, so no alias ever names a missing decl.
-///
-/// `n_u` is RECOMPUTED (`contract.nU(dev)`) rather than aliased: it is
-/// private in device.zig and `contract.rejectStrayPubDecls` will not let it
-/// become public. It is the same comptime value either way.
+/// Builds `Output.prelude` (the file-scope prologue of a `u/<key>.zig`) and
+/// `Output.helpers` (`h.zig`). Unit files alias the helpers rather than
+/// re-emitting them, so `zig` analyses each once. The aliases are gated on the
+/// same `Features` `emitFile` uses, so none names a missing decl.
 fn buildPrelude(self: *Gen, f: Features) Error!void {
     var p: std.ArrayList(u8) = .empty;
     try p.appendSlice(self.arena, prelude_head_txt);
@@ -221,12 +199,10 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.files) try p.appendSlice(self.arena, prelude_file_txt);
     if (f.tbl) try p.appendSlice(self.arena, prelude_table_txt);
     if (f.rng) try p.appendSlice(self.arena, prelude_rng_txt);
-    // The shared core is a unit file like any other and sits beside the
-    // units that call it; device.zig's own alias for it is private to
-    // device.zig, so it is not in scope here. The alias is spelled `core`
-    // rather than the structural key so that the core's OWN file — which
-    // gets this same prologue — does not redeclare its own name. A file
-    // importing itself is legal and, unreferenced, never analysed.
+    // The shared core is a unit file beside the units that call it, and
+    // device.zig's alias for it is private. Spelled `core`, not the structural
+    // key, so the core's own file (same prologue) does not redeclare its name;
+    // a file importing itself is legal and, unreferenced, never analysed.
     if (self.core.name.len != 0)
         try p.print(self.arena, "const core = @import(\"{0s}.zig\").{0s};\n", .{self.core.name});
     try p.appendSlice(self.arena, "\n");
@@ -252,9 +228,8 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     self.helpers = hz.items;
 }
 
-/// The inverse of `publish`: drop a leading `pub ` so an embedded Zig file
-/// can be spliced into device.zig, where the contract forbids stray public
-/// names. See `emitFile`.
+/// Copies `src` into `out` with each leading `pub ` dropped, so an embedded
+/// Zig file can be spliced into device.zig. The inverse of `publish`.
 fn depublish(gpa: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) Error!void {
     var it = std.mem.splitScalar(u8, src, '\n');
     var first = true;
@@ -265,11 +240,9 @@ fn depublish(gpa: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) E
     }
 }
 
-/// Copy `src` into `out`, making each top-level declaration public. The
-/// same text is emitted PRIVATE into device.zig, where the contract forbids
-/// stray public names, and PUBLIC into `h.zig`, where the unit files can
-/// reach it — one source of truth, one three-line transform, instead of two
-/// near-identical copies of 10 KB of helper text to keep in sync.
+/// Copies `src` into `out`, making each top-level `fn`/`const` public. The
+/// same text is private in device.zig, where the contract forbids stray
+/// public names, and public in `h.zig`, where the unit files reach it.
 fn publish(arena: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) Error!void {
     var it = std.mem.splitScalar(u8, src, '\n');
     var first = true;
@@ -282,9 +255,9 @@ fn publish(arena: std.mem.Allocator, out: *std.ArrayList(u8), src: []const u8) E
     }
 }
 
-/// Close the byte range of the unit declaration that started at `lo`. The
-/// ranges must TILE (`Output`'s invariant), which is what lets the writer
-/// reconstruct `device.zig` as prologue ++ imports ++ tail.
+/// Records the unit declaration `name` spanning `lo` to the current end of
+/// `self.out`, with its keyword at `fn_at`. Asserts `lo` is the previous
+/// range's end: the ranges tile (`Output`'s invariant).
 pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Error!void {
     if (self.file_hi.items.len != 0)
         assert(self.file_hi.items[self.file_hi.items.len - 1] == lo);
@@ -294,12 +267,10 @@ pub fn recordUnitFile(self: *Gen, name: []const u8, lo: usize, fn_at: usize) Err
     try self.file_hi.append(self.arena, @intCast(self.out.items.len));
 }
 
-/// Does this model need the §4.5.2 accepted-step machinery at all? A §5.10
-/// held variable does, for the same reason an operator does: its value is
-/// carried in `Instance` and only `updateState` may advance it.
-/// `contract.validate` (tools/contract.zig) then requires
-/// `State` + `initState` + `updateState` as a set, which `emitStateMachine`
-/// emits together.
+/// Returns whether the model needs the §4.5.2 accepted-step machinery: a
+/// stateful operator, a §5.10 held variable, a `$limit` slot or a §9.17.1
+/// `$discontinuity(-1)` iteration rejection. Each keeps state in `Instance`
+/// that only `updateState` may advance.
 pub fn hasStatefulOps(self: *const Gen) bool {
     if (self.lowered.held_vars.items.len != 0 or self.lowered.limit_slots.items.len != 0 or self.lowered.uses.contains(.reject_iteration)) return true;
     for (self.names.units) |u| {
@@ -308,6 +279,7 @@ pub fn hasStatefulOps(self: *const Gen) bool {
     return false;
 }
 
+/// Returns whether any unit is a call to analog operator `k`.
 pub fn usesOp(self: *const Gen, k: OpKind) bool {
     for (self.names.units) |u| {
         if (u.role == .analog_op and u.op == k) return true;
@@ -322,20 +294,17 @@ fn usesQuad(self: *const Gen) bool {
     return false;
 }
 
-/// §1.3.1 nodes / §6.5 ports. `x[i]` in every emitted body indexes exactly
-/// this enum, and ports come first so the host's terminal order is the
-/// module header order.
+/// Emits `U`, the solver unknowns (§1.3.1 nodes, §6.5 ports first, so the
+/// host's terminal order is the module header order), and the per-unknown
+/// tables. `x[i]` in every emitted body indexes this enum.
+/// Fails with `error.TooManyUnknowns` (E1003) above 256 unknowns.
 pub fn emitTopology(self: *Gen) Error!void {
-    // The 257th member is `enum tag value '256' too large for type 'u8'` —
-    // an error in the HOST's build, at a line of generated Zig, with nothing
-    // naming the .va that produced it. Refuse here instead, where the model
-    // is still in hand. `--emit-zig` exited 0 on this for seven waves.
+    // A 257th member would fail in the host's build at a line of generated
+    // Zig, naming no .va. Refuse here, where the model is still in hand.
     //
-    // ponytail: |U| <= 256 is a PERMANENT ceiling, not a pending widening.
-    // `enum(u16)` is the upgrade path and it is an ABI break: `isDenseEnum`
-    // (tools/contract.zig) requires the `u8` tag, so the tag type and that
-    // predicate move together, and every host that already links a device
-    // recompiles. Registered in TODO.md §3 under the device contract.
+    // ponytail: |U| <= 256 is a permanent ceiling. `enum(u16)` is the upgrade
+    // path and an ABI break: `isDenseEnum` (tools/contract.zig) requires the
+    // `u8` tag, so both move together and every host recompiles.
     if (self.names.u_names.len > 256) {
         if (self.diags) |bag| try bag.add(
             .codegen,
@@ -384,13 +353,10 @@ pub fn emitTopology(self: *Gen) Error!void {
         }
         try self.w("}};\n\n", .{});
     }
-    // §3.6.1.2 the tolerance the DISCIPLINE settled on for each unknown.
-    // `DisciplineInfo` has carried both halves since it was written, with
-    // nothing consuming them; this is the consumer. A host solving `eval`
-    // needs the absolute half of its stopping test per unknown and cannot
-    // derive it — "negligible" is 1e-6 V on an electrical node, 1e-12 A on
-    // its current, and 1e-4 K on a thermal one, and §3.6.2.3 lets a
-    // discipline override the nature's number outright.
+    // §3.6.1.2 the tolerance the discipline settled on for each unknown. A
+    // host needs the absolute half of its stopping test per unknown and
+    // cannot derive it: "negligible" differs per nature, and §3.6.2.3 lets a
+    // discipline override the nature's number.
     try self.w("/// §3.6.1.2 `abstol` per unknown: the largest value of this\n", .{});
     try self.w("/// quantity a host may treat as zero, after any §3.6.2.3 override.\n", .{});
     try self.w("pub const u_abstol = [n_u]f64{{\n", .{});
@@ -401,21 +367,12 @@ pub fn emitTopology(self: *Gen) Error!void {
     try emitNodesets(self);
 }
 
-/// §3.6.3.2 net discipline initial (nodeset) values, as one optional table
-/// over `U` — the `u_abstol` shape, for the `u_abstol` reason: it is a
-/// number per unknown that only the DECLARATION knows and only the SOLVER
-/// can use, and the solver belongs to the host.
-///
-/// Emitted only when the module declares at least one, so a device that
-/// has no nodeset is byte-identical to what it was before this existed and
-/// a host reads "no opinion" off the decl's absence rather than off a table
-/// of nulls.
-///
-/// `?f64` and not `f64`: "a null value ... indicates that no nodeset value
-/// is being specified", and zero is a perfectly ordinary nodeset. Every
-/// unknown that is not a declared net is null too — a §5.4.2 branch flow
-/// has no net_decl_assignment to carry one, since the clause gives the
-/// value to "the potential of the net".
+/// Emits `u_nodeset`, the §3.6.3.2 net discipline initial values as one
+/// optional table over `U`: a number per unknown only the declaration knows
+/// and only the host's solver can use. Emitted only when the module declares
+/// one, so its absence means "no opinion". `?f64` because "a null value ...
+/// indicates that no nodeset value is being specified" and zero is an
+/// ordinary nodeset; a §5.4.2 branch flow is always null.
 fn emitNodesets(self: *Gen) Error!void {
     if (self.lowered.nodesets.items.len == 0) return;
     try self.w("/// §3.6.3.2 nodeset: the initial guess the source states for each\n", .{});
@@ -425,9 +382,7 @@ fn emitNodesets(self: *Gen) Error!void {
     for (0..self.names.n_u) |i| {
         // §3.6.3.2: "If different nets of a node have conflicting
         // initializers ... it is a race condition for which the initializer
-        // wins." Two declarations of one net inside one module are the
-        // non-hierarchical case of that sentence, so LAST wins here and the
-        // clause permits either.
+        // wins." Last wins here, which the clause permits.
         var v: ?f64 = null;
         for (self.lowered.nodesets.items) |ns| {
             if (ns.node == i) v = ns.value;
@@ -437,24 +392,12 @@ fn emitNodesets(self: *Gen) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// §3.6.1.2 the `abstol` of the nature this unknown's quantity belongs to,
-/// after §3.6.2.3's per-discipline override — which is why it is read off
-/// `DisciplineInfo` and not off the nature table.
-///
-/// A §5.4.2 branch-flow unknown has no discipline of its own (`appendNode`
-/// gives it `""`), so its tolerance comes from the discipline at its HIGH
-/// node — which `Lower.NodeKind` carries as the slot's payload. It used to
-/// be recovered by parsing `flow(a,b)` back apart, which is a guess about a
-/// spelling and not a fact about the unknown, and which a node name holding
-/// a `,` or a `>` (both legal inside a §2.8.1 escaped identifier) got wrong.
-///
-/// A §1.3.4.2 flow-only net is `.net` and its own node already, so it falls
-/// straight through to `flow_abstol`.
-///
-/// The two fallbacks are annex D's own defaults for `Voltage` and `Current`
-/// (`VOLTAGE_ABSTOL` 1e-6, `CURRENT_ABSTOL` 1e-12), reached only by an
-/// unknown whose net never got a discipline — a §3.5 implicit net in a file
-/// with no `default_discipline`, which cannot be contributed to anyway.
+/// Returns the §3.6.1.2 `abstol` of the nature this unknown's quantity
+/// belongs to, after §3.6.2.3's per-discipline override (so it reads
+/// `DisciplineInfo`, not the nature table). A §5.4.2 branch flow takes the
+/// discipline at its high node (`Lower.NodeKind`'s payload). A net with no
+/// discipline (a §3.5 implicit net without `default_discipline`) falls back to
+/// annex D's `VOLTAGE_ABSTOL` 1e-6 / `CURRENT_ABSTOL` 1e-12.
 pub fn abstolOf(self: *const Gen, i: u32) f64 {
     const flow = plan_topo.isFlowUnknown(self.input(), i);
     var idx: u16 = @intCast(i);
@@ -469,7 +412,8 @@ pub fn abstolOf(self: *const Gen, i: u32) f64 {
     return if (flow) info.flow_abstol else info.potential_abstol;
 }
 
-/// §3.4 parameters. One field, typed, with the constant-folded spec default.
+/// Emits `Model`: one typed field per §3.4 parameter, initialized to its
+/// folded spec default, plus alias, `tnom` and retention-flag fields.
 fn emitModel(self: *Gen) Error!void {
     try self.w("/// §3.4 module parameters (spec defaults folded at compile time).\npub const Model = struct {{\n", .{});
     for (self.lowered.params.items, 0..) |p, i| {
@@ -484,19 +428,12 @@ fn emitModel(self: *Gen) Error!void {
             try self.w("    {s}__given: bool = false, // §9.19 $param_given\n", .{self.names.p_names[i]});
         }
     }
-    // §3.4.7 aliasparam. "The aliasparam declaration creates an alternate
-    // name ... which can be used to override the value of the parameter" —
-    // so the alias is part of the model-card ABI even though it is not a
-    // parameter, and a card that only carried the original name would make
-    // `nmos2 #(.trise(5))` unspellable. It is a SECOND FIELD rather than a
-    // second name for the first because Zig has no field aliases; `derive`
-    // below folds it back onto the original, which is the point at which
-    // the two names become one storage again.
-    //
-    // The `__given` flag is unconditional here (unlike §9.19's, which is
-    // emitted only for a parameter someone asked about): it is the only
-    // thing that tells "the host overrode the alias" from "the host left
-    // the alias at the original's default", and those two have to differ.
+    // §3.4.7 aliasparam: "The aliasparam declaration creates an alternate
+    // name ... which can be used to override the value of the parameter", so
+    // the alias is part of the model card. It is a second field because Zig
+    // has no field aliases; `derive` folds it back onto the original.
+    // The `__given` flag is unconditional: it is the only way to tell "the
+    // host overrode the alias" from "the host left it at the default".
     for (self.lowered.aliases.items, 0..) |al, i| {
         const p = self.lowered.params.items[al.param];
         const ty = Analysis.tyOfParam(p.ty);
@@ -512,21 +449,18 @@ fn emitModel(self: *Gen) Error!void {
         });
         try self.w("    {s}__given: bool = false,\n", .{self.names.a_names[i]});
     }
-    // §9.15 the host-published nominal temperature this module reads.
-    // Model, not Instance: `.options tnom` is one number per RUN, so an
-    // Instance copy would replicate a global across every instance of
-    // every batch for a value `derive()` reads once at build. The
-    // initializer is Table 9-27's default, so `Model{}` is unchanged for a
-    // host that never writes it.
+    // §9.15 the host-published nominal temperature. Model, not Instance:
+    // `.options tnom` is one number per run. The initializer is Table 9-27's
+    // default, for a host that never writes it.
     if (self.lowered.uses.contains(.host_simparam)) try self.w(
         "    {s}: f64 = {s}, // §9.15 $simparam(\"tnom\"), degC — host-written\n",
         .{ Lower.simparamHostField("tnom").?, try fmtF64(self, self.lowered.simparamValue("tnom").?) },
     );
     // §5.6.5 the card-only retention flag of each collapsible switch branch,
-    // published for the host: a guarded `jac_const` entry names this field
-    // (`contract.JacWhen`). Not a parameter — `derive` overwrites it. The
-    // initializer is the flag at the declared defaults when that folds, and
-    // NaN otherwise, so a host that skips `derive` does not get a plausible 0.
+    // which a guarded `jac_const` entry names (`contract.JacWhen`). Not a
+    // parameter: `derive` overwrites it. The initializer is the flag at the
+    // declared defaults when that folds, else NaN, so a host that skips
+    // `derive` does not get a plausible 0.
     for (self.topo.cpairs, 0..) |p, k| {
         if (!p.card) continue;
         const d = if (self.an.foldConst(p.flag, true)) |f| try fmtF64(self, f.f) else "std.math.nan(f64)";
@@ -538,30 +472,14 @@ fn emitModel(self: *Gen) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// §6.3.4/§3.4.5 — recompute every parameter whose value is not its own.
-///
-/// The Model is a flat struct of independent fields, so a host write to
-/// `base` cannot by itself reach a `doubled = 2.0*base` declared over it;
-/// §6.3.4 requires that it does ("an update of gate_width ... automatically
-/// updates gate_cap"). This is that seam: the host writes the model card,
-/// calls `derive`, and only then builds an Instance.
-///
-/// Two kinds of field are rewritten, and nothing else — a parameter with a
-/// literal default keeps costing exactly one field initializer:
-///   - one whose default mentions another parameter (§6.3.4);
-///   - every §3.4.5 localparam, whatever its default. "Local parameters ...
-///     shall not be directly modified" — and since the field has to stay
-///     readable as `model.<name>` from the units, the way to enforce that
-///     against a host that writes it anyway is to overwrite it here.
-///
-/// Declaration order IS dependency order: a default may only name a
-/// parameter declared before it (a forward or self reference is E0314 at
-/// lowering), so a chain a→b→c derives correctly in one pass and a cycle
-/// cannot be built in the first place — no SCC pass, no cycle diagnostic.
-///
-/// The field initializer is left as the fold-through-declared-defaults
-/// value, so `Model{}` on its own is still the spec default and a host that
-/// overrides nothing need not call this at all.
+/// Emits `derive`, which recomputes every parameter whose value is not its
+/// own (§6.3.4: "an update of gate_width ... automatically updates
+/// gate_cap"). The host writes the model card, calls `derive`, then builds
+/// instances. It rewrites a parameter whose default names another parameter
+/// unless the host wrote it, and every §3.4.5 localparam unconditionally
+/// ("shall not be directly modified"). Declaration order is dependency order
+/// (a forward reference is E0314), so one pass suffices. `Model{}` is already
+/// the spec default, so a host that overrides nothing need not call it.
 pub fn emitDerive(self: *Gen) Error!void {
     const at = self.out.items.len;
     try self.w(
@@ -574,10 +492,8 @@ pub fn emitDerive(self: *Gen) Error!void {
     , .{});
     const at_s = self.out.items.len - "S: type, model: *Model) void {\n".len;
     const body = self.out.items.len;
-    // §3.4.7 first, and that order is the rule and not a convenience: an
-    // override written through the alias has to be the original's value
-    // BEFORE a §6.3.4 dependent parameter reads it, or `dtemp` derives from
-    // the alias and everything over `dtemp` derives from the default.
+    // §3.4.7 first: an override written through the alias must be the
+    // original's value before a §6.3.4 dependent parameter reads it.
     for (self.lowered.aliases.items, 0..) |al, i| {
         try self.w("    if (model.{s}__given) model.{s} = model.{s};\n", .{
             self.names.a_names[i], self.names.p_names[al.param], self.names.a_names[i],
@@ -588,7 +504,7 @@ pub fn emitDerive(self: *Gen) Error!void {
         // A string parameter has no arithmetic to redo; a string localparam
         // is left overridable rather than growing a second renderer for it.
         if (ty == .str) continue;
-        // `resolve_params = false` ⇒ this folds only if the default is
+        // `resolve_params = false`: this folds only if the default is
         // self-contained, which is exactly "not derived from a parameter".
         if (self.an.foldConst(p.default, false) != null and !p.is_local) continue;
         // Render in the parameter's numeric domain. A known initializer
@@ -600,11 +516,10 @@ pub fn emitDerive(self: *Gen) Error!void {
             if (self.diags) |bag| try bag.add(.codegen, .E1004, self.lowered.tokenSpan(p.tok), "host derivation of `{s}` uses an unsupported expression; its declared value cannot be frozen after parameter overrides", .{p.name});
             return error.UnsupportedParameterDefault;
         };
-        // §6.3.4 gives the DEFAULT; an explicit host write wins. Only a
-        // localparam is overwritten unconditionally ("shall not be
-        // directly modified"). Unguarded, BSIMSOI's `VTH0 = VTHO` erased
-        // every card VTH0 back to VTHO's default. `initGiven` raised the
-        // `__given` companion for every non-local derived parameter.
+        // §6.3.4 gives the default; an explicit host write wins (else a card's
+        // `VTH0` over `VTH0 = VTHO` would be erased). Only a localparam is
+        // overwritten unconditionally. `initGiven` raised the `__given`
+        // companion for every non-local derived parameter.
         if (!p.is_local)
             try self.w("    if (!model.{s}__given) ", .{self.names.p_names[i]})
         else
@@ -623,18 +538,12 @@ pub fn emitDerive(self: *Gen) Error!void {
     try self.w("}}\n\n", .{});
 }
 
-/// §3.2/§3.4 — refuse a card that moves a SHAPE parameter (`ParamInfo.shape`).
-///
-/// §3.4: parameters "can be modified at compilation time"; an array bound or a
-/// replication count is where the device takes one at that time, because the
-/// storage it sizes is laid out in the generated text. A card is still written
-/// at run time, so the one honest answer to a card that disagrees with the
-/// compiled shape is to name the parameter and refuse it — the alternative was
-/// a folded shape and a card-read index silently disagreeing. The host calls
-/// this after `derive` (a localparam over a card value is final only then);
-/// null is "the card fits". Integer and f64 compares, no allocation, no print:
-/// cheap, and safe in a GPU build. Absent when nothing is shaped by a
-/// parameter — the common case, and the contract's default.
+/// Emits `checkShape`, which names the first shape parameter
+/// (`ParamInfo.shape`, §3.2/§3.4) whose card value differs from the compiled
+/// one, or returns null when the card fits. An array bound is laid out in the
+/// generated text at compile time, so a card that moves it must be refused.
+/// The host calls it after `derive`. No allocation or print, so it is safe in
+/// a GPU build. Not emitted when no parameter shapes anything.
 fn emitShapeCheck(self: *Gen) Error!void {
     const at = self.out.items.len;
     try self.w(
@@ -657,12 +566,10 @@ fn emitShapeCheck(self: *Gen) Error!void {
     try self.w("    return null;\n}}\n\n", .{});
 }
 
-/// §5.6.5 `derive`'s tail: every card-only retention flag, into the `Model`
-/// field `emitModel` declared for it. The core at x = 0 on a scratch
-/// Instance, exactly as `collapse` reads the same flags — exact, since a
-/// card-only flag reads neither x nor the Instance. After the parameter
-/// writes above, which it reads.
-/// Returns whether it read the core, i.e. named `S`.
+/// Emits `derive`'s §5.6.5 tail: every card-only retention flag into the
+/// `Model` field `emitModel` declared for it, read from the core at x = 0 on a
+/// scratch Instance (exact, since a card-only flag reads neither). Must follow
+/// the parameter writes it reads. Returns whether it read the core, i.e. named `S`.
 fn deriveFlags(self: *Gen) Error!bool {
     var any = false;
     for (self.topo.cpairs) |p| any = any or p.card;
@@ -686,26 +593,12 @@ fn deriveFlags(self: *Gen) Error!bool {
     return true;
 }
 
-/// W1050 — the one place a parameter whose default VerA never computes is
-/// said out loud. Rendering `0` for such a field is what shipped four wrong
-/// parameters in a real model, and the reason it was invisible is that
-/// nothing complained.
-///
-/// A `0` initializer is honest under exactly two conditions, and this is
-/// the negation of both:
-///   - the two folds in `paramDefault` answered, so `0` is the real value;
-///   - `derive()` overwrites the field, which it does whenever `f64Const`
-///     can render the default over the model card (§6.3.4).
-/// What is left is a default nothing in the pipeline evaluates. It is
-/// reachable only through a ch9 call — §9.10 `$temperature`, §9.18
-/// `$simparam` — which is not a §3.4.1 constant_expression and has no
-/// compile-time value to fold to; the field is then the HOST's to write,
-/// which is a promise better made in a warning than in silence.
-///
-/// A warning, not a refusal: refusing would reject a model whose default
-/// reads a simulator quantity, and no evidence in this tree says those do
-/// not exist. `--deny=W1050` is there for a host that wants the stricter
-/// reading of §3.4.1.
+/// Warns W1050 for a parameter whose default nothing in the pipeline
+/// evaluates: neither fold in `paramDefault` answers and `derive` cannot
+/// render it (a ch9 call such as §9.10 `$temperature` or §9.18 `$simparam`,
+/// which is not a §3.4.1 constant_expression). The field's `0` is then the
+/// host's to overwrite. A warning, not a refusal, so a model whose default
+/// reads a simulator quantity still compiles; `--deny=W1050` makes it strict.
 fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
     const bag = self.diags orelse return;
     if (!bag.enabled(.W1050)) return;
@@ -718,17 +611,11 @@ fn checkParamDefault(self: *Gen, p: Lower.ParamInfo) Error!void {
     try d.emit();
 }
 
-/// §3.4 the field initializer: the parameter's value under the DECLARED
-/// defaults, which is what `Model{}` promises a host that overrides nothing.
-///
-/// Two folds answer this, and the second is not a duplicate of the first.
-/// `foldConst` walks the MIR, where §4.2.12's `?:` is not a value at all —
-/// it is a CFG diamond and a phi (`Lower.lowerTernary`), which no
-/// value-level fold can see through. `Lower.constEval` folded the same
-/// default over the AST at declaration time, before the diamond existed,
-/// and §3.4 defines the default as exactly that fold; `ParamInfo.folded`
-/// carries its result here. Integral defaults use that exact result before
-/// consulting the real-valued MIR fold, which cannot represent every i64.
+/// Returns the §3.4 field initializer: the parameter's value under the
+/// declared defaults, which is what `Model{}` promises. Two folds answer it:
+/// `ParamInfo.folded` (`Lower.constEval` over the AST, which sees through a
+/// §4.2.12 `?:` that MIR has already turned into a CFG diamond) and
+/// `foldConst` over the MIR. Integral defaults prefer the exact AST result.
 pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 {
     if (want == .int) if (p.folded) |k| {
         const value = switch (k) {
@@ -741,11 +628,10 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
     const c = self.an.foldConst(p.default, true);
     if (c == null) if (p.folded) |k| return switch (want) {
         .real => try fmtF64(self, k.asReal()),
-        // From the i64 side rather than through the f64 carrier: `folded`
-        // kept the integer, so nothing has to be rounded back out of it.
-        // A REAL default on an integer parameter goes through the same
-        // saturating cast as the fold path below — `Lower.Const.asInt`
-        // casts unguarded, and lower.zig is not this file's to change.
+        // From the i64 side: `folded` kept the integer, so nothing is rounded.
+        // A real default on an integer parameter takes the same saturating
+        // cast as the fold path below, because `Lower.Const.asInt` casts
+        // unguarded.
         .int => try std.fmt.allocPrint(self.arena, "{d}", .{switch (k) {
             .real => |r| std.math.lossyCast(i64, @round(r)),
             .int, .str => k.asInt(),
@@ -758,14 +644,10 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
     return switch (want) {
         .real => try fmtF64(self, if (c) |k| k.f else 0.0),
         // ponytail: `parameter integer big = 1e300;` saturates (`lossyCast`:
-        // clamp to i64, NaN→0) instead of panicking the compiler. §4.2.1.1
-        // only says real→integer ROUNDS; it fixes no overflow rule, and the
-        // honest answer would be a lowering-time diagnostic on the default's
-        // own span — that needs a new code in diag_code.zig and a check in
-        // lower.zig's constant validation, both owned elsewhere right now.
-        // Until then the field, the fold (`Analysis.asI64`) and the runtime
-        // `fi_cast` all saturate the same way, so no path panics and all
-        // three agree on the garbage.
+        // clamp to i64, NaN -> 0) instead of panicking the compiler. §4.2.1.1
+        // fixes no overflow rule. The field, the fold (`Analysis.asI64`) and
+        // the runtime `fi_cast` all saturate alike, so they agree. Upgrade
+        // path: a lowering-time diagnostic on the default's span.
         .int => try std.fmt.allocPrint(self.arena, "{d}", .{if (c) |k| std.math.lossyCast(i64, @round(k.f)) else 0}),
         .str => blk: {
             const def = self.mir.valueDef(self.an.rv(p.default));
@@ -777,25 +659,18 @@ pub fn paramDefault(self: *Gen, p: Lower.ParamInfo, want: VTy) Error![]const u8 
     };
 }
 
-/// Rendered form of a float constant, memoized on its BIT PATTERN.
-///
-/// `hisimhv_va` emits 385 395 float constants and they are **140 distinct
-/// texts** — 68 600 of them are literally `0.0` and 63 149 are `1.0`. The
-/// unmemoized form did two `allocPrint`s into an arena that is never freed,
-/// so it was ~770 K allocations to produce 140 strings.
-///
-/// Keyed on `@bitCast`, not on the `f64`: `-0.0` and `0.0` compare equal but
-/// render differently, and NaN is not equal to itself. `std.hash.int` on the
-/// u64 is three multiplies and bijective, so it adds no collisions over the
-/// identity — the same trick as `ssa.zig`'s defs context, and as
-/// `InternPool.Index.Adapter.hash`.
+/// Returns the Zig text of a float constant, memoized on its bit pattern.
+/// Large models emit hundreds of thousands of constants with few distinct
+/// texts. Keyed on `@bitCast`, not the `f64`: `-0.0` and `0.0` compare equal
+/// but render differently, and NaN is not equal to itself. The text is
+/// arena-owned and shared between calls.
 pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
     if (std.math.isNan(x)) return "std.math.nan(f64)";
     if (std.math.isInf(x)) return if (x > 0) "std.math.inf(f64)" else "-std.math.inf(f64)";
     const gop = try self.f64_cache.getOrPut(self.arena, @bitCast(x));
     if (gop.found_existing) return gop.value_ptr.*;
-    // Stack, then copy the survivor — `printFloat` renders into a stack
-    // buffer too. `{d}` on an f64 is at most ~24 bytes.
+    // Render on the stack, then copy the survivor. `{d}` on an f64 is at
+    // most ~24 bytes.
     var buf: [512]u8 = undefined;
     const s = std.fmt.bufPrint(&buf, "{d}", .{x}) catch unreachable;
     // ponytail: use the stdlib byte-set search; formatting stays unchanged.
@@ -810,10 +685,9 @@ pub fn fmtF64(self: *Gen, x: f64) Error![]const u8 {
 /// §9.12 / IEEE 1364 §17.10.1/§17.10.2: the plusargs "are searched in the
 /// order provided", and a match is a plusarg whose prefix "matches all
 /// characters in the provided string". `fmt` cuts `$value$plusargs`'s
-/// user_string at its format, leaving the plusarg_string. The match comes back
-/// without its `+`, which is what `$sscanf` then reads against the whole
-/// user_string: the literal prefix matches itself and the format converts the
-/// remainder (an empty one scans as 0 or "", §17.10.2's own answer).
+/// user_string at its format. The match comes back without its `+`, and
+/// `$sscanf` then reads it against the whole user_string (an empty remainder
+/// scans as 0 or "", §17.10.2's own answer).
 const plusarg_txt =
     \\fn zPlusarg(args: []const [:0]const u8, want: []const u8, fmt: bool) ?[]const u8 {
     \\    const key = if (fmt) want[0 .. std.mem.indexOfScalar(u8, want, '%') orelse want.len] else want;
@@ -823,9 +697,9 @@ const plusarg_txt =
     \\
 ;
 
-/// Per-instance state: environment (§9.10) plus one field group per
-/// stateful §4.5 operator, KEYED BY THE STABLE UNIT NAME so adding an
-/// unrelated operator never renumbers existing state.
+/// Emits `Instance`: environment (§9.10) plus one field group per stateful
+/// §4.5 operator, keyed by the stable unit name so adding an unrelated
+/// operator never renumbers existing state.
 pub fn emitInstance(self: *Gen) Error!void {
     try self.w(
         \\/// Per-instance state. The host owns every field above the operator
@@ -865,12 +739,10 @@ pub fn emitInstance(self: *Gen) Error!void {
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
     );
-    // §9.13.1's "internal seed", one slot per seedless call site. The
-    // DEFAULT is the seed "the simulator picks" — a fixed value, not a clock
-    // read, because §9.13.2's "shall always return the same value given the
-    // same seed" is only checkable if a run is reproducible, and a device
-    // whose numbers move between two identical runs cannot be debugged.
-    // Distinct per site: §9.13.1 says the internal seed "gets updated every
+    // §9.13.1's "internal seed", one slot per seedless call site. The default
+    // is a fixed value, not a clock read, so a run is reproducible and
+    // §9.13.2's "shall always return the same value given the same seed" can
+    // be checked. Distinct per site: the internal seed "gets updated every
     // time the call ... is made", so two call sites are two streams.
     if (self.lowered.rng_auto_sites != 0) {
         try self.w(
@@ -889,9 +761,7 @@ pub fn emitInstance(self: *Gen) Error!void {
     for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
         const n = self.names.unit_names[i];
-        // The nine operators whose Instance shape is FIXED are a table
-        // read — the per-operator prose that used to live in these arms is
-        // now beside the row it explains, in op_zig.zig.
+        // Operators whose Instance shape is fixed are a table read (op_zig.zig).
         for (opdb.get(u.op).slots) |s| {
             if (s.note.len == 0) {
                 try self.w("    {s}__{s}: f64 = {s},\n", .{ n, s.suffix, s.default });
@@ -899,8 +769,7 @@ pub fn emitInstance(self: *Gen) Error!void {
                 try self.w("    {s}__{s}: f64 = {s}, // {s}\n", .{ n, s.suffix, s.default, s.note });
             }
         }
-        // The three whose field COUNT depends on the call (`shape =
-        // .from_args`) stay here, because it does.
+        // Operators whose field count depends on the call (`shape = .from_args`).
         switch (u.op) {
             .absdelay => {
                 try self.w(
@@ -909,10 +778,9 @@ pub fn emitInstance(self: *Gen) Error!void {
                         "    {s}__head: u32 = 0,\n",
                     .{ n, hist_len, n, hist_len, n },
                 );
-                // §4.5.7 the frozen td of the two-argument form. Emitted
-                // only for a SIGNAL-valued td — a constant or parameter one
-                // is already its own first value, so the common site keeps
-                // exactly the fields it had.
+                // §4.5.7 the frozen td of the two-argument form. Emitted only
+                // for a signal-valued td; a constant or parameter one is
+                // already its own first value.
                 if (try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i))) try self.w(
                     "    {s}__td: f64 = 0.0, // §4.5.7 td, frozen at the first evaluation\n",
                     .{n},
@@ -924,9 +792,8 @@ pub fn emitInstance(self: *Gen) Error!void {
             },
             // §4.5.11/§4.5.12 direct-form-I history of the cascade: `deg`
             // past inputs and past outputs per section, newest first. The
-            // SHAPE is structural (it comes from the flattened call), which
-            // is what keeps it a codegen-time constant even though every
-            // coefficient VALUE is a runtime read of Model.
+            // shape comes from the flattened call, so it is a codegen-time
+            // constant even though every coefficient is a runtime Model read.
             .laplace, .zi => {
                 if (self.names.opInstOf(@intCast(i)) == null) continue;
                 const p = cg_filters.planOf(self, i);
@@ -935,12 +802,10 @@ pub fn emitInstance(self: *Gen) Error!void {
                     n, p.ns * p.deg, if (u.op == .zi) "12" else "11",
                 });
                 try self.w("    {s}__y: [{d}]f64 = @splat(0.0),\n", .{ n, p.ns * p.deg });
-                // §4.5.12 the filter's own clock as a COUNT of samples
-                // taken, not as the next sample TIME. A time re-armed by
-                // `next += zn*T` drifts off the k·T grid by an ulp or two
-                // (1e-9 + 1e-9 + 1e-9 is strictly greater than the double
-                // nearest 3e-9), and the first timepoint that lands under
-                // the drifted clock loses a sample for the whole run.
+                // §4.5.12 the filter's clock as a count of samples taken, not
+                // the next sample time: `next += zn*T` drifts off the k·T grid
+                // by an ulp or two (1e-9 + 1e-9 + 1e-9 > 3e-9 in f64), and a
+                // timepoint under the drifted clock loses a sample for good.
                 if (u.op == .zi) try self.w(
                     "    {s}__nk: f64 = 0.0, // §4.5.12 samples taken\n    {s}__out: f64 = 0.0,\n",
                     .{ n, n },
@@ -953,28 +818,25 @@ pub fn emitInstance(self: *Gen) Error!void {
         }
     }
     // §5.6.1.2 path-integrated reactive latches (ngspice NIintegrate
-    // semantics, mesaload.c:341-344): pb__k = ddt operand at the last
-    // ACCEPTED solve, pq__k = Σ committed A·ΔB increments — the charge
-    // base, FIXED across one Newton attempt. wb__/wq__ stage the current
-    // iterate's values (updateState); stateCtl(.commit) latches them.
-    // Zero defaults make the first committed increment A·(B−0) = A·B —
-    // exactly ngspice MODEINITTRAN's qgs = capgs·vgs product seeding.
+    // semantics): pb__k is the ddt operand at the last accepted solve, pq__k
+    // the sum of committed A·ΔB increments (the charge base, fixed across one
+    // Newton attempt). wb__/wq__ stage the current iterate (updateState);
+    // stateCtl(.commit) latches them. Zero defaults make the first committed
+    // increment A·B, as ngspice MODEINITTRAN seeds qgs = capgs·vgs.
     for (0..self.core.prev_lo.len) |k| {
         try self.w("    pb__{d}: f64 = 0.0, // path_prev latch\n    wb__{d}: f64 = 0.0, // staged\n", .{ k, k });
     }
     for (0..self.core.acc_lo.len) |k| {
         try self.w("    pq__{d}: f64 = 0.0, // path_acc latch\n    wq__{d}: f64 = 0.0, // staged\n", .{ k, k });
     }
-    // §5.10 event-assigned variables. LAST, so a model that gains one does
-    // not move a single operator field, and the default is the DECLARED
-    // initializer — the only evaluation that can observe it is the first,
-    // before `updateState` has ever run.
+    // §5.10 event-assigned variables. Last, so a model that gains one moves
+    // no operator field. The default is the declared initializer, which only
+    // the first evaluation (before any `updateState`) can observe.
     for (self.lowered.held_vars.items, 0..) |h, i| {
         // ponytail: a parameter-dependent initializer takes the parameter's
-        // SPEC default, exactly like every §4.5 operator control argument
-        // (`f64Expr`/`argF64`), because a struct field default is a comptime
-        // value and a model card is not. Upgrade path: write it in
-        // `initState`, which already takes a mutable `*Instance`.
+        // spec default, like every §4.5 operator control argument, because a
+        // struct field default is comptime and a model card is not. Upgrade
+        // path: write it in `initState`, which already takes `*Instance`.
         if (h.array != none_u32) {
             try emitHeldArrayField(self, h, self.names.held_names[i], "// §5.10 held across evaluations");
             continue;
@@ -983,8 +845,8 @@ pub fn emitInstance(self: *Gen) Error!void {
         const v: f64 = if (init) |c| c.f else 0.0;
         if (h.ty == .integer) {
             try self.w("    {s}: i64 = {d}, // §5.10 held across evaluations\n", .{
-                // Saturating like every other fold-side real→int cast —
-                // an initializer of `1e300` must not panic the compiler.
+                // Saturating like every other fold-side real -> int cast: an
+                // initializer of `1e300` must not panic the compiler.
                 self.names.held_names[i], std.math.lossyCast(i64, @round(v)),
             });
         } else {
@@ -993,10 +855,9 @@ pub fn emitInstance(self: *Gen) Error!void {
             });
         }
     }
-    // FSM accepted/working twins — `stateCtl`'s accepted copy. Emitted
-    // only for modules whose hook has an FSM half (`fsmStateCtl`), so a
-    // plain cross-observer — or a path-latch model — carries no dead
-    // fields.
+    // FSM accepted/working twins: `stateCtl`'s accepted copy. Emitted only
+    // for modules whose hook has an FSM half (`fsmStateCtl`), so a plain
+    // cross observer or path-latch model carries no dead fields.
     if (fsmStateCtl(self)) {
         for (self.lowered.held_vars.items, 0..) |h, i| {
             if (h.array != none_u32) {
@@ -1036,9 +897,9 @@ pub fn emitInstance(self: *Gen) Error!void {
     try self.w("}};\n\n", .{});
 }
 
-/// §3.2.2/§5.10 a held array's `Instance` field: its plain values, defaulting
-/// to the declared initializer element by element (§3.2's zero where the
-/// pattern is silent) — the SPEC default, as for a held scalar.
+/// Emits a §3.2.2/§5.10 held array's `Instance` field: plain values,
+/// defaulting element by element to the declared initializer (§3.2's zero
+/// where the pattern is silent), the spec default as for a held scalar.
 fn emitHeldArrayField(self: *Gen, h: Lower.HeldVar, name: []const u8, comment: []const u8) Error!void {
     const m = self.lowered.mem_arrays.items[h.array];
     const ty: []const u8 = if (m.ty == .integer) "i64" else "f64";
@@ -1058,16 +919,11 @@ fn emitHeldArrayField(self: *Gen, h: Lower.HeldVar, name: []const u8, comment: [
     try self.w(" }}, {s}\n", .{comment});
 }
 
-/// A module whose §5.10 event-HELD state is fed by `cross`/`above` edges
-/// is a hysteresis FSM the transient can catch mid-step (a switch). It
-/// gets `stateCtl` (contract.zig StateCtlOp): the driver rejects the
-/// converged step whose accepted solution flipped the latch and shrinks
-/// toward the crossing, so the conductance discontinuity lands SHARP —
-/// which is what makes a piecewise-constant waveform interpolate
-/// correctly onto ngspice's own output grid. Without the hook the flip
-/// smears across whatever dt the integrator happened to carry
-/// (devices/switch: one 0.8-of-full-scale sample against a 1e-11 match
-/// everywhere else).
+/// Returns whether the module's §5.10 held state is fed by `cross`/`above`
+/// edges: a hysteresis FSM (a switch) that gets `stateCtl`
+/// (contract.StateCtlOp). The host rejects a converged step whose accepted
+/// solution flipped the latch and shrinks toward the crossing, so the
+/// discontinuity lands sharp instead of smearing across one step.
 fn fsmStateCtl(self: *const Gen) bool {
     for (self.lowered.held_vars.items) |h| {
         if (h.why == .event) break;
@@ -1082,32 +938,28 @@ fn fsmStateCtl(self: *const Gen) bool {
     return false;
 }
 
-/// Any path latch at all. The reactive lowering always plants prev+acc
-/// pairs, but a source-level `$prev` site arrives alone — every gate that
-/// keys the latch machinery (R text, state machine, core sweep, stateCtl)
-/// tests this, not `acc_lo`, so a `$prev`-only model still gets its
+/// Returns whether the module has any path latch. Every gate on the latch
+/// machinery tests this, not `acc_lo`: the reactive lowering plants prev+acc
+/// pairs, but a source-level `$prev` site arrives alone and still needs its
 /// updateState staging and commit advance.
 pub fn pathLatches(self: *const Gen) bool {
     return self.core.acc_lo.len != 0 or self.core.prev_lo.len != 0;
 }
 
-/// §5.6.1.2 path-integrated reactive sites also ride `stateCtl`: the
-/// driver's existing `.commit` calls (operating-point exit, transient
-/// accepted step) are exactly the accepted-solve boundary the latches
-/// advance on. They contribute nothing to `query` — the base moving is
-/// the integrator's business, not a step-reject condition.
+/// Returns whether the module needs `stateCtl`: an FSM, a §4.5.15 `$limit`
+/// slot or any §5.6.1.2 path latch. The host's `.commit` calls (operating-point exit, accepted
+/// transient step) are the boundary the latches advance on; latches add
+/// nothing to `query`, since the base moving is not a step-reject condition.
 pub fn emitsStateCtl(self: *const Gen) bool {
     return fsmStateCtl(self) or pathLatches(self) or self.lowered.limit_slots.items.len != 0;
 }
 
-/// The hook body. `query` compares the HELD (discrete) state only; the
-/// continuous cross histories are committed/reverted alongside so a
-/// rejected attempt cannot leave a half-advanced edge test behind (which
-/// would suppress the refire on the retry). Path latches commit `pb = wb`,
-/// `pq += wq` (and zero `wq` so a commit with no fresh `updateState`
-/// adds 0); on revert they need nothing — the base was never written
-/// speculatively. Tag ORDER mirrors contract.StateCtlOp — the engine
-/// converts by ordinal.
+/// Emits the `stateCtl` hook. `query` compares the held (discrete) state
+/// only; cross histories are committed or reverted alongside, so a rejected
+/// attempt leaves no half-advanced edge test that would suppress the refire.
+/// Path latches commit `pb = wb`, `pq += wq` and zero `wq`; revert needs
+/// nothing. Tag order mirrors contract.StateCtlOp, which the host converts
+/// by ordinal.
 pub fn emitStateCtl(self: *Gen) Error!void {
     // ponytail: topology is fixed during emission; scan once for all three actions.
     const fsm = fsmStateCtl(self);

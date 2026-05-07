@@ -1,14 +1,6 @@
-//! The backend's facts about each `Mir.Opcode` — how it is SPELLED in Zig —
-//! one row per opcode.
-//!
-//! `lib/ir/opcode.zig` holds the IR facts and leaves the Zig spellings to the
-//! backend ("`lib/ir` does not know the target is Zig"); this is that half.
-//! `std.EnumArray.init` with no defaults, so an opcode added to `Mir.Opcode`
-//! does not compile until its row states every column here — the questions
-//! `devSafe`, `libmClass`, `f64Const` and `renderOp` used to answer in
-//! separate switches with an `else`, each taking a default silently.
-//!
-//! DOD: comptime rows in `.rodata`, read with one indexed load. No allocation.
+//! Backend facts per `Mir.Opcode`: how each is spelled in Zig, one comptime
+//! row per opcode. `lib/ir/opcode.zig` holds the IR half. `EnumArray.init`
+//! has no defaults, so a new opcode does not compile until its row is filled.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -24,35 +16,32 @@ pub const Spell = union(enum) {
     helper: []const u8,
 };
 
+/// One opcode's backend facts.
 pub const Row = struct {
     /// §4.3 its `S` spelling in `renderOp`.
     s: Spell,
-    /// That spelling ALWAYS collapses its operands to `.val()` — a scalar
-    /// decision, so a lane-parallel `S` pins its lanes (`float/lanes.zig` `pinLanes`).
-    /// `pow` is not here: it pins only on its `zPow` path, which `renderOp`
-    /// decides from the exponent. `fi_cast` is, and pins in its own prong.
+    /// The spelling always collapses its operands to `.val()`, so it pins
+    /// lanes (`lanes.pinLanes`). `pow` is false: it pins only on its `zPow`
+    /// path, which `renderOp` picks from the exponent.
     pins_lanes: bool,
-    /// `f64Const`'s plain-f64 host spelling: the text around the operand of
-    /// a unary (2 fragments) or around a binary's two (3). Null: no host
-    /// form (`fmod` has one, but it is not a fragment wrap — see there).
+    /// `f64Const`'s plain-f64 host spelling: the text around a unary's operand
+    /// (2 fragments) or a binary's two (3). Null means no fragment form
+    /// (`fmod` is spelled separately in `f64Const`).
     ///
-    /// §4.3.1 Table 4-14 and §4.3.2 Table 4-15 in full: every one is a pure
-    /// f64→f64 function of a value the host already has, so a §6.3.4 default
-    /// over one derives exactly as an arithmetic default does — the clause
-    /// puts no operator restriction on a dependent parameter, so neither
-    /// does this. The integer ops share the real spelling, in the f64 domain
-    /// `foldConst` folds them in; `idiv` has none, because its truncation is
-    /// NOT what `/` does on an f64. `if_cast` and `opt_barrier` are
-    /// identities there.
+    /// Covers §4.3.1 Table 4-14 and §4.3.2 Table 4-15 in full, since §6.3.4
+    /// puts no operator restriction on a dependent parameter default. Integer
+    /// ops share the real spelling in `foldConst`'s f64 domain; `idiv` has
+    /// none because its truncation is not f64 `/`.
     host_f64: ?[]const []const u8,
-    /// `codegen.devSafe`: the host spelling is instructions a GPU executes
-    /// without libm, AND the opcode is real-valued.
+    /// `codegen.devSafe`: the op is real-valued and its host spelling runs on
+    /// a GPU without libm.
     dev_safe: bool,
-    /// `hoist.libmClass`: the op is a libm call on the host, costly enough
-    /// that evaluating it eagerly is a price (`float/lanes.zig` `eagerCostly`).
+    /// The op is a libm call on the host, costly enough that evaluating it
+    /// eagerly is a price (`lanes.eagerCostly`).
     libm: bool,
 };
 
+/// Every opcode's row.
 pub const table = std.EnumArray(Mir.Opcode, Row).init(.{
     .fadd = .{ .s = .custom, .pins_lanes = false, .host_f64 = &.{ "(", ") + (", ")" }, .dev_safe = true, .libm = false },
     .fsub = .{ .s = .custom, .pins_lanes = false, .host_f64 = &.{ "(", ") - (", ")" }, .dev_safe = true, .libm = false },
@@ -125,9 +114,8 @@ pub const table = std.EnumArray(Mir.Opcode, Row).init(.{
     .path_prev = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .path_acc = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .select = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
-    // §3.2.2 array storage (`render.emitArrayStmt`/`renderLoad`). A store into
-    // `f64` storage collapses its value to `.val()` and pins there, per
-    // storage — not a fact of the opcode.
+    // §3.2.2 array storage. A store into `f64` storage pins per storage in
+    // `render.emitArrayStmt`, not per opcode.
     .anew = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .fload = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
     .iload = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
@@ -138,6 +126,7 @@ pub const table = std.EnumArray(Mir.Opcode, Row).init(.{
     .call = .{ .s = .custom, .pins_lanes = false, .host_f64 = null, .dev_safe = false, .libm = false },
 });
 
+/// Returns `op`'s row.
 pub fn get(op: Mir.Opcode) Row {
     return table.get(op);
 }
