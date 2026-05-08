@@ -4,9 +4,6 @@
 //! resolved at compile time (the device has no runtime hierarchy).
 //!
 //! LRM clauses this file's code cites: §1.3.1.1, §3.6.3.2, §3.11.1, §5.2.1, §5.4.3, §5.8.3, §6.2.1, §6.7, §9.16, §9.20.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_hier_name.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -32,22 +29,16 @@ const astTy = Lower.astTy;
 /// This file's private state on `Lower` (`Lower.hier_name_state`).
 pub const State = struct {
     /// §9.20 the analog_net_reference of every alias call so far → the unknown that
-    /// net was DECLARED with, before any alias moved it.
-    ///
-    /// Two rules need this and neither can be answered from `node_voltages` once an
-    /// alias has been applied. The relation between two calls — "It shall be an
-    /// error for the hierarchical_reference_string to reference a node that is used
-    /// as an analog_net_reference in ANOTHER ... call" — is the key set. And the
-    /// clause's ban on a PORT as the analog_net_reference is about the net's own
-    /// declaration: once `n1` has been aliased onto a port, `node_voltages` says it
-    /// IS one, and the SECOND call of the last-writer rule would be refused for
-    /// something the source never wrote.
+    /// net was declared with, before any alias moved it. The key set answers "used as
+    /// an analog_net_reference in another ... call", and the declared unknown keeps the
+    /// port ban about the declaration, which `node_voltages` no longer shows once an
+    /// alias has been applied.
     alias_home: std.StringHashMapUnmanaged(u16) = .empty,
     /// The conditions enclosing the analog-initial statement being lowered,
     /// outermost first (`pushCond`). An alias call under any of them is chosen
     /// by a parameter, so it goes to `runtime` instead of `node_voltages`.
     conds: std.ArrayList(Cond) = .empty,
-    /// §9.20 + §5.2.1 the aliases a parameter chooses, keyed by the DECLARED
+    /// §9.20 + §5.2.1 the aliases a parameter chooses, keyed by the declared
     /// unknown of their analog_net_reference, which is what `node_voltages`
     /// names while one exists and what `aliasProbe` dispatches on.
     runtime: std.AutoHashMapUnmanaged(u16, Runtime) = .empty,
@@ -72,23 +63,21 @@ pub const Runtime = struct {
     entries: std.ArrayList(struct { target: u16, conds: []const Cond }) = .empty,
 };
 
-/// Enter an arm of a conditional inside `analog initial` (a no-op elsewhere,
-/// where no alias call can be).
+/// Enters an arm of a conditional inside `analog initial`; a no-op elsewhere,
+/// where no alias call can be.
 pub fn pushCond(self: *Lower, c: Cond) Oom!void {
     if (self.in_analog_initial) try self.hier_name_state.conds.append(self.arena, c);
 }
 
+/// Leaves the arm `pushCond` entered.
 pub fn popCond(self: *Lower) void {
     if (self.in_analog_initial) _ = self.hier_name_state.conds.pop();
 }
 
-/// §9.20's net, read: "the analog_net_reference will be aliased to that
-/// hierarchical node and shall refer to the same circuit matrix position". For a
-/// net whose alias a parameter chooses, §9.20 has the call "re-evaluated each
-/// sweep point of a dc sweep as needed" and §5.2.1 re-executes the block when
-/// "a parameter ... referenced from an analog initial block is changed", so the
-/// position is a select over the candidates on the conditions that chose them —
-/// re-lowered here, which `Cond.pure` makes the same value as in the block.
+/// Returns the potential probe of node `idx`, following §9.20 aliases. For a net
+/// whose alias a parameter chooses (§9.20 re-evaluates per sweep point, §5.2.1
+/// re-executes `analog initial` on a parameter change), emits a select over the
+/// candidates, re-lowering their conditions (`Cond.pure` makes that the same value).
 pub fn aliasProbe(self: *Lower, idx: u16) Oom!Mir.Value {
     const set = self.hier_name_state.runtime.get(idx) orelse return lower_node.probe(self, idx);
     var v = try lower_node.probe(self, set.base);
@@ -118,9 +107,9 @@ fn condValue(self: *Lower, t: Cond) Oom!Mir.Value {
     return if (t.pol) b.? else self.emit(.lognot, &.{b.?});
 }
 
-/// Everything but a potential probe of a parameter-aliased net: a contribution
-/// to it, a flow through it, `ddx` with respect to it. Each would need its row
-/// or column chosen by the card as well.
+/// Reports an error when nodes `hi` or `lo` have a parameter-chosen alias. Only a
+/// potential probe can follow one; a contribution, flow or `ddx` would need its
+/// row or column chosen by the card as well.
 /// ponytail: refused rather than routed; route them through the same select
 /// the day a model needs one.
 pub fn refuseRuntime(self: *Lower, tok: u32, hi: u16, lo: u16) Oom!void {
@@ -137,25 +126,11 @@ pub const AliasHit = struct { idx: u16, direct: bool };
 /// §9.20's validity list for `$analog_node_alias()` / `$analog_port_alias()`,
 /// then the alias itself.
 ///
-/// All six rules are checked HERE, in lowering, because every one of them is a
-/// property of the call and none of them is a property of a value: the block the
-/// call sits in, the guard above it, the SHAPE of the first argument (a node
-/// declaration, not a probe and not a bit select), the constancy of the second,
-/// and the relation between two calls. codegen sees a `call` with two operands
-/// and cannot recover any of that.
-///
-/// One code for the list. The six sentences are one rule with one reason — an
-/// alias makes its node "refer to the same circuit matrix position" as the
-/// hierarchical reference, so it is a topology edit and topology is fixed before
-/// a solve — and each message quotes the sentence it enforces.
-///
-/// The edit is HERE too, and for the same reason: a node's identity in this
-/// compiler is `node_voltages`, the name → unknown map every probe goes
-/// through, so "refer to the same circuit matrix position" is one `put`. Doing
-/// it at the call site is also what gives §9.20's last-writer rule — "if a
-/// particular node is involved in multiple calls ..., then the last evaluated
-/// call shall take precedence" — for free: the calls are lowered in source
-/// order and each overwrites the last.
+/// All six rules are properties of the call (its block, its guard, the shape of the
+/// first argument, the constancy of the second, the relation between calls), which
+/// codegen cannot recover, so they are checked here under one code (E0812), each
+/// message quoting its sentence. The alias is a `node_voltages` write made in source
+/// order, which gives §9.20's "the last evaluated call shall take precedence".
 pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []const Ast.ExprId) Oom!lower_limit.AliasResult {
     const ex = &self.file.exprs;
     // 1. "It shall be an error for the $analog_node_alias() and
@@ -170,17 +145,15 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
     // unless the conditional expression controlling the statement consists of
     // terms which can not change during the course of a simulation."
     //
-    // That carve-out is EXACTLY `static_cond_depth`: A.8.3's
+    // That carve-out is `static_cond_depth`: A.8.3's
     // `analysis_or_constant_expression` is the same "cannot change during the
     // simulation" set, so a parameter or `analysis()` guard is admitted and
     // `$abstime` is not. A constant-folded `if` never raises either counter and
     // so never reaches here at all.
     //
-    // The `analog initial` block is itself ONE guarded body — `lowerModule`
-    // wraps it in the `initial_step` flag rather than splitting the CFG — so the
-    // depth inside an EMPTY initial block is already 1/0. That guard is not a
-    // §9.20 conditional, it is the context the clause requires, so it is
-    // discounted (saturating, since rule 1 above is what guarantees it is there).
+    // `lowerModule` wraps `analog initial` in the `initial_step` guard, so the depth
+    // inside it is already 1/0. That guard is the context the clause requires, not
+    // a §9.20 conditional, so it is discounted (saturating; rule 1 guarantees it).
     if ((self.cond_depth -| 1) != self.static_cond_depth) {
         try self.err(self.file.exprs.mainTok(e), .E0812, "`{s}` is used inside conditional statement whose condition can change during the simulation", .{name});
         return .refused;
@@ -198,9 +171,8 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
     switch (ex.tag(ref)) {
         .ident => {
             const rname = self.file.str(ex.strOf(ref));
-            // The net's own unknown: §9.20's last-writer rule means `rname` may
-            // already BE an alias, and every rule below is about the
-            // declaration, not about where the previous call pointed it.
+            // The net's declared unknown: `rname` may already be an alias, and
+            // every rule below is about the declaration.
             const idx = self.hier_name_state.alias_home.get(rname) orelse self.node_voltages.get(rname);
             if (idx == null or idx.? == ground or self.vars.contains(rname)) {
                 try self.err(self.file.exprs.mainTok(e), .E0812, "the analog_net_reference of `{s}` is not a continuous node declared in this module", .{name});
@@ -218,8 +190,8 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
         },
         // 5. "If the analog_net_reference is a vector node, it shall reference
         // the full vector node, it shall be an error for it to be a bit select
-        // or part select of a vector node." The asymmetry is deliberate: the
-        // scalar ELEMENT is what the hierarchical_reference_string may name.
+        // or part select of a vector node." The hierarchical_reference_string,
+        // by contrast, may name a scalar element.
         .index, .range => {
             try self.err(self.file.exprs.mainTok(e), .E0812, "a vector analog_net_reference must be the whole vector, not a bit select or part select", .{});
             return .refused;
@@ -231,9 +203,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
     }
     // 6. "The hierarchical_reference_string shall be a CONSTANT string value
     // (string literal or string parameter) containing a hierarchical reference
-    // to a continuous node." Two spellings and nothing else — a string VARIABLE
-    // is read during a solve, which is what the analog-initial rule already
-    // rules out for the call itself. `constEval` admits exactly those two.
+    // to a continuous node." `constEval` admits exactly those two spellings.
     const target = blk: {
         if (args.len > 1) if (lower_constfold.constEval(self, args[1])) |c| switch (c) {
             .str => |s| break :blk s,
@@ -245,8 +215,8 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
     // "It shall be an error for the hierarchical_reference_string to reference a
     // node that is used as an analog_net_reference in ANOTHER
     // $analog_node_alias or $analog_port_alias() system function call." The same
-    // LEFT argument twice is legal — the clause spends a last-writer rule on it
-    // — so only target-against-other-reference is compared.
+    // left argument twice is legal (the last-writer rule), so only the target is
+    // compared against other references.
     //
     // Only a dotted-free string can name one: §6.7 says "the first name in a
     // path name can also be the top of a hierarchy which starts at the level
@@ -259,7 +229,7 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
             return .refused;
         }
     }
-    // First call for this net records its DECLARED unknown; a later one must
+    // First call for this net records its declared unknown; a later one must
     // not overwrite it with the alias the earlier call installed.
     if (!self.hier_name_state.alias_home.contains(ref_name)) try self.hier_name_state.alias_home.put(self.arena, ref_name, local);
     return bindAlias(self, name, ref_name, local, target);
@@ -273,36 +243,18 @@ pub fn checkAliasCall(self: *Lower, e: Ast.ExprId, name: []const u8, args: []con
 /// node, then the analog_net_reference will be aliased to that hierarchical node
 /// and shall refer to the same circuit matrix position."
 ///
-/// The clause's own three validity rules, in its order, plus resolution:
+/// The clause's three validity rules, in its order, after resolution: a scalar node
+/// or scalar element (a scalarised vector base name resolves to nothing); compatible
+/// disciplines (§3.11.1, `disciplineConflict`); and, for `$analog_port_alias()`, a port.
 ///
-///   "shall refer to a scalar continuous node or a scalar element of a
-///    continuous vector node" — a vector BASE name is not a node here at all
-///    (lowering scalarises `[3:0] b` into `b[3]`…`b[0]`), so it resolves to
-///    nothing and takes the zero answer without an arm of its own;
-///   "the discipline of the analog_net_reference and the resolved hierarchical
-///    node reference shall be compatible (see 3.11)" — `disciplineConflict`,
-///    the same §3.11.1 rule list `checkNetCompat` applies to a branch;
-///   "for the $analog_port_alias() system function, the resolved hierarchical
-///    node reference shall be a port".
+/// A surviving call is one `node_voltages` write. The aliased net keeps its `nodes`
+/// row with no equation, because pruning it would renumber `U`, which the host reads.
+/// A call under a parameter condition is recorded for `aliasProbe` to select at run
+/// time; otherwise resolution is compile time.
 ///
-/// Everything that survives is one `node_voltages` write. The aliased net keeps
-/// its own `nodes` row, which no probe can reach any more: an unknown with
-/// no equation, which is what a net the clause has just merged away IS. That is
-/// the same shape a declared-and-unused net already has here, and pruning it
-/// would renumber `U` — an ABI the host reads.
-///
-/// A call under a parameter CONDITION is the one case where §9.20's "shall be
-/// re-evaluated each sweep point of a dc sweep" can change the answer; it is
-/// recorded for `aliasProbe` to select at run time. Otherwise the resolution is
-/// COMPILE TIME and that sentence holds vacuously — the only inputs are the
-/// string and the elaborated design.
-///
-/// ponytail: the other input that CAN move is a string PARAMETER the host
-/// overrides on the model card: that is frozen at its declared default here,
-/// exactly as §3.6.3.2's nodeset is. Making it move needs a device whose
-/// topology is a function of its model card, which is not what `U` is; the
-/// upgrade path is to refuse a parameter-valued string whose default and
-/// override could resolve differently, once a host exists that can tell us.
+/// ponytail: a string parameter the model card overrides is frozen at its default,
+/// as §3.6.3.2's nodeset is. Upgrade: refuse a parameter-valued string whose default
+/// and override could resolve differently.
 fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u16, target: []const u8) Oom!lower_limit.AliasResult {
     const hit = resolveAliasNode(self, target) orelse return .unresolved;
     // §1.3.1.1 ground is not an unknown, but it IS a valid continuous node and
@@ -320,26 +272,17 @@ fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u16, 
         }
     }
     if (std.mem.eql(u8, fname, "$analog_port_alias")) {
-        // "the resolved hierarchical node reference shall be a port". A port of
-        // the ELABORATED device, which is the only port whose flow §5.4.3 can
-        // read: `I(<p>)` is a row pinning the module's KCL sum at `p`.
+        // "the resolved hierarchical node reference shall be a port": a port of
+        // the elaborated device, the only port whose flow §5.4.3 can read.
         //
-        // ponytail: so a child instance's port — the clause's own
-        // `$analog_port_alias(n2, "top.r1.p")`, whose promise is that `I(<n2>)`
-        // "shall measure the flow through the port of the INSTANCE referred to"
-        // — takes the zero answer instead. Flattening binds that port to the
-        // parent net it was connected to (`hier_names`), and the flow through
-        // one instance's terminal is no longer a quantity the flat design has:
-        // every instance on that net shares it. Answering 1 and measuring the
-        // NET's flow would be a different number wearing the right name, and
-        // §9.20 gives the honest 0 a meaning ("the user is encouraged to check
-        // the return value"). The upgrade path is a per-instance terminal flow
-        // unknown, which is elaboration's to mint, not this function's.
+        // ponytail: a child instance's port (`$analog_port_alias(n2, "top.r1.p")`)
+        // returns 0. Flattening binds it to the parent net, whose flow every
+        // instance on the net shares, so answering 1 would measure the wrong
+        // quantity. Upgrade: a per-instance terminal flow unknown from elaboration.
         if (!hit.direct or hit.idx == ground or hit.idx >= self.out.num_ports) return .unresolved;
     }
-    // A call under a parameter condition: `aliasProbe` chooses at run time,
-    // since the model card may override the parameter the lowering sees only
-    // the default of. The net keeps naming its declared unknown meanwhile.
+    // A call under a parameter condition: `aliasProbe` chooses at run time, since
+    // the model card may override the parameter. The net keeps its declared unknown.
     const st = &self.hier_name_state;
     var pure = st.conds.items.len != 0;
     for (st.conds.items) |c| pure = pure and c.pure;
@@ -350,10 +293,9 @@ fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u16, 
         try self.node_voltages.put(self.arena, ref_name, local);
         return .bound;
     }
-    // The alias itself: from here the analog_net_reference names the resolved
-    // node's unknown, so every later probe of it lands on that matrix position.
-    // An unconditional call is the last writer over every conditional one.
-    // ponytail: a condition that is static only as a VALUE (a variable holding
+    // The alias itself: every later probe of the analog_net_reference lands on the
+    // resolved node's unknown. An unconditional call overrides every conditional one.
+    // ponytail: a condition that is static only as a value (a variable holding
     // a parameter, `isStaticValue`) cannot be re-lowered outside the block, so
     // it still binds here, at the last arm lowered.
     _ = st.runtime.remove(local);
@@ -361,23 +303,14 @@ fn bindAlias(self: *Lower, fname: []const u8, ref_name: []const u8, local: u16, 
     return .bound;
 }
 
-/// §6.7 resolve a `hierarchical_reference_string` against the ELABORATED design.
+/// §6.7 resolves a `hierarchical_reference_string` against the elaborated design.
 /// `direct` says the name was a node of the flat design itself rather than a
-/// child port that flattening bound to one — see `bindAlias`'s port rule.
+/// child port that flattening bound to one (see `bindAlias`'s port rule).
 ///
-/// Flattening renames a child's net to `path.name` with `Elaborate.sep`, which
-/// IS a period, so the string §9.20 hands us and the name the flat design
-/// carries are the same bytes and this is a map lookup — the same identity
-/// `flatName` rides for a `.hier_ident` written in source. What differs is only
-/// that the path arrives as a string, so the two prefix rules are applied to
-/// bytes instead of to interned parts:
-///
-///   §6.2.1 `$root.` — "used to unambiguously refer to a top-level instance or
-///   to an instance path starting from the root of the instantiation tree";
-///   §6.7 the first name of a path "can also be the top of a hierarchy", with
-///   "the ambiguity ... resolved by giving priority to the local scope" — hence
-///   the unstripped lookup FIRST, and the device's own module name stripped
-///   only after it fails.
+/// Flattened names join path parts with `Elaborate.sep`, a period, so this is a map
+/// lookup. A leading `$root.` is stripped (§6.2.1); the unstripped name is tried
+/// first and the device's own module name stripped only after it fails, since §6.7
+/// resolves the ambiguity "by giving priority to the local scope".
 fn resolveAliasNode(self: *Lower, path: []const u8) ?AliasHit {
     if (lookupFlatNode(self, path)) |h| return h;
     var p = path;
@@ -401,32 +334,9 @@ fn lookupFlatNode(self: *Lower, p: []const u8) ?AliasHit {
     return null;
 }
 
-/// §9.16 the dynamic simulation probe function, Syntax 9-11:
-///
-///     $simprobe ( inst_name , param_name [, expression] )
-///
-/// "$simprobe allows a module to probe the value of a parameter of another
-/// module instance", and the clause's one sentence with a value in it is the
-/// resolution rule: "If either the inst_name or param_name cannot be resolved,
-/// and the optional expression is not supplied, then an error shall be
-/// generated. If the optional expression is supplied, its value will be returned
-/// in lieu of raising an error."
-///
-/// So the answer is decided by whether `inst_name.param_name` resolves, and in a
-/// flattened design that is a NAME LOOKUP: the flat name of a child's parameter
-/// IS its hierarchical path (`Elaborate.sep`), the same identity §6.7 rides on.
-/// Nothing is dynamic about it, which is the point — the device has no runtime
-/// hierarchy to walk.
-///
-/// ponytail: the ceiling is a COMPUTED name. §9.16's arguments are strings, and a
-/// string that is not a literal here cannot be resolved at compile time; it takes
-/// the fallback, which is precisely what §9.16 says an unresolvable probe does,
-/// and with no fallback it is the error the clause asks for. A host with a real
-/// instance table would resolve more names than this does — that is the piece
-/// Ruling E deliberately gave up, and it is recorded here rather than hidden.
 /// §9.16 "the parent of the current instance": the caller's own instance path
 /// with its last segment dropped, separator included, "" at the top. Joined to
-/// an `inst_name` it gives the flat name of a SIBLING.
+/// an `inst_name` it gives the flat name of a sibling.
 fn callerParentPath(self: *const Lower) []const u8 {
     if (self.cur_unit >= self.out.unit_paths.len) return "";
     const p = self.out.unit_paths[self.cur_unit].path;
@@ -437,6 +347,13 @@ fn callerParentPath(self: *const Lower) []const u8 {
     return p[0 .. cut + 1];
 }
 
+/// Lowers `$simprobe(inst_name, param_name [, expression])` (LRM §9.16) to the
+/// sibling instance's parameter or variable, resolved at compile time by flat name.
+/// When the name does not resolve, returns `expression`, or reports an error when
+/// there is none.
+///
+/// ponytail: only literal names resolve; a computed name takes the fallback, as an
+/// unresolvable probe does. A host with a runtime instance table would resolve more.
 pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -447,30 +364,20 @@ pub fn lowerSimprobe(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const inst = lower_sysfunc.constStrArg(self, args[0]);
     const param = lower_sysfunc.constStrArg(self, args[1]);
     if (inst != null and param != null) {
-        // §9.16: "the simulator will look for an instance called inst_name IN
-        // THE PARENT OF THE CURRENT INSTANCE i.e. a sibling of the instance
-        // containing the $simprobe() expression." The name is therefore
-        // RELATIVE, and the flat key is the caller's parent path joined to it —
-        // not the bare `inst_name`, which only worked for a caller that
-        // happened to sit at the root, and which also resolved a path FROM the
-        // root, the one reading the sibling rule excludes.
+        // §9.16: "the simulator will look for an instance called inst_name in
+        // the parent of the current instance i.e. a sibling of the instance
+        // containing the $simprobe() expression." The name is relative, so the
+        // flat key is the caller's parent path joined to it.
         const path = try std.mem.concat(self.arena, u8, &.{
             callerParentPath(self), inst.?, &[_]u8{Elaborate.sep}, param.?,
         });
         if (self.param_index.get(path)) |pi|
             return .{ .v = self.param_values.items[pi], .ty = astTy(self.out.params.items[pi].ty) };
-        // §9.16's own first sentence: "$simprobe() queries the simulator for AN
-        // OUTPUT VARIABLE named param_name in a sibling instance", and the
-        // clause's example probes `id` of a mosfet — an operating-point
-        // quantity, not a parameter. "The intended use of this function is to
-        // allow dynamic monitoring of instance quantities", which a probe that
-        // can only read the netlist's own numbers does not do. A flattened
-        // child's variable is an ordinary variable under its path name, so the
-        // read is the ordinary one.
-        //
-        // The sibling's block was lowered before this one (elaboration appends
-        // instances in tree order), so the value read here is the one that
-        // instance computed for this evaluation.
+        // §9.16: "$simprobe() queries the simulator for an output variable named
+        // param_name in a sibling instance". A flattened child's variable is an
+        // ordinary variable under its path name. The sibling's block was lowered
+        // first (elaboration appends instances in tree order), so this reads the
+        // value it computed for this evaluation.
         // §6.4.3 unless the instance's paramset hides it: "the module output
         // variable shall not be available for instances using the paramset".
         const hidden = for (self.ps_hidden) |h| {

@@ -1,11 +1,5 @@
-//! Prover self-checks: source in, float-mode verdict and domain diagnostics out.
-//!
-//! Run on std.testing.allocator.
-//!
-//! LRM clauses this file's code cites: §3.2.1, §3.4.2, §4.2.4, §4.2.12, §4.3.1, §4.3.2, §5.6.1.3, §5.8.
-//!
-//! Cut verbatim from `proof.zig`. Functions take `self: *proof` and are called
-//! directly, `proof_test.f(self, ...)`; `proof.zig` aliases only what other modules call.
+//! Prover self-checks: Verilog-A source in, float-mode verdict and domain diagnostics out,
+//! on std.testing.allocator. LRM §3.2.1, §3.4.2, §4.2.4, §4.2.12, §4.3.1, §4.3.2, §5.6.1.3, §5.8.
 
 const std = @import("std");
 const proof = @import("../proof.zig");
@@ -22,14 +16,14 @@ const unitCount = proof.unitCount;
 const prove = proof.prove;
 const proveOpts = proof.proveOpts;
 
-// ---------------------------------------------------------------------------
-// Tests
-// ---------------------------------------------------------------------------
-
+/// The frontend preprocessor the harness runs.
 pub const Preprocessor = @import("frontend").Preprocessor;
+/// The frontend lexer the harness runs.
 pub const Lexer = @import("frontend").Lexer;
+/// The frontend parser the harness runs.
 pub const Parser = @import("frontend").Parser;
 
+/// Source parsed and lowered in its own arena, ready for `prove`. Free with `deinit`.
 pub const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
     file: Ast.SourceFile,
@@ -95,15 +89,15 @@ test "W0650: a .strict unit warns, names the culprit, and still compiles" {
     const v = try h.prove(std.testing.allocator, .{});
     defer v.deinit(std.testing.allocator);
 
-    // LEGAL: an unbounded exp is spec-faithful (§4.3.2 "All x"), so the model
-    // is ACCEPTED — the warning is about speed, not correctness.
+    // Legal: an unbounded exp is spec-faithful (§4.3.2 "All x"), so the model
+    // is accepted; the warning is about speed, not correctness.
     try std.testing.expect(v.ok());
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
     try std.testing.expect(!h.bag.failed());
 
     const e = h.find(.W0650) orelse return error.NoFinitenessWarning;
     try std.testing.expectEqual(diag.Severity.warning, e.severity);
-    // The caret is on the contribution — the unit — not on some interior
+    // The caret is on the contribution (the unit), not on some interior
     // instruction the user did not write.
     try std.testing.expect(!e.span.isNone());
     // The culprit is named. A probe is finite-but-unbounded, so `exp` of it is
@@ -152,7 +146,7 @@ test "W0650: unknown_bound recovers the proof, and the warning goes away with it
     try std.testing.expect(loose.has(.W0650));
 
     // The compliance limit is a property of the host's solver, not of the
-    // language — declaring it is what makes the transcendental provable.
+    // language; declaring it is what makes the transcendental provable.
     var tight: Harness = undefined;
     try Harness.run(std.testing.allocator, src, &tight);
     defer tight.deinit();
@@ -221,20 +215,16 @@ test "W0651: a §3.4.2 string value set is not a bound, so it is not an open one
     const v = try h.prove(std.testing.allocator, .{});
     defer v.deinit(std.testing.allocator);
 
-    // `paramInterval` answers `.top` for every string parameter — there is no
-    // number in the range to close — and the fixture that pinned this
-    // (ch03_data_types/17_string_parameter_range.va) collected two W0651 it
-    // could do nothing about, since a green fixture does not fail on warnings.
+    // `paramInterval` answers `.top` for every string parameter; there is no
+    // number in the range to close
+    // (fixture: ch03_data_types/17_string_parameter_range.va).
     try std.testing.expect(!h.has(.W0651));
 }
 
 test "§3.4.2: an `exclude` proves nonzero only where its bracket is square" {
-    // The three exclusions that differ ONLY in whether 0 is inside them. The
-    // first still admits 0, so the divide is not provably safe and the unit has
-    // to stay `.strict`; the other two really do remove 0 and earn `.optimized`.
-    // Reading `(0:5)` as if it excluded its endpoints' *values* is unsound in
-    // the dangerous direction: it hands fast-math a divisor the range permits
-    // to be zero.
+    // Three exclusions that differ only in whether 0 is inside them. The
+    // first still admits 0, so the divide is not provably safe and the unit
+    // stays `.strict`; the other two remove 0 and earn `.optimized`.
     const cases = [_]struct { range: []const u8, mode: FloatMode }{
         .{ .range = "exclude (0:5)", .mode = .strict },
         .{ .range = "exclude [0:5]", .mode = .optimized },
@@ -268,14 +258,11 @@ test "§3.4.2: an `exclude` proves nonzero only where its bracket is square" {
 }
 
 test "§3.4.2: a PUNCTURED sign-spanning divisor licenses no corner interval" {
-    // `b` in [-10,10]\{0}: 1.0/b really ranges over (-inf,-0.1] ∪ [0.1,+inf).
-    // The corners 1/±10 used to fabricate the COMPLEMENT [-0.1,0.1], from
-    // which ln(0.3 - 1/b) was "proven" in-domain and the unit went
-    // `.optimized` — whose nnan assertion ln(0.3 - 1/b) then violated at any
-    // card with 0.3 - 1/b < 0 (silent Release UB). And the mirrored shape
-    // ln(1/b - 0.5) was "proven" OUT of domain, an E0602 reject fabricated
-    // against legal inputs (b = 0.1 gives ln(9.5)). Both must now be the
-    // honest third verdict: accepted, `.strict`.
+    // `b` in [-10,10]\{0}: 1.0/b ranges over (-inf,-0.1] ∪ [0.1,+inf), and
+    // the corners 1/±10 give its complement [-0.1,0.1]. From that,
+    // ln(0.3 - 1/b) would prove in-domain (NaN at cards with 0.3 - 1/b < 0)
+    // and ln(1/b - 0.5) would be rejected (b = 0.1 gives ln(9.5)). Both are
+    // the third verdict: accepted, `.strict`.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module p(p, n);
@@ -299,11 +286,10 @@ test "§3.4.2: a PUNCTURED sign-spanning divisor licenses no corner interval" {
 }
 
 test "§4.3.1: pow with a sign-spanning base and an even exponent reaches 0" {
-    // x in [-2,2]: pow(x,2) is [0,4] — the interior minimum at x = 0 is the
-    // point the four corners (all = 4) miss. From the fabricated [4,4] BOTH
-    // wrong directions were derived: sqrt(pow(x,2)-1) went `.optimized` (NaN
-    // at |x| < 1 under fast-math = silent UB) and ln(2-pow(x,2)) was REJECTED
-    // E0602 on a fabricated "known range [-2:-2]" (legal at |x| > sqrt(2)).
+    // x in [-2,2]: pow(x,2) is [0,4]; the interior minimum at x = 0 is the
+    // point the four corners (all 4) miss. A [4,4] claim would make
+    // sqrt(pow(x,2)-1) `.optimized` (NaN at |x| < 1) and reject
+    // ln(2-pow(x,2)) with E0602 (legal at |x| > sqrt(2)).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module q(p, n);
@@ -324,8 +310,8 @@ test "§4.3.1: pow with a sign-spanning base and an even exponent reaches 0" {
     try std.testing.expect(v.ok());
     try std.testing.expect(!h.has(.E0602));
     try std.testing.expect(!h.has(.E0604));
-    // Both `<+ I(p,n)` statements fold into ONE unit (§5.6.1.3, see UNIT
-    // ORDERING) — and its joined slice is NaN-capable, so `.strict`.
+    // Both `<+ I(p,n)` statements fold into one unit (§5.6.1.3, see
+    // `Verdict.unit_modes`), and its joined slice is NaN-capable, so `.strict`.
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
 }
 
@@ -351,10 +337,10 @@ test "§4.3.1: pow on a proven-positive base keeps its corner proof" {
 }
 
 test "audit: a domain-straddling monotone argument yields no narrow interval" {
-    // sqrt over [-4,9] is [0,3] on the legal branch; the old NaN→+inf
-    // endpoint fold claimed [3,+inf], from which asin(sqrt(s)-…) faced a
-    // fabricated E0605 "provably > 1". Straddle must abstract to ⊤: accepted,
-    // `.strict`, no rejection (legal cards exist: s = 0.25 → asin(0.5)).
+    // sqrt over [-4,9] is [0,3] on the legal branch; a NaN endpoint folded
+    // to +inf would claim [3,+inf] and reject asin(sqrt(s)-...) with E0605.
+    // Straddle abstracts to top: accepted, `.strict`, no rejection (legal
+    // cards exist: s = 0.25 gives asin(0.5)).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module a(p, n);
@@ -374,9 +360,8 @@ test "audit: a domain-straddling monotone argument yields no narrow interval" {
 }
 
 test "§3.2.1: an integer parameter is 32-bit, hence finite without a range" {
-    // `q` unranged used to seed ⊤/non-finite and drag the unit `.strict`,
-    // with a W0650 blaming an unrelated probe. A model-card integer cannot
-    // hold an infinity — its type is the range.
+    // `q` is unranged, but a model-card integer cannot hold an infinity:
+    // its type is the range.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module i(p, n);
@@ -421,7 +406,7 @@ test "§3.2.1: even a `from [0:inf]` integer range is clamped finite by its type
 test "E0609: pow with a provably-negative base and provably-fractional exponent" {
     // §4.3.1 Table 4-14 "if x < 0, all integer y": every card in
     // [-10:-1] × {0.5} evaluates pow to NaN, so §4.3.2's "shall report an
-    // error" is discharged statically — the same standard as E0602.
+    // error" is discharged statically, the same standard as E0602.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module e(p, n);
@@ -441,7 +426,7 @@ test "E0609: pow with a provably-negative base and provably-fractional exponent"
 }
 
 test "E0609: pow(0, negative) is provably outside Table 4-14's zero-base row" {
-    // "if x = 0, all y > 0" — an integer exponent does not rescue a zero
+    // "if x = 0, all y > 0": an integer exponent does not rescue a zero
     // base; pow(0,-2) is +inf on every execution.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -460,8 +445,8 @@ test "E0609: pow(0, negative) is provably outside Table 4-14's zero-base row" {
 }
 
 test "E0609: a straddling base or a possibly-integer exponent stays accepted" {
-    // Three-way split: `u` unranged MIGHT be negative and `w` in [2.5:3.0]
-    // MIGHT be the integer 3.0 — neither is a provable violation, so both
+    // Three-way split: `u` unranged might be negative and `w` in [2.5:3.0]
+    // might be the integer 3.0. Neither is a provable violation, so both
     // are accepted and forfeit finiteness (`.strict`), never rejected.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -503,9 +488,9 @@ test "class-6 errors carry a real source span (Mir.InstRow.tok)" {
     try std.testing.expect(!v.ok());
 
     const e = h.find(.E0601) orelse return error.NoDivisorError;
-    // The whole point of the provenance column: this used to be 0:0.
+    // `Mir.InstRow.tok` gives the error a location, on the user's source
+    // rather than the prelude.
     try std.testing.expect(!e.span.isNone());
-    // And the span must land on the source the user wrote, not the prelude.
     const src_text = h.bag.fileText(h.bag.locate(e.span, e.file).file);
     try std.testing.expect(std.mem.indexOf(u8, src_text, "10 % d") != null);
 }
@@ -596,8 +581,7 @@ test "proof: a PROVABLY-violated ln domain is still an error (LRM 4.3.2 'shall r
     const e = h.find(.E0602).?;
     try std.testing.expect(std.mem.indexOf(u8, e.message, "ln()") != null);
     try std.testing.expect(std.mem.indexOf(u8, e.message, "parameter `k`") != null);
-    // The location is the whole point of Mir.InstRow.tok: class-6 diagnostics
-    // used to report at 0:0.
+    // `Mir.InstRow.tok` gives finiteness diagnostics a location.
     try std.testing.expect(!e.span.isNone());
     try std.testing.expectEqual(FloatMode.strict, v.unit_modes[0]);
 }
@@ -624,7 +608,7 @@ test "proof: a dominating §5.8 guard discharges the domain of a node probe" {
 
 test "proof: `/` by a possibly-zero divisor is ACCEPTED and forced .strict (LRM 4.2.4)" {
     // §4.2.4's only zero rule is "It shall be an error to pass zero (0) as the
-    // second argument to the MODULUS operator" — division by zero is not an
+    // second argument to the MODULUS operator". Division by zero is not an
     // error, it is an exact IEEE +-inf. This is the plain resistor `V/r`, the
     // most common statement in all of Verilog-A; rejecting it would make
     // VerA stricter than the LRM.
@@ -741,7 +725,7 @@ test "proof: random distribution names do not prove finite results" {
 test "proof: `1.0/$vt(V)` and `1.0/limexp(V)` are .strict with W0650 (§9.15, §4.5.13)" {
     // $vt(0) = 0 (kT/q at T = 0), and limexp(x) is exp(x) below its knee,
     // which is 0.0 in f64 below about -745: both divisors can be zero, so
-    // `.optimized` (ninf) over either division is UB. Both used to prove.
+    // `.optimized` (ninf) over either division is UB.
     for ([_][]const u8{ "$vt", "limexp" }) |f| {
         var h: Harness = undefined;
         const src = try std.fmt.allocPrint(std.testing.allocator,

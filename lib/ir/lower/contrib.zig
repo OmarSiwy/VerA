@@ -1,12 +1,9 @@
 //! §5.6 contributions: `<+`, indirect contributions, switch branches.
 //!
-//! In: contribution statements. Out: `contributions` (one per access and node pair; the unit
+//! In: contribution statements. Out: `contributions` (one per access and branch; the unit
 //! order proof.zig and naming.zig index by), branch rows.
 //!
 //! LRM clauses this file's code cites: §1.3.1, §1.3.1.2, §4.4, §4.6.3, §4.6.4.6, §5.4.1, §5.6.1.2, §5.6.1.3, §5.6.7, §5.6.7.2, §6.3.6, §7.3.2.1.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_contrib.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -35,15 +32,10 @@ const emit = Lower.emit;
 const call = Lower.call;
 const toReal = Lower.toReal;
 
-// ---------------------------------------------------------------------------
-// Class 4 — contributions (LRM §5.6)
-// ---------------------------------------------------------------------------
-
-/// LRM §5.6. Resolve the branch, split the rhs into its resistive and reactive
-/// halves (§5.6.1.2) and ACCUMULATE both into the target's places (§5.6.1.3).
-///
-/// Reference direction (§1.3.1.2) is carried by the (hi, lo) order alone —
-/// codegen stamps `+val` at hi and `-val` at lo.
+/// Lowers one `<+`: resolves the branch, splits the rhs into its resistive and
+/// reactive halves (§5.6.1.2) and accumulates both into the target (§5.6.1.3).
+/// The reference direction (§1.3.1.2) is carried by the (hi, lo) order alone:
+/// codegen stamps `+val` at hi and `-val` at lo. (LRM §5.6)
 pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(lhs), .E0405, "not allowed in {s}", .{ctx});
@@ -60,10 +52,9 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     // "Contribution statements are not allowed". The set of branches a device
     // stamps is fixed before the solve, and a runtime trip count is not.
     //
-    // `self.loops` is exactly the right question: only the three CFG loops push
-    // onto it, and §5.9.3's genvar `for` is unrolled by `tryUnrollFor` before
-    // `lowerFor` ever gets there — so an `analog for (i = 0; i < 4; ...)` over a
-    // genvar contributes four times and never reaches here.
+    // Only the three CFG loops push onto `self.loops`. §5.9.3's genvar `for` is
+    // unrolled by `tryUnrollFor` before `lowerFor` runs, so a genvar loop
+    // contributes once per iteration and never reaches here.
     if (self.loops.items.len != 0) {
         try self.err(self.file.exprs.mainTok(lhs), .E0426, "", .{});
         return;
@@ -100,10 +91,9 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     }
     // §1.3.4.1 "In that case, potential contributions may not be made to
     // `input` ports"; §1.3.4.2 says the same of flow contributions. The port's
-    // direction IS the direction of its one quantity, so an `input` is supplied
-    // from outside and driving it has no meaning. Only `input` — contributing
-    // to an `output` is the whole point of a signal-flow port, and an `inout`
-    // signal-flow port never gets this far: E0360 refuses the declaration.
+    // direction is the direction of its one quantity, so an `input` is supplied
+    // from outside and driving it has no meaning. Only `input`: an `output` is
+    // meant to be driven, and E0360 already refuses an `inout` signal-flow port.
     for ([_]u16{ target.hi, target.lo }) |n| {
         if (n >= self.out.nodes.len or self.out.nodes.items(.dir)[n] != .input) continue;
         if (!lower_node.isSignalFlow(self, self.out.nodes.items(.disc)[n])) continue;
@@ -185,10 +175,9 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
                 const g = self.noise_val.get(s.id) orelse continue;
                 switch (try lower_analog_op.noiseCoeff(self, v0, g)) {
                     .absent => {},
-                    // No factor describes this use. Fall back to 1, which is
-                    // what the export carried before coefficients existed, and
-                    // stop accumulating so a later statement cannot make the
-                    // row claim more than it knows.
+                    // No factor describes this use. Fall back to 1 and stop
+                    // accumulating, so a later statement cannot make the row
+                    // claim more than it knows.
                     .nonlinear => {
                         s.nonlinear = true;
                         s.coeff = .f_one;
@@ -204,37 +193,21 @@ pub fn lowerContribute(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void 
     }
 }
 
-/// §6.3.6 the double-scaling misuse, which the clause states about a specific
-/// printed module and calls an ERROR there:
+/// §6.3.6 the double-scaling misuse: "The first example, badres, misuses the
+/// $mfactor such that the contributed current would be multiplied by $mfactor
+/// twice ... The simulator will generate an error for this module." Every flow
+/// contribution is already scaled by $mfactor and "Verilog-AMS does not provide
+/// a method to disable" it, so an explicit factor can only scale it again.
 ///
-///   "The first example, badres, misuses the $mfactor such that the contributed
-///   current would be multiplied by $mfactor twice, once by the explicit
-///   multiplication and once by the automatic scaling rule. The simulator will
-///   generate an error for this module."
+/// The predicate is scaling, not presence: §6.3.6's legal `parares` reads
+/// $mfactor in an `if` condition. So the test is `$mfactor` as an operand of a
+/// `*` or `/` in the contributed value; dividing by it is the same misuse.
+/// Potential contributions are not scaled, so only flow is checked.
 ///
-/// The automatic rule is the clause's first bullet — "all contributions to a
-/// branch flow quantity in the analog block shall be multiplied by $mfactor" —
-/// and the clause adds that "Verilog-AMS does not provide a method to disable"
-/// it. So an explicit factor of $mfactor in a FLOW contribution cannot be an
-/// opt-out; it can only be the second multiplication.
-///
-/// THE PREDICATE IS SCALING, NOT PRESENCE, and that is what keeps §6.3.6's own
-/// legal companion legal: `parares` reads $mfactor in the CONDITION of an `if`
-/// (`r/$mfactor < 1e-3`) and the clause says outright that "no error will be
-/// generated for this module". So the test is `$mfactor` as an operand of a `*`
-/// or a `/` inside the contributed value — division included, since dividing the
-/// contribution by $mfactor is the same misuse read as an attempt to cancel the
-/// automatic rule out.
-///
-/// Flow only: §6.3.6's automatic scaling is stated for flow contributions, so a
-/// potential contribution has nothing for an explicit factor to double.
-///
-/// ponytail: the ceiling is a FLATTENED child, where elaboration has already
-/// substituted `$mfactor` for the running product (elaborate.zig
-/// `rewriteSysCall`) and there is no `sys_call` left to find. It only bites when
-/// some ancestor actually specified a `.$mfactor(...)` — with none specified the
-/// read is left as-is and this check sees it. The upgrade is to run this scan in
-/// the clone, which needs the discipline table elaboration does not have.
+/// ponytail: misses a flattened child whose ancestor specified `.$mfactor(...)`,
+/// where elaboration (`rewriteSysCall`) has already substituted the product and
+/// no `sys_call` is left. The upgrade is to run this scan in the clone, which
+/// needs the discipline table elaboration does not have.
 fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom!void {
     if (!scalesByMfactor(self, rhs)) return;
     var b = self.errWith(self.file.exprs.mainTok(lhs), .E0912);
@@ -244,22 +217,13 @@ fn checkMfactorDoubleScaling(self: *Lower, lhs: Ast.ExprId, rhs: Ast.ExprId) Oom
     try b.emit();
 }
 
-/// Is the CONTRIBUTED VALUE a product in which `$mfactor` is a factor?
+/// Whether the contributed value is a product with `$mfactor` as a factor.
 ///
-/// The walk follows the product SPINE of the right-hand side — mul, div and the
-/// sign operators — and no further. That is the clause's own sentence read
-/// literally: "the contributed current would be multiplied by $mfactor twice".
-/// A `$mfactor` that multiplies one addend of a sum does not multiply the
-/// contributed current; `mfactor.va` writes `I(p) <+ V(p) + 0.0 * $mfactor;` on
-/// purpose, to read the parameter from the residual path, and that contribution
-/// is `V(p)` — scaling it once is all that happens to it.
-///
-/// The precedent for stopping at the spine is `checkZeroTransitionZFilter` above:
-/// where the LRM states a rule about the value assigned to a branch, a scan of
-/// the whole subtree invents a rule about expressions the clause declines to
-/// state. The known hole is `I <+ V/r * $mfactor + off`, which is a misuse this
-/// does not catch; the LRM gives no rule for the mixed case and `badres` is not
-/// it.
+/// The walk follows only the product spine (mul, div, sign), reading "the
+/// contributed current would be multiplied by $mfactor twice" literally: a
+/// `$mfactor` scaling one addend of a sum does not scale the current
+/// (`mfactor.va` writes `I(p) <+ V(p) + 0.0 * $mfactor;` on purpose). The known
+/// hole is `I <+ V/r * $mfactor + off`; the LRM gives no rule for the mixed case.
 fn scalesByMfactor(self: *Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
@@ -297,21 +261,11 @@ fn isMfactorRead(self: *Lower, e: Ast.ExprId) bool {
 /// specified as zero (0), then the output is abruptly discontinuous. A Z-filter
 /// with zero (0) transition time shall not be directly assigned to a branch."
 ///
-/// A zero τ is LEGAL — the same clause makes τ optional and "nonnegative", and
-/// reading the discontinuous output into a variable is fine. What is banned is
-/// putting the discontinuity straight into the equation system, where a branch
-/// quantity that steps instantaneously has no derivative for Newton-Raphson.
-/// So the target of the rule is the STATEMENT, which is why the check lives
-/// here and not beside the operator's other argument checks.
-///
-/// DIRECTLY: the filter call has to BE the right-hand side. `V(x) <+ 2*zi_zp(…)`
-/// is arithmetic over the filter's output and the clause does not reach it —
-/// the LRM says "directly assigned", and a scan of the whole subtree would
-/// invent a rule about expressions the clause declines to state.
-///
-/// An absent τ is not a zero one: it means the sampler's own default, which is
-/// the simulator's business (§4.5.12 leaves it unstated) and is not the
-/// "specified as zero" the sentence conditions on.
+/// A zero τ is legal (reading the output into a variable is fine); the rule
+/// targets the statement, so the check lives here rather than with the
+/// operator's argument checks. "Directly" means the filter call is the whole
+/// right-hand side: `V(x) <+ 2*zi_zp(…)` is not reached. An absent τ is the
+/// simulator's default, not "specified as zero".
 fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
     const ex = &self.file.exprs;
     if (ex.tag(rhs) != .filter_call) return;
@@ -331,17 +285,14 @@ fn checkZeroTransitionZFilter(self: *Lower, rhs: Ast.ExprId) Oom!void {
 /// an error, it is illegal to assign these values to a branch through
 /// contribution in the analog context."
 ///
-/// Compile time only, and that boundary is the clause's own scope rather than a
-/// limitation to apologise for: §7.3.2.1 is about a value the SOURCE names, and
-/// with `inf` confined by annex A to a value_range_expression the only way to
-/// write one is the IEEE arithmetic the clause itself describes — 1.0/0.0,
-/// -1.0/0.0, 0.0/0.0. A value that goes infinite only at some operating point
-/// is W0650's business, and W0650 is a different claim: "not provably finite",
-/// not "provably not finite".
+/// Compile time only: the clause is about a value the source names, and annex A
+/// confines `inf` to a value_range_expression, so the only way to write one is
+/// IEEE arithmetic (1.0/0.0, 0.0/0.0). A value non-finite only at some operating
+/// point is W0650's "not provably finite", a different claim.
 ///
-/// SUBEXPRESSIONS, not the whole contribution. A branch value almost always
-/// contains a probe, so `bad + 0.0*V(p)` folds to nothing as a unit; the scan
-/// folds every subtree it can and accuses the first one that is not finite.
+/// Scans subexpressions, not the whole contribution: `bad + 0.0*V(p)` does not
+/// fold as a unit, so the scan folds every subtree it can and reports the first
+/// non-finite one.
 fn checkFiniteContribution(self: *Lower, lhs: Ast.ExprId, v: Mir.Value) Oom!void {
     self.finite_scan.clearRetainingCapacity();
     var bad: ?f64 = null;
@@ -369,8 +320,8 @@ pub const FiniteScan = struct { r: ?Const, bad: ?f64 };
 ///
 /// ponytail: arithmetic and sign only. `exp(1000)` overflows to +inf as well,
 /// but §7.3.2.1's examples are IEEE division and every operator added here
-/// widens the surface for a false accusation. Add the transcendentals the day a
-/// model writes one.
+/// widens the surface for a false accusation. Add transcendentals when a model
+/// needs them.
 fn scanFinite(self: *Lower, v0: Mir.Value, bad: *?f64) Oom!?Const {
     const v = self.mir.resolveAlias(v0);
     if (self.finite_scan.get(v)) |s| {
@@ -418,24 +369,15 @@ fn accuses(op: Mir.Opcode) bool {
     };
 }
 
-/// LRM §5.6.7 indirect branch contribution — `V(out) : V(in) == e;`, read
+/// Lowers a §5.6.7 indirect branch contribution, `V(out) : V(in) == e;`, read
 /// "drive V(out) so that V(in) == e".
 ///
-/// Topologically identical to a direct potential contribution: `out` is driven
-/// by a source whose current is a solver unknown, and codegen stamps that
-/// current at hi/lo. Only the constitutive row differs — it is
-///
-///     <probe> − <equation>
-///
-/// with NO `V(hi,lo)` term, because "the source voltage needs to be adjusted so
-/// that the given equation is satisfied": the branch voltage is the free
-/// variable, not a term of the constraint. Row ORIENTATION is probe − equation
-/// (not the reverse); for a symmetric equation like the ideal opamp both signs
-/// converge to the same point, but an asymmetric one does not.
-///
-/// "Any branches referenced in the equation are only probed and not driven" —
-/// that falls out for free: `lowerExpr` on `V(in)` produces a probe, and only
-/// the entry appended here ever reaches codegen's stamping loop.
+/// Topologically a direct potential source whose current is a solver unknown.
+/// Only the constitutive row differs: it is `<probe> - <equation>` with no
+/// `V(hi,lo)` term, since "the source voltage needs to be adjusted so that the
+/// given equation is satisfied". The orientation matters for an asymmetric
+/// equation. Branches in the equation are only probed, because only the entry
+/// appended here reaches codegen's stamping loop.
 pub fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprId, eqn: Ast.ExprId) Oom!void {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(lhs), .E0410, "not allowed in {s}", .{ctx});
@@ -496,11 +438,9 @@ pub fn lowerIndirect(self: *Lower, tok: u32, lhs: Ast.ExprId, probe_e: Ast.ExprI
 /// probe or the flow of a potential probe, and which one is decided by which
 /// the module reads. Reading both asks for two zeros at once.
 ///
-/// A SWEEP and not a test at the read, because the classification depends on
-/// contributions that may be lowered later: §1.3.1 makes a branch a probe by
-/// nothing ever appearing on the left of its `<+`, which is only knowable once
-/// the whole module is lowered. A source branch is exempt — §5.4.2.2 makes both
-/// of its quantities accessible.
+/// Runs as a sweep after the module is lowered, because a branch is a probe only
+/// if nothing is ever contributed to it (§1.3.1). A source branch is exempt:
+/// §5.4.2.2 makes both of its quantities accessible.
 pub fn checkProbeBranches(self: *Lower) Oom!void {
     // ponytail: O(reads²) over one module's access functions. A pair map keyed
     // on the unordered node pair if a model ever makes this measurable.
@@ -538,17 +478,12 @@ fn hierNetForm(self: *const Lower, lhs: Ast.ExprId) bool {
 /// check if the contribution produces a solvable set of equations, e.g. no
 /// voltage source loops created."
 ///
-/// A potential `<+` to `V(drv.x)` is therefore a SECOND unnamed branch beside
-/// any potential source the instance `drv` has on the same pair — two
-/// potential sources in parallel, the shortest voltage-source loop there is.
-/// `contribIndex` keys an unnamed branch on its node pair alone, so it would
-/// merge the two into one accumulator and sum them; the loop is found here,
-/// before that merge, in either lowering order (the record list covers the
-/// writer lowering first). True when it reported.
-///
-/// Every such statement is counted, conditional or not: a potential source
-/// that closes the loop on some iterations still leaves those iterations
-/// without a solution.
+/// A potential `<+` to `V(drv.x)` is therefore a second unnamed branch beside
+/// any potential source `drv` has on the same pair: two potential sources in
+/// parallel. `contribIndex` keys an unnamed branch on its node pair alone and
+/// would sum them, so the loop is found here, before that merge, in either
+/// lowering order. Conditional statements count too. Returns true when it
+/// reported.
 fn checkHierParallel(self: *Lower, lhs: Ast.ExprId, target: Target) Oom!bool {
     if (target.access != .potential or target.br != unnamed_branch) return false;
     const hier = hierNetForm(self, lhs);
@@ -588,10 +523,8 @@ fn checkHierParallel(self: *Lower, lhs: Ast.ExprId, target: Target) Oom!bool {
 /// loop.
 ///
 /// Reported only when the loop's rows come from more than one module instance
-/// (`Contribution.unit`): that is the case these clauses create — a
-/// contribution into another instance's nets, landing in parallel with that
-/// instance's own sources — and the one no single module's author can see.
-/// A loop inside one module is left alone, as it was before this check.
+/// (`Contribution.unit`), the case these clauses create and no single module's
+/// author can see. A loop inside one module is not reported.
 pub fn checkSourceLoops(self: *Lower) Oom!void {
     const Edge = struct { a: u32, b: u32, unit: u32 };
     const n_nodes: u32 = @intCast(self.out.nodes.len + 1); // the last row is ground
@@ -730,13 +663,9 @@ fn isIndirectProbe(self: *const Lower, e: Ast.ExprId) bool {
 /// twice, and its two spellings differ by a sign — for the flow and for the
 /// potential alike.
 ///
-/// Canonicalising here rather than at each use is what makes that true
-/// everywhere at once: `flowUnknown` mints one unknown per branch instead of an
-/// independent second one for the reversed pair, `contribIndex` accumulates
-/// both spellings into one source, and codegen — which reconstructs the
-/// `flow(a,b)` NAME from a contribution's `hi`/`lo` to find the slot lowering
-/// already allocated — only ever sees the one spelling, so nothing downstream
-/// needs to know the rule exists.
+/// Canonicalising here means `flowUnknown` mints one unknown per branch,
+/// `contribIndex` accumulates both spellings into one source, and codegen
+/// (which rebuilds the `flow(a,b)` name from `hi`/`lo`) sees one spelling.
 pub const Target = struct {
     access: Access,
     hi: u16,
@@ -759,21 +688,15 @@ fn branchKey(self: *Lower, buf: *[lower_param.elem_key_len]u8, e: Ast.ExprId) Oo
     return switch (ex.tag(e)) {
         .ident => self.file.str(ex.strOf(e)),
         // §5.5.5 "A module is allowed to access the potential and flow of a
-        // branch in another module instance", and §6.7.1's first bullet says it
-        // of the name: "Potential and flow access for named and unnamed
-        // branches (including port branches) can be done hierarchically." The
-        // resolution is `nodeOf`'s exactly: elaboration cloned the child's
-        // BranchDecl under `path.name` (Ruling E), so the §6.7 path IS the key
-        // `branches`/`port_branches` already hold, and `flatName` is the whole
-        // join. A miss is not an error HERE — the caller falls through to
-        // `nodeOf`, whose `.hier_ident` arm owns E0901 and, like this path,
-        // mints nothing on failure (a wrong path names no branch anywhere).
-        // Arena rather than `buf`: cold, one path per source reference.
+        // branch in another module instance" (§6.7.1). Elaboration cloned the
+        // child's BranchDecl under `path.name`, so the flat name is the key
+        // `branches`/`port_branches` already hold. A miss falls through to
+        // `nodeOf`, whose `.hier_ident` arm owns E0901. Arena rather than `buf`:
+        // cold, one path per source reference.
         .hier_ident => try lower_expr.flatName(self, e),
-        // Into the caller's buffer, not the arena: both consumers do nothing
-        // with the result but `branches.get`/`port_branches.get`, which never
-        // retain a key — and this runs once per §4.4.1 ACCESS, so `br[0]` in an
-        // unrolled loop body was minting a fresh string per iteration. `elemKey`.
+        // Into the caller's buffer, not the arena: both consumers only call
+        // `branches.get`/`port_branches.get`, which never retain a key, and this
+        // runs once per §4.4.1 access.
         .index => blk: {
             const base = ex.lhs(e);
             if (ex.tag(base) != .ident) break :blk null;
@@ -801,7 +724,8 @@ fn canonical(access: Access, hi: u16, lo: u16, br: u32) Target {
         .{ .access = access, .hi = lo, .lo = hi, .neg = true, .br = br };
 }
 
-/// §4.4.1 resolve `V(a)`, `V(a,b)`, `I(br)` to (access, node pair).
+/// Resolves `V(a)`, `V(a,b)`, `I(br)` to (access, node pair), or null after
+/// reporting why it cannot (LRM §4.4.1).
 pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
@@ -825,13 +749,11 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     }
     // §5.4.3 "The port access function shall not be used on the left side of a
     // contribution operator <+", and §3.12.1 makes a named port branch the same
-    // function under another name. `lowerBranchAccess` — the READ path, the one
-    // place a port branch means something — has already peeled it off above, so
-    // everything still arriving here is an lvalue or an indirect-assignment
-    // probe. ponytail: `ddx(f, I(pb))` also lands here and gets this message,
-    // which names the right clause and the wrong position; no fixture writes it,
-    // and the honest fix is §4.5.6 deciding whether a port flow is a valid
-    // derivative unknown at all.
+    // function under another name. `lowerBranchAccess` handles the read path, so
+    // everything arriving here is an lvalue or an indirect-assignment probe.
+    // ponytail: `ddx(f, I(pb))` also lands here and gets this message, which
+    // names the wrong position; the fix is §4.5.6 deciding whether a port flow
+    // is a valid derivative unknown at all.
     if (try portBranchOf(self, e)) |_| {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0407);
         b.msg("`{s}` is a port branch (3.12.1)", .{self.file.str(ex.strOf(ex.lhs(e)))});
@@ -862,21 +784,14 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     // §4.4 Table 4-16 gives both `V(n1,n1)` and `I(n1,n1)` as `Error`, and the
     // prose under it is normative for the flow half: "If two net expressions
     // are given as arguments to a flow access function, they shall not evaluate
-    // to the same signal." A branch from p to p is not a zero-potential branch;
-    // it is not a branch. Annex G Table G.1 records why the spelling exists at
-    // all — `I(a,a)` was the OVI v1.0 port flow, replaced by `I(<a>)`.
+    // to the same signal." (Annex G Table G.1: `I(a,a)` was the OVI v1.0 port
+    // flow, replaced by `I(<a>)`.) Only the two-argument form: `V(gnd)` stays
+    // legal.
     //
-    // Only the TWO-argument form: `V(n)` is `V(n, gnd)` by §1.3.1.1 and is not
-    // written with a repeated signal, so `V(gnd)` stays legal.
-    //
-    // Ground is exempt as a PAIR, not as an oversight. §1.3.1.1 collapses every
-    // `ground` net onto the one global reference node, so `V(g1, g2)` over two
-    // separately declared grounds lands on hi == lo == ground while naming two
-    // different signals — which Table 4-16 does not forbid, and which
-    // ch01_intro/24 and annex_h_glossary/08 both assert reads 0.
-    // ponytail: that also lets the literal `V(g1, g1)` through. Catching it
-    // needs a name comparison the interned index has already thrown away, and
-    // no fixture writes it.
+    // Ground is exempt as a pair: §1.3.1.1 collapses every `ground` net onto one
+    // node, so `V(g1, g2)` over two declared grounds names two signals and reads 0.
+    // ponytail: that also lets the literal `V(g1, g1)` through; catching it needs
+    // a name comparison the interned index has already thrown away.
     if (ex.rhs(e) != .none and hi == lo and hi != ground) {
         var b = self.errWith(self.file.exprs.mainTok(e), .E0315);
         b.msg("`{s}({s}, {s})` names one signal twice", .{ name, lower_node.nodeName(self, hi), lower_node.nodeName(self, lo) });
@@ -888,37 +803,22 @@ pub fn branchOf(self: *Lower, e: Ast.ExprId) Oom!?Target {
     return canonical(access, hi, lo, unnamed_branch);
 }
 
-/// §5.5.1 Syntax 5-3 `nature_access_function ::= nature_attribute_identifier |
-/// potential | flow`. Spelled out as constants because they are the one pair of
-/// access names that is not read out of a §3.6.1.4 `access =` attribute.
+/// §5.5.1 Syntax 5-3's generic potential access name. The generic pair is the
+/// only access names not read from a §3.6.1.4 `access =` attribute.
 pub const generic_potential = "potential";
+/// §5.5.1 Syntax 5-3's generic flow access name.
 pub const generic_flow = "flow";
 
 /// §4.4: "The access function name shall match the discipline declaration for
 /// the nets, ports, or branch given in the argument expression list."
 ///
-/// `access_kind` alone cannot answer this — it is the global set of access
-/// names, so every name that belongs to SOME discipline resolves on EVERY net,
-/// and `V(n)` quietly read a net whose discipline names its potential something
-/// else. The discipline of the node is what decides.
-///
-/// Three separate failures live here, and they are three because a net can be
-/// wrong in three different ways:
-///
-///  - E0337, no discipline at all. §3.6.5 makes the implicit net legal AS A
-///    DECLARATION, so this cannot fire where the net is created — only here, on
-///    the access, which is what §3.6.3 ("such nets can not be used in analog
-///    behavioral descriptions") and §6.5.2.1 ("can only be used in a structural
-///    description") actually forbid.
-///  - E0501 with no `want`, the discipline binds no nature for this half:
-///    natureless (`ddiscrete`, `\logic`, a bare `discipline x; enddiscipline`)
-///    or the wrong half of a signal-flow pair (`I` on annex D's `voltage`).
-///    §1.3.4 puts it plainest — "flow for such a node is not defined".
-///  - E0501 with a `want`, the §3.6.1.4 name mismatch.
-///
-/// The last two share a code because they are one sentence of §4.4: the name
-/// does not match the discipline. They differ only in whether there is a
-/// spelling to suggest, which is a note, not a rule.
+/// `access_kind` is the global set of access names, so the node's discipline
+/// decides. Reports one of:
+///  - E0337: no discipline. §3.6.5 makes the implicit net legal as a
+///    declaration; §3.6.3 and §6.5.2.1 forbid it in analog behaviour.
+///  - E0501 with no suggestion: the discipline binds no nature for this half
+///    (natureless, or `I` on a signal-flow `voltage`; §1.3.4).
+///  - E0501 with a suggestion: the §3.6.1.4 name mismatch.
 pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: Access, node: u16) Oom!void {
     if (node == ground) return;
     const dname = self.out.nodes.items(.disc)[node];
@@ -947,10 +847,8 @@ pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: A
     if (std.mem.eql(u8, want, name)) return;
     // §4.4: "As an alternative to using the access attribute specified in the
     // discipline, the generic potential and flow access functions are also
-    // supported." So `potential`/`flow` are exempt from the name match, and
-    // ONLY from it — the two checks above still apply, and must: §5.5.1's
-    // generic spelling reaches a nature, not a bare node, so a natureless or
-    // half-bound discipline has nothing for it to read either.
+    // supported." So `potential`/`flow` skip only the name match; the checks
+    // above still apply, since the generic spelling also reaches a nature.
     if (std.mem.eql(u8, name, generic_potential) or std.mem.eql(u8, name, generic_flow)) return;
     var b = self.errWith(self.file.exprs.mainTok(e), .E0501);
     b.msg("`{s}` is not an access function of `{s}`", .{ name, lower_node.nodeName(self, node) });
@@ -964,9 +862,10 @@ pub fn checkAccessMatch(self: *Lower, e: Ast.ExprId, name: []const u8, access: A
     try b.emit();
 }
 
-/// Find or create the accumulator pair for one contribution target. A pair
-/// that receives BOTH a potential and a flow contribution (in different arms)
-/// is the §5.6.5 switch branch — two entries, one per access.
+/// Returns the contribution index for a target, creating its entry and
+/// accumulator on first use. A pair that receives both a potential and a flow
+/// contribution (in different arms) is the §5.6.5 switch branch: two entries,
+/// one per access.
 pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
     for (self.out.contributions.items, 0..) |c, i| {
         // §5.6.7.2 an indirectly-assigned branch is never an accumulation
@@ -991,8 +890,8 @@ pub fn contribIndex(self: *Lower, t: Target, tok: u32) Oom!u32 {
     return newContrib(self, .direct, t, tok);
 }
 
-/// Append a fresh contribution + its accumulator pair. The two tables stay
-/// parallel; see the UNIT ORDERING note in proof.zig.
+/// Appends a contribution and its accumulator; the two lists stay parallel, so
+/// a contribution's index is its accumulator's index.
 fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
     try lower_hier_name.refuseRuntime(self, tok, t.hi, t.lo);
     const idx: u32 = @intCast(self.out.contributions.items.len);
@@ -1029,18 +928,10 @@ fn newContrib(self: *Lower, kind: Kind, t: Target, tok: u32) Oom!u32 {
 /// between the clause's own worked example answering 7.0 (1 discarded by the
 /// flow, the flow discarded by the 3, then 3 + 4) and answering 8.0.
 ///
-/// Zeroing the other accumulator is the whole implementation, because a zeroed
-/// accumulator emits NO row: `emitResidual` skips a contribution whose folded
-/// value is `.f_zero`. So an unconditional discard deletes the source from the
-/// device, which is what "discarded" means, and a zero FLOW source is in any
-/// case §5.4.4's open circuit — the state the branch is in when nothing is
-/// retained for it.
-///
-/// Under a conditional the discard survives as a phi rather than a constant —
-/// and so does the `wrote` flag cleared beside it, which is the whole §5.6.5
-/// switch branch: codegen reads both ends' flags and selects the branch row's
-/// content at run time (retained potential → potential source, retained flow →
-/// flow source, neither → §5.6.1.3's open circuit).
+/// Zeroing the other accumulator is enough: codegen emits no row for a
+/// contribution whose value folds to zero. Under a conditional the discard and
+/// the cleared `wrote` flag survive as phis, which is the §5.6.5 switch branch:
+/// codegen picks the row's content at run time from both flags.
 fn discardOpposite(self: *Lower, t: Target) Oom!void {
     const other: Access = if (t.access == .potential) .flow else .potential;
     for (self.out.contributions.items, self.accum.items, 0..) |c, acc, ci| {
@@ -1049,11 +940,10 @@ fn discardOpposite(self: *Lower, t: Target) Oom!void {
         // branch is discarded. A parallel named branch over the same pair is a
         // different source and keeps what it retained.
         if (c.br != t.br) continue;
-        // And so is a parallel INSTANCE over the same pair. §5.4.1 gives branch
-        // identity per module instance; flattening collapses every instance's
-        // unnamed branch onto the node pair, so without this a load wired across
-        // a source deletes the source — `resistor load(p,n)` beside
-        // `vsine v1(p,n)`, which is the first circuit anyone draws.
+        // So is a parallel instance over the same pair. §5.4.1 gives branch
+        // identity per module instance, and flattening collapses every
+        // instance's unnamed branch onto the node pair: without this, a load
+        // wired across a source would delete the source.
         if (c.unit != self.cur_unit) continue;
         try self.builder.writeVariable(acc.resist, self.cur, .f_zero);
         try self.builder.writeVariable(acc.react, self.cur, .f_zero);
@@ -1065,6 +955,7 @@ fn discardOpposite(self: *Lower, t: Target) Oom!void {
     }
 }
 
+/// A right-hand side split into its resistive and reactive halves (§5.6.1.2).
 pub const Split = struct {
     resist: ?Mir.Value,
     react: ?Mir.Value,
@@ -1076,16 +967,14 @@ pub const Split = struct {
 /// accumulator: the charge, its sign in the sum, and its `vera_lte` verdict.
 pub const PendingSite = struct { charge: Mir.Value, negate: bool, lte: bool, tok: u32 };
 
-/// LRM §5.6.1.2 — separate the ddt terms (§4.5.3) into the reactive part.
+/// Separates the ddt terms (§4.5.3) of a right-hand side into the reactive
+/// part (LRM §5.6.1.2).
 ///
-/// The split is structural, on the ADDITIVE terms of the rhs: a term free of
-/// `ddt` is resistive; a term containing one is reactive, and its reactive
-/// value is the term with the `ddt` stripped (`C*ddt(V)` → `C*V`), i.e. the
-/// charge/flux whose time derivative codegen's q() differentiates. That is
-/// exact whenever `ddt` appears once along a multiplicative spine of the term,
-/// which is what §5.6.1.2's charge formulation means. Anything else (`ddt`
-/// inside a call, two `ddt`s multiplied) is a diagnostic — never silently the
-/// wrong physics.
+/// The split is on the additive terms: a term with no `ddt` is resistive; a term
+/// with one is reactive, and its value is the term with the `ddt` stripped
+/// (`C*ddt(V)` → `C*V`), the charge codegen differentiates. That is exact when
+/// `ddt` appears once on a multiplicative spine. Anything else (`ddt` inside a
+/// call, two `ddt`s multiplied) is a diagnostic.
 fn splitContribution(self: *Lower, rhs: Ast.ExprId) Oom!Split {
     var out: Split = .{ .resist = null, .react = null };
     try splitTerm(self, rhs, false, &out);
@@ -1223,6 +1112,7 @@ fn containsDdt(self: *const Lower, e: Ast.ExprId) bool {
 /// on an unknown (literals/params have zero gradient and need no site).
 pub const ReactiveTerm = struct { b: Mir.Value, coeff: ?Mir.Value = null, coeff_nonconst: bool = false };
 
+/// Whether `v` has zero gradient: a literal, `undef` or a parameter.
 pub fn coeffIsConst(self: *const Lower, v: Mir.Value) bool {
     return switch (self.mir.valueKind(v)) {
         .float_const, .int_const, .undef, .param_ref => true,
@@ -1230,9 +1120,8 @@ pub fn coeffIsConst(self: *const Lower, v: Mir.Value) bool {
     };
 }
 
-/// LRM semantics of `A*ddt(B)` is A·dB/dt — the CAPACITANCE form: the
-/// stamped current carries no B·dA/dt (measured with the plain-product
-/// lowering: MESA Cgg inflated up to 2.17x, oscillator period 21% slow).
+/// LRM semantics of `A*ddt(B)` is A·dB/dt, the capacitance form: the stamped
+/// current carries no B·dA/dt (the plain product measured wrong on MESA Cgg).
 /// A non-constant A becomes a path-integrated charge, ngspice's own
 /// construction (NIintegrate on the increment, mesaload.c:341-344):
 ///
@@ -1243,11 +1132,9 @@ pub fn coeffIsConst(self: *const Lower, v: Mir.Value) bool {
 ///  - the committed charge increment is A·ΔB: capacitance-form physics;
 ///  - at any committed point ΔB = 0, so the C-plane is exactly A·∂B/∂x (AC);
 ///  - within a step the residual is one smooth function whose AD Jacobian
-///    carries dA only as (dA/dx)·ΔB — the legitimate Newton term that
-///    vanishes as dt→0. The earlier per-iterate freeze latch instead solved
-///    the product-form residual with the dA term deleted from the Jacobian:
-///    a quasi-Newton whose error gain grows with α = 1/dt, which is exactly
-///    the mesa_oscillator/hfet_inverter/mos6_inverter timestep wedge.
+///    carries dA only as (dA/dx)·ΔB, the Newton term that vanishes as dt→0.
+///    Deleting the dA term instead gives a quasi-Newton whose error gain grows
+///    with 1/dt and wedges the timestep.
 fn finishReactive(self: *Lower, t: ReactiveTerm) Oom!Mir.Value {
     const c = t.coeff orelse return t.b; // plain ddt(B): q = B, exact
     // Constant/param coefficient: dA ≡ 0, the plain product IS the
@@ -1375,25 +1262,13 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
     return null;
 }
 
-/// §4.6.4 every small-signal noise source in one expression, appended to `out`
-/// in first-appearance order, deduplicated by generator identity.
+/// §4.6.4.1/.2/.3 the optional `name`, read straight off the AST: the label is
+/// a string literal, so the call node still carries it.
 ///
-/// A SET and a full walk, not the first hit: `I(a,b) <+ white_noise(k) +
-/// flicker_noise(kf, 1.0)` declares two generators on one branch, and so do two
-/// separate `<+` lines (see `NoiseSrc`). Dedup is by `id`, so a variable named
-/// in both arms of a ?: still counts its generator once, while two textually
-/// separate calls of the same kind stay two generators (§4.6.4.6: "each noise
-/// function generates noise which is uncorrelated").
-/// §4.6.4.1/.2/.3 the optional `name`, read straight off the AST rather than
-/// recorded by `lowerNoise`: the label is a string LITERAL in the source, so
-/// the call node still carries it here and a side map would only be a second
-/// copy to keep in step.
-///
-/// The name is the TRAILING string argument of a call that has more than one,
-/// which is the one rule all three forms share — `white_noise(pwr, name)`,
+/// The name is the trailing string argument of a call with more than one,
+/// the rule all three forms share: `white_noise(pwr, name)`,
 /// `flicker_noise(pwr, exp, name)`, `noise_table(input, name)`. The arity test
-/// is what keeps §4.6.4.3's one-argument `noise_table("file.tbl")` a FILENAME
-/// and not a label.
+/// keeps §4.6.4.3's one-argument `noise_table("file.tbl")` a filename.
 fn noiseName(self: *const Lower, e: Ast.ExprId) []const u8 {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -1408,11 +1283,8 @@ fn noiseName(self: *const Lower, e: Ast.ExprId) []const u8 {
 /// (`ac_stim ( [ " analysis_identifier " …`), so a literal is the only spelling
 /// there is; "ac" is the clause's own default for the absent one.
 ///
-/// The opposite end of the call from `noiseName`, and that is the whole
-/// difference between the two: §4.6.4's label is trailing and optional, §4.6.3's
-/// analysis name is leading and selects the analysis. Sharing one reader would
-/// have read `ac_stim("ac", 2.0, 0.0)` as unnamed and `ac_stim("noise")` as a
-/// noise LABEL rather than as the analysis it names.
+/// The opposite end of the call from `noiseName`: §4.6.4's label is trailing
+/// and optional, §4.6.3's analysis name is leading.
 fn acAnalysisName(self: *const Lower, e: Ast.ExprId) []const u8 {
     const ex = &self.file.exprs;
     const args = ex.args(e);
@@ -1420,21 +1292,23 @@ fn acAnalysisName(self: *const Lower, e: Ast.ExprId) []const u8 {
     return self.file.str(ex.strOf(args[0]));
 }
 
+/// Appends every §4.6.4 small-signal source in `e` to `out`, in first-appearance
+/// order, deduplicated by generator identity (`id`). A full walk, not the first
+/// hit: one expression can declare several generators. Two textually separate
+/// calls stay two generators (§4.6.4.6: "each noise function generates noise
+/// which is uncorrelated"); a variable read in both arms of a ?: counts once.
+/// Allocates into `self.arena`.
 pub fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseSrc)) error{OutOfMemory}!void {
     if (e == .none) return;
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .noise_call => {
             const n = self.file.strings.get(ex.strOf(e));
-            // §4.6.3 ac_stim shares the small-signal grammar but is a STIMULUS,
-            // not a noise source; listing it in `noise_gens` would invent a
-            // noise generator the model never declared. It is the ONLY name in
-            // this grammar that is not a generator — §4.6.4.3/.4's tables are
-            // generators whose PSD happens to be a table, and they carry it in
-            // `NoiseSrc.table` rather than in `pwr`/`exp`. It is collected
-            // HERE, on the same walk, and separated by `kind` in codegen, which
-            // is what gives the stimulus §4.6.4.6's "assigned to a variable
-            // first" path without a second copy of this function.
+            // §4.6.3 ac_stim shares the small-signal grammar but is a
+            // stimulus, not a noise source. It is collected on the same walk
+            // and separated by `kind` in codegen, which gives it §4.6.4.6's
+            // "assigned to a variable first" path too. The §4.6.4.3/.4 tables
+            // are generators and carry their PSD in `NoiseSrc.table`.
             const kind: NoiseKind = if (std.mem.eql(u8, n, "white_noise"))
                 .thermal // §4.6.4.1
             else if (std.mem.eql(u8, n, "flicker_noise"))
@@ -1461,17 +1335,14 @@ pub fn noiseSrcsOf(self: *const Lower, e: Ast.ExprId, out: *std.ArrayList(NoiseS
             });
         },
         // §4.6.4.6's own spelling: the source was assigned to a variable and
-        // the contribution names the variable. Without this the walk stops at
-        // the identifier and the generator is never exported — and the shared
-        // `id` the map carries is what keeps two such uses ONE generator.
+        // the contribution names the variable. The shared `id` keeps two such
+        // uses one generator.
         .ident => {
             const srcs = self.var_noise.get(self.file.str(ex.strOf(e))) orelse return;
             for (srcs) |s| try addNoiseSrc(self.arena, out, s);
         },
-        // Every other tag through its children (`ExprStore.children`),
-        // assignment-pattern elements included. Both arms of a ?: count: a
-        // SET of declared generators is what this walk collects, and which arm
-        // the solve takes does not undeclare the other one.
+        // Both arms of a ?: count: the walk collects the set of declared
+        // generators, whichever arm the solve takes.
         else => { // else: every other tag holds generators only through its children
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| try noiseSrcsOf(self, c, out);

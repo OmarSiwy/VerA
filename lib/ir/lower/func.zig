@@ -3,9 +3,6 @@
 //! In: function declarations and call sites. Out: inlined MIR at each call (recursion refused).
 //!
 //! LRM clauses this file's code cites: §3.2, §4.7, §4.7.1, §4.7.2, §4.7.2.3, §4.7.2.4, §4.7.3, §5.11, §6.8, §7.3.7, §9.17.3.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_func.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -33,22 +30,12 @@ const toReal = Lower.toReal;
 const toInt = Lower.toInt;
 const astTy = Lower.astTy;
 
-// ---------------------------------------------------------------------------
-// Class 9 — user-defined analog functions (LRM §4.7)
-// ---------------------------------------------------------------------------
-
-/// §4.7.3: "An analog user-defined function ... shall not call itself directly
-/// or indirectly, i.e., recursive functions are not permitted."
+/// Reports E0510 on every function in `fns` that calls itself directly or
+/// indirectly: "recursive functions are not permitted" (LRM §4.7.3). Checked on the
+/// declarations, not only at reached calls, because an uncalled recursive function
+/// is still illegal.
 ///
-/// The sentence constrains the FUNCTION, so the check cannot be left to
-/// `inlineUserFuncPre`'s inline stack: that one only fires when the analog block
-/// actually reaches the call, which makes an illegal declaration legal as long
-/// as nobody calls it — and it is precisely the declarations that cannot be
-/// compiled, since §4.7.2 inlining has no call ABI to fall back on.
-///
-/// The call graph is tiny (functions are per-module and hand-written), so this
-/// is a reachability walk per function rather than an SCC pass; both report the
-/// same set, and this one names every function that sits on a cycle.
+/// Cost: one reachability walk per function, O(fns * edges); the graph is one module's.
 pub fn checkFuncRecursion(self: *Lower, fns: []const Ast.FuncDecl) Oom!void {
     if (fns.len == 0) return;
     const edges = try self.arena.alloc(std.ArrayList(u32), fns.len);
@@ -78,12 +65,11 @@ pub fn checkFuncRecursion(self: *Lower, fns: []const Ast.FuncDecl) Oom!void {
     }
 }
 
-/// With `limits`, §9.17.3 mints one state slot per ACCESS FUNCTION reached by a
-/// user-function `$limit`, in source order, seeded in the entry block.
-/// `LimitSlot`'s header says why the key is the access function, not the call site.
-/// Otherwise collect the §4.7 functions the statement calls, as indices into `fns`.
-/// A name that is not a declared function is not an edge — `lowerUserCall`
-/// reports it (E0512) when the call is reached.
+/// Walks every expression under statement `id`. With `limits`, creates one state
+/// slot per access function reached by a user-function `$limit`, in source order,
+/// seeded in the entry block (LRM §9.17.3). Otherwise appends to `out` the index in
+/// `fns` of each §4.7 function called; an undeclared name is not an edge
+/// (`lowerUserCall` reports E0512 when the call is reached).
 pub fn scanCallSites(
     self: *Lower,
     id: Ast.StmtId,
@@ -99,9 +85,11 @@ pub fn scanCallSites(
         l: *Lower,
         fns: if (limits) void else []const Ast.FuncDecl,
         out: if (limits) void else *std.ArrayList(u32),
+        /// Visits one expression edge.
         pub fn expr(w: @This(), e: Ast.ExprId, _: Ast.SourceFile.Edge) Oom!void {
             try scanCallSitesExpr(w.l, e, limits, w.fns, w.out);
         }
+        /// Visits one nested statement.
         pub fn stmt(w: @This(), s: Ast.StmtId) Oom!void {
             try scanCallSites(w.l, s, limits, w.fns, w.out);
         }
@@ -127,8 +115,7 @@ fn scanCallSitesExpr(
             }
         }
     } else if (tag == .call) {
-        // StrIds are interned, so identity IS name equality (`natureOf` relies
-        // on the same thing).
+        // StrIds are interned, so identity is name equality.
         for (fns, 0..) |*fd, k| if (fd.name == ex.strOf(e)) {
             try out.append(self.arena, @intCast(k));
             break;
@@ -138,18 +125,18 @@ fn scanCallSitesExpr(
     for (ex.children(e, &buf)) |c| try scanCallSitesExpr(self, c, limits, fns, out);
 }
 
+/// Lowers a call to a §4.7 user function by inlining its body. An undeclared name
+/// reports through `unknownCall`; a digital function called from analog context
+/// reports E0436 and is inlined anyway (LRM §7.3.7).
 pub fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const name = self.file.str(ex.strOf(e));
     const m = self.out.module orelse return poison;
     for (m.functions) |*fd| {
         if (!std.mem.eql(u8, self.file.str(fd.name), name)) continue;
-        // §7.3.7's first sentence, the mirror of E0430's second: "Digital
-        // functions cannot be called from within the analog context." The
-        // declaration is legal (§4.7 admits both kinds); it is the CALL that
-        // crosses, so the diagnostic lands here and not on the keyword.
-        // Lowered anyway afterwards, so one refused call does not turn every
-        // use of its result into a second, derived complaint.
+        // §7.3.7: "Digital functions cannot be called from within the analog
+        // context." The declaration is legal; the call is not, so the diagnostic
+        // lands here. Lowered anyway, so uses of the result do not report again.
         if (!fd.is_analog) {
             var b = self.errWith(ex.mainTok(e), .E0436);
             b.msg("`{s}`", .{name});
@@ -163,18 +150,12 @@ pub fn lowerUserCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     return poison;
 }
 
-/// LRM §4.7.3/§4.7.2 — analog functions are INLINED (§4.7.1 forbids
-/// recursion, and there is no call ABI in the generated device).
-///
-/// §4.7.1 isolation: the body sees only its own arguments and locals, never
-/// module variables — implemented by swapping in a fresh scope.
-/// §4.7.2.3/§4.7.2.4: `output`/`inout` arguments are written back to the
-/// caller's lvalue after the body runs.
-///
-/// Leading formals can bind to values the CALLER already has rather than to
-/// source expressions. §9.17.3's `$limit` supplies these leading values: the
-/// simulator supplies `vnew` and `vold` itself and the source only writes the
-/// tail. `pre` fills `fd.args[0..pre.len]`, `arg_exprs` the rest.
+/// Inlines a call to `fd` at `site`; the generated device has no call ABI.
+/// The body sees only its own arguments and locals (LRM §4.7.1), and `output`/`inout`
+/// arguments are written back to the caller's lvalues afterwards (§4.7.2.3, §4.7.2.4).
+/// `pre` binds the leading formals to values the caller already has (`$limit`'s
+/// `vnew` and `vold`, §9.17.3); `arg_exprs` binds the rest. Reports E0510 on a
+/// recursive inline and E0511 on an argument-count mismatch, returning `poison`.
 pub fn inlineUserFuncPre(
     self: *Lower,
     fd: *const Ast.FuncDecl,
@@ -196,10 +177,9 @@ pub fn inlineUserFuncPre(
         return poison;
     }
 
-    // Actuals are evaluated in the CALLER's scope, before it is swapped out.
-    // An ARRAY formal (§4.7.2.3) takes one Value per element — the formal is
-    // scalarized inside the function exactly as a §3.2 array is anywhere else,
-    // so the pass is element-wise in both directions.
+    // Actuals are evaluated in the caller's scope, before it is swapped out.
+    // An array formal (§4.7.2.3) is scalarized like any §3.2 array, so it takes
+    // one Value per element in both directions.
     var actuals: std.ArrayList([]const Mir.Value) = .empty;
     defer actuals.deinit(self.arena);
     for (fd.args, 0..) |formal, fi| {
@@ -257,13 +237,9 @@ pub fn inlineUserFuncPre(
     const saved_arrays = self.arrays;
     const saved_ret = self.ret;
     const saved_restrict = self.restrict;
-    // MASKED, not merely marked: the body is inlined into the caller's CFG, so
-    // without a fresh stack a `break` in a function whose own loops are all
-    // closed bound the loop the CALL SITE sits in and silently exited it — a
-    // caller-scope capture the same §4.7.1 isolation that swaps `vars` forbids.
-    // With the stack empty, `lowerJump` reports the §5.11 "only be used in a
-    // loop" E0404 exactly as it does for a bare module-level `break`, and a
-    // loop INSIDE the body still pushes and binds normally.
+    // A fresh loop stack: the body is inlined into the caller's CFG, so otherwise a
+    // `break` outside the body's own loops would exit the loop around the call site.
+    // With the stack empty, `lowerJump` reports §5.11's E0404 as for a module-level `break`.
     const saved_loops = self.loops;
     const saved_func_params = self.func_params;
     const log_mark = self.scope_log.items.len;
@@ -274,18 +250,16 @@ pub fn inlineUserFuncPre(
     try self.inlining.append(self.arena, name);
 
     // §4.7.2 local parameters fold to constants; they never reach the Model.
-    // The DECL LIST is installed as `func_params` so `lookupName` masks a
-    // module parameter of the same name for the body's duration (§6.8) —
-    // swapped per call like `vars`, so a callee never sees its caller's
-    // locals (§4.7.1 isolation).
+    // The decl list is installed as `func_params` so `lookupName` masks a module
+    // parameter of the same name for the body's duration (§6.8). Swapped per call
+    // like `vars` (§4.7.1 isolation).
     self.func_params = fd.params;
     // `consts` is shared with the caller, and §4.7.1 lets the body see only
     // "locally-defined parameters and module-level parameters" of what it
     // holds. So for the body's duration the caller's genvars are taken out
     // (a genvar is neither), and a local parameter's fold replaces a module
-    // parameter's of the same name; `shadowed` records every entry touched,
-    // and the exit below puts each one back. Without it a local `N` stayed
-    // the module's `N` for every constant fold after the call.
+    // parameter's of the same name; `shadowed` records every entry touched so the
+    // exit below restores it.
     var shadowed: std.ArrayList(struct { name: []const u8, prev: ?Const }) = .empty;
     defer shadowed.deinit(self.arena);
     const saved_genvars = self.active_genvars;
@@ -312,9 +286,9 @@ pub fn inlineUserFuncPre(
         const ty = astTy(formal.ty);
         if (formal.dims.len != 0) {
             // The formal's own §3.2 declaration, inside the function scope: the
-            // shape comes from the FORMAL and the values from the actual, which
-            // is what makes `arrayadd(x, '{y,z})` (§4.7.3) legal — the two
-            // actuals have different shapes and the same size.
+            // shape comes from the formal and the values from the actual, which
+            // makes `arrayadd(x, '{y,z})` (§4.7.3) legal: the two actuals have
+            // different shapes and the same size.
             const dims = try lower_param.dimsBounds(self, formal.dims, formal.main_tok, fname) orelse continue;
             // §3.2.2 a formal some subscript in the body indexes at run time:
             // one storage, filled element by element from the actual.
@@ -401,25 +375,22 @@ pub fn inlineUserFuncPre(
         if (formal.direction != .output and formal.direction != .inout) continue;
         defer w += 1;
         // A `pre` formal has no source expression to write back into. §9.17.3
-        // makes every formal of a `$limit` limiter `input` (E0814), so this is
-        // unreachable there; the guard is what keeps it unreachable.
+        // makes every `$limit` limiter formal `input` (E0814), so this guard
+        // only keeps that true.
         if (fi < pre.len) continue;
         const actual = arg_exprs[fi - pre.len];
         const vals = writeback.items[w];
         if (formal.dims.len != 0) {
             // §4.7.2.3: "the last value assigned to the output argument is then
             // assigned to the corresponding analog variable reference that was
-            // passed into the function" — element by element, in declaration
+            // passed into the function", element by element, in declaration
             // order, into the caller's own storage.
             try funcArrayOut(self, actual, vals);
             continue;
         }
-        // §3.2 a runtime subscript names no single storage slot, so the
-        // writeback is the same masked one `a[i] = …` takes. §4.7.2.3 says
-        // only that "the last value assigned to the output argument is then
-        // assigned to the corresponding analog variable reference" — it puts
-        // no constant-expression condition on the reference, and `resolveLvalue`
-        // was refusing one with E0311.
+        // §3.2 a runtime subscript names no single storage slot, so the writeback
+        // is the same masked one `a[i] = ...` takes. §4.7.2.3 puts no
+        // constant-expression condition on the "analog variable reference".
         if (try lower_stmt.writeRuntimeIndex(self, actual, actual, .{ .v = vals[0], .ty = astTy(formal.ty) })) continue;
         const slot = try lower_stmt.resolveLvalue(self, actual) orelse continue;
         try lower_stmt.writeLvalue(self, slot, vals[0]);
@@ -446,12 +417,9 @@ fn arrayActualCells(self: *Lower, actual: Ast.ExprId) Oom!?usize {
 
 /// §4.7.2.3: "the argument passed into the function must be an analog variable
 /// or an array assignment pattern of analog variables of equivalent size."
-/// Copy IN — one Value per element of the formal. False when the actual has the
-/// wrong size or is not one of those two shapes.
-///
-/// The pattern arm lowers each element as an EXPRESSION and not as an lvalue:
-/// copy-in has no reason to require storage, and `funcArrayOut` is where the
-/// clause's write-back needs one. `'{y, z}` satisfies both.
+/// Copies in one Value per element of the formal. False when the actual has the
+/// wrong size or is not one of those two shapes. Pattern elements lower as
+/// expressions; `funcArrayOut` is where write-back needs storage.
 fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) Oom!bool {
     const ex = &self.file.exprs;
     switch (ex.tag(actual)) {
@@ -481,8 +449,7 @@ fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) Oom!b
         // is an array for assignment, and §4.7.3 says "the argument
         // expressions are assigned to the declared inputs": so a slice is an
         // analog variable an array formal takes, copied in cell by cell the
-        // way `copyArraySlice` copies one — the same select chain for a
-        // subscript decided during the solve.
+        // way `copyArraySlice` copies one.
         .index => {
             var buf: [lower_param.max_stack_dims]Ast.ExprId = undefined;
             const s = (try lower_stmt.arrayRef(self, actual, &buf)) orelse return false;
@@ -501,9 +468,8 @@ fn funcArrayIn(self: *Lower, actual: Ast.ExprId, ty: Ty, out: []Mir.Value) Oom!b
 }
 
 /// The write-back half of the same sentence. Each element of the actual is an
-/// ordinary lvalue, so a pattern element that is not writable collects the usual
-/// E0313/E0316 from `resolveLvalue` — which is the right verdict: §4.7.2.3 says
-/// "analog variables", and a literal there has nowhere to receive the result.
+/// ordinary lvalue, so a pattern element that is not writable reports the usual
+/// E0313/E0316 from `resolveLvalue` (§4.7.2.3 says "analog variables").
 fn funcArrayOut(self: *Lower, actual: Ast.ExprId, vals: []const Mir.Value) Oom!void {
     const ex = &self.file.exprs;
     switch (ex.tag(actual)) {

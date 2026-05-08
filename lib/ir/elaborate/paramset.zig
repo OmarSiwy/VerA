@@ -1,12 +1,7 @@
-//! §6.4 paramsets: choosing and applying a paramset for an instance.
-//!
-//! In: an instance of a paramset name and its overrides. Out: the chosen module and the
-//! parameter values the paramset statements assign.
-//!
-//! LRM clauses this file's code cites: §2.6, §3.4, §3.4.2, §3.4.5, §3.4.6, §3.4.7, §6.3, §6.4, §6.4.1, §6.4.2, §6.4.3, §9.18, §9.19.
-//!
-//! Cut verbatim from `elaborate.zig`. Functions take `self: *Flatten` and are called
-//! directly, `elab_paramset.f(self, ...)`; `elaborate.zig` aliases only what other modules call.
+//! §6.4 paramsets: an instance of a paramset name and its overrides → the
+//! selected paramset (§6.4.2), the module at the end of its chain, and the
+//! parameter values the paramset statements assign. LRM §3.4.2, §3.4.5,
+//! §3.4.7, §6.3, §6.4, §6.4.1, §6.4.2, §6.4.3, §9.18, §9.19.
 
 const std = @import("std");
 const elaborate = @import("../elaborate.zig");
@@ -22,35 +17,30 @@ const connectionFor = Flatten.connectionFor;
 
 // ---- §6.4 paramsets ---------------------------------------------------
 
-/// §6.4.2 which paramset of an overload set this instance uses.
+/// Returns the paramset of an overload set this instance uses (§6.4.2), or
+/// null after reporting E0904 (no paramset of that name), E0911 (none
+/// admits the instance) or E0914 (still ambiguous after tie-breaking).
 ///
 /// "Paramset identifiers need not be unique: multiple paramsets can be
 /// declared using the same paramset_identifier ... During elaboration, the
 /// simulator shall choose an appropriate paramset from the set that shares a
 /// given name for every instance that references that name."
 ///
-/// Two phases, straight from the clause. The selection rules — "the
-/// following rules shall be enforced" — cut the overload set down to the
-/// applicable paramsets (`paramsetAdmits`). Then: "The rules above may not
+/// Two phases, from the clause. The selection rules ("the following rules
+/// shall be enforced") cut the overload set down to the applicable paramsets
+/// (`paramsetAdmits`). Then: "The rules above may not
 /// be sufficient for the simulator to pick a unique paramset, in which case
 /// the following rules shall be applied in order until a unique paramset
 /// has been selected:"
 ///
 ///   1. "The paramset with the fewest number of un-overridden parameters
-///      shall be selected." — §6.4.2's own m3 example: the default paramset
-///      (l, w, both overridden) beats the long-channel one (ad, as left at
-///      their defaults);
+///      shall be selected." (§6.4.2's m3 example: the default paramset, l and
+///      w both overridden, beats the long-channel one, ad and as defaulted.)
 ///   2. "The paramset with the greatest number of local parameters with
 ///      specified ranges shall be selected."
 ///   3. "The paramset with the fewest ports not connected in the instance
-///      line shall be selected." — over the TARGET module's port list,
-///      since same-named paramsets "may refer to different modules".
-///
-/// "It shall be an error if there are still more than one applicable
-/// paramset for an instance after application of these rules" — E0914. A
-/// set where NOTHING survives selection is E0911, because that instance has
-/// no paramset and the LRM's own binning examples rely on exactly one
-/// surviving.
+///      line shall be selected", over the target module's port list, since
+///      same-named paramsets "may refer to different modules".
 pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance) Error!?*const Ast.ParamsetDecl {
     var candidates: usize = 0;
     var live: std.ArrayList(*const Ast.ParamsetDecl) = .empty;
@@ -85,9 +75,8 @@ pub fn selectParamset(self: *Flatten, inst: *const Ast.Instance) Error!?*const A
 /// The three §6.4.2 tie-breaking rules, in the clause's order.
 pub const TieRule = enum { un_overridden, ranged_locals, unconnected_ports };
 
-/// Apply ONE tie-breaking rule: score every surviving candidate and keep
-/// the minimum (a "greatest" rule negates its count, so one comparison
-/// direction serves all three).
+/// Applies one tie-breaking rule: scores every surviving candidate and keeps
+/// the minimum in `live` (a "greatest" rule negates its count).
 pub fn tieBreak(
     self: *Flatten,
     inst: *const Ast.Instance,
@@ -98,10 +87,8 @@ pub fn tieBreak(
     for (live.items, scores) |ps, *s| s.* = switch (rule) {
         // "the fewest number of un-overridden parameters": the paramset's
         // overridable parameters the instance left at their defaults. A
-        // localparam is not counted — it is not overridable at all (§3.4.5),
-        // so it says nothing about how specifically this instance names
-        // this bin, and §6.4.2's neighbouring rules treat "parameters" and
-        // "local parameters" as disjoint counts.
+        // localparam is not overridable (§3.4.5), and §6.4.2's neighbouring
+        // rules count "parameters" and "local parameters" separately.
         .un_overridden => blk: {
             const overridable: i64 = @intCast(overridableCount(ps.params));
             const named = inst.params.len != 0 and inst.params[0].name != .none;
@@ -117,8 +104,8 @@ pub fn tieBreak(
             }
             break :blk n;
         },
-        // "the greatest number of local parameters with specified ranges" —
-        // negated, see above.
+        // "the greatest number of local parameters with specified ranges",
+        // negated.
         .ranged_locals => blk: {
             var n: i64 = 0;
             for (ps.params) |p| n += @intFromBool(p.is_local and p.ranges.len != 0);
@@ -147,15 +134,16 @@ pub fn tieBreak(
     live.shrinkRetainingCapacity(w);
 }
 
-/// §3.4.5 the parameters an override CAN land on: the non-`is_local` ones.
+/// Returns how many of `params` an override can land on: the non-local ones
+/// (§3.4.5).
 pub fn overridableCount(params: []const Ast.ParamDecl) usize {
     var n: usize = 0;
     for (params) |p| n += @intFromBool(!p.is_local);
     return n;
 }
 
-/// Does a NAMED instance override land on paramset parameter `name`,
-/// directly or through a §3.4.7 alias?
+/// Returns whether a named instance override with a value lands on paramset
+/// parameter `name`, directly or through a §3.4.7 alias.
 pub fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, name: Ast.StrId) bool {
     for (inst.params) |o| {
         if (o.value == .none) continue;
@@ -165,26 +153,23 @@ pub fn overridesParam(inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl, na
     return false;
 }
 
-/// §6.4.2's SELECTION rules — "When choosing an appropriate paramset, the
-/// following rules shall be enforced" — as far as each is decidable here:
+/// Returns whether `ps` passes §6.4.2's selection rules for `inst` ("When
+/// choosing an appropriate paramset, the following rules shall be
+/// enforced"), as far as each is decidable here. Reports nothing.
 ///
 ///   1. "All parameters overridden on the instance shall be parameters of
-///      the paramset" — and §3.4.5 keeps a localparam out of an override's
-///      reach, so a paramset whose only `x` is local does not admit an
-///      override of `x`, in either spelling;
+///      the paramset", and §3.4.5 keeps a localparam out of an override's
+///      reach in either spelling.
 ///   2. "The parameters of the paramset, with overrides and defaults, shall
 ///      be all within the allowed ranges specified in the paramset
-///      parameter declaration" — which is what makes a BINNED set (§6.4.2's
-///      short- and long-channel pair, annex E's `spice_binning`) select on
-///      geometry;
+///      parameter declaration": this is what makes a binned set select on
+///      geometry.
 ///   3. "The local parameters of the paramset, computed from parameters,
-///      shall be within the allowed ranges specified in the paramset" —
-///      their defaults ride the same loop, and `constReal` folds only
-///      literals, so a computed value is judged exactly as far as it can be
-///      folded (see `inRanges` for why unfoldable admits);
+///      shall be within the allowed ranges specified in the paramset":
+///      judged as far as `constReal` folds (see `inRanges`).
 ///   4. "The underlying module shall have a port declared for each port
-///      connected in the instance line." A target module the file never
-///      declares cannot fail it — that absence is E0904's, at the use site.
+///      connected in the instance line." An undeclared target module cannot
+///      fail it; that is E0904 at the use site.
 pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.ParamsetDecl) bool {
     const named = inst.params.len != 0 and inst.params[0].name != .none;
     if (!named and inst.params.len > overridableCount(ps.params)) return false;
@@ -193,7 +178,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
         // §6.4.2 "with overrides and defaults": the value this paramset would
         // give the parameter, whichever supplied it. An `is_local` entry
         // takes no override in either spelling (§3.4.5), so its default is
-        // the value judged — criterion 3.
+        // the value judged (criterion 3).
         var value = p.default;
         if (p.is_local) {
             // keep the default
@@ -218,8 +203,7 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
         if (!found) return false;
     };
     // Criterion 4, both connection spellings. A mixed or malformed list is
-    // not judged here — that is E0906's, after selection
-    // (`checkConnectionShape`).
+    // E0906 after selection (`checkConnectionShape`).
     if (elab_names.findModule(self, ps.target)) |child| {
         const conns_named = inst.ports.len != 0 and inst.ports[0].name != .none;
         if (conns_named) {
@@ -237,20 +221,17 @@ pub fn paramsetAdmits(self: *Flatten, inst: *const Ast.Instance, ps: *const Ast.
 
 /// §3.4.2 does this value satisfy the declared `from`/`exclude` ranges?
 ///
-/// ponytail: a value or a bound this cannot FOLD counts as admissible. The
-/// alternative is to reject a paramset for being written over an expression
-/// the elaborator declines to evaluate, which would turn a missing folder
-/// into a selection error; `Lower` still judges the value it ends up with
-/// (E0361), so nothing is lost, only deferred.
+/// ponytail: a value or a bound this cannot fold counts as admissible, so a
+/// missing folder never becomes a selection error; `Lower` still judges the
+/// value it ends up with (E0361).
 fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) bool {
     if (ranges.len == 0) return true;
     // §3.4.2: "Valid values of string parameters are indicated differently.
     // The `from` keyword may be used with a list of valid string values, or
     // the `exclude` keyword may be used with a list of invalid string
-    // values." A.2.5's `value_range_type '{ string {, string} }`, which the
-    // parser parks in `ValueRange.strings`. Without this arm a binned
-    // paramset set keyed on a string — §3.4.6's own `ebersmoll` mapping —
-    // has every bin admit, and §6.4.2's rule 2 never narrows it.
+    // values." A.2.5's `value_range_type '{ string {, string} }`, parsed
+    // into `ValueRange.strings`. Without this arm a binned set keyed on a
+    // string (§3.4.6's `ebersmoll` mapping) admits every bin.
     if (value != .none and self.ctx.file.exprs.tag(value) == .str_literal)
         return strInRanges(self, self.ctx.file.str(self.ctx.file.exprs.strOf(value)), ranges);
     const v = constReal(self, value) orelse return true;
@@ -273,11 +254,10 @@ fn inRanges(self: *Flatten, value: Ast.ExprId, ranges: []const Ast.ValueRange) b
     return !has_from or in_from;
 }
 
-/// The string half of `inRanges`. Same shape as `lower.checkParamRange`'s
-/// `.str` arm — membership in a `'{ ... }` set, union over the `from`
-/// clauses, any `exclude` hit is fatal — but it returns a verdict instead
-/// of a diagnostic, because here a non-member only means "this bin is not
-/// the one".
+/// The string half of `inRanges`: membership in a `'{ ... }` set, union over
+/// the `from` clauses, any `exclude` hit fatal, as lowering's
+/// `checkParamRange` judges it. Returns a verdict instead of a diagnostic,
+/// because here a non-member only means "this bin is not the one".
 fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bool {
     var has_from = false;
     var in_from = false;
@@ -297,21 +277,18 @@ fn strInRanges(self: *Flatten, s: []const u8, ranges: []const Ast.ValueRange) bo
     return !has_from or in_from;
 }
 
-/// A constant this pass can fold: §2.6 literals, the A.2.5 infinities, and
-/// every operator over them, through the one constant kernel — so `1/2` is
-/// §4.2.4's integer division, 0, exactly as lowering will compute the value
-/// the chosen paramset receives. NOT parameter reads — the parameter table is
-/// lowering's, and §6.4.2's ranges in every printed example are literals.
+/// Folds `e` to a real, or null: §2.6 literals, the A.2.5 infinities, and
+/// every operator over them, through the shared constant kernel, so `1/2` is
+/// §4.2.4's integer division as in lowering. Parameter reads do not fold;
+/// §6.4.2's printed ranges are all literals.
 pub fn constReal(self: *Flatten, e: Ast.ExprId) ?f64 {
     const c = constfold.fold(self.ctx.file, e, constfold.literal_env) orelse return null;
     return if (c == .str) null else c.asReal();
 }
 
-/// §9.18 Table 9-29 "Allowed Values": `$mfactor > 0`. The resolved value is a
-/// PRODUCT down the hierarchy, so one specified factor out of range puts every
-/// value below it out of range. Only a factor that folds over literals is
-/// judged (`constReal`); one over the parent's parameters is the host's to
-/// supply. `true` when refused.
+/// Reports E0890 and returns true when `e` folds to a `$mfactor` that is not
+/// positive (§9.18 Table 9-29). Only a factor that folds over literals is
+/// judged (`constReal`).
 pub fn checkMfactor(self: *Flatten, tok: u32, e: Ast.ExprId) Error!bool {
     const v = constReal(self, e) orelse return false;
     if (v > 0) return false;
@@ -319,22 +296,15 @@ pub fn checkMfactor(self: *Flatten, tok: u32, e: Ast.ExprId) Error!bool {
     return true;
 }
 
-/// §6.4 the parameter values a paramset instance gives the module.
+/// Computes the module parameter values a paramset instance gives `child`
+/// into `over`, and sets `unit`'s §9.18 `$mfactor` and §9.19 `$param_given`
+/// (§6.4). Two levels: the instance overrides the paramset's own parameters,
+/// then the paramset's statements compute the module's from those, so
+/// `.k = 2.0 * gain;` with `#(.gain(3.0))` gives `k` = 6.0.
 ///
-/// Two levels, and the order between them is the whole clause: the INSTANCE
-/// overrides the paramset's own parameters, and the paramset's statements
-/// then compute the MODULE's from those. `.k = 2.0 * gain;` with the instance
-/// saying `#(.gain(3.0))` means the module's `k` is 6.0 — not 3.0 (which is
-/// passing the override straight through) and not 2.0 (which is ignoring the
-/// instance).
-///
-/// The paramset's own parameters become localparams of the flat design under
-/// `path ++ paramset_name ++ sep`, one level below the instance's own path.
-/// They need to be somewhere — a statement's value reads them — and they are
-/// not the module's, so they cannot share the module's level: `u.gain` is the
-/// module's parameter if the module declares one, and `u.ch6_ps.gain` is the
-/// paramset's. Deterministic, readable, and injective for the same reason
-/// every other flat name is (`sep`).
+/// The paramset's own parameters become localparams under
+/// `path ++ paramset_name ++ sep`, so `u.gain` stays the module's parameter
+/// and `u.ch6_ps.gain` is the paramset's.
 pub fn paramsetOverrides(
     self: *Flatten,
     inst: *const Ast.Instance,
@@ -356,10 +326,8 @@ pub fn paramsetOverrides(
     var ps_unit: Unit = .{ .mfactor = parent.mfactor };
     var ps_over: std.AutoHashMapUnmanaged(Ast.StrId, Ast.ExprId) = .empty;
     // A synthesized instance of the paramset-as-unit: same overrides, no
-    // ports. `collectOverrides` already implements §6.3's ordered/named
-    // arms, §3.4.7's alias handling and §9.18's `.$mfactor`, and a paramset's
-    // parameter list is a §3.4 parameter list — so this is that code, not a
-    // second copy of it.
+    // ports, so `collectOverrides` handles §6.3's ordered/named arms,
+    // §3.4.7's aliases and §9.18's `.$mfactor` for it.
     const as_module: Ast.ModuleDecl = .{
         .name = ps.name,
         .ports = &.{},
@@ -373,22 +341,20 @@ pub fn paramsetOverrides(
 
     const saved = self.unit;
     self.unit = ps_unit;
-    // Everything cloned from here to the restore is paramset-body text —
-    // the instance's own override values (`ps_over`) were already cloned
-    // by `collectOverrides` above, in the parent's scope.
+    // Everything cloned from here to the restore is paramset-body text;
+    // the instance's override values (`ps_over`) were cloned above, in the
+    // parent's scope.
     self.in_paramset = true;
     try elab_clone.cloneParams(self, ps.params, ps.aliasparams, &ps_over);
 
     // ---- level 2: the module's parameters, from the paramsets' statements
     //
-    // §6.4's chain, applied FAR link first so a nearer link's assignment to
-    // the same module parameter wins. §6.4 states only that a chain may
-    // exist and that its last link references a module; it supplies no
-    // precedence rule, and nearest-wins is chosen because a near link is
-    // the more specific specialization — the same direction §6.3 gives an
-    // instance override over a declared default.
+    // §6.4's chain, applied far link first so a nearer link's assignment to
+    // the same module parameter wins. §6.4 gives no precedence rule;
+    // nearest-wins treats the near link as the more specific one, as §6.3
+    // ranks an instance override over a default.
     //
-    // ponytail: a farther link's own PARAMETERS are not brought into scope;
+    // ponytail: a farther link's own parameters are not brought into scope;
     // its statements are evaluated in the near link's. Only the near link is
     // named by an instance, so only its parameters can take a §6.3 override,
     // and no fixture writes a far link that reads one. The upgrade path is a
@@ -444,7 +410,7 @@ pub fn paramsetOverrides(
                     .extra = @intFromEnum(Ast.BinaryOp.mul),
                 });
             },
-            .output_var => {}, // §6.4.3, dropped in the parser — see there
+            .output_var => {}, // §6.4.3, dropped in the parser
         };
     }
     self.in_paramset = false;

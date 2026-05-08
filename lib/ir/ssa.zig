@@ -1,41 +1,16 @@
-//! Class 4 — SSA construction (Braun et al., "Simple and Efficient Construction
-//! of Static Single Assignment Form"). Serves LRM §5 control flow: §5.8
-//! conditionals, §5.9 loops, variable reads/writes across blocks.
-//!
-//! Transformation: per-block writes/reads → SSA Values with phi nodes.
-//!
-//! DOD:
-//!   - defs: DENSE matrix (place, block) → Value. It was a sparse hash map on the
-//!     theory that most pairs are undefined; measured, they are not (19% of cells
-//!     live on hisimhv_va, ~100% on small modules) and the hash table was the
-//!     single hottest thing in the frontend. See `SsaBuilder.defs`.
-//!   - per-block state (sealed?, preds, incomplete phis) in a MultiArrayList row
-//!     indexed by Block; the pred and incomplete-phi lists are intrusive u32
-//!     indices into two flat pools, not one allocation per block.
-//!   - an ACYCLIC join whose predecessors agree gets no phi at all (the
-//!     `pending` cell, see `readVariableRecursive`); a phi created on a cycle
-//!     that turns out trivial is aliased to its single value (Mir.alias, so
-//!     codegen never emits a `var` for it).
-//!
-//! CONTRACT FOR CONSUMERS (proof.zig, codegen.zig):
-//!   1. Every Value read out of the MIR MUST be passed through `mir.resolveAlias`
-//!      before use. A collapsed phi is never rewritten in its users' operand
-//!      lists — the alias table IS the rewrite. `resolveAlias(v) != v` means the
-//!      phi is dead: emit no declaration for it.
-//!   2. Phi instructions are created ON DEMAND, so a `.phi` row can sit anywhere
-//!      in its block's instruction chain — including after the terminator.
-//!      Codegen must treat `.phi` as a block header: skip it in the linear walk
-//!      and materialize it as a mutable local assigned at the end of each
-//!      predecessor (the standard SSA-out-of-form move). Never emit a phi row
-//!      in place.
+//! SSA construction (Braun et al., "Simple and Efficient Construction of
+//! Static Single Assignment Form"): per-block variable writes and reads for
+//! §5.8 conditionals and §5.9 loops → MIR Values and phis. Consumers must pass
+//! every Value through `Mir.resolveAlias` (a collapsed phi is aliased, not
+//! rewritten), and must treat `.phi` rows as block headers: a phi is minted on
+//! demand, so its row can sit anywhere in the chain, even after the terminator.
 
 const std = @import("std");
 const Mir = @import("mir.zig");
 const assert = std.debug.assert;
 
-/// Every failure in this file is an allocation failure. Spelled out (not
-/// inferred) because readVariable ⇄ readVariableRecursive ⇄ addPhiOperands are
-/// mutually recursive.
+// Spelled out, not inferred: readVariable, readVariableRecursive and
+// addPhiOperands are mutually recursive.
 const Error = std.mem.Allocator.Error;
 
 /// A "place" is an assignable location (a variable or a lowered temp).
@@ -46,79 +21,41 @@ const list_end: u32 = std.math.maxInt(u32);
 
 /// "No definition recorded for this (place, block)" in the `defs` matrix.
 ///
-/// It CANNOT be `Mir.Value.undef`: that is a legitimate stored result (a phi
-/// over only self-references collapses to `undef`, see `tryRemoveTrivialPhi`),
-/// and conflating "never written" with "written as undefined" would re-run the
-/// recursive read on every access and re-create the collapsed phi. So cells hold
-/// `@intFromEnum(value) + 1` and ZERO means absent — the bias exists so that a
-/// freshly mapped, all-zero page already reads as an empty matrix and no
-/// `@memset` is needed. See `defsIndex`; `writeVariable` asserts no overflow.
+/// Not `Mir.Value.undef`, which is a legitimate stored result (a phi over only
+/// self-references collapses to it); confusing the two would re-run the
+/// recursive read and re-create the collapsed phi. Cells hold
+/// `@intFromEnum(value) + 1` so a freshly mapped, all-zero page already reads
+/// as empty. `writeVariable` asserts no overflow.
 const absent: u32 = 0;
 
 /// "This (place, block) is a join whose predecessors are being read right
-/// now" — see the ≥2-preds arm of `readVariableRecursive`. A read that meets
+/// now"; see the ≥2-preds arm of `readVariableRecursive`. A read that meets
 /// it has come round a cycle and mints the phi there (`readVariable`). Never
 /// a biased Value: `writeVariable` keeps the Value space two short of it.
 const pending: u32 = std.math.maxInt(u32);
 
-/// `defs` ONLY: the matrix is mapped straight from the OS, which hands back
-/// zero-filled pages — `mmap(MAP_ANONYMOUS)` on POSIX, `NtAllocateVirtualMemory`
-/// on Windows. Those zeros ARE the `@memset(absent)` that used to run, which was
-/// 17.9% of frontend instructions (callgrind, `hisimhv_va`, all of it under
-/// `writeVariable` → `defsIndex`) because every stride doubling zeroed the whole
-/// new buffer before copying the old rows back over half of it. Lazy faulting is
-/// the second half of the win: untouched cells never become resident, which is
-/// what repaid the ~8% peak-RSS regression the dense matrix introduced.
-///
-/// `std.heap.page_allocator` will NOT do — the `Allocator` interface poisons
-/// fresh bytes with `undefined` (0xAA) under runtime safety, so the zeros only
-/// survive in ReleaseFast. `PageAllocator.map` is the same syscall without the
-/// wrapper. `mapZeroed` canary-checks the guarantee where safety is on.
+// `defs` is mapped straight from the OS, whose fresh pages are zero: that is
+// the `absent` fill for free, and untouched cells never become resident.
+// `std.heap.page_allocator` will not do: the `Allocator` interface poisons
+// fresh bytes with 0xAA under runtime safety. `mapZeroed` canary-checks it.
 const PageAllocator = std.heap.PageAllocator;
 
+/// Braun-style SSA builder over one `Mir`. Blocks are created by the caller
+/// (`Mir.addBlock`); the builder records edges, writes and reads, and emits
+/// phis into the Mir as reads require.
 pub const SsaBuilder = struct {
     gpa: std.mem.Allocator,
     mir: *Mir,
-    /// (place, block) → Value, as a DENSE PLACE-MAJOR matrix:
+    /// (place, block) → Value as a dense place-major matrix:
     /// `defs[place * block_stride + block]`, `absent` (= 0) where unwritten and
-    /// `@intFromEnum(value) + 1` where written — see `absent` for the bias.
-    ///
-    /// CORPUS for every number below: the 38 foundry models in the ARPice host
-    /// repo (`../ARPice/src/devices/models`; `VERA_MODELS` overrides the path),
-    /// NOT vendored here — `hisimhv_va`/`hisim2_va` are HiSIM_HV and HiSIM2, and
-    /// the four the RSS row runs over come from that set. No fixture in
-    /// `tests/fixtures` is anywhere near this size, so re-measuring needs the
-    /// models fetched first.
-    ///
-    /// DOD: this was a `HashMap<u64=(place<<32|block), Value>` justified as
-    /// "sparse by construction". Measured, it is not sparse — on `hisimhv_va` it
-    /// holds 2,114,902 live entries over 1978 places × 5646 blocks = 11.2 M cells
-    /// (19% dense, ~100% on small modules), and the hash table's own 4.19 M-slot
-    /// allocation was already LARGER than the live matrix. Hashing, probing and
-    /// rehashing were ~35% of frontend runtime, `grow` alone 9.2%; a matrix index
-    /// is a multiply-add. Measured end to end: frontend 1.33–1.58× faster.
-    ///
-    /// Both axes round up to a power of two, so 1978 × 5646 live cells span
-    /// 2048 × 8192 = 67 MB of ADDRESS SPACE against the hash map's 54 MB — but
-    /// only the touched pages are ever resident (see `PageAllocator`), so peak
-    /// RSS dropped 361 → 270 MB on hisimhv_va, 245 → 201, 156 → 113, 155 → 108 —
-    /// below the hash map's own 338 / 286 / 143 / 143 on all four foundry models,
-    /// not merely back to par. Two alternatives were measured back when
-    /// the matrix was eagerly zeroed and both were WORSE; the mapping change
-    /// removes their premise, so do not reach for either without re-measuring:
-    ///   - growing the block axis to `mir.blockCount()` instead of doubling
-    ///     re-strides more often, and a re-stride holds the old and new buffer at
-    ///     once — peak RSS went UP (hisim2_va 155 → 194 MB).
-    ///   - block-major with rows appended exactly re-allocates once per block,
-    ///     which is quadratic: 4.6 GB and 4× SLOWER.
-    ///
-    /// PLACE-MAJOR is load-bearing: the hot recursion (`readVariableRecursive` →
-    /// `addPhiOperands`) walks predecessor BLOCKS for ONE fixed place, so
-    /// consecutive probes land in adjacent cells.
+    /// `@intFromEnum(value) + 1` where written. Dense because on large compact
+    /// models the pairs are not sparse, and a hash map cost more in both time
+    /// and memory. Place-major because the hot recursion walks predecessor
+    /// blocks for one fixed place, so consecutive probes land in adjacent cells.
     defs: []u32 = &.{},
-    /// Row length of `defs` — capacity along the block axis, not the live count.
+    /// Row length of `defs`: capacity along the block axis, not the live count.
     block_stride: u32 = 0,
-    /// Rows allocated in `defs` — capacity along the place axis.
+    /// Rows allocated in `defs`: capacity along the place axis.
     place_cap: u32 = 0,
     /// Row per Mir.Block, grown lazily (lower.zig owns block creation).
     block_state: std.MultiArrayList(BlockState) = .empty,
@@ -134,20 +71,18 @@ pub const SsaBuilder = struct {
     /// Shared phi-operand scratch, used with stack discipline (save length,
     /// restore on exit) so re-entrant lowering needs no per-phi allocation.
     scratch: std.ArrayList(Mir.PhiPair) = .empty,
-    /// Trivial-phi worklist, driven with the same save/restore discipline as
-    /// `scratch`. A second list rather than a reuse of `scratch` only because the
-    /// element type differs.
+    /// Trivial-phi worklist, with the same save/restore discipline as `scratch`.
     phi_work: std.ArrayList(Mir.Value) = .empty,
     next_place: u32 = 0,
 
+    /// Per-block SSA state, one row per `Mir.Block`.
     pub const BlockState = struct {
         /// Braun: sealed ⇒ this block's predecessor set is final.
         sealed: bool = false,
         preds_head: u32 = list_end,
         preds_tail: u32 = list_end,
-        /// Kept beside the list so `readVariableRecursive`'s `predCount(b) == 1`
-        /// test is a load, not a walk. Same reason AIR stores `body_len` next to
-        /// its trailing instruction list instead of terminating it.
+        /// Kept beside the list so `readVariableRecursive`'s single-predecessor
+        /// test is a load, not a walk.
         preds_len: u32 = 0,
         /// Phis created before the block was sealed; filled by `sealBlock`.
         phis_head: u32 = list_end,
@@ -157,6 +92,8 @@ pub const SsaBuilder = struct {
     const IncompletePhi = struct { place: Place, value: Mir.Value, next: u32 };
     const UserNode = struct { phi: Mir.Value, next: u32 };
 
+    /// Returns an empty builder writing into `mir`. `gpa` backs the scratch
+    /// tables; call `deinit` to free them.
     pub fn init(gpa: std.mem.Allocator, mir: *Mir) SsaBuilder {
         return .{ .gpa = gpa, .mir = mir };
     }
@@ -174,7 +111,8 @@ pub const SsaBuilder = struct {
         self.* = .{ .gpa = self.gpa, .mir = self.mir };
     }
 
-    /// Fresh assignable location (LRM §3.4.4 variable, or a lowered temporary).
+    /// Returns a fresh assignable location (a §3.4.4 variable or a lowered
+    /// temporary).
     pub fn newPlace(self: *SsaBuilder) Place {
         defer self.next_place += 1;
         return @enumFromInt(self.next_place);
@@ -182,8 +120,8 @@ pub const SsaBuilder = struct {
 
     // ------------------------------------------------------------- CFG edges --
 
-    /// Declare `pred → block` in the CFG. MUST be called before `sealBlock(block)`;
-    /// lower.zig calls it wherever it emits a jump/branch (§5.8, §5.9).
+    /// Declares the CFG edge `pred → block` (§5.8, §5.9).
+    /// Asserts that `block` is not sealed yet, and that both blocks exist.
     pub fn addPredecessor(self: *SsaBuilder, block: Mir.Block, pred: Mir.Block) Error!void {
         const b = try self.ensureState(block);
         assert(!self.block_state.items(.sealed)[b]); // preds are final once sealed
@@ -201,8 +139,8 @@ pub const SsaBuilder = struct {
         self.block_state.items(.preds_len)[b] += 1;
     }
 
-    /// Mark a block's predecessors final and fill every incomplete phi.
-    /// Braun §sealBlock. Idempotent.
+    /// Marks a block's predecessors final and fills every incomplete phi.
+    /// Idempotent. Asserts that `block` exists.
     pub fn sealBlock(self: *SsaBuilder, block: Mir.Block) Error!void {
         const b = try self.ensureState(block);
         if (self.block_state.items(.sealed)[b]) return;
@@ -222,7 +160,7 @@ pub const SsaBuilder = struct {
 
     // ------------------------------------------------------- read / write --
 
-    /// Record `place := value` in `block`. LRM §5.7 assignment.
+    /// Records the §5.7 assignment `place := value` in `block`.
     pub fn writeVariable(self: *SsaBuilder, place: Place, block: Mir.Block, value: Mir.Value) Error!void {
         // see `absent` and `pending`: the +1 bias lands on neither
         assert(@intFromEnum(value) < std.math.maxInt(u32) - 1);
@@ -230,9 +168,9 @@ pub const SsaBuilder = struct {
         self.defs[i] = @intFromEnum(value) + 1;
     }
 
-    /// Read `place` in `block`, inserting phis as needed. Braun §readVariable.
-    /// Reading a place that is undefined on some path yields `.undef` there —
-    /// initializing declared variables (§3.4.4) is lower.zig's job, not ours.
+    /// Returns the value of `place` in `block`, emitting phis as needed. A place
+    /// undefined on some path yields `.undef` there; initializing declared
+    /// variables (§3.4.4) is the caller's job.
     pub fn readVariable(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         const raw = self.defsRaw(place, block);
         if (raw == absent) return self.readVariableRecursive(place, block);
@@ -260,9 +198,8 @@ pub const SsaBuilder = struct {
         return if (v == absent) null else @enumFromInt(v - 1);
     }
 
-    /// `n` cells of `absent`, for free — see `PageAllocator`. The canary is the
-    /// whole test that the zero-page guarantee still holds; it is two loads, and
-    /// `assert` compiles out of ReleaseFast anyway.
+    /// `n` cells of `absent`, for free (see `PageAllocator`). The assert is a
+    /// canary that the zero-page guarantee still holds.
     fn mapZeroed(n: usize) Error![]u32 {
         const bytes = std.math.mul(usize, n, @sizeOf(u32)) catch return error.OutOfMemory;
         const p = PageAllocator.map(bytes, .of(u32)) orelse return error.OutOfMemory;
@@ -277,13 +214,8 @@ pub const SsaBuilder = struct {
         PageAllocator.unmap(p[0 .. defs.len * @sizeOf(u32)]);
     }
 
-    /// Index of (place, block), growing the matrix to cover it.
-    ///
-    /// BOTH axes grow geometrically. Widening the block axis re-strides every row;
-    /// adding a place appends rows and moves nothing, but growing it exactly would
-    /// still re-allocate per place. Exact growth on either axis is quadratic — it
-    /// was measured on the block axis at 4.6 GB and 4× slower, on the foundry
-    /// corpus `defs` names (not vendored here; see its CORPUS note).
+    /// Index of (place, block), growing the matrix to cover it. Both axes grow
+    /// geometrically: exact growth on either axis is quadratic.
     fn defsIndex(self: *SsaBuilder, place: Place, block: Mir.Block) Error!usize {
         const p = @intFromEnum(place);
         const b = @intFromEnum(block);
@@ -307,7 +239,7 @@ pub const SsaBuilder = struct {
             const new_cap = @max(p + 1, @max(self.place_cap * 2, 16));
             // Appending rows moves nothing, so this is one flat copy. It is a
             // fresh mapping rather than a `realloc` because an in-place resize
-            // would hand back tail bytes with no zero guarantee — see `absent`.
+            // would hand back tail bytes with no zero guarantee (see `absent`).
             const grown = try mapZeroed(@as(usize, new_cap) * self.block_stride);
             @memcpy(grown[0..self.defs.len], self.defs);
             unmapMatrix(self.defs);
@@ -319,14 +251,10 @@ pub const SsaBuilder = struct {
 
     /// Braun §readVariableRecursive. Every path memoizes its result with
     /// `writeVariable`, which is also what breaks cycles on the loop path.
-    ///
-    /// ponytail: still recursive, and its depth is a CFG chain length (the
-    /// single-predecessor arm below), not a nesting depth — the same unbounded
-    /// shape `tryRemoveTrivialPhi` was just converted out of. Ceiling: one stack
-    /// frame per block on the first read of a place, so ~10⁵ sequential `if`s in
-    /// one module would blow the stack. All 36 foundry models are far under it.
-    /// The fix is an explicit stack with a resume state, since the ≥2-preds arm
-    /// has real post-recursion work.
+    // ponytail: recursive, with depth a CFG chain length (the single-predecessor
+    // arm), not a nesting depth. Ceiling: one frame per block on the first read
+    // of a place, so ~10⁵ sequential `if`s in one module would blow the stack.
+    // The fix is an explicit stack with a resume state for the ≥2-preds arm.
     fn readVariableRecursive(self: *SsaBuilder, place: Place, block: Mir.Block) Error!Mir.Value {
         const b = try self.ensureState(block);
 
@@ -346,22 +274,14 @@ pub const SsaBuilder = struct {
             assert(head != list_end);
             val = try self.readVariable(place, self.pred_pool.items[head].block);
         } else {
-            // ≥2 preds (or 0 — an undefined read in a source-less block).
+            // ≥2 preds (or 0: an undefined read in a source-less block).
             //
-            // Braun emits the phi FIRST (to break cycles) and collapses a
-            // trivial one afterwards by aliasing. The alias is the rewrite, so
-            // the dead row, its Value, its alias slot and its operands all
-            // stayed: a variable written at the top of a compact model and
-            // read after ~1000 sequential `if`s left ~1000 of them. MEASURED on
-            // bsim4va (ReleaseFast, --emit-zig): 653,271 of 665,981 MIR rows
-            // were phis, 651,266 of them dead — and every later pass sized by
-            // `nv` or walking `insts` paid for them.
-            //
-            // So the cell is marked `pending` instead, and a phi is emitted
-            // only when it is needed: when a read cycles back here
-            // (`readVariable` mints it, and it is filled and collapsed exactly
-            // as before) or when the predecessors disagree. An acyclic trivial
-            // join gets no row at all.
+            // Braun emits the phi first and collapses a trivial one by aliasing,
+            // which leaves a dead row behind; on a compact model with long `if`
+            // chains nearly every phi row was dead. So the cell is marked
+            // `pending` instead, and a phi is emitted only when a read cycles
+            // back here (`readVariable` mints it) or the predecessors disagree.
+            // An acyclic trivial join gets no row at all.
             const cell = try self.defsIndex(place, block);
             self.defs[cell] = pending;
             const top = self.scratch.items.len;
@@ -386,7 +306,7 @@ pub const SsaBuilder = struct {
     /// Braun §addPhiOperands: one operand per predecessor edge, then collapse.
     fn addPhiOperands(self: *SsaBuilder, place: Place, phi: Mir.Value, block: Mir.Block) Error!Mir.Value {
         // One shared scratch used as a stack: this is re-entrant (readVariable
-        // recurses back in), and a fresh list per phi was an allocation per phi.
+        // recurses back in), and a list per phi would allocate per phi.
         const top = self.scratch.items.len;
         defer self.scratch.shrinkRetainingCapacity(top);
         try self.readPreds(place, block);
@@ -412,7 +332,7 @@ pub const SsaBuilder = struct {
     }
 
     /// The one value every pair resolves to (`.undef` for no pairs), or null
-    /// when they disagree — `tryRemoveTrivialPhi`'s rule for a phi that does
+    /// when they disagree: `tryRemoveTrivialPhi`'s rule for a phi that does
     /// not exist yet, so there is no self-reference to skip.
     fn sameValue(mir: *const Mir, pairs: []const Mir.PhiPair) ?Mir.Value {
         if (pairs.len == 0) return .undef;
@@ -424,43 +344,24 @@ pub const SsaBuilder = struct {
     /// Collapse a phi whose operands all resolve to one value (self-references
     /// ignored) to that value. Braun §tryRemoveTrivialPhi.
     ///
-    /// "Rerouting users" is done by ALIASING rather than rewriting: the operand
-    /// lists keep pointing at the dead phi and every consumer resolves through
-    /// `Mir.resolveAlias`. Dependent phis are then re-checked.
-    ///
-    /// EXPLICIT WORKLIST, not recursion. Braun states this recursively and every
-    /// textbook port copies that, but the recursion is over the phi DEF-USE
-    /// graph, so its depth is bounded by nothing syntactic — a 600 K-line foundry
-    /// model chains phis far deeper than it nests anything. Every recursion in
-    /// the Zig compiler's equivalents is nesting-bounded (AstGen walks the tree,
-    /// Liveness walks bodies), so the analogue here is codegen.zig's dominator
-    /// Euler tour, which is an explicit stack for exactly this reason. This is a
-    /// stack-overflow fix, NOT a speed fix: no measurable time change.
-    ///
-    /// EQUIVALENCE with the recursive form — the return value is load-bearing
-    /// (`addPhiOperands` hands it back as the value of the phi), and a worklist
-    /// drains in a different order than a call stack, so both halves matter:
-    ///   - RETURN. The recursion fixes `repl` for the root BEFORE it descends
-    ///     into the root's users, and returns that same `repl` afterwards; every
-    ///     recursive call's result is discarded (`_ =`). So capturing the first
-    ///     iteration's result and then draining the worklist returns the same
-    ///     Value, whatever the drain order is.
-    ///   - ORDER. It is preserved anyway, which is what keeps the alias table —
-    ///     and therefore the generated bytes — identical. Users are appended in
-    ///     list order and then reversed, so the LIFO pops them head→tail, and a
-    ///     popped phi's own users land on top and drain before its remaining
-    ///     siblings: exactly the recursion's pre-order DFS. The `hasAlias` skip is
-    ///     applied at POP time, not push time, because the recursion re-tests it
-    ///     only after the previous sibling's whole subtree has run. (The
-    ///     recursion's extra `u.phi == phi` skip is subsumed: `phi` was just
-    ///     aliased, so `hasAlias` already rejects it.) Snapshotting a user list is
-    ///     safe because nothing on this path calls `addUser`, so `user_pool`
-    ///     cannot grow or move mid-walk.
-    ///
-    /// TERMINATION: entries are pushed only by the branch that just called
-    /// `Mir.setAlias`, `setAlias` is monotonic (an alias is never cleared), and a
-    /// popped phi that `hasAlias` is dropped. So each phi pushes its users at most
-    /// once and total pushes are bounded by `user_pool.len`.
+    /// Users are rerouted by aliasing, not rewriting: operand lists keep naming
+    /// the dead phi and consumers resolve through `Mir.resolveAlias`. Dependent
+    /// phis are then re-checked.
+    //
+    // An explicit worklist, not Braun's recursion: the recursion follows the
+    // phi def-use graph, whose depth nothing syntactic bounds. It must match
+    // the recursive form exactly, since the alias table decides the emitted
+    // bytes:
+    //   - Return: the recursion fixes `repl` for the root before descending and
+    //     discards every nested result, so returning the first iteration's
+    //     result is the same whatever the drain order.
+    //   - Order: users are appended in list order and reversed, so the LIFO pops
+    //     them head to tail and a popped phi's users drain before its siblings,
+    //     the recursion's pre-order DFS. `hasAlias` is tested at pop time, as the
+    //     recursion re-tests it after each sibling's subtree. Nothing on this
+    //     path calls `addUser`, so `user_pool` cannot move mid-walk.
+    //   - Termination: only the branch that just called `setAlias` pushes, and
+    //     aliases are never cleared, so each phi pushes its users at most once.
     fn tryRemoveTrivialPhi(self: *SsaBuilder, phi: Mir.Value) Error!Mir.Value {
         // Stack discipline like `scratch`: this runs under re-entrant lowering.
         const top = self.phi_work.items.len;
@@ -488,8 +389,7 @@ pub const SsaBuilder = struct {
             if (repl != cur) {
                 self.mir.setAlias(cur, repl);
                 // Queue only the phis that named `cur` as an operand: they may now
-                // be trivial. Walking every phi here was 97% of runtime on
-                // bsimsoi_va.
+                // be trivial. Walking every phi here dominated runtime.
                 const mark = self.phi_work.items.len;
                 var node = self.userHead(cur);
                 while (node != list_end) {
