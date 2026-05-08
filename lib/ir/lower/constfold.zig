@@ -1,14 +1,9 @@
 //! Constant evaluation: §4.2 constant_expression, §6.6.1 generate bounds.
 //!
 //! In: an expression AST and the current scope. Out: a `Const`, or null when the expression
-//! is not constant. Reads the symbol tables, never writes.
-//!
-//! LRM clauses this file's code cites: §2.7, §3.2, §3.4, §3.5, §4.2, §4.2.1, §4.2.9, §4.2.11, §4.3, §4.7.2, §6.6.1, §6.6.2.
-//!
-//! The operator rules are the shared kernel's (`frontend/constfold.zig`); this
-//! file is lowering's `env` over it — identifiers through `consts` — plus the
-//! §4.2.9 signedness questions. Functions take `self: *Lower` and are called
-//! directly, `lower_constfold.f(self, ...)`.
+//! is not constant. Reads the symbol tables, never writes. The operator rules are
+//! `frontend/constfold.zig`'s; this file supplies identifiers (through `consts`) and §4.2.9 signedness.
+//! LRM: §2.7, §3.2, §3.4, §3.5, §4.2, §4.2.1, §4.2.9, §4.2.11, §4.3, §4.7.2, §6.6.1, §6.6.2.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -17,31 +12,23 @@ const Ast = @import("frontend").Ast;
 const constfold = @import("frontend").constfold;
 const Const = constfold.Const;
 
-// ---------------------------------------------------------------------------
-// Class 9 — constant evaluation (LRM §4.2 constant_expression, §6.6.1)
-// ---------------------------------------------------------------------------
-
-/// Fold an elaboration-time constant: literals, genvars (§3.5) and parameters
-/// (§3.4 — a parameter IS a constant expression for array bounds and
-/// generate bounds, §6.6.1). Returns null when the expression is not constant.
+/// Folds an elaboration-time constant: literals, genvars (LRM §3.5) and parameters
+/// (LRM §3.4, §6.6.1). Returns null when the expression is not constant.
 pub fn constEval(self: *const Lower, e: Ast.ExprId) ?Const {
     return foldExpr(self, e, true);
 }
 
-/// `constEval` for a SHAPE — an array or vector bound, a replication count, or
-/// the elaborated structure (a genvar loop's bounds, a generate scheme). §3.4
-/// fixes a parameter "at compilation time", and a shape is the one place the
-/// device cannot follow a card, so every parameter the fold reads is
-/// marked `ParamInfo.shape` and codegen's `checkShape` refuses a card that
-/// moves it (rather than the old silent disagreement between a folded shape
-/// and a card-read index).
+/// Folds a shape: an array or vector bound, a replication count, or a generate
+/// scheme's bounds. Marks every parameter it reads `ParamInfo.shape`, because the
+/// device cannot follow a model card there; codegen's `checkShape` refuses a card
+/// that moves one (LRM §3.4).
 pub fn shapeEval(self: *Lower, e: Ast.ExprId) ?Const {
     return constfold.fold(self.file, e, Env{ .self = self, .params = true, .shape = self });
 }
 
-/// With `params = false`, a procedural `if (p > 0)` must stay
-/// a runtime branch — `p` is overridable by the model card, so folding it to
-/// its default would silently compile the wrong arm (§3.4 vs §6.6.2).
+/// Folds `e` to a constant, or returns null. With `params = false` parameters do not
+/// fold: a procedural `if (p > 0)` stays a runtime branch because the model card can
+/// override `p` (LRM §3.4, §6.6.2).
 pub fn foldExpr(self: *const Lower, e: Ast.ExprId, params: bool) ?Const {
     return constfold.fold(self.file, e, Env{ .self = self, .params = params });
 }
@@ -55,6 +42,7 @@ const Env = struct {
     /// `shapeEval`'s: where a parameter read in a shape is marked.
     shape: ?*Lower = null,
 
+    /// Returns the constant an identifier or conversion call names, or null.
     pub fn leaf(env: Env, e: Ast.ExprId) ?Const {
         const self = env.self;
         const ex = &self.file.exprs;
@@ -62,8 +50,8 @@ const Env = struct {
         if (ex.tag(e) != .ident) return null;
         const name = self.file.str(ex.strOf(e));
         if (self.vars.contains(name)) return null; // a runtime variable
-        // A function-local parameter is NOT overridable by a model card
-        // (§4.7.2 — it never reaches the Model), so `foldExpr(..., false)`'s refusal
+        // A function-local parameter is not overridable by a model card
+        // (§4.7.2: it never reaches the Model), so `foldExpr(..., false)`'s refusal
         // to look through a parameter does not apply to a shadowing local.
         if (self.param_index.get(name)) |i| if (!lower_expr.funcParamShadows(self, name)) {
             if (!env.params) return null;
@@ -96,8 +84,8 @@ const Env = struct {
         if (std.mem.eql(u8, name, "$itor")) return .{ .real = @floatFromInt(a.asIntExact() orelse return null) };
         // §9.14 / IEEE 1364-2005 §17.11.1, one of the "mathematical system
         // functions listed in 17.11": "the ceiling of the log base 2 of the
-        // argument (the log rounded up to an integer value)". An integer
-        // argument only, and a non-negative one — 0 and 1 both give 0; the
+        // argument (the log rounded up to an integer value)". A non-negative
+        // integer argument only (0 and 1 both give 0); the
         // unsigned reading of a negative argument stays a run-time question.
         if (std.mem.eql(u8, name, "$clog2")) {
             const n = a.asIntExact() orelse return null;
@@ -108,9 +96,11 @@ const Env = struct {
         }
         return null;
     }
+    /// Reports whether `e` must not fold (see `mixedShiftComparison`).
     pub fn refuse(env: Env, e: Ast.ExprId) bool {
         return mixedShiftComparison(env.self, e);
     }
+    /// Returns `e`'s source signedness, or null when nothing states it.
     pub fn signed(env: Env, e: Ast.ExprId) ?bool {
         return integerSourceSigned(env.self, e, 0);
     }
@@ -173,7 +163,7 @@ fn integerSourceSigned(self: *const Lower, e: Ast.ExprId, depth: u32) ?bool {
 }
 
 /// §5.5.1 over two nonself-determined operands: unsigned when either is, signed
-/// when both are. Only when BOTH are known integers — "If any operand is real,
+/// when both are. Only when both are known integers: "If any operand is real,
 /// the result is real", and a null operand may be one.
 fn operandsSigned(self: *const Lower, a: Ast.ExprId, b: Ast.ExprId, depth: u32) ?bool {
     const sa = integerSourceSigned(self, a, depth) orelse return null;
@@ -181,21 +171,12 @@ fn operandsSigned(self: *const Lower, a: Ast.ExprId, b: Ast.ExprId, depth: u32) 
     return sa and sb;
 }
 
-/// §4.2.9, the rule that makes signedness a property of the COMPARISON and not
-/// of either operand: "When one or both operands are unsigned, the expression
-/// shall be interpreted as a comparison between unsigned values. If the operands
-/// are of unequal bit lengths, the smaller operand shall be zero-extended to the
-/// size of the larger operand."
-///
-/// The mask that zero-extension is, or `null` when both operands are signed (or
-/// nothing proves either one unsigned) and the ordinary signed compare stands.
-/// Masking BOTH sides to the wider width is the whole of the rule: the results
-/// are then non-negative, so the signed i64 opcodes `cmp` emits compare them as
-/// the unsigned values §4.2.9 asks for. `a < 32'd1` with `a` at -1 is
-/// 4294967295 < 1, not -1 < 1.
-///
-/// §3.2 supplies the width of everything that is not a sized literal: "variables
-/// can hold values ranging from -2**31 to 2**31-1", so 32 bits.
+/// Returns the zero-extension mask for comparison `e`, or null when no operand is
+/// known unsigned and the signed compare stands. "When one or both operands are
+/// unsigned, the expression shall be interpreted as a comparison between unsigned
+/// values" (LRM §4.2.9). Masking both sides to the wider width makes them
+/// non-negative, so `cmp`'s signed i64 opcodes compare them as unsigned:
+/// `a < 32'd1` with `a` at -1 is 4294967295 < 1. Unsized operands are 32 bits (§3.2).
 ///
 /// ponytail: a 64-bit-or-wider sized literal declines the mask rather than
 /// widening the carrier. `Lower`'s integer carrier is i64 and the top bit is its
@@ -234,6 +215,8 @@ fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
     };
 }
 
+/// Reports whether comparison `e` has a logical-shift operand and operands of known,
+/// differing signedness. Lowering refuses it (E0364) and constant folding leaves it alone.
 pub fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     switch (ex.binOp(e)) {

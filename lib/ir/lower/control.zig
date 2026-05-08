@@ -3,9 +3,6 @@
 //! In: if/case/for/while/repeat AST. Out: MIR control flow (blocks, branches, phis).
 //!
 //! LRM clauses this file's code cites: §3.5, §4.2.7, §5.6.7, §5.8, §5.8.1, §5.8.3, §5.9, §5.9.1, §5.9.2, §6.6, §6.6.1, §6.6.2.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_control.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -26,35 +23,21 @@ const branchTo = Lower.branchTo;
 const toInt = Lower.toInt;
 const toBool = Lower.toBool;
 
-// ---------------------------------------------------------------------------
-// Class 4 — control flow (LRM §5.8, §5.9)
-// ---------------------------------------------------------------------------
-
 /// §6.6: "All expressions in generate schemes shall be constant expressions,
 /// deterministic at elaboration time." The scheme of an if-generate is its
 /// condition and of a case-generate its selector; the loop generate's three
 /// parts are E0417-E0419, judged in `tryUnrollFor` where the unroll needs them.
 ///
-/// `constEval`, NOT `foldExpr(..., false)`: a `parameter` is a `constant_primary` (A.8.4)
-/// and §6.6's stated purpose is "the ability for parameter values to affect the
-/// structure of the model", so a parameterized scheme is exactly what the clause
-/// is for. What it excludes is a module variable or anything reading the
-/// solution — the things `constEval` returns null for.
+/// A parameter is a `constant_primary` (A.8.4), and §6.6 exists for "parameter
+/// values to affect the structure of the model", so parameters fold here; a module
+/// variable or a solution read does not. Each parameter read becomes a §3.4 shape
+/// parameter (`shapeEval`), which `checkShape` keeps the card from moving. An
+/// unfoldable scheme is reported, then still lowered as a §5.8 runtime branch.
 ///
-/// Reported and then lowered anyway: a scheme VerA cannot fold is still lowered
-/// as the §5.8 runtime branch it looks like, so a second mistake inside the
-/// selected arm is reported in the same run.
-///
-/// `shapeEval`: a parameter a scheme reads fixes the elaborated STRUCTURE, so it
-/// is a §3.4 shape parameter — compiled in, and `checkShape` refuses a card
-/// that moves it (decided 2026-09-24).
-///
-/// ponytail: a scheme this accepts is not necessarily FOLDED. `lowerIf` still
-/// lowers a parameterized generate as a runtime diamond over both arms instead
-/// of one elaborated arm; since the card cannot move a shape parameter, the
-/// diamond always takes the compiled arm. Same behavior, different structure,
-/// and nothing VerA emits can observe the difference until §6.6.1's
-/// per-instance declarations exist.
+/// ponytail: `lowerIf` still lowers a parameterized generate as a runtime diamond
+/// over both arms. The card cannot move a shape parameter, so the diamond always
+/// takes the compiled arm; this is unobservable until §6.6.1 per-instance
+/// declarations exist.
 pub fn checkGenScheme(self: *Lower, tok: u32, scheme: Ast.ExprId) Oom!void {
     if (lower_constfold.shapeEval(self, scheme) != null) return;
     var b = self.errWith(tok, .E0428);
@@ -62,8 +45,8 @@ pub fn checkGenScheme(self: *Lower, tok: u32, scheme: Ast.ExprId) Oom!void {
     try b.emit();
 }
 
-/// §5.8 conditional. A constant-foldable condition lowers only the taken arm —
-/// that is also what makes `generate if` (§6.6.2) collapse at elaboration.
+/// Lowers a §5.8 conditional. A constant-foldable condition lowers only the taken
+/// arm, which is also what collapses `generate if` (§6.6.2).
 pub fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.StmtId) Oom!void {
     if (lower_constfold.foldExpr(self, cond, false)) |c| {
         return lower_stmt.lowerStmt(self, if (c.isTrue()) then_s else else_s);
@@ -72,16 +55,11 @@ pub fn lowerIf(self: *Lower, cond: Ast.ExprId, then_s: Ast.StmtId, else_s: Ast.S
     try lowerBranchStmt(self, c, then_s, else_s, isAnalysisOrConst(self, cond) or try isStaticValue(self, c), cond);
 }
 
-/// Lower a body that only runs under a RUNTIME condition. The wrapper carries
-/// §5.6.7's ban on indirect contributions in a non-constant conditional or loop
-/// and §5.8.1/§5.9's ban on analog operators in one; the constant-folded paths
-/// (`lowerIf`'s fold, `tryUnrollFor`) call `lowerStmt` directly and are
-/// therefore unrestricted, which is exactly the "unless the conditional
-/// expression is a constant expression" carve-out.
-///
-/// `static` is the WEAKER §5.8.1 carve-out — an `analysis_or_constant_expression`
-/// rather than a constant one. It relaxes E0514 alone; `cond_depth` still rises,
-/// so the two constant-only rules keep rejecting the same code they did.
+/// Lowers a body that only runs under a runtime condition, raising `cond_depth` for
+/// §5.6.7's ban on indirect contributions and §5.8.1/§5.9's ban on analog operators.
+/// Constant-folded paths call `lowerStmt` directly, which is the "unless the
+/// conditional expression is a constant expression" carve-out. `static` is §5.8.1's
+/// weaker `analysis_or_constant_expression` carve-out; it relaxes E0514 alone.
 fn lowerCondBody(self: *Lower, body: Ast.StmtId, static: bool) Oom!void {
     self.cond_depth += 1;
     self.static_cond_depth += @intFromBool(static);
@@ -92,14 +70,10 @@ fn lowerCondBody(self: *Lower, body: Ast.StmtId, static: bool) Oom!void {
     try lower_stmt.lowerStmt(self, body);
 }
 
-/// A.8.3 `analysis_or_constant_expression` — the §5.8.1 carve-out. True when
-/// nothing in the tree can change between one Newton iteration and the next:
-/// literals, `parameter`s and `analysis()` calls, combined with operators.
-///
-/// Deliberately NOT `foldExpr(..., false)`: that folds to a VALUE and refuses a parameter
-/// on purpose (a model card overrides it), while this asks the different
-/// question of whether the value is fixed for the whole analysis. A parameter
-/// is `constant_primary` in A.8.4 and cannot move mid-solve, so it qualifies.
+/// Reports whether `e` is an A.8.3 `analysis_or_constant_expression` (the §5.8.1
+/// carve-out): literals, parameters and `analysis()` calls combined with operators,
+/// none of which can change between Newton iterations. Unlike `foldExpr(..., false)`,
+/// a parameter qualifies: the card may override it, but not mid-solve.
 pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
     if (e == .none) return false;
     const ex = &self.file.exprs;
@@ -150,7 +124,7 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
             break :blk true;
         },
         // A.8.4 `nature_attribute_reference ::= net_identifier .
-        // potential_or_flow . nature_attribute_identifier` — a nature's
+        // potential_or_flow . nature_attribute_identifier`: a nature's
         // attribute is fixed at declaration. Any other dotted name is a §6.8
         // hierarchical reference to something that can move.
         .hier_ident => blk: {
@@ -163,7 +137,7 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
         // are not A.8.4 primaries.
         //
         // A user function call stays out even with constant arguments: A.8.4's
-        // `constant_analog_function_call` promises nothing about the BODY, which
+        // `constant_analog_function_call` promises nothing about the body, which
         // may read `$abstime` (§9.10), and §4.5.15's test is "terms which can
         // not change their value during the course of a simulation".
         .call,
@@ -184,20 +158,17 @@ pub fn isAnalysisOrConst(self: *const Lower, e: Ast.ExprId) bool {
     };
 }
 
-/// §4.5.15 "terms which can not change their value during the course of a
-/// simulation", decided by DEPENDENCE on the lowered condition rather than by
-/// its syntax. `isAnalysisOrConst` answers for the spelling and refuses every
-/// variable; this follows the variable to what it was computed from. The
-/// clause's own reason is the test: an operator must be "evaluated every
-/// iteration", which a condition whose value cannot move guarantees however
-/// the source spelled it (`td = ptf * c * tf; if (td == 0.0) ...`).
+/// Reports whether lowered value `v` consists of §4.5.15 "terms which can not
+/// change their value during the course of a simulation", by following its
+/// dependences rather than its spelling, so `td = ptf * c * tf; if (td == 0.0)`
+/// qualifies where `isAnalysisOrConst` refuses every variable.
 ///
 /// Static leaves: literals, parameters (§3.4), and the calls `static_calls`
 /// names. Dynamic: a §4.4 probe (`block_param`), the committed-state latches,
 /// any other call (analog operators, `$abstime`, `$held_*` seeds, I/O, ...),
 /// and a phi whose merge a dynamic branch decides.
 ///
-/// ponytail: a phi is judged by EVERY branch backward-reachable from its
+/// ponytail: a phi is judged by every branch backward-reachable from its
 /// incoming blocks, not only the ones between its dominator and itself, so a
 /// solve-dependent `if` anywhere earlier in the block makes a later merge
 /// dynamic even when it cannot decide it. Sound, and no worse than the
@@ -277,9 +248,9 @@ fn staticWalk(
     }
 }
 
-/// Every branch that can decide whether control reaches `from` has a static
-/// condition. Walks predecessors to the entry; see `isStaticValue` for the
-/// over-approximation this is.
+/// Reports whether every branch that can decide whether control reaches `from` has
+/// a static condition. Walks predecessors to the entry; see `isStaticValue` for the
+/// over-approximation.
 fn controlStatic(
     self: *Lower,
     from: Mir.Block,
@@ -308,6 +279,8 @@ fn controlStatic(
     return true;
 }
 
+/// Lowers `if (cond) then_s else else_s` over an already lowered condition as a
+/// runtime diamond; `static` is as for `lowerGuarded`.
 pub fn lowerBranchStmt(
     self: *Lower,
     cond: Mir.Value,
@@ -342,10 +315,9 @@ pub fn lowerBranchStmt(
     self.cur = join;
 }
 
-/// §5.8.3 case — lowered as the equality chain the LRM defines it to be: the
-/// first matching arm wins, `default` is the final else. `casex`/`casez`
-/// (§7.3.2) differ only in the don't-care bits a four-state side brings
-/// (`lower_expr.caseMatch`); annex C.7's removal of them is the subset's.
+/// Lowers a §5.8.3 case as its equality chain: the first matching arm wins and
+/// `default` is the final else. `casex`/`casez` (§7.3.2) differ only in the
+/// don't-care bits a four-state side brings (`lower_expr.caseMatch`).
 pub fn lowerCase(
     self: *Lower,
     tok: u32,
@@ -362,11 +334,8 @@ pub fn lowerCase(
         default_arm = a.body;
     }
     // §5.8.3: "The default statement is optional. Use of multiple default
-    // statements in one case statement is illegal." Nothing in the clause
-    // orders them, so a second one leaves the fall-through arm ambiguous —
-    // which is why this is a well-formedness rule and not a preference.
-    // Reported once for the statement, and lowering carries on with the last
-    // one so a second, unrelated mistake in the same case is still reported.
+    // statements in one case statement is illegal." Reported once; lowering
+    // carries on with the last one so later mistakes are still reported.
     if (defaults > 1) {
         try self.err(tok, .E0427, "{d} `default` arms", .{defaults});
     }
@@ -374,7 +343,7 @@ pub fn lowerCase(
     // A.6.7, so whether an arm is decided before the solve turns entirely on
     // the scrutinee.
     // §7.3.2 a four-state subject or an x/z label compares both planes, as
-    // `===` does (IEEE 1364 §9.5: `case` IS case equality).
+    // `===` does (IEEE 1364 §9.5: `case` is case equality).
     const ex = &self.file.exprs;
     var four = ex.tag(scrutinee) == .ident and self.out.discrete_xz.contains(self.file.str(ex.strOf(scrutinee)));
     for (arms) |a| for (a.labels) |l| if (ex.tag(l) == .logic_literal) {
@@ -434,7 +403,7 @@ fn lowerCaseChain(
     self.cur = join;
 }
 
-/// §5.9.1 `while`. Braun order: the header is sealed only after the back edge.
+/// Lowers a §5.9.1 `while` loop. The header is sealed only after the back edge (Braun SSA).
 pub fn lowerWhile(self: *Lower, cond: Ast.ExprId, body: Ast.StmtId) Oom!void {
     const header = try self.mir.addBlock(self.arena);
     try self.gotoBlock(header);
@@ -443,14 +412,9 @@ pub fn lowerWhile(self: *Lower, cond: Ast.ExprId, body: Ast.StmtId) Oom!void {
     const c = try self.toBool(try lower_expr.lowerExpr(self, cond));
     const body_b = try self.mir.addBlock(self.arena);
     const exit = try self.mir.addBlock(self.arena);
-    // `self.cur`, NOT `header`: a §4.2.7 short-circuit (`while (i<=4 && f(x))`)
-    // splits the condition across blocks of its own and leaves `cur` at the
-    // join. Branching from `header` regardless appended a SECOND terminator to
-    // a block that already ended in the `&&`'s branch — the join and the rhs
-    // block then had no predecessor, codegen never emitted them, and the loop
-    // branched on a temporary nothing ever assigned. Same hazard as `?:` in a
-    // condition. Pinned by codegen.zig's test "§5.9.1 a short-circuit loop
-    // condition still reaches the loop's branch".
+    // `self.cur`, not `header`: a §4.2.7 short-circuit or `?:` in the condition
+    // splits it across blocks and leaves `cur` at the join, and `header` already
+    // ends in that split's branch.
     try self.branchTo(c, body_b, exit, false);
 
     try self.loops.append(self.arena, .{ .brk = exit, .cont = header });
@@ -464,7 +428,7 @@ pub fn lowerWhile(self: *Lower, cond: Ast.ExprId, body: Ast.StmtId) Oom!void {
     self.cur = exit;
 }
 
-/// §5.9 `repeat (n)` — the LRM's counted loop, lowered as an integer countdown.
+/// Lowers a §5.9 `repeat (n)` loop as an integer countdown.
 pub fn lowerRepeat(self: *Lower, count: Ast.ExprId, body: Ast.StmtId) Oom!void {
     const n = try self.toInt(try lower_expr.lowerExpr(self, count));
     const place = self.builder.newPlace();
@@ -498,9 +462,8 @@ pub fn lowerRepeat(self: *Lower, count: Ast.ExprId, body: Ast.StmtId) Oom!void {
     self.cur = exit;
 }
 
-/// §5.9.2 `for`. If the loop variable is a genvar (§3.5) the whole loop is
-/// unrolled at elaboration (§6.6.1) — that is the only form allowed to appear
-/// in a generate region, and it is what makes `genvar`-indexed nets work.
+/// Lowers a §5.9.2 `for` loop. A genvar loop (§3.5) is unrolled instead (§6.6.1),
+/// which is what makes `genvar`-indexed nets work.
 pub fn lowerFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.StmtId, body: Ast.StmtId) Oom!void {
     if (try tryUnrollFor(self, init_s, cond, step, body)) return;
 
@@ -513,7 +476,7 @@ pub fn lowerFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
     const body_b = try self.mir.addBlock(self.arena);
     const step_b = try self.mir.addBlock(self.arena);
     const exit = try self.mir.addBlock(self.arena);
-    // `self.cur`, not `header` — see `lowerWhile`: the condition may have been
+    // `self.cur`, not `header` (see `lowerWhile`): the condition may have been
     // split across blocks by a short-circuit, and the branch belongs at its end.
     try self.branchTo(c, body_b, exit, false);
 
@@ -575,7 +538,7 @@ fn tryUnrollFor(self: *Lower, init_s: Ast.StmtId, cond: Ast.ExprId, step: Ast.St
     return true;
 }
 
-/// The genvar assigned by a `for` init statement, if any (§3.5).
+/// Returns the genvar a `for` init statement assigns, or null (LRM §3.5).
 pub fn genvarOf(self: *const Lower, init_s: Ast.StmtId) ?[]const u8 {
     const m = self.out.module orelse return null;
     if (init_s == .none) return null;

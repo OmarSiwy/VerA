@@ -4,9 +4,6 @@
 //! implicit nets, and the port/branch tables.
 //!
 //! LRM clauses this file's code cites: §1, §1.3.1.1, §2.7, §2.8.1, §3.6.3, §3.6.3.2, §3.6.5, §3.9, §3.12, §5.4.1, §5.5.2, §5.9.3, §6.5.2.2.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_node.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -36,55 +33,25 @@ pub const State = struct {
     /// declared branch is 1 and no named branch can ever be mistaken for §5.4.1
     /// Example 2's single implicit branch of a node pair.
     last_branch_id: u32 = unnamed_branch,
-    /// Every spelling handed to `nodes`, so `appendNode` can keep them unique.
-    /// This is NOT an identity table — two different unknowns may want one spelling
-    /// (`uniqueSpelling` names both ways that happens); it exists because the
-    /// emitted `U` enum has one member per slot and two members cannot share a name.
-    /// Heap, and one entry per `nodes` row: the only bound on that count is
-    /// the source, since |U| ≤ 256 is enforced by `codegen.emitTopology` AFTER
-    /// lowering has built the table.
+    /// Every spelling handed to `nodes`, so `appendNode` can keep them unique for
+    /// the emitted `U` enum. Not an identity table: two different unknowns may want
+    /// one spelling (see `uniqueSpelling`).
     spellings: std.StringHashMapUnmanaged(void) = .empty,
     /// Deduped probe Value per `nodes` row; `.undef` = not probed yet.
     probe_cache: std.ArrayList(Mir.Value) = .empty,
 };
 
-// ---- §1.3.1 nodes ----------------------------------------------------------
-
-/// §1.3.4 — is `dname` a SIGNAL-FLOW discipline? Exactly one of the two natures
-/// is bound, so the net carries one quantity and no conservation law relates it
-/// to anything (§3.6.2.1 makes the both-natures case conservative instead).
-///
-/// The exclusive-or matters. codegen.zig flowOnlySignalFlowNet asks the
-/// narrower `flow and no potential`, which is right for the question IT asks —
-/// "is this node's one unknown a flow?" — but a natureless `domain continuous`
-/// discipline (§3.11.1) and a
-/// `domain discrete` one bind NEITHER nature, and neither is a signal-flow
-/// discipline. §1.3.4.1/§1.3.4.2 say "potential signal flow" and "flow
-/// signal-flow" disciplines, which is one nature, present.
+/// Reports whether `dname` is a §1.3.4 signal-flow discipline: exactly one of its
+/// two natures is bound. A discipline binding both is conservative (§3.6.2.1); one
+/// binding neither (natureless continuous, or discrete) is not signal-flow either.
 pub fn isSignalFlow(self: *const Lower, dname: []const u8) bool {
     if (dname.len == 0) return false;
     const d = self.out.disciplines.get(dname) orelse return false;
     return d.has_potential != d.has_flow;
 }
 
-/// §10.2 + §7.4. "The default discipline is applied by discipline resolution
-/// (see 7.4 and Annex F) to all discrete signals without a discipline
-/// declaration that appear in the text stream following the use of the
-/// `default_discipline directive." So: only a net that still has none, and
-/// only a directive that precedes the net's own declaration.
-///
-/// The QUALIFIER selects which nets a default claims, which is why more than
-/// one can be in force "provided each differs in qualifier", and why §10.2's
-/// precedence sentence ("the more specific directives have higher precedence")
-/// makes a qualified default beat an unqualified one. Every net that reaches
-/// this point is a plain net, hence `wire` by IEEE Std 1364 §3.5's default
-/// nettype — VerA has no `real`/`wreal` net declarations at all (E0205) and a
-/// `reg` is one §3.2 integer VARIABLE rather than a net (§7.3.1 Table 7-1's own
-/// mapping), so `wire` and the unqualified form are the only two keys that can
-/// match.
-/// ponytail: widen the key to the net's declared data type when those land.
-/// The same, for a declaration that may be a §3.6.3 vector: the default is
-/// written onto each scalarised element, since the base name is not a node.
+/// Applies the `default_discipline in force at `main_tok` to net `name`, or to each
+/// scalarised element when it is a §3.6.3 vector (LRM §10.2).
 pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     const r = self.out.vectors.get(name) orelse
         return applyDefaultDiscipline(self, try netKey(self, name, main_tok), main_tok);
@@ -93,6 +60,12 @@ pub fn applyDefaultToAll(self: *Lower, name: []const u8, main_tok: u32) Oom!void
         try applyDefaultDiscipline(self, try lower_param.elemKey(self, &key_buf, name, &.{r.at(@intCast(k))}), main_tok);
 }
 
+/// §10.2: "The default discipline is applied ... to all discrete signals without a
+/// discipline declaration that appear in the text stream following the use of the
+/// `default_discipline directive." So only a net that still has none, and only a
+/// directive preceding its declaration. Every net here is a plain `wire` (IEEE 1364
+/// §3.5), so `wire` and the unqualified form are the only qualifiers that can match.
+/// ponytail: widen the key to the net's declared data type when those land.
 fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     if (self.directives.disciplines.len == 0) return;
     const idx = self.node_voltages.get(name) orelse return;
@@ -100,16 +73,15 @@ fn applyDefaultDiscipline(self: *Lower, name: []const u8, main_tok: u32) Oom!voi
     if (self.out.nodes.items(.disc)[idx].len != 0) return;
     const dname = defaultDisciplineAt(self, main_tok) orelse return;
     // A default naming a discipline that was never declared supplies no
-    // nature, so leaving the net bare is the honest outcome: E0337 then says
-    // the net has no discipline, which is exactly what happened.
+    // nature, so the net stays bare and E0337 reports it.
     if (!self.out.disciplines.contains(dname)) return;
     self.out.nodes.items(.disc)[idx] = dname;
 }
 
-/// §10.2 the `default_discipline in force for a wire at token `main_tok`, or
-/// null when none is. Backwards from the token: the most recent directive
-/// wins, and a wire-qualified one wins over an unqualified one however old it
-/// is.
+/// §10.2 the `default_discipline in force for a wire at token `main_tok`, or null.
+/// The most recent directive wins, and a wire-qualified one wins over an
+/// unqualified one however old it is ("the more specific directives have higher
+/// precedence").
 fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
     if (main_tok >= self.tok_starts.len) return null;
     const at = self.tok_starts[main_tok];
@@ -132,19 +104,12 @@ fn defaultDisciplineAt(self: *const Lower, main_tok: u32) ?[]const u8 {
 /// If the discipline of digital connections (vpiLoConn) to a mixed net are
 /// unknown then the default_discipline must be specified (via the directive or
 /// other vendor specific method). If not specified, an error will result
-/// during discipline resolution." — E0960.
+/// during discipline resolution." Reports E0960.
 ///
-/// Every terminal of a gate, pull source or switch is such a digital
-/// connection. The net it names is MIXED when the net's own discipline is
-/// continuous: the primitive's side is discrete by the clause's second
-/// sentence, so the net joins the two domains. VerA has no vendor-specific
-/// method, so the directive in force at the primitive's text-stream position
-/// (the position §10.2 reads for any net) is the only way the connection's
-/// discipline can be known.
-///
-/// Run after `applyDefaultToAll`, so a bare net the directive made discrete is
-/// already not continuous. A net with no discipline at all is not mixed HERE:
-/// §3.6.5/§7.4 resolve it, and E0337 rules if anything analog touches it.
+/// Every gate, pull source or switch terminal is such a digital connection, and
+/// its net is mixed when the net's own discipline is continuous. VerA has no
+/// vendor-specific method, so only the directive in force at the primitive can
+/// supply the connection's discipline. Must run after `applyDefaultToAll`.
 pub fn checkPrimitiveDisciplines(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     for (module.gates) |g| {
         try checkPrimitiveTerminal(self, g.out, g.main_tok, "gate");
@@ -176,18 +141,13 @@ fn checkPrimitiveTerminal(self: *Lower, term: Ast.ExprId, prim_tok: u32, what: [
     try b.emit();
 }
 
-/// IEEE 1364 §19.2 `` `default_nettype none ``, on a name that is about to
-/// become a §3.6.5 implicit net. A no-op under every other net type: the
-/// directive picks the TYPE an implicit net has, and VerA's analog nets have no
-/// type to pick — §3.6 gives a net a DISCIPLINE, which is §10.2's directive and
-/// a different question. `none` is the member that says something this engine
-/// can act on, because it says the implicit net may not exist at all.
+/// Reports an error when IEEE 1364 §19.2 `` `default_nettype none `` is in force at
+/// `main_tok`, on a name about to become a §3.6.5 implicit net. Other net types are
+/// a no-op: VerA's analog nets have a discipline, not a net type.
 ///
-/// ponytail: the other ten values are accepted and dropped. The ceiling is real
-/// and it is the digital kernel's — `wand`/`wor`/`trireg`/`tri0` differ only in
-/// how MULTIPLE DRIVERS resolve, and VerA has no driver-resolution model to
-/// differ in. Upgrade path is the discrete net type on `Ast.NetDecl`, at which
-/// point this function stops discarding the value and starts stamping it.
+/// ponytail: the other ten values are accepted and dropped; they differ only in
+/// how multiple drivers resolve, which VerA does not model. Upgrade: a discrete
+/// net type on `Ast.NetDecl`.
 pub fn rejectImplicitNet(self: *Lower, name: []const u8, main_tok: u32) Oom!void {
     if (Preprocessor.NetTypeRegion.inForce(self.directives.nettypes, self.tokStart(main_tok), .default) != .none) return;
     var b = self.errWith(main_tok, .E0367);
@@ -197,33 +157,14 @@ pub fn rejectImplicitNet(self: *Lower, name: []const u8, main_tok: u32) Oom!void
     try b.emit();
 }
 
-/// IEEE 1364 §19.10 on the internal nets §6.2.2 gave the unconnected `input`
-/// ports. Run after the declarations are interned and before the analog blocks
-/// lower, which is the order the rule reads in: the port arrives already driven,
-/// and the child's equations then see whatever the drive put there.
+/// Applies IEEE 1364 §19.10 `unconnected_drive to the internal nets §6.2.2 gave
+/// unconnected `input` ports: `pull0` holds the port at potential 0 and `pull1` at 1,
+/// in its discipline's potential units, through a potential source. Must run after
+/// the declarations are interned and before the analog blocks lower. Skips a net
+/// whose discipline binds no potential.
 ///
-/// WHAT A PULL IS HERE. §19.10 pulls a digital net to a logic level through a
-/// `pull`-strength driver. The analog kernel has neither logic levels nor
-/// strengths, and it has exactly one way of saying "driven to a level": a
-/// potential source between the node and the reference. So `pull0` holds the
-/// port at 0 and `pull1` at 1, in the units of its discipline's potential
-/// nature — and the half that DISCRIMINATES is not the number, it is the
-/// source: an unconnected input under `nounconnected_drive is a floating
-/// unknown that KCL gives zero current, and under either pull it is a driven
-/// node that current flows into.
-///
-/// ponytail: 1.0 is the ceiling. §19.10's `pull1` is strength Pu1 on a
-/// four-state net, not one volt, and a discipline whose potential is a
-/// temperature or a pressure has no reason for its logic 1 to be 1. The upgrade
-/// path is the discrete kernel's net resolution, where a pull is a driver among
-/// drivers and this stops being a potential at all; until there is one, a
-/// number that is right for `logic` and honest about being a number beats
-/// recording the directive and doing nothing with it.
-///
-/// Skipped on a net whose discipline binds no potential (§3.6.2.2 discrete, or
-/// none at all): there is nothing to hold it at, and inventing a source would
-/// turn a directive into an E0501 about an access function the model never
-/// wrote.
+/// ponytail: 1.0 stands in for §19.10's Pu1 strength; the upgrade is discrete net
+/// resolution, where a pull is a driver rather than a potential.
 pub fn applyUnconnectedDrive(self: *Lower) Oom!void {
     if (self.directives.drives.len == 0) return;
     for (self.unconnected_inputs) |site| {
@@ -238,15 +179,13 @@ pub fn applyUnconnectedDrive(self: *Lower) Oom!void {
         const old = try self.builder.readVariable(acc.resist, self.cur);
         const level: Mir.Value = if (drive == .pull1) .f_one else .f_zero;
         try self.builder.writeVariable(acc.resist, self.cur, try self.emit(.fadd, &.{ old, level }));
-        // §5.6.1.3: the source is retained on every path, the same as an
-        // unconditional `<+` — there is no path on which an unconnected port
-        // stops being unconnected.
+        // §5.6.1.3: retained on every path, like an unconditional `<+`.
         try self.builder.writeVariable(acc.wrote, self.cur, .f_one);
     }
 }
 
-/// Register (or find) a node. Undeclared names are implicit nets (§3.6.5), so
-/// this never fails; registration order is source order ⇒ deterministic.
+/// Returns the `nodes` row of net `name`, creating it on first use. Undeclared names
+/// are implicit nets (§3.6.5); rows are created in source order.
 pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u16 {
     const gop = try self.node_voltages.getOrPut(self.arena, name);
     if (gop.found_existing) {
@@ -259,23 +198,13 @@ pub fn internNode(self: *Lower, name: []const u8, discipline: []const u8) Oom!u1
     return idx;
 }
 
-/// §3.6.3.2 fold one net_decl_assignment into a nodeset value for `node`.
+/// Folds one §3.6.3.2 net_decl_assignment into a nodeset value for `node`.
+/// "The initializer shall be a constant_expression": a failed fold reports E0365.
+/// Parameters fold (§3.4). A string folds to 0.0, the unknown's own start value.
 ///
-/// "The initializer shall be a constant_expression" — so a fold that fails IS
-/// the rule, and E0365 is it. `constEval` looks through parameters, which is
-/// what the clause wants: §3.4 makes a parameter reference a constant
-/// expression, and `electrical n = vstart;` is the form a model card tunes.
-///
-/// A string folds to 0.0 through `asReal()` and is not separately diagnosed: a
-/// nodeset is a potential, `parameter string` cannot be one, and the value it
-/// lands on is the same 0.0 the unknown starts at without any nodeset at all.
-///
-/// ponytail: the value is frozen at the fold, so a nodeset written over a
-/// parameter keeps the parameter's DECLARED default even after a model card
-/// overrides it — a stale initial guess, never a wrong answer, since §3.6.3.2
-/// only feeds the solver's starting point. The upgrade path is the §6.3.4
-/// `derive()` shape: keep the `Ast.ExprId`, render it with codegen's
-/// `f64Const`, and export `nodeset(model)` instead of a comptime table.
+/// ponytail: the value is frozen at the parameter's declared default, so a card
+/// override leaves a stale initial guess (never a wrong answer). Upgrade: keep the
+/// `Ast.ExprId` and export `nodeset(model)` the way `derive()` is.
 pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []const u8) Oom!void {
     const c = lower_constfold.constEval(self, e) orelse {
         var b = self.errWith(tok, .E0365);
@@ -287,11 +216,10 @@ pub fn recordNodeset(self: *Lower, node: u16, e: Ast.ExprId, tok: u32, name: []c
     try self.out.nodesets.append(self.arena, .{ .node = node, .value = c.asReal(), .tok = tok });
 }
 
-/// The one place a `nodes` row is created: it fixes the slot's KIND and
-/// its SPELLING together, which is the split this table exists to keep. Every
-/// caller owns the IDENTITY question itself (`node_voltages` for a net,
-/// `flow_unknowns` for a branch, `port_probes` for a port) — this function does
-/// not dedupe and must not, since two distinct unknowns may ask for one name.
+/// The one place a `nodes` row is created, fixing its kind and spelling together.
+/// Does not dedupe: each caller owns identity (`node_voltages` for a net,
+/// `flow_unknowns` for a branch, `port_probes` for a port), and two distinct
+/// unknowns may ask for one name.
 fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: NodeKind) Oom!u16 {
     const idx: u16 = @intCast(self.out.nodes.len);
     assert(idx != ground);
@@ -302,31 +230,14 @@ fn appendNode(self: *Lower, name: []const u8, discipline: []const u8, kind: Node
     return idx;
 }
 
-/// `name`, or the first `name#k` nobody has taken. codegen prints one `U`
-/// member per slot, so two slots cannot share a spelling — and once identity
-/// stopped BEING the spelling, two slots genuinely can want one:
-///
-///   - §1.3.1.1's reference node prints `gnd` (`nodeName`) and §2.7 lets a plain
-///     net be called `gnd` too, so `I(a)` and `I(a,gnd)` both print `flow(a,gnd)`
-///     while naming two different branches;
-///   - §2.8.1 strips the backslash, so a net `\flow(p,n)` is the identifier
-///     `flow(p,n)`, which is what `flowUnknown` prints for the branch (p,n).
-///
-/// `#` is not a §2.7 identifier character and `naming.sanitize` escapes it, so a
-/// suffixed member cannot collide with an unsuffixed one either — the same
-/// convention, and the same reasoning, as `codegen.freshUName`, which uniquifies
-/// the branch-current unknowns codegen appends after `nodes`. The loop
-/// terminates in at most `nodes.len` steps (each `k` it rejects is held by
-/// a distinct earlier slot), and that is bounded by |U| ≤ 256.
-///
-/// The suffix falls on the LATER slot, so it is a function of source order and
-/// nothing else. A fixture that has to spell one of these writes the member as
-/// `emitTopology` prints it — the same rule as every other unknown.
+/// `name`, or the first `name#k` nobody has taken, since each slot is one `U` member.
+/// Two slots can want one spelling: a net named `gnd` (§2.7) against the reference
+/// node, or an escaped net `\flow(p,n)` (§2.8.1) against branch (p,n). `#` is not a
+/// §2.7 identifier character, so a suffixed name cannot collide with a source one.
+/// The suffix falls on the later slot, so it depends only on source order.
 fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
     if (!self.node_state.spellings.contains(name)) return name;
-    // The candidates that LOSE are hashed and thrown away, so they are built on
-    // the stack and only the winner reaches the arena — `elemKey`'s trick, with
-    // the same spill for a name too wide for the buffer.
+    // Losing candidates are built on the stack; only the winner reaches the arena.
     var buf: [spelling_buf_len]u8 = undefined;
     var k: u32 = 1;
     while (true) : (k += 1) {
@@ -336,17 +247,14 @@ fn uniqueSpelling(self: *Lower, name: []const u8) Oom![]const u8 {
     }
 }
 
-/// Widest spelling `uniqueSpelling` builds without spilling: `flow(<` plus two
-/// §2.7 identifiers — capped at 1024 characters, the same source bound
-/// `elem_key_len` and `naming.max_name_len` are sized from — plus the
-/// punctuation and a `#` with a `u32` after it.
+/// Widest spelling `uniqueSpelling` builds without spilling: two 1024-character
+/// identifiers (the bound `elem_key_len` uses), punctuation, and `#` with a `u32`.
 const spelling_buf_len = 2 * 1024 + 32;
 
 /// §3.12.1 "A port branch ... is a branch between the upper and lower
 /// connections of the port", Syntax 3-9 `branch ( < port_identifier > )`.
-/// Checked per SOURCE module: after flattening, a child's port is an internal
-/// node of the device whenever its parent joins it to an internal net, and
-/// that branch is legal — the rule is about the module that declares it.
+/// Checked per source module, since after flattening a child's port may be an
+/// internal node of the device.
 pub fn checkPortBranchDecls(self: *Lower) Oom!void {
     const ex = &self.file.exprs;
     for (self.file.modules[self.file.builtin_modules..]) |*m| for (m.branches) |b| {
@@ -362,22 +270,15 @@ pub fn checkPortBranchDecls(self: *Lower) Oom!void {
     };
 }
 
-/// Resolve a net reference — `n` or `n[i]` — to a `nodes` row.
-///
-/// The element case is a plain `internNode` of the scalarised name, so a
-/// vector element is a node like any other from here on. What this function
-/// owes on top is the two checks that only exist while the range is still
-/// known: §5.5.2 says an access function takes "scalars or individual elements
-/// of a vector", so a bare vector name is not a signal (E0351), and an index
-/// has to name an element that was declared (E0351/E0352). Without them
-/// `V(bus[9])` would quietly intern a §3.6.5 implicit net called `bus[9]` and
-/// read 0.
+/// Resolves a net reference, `n` or `n[i]`, to a `nodes` row. An access function
+/// takes "scalars or individual elements of a vector" (§5.5.2), so a bare vector
+/// name reports E0351 and an undeclared element E0351/E0352.
 pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
     if (e == .none) return ground;
     const ex = &self.file.exprs;
     switch (ex.tag(e)) {
         .ident => {
-            // §2.8.1 — see `netKey`. The reference to `\bus[0] ` is an `.ident`
+            // §2.8.1, see `netKey`. The reference to `\bus[0] ` is an `.ident`
             // and the reference to element 0 of `bus` is an `.index`, so the two
             // never share a path here; only the KEY had to be kept apart.
             const name = try netKey(self, self.file.str(ex.strOf(e)), ex.mainTok(e));
@@ -385,25 +286,16 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
                 try self.err(self.file.exprs.mainTok(e), .E0351, "`{s}` is a vector [{d}:{d}]; name one element of it", .{ name, r.msb, r.lsb });
                 return ground;
             }
-            // IEEE 1364 §19.2's `none`, on the other half of §3.6.5: `internNode`
-            // below is the one call in this file that MAKES a net out of a name
-            // nobody declared, so this is the one place the directive can act.
-            // Checked before the intern and not inside it — `lowerModule` interns
-            // every declared port and net through the same function, and those
-            // are declarations, not implicit nets.
+            // IEEE 1364 §19.2's `none`: this is the one place an undeclared name
+            // becomes a net. Checked here, not in `internNode`, which also interns
+            // every declared net.
             if (!self.node_voltages.contains(name))
                 try rejectImplicitNet(self, name, self.file.exprs.mainTok(e));
             return internNode(self, name, "");
         },
-        // §6.7.1 a hierarchical terminal, `V(u.a)`. `flatName` is the whole
-        // resolution: elaboration named the child's net `u.a`, so the path IS the
-        // flat name and the lookup is the ordinary one.
-        //
-        // What it may NOT do is intern a new node the way the `.ident` arm does.
-        // §3.6.5's implicit net is a rule about an UNDECLARED SIMPLE name in this
-        // module; a path that resolves to nothing names no net anywhere in the
-        // design, and silently creating one turns a wrong path into a floating
-        // node and an E0337 about a name the author never declared.
+        // §6.7.1 a hierarchical terminal, `V(u.a)`: elaboration named the child's
+        // net `u.a`, so `flatName` resolves it. It never interns a new node:
+        // §3.6.5's implicit net applies only to an undeclared simple name.
         .hier_ident => {
             const name = try lower_expr.flatName(self, e);
             if (!self.node_voltages.contains(name)) {
@@ -428,9 +320,8 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
                 return ground;
             };
             // §5.5.2 "The index must be a constant expression, though it may
-            // include genvar variables" — which `constEval` reads out of
-            // `consts`, where `tryUnrollFor` binds the genvar of the enclosing
-            // §5.9.3 `for` for the duration of each unrolled copy.
+            // include genvar variables"; `tryUnrollFor` binds the genvar in
+            // `consts` for each unrolled copy.
             const i = lower_constfold.constEval(self, ex.rhs(e)) orelse {
                 try self.err(self.file.exprs.mainTok(e), .E0352, "index into `{s}` is not a constant expression", .{name});
                 return ground;
@@ -448,46 +339,18 @@ pub fn nodeOf(self: *Lower, e: Ast.ExprId) Oom!u16 {
     }
 }
 
-/// The scalarised name of one vector element. `p[0]` and not `p__0`: it is the
-/// spelling the source uses, so a diagnostic, a `//!` operating-point binding
-/// and the emitted `U` enum all name the same thing, and naming.zig's escape
-/// makes it a legal Zig identifier without anybody choosing an encoding.
-///
-/// `internNode` for a vector element, `bus[3]`.
-///
-/// The spelling goes into a stack buffer for the LOOKUP and only reaches the
-/// arena when the element is genuinely new. `elemKey`'s reasoning exactly, and
-/// for the same reason: §5.5.2 lets `V(bus[3])` sit in an unrolled §5.9.3 loop
-/// body, and formatting the name afresh on every reference would just
-/// rediscover the slot the first one interned. `getKey` hands back the arena copy
-/// already in the map, so `internNode` does its whole job unchanged.
-/// The node-table key for a net named by the SOURCE identifier at `tok`.
+/// The node-table key for a net named by the source identifier at `tok`.
 ///
 /// §2.8.1: "Escaped identifiers shall start with the backslash character (\) and
 /// end with white space ... Neither the leading backslash character nor the
 /// terminating white space is considered to be part of the identifier." So
 /// `electrical \bus[0] ;` declares a SCALAR net whose name is the five
-/// characters `bus[0]` — byte-for-byte what `internNodeElem` prints for element
-/// 0 of `electrical [0:1] bus`. That spelling is a GENERATED name (§3.13.3), not
-/// a declaration in the module's namespace, so the two are different objects and
-/// the shared key merged them: the escaped scalar was refused as a second
-/// discipline declaration of the vector's element (E0902), and without that
-/// refusal the two would have shared one solver unknown and one wrong voltage.
+/// characters `bus[0]`, the same as `internNodeElem`'s name for element 0 of
+/// `electrical [0:1] bus`, which is a generated name (§3.13.3) and a different
+/// object. Only the token still shows the `\` (the parser strips it), so an escaped
+/// name ending in `]` gets the `\` back in its key; other names keep theirs.
 ///
-/// Discriminated at the TOKEN, which is the only place the information still
-/// exists — the parser strips the `\` from the name (`Parser.tokenText`), and no
-/// property of the resulting string can tell `bus[0]` from `bus[0]`. The `\` is
-/// put back, which is unspellable by any generated name and is the §2.8.1
-/// spelling a reader already expects in a diagnostic.
-///
-/// Only a name ENDING in `]` is touched: nothing else can collide with an
-/// element spelling, and an escaped net that cannot collide keeps the key it has
-/// always had. That matters for the Annex E path, which declares a SPICE card
-/// named for a keyword as an escaped identifier (`spice_cards`).
-///
-/// ponytail: a fresh arena copy per reference, not per net. The name is rare
-/// enough that the `elemKey` stack-buffer trick would cost more comment than it
-/// saves; `internNode`'s `getOrPut` drops the copy on every hit after the first.
+/// ponytail: allocates a fresh arena copy per reference; such names are rare.
 pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
     if (name.len == 0 or name[name.len - 1] != ']') return name;
     if (tok >= self.tok_starts.len) return name;
@@ -496,6 +359,8 @@ pub fn netKey(self: *Lower, name: []const u8, tok: u32) Oom![]const u8 {
     return std.fmt.allocPrint(self.arena, "\\{s}", .{name});
 }
 
+/// `internNode` for a vector element, spelled as the source does (`bus[3]`).
+/// Looks up on a stack buffer and allocates only for a new element.
 fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
     var buf: [lower_param.elem_key_len]u8 = undefined;
     const key = try lower_param.elemKey(self, &buf, base, &.{i});
@@ -503,10 +368,8 @@ fn internNodeElem(self: *Lower, base: []const u8, i: i64) Oom!u16 {
     return internNode(self, name, "");
 }
 
-/// Fold a declared `[msb:lsb]` (§3.6.3 Syntax 3-6). The bounds are constant
-/// expressions — §6.5.2.2 prints `electrical [0:4-1] in;` as valid — so this
-/// is lowering's job and not the parser's. `null` means it did not fold and
-/// the diagnostic has been emitted.
+/// Folds a declared `[msb:lsb]` (§3.6.3 Syntax 3-6); the bounds are constant
+/// expressions (`electrical [0:4-1] in;`, §6.5.2.2). Returns null after a diagnostic.
 pub fn foldDim(self: *Lower, d: Ast.Dim, tok: u32) Oom!?VecRange {
     const msb = lower_constfold.shapeEval(self, d.msb) orelse {
         try self.err(tok, .E0352, "the msb of the range is not a constant expression", .{});
@@ -519,17 +382,10 @@ pub fn foldDim(self: *Lower, d: Ast.Dim, tok: u32) Oom!?VecRange {
     return .{ .msb = msb.asInt(), .lsb = lsb.asInt() };
 }
 
-/// §6.5.2.2 the range of a port, from whichever of its two declarations
-/// carries one — and, when both do, only after the clause's own check: "If a
-/// port is declared as a vector, the range specification between the two
-/// declarations of a port shall be identical."
-///
-/// Identical means EVALUATE-identical, which is why the comparison is here and
-/// on FOLDED bounds: the clause prints `input [0:3] in; electrical [0:4-1] in;`
-/// as valid and `input [3:0] in; electrical [0:3] in;` as an error, and those
-/// two differ only after folding. A range on ONE declaration is not this rule's
-/// business — its sentence is guarded by "if a port is declared as a vector",
-/// and `inout p; electrical [3:0] p;` declares it exactly once.
+/// Returns a port's range from whichever of its two declarations carries one. When
+/// both do, "the range specification between the two declarations of a port shall
+/// be identical" (LRM §6.5.2.2), compared after folding: `input [0:3] in;
+/// electrical [0:4-1] in;` is valid, `input [3:0] in; electrical [0:3] in;` is not.
 pub fn portRange(self: *Lower, p: *const Ast.Port) Oom!?VecRange {
     const dir_r = if (p.range) |d| try foldDim(self, d, p.main_tok) else null;
     const ty_r = if (p.type_range) |d| try foldDim(self, d, p.main_tok) else null;
@@ -543,7 +399,7 @@ pub fn portRange(self: *Lower, p: *const Ast.Port) Oom!?VecRange {
 }
 
 /// The vector a branch terminal names, or null when it is a scalar (or not a
-/// bare identifier at all — `branch (a[1], b)` is two scalars).
+/// bare identifier at all: `branch (a[1], b)` is two scalars).
 pub fn vecTerminal(self: *const Lower, e: Ast.ExprId) ?VecRange {
     if (e == .none) return null;
     if (self.file.exprs.tag(e) != .ident) return null;
@@ -556,18 +412,10 @@ pub fn vecTerminal(self: *const Lower, e: Ast.ExprId) ?VecRange {
 ///     electrical [1:3]b;
 ///     branch (a,b) br1;  // Branch br1 is of size 3 and can be indexed 0 to 2
 ///
-/// Three rules, all of them here. The terminals pair "in a parallel one-to-one
-/// fashion", which is `VecRange.at(k)` against `at(k)` — declaration order on
-/// both sides, so neither terminal's own numbering leaks into the pairing. A
-/// scalar terminal fans in (Figure 3-2), so it repeats. And "if the range of
-/// the vector branch is not specified then the indexing of the vector branch
-/// shall start at 0" — hence `[0:size-1]` regardless of what either terminal
-/// is indexed from.
-///
-/// The elements are registered in `branches` under their scalarised names, so
-/// `V(br1[1])` resolves through the ordinary branch lookup; the base name goes
-/// into `vectors` so that `V(br1)` and `V(br1[9])` get the vector diagnostics
-/// rather than being read as a net.
+/// The terminals pair "in a parallel one-to-one fashion" in declaration order, a
+/// scalar terminal repeats (Figure 3-2), and the branch is indexed `[0:size-1]`.
+/// Elements are registered in `branches` under scalarised names; the base name
+/// goes into `vectors` for the vector diagnostics.
 pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
     const name = self.file.str(b.name);
     const hv = vecTerminal(self, b.hi);
@@ -579,8 +427,7 @@ pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
         }
     };
     const size = if (hv) |h| h.size() else lv.?.size();
-    // A scalar terminal is resolved once, outside the loop: it is the SAME
-    // node on every element (Figure 3-2), not a fresh implicit net per index.
+    // A scalar terminal is the same node on every element (Figure 3-2).
     const h_scalar = if (hv == null) try nodeOf(self, b.hi) else ground;
     const l_scalar = if (lv == null) try nodeOf(self, b.lo) else ground;
     const h_name = if (hv != null) self.file.str(self.file.exprs.strOf(b.hi)) else "";
@@ -588,9 +435,7 @@ pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
     for (0..size) |k| {
         const hi = if (hv) |h| try internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ h_name, h.at(@intCast(k)) }), "") else h_scalar;
         const lo = if (lv) |l| try internNode(self, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ l_name, l.at(@intCast(k)) }), "") else l_scalar;
-        // §3.12 → §3.11 once, not `size` times: every element of a vector
-        // branch pairs the same two DISCIPLINES, so the verdict is the same on
-        // all of them and only the first has anything new to say.
+        // §3.12 → §3.11 once: every element pairs the same two disciplines.
         if (k == 0) try lower_discipline.checkNetCompat(self, b.main_tok, hi, lo);
         try self.branches.put(self.arena, try std.fmt.allocPrint(self.arena, "{s}[{d}]", .{ name, @as(i64, @intCast(k)) }), .{
             .hi = hi,
@@ -601,21 +446,20 @@ pub fn declareVectorBranch(self: *Lower, b: *const Ast.BranchDecl) Oom!void {
     try self.out.vectors.put(self.arena, name, .{ .msb = 0, .lsb = @as(i64, size) - 1 });
 }
 
-/// The name codegen prints for a `nodes` row (naming.zig unit targets).
+/// Returns the name codegen prints for a `nodes` row, or "gnd" for `ground`.
 pub fn nodeName(self: *const Lower, idx: u16) []const u8 {
     return self.out.nodeName(idx);
 }
 
-/// §5.4.1 a fresh branch identity, one per DECLARED branch name (array elements
-/// included). Ids are per-module and never reused; nothing outside lowering sees
-/// them, so they need no stable spelling.
+/// Returns a fresh §5.4.1 branch identity, one per declared branch name (array
+/// elements included). Ids are per-module, never reused, and private to lowering.
 pub fn newBranchId(self: *Lower) u32 {
     self.node_state.last_branch_id += 1;
     return self.node_state.last_branch_id;
 }
 
-/// §4.4 potential probe of one node. Deduped so a node is one `block_param`
-/// (codegen's `x[idx]`); ground is the literal 0 (§1.3.1.1).
+/// Returns the §4.4 potential probe of one node, deduped so a node is one
+/// `block_param` (codegen's `x[idx]`); ground is the literal 0 (§1.3.1.1).
 pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
     if (idx == ground) return .f_zero;
     if (self.node_state.probe_cache.items[idx] != .undef) return self.node_state.probe_cache.items[idx];
@@ -624,20 +468,9 @@ pub fn probe(self: *Lower, idx: u16) Oom!Mir.Value {
     return v;
 }
 
-/// §5.4.2 reading a flow (`I(a,b)`) makes the branch current a solver unknown
-/// of its own. It gets a `nodes` row so codegen indexes it like any other
-/// `x[i]`.
-///
-/// Deduped on the PAIR, which is the identity §5.4.1 gives a branch, and not on
-/// the printed name. Two branches can print alike — §1.3.1.1's reference node
-/// and a net that §2.7 lets the author call `gnd` both spell `gnd` — and keying
-/// on the name aliased `I(a)` onto `I(a,gnd)`, one unknown for two currents and
-/// a Jacobian that is quietly wrong (`ch05_analog_behavior/
-/// net_named_gnd_is_not_ground.va` is that circuit).
-///
-/// It also means the name is formatted on the MISS path only, where the old
-/// spelling-keyed version paid an `allocPrint` per reference to discover the
-/// entry already existed.
+/// Returns the `nodes` row of branch (hi, lo)'s current, the solver unknown a §5.4.2
+/// flow read creates. Deduped on the node pair (the §5.4.1 identity), not the
+/// printed name, since a net called `gnd` prints like the reference node.
 pub fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
     const gop = try self.out.flow_unknowns.getOrPut(self.arena, .{ .hi = hi, .lo = lo });
     if (gop.found_existing) return gop.value_ptr.*;
@@ -649,14 +482,9 @@ pub fn flowUnknown(self: *Lower, hi: u16, lo: u16) Oom!u16 {
     return u;
 }
 
-/// §5.4.3 the unknown carrying `I(<p>)`. Spelled `flow(<p>)` on purpose: it
-/// reads as the port access function it came from, and it can never be mistaken
-/// for a `flow(a,b)` branch unknown (that form always has a comma).
-///
-/// `port_probes` is the identity — one entry per port, and the scan is bounded
-/// by the module's port count, which is why it needs no map. Reading it FIRST
-/// is the fix: the old order interned the name and let the string dedupe,
-/// so a net spelled `flow(<p>)` took over the port's current.
+/// Returns the §5.4.3 unknown carrying `I(<p>)`, spelled `flow(<p>)`. `port_probes`
+/// is the identity (a linear scan over the module's ports), so a net spelled
+/// `flow(<p>)` cannot take over the port's current.
 pub fn portFlowUnknown(self: *Lower, p: u16) Oom!u16 {
     for (self.out.port_probes.items) |pp| {
         if (pp.port == p) return pp.u;
