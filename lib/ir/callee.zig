@@ -1,22 +1,15 @@
-//! What a MIR `call` calls, as an enum: every callee name lowering can emit.
-//!
-//! The tag IS the spelling (`.@"$vt"`, `.ddt`, `.@"$limit$old"`), so a name
-//! round-trips through `@tagName` with no second table to drift, and a
-//! consumer that dispatched with `mem.eql(u8, name, "$vt")` switches on
-//! `.@"$vt"` instead — exhaustively, where tests/exhaustive.zig can see it.
-//!
-//! `.systf` is every name NOT listed: a §2.8.3 user system function (a VPI
-//! registration, §12.32) or a typo W0852 reports. Its spelling is not the tag,
-//! so a call keeps its raw name beside the enum (`Mir.InstData.call.name`).
-//!
-//! Minted once, by `Mir.emitCall`, the one MIR call constructor.
-//!
-//! DOD: `fromName` is one comptime `StaticStringMap` probe; `table` is
-//! comptime rows in `.rodata`. No allocation.
+//! What a MIR `call` calls: every callee name lowering can emit, as an enum
+//! whose tag is the spelling (`.@"$vt"`, `.@"$limit$old"`), plus per-callee
+//! facts (`table`: type, arity, descriptor slot, task family). Consumers switch
+//! on it instead of comparing strings. `.systf` is any unlisted name: a §2.8.3
+//! user system function (§12.32) or a typo W0852 reports; such a call keeps
+//! its raw name in `Mir.InstData.call.name`. `Mir.emitCall` mints it.
 
 const std = @import("std");
 const op = @import("op.zig");
 
+/// Every callee lowering can emit; `@tagName` is the source or synthetic
+/// spelling, so no second name table exists.
 pub const Callee = enum(u8) {
     // §4.5 analog operators (Table 4-19) and §4.5.13/§4.5.14 limexp, ddx.
     ddt,
@@ -147,7 +140,7 @@ pub const Callee = enum(u8) {
     @"$discontinuity",
     @"$limit",
     @"$table_model",
-    // VerA-synthetic: `absdelay` under `(* vera_interp = 2 *)` — the same
+    // VerA-synthetic: `absdelay` under `(* vera_interp = 2 *)`: the same
     // §4.5.7 operator and state, read by 3-point Lagrange interpolation.
     @"absdelay$quad",
     // VerA-synthetic: lowering's rewrites of one source call into several.
@@ -215,9 +208,8 @@ const by_name = std.StaticStringMap(Callee).initComptime(blk: {
     break :blk kvs;
 });
 
-/// A call's value type — the one fact `Lower.sysFuncTy` (lowering's side)
-/// and `analysis.callTy` (codegen's side) used to keep in two lists that had
-/// to agree. `analysis.VTy` is this type.
+/// A call's value type, read by both lowering and analysis.
+/// `analysis.VTy` is this type.
 pub const Ty = enum(u8) { real, int, str };
 
 /// How many arguments a source call may carry, as its clause's syntax prints
@@ -228,9 +220,11 @@ pub const Arity = struct {
     max: u8 = std.math.maxInt(u8),
 
     const unchecked: Arity = .{};
+    /// Returns the arity that admits exactly `n` arguments.
     pub fn exactly(n: u8) Arity {
         return .{ .min = n, .max = n };
     }
+    /// Returns whether a call with `n` arguments is in range.
     pub fn admits(a: Arity, n: usize) bool {
         return n >= a.min and n <= a.max;
     }
@@ -256,16 +250,17 @@ pub const Family = enum(u3) {
     file_read,
 };
 
+/// One row of `table`: the facts a consumer needs about a callee.
 pub const Info = struct {
     /// Everything not listed is real: §9.14/§9.15 and every §4.5 operator.
     ty: Ty = .real,
     /// The argument count Syntax 9-2..9-9, 9-5 and Table 4-14 admit.
     args: Arity = .unchecked,
-    /// §9.5.1/§9.5.2: the position of the multichannel or file descriptor —
-    /// "a 32-bit integer", "the result of an expression that takes the form
-    /// of a 32-bit unsigned integer value" — so a real or a string there is
-    /// not a descriptor at all. Null for a call that takes none.
+    /// §9.5.1/§9.5.2: the position of the multichannel or file descriptor
+    /// ("a 32-bit integer"), so a real or a string there is not a descriptor.
+    /// Null for a call that takes none.
     fd: ?u3 = null,
+    /// The §9.4/§9.5/§9.7 task family, `.none` for everything else.
     family: Family = .none,
 };
 
@@ -274,6 +269,7 @@ const display: Info = .{ .family = .display };
 const one: Arity = .exactly(1);
 const two: Arity = .exactly(2);
 
+/// Per-callee facts; an unlisted callee gets `Info`'s defaults.
 pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$param_given" = .{ .ty = .int },
     .@"$port_connected" = .{ .ty = .int },
@@ -343,8 +339,8 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     // §9.5.6 `$fflush(mcd)`, `$fflush(fd)`, `$fflush()`.
     .@"$fflush" = .{ .args = .{ .max = 1 }, .fd = 0, .family = .file_out },
     // §9.11 Table 9-8: `$realtobits` yields the bit PATTERN (an integer),
-    // `$bitstoreal` the real that pattern stands for — see
-    // tests/fixtures/exhaustive/122_bit_conversions.va.
+    // `$bitstoreal` the real that pattern stands for (see
+    // tests/fixtures/exhaustive/122_bit_conversions.va).
     .@"$realtobits" = .{ .ty = .int, .args = one },
     .@"$analog_node_alias" = .{ .ty = .int },
     .@"$analog_port_alias" = .{ .ty = .int },
@@ -380,18 +376,22 @@ pub const table = std.EnumArray(Callee, Info).initDefault(.{}, .{
     .@"$ferror$str" = .{ .ty = .str, .family = .file_read },
 });
 
+/// Returns the value type of a call to `c`.
 pub fn ty(c: Callee) Ty {
     return table.get(c).ty;
 }
 
+/// Returns the argument count a source call to `c` may carry.
 pub fn arity(c: Callee) Arity {
     return table.get(c).args;
 }
 
+/// Returns the descriptor argument's position, or null if `c` takes none.
 pub fn fdArg(c: Callee) ?u3 {
     return table.get(c).fd;
 }
 
+/// Returns the §9.4/§9.5/§9.7 task family of `c`.
 pub fn family(c: Callee) Family {
     return table.get(c).family;
 }
@@ -413,10 +413,9 @@ pub fn takesFormat(c: Callee) bool {
     };
 }
 
-/// The §4.5 operator, §5.10.3 event or §9.17 task this callee is — the unit
-/// `naming.enumerateUnits` gives it and the `Instance` state `op_zig.table` says
-/// it owns — or `.none`. Written out, so a new callee states whether it owns
-/// state.
+/// Returns the §4.5 operator, §5.10.3 event or §9.17 task this callee is
+/// (the unit `naming.enumerateUnits` gives it), or `.none`. Written out with
+/// no `else`, so a new callee must state whether it owns state.
 pub fn opKind(c: Callee) op.OpKind {
     return switch (c) {
         .ddt => .ddt,
