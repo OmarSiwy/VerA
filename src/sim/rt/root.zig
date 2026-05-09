@@ -524,25 +524,23 @@ pub const State = struct {
         try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
     }
 
-    /// `put` of a combinational node's output while the settle event runs
-    /// it, whether or not an input changed: the value is stored as is, and
-    /// the readers in `senses` (`word` counted from `off`) whose bits moved
-    /// are marked dirty here, without a branch; `reach` is woken as `put`
-    /// wakes it. A node reached in topological order only marks later ones.
-    pub inline fn putNode(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype, comptime senses: []const Sense) Error!void {
+    /// `put` of the whole of a combinational node's output while the
+    /// settle event runs it, whether or not an input changed: the value is
+    /// stored as is, and the readers in `senses` (`word` counted from `off`)
+    /// whose bits moved are marked dirty here, without a branch; `reach` is
+    /// woken as `put` wakes it. A node reached in topological order only
+    /// marks later ones.
+    pub inline fn putNode(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, comptime senses: []const Sense) Error!void {
         if (self.held(slot)) return;
         const s = logic.wide(a);
         const n = s.v.len;
-        const mw: [n]u64 = if (@TypeOf(m) == comptime_int or @TypeOf(m) == u64) .{m} else m;
         const before = logic.low(self.get(off));
         var d: [n]u64 = undefined;
         inline for (0..n) |j| {
             const o = self.get(off + j);
-            const nv = (o.v & ~mw[j]) | (s.v[j] & mw[j]);
-            const nx = (o.x & ~mw[j]) | (s.x[j] & mw[j]);
-            d[j] = (nv ^ o.v) | (nx ^ o.x);
-            self.v[off + j] = nv;
-            if (!two) self.x[off + j] = nx;
+            d[j] = (s.v[j] ^ o.v) | (s.x[j] ^ o.x);
+            self.v[off + j] = s.v[j];
+            if (!two) self.x[off + j] = s.x[j];
         }
         inline for (senses) |e| self.dirty[e.node / 64] |= @as(u64, @intFromBool(d[e.word] & e.mask != 0)) << @intCast(e.node % 64);
         if (@as(u8, @bitCast(reach)) == 0) return;
