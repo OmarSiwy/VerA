@@ -144,13 +144,34 @@ pub const Edge = enum(u2) {
 
 pub const Error = error{Failed} || std.mem.Allocator.Error || std.Io.Writer.Error;
 
+/// What can observe a change of a slot, as `digital/plan.zig` found it: a
+/// store's `wake` does only these.
+pub const Reach = packed struct(u8) {
+    /// Continuous drivers the fan-out queues (§6.1).
+    fan: bool = false,
+    /// Combinational nodes (`Design.comb`).
+    comb: bool = false,
+    /// Triggered processes (`Design.watchers`).
+    watch: bool = false,
+    /// A process suspended at an event control (`State.watch`).
+    terms: bool = false,
+    /// The §17.1.3 monitor.
+    mon: bool = false,
+    /// A §18 dump.
+    dump: bool = false,
+    _: u2 = 0,
+
+    pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
+};
+
 /// `exec.Susp` without the task activation, which no native process has.
 const Susp = struct { pc: u32, gen: u32, alive: bool };
 const Term = struct { susp: u32, gen: u32, edge: Edge };
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
-/// holds THEN. `v`, `x` and `m` are `n` words each at `words[at..]`.
-const Nba = struct { slot: u32, off: u32, n: u32, at: u32 };
+/// holds THEN. `v`, `x` and `m` are `n` words each at `words[at..]`. A
+/// `quiet` slot has nothing to wake.
+const Nba = struct { slot: u32, off: u32, n: u32, at: u32, quiet: bool };
 /// An `Nba` in flight past this timestep, owning its `v`, `x`, `m` words.
 const Late = struct { slot: u32, off: u32, n: u32, words: []u64 };
 /// The scheduler payload of the one NBA-region event that applies every
@@ -347,7 +368,9 @@ pub const State = struct {
             for (self.rows.items, 0..) |row, i| {
                 if (i != 0) try self.count(event.time);
                 const w = self.words.items[row.at..][0 .. 3 * row.n];
-                try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                if (row.quiet) {
+                    if (!self.held(row.slot)) self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                } else try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
             }
             self.rows.clearRetainingCapacity();
             self.words.clearRetainingCapacity();
@@ -448,30 +471,33 @@ pub const State = struct {
     /// The bits `m` of the value at word `off` become `a`'s, for a slot no
     /// event control, driver or node can be waiting on.
     pub inline fn set(self: *State, off: u32, a: anytype, m: anytype) void {
-        if (@TypeOf(a) != W) {
-            for (self.v[off..][0..a.v.len], self.x[off..][0..a.v.len], a.v, a.x, m) |*ov, *ox, av, ax, am| {
-                ov.* = (ov.* & ~am) | (av & am);
-                ox.* = (ox.* & ~am) | (ax & am);
-            }
-            return;
-        }
+        if (@TypeOf(a) != W) return self.merge(off, &a.v, &a.x, &m);
         const bits: u64 = m;
         self.v[off] = (self.v[off] & ~bits) | (a.v & bits);
         if (!two) self.x[off] = (self.x[off] & ~bits) | (a.x & bits);
     }
 
+    /// The bits `m` of the words from `off` become `v`/`x`'s.
+    fn merge(self: *State, off: u32, v: []const u64, x: []const u64, m: []const u64) void {
+        for (self.v[off..][0..v.len], self.x[off..][0..v.len], v, x, m) |*ov, *ox, av, ax, am| {
+            ov.* = (ov.* & ~am) | (av & am);
+            ox.* = (ox.* & ~am) | (ax & am);
+        }
+    }
+
     /// `exec.store` of the bits `m` of `slot`, whose words start at `off`:
     /// nothing happens unless the value changes; then every waiter it
-    /// matches wakes. `a` is a `logic.T`, `m` the `logic.M` of its width.
-    pub inline fn put(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+    /// matches wakes, of those `reach` names. `a` is a `logic.T`, `m` the
+    /// `logic.M` of its width.
+    pub inline fn put(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
         if (@TypeOf(a) != W) return self.store(slot, off, &a.v, &a.x, &m);
-        return self.putWord(slot, off, 0, a, m);
+        return self.putWord(reach, slot, off, 0, a, m);
     }
 
     /// `put` of the bits `m` of word `j` alone: a bit-select of a wide slot
     /// touches one word. An edge is its least significant bit's (§9.7.2),
     /// which only word 0 holds.
-    pub inline fn putWord(self: *State, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
+    pub inline fn putWord(self: *State, comptime reach: Reach, slot: u32, off: u32, j: u32, a: W, m: u64) Error!void {
         if (self.held(slot)) return;
         const at = off + j;
         const o = self.get(at);
@@ -482,8 +508,8 @@ pub const State = struct {
         const before = logic.low(self.get(off));
         self.v[at] = nv;
         if (!two) self.x[at] = nx;
-        if (self.sensed(slot)) self.diff[at] |= d;
-        try self.wake(slot, before, logic.low(self.get(off)));
+        if (reach.comb and self.sensed(slot)) self.diff[at] |= d;
+        try self.wakeOf(reach, slot, before, logic.low(self.get(off)));
     }
 
     /// `put` of a real (§4.8, `exec.store`): it changes when its value
@@ -531,21 +557,21 @@ pub const State = struct {
     /// `a` in the NBA region.
     /// ponytail: a real's update is compared by its bits, not its value as
     /// `putReal` does; only -0.0 over 0.0 and a NaN over itself differ.
-    pub fn nba(self: *State, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+    pub fn nba(self: *State, comptime reach: Reach, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
         const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
         const at: u32 = @intCast(self.words.items.len);
         if (@TypeOf(a) == W)
             try self.words.appendSlice(self.gpa, &.{ a.v, a.x, m })
         else
             try self.words.appendSlice(self.gpa, &(a.v ++ a.x ++ m));
-        try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = n, .at = at });
+        try self.rows.append(self.gpa, .{ .slot = slot, .off = off, .n = n, .at = at, .quiet = reach == Reach{} });
         if (self.rows.items.len == 1) _ = self.sched.schedule(.nba, nba_payload) catch |e| return self.schedFail(e);
     }
 
     /// §9.2.2 `<= #d`: `nba` of the update `after` ticks later. At 0 it
     /// joins this step's rows, the order its own event would take.
-    pub fn nbaAfter(self: *State, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
-        if (after == 0) return self.nba(slot, off, a, m);
+    pub fn nbaAfter(self: *State, comptime reach: Reach, after: u64, slot: u32, off: u32, a: anytype, m: anytype) Error!void {
+        if (after == 0) return self.nba(reach, slot, off, a, m);
         const n: u32 = if (@TypeOf(a) == W) 1 else a.v.len;
         const words = try self.gpa.alloc(u64, 3 * n);
         if (@TypeOf(a) == W) @memcpy(words, &[3]u64{ a.v, a.x, m }) else @memcpy(words, &(a.v ++ a.x ++ m));
@@ -694,18 +720,29 @@ pub const State = struct {
     /// schedule the nodes and triggered processes reading it come between.
     /// A change of a slot the monitor watches asks for its line (§17.1.3).
     pub fn wake(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
-        if (self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
-        if (self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
-        if (slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
+        return self.wakeOf(.all, slot, before, after);
+    }
+
+    /// `wake` of what `reach` names alone.
+    inline fn wakeOf(self: *State, comptime reach: Reach, slot: u32, before: Bit, after: Bit) Error!void {
+        if (reach.mon and self.monitored.len != 0 and self.monitored[slot]) try self.requestMonitor();
+        if (reach.dump and self.dumped.len != 0 and self.dumped[slot]) try self.requestDump();
+        if (reach.fan and slot + 1 < self.fan_start.len) for (self.fan[self.fan_start[slot]..self.fan_start[slot + 1]]) |pc| if (self.armed[pc]) {
             self.armed[pc] = false;
             try self.run(pc, null);
         };
-        if (slot + 1 < self.comb_start.len and self.comb_start[slot] != self.comb_start[slot + 1]) try self.dirtyReaders(slot);
-        if (slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
+        if (reach.comb and self.sensed(slot)) try self.dirtyReaders(slot);
+        if (reach.watch and slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
             if (!self.waiting[w.proc] or !w.edge.matches(before, after)) continue;
             self.waiting[w.proc] = false;
             try self.run(w.pc, null);
         };
+        if (reach.terms) try self.wakeTerms(slot, before, after);
+    }
+
+    /// `wake` of the event controls filed under `slot`, in the order they
+    /// suspended.
+    fn wakeTerms(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
         const list = &self.terms[slot];
         var keep: usize = 0;
         for (list.items) |t| {
