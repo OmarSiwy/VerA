@@ -200,10 +200,8 @@ pub const State = struct {
     /// Per plane word of a slot with node readers: the bits that changed
     /// since its readers were last marked.
     diff: []u64,
-    /// One bit per combinational node, set while the settle event runs; it
-    /// runs them from `cursor` up.
+    /// One bit per combinational node, set while the settle event runs.
     dirty: []u64,
-    cursor: u32 = 0,
     settle: enum { idle, queued, running } = .idle,
     watch_start: []const u32,
     watchers: []const Watcher,
@@ -369,19 +367,14 @@ pub const State = struct {
             return self.fail("more than {d} events at time {d}: a zero-delay loop keeps simulation time from advancing", .{ budget, at });
     }
 
-    /// The next dirty combinational node of this settle event, in
-    /// topological order, or null when none is left.
-    pub fn nextDirty(self: *State) ?u32 {
-        while (self.cursor < self.dirty.len) : (self.cursor += 1) {
-            const w = self.dirty[self.cursor];
-            if (w != 0) {
-                self.dirty[self.cursor] = w & (w - 1);
-                return self.cursor * 64 + @ctz(w);
-            }
-        }
-        self.cursor = 0;
-        self.settle = .idle;
-        return null;
+    /// Clear combinational node `n`'s dirty bit; whether it was set. The
+    /// settle event takes every node in topological order, so a node only
+    /// ever dirties one it has not reached yet.
+    pub inline fn take(self: *State, n: u32) bool {
+        const bit = @as(u64, 1) << @intCast(n % 64);
+        const was = self.dirty[n / 64] & bit != 0;
+        self.dirty[n / 64] &= ~bit;
+        return was;
     }
 
     /// Mark dirty the nodes that read a bit of `slot` changed since the
@@ -391,9 +384,6 @@ pub const State = struct {
         for (senses) |e| {
             const hit = self.diff[e.word] & e.mask != 0;
             self.dirty[e.node / 64] |= @as(u64, @intFromBool(hit)) << @intCast(e.node % 64);
-            // A node's successors come after it, so a running settle only
-            // ever gains bits above its cursor; this keeps it right regardless.
-            self.cursor = @min(self.cursor, if (hit) e.node / 64 else self.cursor);
         }
         if (senses.len != 0) @memset(self.diff[senses[0].word .. senses[senses.len - 1].word + 1], 0);
     }
