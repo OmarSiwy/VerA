@@ -2899,8 +2899,10 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
 test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`" {
     // ngspice fetlims against the `von` its PREVIOUS load stored
     // (mos1load.c:351, :535), and §9.17.3 leaves the returned value to the
-    // simulator. So `limit` runs the core that computes its arguments at `old`,
-    // the previous iterate's limited point, never at the unlimited `cur`.
+    // simulator. So `limit` runs the slice of the core that computes its
+    // arguments at `old`, the previous iterate's limited point, never at the
+    // unlimited `cur`. The slice returns `von` alone: the residuals stay in
+    // the core, and `limit` never pays for them.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module m(g, s, d);
@@ -2915,8 +2917,12 @@ test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`"
     , &h);
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s, "core(S, zVals(S, &old), model, inst, sim)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "m = m__common__core__limit(S, zVals(S, &old), model, inst, sim)") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "for (cur, 0..)") == null);
+    const at = std.mem.indexOf(u8, s, "fn m__common__core__limit(").?;
+    const sig = s[at..std.mem.indexOfPos(u8, s, at, "} {").?];
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f0:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f1:") == null);
 }
 
 test "codegen: §9.17.3 two pnjlimds legs + limvds emit ngspice's bulk rung" {
