@@ -507,6 +507,15 @@ pub const State = struct {
         const nv = (o.v & ~m) | (a.v & m);
         const nx = (o.x & ~m) | (a.x & m);
         const d = (nv ^ o.v) | (nx ^ o.x);
+        if (comptime reach == Reach{ .comb = true }) {
+            // Only nodes read the slot: the store does not branch on the
+            // data, and only its first change of the step reaches `dirtyReaders`.
+            self.v[at] = nv;
+            if (!two) self.x[at] = nx;
+            self.diff[at] |= d;
+            if (!self.pending[slot] and d != 0) try self.dirtyReaders(slot);
+            return;
+        }
         if (d == 0) return;
         const before = logic.low(self.get(off));
         self.v[at] = nv;
