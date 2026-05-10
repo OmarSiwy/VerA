@@ -836,9 +836,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         .jump => |t| try self.print("            continue :sw {d};\n", .{t}),
         .branch => |b| {
-            try self.print("            continue :sw if (", .{});
+            // Two constant `continue`s: each is a direct jump, where one
+            // `continue` of a selected pc is a jump through the table.
+            try self.print("            if (", .{});
             try expr.truth(self, b.condition);
-            try self.print(" == .one) {d} else {d};\n", .{ next, b.otherwise });
+            try self.print(" == .one) continue :sw {d};\n            continue :sw {d};\n", .{ next, b.otherwise });
         },
         .case_select => |c| {
             const case = r.file.stmt(c.statement).case_stmt;
@@ -861,9 +863,9 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             if ((try expr.natural(self, x.count)).width > 64) return self.refuse("a repeat count wider than 64 bits");
             try self.print("            const n = try s.repeatCount(", .{});
             const ty = try expr.selfDetermined(self, x.count);
-            try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            continue :sw if (n == 0) {d} else {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
+            try self.print(", {d}, {});\n            s.repeats[{d}] = n;\n            if (n == 0) continue :sw {d};\n            continue :sw {d};\n", .{ ty.width, ty.signed, x.counter, x.end, next });
         },
-        .repeat_next => |x| try self.print("            s.repeats[{d}] -= 1;\n            continue :sw if (s.repeats[{d}] != 0) {d} else {d};\n", .{ x.counter, x.counter, x.body, next }),
+        .repeat_next => |x| try self.print("            s.repeats[{d}] -= 1;\n            if (s.repeats[{d}] != 0) continue :sw {d};\n            continue :sw {d};\n", .{ x.counter, x.counter, x.body, next }),
         .wait_event => |e| {
             if (try waitFixed(self)) return;
             try self.print("            const id = try s.park({d});\n", .{next});
