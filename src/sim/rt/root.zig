@@ -454,7 +454,8 @@ pub const State = struct {
                 if (i != 0) try self.count(event.time);
                 const w: []const u64 = if (row.n == 1) &row.one else self.words.items[row.at..][0 .. 3 * row.n];
                 if (row.quiet) {
-                    if (!self.held(row.slot)) self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
+                    if (self.held(row.slot)) continue;
+                    if (row.n == 1) self.set(row.off, W{ .v = row.one[0], .x = row.one[1] }, row.one[2]) else self.merge(row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
                 } else try self.store(row.slot, row.off, w[0..row.n], w[row.n..][0..row.n], w[2 * row.n ..]);
             }
             self.rows.clearRetainingCapacity();
