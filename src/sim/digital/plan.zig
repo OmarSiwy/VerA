@@ -197,10 +197,11 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             if (indeg[ci] == 0) try queue.append(a, ci);
         };
     }
-    const node_pc = try a.alloc(u32, queue.items.len);
+    const order = try coneOrder(a, cands.items, queue.items);
+    const node_pc = try a.alloc(u32, order.len);
     const node_of = try a.alloc(?u32, procs.len);
     @memset(node_of, null);
-    for (queue.items, 0..) |ci, n| {
+    for (order, 0..) |ci, n| {
         const p = &procs[cands.items[ci].proc];
         p.role = .{ .comb = @intCast(n) };
         node_of[cands.items[ci].proc] = @intCast(n);
@@ -323,6 +324,65 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
         x.dump = true;
     };
     return reach;
+}
+
+/// `acyclic` (Kahn's order of the candidates that are nodes) reordered cone
+/// by cone: a depth-first post-order over each node's writers, deepest
+/// first, from the last node back, so a node lands just after the nodes it
+/// reads, and mostly in their dirty word. Any topological order is one
+/// §11.4.1 permits for the settle event.
+fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![]const u32 {
+    var writers: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty;
+    for (acyclic) |ci| for (cands[ci].outputs) |s| {
+        const g = try writers.getOrPut(a, s);
+        if (!g.found_existing) g.value_ptr.* = .empty;
+        try g.value_ptr.append(a, ci);
+    };
+    // Per node, the nodes that write what it reads, by longest path from a
+    // source, deepest first: the chain a node ends is laid down before the
+    // shallow inputs that join it.
+    const level = try a.alloc(u32, cands.len);
+    const preds = try a.alloc([]u32, cands.len);
+    for (acyclic) |ci| {
+        var ps: std.ArrayList(u32) = .empty;
+        level[ci] = 0;
+        for (cands[ci].inputs) |s| if (writers.get(s)) |l| for (l.items) |w| {
+            try ps.append(a, w);
+            level[ci] = @max(level[ci], level[w] + 1);
+        };
+        preds[ci] = ps.items;
+    }
+    for (acyclic) |ci| std.mem.sort(u32, preds[ci], level, struct {
+        fn deeper(lv: []const u32, x: u32, y: u32) bool {
+            return lv[x] > lv[y];
+        }
+    }.deeper);
+    const done = try a.alloc(bool, cands.len);
+    @memset(done, false);
+    const Frame = struct { ci: u32, next: u32 = 0 };
+    var stack: std.ArrayList(Frame) = .empty;
+    var order: std.ArrayList(u32) = .empty;
+    var i = acyclic.len;
+    while (i > 0) {
+        i -= 1;
+        if (done[acyclic[i]]) continue;
+        done[acyclic[i]] = true;
+        try stack.append(a, .{ .ci = acyclic[i] });
+        while (stack.items.len != 0) {
+            const f = &stack.items[stack.items.len - 1];
+            if (f.next == preds[f.ci].len) {
+                try order.append(a, f.ci);
+                _ = stack.pop();
+                continue;
+            }
+            const w = preds[f.ci][f.next];
+            f.next += 1;
+            if (done[w]) continue;
+            done[w] = true;
+            try stack.append(a, .{ .ci = w });
+        }
+    }
+    return order.items;
 }
 
 /// Does `p` suspend only at its entry, returning there after every pass?

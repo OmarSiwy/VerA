@@ -460,7 +460,9 @@ fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!v
     var wakes = self.reach[slot];
     wakes.comb = false;
     try self.print("    try s.putNode({f}, {d}, {d}, val{d}(s), &.{{", .{ fmtReach(wakes), slot, self.off[slot], n });
-    for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
+    // A pure reader in this node's own dirty word runs after it anyway.
+    for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| if (e.node / 64 != n / 64 or !pureNode(self, p.node_pc[e.node]))
+        try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
     try self.print(" }});\n", .{});
 }
 
