@@ -389,16 +389,20 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     , .{});
     if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s.view());\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
-    // The settle event: the nodes in topological order, 64 to a dirty word.
+    // The settle event: the nodes in topological order, 64 to a dirty word,
+    // each word a function of its own so no one function grows with the
+    // design (the compiler's time does, faster than its size).
     if (p.node_pc.len != 0) {
-        try self.print("fn settle(s: rt.View) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{});
+        try self.print("fn settle(s: rt.View) rt.Error!void {{\n", .{});
+        for (0..(p.node_pc.len + 63) / 64) |w| try self.print("    if (s.dirty[{d}] != 0) try @call(.never_inline, settle{d}, .{{s}});\n", .{ w, w });
+        try self.print("    s.s.settle = .idle;\n}}\n\n", .{});
         var lo: usize = 0;
         while (lo < p.node_pc.len) : (lo += 64) {
-            try self.print("    if (s.dirty[{d}] != 0) {{\n", .{lo / 64});
+            try self.print("fn settle{d}(s: rt.View) rt.Error!void {{\n    @setEvalBranchQuota(1 << 30);\n", .{lo / 64});
             for (p.node_pc[lo..@min(lo + 64, p.node_pc.len)], lo..) |pc, n| try settleNode(self, p, pc, @intCast(n), entry_of[pc].?);
-            try self.print("        s.dirty[{d}] = 0;\n    }}\n", .{lo / 64});
+            try self.print("    s.dirty[{d}] = 0;\n}}\n\n", .{lo / 64});
         }
-        try self.print("    s.s.settle = .idle;\n}}\n\n", .{});
+        for (p.node_pc, 0..) |pc, n| if (pureNode(self, pc)) try nodeValue(self, pc, @intCast(n));
     }
 
     // Under `--two-state` an x or z initial value (§3.2) is 0. The
@@ -444,45 +448,58 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
 }
 
 /// Node `n`, whose evaluation starts at `pc` in `fn proc<entry>`, in the
-/// settle event. A continuous assignment of a value that reads only nets
-/// and variables runs whenever a node of its word is dirty: with no operand
-/// changed it computes the value its net already holds, and storing that
-/// changes nothing (§6.1), so the node's own dirty bit need not be tested.
-/// Any other node runs when its bit says an input changed.
+/// settle event. A `pureNode` runs whenever a node of its word is dirty:
+/// with no operand changed it computes the value its net already holds, and
+/// storing that changes nothing (§6.1), so its own dirty bit need not be
+/// tested. Any other node runs when its bit says an input changed.
 fn settleNode(self: *Emitter, p: plan.Plan, pc: u32, n: u32, entry: u32) Error!void {
+    const r = self.r;
+    if (!pureNode(self, pc)) return self.print("    if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc });
+    const slot = r.nets[r.drivers[r.code.items[pc].continuous].net].slot;
+    if (!self.watched[slot]) return self.print("    s.set({d}, val{d}(s), {f});\n", .{ self.off[slot], n, full(try self.slotWidth(slot)) });
+    var wakes = self.reach[slot];
+    wakes.comb = false;
+    try self.print("    try s.putNode({f}, {d}, {d}, val{d}(s), &.{{", .{ fmtReach(wakes), slot, self.off[slot], n });
+    for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
+    try self.print(" }});\n", .{});
+}
+
+/// Does the node at `pc` continuously assign a value that reads only nets
+/// and variables, of a net that is not a real?
+fn pureNode(self: *Emitter, pc: u32) bool {
     const r = self.r;
     const i = switch (r.code.items[pc]) {
         .continuous => |i| i,
-        else => return self.print("        if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc }),
+        else => return false, // else: an `always @*` node, whose body may do anything
     };
     const d = r.drivers[i];
+    return switch (d.source) {
+        .expr => |x| pure(self, x.e) and !r.reals.contains(r.nets[d.net].slot),
+        .gate => true,
+        .bridge, .udp, .mos, .pull => false,
+    };
+}
+
+/// `fn val<n>`: the value of `pureNode` `n` (at `pc`), read through an
+/// `rt.View`, which its process and the settle event both store.
+fn nodeValue(self: *Emitter, pc: u32, n: u32) Error!void {
+    const r = self.r;
+    const d = r.drivers[r.code.items[pc].continuous];
     const slot = r.nets[d.net].slot;
     r.scope = d.scope;
     r.pc = pc;
-    switch (d.source) {
-        .expr => |x| if (!pure(self, x.e) or r.reals.contains(slot))
-            return self.print("        if (s.take({d})) try proc{d}(s.s, {d});\n", .{ n, entry, pc }),
-        .gate => {},
-        .bridge, .udp, .mos, .pull => unreachable, // a node's driver is plain
-    }
-    try self.print("        {{\n", .{});
+    const head = self.out.written().len;
+    try self.print("fn val{d}(s: rt.View) L.T({d}) {{\n    @setEvalBranchQuota(1 << 30);\n", .{ n, try self.slotWidth(slot) });
+    const body = self.out.written().len;
     if (d.source == .gate) try planes(self, d.source.gate.ins, d.source.gate.lane);
-    if (self.watched[slot]) {
-        var wakes = self.reach[slot];
-        wakes.comb = false;
-        try self.print("            try s.putNode({f}, {d}, {d}, ", .{ fmtReach(wakes), slot, self.off[slot] });
-    } else try self.print("            s.set({d}, ", .{self.off[slot]});
+    try self.print("    return ", .{});
     switch (d.source) {
         .expr => |x| try driverValue(self, x.e, x.slice, slot),
         .gate => |g| try gateLogic(self, g.kind, g.ins.len),
-        .bridge, .udp, .mos, .pull => unreachable, // a node's driver is plain
+        .bridge, .udp, .mos, .pull => unreachable, // `pureNode` admits these two
     }
-    if (self.watched[slot]) {
-        try self.print(", &.{{", .{});
-        for (p.comb[p.comb_start[slot]..p.comb_start[slot + 1]]) |e| try self.print(" .{{ .node = {d}, .word = {d}, .mask = 0x{x} }},", .{ e.node, e.word - self.off[slot], e.mask });
-        try self.print(" }}", .{});
-    } else try self.print(", {f}", .{full(try self.slotWidth(slot))});
-    try self.print(");\n        }}\n", .{});
+    try self.print(";\n}}\n\n", .{});
+    if (std.mem.indexOf(u8, self.out.written()[head..], "s.") == null) try insert(self, body, "    _ = s;\n");
 }
 
 /// Does `e` read only nets and variables: no system or user function,
@@ -1215,6 +1232,12 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     r.scope = d.scope;
     const nw = try self.slotWidth(n.slot);
     if (plainDriver(r, i)) {
+        if (self.role == .comb and pureNode(self, pc)) {
+            try self.print("            ", .{});
+            try self.store(n.slot, .blocking);
+            try self.print("val{d}(s.view()), {f});\n            return;\n", .{ self.role.comb, full(nw) });
+            return;
+        }
         if (d.source == .gate) try planes(self, d.source.gate.ins, d.source.gate.lane);
         try self.print("            ", .{});
         try self.store(n.slot, .blocking);
