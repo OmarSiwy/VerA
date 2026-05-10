@@ -13,10 +13,13 @@
 //!
 //! That is the `fifo` schedule. The `static` one keeps the queue only for
 //! what needs it: a combinational node (a continuous assignment, an
-//! `always @*`) is marked dirty when a bit it reads changes and every dirty
-//! node runs in one `settle` event, in topological order; an `always @(event)`
-//! whose body never suspends waits on a static per-slot watcher list, not on
-//! a suspension record. Both are orders §11.4.1 leaves to the simulator.
+//! `always @*`) is marked dirty when a bit it reads changes, and one
+//! `settle` event runs, in topological order, each word of 64 nodes that
+//! holds a dirty one (a continuous assignment of nets and variables whether
+//! or not it is dirty: unchanged inputs store an unchanged value); an
+//! `always @(event)` whose body never suspends waits on a static per-slot
+//! watcher list, not on a suspension record. Both are orders §11.4.1 leaves
+//! to the simulator. A store wakes only what its slot's `Reach` names.
 //!
 //! A net resolved from several drivers, strengths, gates, UDPs, switches
 //! or delays (§7.9, §6.1.3) resolves in `net.zig`, on `digital/net.zig`'s
