@@ -18,6 +18,7 @@ const emit = @import("emit.zig");
 const expr = @import("emit_expr.zig");
 const Emitter = emit.Emitter;
 const Error = emit.Error;
+pub const Reach = @import("../rt/root.zig").Reach;
 
 pub const Schedule = enum { fifo, static };
 
@@ -46,6 +47,8 @@ pub const Sense = struct { node: u32, word: u32, mask: u64 };
 pub const Plan = struct {
     /// Per slot: an event control, driver or node may wait on it.
     watched: []const bool,
+    /// Per slot: what a change of it can wake.
+    reach: []const Reach,
     /// Per node, the pc its evaluation starts at.
     node_pc: []const u32 = &.{},
     /// Per slot, the bits its node readers read, ascending by word
@@ -126,7 +129,12 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     // a dumped change must reach `rt`'s hook, which `set` bypasses.
     // ponytail: every slot of a dumping design; the catalog's alone if it matters.
     if (emit.dumps(r)) @memset(watched, true);
-    if (schedule == .fifo) return .{ .watched = watched, .fan_start = r.fan_start, .fan = r.fan };
+    if (schedule == .fifo) return .{
+        .watched = watched,
+        .reach = try reachOf(self, procs, mon.items, r.fan_start, &.{}, &.{}),
+        .fan_start = r.fan_start,
+        .fan = r.fan,
+    };
 
     // Candidates for a node, with the slots they read and write.
     // `bits` is null when a node re-runs on any change of an input.
@@ -189,10 +197,11 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             if (indeg[ci] == 0) try queue.append(a, ci);
         };
     }
-    const node_pc = try a.alloc(u32, queue.items.len);
+    const order = try coneOrder(a, cands.items, queue.items);
+    const node_pc = try a.alloc(u32, order.len);
     const node_of = try a.alloc(?u32, procs.len);
     @memset(node_of, null);
-    for (queue.items, 0..) |ci, n| {
+    for (order, 0..) |ci, n| {
         const p = &procs[cands.items[ci].proc];
         p.role = .{ .comb = @intCast(n) };
         node_of[cands.items[ci].proc] = @intCast(n);
@@ -255,6 +264,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
 
     return .{
         .watched = watched,
+        .reach = try reachOf(self, procs, mon.items, fan.start, comb.start, watch.start),
         .node_pc = node_pc,
         .comb_start = comb.start,
         .comb = comb.items,
@@ -264,6 +274,115 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
         .fan_start = fan.start,
         .fan = fan.items,
     };
+}
+
+/// Per slot, what its change can wake: the tables' rows, an event control
+/// a process files (every wait but a triggered process's or a node's entry;
+/// a subroutine a process calls never waits), the monitor, a dump.
+fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []const u32, comb_start: []const u32, watch_start: []const u32) Error![]const Reach {
+    const r = self.r;
+    const reach = try self.arena.alloc(Reach, r.values.len);
+    @memset(reach, .{});
+    const has = struct {
+        fn f(start: []const u32, s: usize) bool {
+            return s + 1 < start.len and start[s] != start[s + 1];
+        }
+    }.f;
+    for (reach, 0..) |*x, s| {
+        x.fan = has(fan_start, s);
+        x.comb = has(comb_start, s);
+        x.watch = has(watch_start, s);
+    }
+    var ts: std.ArrayList(Term) = .empty;
+    for (procs) |p| for (p.pcs) |pc| {
+        if (pc == p.entry and p.role != .general) continue;
+        r.scope = r.code_scope.items[pc];
+        switch (r.code.items[pc]) {
+            .wait_event => |e| {
+                ts.clearRetainingCapacity();
+                try terms(self, e, &ts);
+                for (ts.items) |t| reach[t.slot].terms = true;
+            },
+            .wait_slots => |slots| for (slots) |s| {
+                reach[s].terms = true;
+            },
+            .wait_level => |x| for (x.slots) |s| {
+                reach[s].terms = true;
+            },
+            .sample => |x| {
+                const st = r.file.stmt(x.statement).assign;
+                if (st.nonblocking or st.timing_is_delay) continue;
+                ts.clearRetainingCapacity();
+                try terms(self, st.timing, &ts);
+                for (ts.items) |t| reach[t.slot].terms = true;
+            },
+            else => {}, // else: only these four file an event control
+        }
+    };
+    for (mon) |s| reach[s].mon = true;
+    if (emit.dumps(r)) for (reach) |*x| {
+        x.dump = true;
+    };
+    return reach;
+}
+
+/// `acyclic` (Kahn's order of the candidates that are nodes) reordered cone
+/// by cone: a depth-first post-order over each node's writers, deepest
+/// first, from the last node back, so a node lands just after the nodes it
+/// reads, and mostly in their dirty word. Any topological order is one
+/// §11.4.1 permits for the settle event.
+fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![]const u32 {
+    var writers: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty;
+    for (acyclic) |ci| for (cands[ci].outputs) |s| {
+        const g = try writers.getOrPut(a, s);
+        if (!g.found_existing) g.value_ptr.* = .empty;
+        try g.value_ptr.append(a, ci);
+    };
+    // Per node, the nodes that write what it reads, by longest path from a
+    // source, deepest first: the chain a node ends is laid down before the
+    // shallow inputs that join it.
+    const level = try a.alloc(u32, cands.len);
+    const preds = try a.alloc([]u32, cands.len);
+    for (acyclic) |ci| {
+        var ps: std.ArrayList(u32) = .empty;
+        level[ci] = 0;
+        for (cands[ci].inputs) |s| if (writers.get(s)) |l| for (l.items) |w| {
+            try ps.append(a, w);
+            level[ci] = @max(level[ci], level[w] + 1);
+        };
+        preds[ci] = ps.items;
+    }
+    for (acyclic) |ci| std.mem.sort(u32, preds[ci], level, struct {
+        fn deeper(lv: []const u32, x: u32, y: u32) bool {
+            return lv[x] > lv[y];
+        }
+    }.deeper);
+    const done = try a.alloc(bool, cands.len);
+    @memset(done, false);
+    const Frame = struct { ci: u32, next: u32 = 0 };
+    var stack: std.ArrayList(Frame) = .empty;
+    var order: std.ArrayList(u32) = .empty;
+    var i = acyclic.len;
+    while (i > 0) {
+        i -= 1;
+        if (done[acyclic[i]]) continue;
+        done[acyclic[i]] = true;
+        try stack.append(a, .{ .ci = acyclic[i] });
+        while (stack.items.len != 0) {
+            const f = &stack.items[stack.items.len - 1];
+            if (f.next == preds[f.ci].len) {
+                try order.append(a, f.ci);
+                _ = stack.pop();
+                continue;
+            }
+            const w = preds[f.ci][f.next];
+            f.next += 1;
+            if (done[w]) continue;
+            done[w] = true;
+            try stack.append(a, .{ .ci = w });
+        }
+    }
+    return order.items;
 }
 
 /// Does `p` suspend only at its entry, returning there after every pass?
