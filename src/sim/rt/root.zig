@@ -480,11 +480,14 @@ pub const State = struct {
     /// last call, then forget those changes.
     fn markReaders(self: *State, slot: u32) void {
         const senses = self.comb[self.comb_start[slot]..self.comb_start[slot + 1]];
+        // Held here, not re-read from `self` after each store to `dirty`.
+        const diff = self.diff;
+        const dirty = self.dirty;
         for (senses) |e| {
-            const hit = self.diff[e.word] & e.mask != 0;
-            self.dirty[e.node / 64] |= @as(u64, @intFromBool(hit)) << @intCast(e.node % 64);
+            const hit = diff[e.word] & e.mask != 0;
+            dirty[e.node / 64] |= @as(u64, @intFromBool(hit)) << @intCast(e.node % 64);
         }
-        if (senses.len != 0) @memset(self.diff[senses[0].word .. senses[senses.len - 1].word + 1], 0);
+        if (senses.len != 0) @memset(diff[senses[0].word .. senses[senses.len - 1].word + 1], 0);
     }
 
     /// Whether a node reads some bit of `slot`.
