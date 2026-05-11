@@ -1,12 +1,5 @@
-//! Locations: byte offset to line and column, spans and labels.
-//!
-//! In: a source buffer and byte offsets. Out: line/column positions and the spans a
-//! diagnostic points at.
-//!
-//! LRM clauses this file's code cites: §2.4.
-//!
-//! Cut verbatim from `diag.zig`. Functions take `self: *diag` and are called
-//! directly, `diag_location.f(self, ...)`; `diag.zig` aliases only what other modules call.
+//! Locations: preprocessed byte offsets -> file, line and column, through the
+//! preprocessor's segment map and the comment-stripping marks (LRM §2.4).
 
 const std = @import("std");
 const diag = @import("../diag.zig");
@@ -27,6 +20,7 @@ pub const Span = struct {
 
     pub const none: Span = .{ .start = 0, .end = 0 };
 
+    /// Returns a zero-width span at `start`.
     pub fn at(start: u32) Span {
         return .{ .start = start, .end = start };
     }
@@ -43,6 +37,7 @@ pub const Span = struct {
 /// 1-based, because humans and every editor count that way.
 pub const Loc = struct { line: u32 = 0, col: u32 = 0 };
 
+/// Index into `Bag.files`, in the order the preprocessor opened them.
 pub const FileId = enum(u16) {
     /// The top-level compilation unit.
     root = 0,
@@ -113,6 +108,8 @@ pub const SourceMap = struct {
         seg: u32,
     };
 
+    /// Returns the file and file offset a preprocessed offset came from. An
+    /// offset inside a macro expansion resolves to the invocation site.
     pub fn resolve(self: *const SourceMap, off: u32) Resolved {
         if (self.segs.len == 0)
             return .{ .file = .root, .offset = off, .seg = Segment.no_parent };
@@ -145,14 +142,12 @@ pub const SourceMap = struct {
     }
 };
 
-/// Byte offset → line, by binary search over precomputed line starts.
-///
-/// Built ONCE per rendered file, only when there is something to render. The
-/// old code re-scanned the whole source from byte 0 for every diagnostic, from
-/// three different call sites.
+/// Byte offset -> line, by binary search over precomputed line starts. Built
+/// once per rendered file, only when there is something to render.
 pub const LineIndex = struct {
     starts: []const u32,
 
+    /// Returns the index of `text`, allocated in `arena`.
     pub fn build(arena: Allocator, text: []const u8) Allocator.Error!LineIndex {
         var starts: std.ArrayList(u32) = .empty;
         try starts.append(arena, 0);

@@ -1,32 +1,27 @@
-//! IR — AST to proven MIR, and the top of this layer's file DAG.
-//!
-//! Re-export only. The leaves import each other directly. Elaboration imports
-//! no lowering file: its closure is `elaborate/`, `dist.zig` and
-//! `discipline_rules.zig`, which lowering imports too. It stays in this module
-//! because a module of its own would own those two shared leaves and add a
-//! `module_specs` row, a minor release, to enforce one edge nothing crosses.
-//!
-//!   AST
-//!     → elaborate.zig  (class 9)     AST → flat design (§6.2.2)
-//!     → lower.zig + ssa.zig → mir.zig (classes 3,4,5,7,9)
-//!     → analysis.zig                 dependency + freedom lattices over MIR
-//!     → ifconv.zig                   branch → select conversion
-//!     → proof.zig      (class 6)     MIR → per-unit finiteness verdict
-//!
-//! Depends on `frontend`, `diag`, and `kernels` — the last only because
-//! elaboration folds §9.13 distribution calls with the same rng the device
-//! will run, so the constant it folds and the value it emits agree.
+//! IR: AST → elaborated design (§6.2.2) → SSA MIR → analysis, if-conversion
+//! and the finiteness proof. Re-exports only; the files import each other
+//! directly. Elaboration imports no lowering file (its closure is `elaborate/`,
+//! `dist.zig`, `discipline_rules.zig`), so it could be its own module; it stays
+//! here because that split would add a `module_specs` row for an edge nothing
+//! crosses. `kernels` is a dependency so §9.13 folds use the device's rng.
 
+/// SSA instruction set every stage after lowering reads.
 pub const Mir = @import("mir.zig");
 /// §4.5 / §5.10.3 / §9.17 the stateful operator set, `OpKind`.
 pub const op = @import("op.zig");
+/// Dependency and freedom lattices over a finished MIR.
 pub const Analysis = @import("analysis.zig");
+/// SSA construction used while lowering.
 pub const Ssa = @import("ssa.zig");
+/// Hierarchy flattening, AST → one flat module (§6).
 pub const Elaborate = @import("elaborate.zig");
+/// AST → MIR lowering.
 pub const Lower = @import("lower.zig");
-/// What lowering hands every later stage — lower/tables.zig.
+/// What lowering hands every later stage (lower/tables.zig).
 pub const Lowered = Lower.Lowered;
+/// Branch → `select` conversion over MIR.
 pub const ifconv = @import("ifconv.zig");
+/// Per-unit float-mode verdict from the finiteness proof.
 pub const proof = @import("proof.zig");
 
 test {

@@ -1,11 +1,9 @@
-//! `$limit`: the limiting-function call and its per-call state slot.
+//! §9.17.3 `$limit`: the limiting-function call and its state slot.
 //!
-//! In: `$limit(access, fn, ...)` calls. Out: a `LimitSlot` per call site and the MIR call.
+//! In: `$limit(access, fn, ...)` calls. Out: the inlined call and one `LimitSlot` per
+//! access function, shared by every site that names it.
 //!
 //! LRM clauses this file's code cites: §2.8, §4.5.15, §4.7, §9.17.3, §9.20.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_limit.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -19,12 +17,9 @@ const TypedValue = Lower.TypedValue;
 const call = Lower.call;
 const toReal = Lower.toReal;
 
-/// The §4.7 function a `$limit` second argument names, or null when the argument
-/// is not one — Syntax 9-12's other two forms put a string there, or nothing.
-///
-/// The ordinary scopes are consulted FIRST, so a variable or parameter that
-/// happens to share a function's name still wins (§2.8), exactly as
-/// `natureAbstol` arranges for a nature identifier in a tolerance slot.
+/// Returns the §4.7 function a `$limit` second argument names, or null when it names
+/// none (Syntax 9-12's other two forms put a string there, or nothing).
+/// A variable or parameter with the same name wins over the function (LRM §2.8).
 // ponytail: lookup only; add an error set if resolution ever does fallible work.
 pub fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
     const ex = &self.file.exprs;
@@ -39,23 +34,13 @@ pub fn limitUserFunc(self: *Lower, a: Ast.ExprId) ?*const Ast.FuncDecl {
     return null;
 }
 
-/// §9.17.3 the third form: `$limit(access, user_function, args…)` returns
-/// `user_function(vnew, vold, args…)` — the access function's value at this
-/// iterate, the value the slot returned at the previous one, then the call's
-/// own tail. The function is an ordinary §4.7 body, so it is INLINED like every
-/// other analog function; the only thing §9.17.3 adds is where `vold` comes
-/// from (`LimitSlot`) and where the return goes (the same slot).
+/// Lowers `$limit(access, user_function, args...)` to the inlined call
+/// `user_function(vnew, vold, args...)`, where `vold` comes from the access function's `LimitSlot`
+/// and the result becomes that slot's next state (LRM §9.17.3).
 ///
-/// THE RETURNED VALUE CARRIES THE ACCESS FUNCTION'S DERIVATIVE, not the
-/// limiter's. That is the point of limiting and not a shortcut: SPICE evaluates
-/// the device at the limited bias and stamps `I(vlim) + g(vlim)·(v − vlim)`, so
-/// the residual is LINEAR in the true unknown beyond the limit point and the
-/// Jacobian entry never vanishes. Differentiating the limiter itself instead
-/// gives dv_lim/dv = 0 inside the clamped region — a device that contributes no
-/// conductance, which is a singular row for a floating internal node. `$limit$uf`
-/// renders that as `vlim.val()` shifted onto the probe (codegen `zLimitUf`), the
-/// same relation the STRING form gets for free from the host writing its clamp
-/// back into `x` before `eval` runs (cg_limit.zig's header).
+/// The result carries the access function's derivative, not the limiter's: the host
+/// stamps `I(vlim) + g(vlim)*(v - vlim)`, so the Jacobian entry never vanishes in the
+/// clamped region. `$limit$uf` (codegen `zLimitUf`) shifts `vlim.val()` onto the probe.
 pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args: []const Ast.ExprId) Oom!TypedValue {
     // §9.17.3 the first argument is an ACCESS FUNCTION, never a net.
     const vnew = try self.toReal(try lower_sysfunc.lowerSysArg(self, args[0], false));
@@ -65,24 +50,20 @@ pub fn lowerLimitUser(self: *Lower, e: Ast.ExprId, fd: *const Ast.FuncDecl, args
         // declining is the one answer that cannot invent state.
         return .{ .v = try self.call("$limit", &.{vnew}), .ty = .real };
     };
-    // The SEED, not the slot's running value: §9.17.3 says the second argument
-    // is "the value that was returned by the $limit() function on the PREVIOUS
-    // iteration", so every site on one access function reads the same number
-    // however many of them ran this time. Reading the running value instead
-    // chains them — a reader followed by a writer would limit twice per
-    // evaluation and halve the damping.
+    // The seed, not the slot's running value: §9.17.3's second argument is "the value
+    // that was returned by the $limit() function on the previous iteration", so every
+    // site on one access function reads the same number. Reading the running value
+    // would chain the sites and limit twice per evaluation.
     const old = self.out.limit_slots.items[slot].seed;
     const res = try self.toReal(try lower_func.inlineUserFuncPre(self, fd, &.{ vnew, old }, args[2..], e));
-    // The site's return is the slot's NEXT state. Written at the site, so the
-    // last site to run this evaluation is the one the next iterate reads —
-    // which is what makes the read-then-write accessor idiom work.
+    // Written at the site, so the last site to run this evaluation is the one the
+    // next iterate reads.
     try self.builder.writeVariable(self.limit_places.items[slot], self.cur, res);
     return .{ .v = try self.call("$limit$uf", &.{ vnew, res }), .ty = .real };
 }
 
-/// The `limit_slots` index for this access function, minting nothing: every
-/// slot was created by `scanCallSites` before the body was lowered. Null
-/// when the argument is not an access function at all.
+/// The `limit_slots` index for this access function, minting nothing: `scanCallSites`
+/// created every slot before the body was lowered. Null when `a` is not an access function.
 fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
     const t = try limitSlotKey(self, a) orelse return null;
     for (self.out.limit_slots.items, 0..) |s, i| {
@@ -92,17 +73,17 @@ fn limitSlotOf(self: *Lower, a: Ast.ExprId) Oom!?usize {
     return null;
 }
 
-/// The branch an access function names. `null` for anything that is not one.
-///
-/// Asked twice of the same expression — once by `scanCallSites`, once by
-/// the site — and that costs nothing: `branchOf`'s diagnostics are deduped by
-/// `(code, span)` in the bag, so a malformed access function is still reported
-/// exactly once.
+/// The branch an access function names, or null for anything that is not one.
+/// Called twice per expression; the bag dedupes `branchOf`'s diagnostics by
+/// `(code, span)`, so a malformed access function is reported once.
 fn limitSlotKey(self: *Lower, a: Ast.ExprId) Oom!?lower_contrib.Target {
     if (a == .none or self.file.exprs.tag(a) != .branch_access) return null;
     return lower_contrib.branchOf(self, a);
 }
 
+/// Creates the `LimitSlot` for access function `a` unless one with the same branch
+/// exists, seeding its state place in the current block (LRM §9.17.3). Does nothing
+/// when `a` is not an access function.
 pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
     const t = try limitSlotKey(self, a) orelse return;
     for (self.out.limit_slots.items) |s| {
@@ -110,8 +91,7 @@ pub fn addLimitSlot(self: *Lower, a: Ast.ExprId) Oom!void {
             return;
     }
     const k: i64 = @intCast(self.out.limit_slots.items.len);
-    // A `call`, so it is opaque to `analysis.foldConst` — the previous iterate
-    // is not a constant, however constant the rest of the expression is.
+    // A `call`, so `analysis.foldConst` cannot fold the previous iterate into a constant.
     const seed = try self.call("$limit$old", &.{try self.mir.addIntConst(self.arena, k)});
     const place = self.builder.newPlace();
     try self.builder.writeVariable(place, self.cur, seed);

@@ -1,19 +1,9 @@
-//! §12.24–§12.28 — `vpi_printf` and the multichannel descriptor family.
-//!
-//! "Channel 1 is stdout, channel 2 is stderr, and channel 3 is the current log
-//! file" (§12.27), bit N-1 of an mcd names channel N, and §12.24/§12.26 make
-//! the first three predefined and unclosable. So a user file is channel 4 or
-//! above, and `vpi_mcd_open` hands out the lowest free one.
-//!
-//! THERE IS NO PRODUCT LOG FILE. VerA writes its transcript to stdout and
-//! nowhere else, so channel 3 is a channel that exists — it can be named,
-//! printed to and refused a close — and discards what it is given. `vpi_printf`
-//! ("to both stdout and the current product log file") is therefore stdout.
-//!
-//! FORMATTING is C's `printf` (§12.27/§12.28 "the same format as the C
-//! fprintf() routine"), done here over `@cVaArg` rather than handed to libc: the
-//! `vpi` module is linked into binaries that do not link libc, and a `va_list`
-//! is the one thing a C variadic cannot be re-read without.
+//! §12.24-§12.28: `vpi_printf` and the multichannel descriptor family.
+//! Channels 1-3 are stdout, stderr and the log (§12.27), predefined and
+//! unclosable; `vpi_mcd_open` hands out the lowest free channel from 4. VerA
+//! has no product log file, so channel 3 discards and `vpi_printf` is stdout.
+//! Formatting is C's printf done over `@cVaArg`, since the `vpi` module is
+//! linked into binaries without libc.
 
 const std = @import("std");
 const root = @import("root.zig");

@@ -1,10 +1,7 @@
-//! Codegen self-checks: MIR in, device.zig text out, asserted by shape.
-//!
-//! Each test lowers a small source and checks the emitted text; the fixture suite checks behaviour.
-//!
-//! LRM clauses this file's code cites: §1, §3.4, §4.5, §4.5.8, §4.5.11, §4.5.15, §4.6.4, §4.6.4.3, §4.6.4.6, §5.4.3, §9.4, §9.5.1.
-//!
-//! Cut verbatim from `codegen.zig`.
+//! Codegen self-checks: a small Verilog-A source in, device.zig text out,
+//! asserted by shape; the fixture suite checks behaviour. Also runs the
+//! device-runtime kernels directly.
+//! LRM §3.4, §4.5, §4.6, §5.4.3, §5.6, §9.4, §9.5, §9.13, §9.17.3, §9.21.
 
 const std = @import("std");
 const codegen = @import("../codegen.zig");
@@ -22,12 +19,15 @@ const generate = codegen.generate;
 // Tests
 // ---------------------------------------------------------------------------
 
+// Test-only imports.
 pub const Ast = @import("frontend").Ast;
 pub const Preprocessor = @import("frontend").Preprocessor;
 pub const Lexer = @import("frontend").Lexer;
 pub const Parser = @import("frontend").Parser;
 pub const ifconv = @import("ir").ifconv;
 
+/// One source lowered into MIR, owning everything in `arena_state`; `gen*`
+/// runs proof and codegen over it. Call `deinit` when done.
 pub const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
     file: Ast.SourceFile,
@@ -65,7 +65,7 @@ pub const Harness = struct {
         return (try self.genOut(gpa)).text;
     }
 
-    /// Same, with §9.4 display tasks emitted — the printing artifact.
+    /// `gen` with §9.4 display tasks emitted: the printing artifact.
     fn genDisplay(self: *Harness, gpa: std.mem.Allocator) ![]const u8 {
         const v = try proof.prove(gpa, &self.mir, &self.lowered, &self.bag);
         defer v.deinit(gpa);
@@ -103,12 +103,10 @@ const resistor_va =
 ;
 
 test "codegen: --jac-f32 adds a permission decl and changes not one other byte" {
-    // The whole claim of the mixed-precision work, pinned. `eval` is generic
-    // over S and reaches it only through primitives that take and return f64
-    // (`con`, `scale`, `addC`, `val`), so the WIDTH of the derivative a host
-    // carries inside S is the host's choice and no arithmetic here depends on
-    // it. If this flag ever starts moving other bytes, that genericity has been
-    // broken somewhere and this test is where it shows up.
+    // `eval` reaches S only through primitives that take and return f64
+    // (`con`, `scale`, `addC`, `val`), so the derivative width inside S is the
+    // host's choice and no emitted arithmetic depends on it. Any other byte
+    // the flag moves means that genericity broke.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, resistor_va, &h);
     defer h.deinit();
@@ -123,7 +121,7 @@ test "codegen: --jac-f32 adds a permission decl and changes not one other byte" 
     try std.testing.expect(std.mem.indexOf(u8, off, "jac_f32") == null);
     const decl = "pub const jac_f32 = true;\n\n";
     const at = std.mem.indexOf(u8, on, decl) orelse return error.NoPermissionDecl;
-    // Excise the block the flag added — comment header included — and what is
+    // Excise the block the flag added (comment header included) and what is
     // left has to be the default output byte for byte.
     const hdr = std.mem.lastIndexOf(u8, on[0..at], "/// This device permits").?;
     const stripped = try std.mem.concat(a, u8, &.{ on[0..hdr], on[at + decl.len ..] });
@@ -342,10 +340,11 @@ test "codegen: §5.10 eval skips a held-array store only updateState reads, and 
     try std.testing.expect(std.mem.indexOf(u8, src, "inst: InstancePtr, sim: contract.SimState, comptime held: bool) struct {") != null);
     // The append and the store that reads it back are skippable; the
     // initial-step zeroing is read by the residual in the same evaluation.
-    try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, src, "if (held) zArrSt("));
+    // Both appear twice: in the core, and in `updateState`'s slice of it.
+    try std.testing.expectEqual(@as(usize, 4), std.mem.count(u8, src, "if (held) zArrSt("));
     try std.testing.expect(std.mem.indexOf(u8, src, "p0 = &inst.") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "core, .{ S, xs, model, inst, sim, false })") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "core(S, zVals(S, &x), model, inst, sim, true)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "core__state(S, zVals(S, &x), model, inst, sim, true)") != null);
     // The read-back carries V's derivative, but into nothing eval returns,
     // so the storage stays plain.
     try std.testing.expect(std.mem.indexOf(u8, src, "var a0: [4]f64 = undefined;") != null);
@@ -360,10 +359,9 @@ test "codegen: one stably-named declaration for the model, thin dispatcher" {
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const U = enum(u8) {") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const num_ports: usize = 2;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "r: f64 = 1000.0,") != null);
-    // The declaration name is naming.zig's structural key, and it is NOT a MIR
-    // index. Since the merge there is ONE of them per model: the per-contribution
-    // keys still exist (naming.zig, proof.zig, the `Instance` state fields) but
-    // no longer name a declaration.
+    // The declaration name is naming.zig's structural key, not a MIR index,
+    // and there is one per model. The per-contribution keys (naming.zig,
+    // proof.zig, the `Instance` state fields) name no declaration.
     try std.testing.expect(std.mem.indexOf(u8, src, "fn res__common__core(comptime S: type,") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "return zResidual(S, xs, @call(.always_inline, core, .{ S, xs, model, inst, sim }));") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
@@ -394,36 +392,32 @@ test "codegen: two contributions sharing a subexpression evaluate it ONCE" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
 
-    // One declaration, named structurally — no MIR index anywhere in it.
+    // One declaration, named structurally, with no MIR index anywhere in it.
     try std.testing.expect(std.mem.indexOf(u8, src, "fn sh__common__core(comptime S: type,") != null);
-    // ONE call for the whole residual, not one per contribution. This is the
-    // runtime half of the merge: LLVM does not CSE repeated calls to a body of
-    // this size (measured — see `plan_core.plan`), so the count here IS the number
-    // of times the model runs per Newton iteration.
+    // One call for the whole residual, not one per contribution. LLVM does
+    // not CSE repeated calls to a body this size (see `plan_core.plan`), so
+    // the count is the number of core runs per Newton iteration.
     try std.testing.expectEqual(
         @as(usize, 1),
         std.mem.count(u8, src, "return zResidual(S, xs, @call(.always_inline, core, .{ S, xs, model, inst, sim }));"),
     );
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
-    // The costly part — `exp` — is emitted once. That is the whole scaling
-    // defect. Counted past the file-scope helpers, several of which spell
-    // `.exp()` themselves.
+    // The costly `exp` is emitted once. Counted past the file-scope helpers,
+    // several of which spell `.exp()` themselves.
     const decls = src[std.mem.indexOf(u8, src, "// ---- the model, in one declaration ----").?..];
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, decls, ".exp()"));
 
     // §4.3: `exp` of an unbounded probe is not provably finite, so both units
-    // are `.strict` and the declaration they share must be too — compiling it
+    // are `.strict` and the declaration they share must be too: compiling it
     // `.optimized` would assert `ninf` on behalf of a unit that never had it.
     const at = std.mem.indexOf(u8, src, "fn sh__common__core").?;
     try std.testing.expect(std.mem.indexOf(u8, src[at..], "@setFloatMode(.strict);") != null);
 }
 
 test "codegen: one declaration even for a single contribution" {
-    // No threshold. A model with one contribution gets the same shape as a model
-    // with fifty, because the shape is not an optimisation any more — `eval`
-    // reads its targets out of one struct and there is nothing to opt out of.
-    // The extra call is free: a one-contribution core is small enough for LLVM
-    // to inline, which is exactly what it will not do for a 60 000-line one.
+    // No threshold: one contribution gets the same shape as fifty, because
+    // `eval` reads its targets out of one struct. The extra call is free; LLVM
+    // inlines a core this small.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator, resistor_va, &h);
     defer h.deinit();
@@ -450,18 +444,18 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
     defer h.deinit();
     const o = try h.genOut(std.testing.allocator);
 
-    // The merged core and the §4.5.11 `__sec` coefficient reader derived from
-    // the laplace operator — every shape `emitUnits` can still produce for a
-    // model with no §9.4 display unit.
-    try std.testing.expectEqual(@as(usize, 2), o.names.len);
+    // The merged core, `updateState`'s slice of it and the §4.5.11 `__sec`
+    // coefficient reader derived from the laplace operator: every shape
+    // `emitUnits` can still produce for a model with no §9.4 display unit.
+    try std.testing.expectEqual(@as(usize, 3), o.names.len);
     for (o.names, o.unit_lo, o.unit_hi, 0..) |name, lo, hi, i| {
-        // Tiling — `Output`'s invariant, and what lets the writer rebuild
+        // Tiling: `Output`'s invariant, and what lets the writer rebuild
         // device.zig as prologue ++ imports ++ tail with nothing dropped.
         if (i != 0) try std.testing.expectEqual(o.unit_hi[i - 1], lo);
         const decl = try std.fmt.allocPrint(std.testing.allocator, "fn {s}(", .{name});
         defer std.testing.allocator.free(decl);
         // The range holds the declaration it is named for, and `unit_fn` points
-        // at that declaration's keyword — where the writer splices `pub `,
+        // at that declaration's keyword, where the writer splices `pub `,
         // without which `@import("u/<key>.zig").<key>` does not resolve.
         try std.testing.expect(std.mem.indexOf(u8, o.text[lo..hi], decl) != null);
         try std.testing.expect(lo <= o.unit_fn[i] and o.unit_fn[i] < hi);
@@ -476,11 +470,9 @@ test "codegen: the unit ranges tile the emission and each names its own decl" {
 }
 
 test "codegen: the unit prologue aliases the helper API and not its internals" {
-    // "Every emitted helper is aliased" is now true by construction — `aliasesOf`
-    // reads the same text `publish` does — so the test that policed it is gone.
-    // What is NOT tautological is the `z` + uppercase clause: it is the only
-    // thing standing between the prologue and a kernel file's private names, and
-    // relaxing it changes the emitted bytes of every unit file. Pin both sides.
+    // `aliasesOf` reads the same text `publish` does, so every helper is
+    // aliased by construction. The `z` + uppercase clause is what keeps a
+    // kernel file's private names out of the prologue; pin both sides.
     const has = std.mem.indexOf;
     try std.testing.expect(has(u8, gen_kernel_text.prelude_str_txt, "const zScan = zh.zScan;\n") != null);
     try std.testing.expect(has(u8, gen_kernel_text.prelude_file_txt, "const zFOpen = zh.zFOpen;\n") != null);
@@ -495,10 +487,9 @@ test "codegen: the unit prologue aliases the helper API and not its internals" {
 
 test "codegen: every split unit file passes AstGen, hoist arrays included" {
     // A `u/<key>.zig` is the prelude ++ its unit, so a body local that shares a
-    // prelude name is a shadowing error in the split form alone: `--emit-so`
-    // failed on every model whose core hoists into `var h` while the
-    // single-file form compiled. `ln` keeps the diamond out of ifconv, so `y`
-    // is a two-assignment phi and lands in the hoist array.
+    // prelude name is a shadowing error in the split (`--emit-so`) form alone.
+    // `ln` keeps the diamond out of ifconv, so `y` is a two-assignment phi and
+    // lands in the hoist array.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module hoist(p, n);
@@ -594,12 +585,12 @@ test "codegen: §5.6.1.2 reactive split emits q(), §4.2.12 select stays lazy" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn q(comptime S: type") != null);
-    // The reactive half is a SECOND field of the same core, reached by `q` —
+    // The reactive half is a SECOND field of the same core, reached by `q`:
     // the split survives the merge as two targets, not two declarations.
     try std.testing.expect(std.mem.indexOf(u8, src, "fn cap__common__core(") != null);
     // §4.2.3/§4.2.12 laziness (proof.zig's CODEGEN OBLIGATION): the `ln` must
     // sit INSIDE the arm, never in a preceding `const`. Matching a bare `if (`
-    // is deliberate — `?:` lowers to a CFG diamond (`lowerTernary`) and a
+    // is deliberate: `?:` lowers to a CFG diamond (`lowerTernary`) and a
     // `select` renders as the expression `(if (c) a else b)`, and BOTH satisfy
     // the obligation. What must never happen is `.log()` ahead of the guard.
     const unit = src[std.mem.indexOf(u8, src, "fn cap__common__core(").?..];
@@ -626,7 +617,7 @@ test "codegen: evalQ fuses both residuals onto ONE core call" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
 
-    // `eval` and `q` survive untouched — the fusion is additive.
+    // `eval` and `q` survive untouched; the fusion is additive.
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn eval(comptime S: type") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn q(comptime S: type") != null);
     const at = std.mem.indexOf(u8, src, "pub fn evalQ(comptime S: type").?;
@@ -728,7 +719,7 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
     const n = try ifconv.run(h.arena_state.allocator(), &h.mir);
     try std.testing.expect(n >= 1);
     const src = try h.gen(std.testing.allocator);
-    // exp(unbounded V) forfeits finiteness, so the unit is .strict — the
+    // exp(unbounded V) forfeits finiteness, so the unit is .strict, the
     // eager-sel license. Arms are plain arithmetic: mask form, no branch.
     try std.testing.expect(std.mem.indexOf(u8, src, ".sel(") != null);
     // Lane-true mask: `V > 0.5` renders in S space as the swapped `lt`, not
@@ -740,9 +731,9 @@ test "codegen: if-converted diamond emits an eager mask select in a strict unit"
 
 test "codegen: a value shared by select arms is computed once, not once per use" {
     var h: Harness = undefined;
-    // bsim2's vgeff shape: `e` is computed BEFORE the `if`, and after
+    // bsim2's vgeff shape: `e` is computed before the `if`, and after
     // conversion its only readers are select arms. Inlined per arm position
-    // it came out as four `exp` calls for the source's one.
+    // it would be four `exp` calls for the source's one.
     try Harness.run(std.testing.allocator,
         \\module sh(p, n);
         \\  inout p, n;
@@ -779,15 +770,15 @@ test "codegen: a domain-guarded arm stays lazy through if-conversion" {
     // What this protects is §4.2.12 laziness, not a spelling: `ln` runs only
     // on the path `V > vmin` selects. The guard may come out as a lazy
     // `(if (c) a else b)` or as the CFG `if (c) { ... } else { ... }` that
-    // ifconv keeps for a domain-restricted arm — both pass, an eager `.sel(`
+    // ifconv keeps for a domain-restricted arm. Both pass; an eager `.sel(`
     // or a `.log()` outside the then-arm fails.
-    // Scoped to the unit body — the emitted math prelude also spells `.log()`.
+    // Scoped to the unit body: the emitted math prelude also spells `.log()`.
     const unit = src[std.mem.indexOf(u8, src, "fn lg__").?..];
     const body = unit[0..std.mem.indexOf(u8, unit, "\n}\n").?];
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, body, ".log()"));
     const lg2 = std.mem.indexOf(u8, body, ".log()").?;
     // The nearest `if (` before the `.log()` opens the arm holding it, and no
-    // `else` between them makes that the THEN arm — the one `V > vmin` takes.
+    // `else` between them makes that the THEN arm, the one `V > vmin` takes.
     const guard = std.mem.lastIndexOf(u8, body[0..lg2], "if (").?;
     try std.testing.expect(std.mem.indexOf(u8, body[guard..lg2], "else") == null);
     try std.testing.expect(std.mem.indexOf(u8, body[0..lg2], "model.vmin") != null);
@@ -839,7 +830,7 @@ test "codegen: a §5.6 potential contribution gets its own branch-current unknow
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     // lowering only allocates `flow(a,b)` where the model PROBES I(a,b), so
-    // codegen appends the unknown AFTER `nodes` — existing indices hold.
+    // codegen appends the unknown AFTER `nodes`, so existing indices hold.
     try std.testing.expect(std.mem.indexOf(u8, src, "flowZ28pZ2cnZ29, // branch flow") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const u_kinds") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".sub(c));") != null);
@@ -849,10 +840,8 @@ test "codegen: a §5.6 potential contribution gets its own branch-current unknow
 test "codegen: §4.6.4 two noise sources on one branch export TWO generators" {
     var h: Harness = undefined;
     // The clause's own shape: "multiple noise contributions to a single branch
-    // are combined". `combined/13_noise_temperature_analysis.va` writes exactly
-    // this, and a single-valued tag made the flicker statement overwrite the
-    // thermal one — deleting from `noise_gens` the ONE generator the documented
-    // Jacobian-derived fallback can actually compute.
+    // are combined" (as `combined/13_noise_temperature_analysis.va` writes it).
+    // Neither statement may overwrite the other's generator.
     try Harness.run(std.testing.allocator,
         \\module rnoise(p, n);
         \\  inout p, n;
@@ -868,14 +857,14 @@ test "codegen: §4.6.4 two noise sources on one branch export TWO generators" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     // §4.6.4.6 each CALL is one generator, so the two rows carry distinct
-    // dense `source` ids — two independent sources, not one shared.
+    // dense `source` ids: two independent sources, not one shared.
     // §4.6.4.1/.2 the trailing `name` argument is a LABEL and rides out with
-    // the row. Two calls sharing one name would still be two sources — the
-    // clause combines them in the host's summary, not in the table — which is
+    // the row. Two calls sharing one name would still be two sources (the
+    // clause combines them in the host's summary, not in the table), which is
     // why `source` is distinct here while `name` is free to repeat.
     try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .thermal, .source = 0, .name = \"thermal\" }") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".kind = .flicker, .source = 1, .name = \"flicker\" }") != null);
-    // §4.6.4.1 before §4.6.4.2 — the sources append in statement order, so the
+    // §4.6.4.1 before §4.6.4.2: the sources append in statement order, so the
     // table is stable across builds and a host may index it positionally.
     try std.testing.expect(
         std.mem.indexOf(u8, src, ".kind = .thermal").? <
@@ -887,7 +876,7 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     var h: Harness = undefined;
     // The shape EVERY series resistance in a real model card writes: the
     // generator lives inside `if (r > 0)`, and its power divides by that very
-    // `r`. Computing `4kT/r` unconditionally evaluates it at r == 0 — an
+    // `r`. Computing `4kT/r` unconditionally evaluates it at r == 0: an
     // infinity that becomes a NaN the instant the collapsed branch gives it a
     // zero adjoint gain. It has to stay a core live-out, which `probeBody`
     // seeds `S.con(0.0)` and only the taken branch assigns.
@@ -916,14 +905,14 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const noise_gens").? < at);
     // Both powers come out of the core, NOT off a Jacobian and NOT inline:
     // §4.6.4.1 states the density as the call's argument, so the shot row is
-    // `2q|I|` and the thermal row is `4kT/rs` — the same call, different
+    // `2q|I|` and the thermal row is `4kT/rs`: the same call, different
     // arguments, and only the model knows which.
     const body = src[at..];
     const ret = std.mem.indexOf(u8, body, "return .{").?;
-    try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "core(S, zVals(S, &x), model, inst, sim)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, body[0..ret], "rn__common__core__noise(S, zVals(S, &x), model, inst, sim)") != null);
     try std.testing.expectEqual(@as(usize, 2), std.mem.count(u8, body[ret .. ret + 120], ".white = m.f"));
     // Both powers are solve-invariant, so the core returns them as `setup`
-    // roots — and `setup` divides by rs only on the `rs > 0` arm, leaving the
+    // roots, and `setup` divides by rs only on the `rs > 0` arm, leaving the
     // root at its zero seed otherwise: a guarded generator still reads zero.
     var k: usize = ret;
     while (std.mem.indexOfPos(u8, body, k, ".white = m.f")) |i| {
@@ -943,8 +932,8 @@ test "codegen: §4.6.4 noisePsd is the model's own PSD, and a guarded one reads 
 
 test "codegen: §4.6.4.3/.4 a noise table is exported sorted, with its own interpolation" {
     var h: Harness = undefined;
-    // The two clauses' arguments are IDENTICAL in shape — "the meaning and
-    // restrictions on the input are the same as for noise_table()" — and they
+    // The two clauses' arguments are IDENTICAL in shape ("the meaning and
+    // restrictions on the input are the same as for noise_table()"), and they
     // differ only in how the points are joined, so the difference has to be in
     // the exported table and nowhere else. Written descending, because
     // §4.6.4.3 makes sorting the simulator's job.
@@ -992,7 +981,7 @@ test "codegen: §4.6.4.3 an array-parameter table exports the card's knots, a li
     // A.8.2's `noise_table_input_arg` names `parameter_identifier` FIRST, and
     // §3.4 makes a parameter's value the model card's. So the comptime
     // `noise_tables` can only be the DECLARED DEFAULT and the card's answer is
-    // the extra hook — which must not appear on a device that has no
+    // the extra hook, which must not appear on a device that has no
     // parameter in any table, or every host of every such device would be
     // obliged to read something `noise_tables` already told it.
     var h: Harness = undefined;
@@ -1052,14 +1041,14 @@ test "codegen: §4.6.4.6 each use of a shared generator exports its own coeffici
     , &h);
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
-    // ONE generator — both rows carry `.source = 0` — with TWO coefficients.
+    // ONE generator (both rows carry `.source = 0`) with TWO coefficients.
     // Without them both rows report the raw 1e-18 and a host computes this
     // module's output noise 4x and 9x low.
     const at = std.mem.indexOf(u8, src, "pub fn noisePsd(").?;
     try std.testing.expect(std.mem.indexOf(u8, src[at..], ".coeff = 2") != null);
     // §1.3.1.2: `V(d,c)` drives the same branch as `V(c,d)` with the sign
     // flipped, and the SIGN is what separates correlation from
-    // anti-correlation — so it has to survive into the export.
+    // anti-correlation, so it has to survive into the export.
     try std.testing.expect(std.mem.indexOf(u8, src[at..], ".coeff = -3") != null);
 }
 
@@ -1079,8 +1068,7 @@ test "codegen: §4.6.4.6 a generator no single factor describes keeps coefficien
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
     // A generator squared is not a linear source, so there is no coefficient
-    // to report and the row falls back to the 1 it carried before the field
-    // existed rather than inventing one.
+    // to report and the row keeps 1 rather than inventing one.
     const at = std.mem.indexOf(u8, src, "pub fn noisePsd(").?;
     try std.testing.expect(std.mem.indexOf(u8, src[at..], ".coeff = 1") != null);
 }
@@ -1090,7 +1078,7 @@ test "codegen: §4.6.4.6 one tabulated source on two branches is one table" {
     // The clause's Example 1 shape with a §4.6.4.4 source: "Perfectly
     // correlated noise is generated by using the output of one noise function
     // for more than one noise source." One call is one generator, so the two
-    // rows share a `source` — and must share the TABLE too, or the export
+    // rows share a `source` and must share the TABLE too, or the export
     // describes one generator with two copies of its own spectrum.
     try Harness.run(std.testing.allocator,
         \\module nshare(a, b, c);
@@ -1141,8 +1129,8 @@ test "codegen: §4.6.3 an ac_stim exports its phasor and no noise generator" {
     // the contribution) must not become two rows.
     try std.testing.expectEqual(@as(usize, 1), std.mem.count(u8, src, ".name = \"xf\" }"));
     // The magnitude is a PARAMETER, so it cannot be comptime data: `acStim`
-    // reads the card. And §4.6.4.6's per-use factor folds into it — a phasor
-    // scales exactly — or a host is low by 3 on this source.
+    // reads the card. And §4.6.4.6's per-use factor folds into it (a phasor
+    // scales exactly), or a host is low by 3 on this source.
     const at = std.mem.indexOf(u8, src, "pub fn acStim(").?;
     try std.testing.expect(std.mem.indexOf(u8, src[at..], "(model.amp) * (3") != null);
     // Polar, not rectangular: `cos(π/2)` is 6.1e-17 and a stimulus that has
@@ -1154,7 +1142,7 @@ test "codegen: §4.6.3 an ac_stim exports its phasor and no noise generator" {
 test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
     // Both halves of the same rule: a `noise_gens` row that cannot be written
     // must take the DECL with it. Silently dropping the row would tell a host
-    // the model declares no such noise, which is a PSD it can never ask for —
+    // the model declares no such noise, which is a PSD it can never ask for;
     // and `@compileError` is how codegen refuses (see `f64Expr`/E0515).
     const cases = [_][]const u8{
         // §1.3.1.1 a ground-ground branch has no row and no column (E0520).
@@ -1189,11 +1177,8 @@ test "codegen: §4.6.4 a generator VerA cannot export refuses the device" {
         // file that cannot be read is a lowering error on the .va, which never
         // reaches codegen at all.
         //
-        // NOT here either: an array PARAMETER. It used to be refused rather
-        // than frozen at its declared default, which a model card may
-        // override; now `noise_tables` carries the defaults and
-        // `noiseTablePoints` carries the card, so neither is frozen and
-        // nothing is refused. The test below this one pins both halves.
+        // Nor an array parameter: `noise_tables` carries its defaults and
+        // `noiseTablePoints` the card (the test after this one).
         // §4.6.4.4 interpolates log(power), and log(0) is not on the line.
         \\module nlog0(p, n);
         \\  inout p, n;
@@ -1246,7 +1231,7 @@ test "codegen: §5.6.7 indirect contribution is a nullor row, ASYMMETRIC-safe" {
     // probe − equation, in that order.
     const probe_at = std.mem.indexOf(u8, body, "U.pin").?;
     // `2.0 * V(out)` reaches the constant through `scale`, not through a
-    // second dual — the derivative-free side of a product never becomes an S.
+    // second dual: the derivative-free side of a product never becomes an S.
     const eqn_at = std.mem.indexOf(u8, body, "scale(2.0)").?;
     try std.testing.expect(std.mem.indexOf(u8, body, ".sub(") != null);
     try std.testing.expect(probe_at < eqn_at);
@@ -1270,16 +1255,15 @@ test "codegen: §5.6.7.1 two indirect contributions to one branch get one source
     // be a duplicate enum field, which the Zig parser cannot catch).
     try std.testing.expect(std.mem.indexOf(u8, src, "flowZ28pZ2cnZ29, // branch flow") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "flowZ28pZ2cnZ29Z231, // branch flow") != null);
-    // Two targets ⇒ two distinct core fields ⇒ two rows in `eval`. (The
-    // group-local ordinal naming.zig gives the second unit is still what keys
-    // its §4.5 state and proof.zig's verdict; it just no longer names a decl.)
+    // Two targets ⇒ two distinct core fields ⇒ two rows in `eval`. (naming.zig's
+    // group-local ordinal keys the second unit's §4.5 state and proof verdict.)
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "const c = m.f1;") != null);
 }
 
 test "codegen: §5.10.5 only a `timer` module gets a nextBreakpoint hook" {
     // The hook is OPTIONAL in tools/contract.zig, and emitting it
-    // for a module with no timer would claim a schedule that does not exist —
+    // for a module with no timer would claim a schedule that does not exist:
     // the host reads "no breakpoints ever" and stops asking. `transition` is the
     // trap case: it is stateful and discontinuity-adjacent, but nothing about it
     // says WHERE a timepoint goes, only how fast the value moves.
@@ -1300,7 +1284,7 @@ test "codegen: §5.10.5 only a `timer` module gets a nextBreakpoint hook" {
 test "codegen: §5.10.5 a timer whose start is a solved quantity emits NO hook" {
     // `nextBreakpoint` gets `*const Model` and no `Instance`, so the schedule
     // has to be a function of the parameters. A start_time read off the solution
-    // is not, and there is no honest answer to give — a guessed one either hangs
+    // is not, and there is no honest answer to give: a guessed one either hangs
     // the transient walk (an answer at or before `t`) or moves an edge. Silence
     // degrades to LTE step control, which is where every device is today.
     var h: Harness = undefined;
@@ -1338,17 +1322,21 @@ test "codegen: §4.5 operator state is keyed to the stable unit id" {
     const src = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, src, "tr__analog_op__transition__from: f64 = 0.0") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "tr__analog_op__transition__t0: f64 = 0.0") != null);
-    // The operator's INPUT is a core field now, not a declaration of its own —
-    // but the state field, and therefore `naming.zig`'s key, is untouched.
+    // The operator's input is a core field, not a declaration of its own; the
+    // state field carries `naming.zig`'s key.
     try std.testing.expect(std.mem.indexOf(u8, src, "zTransition(zL(S, ") != null);
-    try std.testing.expect(std.mem.indexOf(u8, src, "const m = core(S, zVals(S, &x), model, inst, sim);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, src, "const m = tr__common__core__state(S, zVals(S, &x), model, inst, sim);") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn updateState(") != null);
+    // `updateState`'s slice returns the operator input alone: the residual
+    // stays in the core, and the accepted step never pays for it.
+    const at = std.mem.indexOf(u8, src, "fn tr__common__core__state(").?;
+    const sig = src[at..std.mem.indexOfPos(u8, src, at, "} {").?];
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f0:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f1:") == null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const State = struct {") != null);
 }
 
 test "codegen: §4.5.11 laplace_nd emits a real filter, not a compile error" {
-    // Was: asserted laplace was a LOUD @compileError. It is now implemented,
-    // so the assertion is inverted — a stateful filter unit must be emitted.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module lp(p, n);
@@ -1362,17 +1350,16 @@ test "codegen: §4.5.11 laplace_nd emits a real filter, not a compile error" {
     try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
     try std.testing.expect(std.mem.indexOf(u8, src, "laplace_nd") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "pub fn updateState(") != null);
-    // The cascade's `__sec(model)` call is the ONLY Model read in this module,
-    // so the unit's parameter must stay NAMED. Was patched to `_`, which made
-    // every filter-in-a-contribution device fail to compile on `model`.
+    // The cascade's `__sec(model)` call is the only Model read in this module,
+    // so the unit's parameter must stay named, not `_`.
     try std.testing.expect(std.mem.indexOf(u8, src, "__sec(model)") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "core(comptime S: type, x: anytype, model: *const Model") != null);
 }
 
 test "codegen: a non-const analog-operator control argument is a LOUD compile error" {
-    // The invariant the previous test really guarded: unsupported constructs
-    // must be loud, never a silent substitute value (a silent 0 corrupts the
-    // device residual). §4.5.14 requires control arguments to be constant.
+    // Unsupported constructs must be loud, never a silent substitute value
+    // (a silent 0 corrupts the residual). §4.5.14 requires control arguments
+    // to be constant.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module tv(p, n);
@@ -1412,7 +1399,7 @@ test "codegen: §5.4.3 I(<p>) is a solver unknown pinned to the KCL sum at p" {
     try std.testing.expect(std.mem.indexOf(u8, src, "flowZ28Z3caZ3eZ29, // branch flow") != null);
 
     // SIGN: `I(p,n) <+ c` stamps `+c` at hi, so res[a] is the current leaving
-    // node a INTO the module — which is exactly §5.4.3's "flow into a port".
+    // node a INTO the module, which is exactly §5.4.3's "flow into a port".
     // Hence `x − res[a]`, not `x + res[a]`.
     try std.testing.expect(std.mem.indexOf(
         u8,
@@ -1458,7 +1445,7 @@ test "codegen: the `U` block is the SPELLING contract — all four name kinds, v
     var h: Harness = undefined;
     // `node_voltages` is one string key space over four different kinds of name,
     // and only one of them has a source spelling. The KEY is lowering's private
-    // business, but the spelling is not: it reaches the user three times over —
+    // business, but the spelling is not: it reaches the user three times over:
     // as an emitted `U` member (here), as the identifier a `//! bias`/`//! sweep`
     // line has to write (tb.zig's `unknownName`, pinned in its own test), and as
     // the name every diagnostic over an unknown prints. So it is pinned as the
@@ -1467,7 +1454,7 @@ test "codegen: the `U` block is the SPELLING contract — all four name kinds, v
     // fixture that biases an unknown, and each of those is invisible to a
     // substring search.
     //
-    // Ports first, then §3.6.3 internal nets, then §5.4.2/§5.4.3 flows — the
+    // Ports first, then §3.6.3 internal nets, then §5.4.2/§5.4.3 flows: the
     // order `emitTopology` documents, which is also `num_ports`' meaning.
     // `naming.sanitize` is what makes `b[0]` and `flow(p,n)` legal Zig, and
     // `isValidId` leaves `p` and `n` alone.
@@ -1501,7 +1488,7 @@ test "codegen: the `U` block is the SPELLING contract — all four name kinds, v
 
 test "codegen: §5.9 a loop the unit re-runs is not read out of the shared core" {
     var h: Harness = undefined;
-    // Two units both slice the loop, so `plan_core.plan` wants to hoist it — but
+    // Two units both slice the loop, so `plan_core.plan` wants to hoist it, but
     // each also has private values inside it, so each re-materializes the loop.
     // Reading the hoisted counter and exit condition there is reading their
     // FINAL values, and the re-materialized loop then runs zero times.
@@ -1524,14 +1511,11 @@ test "codegen: §5.9 a loop the unit re-runs is not read out of the shared core"
         \\endmodule
     , &h);
     defer h.deinit();
-    // `genDisplay`, not `gen`: since the merge the RESIDUAL cannot hit this bug
-    // at all — there is one body, the loop is emitted where its values are
-    // computed, and there is no cache holding a loop-carried value at its exit
-    // state. §9.4 `display` is the one declaration that still opens with
-    // `const c = core(...)`, so it is the only remaining consumer of the §5.9
-    // `loop_recompute` fixpoint and therefore the only place this can regress.
+    // `genDisplay`, not `gen`: the core emits the loop where its values are
+    // computed, so only §9.4 `display`, which opens with `const c = core(...)`,
+    // consumes the §5.9 `loop_recompute` fixpoint.
     const src = try h.genDisplay(std.testing.allocator);
-    // A body holding `while (true)` while reading `c.f<N>` inside it is the bug.
+    // A `while (true)` body must not read `c.f<N>`: that is the exit state.
     var rest = src;
     while (std.mem.indexOf(u8, rest, "L")) |_| {
         const at = std.mem.indexOf(u8, rest, ": while (true)") orelse break;
@@ -1585,11 +1569,10 @@ test "codegen: §9.4 display tasks are void by default and print on request" {
 }
 
 test "codegen: §9.4.6 a display task under an `if` prints inside its arm" {
-    // THE BUG THIS PINS (was W0851). A guarded display call does not dominate
-    // the end-of-block chain root, so `finishDisplays` could not `fadd` it in —
-    // and an unchained call is dead code the unit slice drops, taking the print
-    // with it. The fix carries it through an SSA place written in the arm, so
-    // the call keeps its position in the CFG and the phi makes it live.
+    // A guarded display call does not dominate the end-of-block chain root,
+    // and an unchained call is dead code the unit slice drops. Lowering carries
+    // it through an SSA place written in the arm, so the call keeps its CFG
+    // position and the phi keeps it live.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module c(p, n);
@@ -1622,23 +1605,12 @@ test "codegen: §9.4.6 a display task under an `if` prints inside its arm" {
 }
 
 test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the executable" {
-    // THE BUG THIS PINS. `emitSysCall`'s §9.5 branch used to be gated on
-    // `display == .emit`, so in a device the eight descriptor-RETURNING names
-    // fell through to `void_tasks`' blanket `S.con(0.0)` — while
-    // `Analysis.callTy` types every one of them `.int` and therefore declared
-    // the slot `i64`. The emitted line was `const t0: i64 = S.con(0.0);`,
-    // `--emit-zig` exited 0, and the failure landed in the HOST's build as
-    // `expected type 'i64', found 'Dual'` against generated Zig in a cache
-    // directory. `emitFileCallDropped` already switched on `callTy`; the gate
-    // was all that kept it from running.
-    //
-    // `fd` FEEDS THE RESIDUAL on purpose. A descriptor whose value nothing reads
-    // gets no slot, so the wrong type would be merely absent instead of wrong —
-    // which is why this is the one shape that observes it.
-    //
-    // THE SUITE CANNOT GRADE THIS. `tests/torture.zig` compiles every fixture
-    // with `.display = .emit` (there is no `//!` directive for the mode), so a
-    // `.va` cannot reach the `.drop` path at all. This test is the grader.
+    // `Analysis.callTy` types the descriptor-returning §9.5 calls `.int`, so
+    // in a device their slot is `i64` and `emitFileCallDropped` must write an
+    // integer zero, not `S.con(0.0)`; otherwise the host's build fails on
+    // generated Zig. `fd` feeds the residual on purpose: an unread descriptor
+    // gets no slot. The suite compiles every fixture with `.display = .emit`,
+    // so only this test reaches the `.drop` path.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module fdev(p, n);
@@ -1653,7 +1625,7 @@ test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the e
     , &h);
     defer h.deinit();
 
-    // §9.5.1 "a zero is returned for the mcd or fd" — as an INTEGER. A device has
+    // §9.5.1 "a zero is returned for the mcd or fd" as an INTEGER. A device has
     // no host file table, so zero is the answer and not a stub.
     const dev = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, dev, ": i64 = @as(i64, 0);") != null);
@@ -1663,18 +1635,18 @@ test "codegen: §9.5 a descriptor is an i64 in the DEVICE too, not only in the e
     try std.testing.expect(std.mem.indexOf(u8, dev, "zFOpen") == null);
 
     // The printing artifact opens the file for real, in the display unit, and
-    // latches the descriptor; the core's `fd` — the one the residual and
-    // `updateState` see — is that latch, not the device's zero.
+    // latches the descriptor; the core's `fd` (the one the residual and
+    // `updateState` see) is that latch, not the device's zero.
     const exe = try h.genDisplay(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, exe, "zFKeep(") != null);
     try std.testing.expect(std.mem.indexOf(u8, exe, ": i64 = zFRes(") != null);
 }
 
 test "codegen: §9.4 a display unit that reads an operator input opens the cache" {
-    // The display unit is the ONE unit not folded into the core, and an
-    // operator's input is not a `mark`ed operand — so a `c.f*` rendered for it
-    // used to arrive with no `const c = core(...)` above it and the printing
-    // artifact did not compile. Same shape for ddt/transition/slew/laplace.
+    // The display unit is the one unit not folded into the core, and an
+    // operator's input is not a `mark`ed operand, so a `c.f*` rendered for it
+    // needs its own `const c = core(...)` above it. Same shape for
+    // ddt/transition/slew/laplace.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module dop(p, n);
@@ -1711,7 +1683,7 @@ test "codegen: §2.6.1 an integer literal keeps all 64 bits" {
     const src = try h.gen(std.testing.allocator);
     // The integer side of the product carries no derivative, so it folds and
     // arrives as the f64 the multiply needs. `fmtF64` is `{d}`, which is the
-    // shortest representation that ROUND-TRIPS — 4607182418800017400.0 parses
+    // shortest representation that ROUND-TRIPS: 4607182418800017400.0 parses
     // back to exactly 4607182418800017408, and every literal in every emitted
     // device already rests on that. What must not happen is the value changing.
     try std.testing.expect(std.mem.indexOf(u8, src, "scale(4607182418800017400.0)") != null);
@@ -1742,7 +1714,7 @@ test "codegen: §3.2 the three sites that impose the 32-bit integer width agree"
     // Site 1, `Lower.foldBinary`: a §4.2 constant expression, folded before the
     // Model field is written. 2^31 is one step past the top of §3.2's range.
     try std.testing.expect(std.mem.indexOf(u8, src, "big: i64 = -2147483648") != null);
-    // §4.2.11 `<<` at the same width — `1 << 31` is the sign bit, not 2^31.
+    // §4.2.11 `<<` at the same width: `1 << 31` is the sign bit, not 2^31.
     try std.testing.expect(std.mem.indexOf(u8, src, "sh: i64 = -2147483648") != null);
     // Site 2, `analysis.foldConst`: a §6.3.4 default over another parameter,
     // folded for the field initializer and re-emitted in `derive` for the
@@ -1752,7 +1724,7 @@ test "codegen: §3.2 the three sites that impose the 32-bit integer width agree"
     // Site 3, `codegen.intBin32`: the device. `+%` is the 64-bit wrap that keeps
     // the add from panicking; the truncation is §3.2's width. The left operand
     // is a PARAMETER, so neither fold can reach it and the wrap has to survive
-    // as emitted code — which is the site this half of the test is about.
+    // as emitted code, which is the site this half of the test is about.
     try std.testing.expect(std.mem.indexOf(u8, src, "@as(i32, @truncate(((model.big) +% (@as(i64, 1)))))") != null);
 }
 
@@ -1764,9 +1736,9 @@ test "codegen: a unit whose target is defined in one arm returns a VALUE, not un
     // history, because `updateState` pushes whatever comes back.
     // The condition is a §3.4 PARAMETER, which §5.8.1 licenses (a `constant_
     // primary` cannot move mid-analysis, so the operator never misses a step)
-    // while `elabConst` still refuses to fold it away — a model card overrides
-    // it. So the diamond is real and the operator is legal, which is exactly the
-    // shape this test needs. A probe condition here would now be E0514.
+    // while `elabConst` still refuses to fold it away (a model card overrides
+    // it). So the diamond is real and the operator is legal. A probe condition
+    // here would be E0514.
     try Harness.run(std.testing.allocator,
         \\module g(p, n, c);
         \\  inout p, n, c;
@@ -1787,17 +1759,11 @@ test "codegen: a unit whose target is defined in one arm returns a VALUE, not un
     // written into the signature, and it closes with `\n} {`.
     const end = std.mem.indexOfPos(u8, src, at, "\n}\n").?;
     const body = src[at..end];
-    // Hoisted slots share one `var h: zSlots(...)`, so the carve-out is no longer a
-    // property of each declaration — the array itself is declared `undefined`.
-    // It is now the pair of facts below: the array is EXACTLY as long as the
-    // number of zero-seeds, so no element of it can reach the `return`
-    // unwritten. Assert both or the guarantee is not being tested.
-    //
-    // Targeted, not a blanket memset: the only hoists are the two returned
-    // fields (the operator input, defined on one arm only, and the contribution
-    // phi). Every other slot is a `const` at its definition, which is what
-    // `probeBody` is for — so counting the hoists is counting exactly the values
-    // that could reach the `return` without being written.
+    // Hoisted slots share one `var h: zSlots(...) = undefined`, so the
+    // guarantee is two facts: the array is exactly as long as the number of
+    // zero-seeds, and every seed writes `S.con(0.0)`. The only hoists are the
+    // two returned fields (the one-arm operator input and the contribution
+    // phi); every other slot is a `const` at its definition (`probeBody`).
     try std.testing.expect(std.mem.indexOf(u8, body, "    var h: zSlots(S, &.{ 0x3, 0x3 }) = undefined;") != null);
     var hoists: usize = 0;
     var it = std.mem.splitScalar(u8, body, '\n');
@@ -1814,28 +1780,20 @@ test "codegen: §4.5.8/§4.5.9 an omitted rate argument copies the one that was 
     // uses it for both rise and fall times." §4.5.9: max_neg_slew_rate "defaults
     // to the opposite of the max_pos_slew_rate."
     //
-    // Both used to default to a NEUTRAL element instead of to the value that WAS
-    // given — `fall = 0.0` and `max_neg = 1e300` — so the short spelling of each
-    // operator behaved differently from the long spelling written with the same
-    // number: the 3-argument `transition` transitioned twice as fast, and `slew`
-    // held the rising edge while letting the falling edge through unlimited.
+    // A neutral default (`fall = 0.0`, `max_neg = 1e300`) would make the short
+    // spelling of each operator differ from the long one with the same number.
     //
     // Asserted on the emitted call rather than by diffing the two spellings,
     // because `slew(x, 2e8, -2e8)` renders `@abs(-2e8)` and the short form
-    // renders `@abs(2e8)` — the same limit, different text.
+    // renders `@abs(2e8)`: the same limit, different text.
     const cases = [_]struct { call: []const u8, want: []const u8 }{
         .{
-            // §4.5.8 now passes rise and fall SEPARATELY (the averaged lag
-            // constant is gone), so the copy shows up as the same number twice
-            // in the last two argument positions of the call.
+            // §4.5.8 passes rise and fall separately, so the copy is the same
+            // number in the last two argument positions.
             //
-            // `0.0000000022` and not `0.0000000022000000000000003`: this is the
-            // tree's only pin on the §2.6.2 scale-factor decode, and the rule in
-            // force is that `2.2n` is ONE `parseFloat` of the joined text
-            // `2.2e-9`, not `2.2 * 1e-9`. The two differ by 1 ulp. Asserted as a
-            // rule, with its LRM argument, in lexer.zig's "§2.6.2 a scale factor
-            // rounds ONCE" test; re-blessed here when the parser stopped
-            // carrying a second decoder that double-rounded.
+            // `0.0000000022`, not `0.0000000022000000000000003`: `2.2n` is one
+            // `parseFloat` of `2.2e-9`, not `2.2 * 1e-9` (1 ulp apart; see
+            // lexer.zig's "§2.6.2 a scale factor rounds ONCE" test).
             .call = "transition(V(p, n), 0, 2.2n)",
             .want = "0.0000000022, 0.0000000022)",
         },
@@ -1867,19 +1825,14 @@ test "codegen: §4.5.8/§4.5.9 an omitted rate argument copies the one that was 
 }
 
 test "codegen: §5.9.1 a short-circuit loop condition still reaches the loop's branch" {
-    // §4.2.7 `&&` splits its expression across blocks, so after lowering the
-    // condition of a `while` the CURRENT block is the short-circuit join, not
-    // the loop header. `lowerWhile`/`lowerFor` used to emit the loop's own
-    // branch into the header regardless: the header ended up with two
-    // terminators, the `&&`'s rhs and join blocks lost their predecessor, and
-    // codegen — which walks reachable blocks — declared slots for the values
-    // defined in them and then never emitted a single assignment. The loop then
-    // branched on an `undefined` local. Zig caught it as "unused local
-    // variable" on `bsimsoi_va`; without that it is a read of undefined memory.
+    // §4.2.7 `&&` splits its expression across blocks, so after lowering a
+    // `while` condition the current block is the short-circuit join, not the
+    // loop header. A loop branch placed in the header strands the rhs and join
+    // blocks: their slots are declared but never assigned, and the loop
+    // branches on an `undefined` local.
     //
-    // Asserted structurally rather than on one temporary's name: EVERY declared
-    // slot must be written somewhere in the body. That is the whole bug class,
-    // and it does not move when slot numbering does.
+    // Asserted structurally, not on one temporary's name: every declared slot
+    // must be written somewhere in the body.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module w(p, n);
@@ -1900,7 +1853,7 @@ test "codegen: §5.9.1 a short-circuit loop condition still reaches the loop's b
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
 
-    // The rhs of the `&&` is emitted at all — it used to be dropped entirely.
+    // The rhs of the `&&` is emitted.
     try std.testing.expect(std.mem.indexOf(u8, src, "zAbs(S, ") != null);
 
     // The model's own slots, past the file-scope helpers.
@@ -1921,15 +1874,13 @@ test "codegen: §5.9.1 a short-circuit loop condition still reaches the loop's b
 test "codegen: §4.5.7 a delay computed from parameters renders as an expression over `model`" {
     // `td = len * sqrt(l * c)` is how every transmission line in the wild
     // spells its delay (devices/models/lossy_tline.va:135,
-    // coupled_tlines.va:110). It is not a literal and not a bare parameter, so
-    // it used to hit the `else` of `f64Expr` and paste an `@compileError` INTO
-    // an expression in the generated Zig — which the Zig compiler then reported
-    // as "unreachable code" at a line of generated code, with nothing naming
-    // the model.
+    // coupled_tlines.va:110). It is neither a literal nor a bare parameter, so
+    // `f64Expr` must render it as an expression, never an `@compileError`
+    // pasted into one.
     //
     // §4.5.7 permits it: `absdelay(input, td [, maxdelay])` takes td as an
     // analog_expression, and with no maxdelay "the value of td when the
-    // absdelay() is first evaluated shall be used" — which for an expression
+    // absdelay() is first evaluated shall be used", which for an expression
     // over parameters is its value at every evaluation.
     //
     // Also pins the ASSIGNMENT: `td` is a `real` variable, not a parameter, so
@@ -1988,16 +1939,11 @@ test "codegen: §5.6.5 a zero-short switch branch emits a collapse hook" {
     // The internal node AND the branch-flow unknown both alias onto the port,
     // so the pair's stamps land on one slot and cancel.
     //
-    // Asserted through the UNION-FIND emission, which replaced the
-    // last-write-wins `out[victim] = target` these rows used to match. That
-    // rewrite was the FIX for chained shorts — BSIM4 rgateMod=0 retains both
-    // V(g,gm) and V(gm,gi), sharing gm, and last-write-wins left the chain's
-    // first link dangling (see `collapse`'s own doc comment). The old spelling
-    // is gone, so matching it asserted the bug rather than the fix.
-    //
-    // `ai` is aliased by the union and then resolved by the `if (r != u)` loop
-    // over every unknown, so it is no longer written by name; the branch-flow
-    // row still is, because it is not a union member.
+    // Asserted through the union-find emission, which handles chained shorts
+    // (BSIM4 rgateMod=0 retains V(g,gm) and V(gm,gi), sharing gm; see
+    // `collapse`'s doc comment). `ai` is resolved by the `if (r != u)` loop
+    // over every unknown, so it is not written by name; the branch-flow row
+    // is, because it is not a union member.
     try std.testing.expect(std.mem.indexOf(
         u8,
         src,
@@ -2008,7 +1954,7 @@ test "codegen: §5.6.5 a zero-short switch branch emits a collapse hook" {
         src,
         "out[@intFromEnum(U.flowZ28aZ2caiZ29)] = zCollapseRoot(&parent, @intFromEnum(U.a));",
     ) != null);
-    // Min-index root, so `a` — a port at index 0 — is the target and never a
+    // Min-index root, so `a` (a port at index 0) is the target and never a
     // mover. That ordering is what lets the host resolve aliases ascending.
     try std.testing.expect(std.mem.indexOf(
         u8,
@@ -2053,11 +1999,8 @@ test "codegen: a zero short still collapses after if-conversion makes its join a
     // The diode idiom again, through ifconv as root.zig runs it. Both arms
     // are pure, so the diamond converts and the retention flag and the
     // potential accumulator become `select`s: `select(rs > 0, 0, 1)` and
-    // `select(rs > 0, 0, 0)`. `zeroOnEveryPath` walked phis only, so the
-    // converted form lost its collapse — and whether a model collapsed
-    // hung on whether ifconv could convert the diamond (a late phi row in
-    // the branching block stopped it, so ifconv finding the terminator by
-    // opcode changed hisimhv_va's BRddp from collapsed to not).
+    // `select(rs > 0, 0, 0)`. `zeroOnEveryPath` must see through them, or
+    // whether a model collapses would hang on whether ifconv converted it.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module d(a, c);
@@ -2086,9 +2029,7 @@ test "codegen: a zero short still collapses after if-conversion makes its join a
 test "codegen: an OBSERVED zero short is not collapsed" {
     // §5.4.2 `I(rsb)` reads the branch-flow unknown, which `collapse` would
     // alias onto a node voltage: the model would read V(a), not its current.
-    // static_switch_elision.va asserts the current and passed only because
-    // ifconv converted its diamond (and the select form never collapsed);
-    // the phi form — an arm ifconv keeps, here `sqrt` — read 0.
+    // Here the arm holds `sqrt`, so ifconv keeps the phi form.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module d(a, c);
@@ -2133,14 +2074,13 @@ test "codegen: an x-steered zero short is NOT collapsed" {
 test "codegen: §4.5 a control argument that is a solve result is E0515, not generated Zig" {
     // The other half: a control argument the CLAUSE makes constant and that
     // genuinely cannot be resolved must be a diagnostic at the `.va` line. An
-    // `@compileError` pasted into an expression is not one — it reads as an
+    // `@compileError` pasted into an expression is not one: it reads as an
     // engine bug in generated code.
     //
     // §4.5.8's rise_time, not §4.5.7's td: Table 4-20 lists every one of
     // `transition`'s times among the CONSTANT expression arguments and
-    // `absdelay`'s td among the DYNAMIC ones, so `absdelay(V(p,n), V(c))` —
-    // which this used to spell — is a legal program and is now compiled (see
-    // `dynCtrlArgs` and
+    // `absdelay`'s td among the DYNAMIC ones, so `absdelay(V(p,n), V(c))` is
+    // legal and compiled (see `dynCtrlArgs` and
     // ch04_expressions/a04_03_absdelay_td_frozen_without_maxdelay.va).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -2164,20 +2104,17 @@ test "codegen: §4.5 a control argument that is a solve result is E0515, not gen
         try std.testing.expect(e.span.end > e.span.start);
     }
     try std.testing.expect(found);
-    // Refused as a whole unit — an `@compileError` STATEMENT that replaces the
-    // body, never one pasted into the middle of an expression (which is what
-    // `inst.abstime - (@compileError(…))` was, and what Zig reported as
-    // "unreachable code" at a line of generated code).
+    // Refused as a whole unit: an `@compileError` statement that replaces the
+    // body, never one pasted into the middle of an expression.
     try std.testing.expect(std.mem.indexOf(u8, src, "\n    @compileError(\"LRM 4.5") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "(@compileError") == null);
 }
 
 test "codegen: metadata control failure stays fatal with and without diagnostics" {
     // §4.5.14 permits first-use capture of a nonliteral constant argument.
-    // A dynamic transition rise_time is currently unsupported, not invalid
-    // source (absdelay's maxdelay is sampled now). Whatever that limitation's
-    // diagnostic, callers must never receive a success flag merely because a
-    // later unit reset the per-body `fatal` field.
+    // A dynamic transition rise_time is unsupported, not invalid source.
+    // Whatever its diagnostic, callers must never receive a success flag
+    // because a later unit reset the per-body `fatal` field.
     for ([_]bool{ false, true }) |with_diags| {
         var h: Harness = undefined;
         try Harness.run(std.testing.allocator,
@@ -2204,7 +2141,7 @@ test "codegen: metadata control failure stays fatal with and without diagnostics
 test "codegen: §12.32.3 an unregistered system function is W0852 and a host call, not a refusal" {
     // The other side of the test above, and the distinction the whole W0852
     // ruling rests on: an unregistered `$name` has no value the LRM fixes, so
-    // the unit must still compile — but not silently. §12.32.3's own sampnhold
+    // the unit must still compile, but not silently. §12.32.3's own sampnhold
     // listing, which is what puts one of these in a contribution.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -2227,13 +2164,11 @@ test "codegen: §12.32.3 an unregistered system function is W0852 and a host cal
         try std.testing.expect(e.span.end > e.span.start); // the call, not the file
     }
     try std.testing.expect(found);
-    // Compiles. A refusal here would reject legal source (§2.8.3), which is the
-    // regression this line exists to catch.
+    // Compiles: a refusal here would reject legal source (§2.8.3).
     try std.testing.expect(std.mem.indexOf(u8, src, "@compileError") == null);
 
-    // §2.8.3/§12.32: the name is EXPORTED for a host to bind, not answered here.
-    // The `0.0` this test used to require is gone deliberately — a substitute
-    // value is what the seam replaced.
+    // §2.8.3/§12.32: the name is exported for a host to bind, not answered
+    // here with a substitute value.
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const systf_calls") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, ".{ .name = \"$sampler\" }") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "inst.systf.?") != null);
@@ -2243,7 +2178,7 @@ test "codegen: a systf call reassembles the host's value and partials into one S
     // The shape §12.22.1 forces, and the reason it is forced: `eval` is generic
     // over S and a function POINTER cannot be, so the host returns a value and
     // writes partials and the call site rebuilds the dual. Each graft term is
-    // `arg.addC(-arg.val()).scale(p)` — VALUE zero, DERIVATIVE p·d(arg) — so on
+    // `arg.addC(-arg.val()).scale(p)` (VALUE zero, DERIVATIVE p·d(arg)), so on
     // the plain-f64 instantiation the residual reads the host's value exactly
     // and on the dual one it also carries the host's slope.
     var h: Harness = undefined;
@@ -2311,7 +2246,7 @@ test "codegen: an unsupported dependent default diagnoses instead of freezing" {
 test "codegen: §3.4 a default with no compile-time value is W1050, a derived one is silent" {
     // The guard on the `0` field initializer, and the line it must NOT cross.
     // `hot` reads §9.18's simulator table, which has no value until the host
-    // runs — nothing folds it and nothing derives it, so `Model{}.hot` ships as
+    // runs: nothing folds it and nothing derives it, so `Model{}.hot` ships as
     // 0 and the host has to write the field. `warm` is 2*`base`, which §6.3.4
     // makes a `derive()` line; the same `0` initializer is honest there because
     // `derive` overwrites it, so warning about it would be noise on every
@@ -2398,10 +2333,9 @@ test "codegen: §6.6 a parameter in a generate scheme fixes structure, so it is 
 }
 
 test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
-    // The defect this fixes: `tnom` folded to the constant 27, so a SPICE deck
-    // setting `.options tnom` was silently ignored by every model — and a
-    // compact model derives its whole parameter set from the nominal
-    // temperature, so 2 K of error moves the I-V curve by percent.
+    // `tnom` must not fold to the constant 27: a SPICE deck setting `.options
+    // tnom` would be ignored, and a compact model derives its whole parameter
+    // set from the nominal temperature.
     //
     // ngspice's shape, per model setup (b4set.c:1950): `if (!tnomGiven) tnom =
     // CKTnomTemp`. Here that is the `__given` guard `emitDerive` already writes
@@ -2419,15 +2353,14 @@ test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
     defer h.deinit();
     const src = try h.gen(std.testing.allocator);
 
-    // ONE host-written field, on Model — `.options tnom` is one number per RUN,
+    // ONE host-written field, on Model: `.options tnom` is one number per RUN,
     // so an Instance copy would replicate a global per instance, and two reads
     // of the same simparam must not become two fields.
     try std.testing.expect(std.mem.count(u8, src, "nom_temp__: f64 = 27.0,") == 1);
 
-    // Table 9-27's declared default still IS the field initializer, in Celsius,
-    // so `Model{}` — a host that writes nothing — is bit-identical to the old
-    // folded constant. That is what keeps every existing fixture unmoved, and
-    // `tnomk` pins that `27.0 + 273.15` folds to the literal `300.15` exactly.
+    // Table 9-27's declared default is the field initializer, in Celsius, so
+    // `Model{}` (a host that writes nothing) reads 27. `tnomk` pins that
+    // `27.0 + 273.15` folds to the literal `300.15` exactly.
     try std.testing.expect(std.mem.indexOf(u8, src, "tnom: f64 = 27.0,") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "tnomk: f64 = 300.15,") != null);
 
@@ -2436,7 +2369,7 @@ test "codegen: §9.15 $simparam(\"tnom\") is the HOST's nominal temperature" {
     try std.testing.expect(std.mem.indexOf(u8, src, "if (!model.tnom__given) model.tnom = model.nom_temp__;") != null);
     try std.testing.expect(std.mem.indexOf(u8, src, "if (!model.tnomk__given) model.tnomk = (model.nom_temp__) + (273.15);") != null);
 
-    // A default that reads the host's table is no longer W1050: `derive()`
+    // A default that reads the host's table is not W1050: `derive()`
     // overwrites the field, which is that warning's own silence condition.
     for (0..h.bag.count()) |i| try std.testing.expect(h.bag.at(i).code != .W1050);
 }
@@ -2464,17 +2397,17 @@ test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digi
     //
     // §9.13.3 binds this family to IEEE 1364 §17.9.3's C listing (Table 9-26),
     // so there ARE digits to pin. Every literal below was produced by COMPILING
-    // AND RUNNING that listing — the copy in Icarus Verilog's vpi/sys_random.c,
+    // AND RUNNING that listing (the copy in Icarus Verilog's vpi/sys_random.c,
     // cross-checked against Verilator's verilated_probdist.cpp; provenance and
-    // URLs in rng_kernels.zig's header — with `zig cc`, never hand-computed.
+    // URLs in rng_kernels.zig's header) with `zig cc`, never hand-computed.
     // The log/sqrt-free rows (`uniform`, `rtl_dist_uniform`, the LCG steps) are
     // compared EXACTLY: they are pure IEEE-754 mul/add/div and the port must
     // reproduce the C bit for bit. The transcendental rows allow libm-vs-@log
-    // ulp drift and nothing more — their SEEDS are still exact, because the
+    // ulp drift and nothing more; their SEEDS are still exact, because the
     // seed path is integer arithmetic and admits no drift at all.
     const k = @import("kernels").rng_kernels;
     const eps = std.testing.expectApproxEqRel;
-    // $random from seed 7 = rtl_dist_uniform(&s, INT_MIN, INT_MAX), twice — the
+    // $random from seed 7 = rtl_dist_uniform(&s, INT_MIN, INT_MAX), twice; the
     // second pair proves the write-back rejoined the reference stream.
     try std.testing.expectEqual(@as(f64, -2146999808), k.zRngRand(7));
     try std.testing.expectEqual(@as(f64, 483484), k.zRngRandNext(7));
@@ -2509,7 +2442,7 @@ test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digi
     try eps(@as(f64, 14.018964442656326), k.zRngErlang(7, 2.0, 3.0), 1e-12);
     try std.testing.expectEqual(@as(f64, -965981971), k.zRngErlangNext(7, 2.0, 3.0));
     // §9.13.1's width sentence: "a 32-bit signed integer; it can be positive or
-    // negative" — both signs occur along the reference stream, and every draw
+    // negative": both signs occur along the reference stream, and every draw
     // stays inside the width.
     var neg = false;
     var pos = false;
@@ -2537,7 +2470,7 @@ test "codegen: §9.13 the emitted draws are IEEE 1364 §17.9.3's, digit for digi
 
 test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
     // The kernels are `@embedFile`d into every device, so the rows checked here
-    // are byte-for-byte the code that runs there — the same arrangement
+    // are byte-for-byte the code that runs there: the same arrangement
     // `filter_kernels.zig` has, and the reason both live in real Zig files.
     //
     // Every row below is a sentence of §9.5.4.2, and the numbers are the ones
@@ -2550,7 +2483,7 @@ test "codegen: §9.5.4.2 the emitted scanner is the one the fixtures assert" {
     try std.testing.expectEqual(@as(i64, 1), k.zScanN("12 34", "%*d %d"));
     try std.testing.expectEqual(@as(i64, 34), k.zScanI("12 34", "%*d %d", 0));
     // "a decimal digit string that specifies an optional numerical maximum
-    // field width" — the field ends there, even mid-number.
+    // field width": the field ends there, even mid-number.
     try std.testing.expectEqual(@as(i64, 12), k.zScanI("12345", "%2d", 0));
     // "0 in the event of an early matching failure", and EOF (-1) when the
     // input ends before any conversion at all.
@@ -2580,9 +2513,9 @@ test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
     // the digits are the ones tests/fixtures/ch09_system_tasks/{07,046,049,050,
     // 051,053,054,158,11} hold VerA to.
     const k = @import("kernels").file_kernels;
-    // The kernels resolve a path relative to the process cwd — which is exactly
+    // The kernels resolve a path relative to the process cwd (which is exactly
     // what makes `ch09_047_missing.dat` a claim about a DIRECTORY, and why
-    // tests/torture.zig runs each fixture in its own — so the name is what has to
+    // tests/torture.zig runs each fixture in its own), so the name is what has to
     // be unique here.
     const path = ".zig-cache/vera-file-kernels-test.dat";
     const absent = ".zig-cache/vera-file-kernels-absent.dat";
@@ -2601,12 +2534,12 @@ test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
     const r = k.zFOpen(path, "r", false);
     try std.testing.expect(r & 2147483648 != 0);
     // §9.5.5 "$ftell ... the offset from the beginning of the file of the current
-    // byte" — 0 before any read.
+    // byte" is 0 before any read.
     try std.testing.expectEqual(@as(i64, 0), k.zFTell(r));
     // §9.5.8 "returns zero otherwise": nothing has been read, so no EOF.
     try std.testing.expectEqual(@as(i64, 0), k.zFEof(r));
     // §9.5.4.1 "until a newline character is read AND TRANSFERRED to str ... the
-    // number of characters read is returned in code" — 4, not the 3 a C `fgets`
+    // number of characters read is returned in code" is 4, not the 3 a C `fgets`
     // minus its delimiter gives.
     try std.testing.expectEqual(@as(i64, 4), k.zFGets(r));
     try std.testing.expectEqualStrings("abc\n", k.zFLine(4, r));
@@ -2619,7 +2552,7 @@ test "codegen: §9.5 the emitted descriptors are the ones the fixtures assert" {
     // STATUS: "otherwise, code is set to 0".
     try std.testing.expectEqual(@as(i64, 0), k.zFSeek(r, 0, 2));
     try std.testing.expectEqual(@as(i64, 4), k.zFTell(r));
-    // "$rewind is equivalent to $fseek (fd,0,0)" — in status and in effect.
+    // "$rewind is equivalent to $fseek (fd,0,0)" in status and in effect.
     try std.testing.expectEqual(@as(i64, 0), k.zFSeek(r, 0, 0));
     try std.testing.expectEqual(@as(i64, 0), k.zFTell(r));
     // §9.5.7 "if the most recent operation did not result in an error, then the
@@ -2696,7 +2629,7 @@ test "codegen: §9.21 the emitted table interpolator is the one the fixtures ass
         }
     };
     // §9.21.1's printed sample set: f(x,y) = 0.5x + y on three isolines of y,
-    // laid out `y x f(x,y)` — 12 rows of 3 columns, outermost-first. The same
+    // laid out `y x f(x,y)`: 12 rows of 3 columns, outermost-first. The same
     // twelve rows 155_table_model_lrm_sample_set.va and ch09_table_model_2d.tbl
     // carry.
     const rows = [_]f64{
@@ -2711,7 +2644,7 @@ test "codegen: §9.21 the emitted table interpolator is the one the fixtures ass
     const f = k.zTable(S, 12, 3, 2, 2, "1LL1LL", rows, [_]S{ .{ .v = 0.25 }, .{ .v = 3.5, .d = 1.0 } });
     try std.testing.expectEqual(@as(f64, 2.0), f.v);
     // The scheme is piecewise linear and the samples lie on 0.5x + y, so ∂f/∂x
-    // is 0.5 — the Jacobian entry a probe in the lookup slot owes the solver.
+    // is 0.5: the Jacobian entry a probe in the lookup slot owes the solver.
     try std.testing.expectEqual(@as(f64, 0.5), f.d);
 
     // §9.21.1 "if the user provides the data in random order the system will
@@ -2725,14 +2658,14 @@ test "codegen: §9.21 the emitted table interpolator is the one the fixtures ass
     try std.testing.expectEqual(@as(f64, 2.0), g.v);
 
     // 131_table_model_array_control.va: one dimension, two samples on f(x) = 2x,
-    // "1LL;1" — halfway between them.
+    // "1LL;1": halfway between them.
     const line = [_]f64{ 1.0, 2.0, 3.0, 6.0 };
     const h1 = k.zTable(S, 2, 2, 1, 1, "1LL", line, [_]S{.{ .v = 2.0, .d = 1.0 }});
     try std.testing.expectEqual(@as(f64, 4.0), h1.v);
     try std.testing.expectEqual(@as(f64, 2.0), h1.d);
     // Table 9-31: linear extrapolation "extends linearly to the requested point
     // from the endpoint using a slope consistent with the selected interpolation
-    // method" — so f(0) = 0 and f(5) = 10 off both ends…
+    // method", so f(0) = 0 and f(5) = 10 off both ends…
     try std.testing.expectEqual(@as(f64, 0.0), k.zTable(S, 2, 2, 1, 1, "1LL", line, [_]S{.{ .v = 0.0 }}).v);
     try std.testing.expectEqual(@as(f64, 10.0), k.zTable(S, 2, 2, 1, 1, "1LL", line, [_]S{.{ .v = 5.0 }}).v);
     // …while constant extrapolation "returns the table endpoint value", and the
@@ -2773,11 +2706,8 @@ test "codegen: §9.21 the emitted table interpolator is the one the fixtures ass
 }
 
 test "codegen: §4.5.11 the bilinear transform is the one the emitted filter runs" {
-    // `filter_kernels.zig` is `@embedFile`d, so — like the four kernels above —
-    // what is exercised here is byte-for-byte what a device runs. It was the
-    // tree's one file reachable by neither import graph AND by no test, which is
-    // why this is characterization: a reviewer hand-checked D=2 and D=3 and found
-    // the kernel correct, and these rows are that check made runnable.
+    // `filter_kernels.zig` is spliced into the device, so what is exercised
+    // here is what a device runs. The rows are a hand check of D=2 and D=3.
     const k = @import("kernels").filter_kernels;
     // §4.5.11's trapezoidal substitution `s = k(1−z⁻¹)/(1+z⁻¹)`, cleared by
     // `(1+z⁻¹)ᴰ`. Multiplied out for D = 2 that is
@@ -2810,12 +2740,9 @@ test "codegen: §4.5.11 the bilinear transform is the one the emitted filter run
 }
 
 test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures assert" {
-    // `limit_kernels.zig` is `@embedFile`d into every device with an honoured
-    // `$limit`, so the shapes pinned here are the shapes that run there. They
-    // need pinning HERE and nowhere else: `tb.zig` generates calls to
-    // `updateState`/`display`/`eval`/`q` only, so no fixture ever executes
-    // `D.limit`, and until this file existed the limiters were a string literal
-    // that nothing in the tree could call.
+    // `limit_kernels.zig` is spliced into every device with an honoured
+    // `$limit`, so the shapes pinned here are the shapes that run there. The
+    // testbench never calls `D.limit`, so no fixture executes them.
     //
     // §4.5.15 leaves the algorithm implementation-defined; what the LRM does fix
     // is §9.17.3's "when the simulator has converged, the return value of the
@@ -2827,7 +2754,7 @@ test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures a
     const vt = 0.025852; // kT/q at 300 K, the `$vt` every junction model passes
     const vcrit = 0.6;
 
-    // TRANSPARENCY. A bias below `vcrit` is returned BIT-identically — this is
+    // TRANSPARENCY. A bias below `vcrit` is returned BIT-identically; this is
     // the row `annex_e_spice/limit_pnj.va` asserts through the device.
     try std.testing.expectEqual(@as(f64, 0.3), k.zPnjlim(0.3, 0.3, vt, vcrit));
     // `DEVpnjlim` damps only past `vcrit` AND past a two-`vt` step; the damped
@@ -2838,7 +2765,7 @@ test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures a
     try std.testing.expect(damped > 0.5 and damped < 1.0);
     try std.testing.expectApproxEqAbs(@as(f64, 0.6254615), damped, 1e-7);
     // Cold start: `vold <= 0` has no exponential to step back along, so the
-    // answer is the logarithmic one, `vt*ln(vnew/vt)` — far below `vnew`.
+    // answer is the logarithmic one, `vt*ln(vnew/vt)`, far below `vnew`.
     try std.testing.expectApproxEqAbs(@as(f64, 0.094499), k.zPnjlim(1.0, 0.0, vt, vcrit), 1e-6);
     // Reverse bias is FLOORED, and the two floors are different formulas:
     // `-vold-1` from a forward-biased previous iterate, `2*vold-1` from a
@@ -2865,7 +2792,7 @@ test "codegen: §4.5.15 the emitted limiters are the ones the annex E fixtures a
     try std.testing.expectEqual(@as(f64, 4.0), k.zLimvds(10.0, 0.0));
     try std.testing.expectEqual(@as(f64, -0.5), k.zLimvds(-3.0, 0.0));
     // Past 3.5 V the bound becomes multiplicative going up (`3*vold+2`) and a
-    // floor of 2 V coming down — the fixture header's "only a previous iterate
+    // floor of 2 V coming down: the fixture header's "only a previous iterate
     // at or above 3.5 V would answer max(0.4, 2) = 2".
     try std.testing.expectEqual(@as(f64, 14.0), k.zLimvds(100.0, 4.0));
     try std.testing.expectEqual(@as(f64, 2.0), k.zLimvds(1.0, 4.0));
@@ -2876,7 +2803,7 @@ test "codegen: §4.5.15 signed $limit clamps sign*v and seeds sign*vcrit" {
     // devsup.c limiters assume forward = positive; a PNP passes type = -1 and
     // the emitted clamp must (1) run the kernel on sg·v, (2) hand back
     // sg·result, (3) seed the junction at sign·vcrit. The unsigned spelling
-    // must stay byte-identical to what it was — no sg indirection.
+    // has no sg indirection.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module lim(p);
@@ -2889,16 +2816,14 @@ test "codegen: §4.5.15 signed $limit clamps sign*v and seeds sign*vcrit" {
     , &h);
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
-    // The ±1 is recovered ONCE per distinct sign at the top of `limit` and
-    // each clamp aliases it — every clamp on a MOSFET reads the same latched
-    // `type`, so re-spelling the compare per site cost 8 Ir per instance per
-    // Newton iterate for an answer that cannot have changed between them.
+    // The ±1 is recovered once per distinct sign at the top of `limit` and
+    // each clamp aliases it: every clamp on a MOSFET reads the same `type`.
     try std.testing.expect(std.mem.indexOf(u8, s, "const zsg__") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, " < 0) -1.0 else 1.0;") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "const sg: f64 = zsg__") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "sg * zPnjlim(sg * vn, sg * vo") != null);
-    // The live sets. The probe is `V(mid)` — mid against §1.3.1.1 ground, not
-    // against the port — so `mid` (bit 1) is the only unknown either half
+    // The live sets. The probe is `V(mid)` (mid against §1.3.1.1 ground, not
+    // against the port), so `mid` (bit 1) is the only unknown either half
     // touches and `p` (bit 0) stays clear in both.
     try std.testing.expect(std.mem.indexOf(u8, s, "pub const limit_reads: u64 = 0x2;") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "pub const limit_writes: u64 = 0x2;") != null);
@@ -2927,7 +2852,7 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
     // The mos-family frame swap (mos1load.c:351-373): both gate legs spelled
     // "fetlimds" plus a limvds on the channel emit ONE rung that branches on
     // the sign of the OLD vds, fetlims only the controlling leg, and gives
-    // limvds mode-dependent write targets — `di` in normal mode (vgs is
+    // limvds mode-dependent write targets: `di` in normal mode (vgs is
     // preserved, vgd derived), `si` in inverse mode (`vds =
     // -DEVlimvds(-vds,-vdso)`, vgd preserved, vgs derived).
     var h: Harness = undefined;
@@ -2958,12 +2883,12 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
     // Inverse arm: −frame limvds, correction to the source side.
     try std.testing.expect(std.mem.indexOf(u8, s, "const dl = -sgt * zLimvds(-sgt * dn, -sgt * vdso);") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "x[@intFromEnum(U.si)] -= dl - dn;") != null);
-    // The limvds site is CLAIMED by the ladder — no standalone clamp shape.
+    // The limvds site is CLAIMED by the ladder: no standalone clamp shape.
     try std.testing.expect(std.mem.indexOf(u8, s, "zLimvds(sg * vn") == null);
     try std.testing.expect(std.mem.indexOf(u8, s, "zLimvds(vn, vo") == null);
 
     // A dangling fetlimds (no second leg, no limvds) is declined whole, not
-    // half-honoured as a static clamp — that would be the bug back again.
+    // half-honoured as a static clamp.
     var h2: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module m2(g, s);
@@ -2981,8 +2906,10 @@ test "codegen: §4.5.15 a fetlimds pair + limvds emit ngspice's mode ladder" {
 test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`" {
     // ngspice fetlims against the `von` its PREVIOUS load stored
     // (mos1load.c:351, :535), and §9.17.3 leaves the returned value to the
-    // simulator. So `limit` runs the core that computes its arguments at `old`,
-    // the previous iterate's limited point, never at the unlimited `cur`.
+    // simulator. So `limit` runs the slice of the core that computes its
+    // arguments at `old`, the previous iterate's limited point, never at the
+    // unlimited `cur`. The slice returns `von` alone: the residuals stay in
+    // the core, and `limit` never pays for them.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module m(g, s, d);
@@ -2997,14 +2924,18 @@ test "codegen: §9.17.3 a solve-dependent $limit argument is evaluated at `old`"
     , &h);
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s, "core(S, zVals(S, &old), model, inst, sim)") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "m = m__common__core__limit(S, zVals(S, &old), model, inst, sim)") != null);
     try std.testing.expect(std.mem.indexOf(u8, s, "for (cur, 0..)") == null);
+    const at = std.mem.indexOf(u8, s, "fn m__common__core__limit(").?;
+    const sig = s[at..std.mem.indexOfPos(u8, s, at, "} {").?];
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f0:") != null);
+    try std.testing.expect(std.mem.indexOf(u8, sig, "f1:") == null);
 }
 
 test "codegen: §9.17.3 two pnjlimds legs + limvds emit ngspice's bulk rung" {
     // mos1load.c:376-384: after the ladder, pnjlim ONE junction chosen by the
-    // LIMITED vds, from its raw value, and move only the bulk — a port here,
-    // written anyway (a host that masks ports only loses the clamp).
+    // LIMITED vds, from its raw value, and move only the bulk: a port here, written
+    // anyway (a host that masks ports only loses the clamp).
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module m(d, g, s, b);
@@ -3145,7 +3076,7 @@ test "codegen: cross-fed held state emits stateCtl with accepted twins" {
     // The hysteresis-FSM hook (contract.zig StateCtlOp): a module whose held
     // state is written from cross edges gets stateCtl + accepted-copy twins,
     // so the transient can land its conductance flip sharp. A held variable
-    // fed only by a timer does NOT — breakpoints already place those edges.
+    // fed only by a timer does NOT: breakpoints already place those edges.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module sw(p, n, c);
@@ -3184,8 +3115,8 @@ test "codegen: cross-fed held state emits stateCtl with accepted twins" {
 test "codegen: a $prev-only model still gets latch staging and commit" {
     // `$prev` plants a path_prev site with NO path_acc sibling (the reactive
     // lowering always pairs them, a source site arrives alone), so every gate
-    // on the latch machinery must key on pathLatches(), not acc_lo — this is
-    // the model that fails silently (pb__ stuck at 0.0) if one reverts.
+    // on the latch machinery must key on pathLatches(), not acc_lo; otherwise
+    // `pb__` silently stays 0.0 here.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module avg(p, n);
@@ -3204,7 +3135,7 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
     try std.testing.expect(std.mem.indexOf(u8, s, "inst.pb__0 = inst.wb__0;") != null); // commit latches
     try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
 
-    // $prev of a value with no unknown dependence is the value itself — no
+    // $prev of a value with no unknown dependence is the value itself: no
     // latch, no hook, byte-identical to writing the parameter.
     var h2: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -3221,14 +3152,12 @@ test "codegen: a $prev-only model still gets latch staging and commit" {
 }
 
 test "codegen: every .val()-collapsing helper is on the lane-pin ledger" {
-    // The `batch_ok` promise is only as good as its pins, and the pins are
-    // hand-placed at emission sites — fixture 158 (zPow) proved a forgotten
-    // one ships a false promise. This binds the two mechanically: any helper
-    // in the emitted math/ops templates whose BODY reads `.val(` must appear
-    // here, and adding one without deciding its pin fails this test, not a
-    // customer's batch run. A helper is on the ledger either because its
-    // emission site calls `pinLanes` (see each site's comment) or because it
-    // steers only on lane-UNIFORM state (dt, ic, inst history — never x).
+    // The `batch_ok` promise is only as good as its pins, which are
+    // hand-placed at emission sites, and a forgotten one ships a false
+    // promise. So any helper in the emitted math/ops templates whose body
+    // reads `.val(` must be listed here: either its emission site calls
+    // `pinLanes`, or it steers only on lane-uniform state (dt, ic, inst
+    // history, never x).
     const pinned = [_][]const u8{
         "zPow",   "zHypot",  "zFmod", "zFloor",   "zCeil",
         "zAtan2", "zLimexp", "zWrap", "zLimitUf",
@@ -3261,7 +3190,7 @@ test "codegen: §4.5.15 only pnjlim reports non-convergence" {
     // The kernels above are pure functions; this pins the one line of
     // `cg_limit.emitClamp` that turns `zPnjlim`'s transparency into the
     // contract's `converged` verdict. ngspice sets `icheck` from `DEVpnjlim`
-    // alone, and exactly on the paths where it moved `vnew` — so "the value
+    // alone, and exactly on the paths where it moved `vnew`, so "the value
     // changed" IS the flag. Nothing executes `D.limit` (see the test above), so
     // the emitted text is the only place this claim is visible.
     var h: Harness = undefined;
@@ -3279,7 +3208,7 @@ test "codegen: §4.5.15 only pnjlim reports non-convergence" {
     try std.testing.expect(std.mem.indexOf(u8, pnj, ".converged = ok }") != null);
 
     // fetlim clamps too, but its clamp is trajectory shaping and not a statement
-    // about the residual — so the device reports converged and carries no `ok`
+    // about the residual, so the device reports converged and carries no `ok`
     // at all. An unconditional `var ok` would be an unused-variable compile
     // error in the emitted device, which no fixture would ever reach.
     var h2: Harness = undefined;
@@ -3364,7 +3293,7 @@ test "codegen: §3.6.3.2 a net initializer is exported as a nodeset, not as a va
     const src = try h.gen(std.testing.allocator);
 
     // One optional table over U, in U's order: port `p`, port `n`, net `mid`.
-    // `n` is null and not 0.0 — "a null value ... indicates that no nodeset
+    // `n` is null and not 0.0: "a null value ... indicates that no nodeset
     // value is being specified", and a host must be able to tell the two apart.
     try std.testing.expect(std.mem.indexOf(u8, src, "pub const u_nodeset = [n_u]?f64{\n    1.5,\n    null,\n    2.25,\n};") != null);
 
@@ -3375,9 +3304,8 @@ test "codegen: §3.6.3.2 a net initializer is exported as a nodeset, not as a va
 }
 
 test "codegen: §3.6.3.2 a module with no net initializer exports no nodeset table" {
-    // The decl is OPTIONAL and its absence is the answer "this module states no
-    // opinion" — a table of nulls would say the same thing in more bytes and
-    // would move every existing device's emitted source.
+    // The decl is optional and its absence means "this module states no
+    // opinion"; a table of nulls would say the same in more bytes.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module plain(p, n);
@@ -3394,8 +3322,8 @@ test "codegen: §3.6.3.2 a module with no net initializer exports no nodeset tab
 test "codegen: the setup split — invariant values are computed by setup and read by eval" {
     // `$param_given(gain) ? gain : 0.0` depends on the card alone, so it is a
     // setup root: `setup` computes it with the host's value scalar V, the core
-    // reads `inst.su` (asserting in Debug that setup ran), and there is no
-    // `precompute`, prefix latch or `P` scalar left.
+    // reads `inst.su` (asserting in Debug that setup ran), and no
+    // `precompute`, prefix latch or `P` scalar is emitted.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module pg(p, n);
@@ -3419,8 +3347,8 @@ test "codegen: the setup split — invariant values are computed by setup and re
 
 test "codegen: the setup split computes a probe-guarded card value, and lists its $simparams" {
     // ln(r) runs only on the `V(p,n) > 0` arm, a branch on the solve: its
-    // block is not placeable, but ln cannot fault — a negative r is NaN,
-    // read only on the arm — so `setup` computes it (plan/setup.zig
+    // block is not placeable, but ln cannot fault (a negative r is NaN,
+    // read only on the arm), so `setup` computes it (plan/setup.zig
     // `speculable`) and the core reads the root.
     // `$simparam("gmin")` is a Table 9-27 name other than `iteration`, so it
     // is invariant and `setup_simparams` names it.
@@ -3504,10 +3432,9 @@ fn setupBody(src: []const u8) []const u8 {
 test "codegen: setup's live exits share one copy of the root stores" {
     // An invariant branch reaches the per-eval loop's stop on one arm and the
     // function exit on the other: two live exits, which leave `zs_done` and
-    // store the six roots once after it (7bfc2fc7 stored them at both). The
-    // DEAD half — an exit only a false `zs_stop` reaches stores nothing — is
-    // pinned by the ARPice models (hisimhv_va: 155 such exits), whose nested
-    // per-eval loops a small module does not reproduce.
+    // store the six roots once after it. The dead half (an exit only a false
+    // `zs_stop` reaches stores nothing) needs nested per-eval loops, as in
+    // hisimhv_va, which a small module does not reproduce.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module zm(p, n);

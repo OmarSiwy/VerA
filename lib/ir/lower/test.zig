@@ -3,9 +3,6 @@
 //! Run on std.testing.allocator through an arena, so a leaked byte fails the test.
 //!
 //! LRM clauses this file's code cites: §2.7, §2.9, §2.9.2, §3.2, §3.2.2, §3.3, §3.4, §5.6.1.3, §5.6.7, §5.6.7.2, §5.8, §5.8.1.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_test.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -23,13 +20,11 @@ const call = Lower.call;
 const strToInt = Lower.strToInt;
 const lowerFile = Lower.lowerFile;
 
-// ---------------------------------------------------------------------------
-// Self-checks run on std.testing.allocator
-// through an arena, so a leaked byte fails the test.
-// ---------------------------------------------------------------------------
-
+/// The frontend parser namespace the harness drives.
 pub const Parser = @import("frontend").Parser;
 
+/// One source file preprocessed, parsed and ready to lower, with the arena and
+/// diagnostic bag the test inspects afterwards.
 pub const Harness = struct {
     arena_state: std.heap.ArenaAllocator,
     file: Ast.SourceFile,
@@ -57,9 +52,8 @@ pub const Harness = struct {
         out.low = Lower.init(arena, &out.mir, &out.file, text, toks.items(.start), &out.bag);
     }
 
-    /// The code of the i'th diagnostic. Assertions key on the CODE, never on
-    /// prose: the message no longer carries the LRM citation (`Info.lrm` does)
-    /// and the title is not part of the message at all.
+    /// The code of the i'th diagnostic. Assertions key on the code, never on
+    /// prose: the LRM citation lives in `Info.lrm`, not in the message.
     fn code(self: *const Harness, i: usize) diag.Code {
         return self.bag.at(i).code;
     }
@@ -531,12 +525,10 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
     try std.testing.expectEqual(@as(u16, 1), h.low.out.port_probes.items[1].port);
     for (h.low.out.port_probes.items) |pp| {
         try std.testing.expect(pp.u >= h.low.out.num_ports);
-        // The KIND tag, which is what codegen's `isFlowUnknown` now reads. This
-        // used to assert the `"flow(<"` prefix, i.e. the spelling — and §2.8.1
-        // makes that predicate false for a net someone declared `\flow(<p>)`.
-        // The spelling still reaches the host as `flowZ28Z3cpZ3eZ29` and is
-        // pinned there, in codegen.zig's "the `U` block is the SPELLING
-        // contract" test; the two claims no longer ride on one string.
+        // The kind tag, which codegen's `isFlowUnknown` reads. Not the
+        // `"flow(<"` spelling: §2.8.1 lets a net be declared `\flow(<p>)`.
+        // The spelling the host sees is pinned by codegen.zig's "the `U` block
+        // is the SPELLING contract" test.
         try std.testing.expectEqual(pp.port, h.low.out.nodes.items(.kind)[pp.u].port_flow);
     }
     try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.out.port_probes.items[0].u));
@@ -578,11 +570,9 @@ test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.
     // retained value, so it mints no `flow(p,n)` unknown; before one — or on a
     // POTENTIAL source, whose branch current codegen does pin — it still does.
     //
-    // What this asserts is WHETHER an unknown exists, and it now reads that off
-    // the KIND TAG — the node pair keyed in `flow_unknowns` — rather than off
-    // the string. Its counterpart on the spelling, that the member still prints
-    // `flowZ28pZ2cnZ29`, is codegen.zig's "the `U` block is the SPELLING
-    // contract" test. Two claims, two tests, no shared string.
+    // This asserts whether an unknown exists, read off the kind tag (the node
+    // pair keyed in `flow_unknowns`). The spelling is pinned by codegen.zig's
+    // "the `U` block is the SPELLING contract" test.
     const cases = [_]struct { src: []const u8, unknown: bool }{
         .{ .src = "I(p,n) <+ 1.0; x = I(p,n);", .unknown = false },
         .{ .src = "x = I(p,n); I(p,n) <+ 1.0;", .unknown = true },
@@ -1064,7 +1054,7 @@ test "lower: A.6.1 an assign target is judged by declaration kind, then by domai
     // (E0435) and admits a discrete one — `ddiscrete` (§3.6.2.2 `domain
     // discrete`) exactly as an undisciplined `wire`. Pinned here because the
     // positive fixture (ch07/ddiscrete_net_continuously_assigned) is xfail on the
-    // digital runner, which would hide a return of the old E0438.
+    // digital runner and would not catch a wrong E0438.
     const cases = [_]struct { decl: []const u8, code: ?diag.Code }{
         .{ .decl = "integer t;", .code = .E0438 },
         .{ .decl = "electrical t;", .code = .E0435 },
@@ -1106,9 +1096,9 @@ test "lower: A.6.2 an initial block of constant assignments lowers; anything els
     // annex_c/13, ch08/analog_digital_initial_order), which pin the VALUE end to
     // end. What no fixture reaches is E0433's own arms: the procedural_*
     // fixtures die in the parser first (`force`, `release` and a procedural
-    // `assign` have no statement production), and a TIMED initial is no longer
-    // E0433 at all — it makes the module mixed (`lower_context.isMixed`). So the
-    // arms are stated here, one per reading a kernel would be needed for.
+    // `assign` have no statement production), and a timed initial is not
+    // E0433: it makes the module mixed (`lower_context.isMixed`). So the arms
+    // are stated here, one per reading a kernel would be needed for.
     const cases = [_]struct { stmt: []const u8, code: diag.Code }{
         // A non-constant right-hand side: `v` is a runtime variable, so there is
         // nothing to install and nothing computed it before the analysis.

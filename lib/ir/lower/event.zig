@@ -4,9 +4,6 @@
 //! turns into updateState.
 //!
 //! LRM clauses this file's code cites: §5.10, §5.10.2, §5.10.3, §5.10.3.1, §9.4.1, §9.4.3, §9.5, §9.5.2, §9.5.4.2, §9.7.3, §9.13.1, §9.13.2.
-//!
-//! Cut verbatim from `lower.zig`. Functions take `self: *Lower` and are called
-//! directly, `lower_event.f(self, ...)`; `lower.zig` aliases only what other modules call.
 
 const std = @import("std");
 const Lower = @import("../lower.zig");
@@ -79,14 +76,11 @@ const DeferredDisplay = struct {
 };
 const GenvarBind = struct { name: []const u8, c: Const };
 
-// ---------------------------------------------------------------------------
-// Class 7 — events (LRM §5.10)
-// ---------------------------------------------------------------------------
+// ---- §5.10 events -----------------------------------------------------------
 
-/// LRM §5.10. An analog event control runs its body only when the event is
-/// active, so it lowers to a guard: the event itself becomes a `call` whose
-/// integer result codegen answers from the simulator state (§5.10.2 global
-/// events, §5.10.3 monitored events).
+/// Lowers an analog event control to a guard: the event becomes a `call` whose
+/// integer result codegen answers from the simulator state, and the body runs
+/// only when it is set (LRM §5.10, §5.10.2, §5.10.3).
 pub fn lowerEventControl(self: *Lower, event: Ast.ExprId, body: Ast.StmtId) Oom!void {
     if (self.restrict) |ctx| {
         try self.err(self.file.exprs.mainTok(event), .E0702, "not allowed in {s}", .{ctx});
@@ -102,9 +96,9 @@ pub fn lowerEventControl(self: *Lower, event: Ast.ExprId, body: Ast.StmtId) Oom!
     // §5.8 "Event control statements (e.g.: timer, cross) cannot be used inside
     // conditional statements unless the conditional expression is a constant
     // expression"; §5.9 bans them in repeat/while/non-genvar for outright;
-    // §5.10.3.1 repeats it for `cross`. STRICTER than E0514 on purpose — the
+    // §5.10.3.1 repeats it for `cross`. Stricter than E0514 on purpose: the
     // carve-out here is a constant expression, so `analysis("dc")` does not
-    // license it and `static_cond_depth` is deliberately not consulted.
+    // license it and `static_cond_depth` is not consulted.
     if (self.cond_depth != 0) {
         var b = self.errWith(self.file.exprs.mainTok(event), .E0707);
         b.help("put `@(...)` on the spine and make the statement it guards conditional", .{});
@@ -159,8 +153,7 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
             if (std.mem.eql(u8, name, "absdelta")) {
                 // §5.10.3.4 "only allowed in an initial or always block": in a
                 // digital process it is the mixed-signal kernel's monitor, and
-                // here it is misplaced. (tests/fixtures/ch05_analog_behavior/
-                // absdelta_digital_only.)
+                // here it is misplaced.
                 try self.err(self.file.exprs.mainTok(e), .E0513, "", .{});
                 return null;
             }
@@ -181,11 +174,9 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
             try self.err(self.file.exprs.mainTok(e), .E0704, "", .{});
             return null;
         },
-        // §5.10.4 `@ hierarchical_event_identifier` — the event's flag IS the
-        // guard. IN SCOPE for Verilog-A: §5.10 lists named events as one of the
-        // three kinds of ANALOG event, and annex C.7 excludes only DIGITAL
-        // behavior and events (§5.10.5's named events are the ones a digital
-        // process triggers, which is the mixed-signal case).
+        // §5.10.4 `@ hierarchical_event_identifier`: the event's flag is the
+        // guard. In scope for Verilog-A: §5.10 lists named events as an analog
+        // event kind, and annex C.7 excludes only digital behaviour and events.
         .ident => {
             const name = self.file.str(ex.strOf(e));
             if (self.events.get(name)) |p| return try self.builder.readVariable(p, self.cur);
@@ -199,17 +190,11 @@ fn lowerEventExpr(self: *Lower, e: Ast.ExprId) Oom!?Mir.Value {
     }
 }
 
-/// §5.10.3.1/§5.10.3.2 argument rules for the monitored events, quoted in full
-/// under E0517. Three rules, and they are three because they fail apart: a
-/// non-integer direction, a negative tolerance, and a tolerance with no
-/// direction beside it.
-///
-/// `timer` has no direction slot, but §5.10.3.3 repeats the tolerance sentence
-/// verbatim — "The tolerance (time_tol) is an analog_expression and shall be
-/// non-negative" — for its third argument, so that one rule applies to it.
-///
-/// Same restraint as `checkFilterArgBounds`: Syntax 5-16 types every one of
-/// these `analog_expression`, so only what folds is judged.
+/// Checks the §5.10.3.1/§5.10.3.2 argument rules for the monitored events
+/// (E0517): a non-integer direction, a negative tolerance, and a tolerance with
+/// no direction. `timer` gets only the tolerance rule, which §5.10.3.3 repeats
+/// for its third argument. Syntax 5-16 types every argument `analog_expression`,
+/// so only what folds is judged.
 pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!void {
     const is_cross = std.mem.eql(u8, name, "cross");
     if (std.mem.eql(u8, name, "timer")) {
@@ -229,9 +214,8 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
     if (dir) |d| if (d < args.len and args[d] != .none) {
         if (lower_constfold.constEval(self, args[d])) |c| {
             const v = c.asReal();
-            // "shall evaluate to integers". Only a folded NON-integral value is
-            // refused: 0.5 selects no direction, while a real spelled 1.0 does
-            // evaluate to one and the clause's complaint would be typographic.
+            // "shall evaluate to integers". Only a folded non-integral value is
+            // refused: 0.5 selects no direction, while a real 1.0 evaluates to one.
             if (c != .str and v != @round(v))
                 try self.err(self.file.exprs.mainTok(args[d]), .E0517, "`cross()` direction shall evaluate to an integer, got {d}", .{v});
         }
@@ -254,8 +238,8 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
 
     // "If either or both tolerances are defined, then the direction shall also
     // be defined." Elision as such is legal — §5.10.3.1's own `sh` example
-    // writes `cross(V(smpl) - thresh, dir, , , en === 1'b1)` — so the accusation
-    // is the missing DIRECTION and not the comma.
+    // writes `cross(V(smpl) - thresh, dir, , , en === 1'b1)`, so the error is
+    // the missing direction, not the comma.
     if (tol_given) if (dir) |d| {
         if (d >= args.len or args[d] == .none) {
             var b = self.errWith(self.file.exprs.mainTok(e), .E0517);
@@ -266,12 +250,10 @@ pub fn checkEventArgBounds(self: *Lower, e: Ast.ExprId, name: []const u8) Oom!vo
     };
 }
 
-// ---------------------------------------------------------------------------
-// ch9 — system tasks (statement position)
-// ---------------------------------------------------------------------------
+// ---- ch9 system tasks (statement position) ---------------------------------
 
-/// §5.12/ch9 analog system task. Display/file tasks are void calls codegen may
-/// drop; the deliberately-unsupported set is rejected by exact name.
+/// Lowers a §5.12/ch9 system task in statement position. Display and file tasks
+/// are void calls codegen may drop; the unsupported set is rejected by name.
 pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
     const c: Mir.Callee = .fromName(name);
     const family = Mir.callee.family(c);
@@ -282,8 +264,7 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     }
     // §9.7.2, final sentence: "The $stop task shall not be used within an
     // analog initial block." Positional, not a support question — $stop in an
-    // ordinary analog block is legal, and §9.7.1 goes out of its way to define
-    // what its sibling $finish means in an analog initial block.
+    // ordinary analog block is legal.
     if (self.in_analog_initial and std.mem.eql(u8, name, "$stop")) {
         try self.err(tok, .E0807, "", .{});
         return;
@@ -294,9 +275,9 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     // is exactly what `lowerRandom` performs; the variate is dropped.
     if (try lowerRandom(self, tok, name, args)) |_| return;
     // §9.4.3's pairing rule is stated for the display tasks and §9.5.2 defines
-    // the file ones as "the same as their counterparts", so it covers both — and
-    // `checkFormatPairing` picks the format as "the first argument that folds to a
-    // string", which steps over the descriptor without being told about it.
+    // the file ones as "the same as their counterparts", so it covers both.
+    // `checkFormatPairing` takes the first argument that folds to a string,
+    // which steps over the descriptor.
     if (formats) try checkFormatPairing(self, tok, args);
     // §9.5.3/§9.5.4.2: all three of these write through an argument, which is
     // not something a `call` result can do — see `lowerStringWrite`/`lowerScan`.
@@ -315,12 +296,10 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     const mon: ?Mir.Value = if (c == .@"$monitor" or c == .@"$fmonitor") try armMonitor(self, name) else null;
     if (mon != null and self.restrict == null) return queueDisplay(self, tok, name, args, mon);
     // §9.4.1 the display/severity/control family on the unconditional spine:
-    // its call is minted at the end of the block, and an operand that reads a
-    // branch flow is EVALUATED there — see `queueDisplay`. The conditional and
-    // restricted cases stay on the path below, which mints the call WHERE THE
-    // STATEMENT IS: a guarded call has to stay in its arm to be guarded, and a
-    // restricted context owns the diagnostic (E0421 fires at the statement,
-    // where `restrict` is still set).
+    // its call is minted at the end of the block, where an operand that reads a
+    // branch flow is evaluated (see `queueDisplay`). Conditional and restricted
+    // cases mint the call at the statement: a guarded call has to stay in its
+    // arm, and E0421 fires where `restrict` is still set.
     if ((family == .display or family == .simctl) and
         self.cond_depth == 0 and self.restrict == null)
         return queueDisplay(self, tok, name, args, null);
@@ -355,16 +334,13 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     const v = try self.call(name, vals.items);
     // ponytail: printing and simulation control share one display-chain append.
     if (formats or family == .simctl) {
-        // §9.7.1/§9.7.2 simulation control joins the same per-accepted-point
-        // side-effect phase as the display tasks: both clauses tie the task to
-        // the SOLVE ("during an accepted iteration"), which is exactly what the
-        // display phase is, and §9.7.3's $fatal — "an implicit call to $finish"
-        // — already travels this way as a member of the severity family. In the
-        // printing artifact the call terminates the run at its position among
-        // the prints (cg_display.emitSimCtl); in a device it is dropped like a
-        // print, with the same W0850, because eval has no channel to stop a
-        // host's solve. A conditional call travels `display_cond_place` exactly
-        // as a conditional $strobe does — §9.4.6's argument applies verbatim.
+        // §9.7.1/§9.7.2 simulation control joins the per-accepted-point
+        // display phase: both clauses tie the task to "an accepted iteration",
+        // and §9.7.3's $fatal already travels this way. The printing artifact
+        // stops the run at its position among the prints (cg_display.emitSimCtl);
+        // a device drops it with W0850, because eval has no channel to stop a
+        // host's solve. A conditional call travels `display_cond_place` like a
+        // conditional $strobe (§9.4.6).
         const cond = self.cond_depth != 0;
         if (cond) try self.chainCondDisplay(v);
         try self.out.displays.append(self.arena, .{
@@ -376,47 +352,28 @@ pub fn lowerSysTask(self: *Lower, tok: u32, name: []const u8, args: []const Ast.
     }
 }
 
-/// §9.4.1 sequence one unconditional display-family statement: capture its
-/// operands, mint its `call` at the END of the analog block.
+/// Sequences one unconditional display-family statement: captures its operands
+/// and mints its `call` at the end of the analog block (LRM §9.4.1).
 ///
-/// WHY THE END. "$strobe provides the ability to display simulation data when
-/// the simulator has converged on a solution for all nodes" (§9.4.1), and
-/// §5.4.2.2 makes "both the potential and the flow of a source branch ...
-/// accessible in expressions anywhere in the module" — anywhere, not from the
-/// statement after the `<+` on. For a FLOW source the accessible value is the
-/// §5.6.1.2 retained accumulator, which §5.6.1.3 only settles at the end of
-/// the cycle's execution path — so a display operand that reads one is lowered
-/// in `finishDisplays`, where `lowerBranchAccess`'s `flowAccum` read IS the
-/// final retained value (the same end-of-block state the core exports as
-/// `Contribution.resist_val`/`wrote_val`, §5.6.1.3 retention-select phis
-/// included). A read placed above the `<+` therefore reports what the branch
-/// retained this cycle, not the 0 of a prefix of the block.
+/// Why the end: $strobe displays data once "the simulator has converged", and
+/// §5.4.2.2 makes a source branch's flow accessible "anywhere in the module".
+/// A flow source's value is the §5.6.1.2 retained accumulator, settled only at
+/// the end of the cycle (§5.6.1.3), so an operand that reads one is lowered in
+/// `finishDisplays`, where the `flowAccum` read is the final retained value.
 ///
-/// ONLY those operands move. An operand with no branch-flow read keeps its
-/// at-statement value (`pre`), so `x = 1; $strobe("%g", x); x = 2;` still
-/// prints 1 — §5.6.1.2's sequential semantics stay untouched for everything
-/// that is not converged simulation data, and assignments/contributions are
-/// not affected at all. The split is per OPERAND because it cannot be finer:
-/// once a tree contains the end-of-block accumulator value, SSA dominance
-/// puts the whole tree after it.
+/// Only those operands move. Any other operand keeps its at-statement value, so
+/// `x = 1; $strobe("%g", x); x = 2;` prints 1. The split is per operand because
+/// SSA dominance puts a whole tree after the accumulator value it contains.
 ///
-/// $display AND $strobe. §9.4.1 distinguishes their timing ("each time the
-/// simulator executes" vs converged), but VerA's printing artifact runs the
-/// display chain once per ACCEPTED point — one converged snapshot — so the
-/// two collapse onto the same phase and the rule is applied to the whole §9.4
-/// family uniformly, §9.7's control/severity tasks included since they travel
-/// the same chain. The §9.5.2 file writers do NOT take this route: §9.5.9
-/// sequences them against `$fgets`/`$ftell` side effects at statement order,
-/// and re-pointing a retained-flow read is not worth reordering a descriptor.
+/// $display and $strobe collapse onto the same phase, since the printing
+/// artifact runs the display chain once per accepted point; §9.7's tasks travel
+/// the same chain. The §9.5.2 file writers do not take this route: §9.5.9
+/// sequences them against `$fgets`/`$ftell` at statement order. The call is
+/// minted at the end even when no operand defers, so prints keep source order.
 ///
-/// The call is minted at the end even when NO operand defers, so the §9.4
-/// prints keep source order among themselves in the emitted unit body.
-///
-/// `monitor` non-null is a §9.4.1 `$monitor`/`$fmonitor` REPORT (`armMonitor`),
-/// and then EVERY operand defers: the report runs at the end of each accepted
-/// step whether or not the statement ran in it, so no at-statement value
-/// exists to capture — and it is on the unconditional spine even when the
-/// statement is guarded, which is why this path takes a guarded one too.
+/// A non-null `monitor` is a `$monitor`/`$fmonitor` report (`armMonitor`): every
+/// operand defers, because the report runs at the end of each accepted step
+/// whether or not the statement ran, and it may come from a guarded statement.
 fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId, monitor: ?Mir.Value) Oom!void {
     const pre = try self.arena.alloc(?TypedValue, args.len);
     var any_deferred = false;
@@ -430,8 +387,7 @@ fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
         p.* = try lower_sysfunc.lowerTaskArg(self, a, name);
     }
     // §5.9.3 an unrolled body's genvar bindings are gone from `consts` by
-    // `finishDisplays`; a deferred operand snapshots them. Only when one
-    // exists — the common module has neither.
+    // `finishDisplays`, so a deferred operand snapshots them.
     var genvars: []const GenvarBind = &.{};
     if (any_deferred and self.active_genvars.items.len != 0) {
         const gs = try self.arena.alloc(GenvarBind, self.active_genvars.items.len);
@@ -460,24 +416,20 @@ fn queueDisplay(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Expr
 }
 
 /// §9.4.1: "When a $monitor task is invoked with one or more arguments, the
-/// simulator SETS UP A MECHANISM whereby for each accepted step, if the variable
+/// simulator sets up a mechanism whereby for each accepted step, if the variable
 /// or an expression in the argument list changes value compared with the last
-/// accepted step ... the entire argument list is displayed AT THE END OF THE
-/// TIME STEP as if reported by the $strobe task."
+/// accepted step ... the entire argument list is displayed at the end of the
+/// time step as if reported by the $strobe task."
 ///
-/// So one statement is two events. The INVOCATION happens where the statement
-/// is, under whatever guards it — this call, `$monitor$arm(k)`, which latches
-/// site `k` on in the display unit. The REPORT is standing: it runs at the end
-/// of every accepted step from then on, whether or not the statement ran in that
-/// step, which is `queueDisplay`'s end-of-block call with `k` prepended. Codegen
-/// joins the two on `k` (`str_kernels.zMonitor`). A monitor registered once under
-/// `@(initial_step)` therefore keeps reporting — which a report minted where the
-/// statement is could never do, since it would run exactly when the statement
-/// does.
+/// So one statement is two events. The invocation happens at the statement,
+/// under its guards: this call, `$monitor$arm(k)`, latches site `k` on. The
+/// report is `queueDisplay`'s end-of-block call with `k` prepended and runs at
+/// the end of every accepted step from then on; codegen joins the two on `k`
+/// (`str_kernels.zMonitor`). A monitor armed once under `@(initial_step)` keeps
+/// reporting.
 ///
-/// The arm rides `display_cond_place` and NOT `displays`: it is part of the
-/// same source statement as the report, which already has its `displays` row,
-/// and W0850 is one warning per statement.
+/// The arm rides `display_cond_place`, not `displays`: the report already has
+/// the statement's `displays` row, and W0850 is one warning per statement.
 fn armMonitor(self: *Lower, name: []const u8) Oom!Mir.Value {
     if (std.mem.eql(u8, name, "$fmonitor")) {
         self.out.uses.insert(.file_tasks);
@@ -540,23 +492,17 @@ pub fn lowerDeferredDisplays(self: *Lower) Oom!void {
     }
 }
 
-/// §9.5 Sequence one file-family call into the per-point I/O phase.
+/// Sequences one §9.5 file-family call into the per-point I/O phase.
 ///
-/// Every §9.5 call has a side effect on a descriptor — an open, a position, a
-/// byte written — and §9.5.9 puts those at the ACCEPTED point, not inside the
-/// iteration ("the file write operations shall not be performed unless the
-/// iteration is accepted"). The display chain IS that phase: it is the one job
-/// `planCommon` keeps out of the shared core, precisely so its side effects
-/// cannot run per Newton iteration.
+/// Every §9.5 call has a side effect on a descriptor, and §9.5.9 puts those at
+/// the accepted point ("the file write operations shall not be performed unless
+/// the iteration is accepted"). The display chain is that phase: codegen keeps
+/// it out of the shared core so its side effects cannot run per Newton
+/// iteration. So a file call joins the chain whether or not its value is read
+/// (a discarded `$fgets` count still moves what `$ftell` measures).
 ///
-/// So a file call joins the chain whether or not its value is read. That is the
-/// difference between this and a display task's append, whose calls are void by
-/// nature: `$fgets` returns a count `049_ftell.va` throws away, and the READ it
-/// performed is what the `$ftell` two lines later measures.
-///
-/// The chain carries reals (`fadd`), and every §9.5 function is integer-valued,
-/// so the carrier is `$itor` — a call codegen already renders, rather than a new
-/// synthetic name for a conversion that already has one.
+/// The chain carries reals (`fadd`) and every §9.5 function is integer-valued,
+/// so the carrier is `$itor`.
 pub fn sequenceFileCall(self: *Lower, tok: u32, name: []const u8, v: Mir.Value) Oom!void {
     self.out.uses.insert(.file_tasks);
     const carrier = try self.call("$itor", &.{v});
@@ -574,14 +520,11 @@ pub fn sequenceFileCall(self: *Lower, tok: u32, name: []const u8, v: Mir.Value) 
 /// args )` and §9.7.3-adjacent §9.5.7 `errno = $ferror( fd, str )` — the three
 /// §9.5 calls that write through an argument as well as returning a value.
 ///
-/// Same rewrite as `lowerScan`, for the same reason: an out-parameter has no
-/// spelling in an SSA expression tree. One source call becomes the count (or the
-/// errno) plus one reader per destination, and every reader takes that count as
-/// its first operand — which both sequences the pair (a data dependency the
-/// emitter cannot reorder) and carries the clause's own "nothing was assigned"
-/// rule into the reader.
-///
-/// Null when `name` is not one of the three.
+/// Same rewrite as `lowerScan`: an out-parameter has no spelling in an SSA
+/// expression tree. One source call becomes the count (or errno) plus one
+/// reader per destination, each taking the count as its first operand, which
+/// sequences the pair and carries the "nothing was assigned" rule into the
+/// reader. Returns null when `name` is not one of the three.
 pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!?Mir.Value {
     const eq = std.mem.eql;
     const gets = eq(u8, name, "$fgets");
@@ -593,9 +536,8 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
     // string one and the string kernels have to be there.
     if (scan) self.out.uses.insert(.str_tasks);
 
-    // Syntax 9-6/9-7/9-9: `$fgets` and `$ferror` take the destination FIRST and
-    // second respectively; `$fscanf` takes the descriptor, the format, then the
-    // destinations. One shape, described rather than branched on three times.
+    // Syntax 9-6/9-7/9-9: `$fgets` takes the destination first, `$ferror`
+    // second; `$fscanf` takes the descriptor, the format, then the destinations.
     const fd_at: usize = if (gets) 1 else 0;
     if (args.len <= fd_at or args[fd_at] == .none) {
         try self.err(tok, .E0813, "`{s}` needs a file descriptor", .{name});
@@ -634,10 +576,10 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
     for (dests) |a| {
         if (a == .none) continue;
         const slot = try lower_stmt.resolveLvalue(self, a) orelse continue;
-        // §9.5.4.1/§9.5.7 write a STRING; only §9.5.4.2 has typed items, and
-        // there the destination's declared type picks the callee exactly as
-        // `lowerScan` does — the name IS the type, so `sysFuncTy` and
-        // `analysis.callTy` cannot disagree about it.
+        // §9.5.4.1/§9.5.7 write a string; only §9.5.4.2 has typed items, and
+        // there the destination's declared type picks the callee as in
+        // `lowerScan`: the name is the type, so `sysFuncTy` and
+        // `analysis.callTy` cannot disagree.
         if (gets or ferr) {
             if (slot.ty != .string) {
                 try self.err(self.file.exprs.mainTok(a), .E0813, "`{s}` writes into a `string` variable, and this one is {s}", .{ name, @tagName(slot.ty) });
@@ -670,11 +612,9 @@ pub fn lowerFileRead(self: *Lower, tok: u32, name: []const u8, args: []const Ast
 ///
 /// Only a shortfall is diagnosed. The same clause gives a surplus a meaning
 /// ("displayed using the default decimal format"), and §9.7.3 puts a
-/// non-string first in `$fatal(n, "…")` — so the format is "the first
-/// argument that folds to a string", exactly the rule `cg_display.emitDisplayTask`
-/// uses to pick one, and a task with no string at all has nothing to count.
-///
-/// A format built at run time folds to null and nothing is said.
+/// non-string first in `$fatal(n, "…")`, so the format is the first argument
+/// that folds to a string, the rule `cg_display.emitDisplayTask` uses. A format
+/// built at run time is not checked.
 pub fn checkFormatPairing(self: *Lower, tok: u32, args: []const Ast.ExprId) Oom!void {
     const at, const fmt = for (args, 0..) |a, i| {
         if (try lower_sysfunc.outputLiteral(self, a)) |text| break .{ i, text };
@@ -765,10 +705,9 @@ fn formatBits(self: *Lower, e: Ast.ExprId) ?u7 {
     };
 }
 
-/// §9.4.3's OTHER pairing rule: each conversion against its operand's TYPE.
-/// `checkFormatPairing` counts; this one checks that the pairs it counted can
-/// be RENDERED (see E0819), and each used to sail through here
-/// and fail the generated device's own build as an "engine bug".
+/// §9.4.3's other pairing rule: each conversion against its operand's type.
+/// `checkFormatPairing` counts; this checks that each pair can be rendered
+/// (E0819), so a mismatch is reported here rather than failing the device build.
 ///
 /// Walk every format run as `cg_display.buildArgs` does, skipping consumed
 /// operands so a string used by `%s` does not become a new format. Numeric
@@ -881,11 +820,9 @@ fn decimalWidth(self: *Lower, e: Ast.ExprId, v: *Mir.Value) Oom!void {
 /// $swrite shall be a string variable to which the resulting string shall be
 /// written, instead of a variable specifying the file to which to write".
 ///
-/// Lowered as an ASSIGNMENT, not as a void call, because the write IS the task.
-/// A call whose result nothing reads is dead code the moment codegen slices a
-/// unit out of the MIR — which is precisely how the old stub could return
-/// `S.con(0.0)` and lose the text. Rendering the formatter is then the same job
-/// as rendering a `$display`, and `cg_display` does both.
+/// Lowered as an assignment, not a void call, because the write is the task: a
+/// call whose result nothing reads is dead code once codegen slices a unit out
+/// of the MIR. `cg_display` renders it like a `$display`.
 fn lowerStringWrite(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!void {
     if (args.len == 0 or args[0] == .none) {
         try self.err(tok, .E0813, "`{s}` needs a string variable to write into", .{name});
@@ -1006,11 +943,10 @@ pub fn lowerValuePlusargs(self: *Lower, args: []const Ast.ExprId) Oom!Mir.Value 
 /// `lowerScan` splits `$sscanf`: a unit body is an SSA expression tree and an
 /// out-parameter has no spelling in one.
 ///
-/// That split is also what makes a draw legal inside a residual at all. Both
-/// halves are functions of the SAME input, so re-evaluating the analog block at
-/// one operating point re-derives the same pair — which is simultaneously
-/// §9.13.2's "shall always return the same value given the same seed" and the
-/// determinism Newton needs. `rng_kernels.zig`'s header argues this at length.
+/// Both halves are functions of the same input, so re-evaluating the block at
+/// one operating point re-derives the same pair: §9.13.2's "shall always return
+/// the same value given the same seed", and the determinism Newton needs
+/// (see `rng_kernels.zig`).
 ///
 /// Returns null when `name` is not one of the 17.
 pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!?TypedValue {
@@ -1025,11 +961,9 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
 
     // §9.13.1 Syntax 9-8 / §9.13.2 Syntax 9-9: the optional trailing
     // `type_string` ("instance" or "global") "shall only be used in calls to a
-    // distribution function from within a paramset". The in-paramset calls were
-    // already handled at elaboration — `elaborate.rewriteParamsetDist` validates
-    // the string and folds or strips the call while cloning a §6.4 paramset body
-    // — so any string still in the last slot here was written OUTSIDE one, and
-    // is the scope error §9.13.2's sentence describes.
+    // distribution function from within a paramset". Elaboration
+    // (`rewriteParamsetDist`) already handled the in-paramset calls, so any
+    // string still in the last slot was written outside one.
     if (given.items.len > 0) {
         const last = given.items[given.items.len - 1];
         if (ex.tag(last) == .str_literal) {
@@ -1083,8 +1017,8 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
         // constant ... this internal seed gets updated every time the call ... is
         // made", and with no source variable there is nowhere in the model to put
         // it. So it is a latch in `Instance`, advanced by `updateState` on the
-        // ACCEPTED step and only read here — the residual stays a pure function
-        // of x, which a draw advancing per Newton iteration would destroy.
+        // accepted step and only read here, so the residual stays a pure
+        // function of x.
         const site = self.out.rng_auto_sites;
         self.out.rng_auto_sites += 1;
         const latch = try self.call("$rng$auto", &.{try self.mir.addIntConst(self.arena, site)});
@@ -1162,18 +1096,15 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
 
     // ---- the two calls ------------------------------------------------------
     const v = try self.call(d.kernel, vals.items);
-    // §9.13.1/§9.13.2: "a value is passed to the function and A DIFFERENT VALUE
-    // IS RETURNED. The variable is initialized by the user and only updated by
-    // the system function." Written AFTER the variate is computed, so both read
-    // the same incoming seed however the two calls end up ordered in the MIR.
+    // §9.13.1/§9.13.2: "a value is passed to the function and a different value
+    // is returned. The variable is initialized by the user and only updated by
+    // the system function." Written after the variate, so both read the same
+    // incoming seed however the two calls are ordered in the MIR.
     //
-    // The write-back is the kernel's OWN `_next` twin over the SAME argument
-    // list, not a generic step: IEEE 1364 §17.9.3's routines consume a
-    // data-dependent number of LCG draws (`normal` rejects pairs, `poisson`
-    // loops, `chi_square`/`t`/`erlang` walk the degrees), and §9.13.3 binds
-    // this family to that listing — so the updated seed must land exactly
-    // where the reference's `long *seed` did, or the SECOND call on the
-    // variable would leave the reference stream.
+    // The write-back is the kernel's own `_next` twin over the same arguments:
+    // IEEE 1364 §17.9.3's routines consume a data-dependent number of LCG draws,
+    // and §9.13.3 binds this family to that listing, so the updated seed must
+    // land where the reference's `long *seed` did.
     if (write_back) |s| {
         const next_name = try std.fmt.allocPrint(self.arena, "{s}_next", .{d.kernel});
         const next = try self.call(next_name, vals.items);
@@ -1189,14 +1120,10 @@ pub fn lowerRandom(self: *Lower, tok: u32, name: []const u8, args: []const Ast.E
 /// refused. The suppression `*` and the maximum field width are part of the
 /// specification and are read past here; `str_kernels.zScan` implements them.
 ///
-/// CASE-SENSITIVE, unlike §9.4.3's display table. Table 9-22 spells every
-/// display conversion twice ("%h or %H"); §9.5.4.2's code table spells each
-/// scan code once, in lower case, and says "if an invalid conversion character
-/// follows the %, the results of the operation are implementation dependent".
-/// A `toLower` here let `%D` past the check and straight into `zScan`, which
-/// compares the raw byte, matches nothing, and returns zero items — no
-/// diagnostic and no data. Refusing is the implementation-dependent result
-/// worth having.
+/// Case-sensitive, unlike §9.4.3's display table: §9.5.4.2 spells each scan
+/// code once, in lower case, and leaves an invalid one implementation
+/// dependent. `zScan` compares the raw byte, so `%D` would silently match
+/// nothing; refusing it is the useful implementation-dependent result.
 fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
     var i: usize = 0;
     while (std.mem.indexOfScalarPos(u8, fmt, i, '%')) |p| {
@@ -1215,7 +1142,7 @@ fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
         // "r Matches a 'real' number in engineering notation, using the scale
         // factors defined in 2.6.2" and "m Returns the current hierarchical
         // path as a string. Does not read data from the input file or str
-        // argument". Leaving them out of this set refused a conforming model.
+        // argument".
         if (std.mem.indexOfScalar(u8, "dohxbcfegsrm", conv) != null) continue;
         var b = self.errWith(tok, .E0813);
         b.msg("$sscanf does not support the conversion `%{c}`", .{conv});
@@ -1227,9 +1154,8 @@ fn checkScanFormat(self: *Lower, tok: u32, fmt: []const u8) Oom!bool {
 }
 
 /// §9.17 analog kernel control. Handled here rather than as an ordinary void
-/// call because both tasks WRITE TO THE HOST: a plain call would render as
-/// `S.con(0.0)` in an eval unit and the request would be silently dropped.
-/// Returns true when `name` was one of them.
+/// call because both tasks write to the host, and an unread call would be
+/// dropped. Returns true when `name` was one of them.
 fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.ExprId) Oom!bool {
     // §9.17.2 `$bound_step ( expression ) ;` — "the simulator shall ensure that
     // the next time step taken is no larger than the smallest $bound_step()
@@ -1318,19 +1244,13 @@ fn lowerKernelCtl(self: *Lower, tok: u32, name: []const u8, args: []const Ast.Ex
     return false;
 }
 
-/// §9.2. Every Chapter 9 table carries a "supported in analog context" column,
-/// and these are the names whose cell says No. Seven tables, one list, because
-/// the tables differ only in which subclause they sit under — the verdict and
-/// the call site are the same for all of them (E0806 spells out the reason per
-/// family).
+/// Whether `name` is a system function whose §9.2 "supported in analog
+/// context" cell says No, across the seven Chapter 9 tables (E0806).
 ///
-/// There is no analog/digital context FLAG to consult, and deliberately so:
-/// `parseAnalog` is the only producer of statements VerA lowers (A.6.2
-/// `analog_construct`), and an analog function body (§4.7.2) is inlined into
-/// one. VerA compiles a continuous-time device — every statement it ever sees
-/// is in the analog context, so the column collapses to a name test. A flag
-/// would be a field that is `true` on every read.
-/// ponytail: add the flag the day a §7 digital block is lowered, not before.
+/// A name test, with no context flag: every statement lowering sees is in the
+/// analog context (A.6.2 `analog_construct`, with §4.7.2 function bodies
+/// inlined into one).
+/// ponytail: add the flag when a §7 digital block is lowered here.
 pub fn isDigitalOnlySysFunc(name: []const u8) bool {
     const digital_only = [_][]const u8{
         // Table 9-1 (§9.4.1) — radix variants and the $monitor mode switches.
@@ -1373,7 +1293,7 @@ pub fn isDigitalOnlySysFunc(name: []const u8) bool {
         // additionally deprecates $realtime in the analog context.
                   "$time",             "$stime",
         "$realtime",
-        // Table 9-8 (§9.11) — the extension is FOUR names, not two:
+        // Table 9-8 (§9.11) — the extension is four names, not two:
         // "$bitstoreal and $realtobits,$rtoi and $itor can be used in the
         // analog context". Table 9-8's analog column agrees — only $signed and
         // $unsigned read No, and both presuppose a sized vector.
@@ -1383,10 +1303,8 @@ pub fn isDigitalOnlySysFunc(name: []const u8) bool {
     return false;
 }
 
-/// §9.2, the other column: the names whose "Supported in digital context" cell
-/// is No and analog cell Yes. §9.7 says it of the severity tasks in prose —
-/// "three new simulation control tasks in the analog context only" — and
-/// the other §9 tables give the rest.
+/// Whether `name` is analog-only: its §9.2 "Supported in digital context" cell
+/// is No and its analog cell Yes. §9.7 says it of the severity tasks in prose.
 pub fn isAnalogOnlySysFunc(name: []const u8) bool {
     const analog_only = [_][]const u8{
         "$debug", "$fdebug", // Tables 9-1/9-2
@@ -1406,29 +1324,17 @@ pub fn isAnalogOnlySysFunc(name: []const u8) bool {
 /// connectmodules"), and Table 9-19 gives every name below "Supported in analog
 /// context of connectmodule: No".
 ///
-/// This is a rule about the CALL SITE, not about the value: an ordinary module
-/// is not a connect module, so the call is illegal on sight — no netlist, no
-/// elaboration, no driver needed. Which is why it lives here, beside the §9.2
-/// analog-context test above, and not in codegen: codegen used to answer these
-/// with the constant 0, and 0 is not merely unhelpful but wrong-looking-right,
-/// since §9.22.2/§9.22.3/§9.23.x index "between 0 and N-1" and N = 0 leaves no
-/// element 0 to have a state, a strength or a type at all.
+/// A rule about the call site: an ordinary module is not a connect module, so
+/// the call is illegal on sight. Answering 0 in codegen would look right and be
+/// wrong, since §9.22.2/§9.22.3/§9.23.x index "between 0 and N-1".
 ///
-/// The list is a name test, exactly as `isDigitalOnlySysFunc` is, and it stays
-/// one now that `connectmodule` PARSES (§7.6, A.1.2's third `module_keyword`):
-/// every call site LOWERING reaches is inside the elaborated device, and a
-/// connect module is never that. §7.6 makes it the bridge the insertion phase
-/// places on a mixed net, so `elaborate.pickTop` refuses to pick one and nothing
-/// lowers its body — a driver call written inside a connect module is therefore
-/// accepted and never reached, which is the right answer to the wrong half of the
-/// clause. The day insertion exists, the test narrows to "is the enclosing design
-/// element a connect module" and this list is the set it narrows over.
+/// A name test like `isDigitalOnlySysFunc`: every call site lowering reaches is
+/// inside the elaborated device, and `elaborate.pickTop` never picks a connect
+/// module (§7.6), so a driver call inside one is never lowered here.
 ///
-/// `$receiver_count` is on the list on the strength of the §9.22.1 paragraph
-/// that introduces it: it is explicitly "Non-normative", but it is printed
-/// INSIDE §9.22, takes the same `signal_name` argument, and Table 9-19 carries
-/// it with the rest — so if it exists at all it is a member of the family the
-/// paragraph above fences (tests/fixtures/annex_g_change_history/08).
+/// `$receiver_count` is listed because its "Non-normative" §9.22.1 paragraph
+/// sits inside §9.22, takes the same `signal_name` argument, and Table 9-19
+/// carries it with the rest.
 pub fn isConnectModuleOnlySysFunc(name: []const u8) bool {
     const cm_only = [_][]const u8{
         // §9.22.1–§9.22.3 and the §9.22.1 non-normative paragraph.

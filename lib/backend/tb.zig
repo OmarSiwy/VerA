@@ -1,29 +1,9 @@
-//! Testbench generation — the second artifact. LRM ch9 (§9.4 display tasks).
-//!
-//! VerA's device output answers "what does the solver stamp?". This file
-//! answers "what does the model SAY?", by making the same .va into a program:
-//!
-//!   .va ──codegen(display = .emit)──> device.zig ──┐
-//!                                                  ├─> zig build-exe ─> ./NAME
-//!   `//!` directives ────renderRunner────> tb.zig ─┘
-//!
-//! Running it prints a transcript: every `$strobe` the model executes, plus the
-//! residual and Jacobian at each declared operating point. That transcript is
-//! the test. A fixture is one .va and one expected transcript, and authoring a
-//! new test is writing Verilog-A — not Zig, and not a table of magic numbers in
-//! another language.
-//!
-//! WHY THE DIRECTIVES ARE COMMENTS. A device's inputs are node voltages the
-//! host supplies; nothing in the source says which ones are interesting. That
-//! has to come from somewhere, and a `//!` line is the only place to put it that
-//! (a) keeps the fixture a single file, (b) survives the preprocessor untouched
-//! — §2.4 makes it a comment — and (c) leaves the .va compilable by any other
-//! Verilog-A tool, which a made-up pragma would not.
-//!
-//! DOD: the directive table is parsed once into flat arena slices, and the
-//! sweep is expanded HERE rather than emitted as nested loops. The runner is
-//! straight-line code with one block per operating point, so its output order is
-//! a property of the text, not of a loop nest.
+//! Testbench generation: a .va's `//!` directives in, a runner program out
+//! that is built with the `display = .emit` device and prints a transcript
+//! (every `$strobe`, plus residual and Jacobian per operating point).
+//! Directives are comments (§2.4) so a fixture stays one portable .va file.
+//! Sweeps are expanded here, so the runner is straight-line code whose output
+//! order is the text's. LRM: §9.4.
 
 const std = @import("std");
 const naming = @import("naming.zig");
@@ -31,14 +11,13 @@ const Lexer = @import("frontend").Lexer;
 pub const Io = std.Io;
 pub const Allocator = std.mem.Allocator;
 
-/// The `//!` marker. Chosen over a bare `//` so an ordinary comment never
-/// becomes a directive by accident, and over ``pragma`` so the file stays
-/// portable Verilog-A.
+/// The directive line prefix. A plain `//` comment is never a directive.
 pub const marker = "//!";
 
+/// Errors from directive parsing and point expansion.
 pub const Error = Allocator.Error || error{
-    /// A `//!` line named a directive that does not exist. Silently ignoring it
-    /// would turn a typo into a test that quietly checks nothing.
+    /// A `//!` line named an unknown directive. Refused so a typo cannot
+    /// silently check nothing.
     UnknownDirective,
     /// A directive's operand was not a number.
     BadNumber,
@@ -49,9 +28,7 @@ pub const Error = Allocator.Error || error{
     /// A `//! lrm` cite is not a section number: see `validSection`.
     BadLrmSection,
     /// A `bias`/`sweep`/`wave` line named something that is not a solver
-    /// unknown — `V(a,c)`, a branch POTENTIAL, being the case that reaches
-    /// here. Its own error rather than `BadSyntax` because the report prints
-    /// the error name and "BadSyntax" says nothing about which half was wrong.
+    /// unknown, such as the branch potential `V(a,c)`.
     BadUnknownName,
 };
 
@@ -59,7 +36,7 @@ pub const Error = Allocator.Error || error{
 pub const Binding = struct { name: []const u8, value: f64 };
 
 /// One `//! limit` line: the `old` lanes that differ from `cur`, and the
-/// wanted outputs; `converged` is the pseudo-lane of the verdict.
+/// wanted outputs, where `converged` names the verdict pseudo-lane.
 pub const LimitCase = struct { old: []const Binding, want: []const Binding };
 
 /// One `//! sweep <unknown> = v, v, …` line.
@@ -68,59 +45,39 @@ pub const Sweep = struct { name: []const u8, values: []const f64 };
 /// §4.6.1 analysis kinds, spelled as the generated `AnalysisKind` enum does.
 pub const Analysis = enum { static, ic, nodeset, dc, tran, ac, noise };
 
-/// Everything the `//!` lines of one fixture said. Every field has a default, so
-/// a .va with no directives at all is still runnable: one operating point with
-/// every unknown at zero and every parameter at its §3.4 default.
+/// Everything the `//!` lines of one fixture said. With no directives the
+/// fixture runs one point, every unknown at zero and every parameter at its
+/// §3.4 default. Slices are owned by the arena `parse` was given.
 pub const Directives = struct {
     /// §3.4 parameter overrides, in source order.
     params: []const Binding = &.{},
     /// Unknowns held at a fixed value across the whole sweep.
     bias: []const Binding = &.{},
-    /// Swept unknowns. The operating points are the CARTESIAN PRODUCT, with the
-    /// LAST line varying fastest — the same order a nested loop written in the
-    /// directive order would visit, so the transcript reads top-down.
+    /// Swept unknowns. The operating points are the cartesian product, last
+    /// line varying fastest.
     sweeps: []const Sweep = &.{},
     /// §9.10 `$temperature`, in kelvin.
     temp: f64 = 300.15,
-    /// §9.10 `$abstime` values. More than one makes each operating point run
-    /// once per time, with `dt` set from the previous entry (§4.5.3 needs it)
-    /// and the generated `updateState` called after each — so the §4.5 stateful
-    /// operators see the history a transient solve would give them.
+    /// §9.10 `$abstime` values. Each operating point runs once per time, with
+    /// `dt` from the previous entry (§4.5.3) and `updateState` after each, so
+    /// §4.5 stateful operators see transient history.
     times: []const f64 = &.{0.0},
     /// Per-timepoint values for an unknown: `//! wave V(in) = 0, 1, 1, 0`, one
-    /// entry per `//! time`. A short list HOLDS its last value, which is how a
-    /// step is written. Without this every §4.5 operator could only ever be
-    /// shown its step response from zero.
+    /// entry per `//! time`. A short list holds its last value.
     waves: []const Sweep = &.{},
-    /// Swept PARAMETERS — the sub-tasks of a §8.2 parametric sweep, as opposed
-    /// to `sweeps`, which moves an unknown within one solve. A parameter sweep
-    /// needs its own model card per point (and its own `derive`, §6.3.4), so it
-    /// is a separate list rather than another `sweep` line. Ordered after
-    /// `sweeps` in the cartesian product, so it varies fastest.
+    /// Swept parameters (§8.2 parametric sweep): each point gets its own model
+    /// card and `derive` (§6.3.4). Varies fastest in the cartesian product.
     psweeps: []const Sweep = &.{},
     /// §4.6.1.
     analysis: Analysis = .dc,
-    /// `//! solve`: the unknowns no other directive names are the DEVICE's to
-    /// determine (§5.6 Newton on its own residual), not the harness's.
-    ///
-    /// Off by default, and that default is a NETLIST statement rather than
-    /// timidity. A .va compiled alone is not a circuit: nothing says what its
-    /// terminals connect to, so the harness supplies the only netlist it can —
-    /// every unknown no `//!` line names is tied to the reference. That is what
-    /// makes `//! bias V(p) = 0.5` on a two-terminal resistor mean "0.5 V
-    /// ACROSS it" and not "one lead driven, the other left open", which is what
-    /// a solve of the isolated device would answer instead: KCL through an open
-    /// lead is zero current, so the far node follows the near one and the branch
-    /// potential comes out 0. 100 fixtures state a rule that way.
-    ///
-    /// A fixture whose POINT is that the solver determines something says so
-    /// with this line. §5.6.7's indirect contribution is the case that cannot be
-    /// written any other way: its target IS a constraint's solution, so a
-    /// fixture that declared the target would be asserting its own input.
+    /// `//! solve`: unknowns no other directive names are solved by Newton on
+    /// the device's own residual (§5.6). Off by default, every unnamed unknown
+    /// is tied to the reference, so `//! bias V(p) = 0.5` on a resistor puts
+    /// 0.5 V across it. Needed where the target is a solution, as in §5.6.7's
+    /// indirect contribution.
     solve_free: bool = false,
     /// Print the residual and its Jacobian after each point's display output.
-    /// `//! print none` leaves the transcript to the model's own `$strobe`s,
-    /// which is what a fixture that tests §9.4 formatting wants.
+    /// `//! print none` leaves only the model's own output.
     print_residual: bool = true,
     /// Expected normal process exit status; signals always fail the fixture.
     expected_exit: u8 = 0,
@@ -131,83 +88,40 @@ pub const Directives = struct {
     /// split on ASCII space/tab only; no quoting, escaping or shell expansion.
     /// Each printable-ASCII token starts with '+' and contains another byte.
     plusargs: []const []const u8 = &.{},
-    /// `//! spice <one netlist line>`, one per line, joined with newlines in
-    /// source order: SPICE netlist text this fixture is compiled AGAINST.
-    ///
-    /// Annex E.2's model and subcircuit declarations are objects defined in a
-    /// netlist, and E.1.1's requirement is conditional on the tool reading one —
-    /// so a fixture for that clause has to be able to hand one over. This is the
-    /// channel, and it is a TRANSPARENT one: the line carries the annex's card
-    /// verbatim, `+` continuations and all, and the compiler does the reading
-    /// (`spice_cards.synthesize`). Nothing here pre-digests it into names and
-    /// ports, because a pre-digested interface would close the fixture while
-    /// skipping the premise the fixture is about.
-    ///
-    /// It is a comment like every other directive (§2.4), so a .va using it is
-    /// still compilable by another tool — which for this family is the point:
-    /// such a tool reads the netlist off its own command line and the cards here
-    /// document which netlist that must be.
+    /// `//! spice <netlist line>` lines joined with newlines in source order:
+    /// the Annex E SPICE netlist the fixture is compiled against. Verbatim,
+    /// `+` continuations included; `spice_cards.synthesize` reads it.
     spice: []const u8 = "",
     /// `//! noise <kind>(<row>,<col>)#<source>`, one per expected `noise_gens`
-    /// entry, in table order. `//! noise none` asserts the table is empty.
-    /// `#<source>` is §4.6.4.6: two lines writing the same `#k` assert the rows
-    /// share ONE generator (perfectly correlated); distinct `#k` assert
-    /// independence.
-    ///
-    /// §4.6.4's generators are the one part of a model that is NOT observable
-    /// from the model's own text: `white_noise` reads 0 outside a small-signal
-    /// analysis (§4.6.2), so a `CHECK` over it can only ever pin the zero, and
-    /// what the clause is actually about — WHICH generator was declared, on
-    /// WHICH branch — leaves through the device's `noise_gens` table to a host.
-    /// Until this directive the suite had no host reading it, so five clauses
-    /// (§4.6.4.1 white_noise, .2 flicker_noise, .3/.4 the tables, .6 correlated
-    /// sources) had nothing a fixture could assert about them beyond acceptance.
-    ///
-    /// The verdict stays the `ok=` column, so no harness change and no second
-    /// judge: the runner prints one `got=/want= ok=` line per entry plus one for
-    /// the count, and `countVerdicts` reads them like any other assertion.
-    ///
-    /// A fixture writes what the LRM REQUIRES the table to be. Where VerA
-    /// exports something else it gets `//! xfail`, in the ordinary way — writing
-    /// the gap into the `want` instead would invert the fixture and fail a
-    /// conforming compiler.
+    /// entry, in table order; `//! noise none` asserts an empty table. Equal
+    /// `#k` on two lines assert one shared generator (§4.6.4.6), distinct `#k`
+    /// independence. §4.6.4 generators read 0 outside small-signal analysis
+    /// (§4.6.2), so the published table is what a fixture asserts. The runner
+    /// prints one `got=/want= ok=` line per entry plus one for the count.
     noise: []const NoiseWant = &.{},
-    /// Whether any `//! noise` line was written at all. Separate from
-    /// `noise.len`, because `//! noise none` is an ASSERTION that the table is
-    /// empty and an absent directive is not — without this the runner could not
-    /// tell "expect nothing" from "does not ask".
+    /// Whether any `//! noise` line was written. `//! noise none` asserts an
+    /// empty table; an absent directive asserts nothing.
     asserts_noise: bool = false,
     /// `//! acstim (<row>,<col>) [name=<analysis>] [mag=<v>] [phase=<v>]`, one
-    /// per expected `ac_gens` entry, in table order. `//! acstim none` asserts
-    /// the table is empty.
-    ///
-    /// §4.6.3's twin of `noise`, and it exists for the same reason: a stimulus
-    /// is a PHASOR, and the only real number a `CHECK` inside the analog block
-    /// could read off one is `mag*cos(phase)` — which is precisely the
-    /// real-part-only lowering the export exists to fix, so writing it down
-    /// would bless the defect as the specification. The (magnitude, phase) pair
-    /// leaves through `ac_gens`/`acStim` to a host that solves a complex
-    /// system, and this line is how a fixture reaches it.
+    /// per expected `ac_gens` entry, in table order; `//! acstim none` asserts
+    /// an empty table. A §4.6.3 stimulus is a phasor that only a host sees
+    /// (`ac_gens`/`acStim`), so the published table is what a fixture asserts.
     acstim: []const AcWant = &.{},
-    /// Whether any `//! acstim` line was written. Same split as
-    /// `asserts_noise`: `//! acstim none` is a claim and silence is not.
+    /// Whether any `//! acstim` line was written (see `asserts_noise`).
     asserts_acstim: bool = false,
     /// `//! qsite <row><sign>... lte|nolte`, one per expected §5.6.1.2 charge
-    /// site in slot order; `//! qsite none` asserts the device has none.
-    ///
-    /// The charge-site layout (`contract.QStamp`) is what a host tapes and
-    /// truncation-checks, and this testbench steps fixed Euler with no LTE of
-    /// its own, so the published table is the observable: which rows each
-    /// site stamps with which sign (`g+ s-`: +1 into g, −1 into s; any other
-    /// weight prints as `g*0.5`), and whether `q_lte` checks it. Printed and
-    /// judged as `got=/want= ok=` lines, like `noise`.
+    /// site in slot order; `//! qsite none` asserts none. Each names the rows
+    /// the site stamps and their sign (`g+ s-`; another weight prints as
+    /// `g*0.5`) and whether `q_lte` checks it (`contract.QStamp`).
     qsites: []const []const u8 = &.{},
+    /// Whether any `//! qsite` line was written (see `asserts_noise`).
     asserts_qsite: bool = false,
     /// `//! seed V(a) = v, ...`: exactly the lanes the device's §9.17.3 cold
     /// start (`seed`) returns non-null, with their values; every other lane
     /// must be null, and every non-null one must be in `limit_writes`.
     /// `//! seed none` asserts no lane is seeded. Lines accumulate.
     seeds: []const Binding = &.{},
+    /// Whether any `//! seed` line was written (see `asserts_noise`).
     asserts_seed: bool = false,
     /// `//! limit V(a) = v, ... -> V(b) = w, ..., converged = 0|1`, one case per
     /// line: `limit` run at the first point's `x` as `cur`, with `old` = `cur`
@@ -215,10 +129,9 @@ pub const Directives = struct {
     /// the verdict, if named). The testbench never limits on its own, so a
     /// published clamp is observable only through this.
     limits: []const LimitCase = &.{},
-    /// `//! reject <substring>`, one per line. Non-empty makes this a REJECT
-    /// fixture: it must NOT compile, and every substring here must appear
-    /// somewhere in the resulting diagnostic. A fixture that cannot run states
-    /// its expectation the same way one that can does — in the .va itself.
+    /// `//! reject <substring>`, one per line. Non-empty makes this a reject
+    /// fixture: it must not compile, and every substring must appear in the
+    /// diagnostics.
     reject: []const []const u8 = &.{},
     /// `//! warn <substring>`, one per line: each must match a WARNING the
     /// compile reported, by code or text as `reject` matches. The fixture
@@ -226,25 +139,16 @@ pub const Directives = struct {
     warn: []const []const u8 = &.{},
     /// `//! nowarn`: the compile reports no warning at all. Never with `warn`.
     nowarn: bool = false,
-    /// `//! lrm <section>`, one per line: the normative clause this fixture
-    /// pins. It is not an expectation and changes no verdict — it is what lets
-    /// a FAIL name the RULE that broke rather than only the file, and what a
-    /// coverage report counts.
+    /// `//! lrm <section>`, one per line: the clauses this fixture pins. No
+    /// verdict depends on it; failure reports and `--coverage` read it.
     lrm: []const []const u8 = &.{},
-    /// `//! xfail <reason>`: the fixture states a genuine LRM requirement that
-    /// VerA is KNOWN not to meet yet, and the reason says WHAT it does not do.
-    /// It points both ways, because the gap does:
-    ///   with `reject` — the LRM says the construct is an error and VerA
-    ///                   still accepts it;
-    ///   without       — the LRM prints this as a legal worked example, so it
-    ///                   must compile and run green, and VerA cannot yet.
-    /// The second is the common case: a fixture written `//! reject` because
-    /// VerA lacks the construct inverts the test, since a CONFORMING compiler
-    /// then fails it.
+    /// `//! xfail <reason>`: the fixture states an LRM requirement VerA does
+    /// not meet yet. With `reject`, VerA wrongly accepts the construct;
+    /// without, VerA cannot yet compile and pass a legal example.
     xfail: ?[]const u8 = null,
-    /// Not a directive: set by the CALLER from the compile (`mixedPlan`) when
-    /// the module has a discrete half. The runner then drives the device from
-    /// `sim.mixed` instead of the straight-line operating points.
+    /// Not a directive: set by the caller from the compile (`mixedPlan`) when
+    /// the module has a discrete half, so the runner drives the device from
+    /// `sim.mixed` instead of fixed operating points.
     mixed: ?Mixed = null,
 };
 
@@ -256,7 +160,8 @@ pub const Mixed = struct {
     source: []const u8,
     /// The root module the device was lowered from.
     top: []const u8,
-    /// The `timescale in force, in seconds; null when the source gave none.
+    /// The `timescale unit and precision in force, in seconds; null when the
+    /// source gave none.
     unit: ?f64,
     precision: ?f64,
     /// Digital-owned names the analog block reads, each a `Model` field.
@@ -272,29 +177,23 @@ pub const Mixed = struct {
     /// digital half re-elaborates does not hold.
     inserts: []const @import("ir").Lowered.Inserted = &.{},
     /// §7.3.6.4 analog variables a digital expression reads
-    /// (`Lowered.discrete_reads`), and the device's §5.10 held variables —
-    /// the `Instance` fields such a variable's value can be copied from.
+    /// (`Lowered.discrete_reads`).
     reads: []const []const u8 = &.{},
+    /// The device's §5.10 held variables: the `Instance` fields a read
+    /// variable's value can be copied from.
     held: []const @import("ir").Lower.HeldVar = &.{},
 };
 
-/// One `//! noise` line, split into the part that names the ROW and the parts
-/// that state its CONTENTS:
+/// One `//! noise` line:
 ///
 ///     //! noise <kind>(<row>,<col>)#<src> [name=<s>] [white=<v>] [flicker=<v>]
 ///                                        [ef=<v>] [rtol=<v>]
 ///     //! noise table(<row>,<col>)#<src> [name=<s>] interp=linear|log
 ///                                        points=<f>:<p>,<f>:<p>,…
 ///
-/// Every field after `topo` is OPTIONAL and asserts nothing when absent, so
-/// every line written before this existed keeps meaning exactly what it did:
-/// the row is at this position, on this branch, with this correlation id.
-///
-/// The split exists because the topology is a COMPTIME property of the model
-/// and the PSD is not. `topo` is checked against `noise_gens` once; `white`,
-/// `flicker` and `ef` are read from `noisePsd` at the FIRST operating point,
-/// which is what lets a fixture pin a bias-dependent density at a stated bias
-/// instead of at whatever the last sweep step happened to be.
+/// Fields after `topo` are optional and assert nothing when absent. `topo` is
+/// checked against `noise_gens` at comptime; `white`, `flicker` and `ef` are
+/// read from `noisePsd` at the first operating point.
 pub const NoiseWant = struct {
     /// `kind(row,col)#source`, verbatim, compared byte-exact against the
     /// device's own spelling of the row.
@@ -302,32 +201,23 @@ pub const NoiseWant = struct {
     /// §4.6.4.1/.2/.3 the source label. Byte-exact; `name=` with an empty
     /// value asserts the model supplied no name.
     name: ?[]const u8 = null,
-    /// §4.6.4.1 `S(f) = white`, and §4.6.4.2's `flicker`/`ef` in `S(f) =
-    /// flicker/f^ef`. Each is read out of `noisePsd(x, model, inst)[k]`.
-    ///
-    /// `white` and `flicker` are the EFFECTIVE density the branch carries —
-    /// `coeff²·white` — and not the raw field. §4.6.4.6's coefficient is a
-    /// property of the use and not of the generator, so which of the two
-    /// exported fields carries the factor is an implementation's business; the
-    /// spectrum reaching a host is not. `ef` is an exponent and is untouched
-    /// by it.
+    /// §4.6.4.1 `S(f) = white` and §4.6.4.2 `S(f) = flicker/f^ef`, read from
+    /// `noisePsd(...)[k]`. `white` and `flicker` are the effective density
+    /// including §4.6.4.6's `coeff²`, not the raw field; `ef` is unscaled.
     white: ?f64 = null,
     flicker: ?f64 = null,
     ef: ?f64 = null,
-    /// Relative tolerance for the three above. The default is tight because a
-    /// fixture asserts a number it DERIVED, not a measurement; a line whose
-    /// value travels through §9.15's implementation-defined k/q has to say so
-    /// by widening this, and say why in its header.
+    /// Relative tolerance for the three above. Tight by default: a fixture
+    /// asserts a derived number. A value through §9.15's k or q widens it.
     rtol: f64 = 1e-12,
-    /// §4.6.4.3/.4 `noise_tables[noise_gens[k].table.?]`. `interp` is the
-    /// clause — `linear` is §4.6.4.3 and `log` is §4.6.4.4 — and `points` is
-    /// the sorted knot list the device exports, which is not the order the
-    /// model necessarily wrote them in.
+    /// §4.6.4.3/.4 `noise_tables[noise_gens[k].table.?]`: `interp` is `linear`
+    /// (§4.6.4.3) or `log` (§4.6.4.4), and `points` is the exported knot list,
+    /// sorted by frequency.
     interp: ?[]const u8 = null,
     points: ?[]const [2]f64 = null,
 
-    /// Does this line assert anything that needs a BIAS? The comptime topology
-    /// block can answer everything else without solving.
+    /// Returns whether this line asserts a bias-dependent density, which needs
+    /// an operating point.
     pub fn needsPoint(self: NoiseWant) bool {
         return self.white != null or self.flicker != null or self.ef != null;
     }
@@ -337,59 +227,45 @@ pub const NoiseWant = struct {
 ///
 ///     //! acstim (<row>,<col>) [name=<analysis>] [mag=<v>] [phase=<v>] [rtol=<v>]
 ///
-/// `NoiseWant` one clause over, and split for the same reason: the BRANCH and
-/// §4.6.3's `analysis_name` are properties of the model TEXT and are checked
-/// against `ac_gens` once, while `mag` and `phase` are the model CARD's — a
-/// parameter is a legal magnitude — and are read out of `acStim(...)` at the
-/// first operating point.
-///
-/// Every field after `topo` is optional and asserts nothing when absent.
+/// Fields after `topo` are optional. `topo` and `name` are checked against
+/// `ac_gens` at comptime; `mag` and `phase` may depend on the model card and
+/// are read from `acStim(...)` at the first operating point.
 pub const AcWant = struct {
-    /// `(row,col)`, canonicalised at parse time so `(p, n)` and `(p,n)` are the
-    /// same want, then compared byte-exact against the device's own spelling.
+    /// `(row,col)` without spaces, compared byte-exact with the device's spelling.
     topo: []const u8,
-    /// §4.6.3 `analysis_name` — which small-signal analysis this source is
-    /// active in, NOT a label: §4.6.4's `name` is a report heading and this one
-    /// selects the analysis. Byte-exact.
+    /// §4.6.3 `analysis_name`: the small-signal analysis this source is active
+    /// in. Byte-exact.
     name: ?[]const u8 = null,
-    /// §4.6.3 "models a source with magnitude mag and phase phase … phase is
-    /// given in radians". Read out of `acStim(model, inst)[k]`.
+    /// §4.6.3 magnitude and phase (radians), read from `acStim(...)[k]`.
     mag: ?f64 = null,
     phase: ?f64 = null,
-    /// Relative tolerance for the two above, tight by default for the reason
-    /// `NoiseWant.rtol` gives: a fixture asserts a number it derived.
+    /// Relative tolerance for the two above (see `NoiseWant.rtol`).
     rtol: f64 = 1e-12,
 
-    /// Does this line need the model card — i.e. a point block — to answer?
+    /// Returns whether this line reads the model card, which needs a point block.
     pub fn needsPoint(self: AcWant) bool {
         return self.mag != null or self.phase != null;
     }
 };
 
-/// Guard against a fixture that asks for a million points and a gigabyte of
-/// generated Zig. Hit only by a mistake — a real sweep is tens of points.
+/// Most operating points one fixture may expand to (`error.TooManyPoints`).
 pub const max_points: usize = 4096;
 
-// Directive parsing: a fixture's `//!` header (analysis, bias, time, sweep, noise, ...) — tb/directive.zig
 const tb_directive = @import("tb/directive.zig");
 pub const parse = tb_directive.parse;
 
-// Runner generation: the testbench `main` for one fixture — tb/runner.zig
 const tb_runner = @import("tb/runner.zig");
 pub const renderRunner = tb_runner.renderRunner;
 pub const renderVpiLib = tb_runner.renderVpiLib;
 pub const mixedPlan = tb_runner.mixedPlan;
 pub const shapeOverrides = tb_runner.shapeOverrides;
 
-// The runner's fixed text: the Newton solver, the differential gates and the batch family — tb/runner_text.zig
 const tb_runner_text = @import("tb/runner_text.zig");
 
-// Building the executable: device.zig + runner into one `zig build-exe` — tb/exe.zig
 const tb_exe = @import("tb/exe.zig");
 pub const buildExe = tb_exe.buildExe;
 pub const BuildOptions = tb_exe.BuildOptions;
 
-// Testbench self-checks — tb/test.zig
 const tb_test = @import("tb/test.zig");
 
 test {

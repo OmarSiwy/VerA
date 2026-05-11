@@ -1,8 +1,6 @@
-//! Which call arguments are values, and the §9.4 mode that decides some of
-//! them — the facts the slice planners (`plan/setup.zig`, `plan/unit.zig`) and
-//! the emitter share.
-//!
-//! PURE: callee in, answer out. Cut verbatim from `codegen.zig`.
+//! Call-argument facts the slice planners (`plan/setup.zig`, `plan/unit.zig`)
+//! and the emitter share: which arguments are values, and the §9.4 display
+//! mode that decides some of them. Callee in, answer out.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -12,28 +10,20 @@ const Input = @import("input.zig").Input;
 
 /// What to do with the §9.4 display tasks a model contains.
 ///
-/// The default is `.drop`, and it is not a shrug: a device is compiled once and
-/// evaluated in the solver's inner loop, on a batch, sometimes on a GPU. A
-/// `std.debug.print` in there is a per-Newton-iteration syscall on the CPU and
-/// does not compile at all for SPIR-V/PTX. So a device NEVER prints, and a
-/// source that asked to is told so (W0850) rather than silently obeyed.
-///
-/// `.emit` is the other product VerA makes out of the same .va: a runnable
-/// testbench, where the whole point is the text. See `--emit-exe` and tb.zig.
+/// `.drop` is the default: a device runs in the solver's inner loop, on a
+/// batch, sometimes on a GPU, where a print is a per-iteration syscall or does
+/// not compile at all (SPIR-V/PTX). So a device never prints, and a source
+/// that asked to is told so (W0850). `.emit` is the runnable testbench
+/// (`--emit-exe`, tb.zig), where the text is the point.
 pub const Display = enum { drop, emit };
 
-/// Is argument `i` of this call RENDERED as a value in the calling unit? The
-/// others are consumed at codegen time — analysis names (§4.6.1), operator
-/// control constants (§4.5), and the operator INPUT, which its own unit
-/// recomputes. Keeping this in step with `emitCall` is what stops the slice
-/// from declaring a local nothing reads (a hard error in Zig).
-/// Is argument `i` of this call an expression the unit has to COMPUTE?
-///
-/// Most ch9 tasks answer from `Instance` or lower to a constant, so their
-/// arguments are dead and slicing them in would emit code nothing reads. The
-/// exception is the display family under `display == .emit`: there the operands
-/// are the entire point, and forgetting them here renders every one of them as
-/// an undefined leaf — which is what `S.con(0.0)` in a print means.
+/// Is argument `i` of this call rendered as a value the calling unit must
+/// compute? The others are consumed at codegen time: analysis names (§4.6.1),
+/// operator control constants (§4.5), the operator input (its own unit
+/// recomputes it), and the operands of ch9 tasks that answer from `Instance`
+/// or a constant. Must stay in step with `emitCall`: slicing in an argument it
+/// never renders declares an unread local (a Zig error), and missing one it
+/// renders leaves an undefined leaf (`S.con(0.0)` in a print).
 pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
     return switch (c) {
         // The §5.10.3 `enable` is the exception: it is a live expression the
@@ -82,10 +72,9 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
         .@"$info",
         => display == .emit,
         // §9.5 every operand is live: the path, the type, the descriptor, the
-        // control string, the offset. `emitCall` renders them all — in the
-        // display unit because the kernels take them, and in every other unit
-        // through `emitFileCallDropped`, which exists precisely so this answer
-        // can be one rule instead of two.
+        // control string, the offset. `emitCall` renders them all, in the
+        // display unit because the kernels take them and in every other unit
+        // through `emitFileCallDropped`, so this answer is one rule.
         .@"$fopen",
         .@"$fclose",
         .@"$fflush",
@@ -216,13 +205,13 @@ pub fn callArgIsValue(c: Mir.Callee, i: usize, display: Display) bool {
     };
 }
 
-/// §5.10.3.1/.2/.3 where each event operator carries its `enable` — the one
+/// §5.10.3.1/.2/.3 where each event operator carries its `enable`, the one
 /// argument of an analog operator that is a runtime expression, so `UnitPlan`
 /// has to keep it live (see `callArgIsValue`) while every other control
 /// argument is folded at codegen time.
 pub fn enableArgIdx(k: OpKind) ?usize {
-    // The table stores it as `?u8` — an argument index, and the narrowest type
-    // the range allows. Widened here, at the one boundary that indexes with it.
+    // The table stores it as `?u8`, the narrowest type the range allows;
+    // widened here, at the one boundary that indexes with it.
     return opdb.get(k).enable_arg orelse return null;
 }
 
@@ -236,11 +225,11 @@ pub fn strArg(in: Input, args: []const Mir.Value, i: usize) ?[]const u8 {
 /// §9.5 the descriptor family.
 pub const isFileCall = Mir.callee.isFileCall;
 
-/// Does this operator's kernel read the CURRENT input? The pure-history ones
+/// Does this operator's kernel read the current input? The pure-history ones
 /// answer from `Instance` alone, and rendering an input they never emit would
 /// leave the unit claiming a parameter (or a cache) nothing references.
-/// `emitOperator` renders `in` exactly for these; `planSlots` has to agree,
-/// which is why the set lives in the table and not in either of them.
+/// `emitOperator` renders `in` exactly for these and `UnitPlan.analyze` must
+/// agree, which is why the set lives in the op table and not in either.
 pub fn opNeedsInput(k: OpKind) bool {
     return opdb.get(k).needs_input;
 }

@@ -1,19 +1,8 @@
-//! §4.5.11 `laplace_*` / §4.5.12 `zi_*` filters — plan, then emit.
-//!
-//! Transformation: a filter operator's MIR call arguments → a CASCADE of
-//! direct-form sections, `H = ∏ num[i]/den[i]`, emitted as one coefficient
-//! reader per filter.
-//!
-//! This group already had the plan/emit seam the rest of the emitter lacks:
-//! `filterPlan` returns a `FilterPlan` that `emitFilterSections` renders, so the
-//! numeric decisions are made before any text exists. That is why it splits out
-//! cleanly — `emitOperator` reaches in through `filterPlan` alone.
-//!
-//! Free functions over `*Gen`: Zig cannot extend a struct across files.
-//!
-//! The kernels these sections call are NOT here — they are
-//! `backend/filter_kernels.zig`, `@embedFile`d verbatim into the device so the
-//! numerics the tests check are the numerics the device runs.
+//! Filter operator MIR call -> `FilterPlan` (a cascade of direct-form sections,
+//! `H = ∏ num[i]/den[i]`) -> one `<unit>__sec` coefficient reader per filter.
+//! LRM §4.5.11 (`laplace_*`), §4.5.12 (`zi_*`).
+//! Planning makes every numeric decision before any text exists. The kernels the
+//! sections call are `filter_kernels.zig`, spliced verbatim into the device.
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
@@ -26,32 +15,29 @@ const Error = cg.Error;
 // §4.5.11 / §4.5.12 filters
 // =======================================================================
 
-/// One polynomial, ASCENDING powers of `s` (§4.5.11) or `z⁻¹` (§4.5.12),
-/// as emitted expression text — a literal or `model.<p>`, so a model-card
-/// override reaches the coefficient without a rebuild.
+/// One polynomial in ascending powers of `s` (§4.5.11) or `z⁻¹` (§4.5.12), as
+/// emitted expression text: a literal or `model.<p>`, so a model-card override
+/// reaches the coefficient without a rebuild.
 pub const Poly = []const []const u8;
 
-/// A filter realised as a CASCADE of sections, `H = ∏ num[i]/den[i]`.
+/// A filter realised as a cascade of sections, `H = ∏ num[i]/den[i]`.
 ///
-/// The root forms (`*_zp`, `*_zd` zeros, `*_np`, `*_zp` poles) stay
-/// FACTORED: one section per real root, one per conjugate pair, each
-/// multiplied out as a REAL quadratic. Expanding ∏(1 − s/ρₖ) into a single
-/// coefficient vector is the Wilkinson operation — for a 6th-order filter
-/// the coefficients span decades and the roots move visibly on the way
-/// back out — so it is never done. Only the coefficient forms (`*_nd`,
-/// `*_zd` denominator, `*_np` numerator) arrive as a polynomial already,
-/// and those stay one direct-form section at their full degree.
+/// Root forms stay factored: one section per real root, one real quadratic per
+/// conjugate pair. Expanding ∏(1 − s/ρₖ) into one coefficient vector is
+/// ill-conditioned (Wilkinson), so it is never done. Coefficient forms arrive
+/// as a polynomial and stay one direct-form section at full degree.
 pub const FilterPlan = struct {
     num: []const Poly = &.{},
     den: []const Poly = &.{},
     /// Sections = max(num.len, den.len); a missing side is the polynomial 1.
     ns: usize = 0,
-    /// Highest degree over every section — the shape of the state arrays.
+    /// Highest degree over every section: the shape of the state arrays.
     deg: usize = 0,
-    /// Do the coefficients read Model? Decides `__sec`'s parameter name.
+    /// True when the coefficients read Model; decides `__sec`'s parameter name.
     uses_model: bool = false,
     /// §4.5.12 sampling period T. Null for a laplace filter.
     period: ?[]const u8 = null,
+    /// The LRM refusal planning produced; the plan is unusable when set.
     err: ?[]const u8 = null,
     /// The unit refusal `f64Expr` raised while planning (E0515: a coefficient
     /// or period the host cannot evaluate), replayed by `planOf` at every use
@@ -66,9 +52,9 @@ pub const FilterPlan = struct {
     }
 };
 
-/// Decode one `laplace_*`/`zi_*` call into its cascade. Lowering flattened
-/// each vector argument as `<count>, e0, e1, …` (see `lower.appendVectorArg`),
-/// so the argument list is g-describing.
+/// Decodes one `laplace_*`/`zi_*` call into its cascade, or a plan whose `err`
+/// names the violated §4.5.11/§4.5.12 rule. Lowering flattened each vector
+/// argument as `<count>, e0, e1, …`, so the argument list is self-describing.
 pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!FilterPlan {
     // `*_zp`/`*_zd` give the ZEROS as roots; `*_zp`/`*_np` give the POLES
     // as roots. The two letters after the underscore say which.
@@ -121,18 +107,12 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
         }
         p.period = try g.f64Expr(args[dv.next]);
         p.uses_model = g.uses_model;
-        // §4.5.12 τ (transition time) and t0 (time of the first transition).
-        // The emitted sampler steps abruptly at t = 0, and that is not a
-        // stand-in for the general form — it is exactly what the clause
-        // describes for τ = 0 ("If the transition time is specified as zero
-        // (0), then the output is abruptly discontinuous") starting at t0 = 0.
-        // So those two values are what the implementation MEANS and are
-        // accepted; anything else is a different waveform, and a silent
-        // different waveform is worse than a refusal.
-        //
-        // Whether a τ = 0 filter may be contributed straight to a branch is
-        // the other half of the clause, and it is a property of the STATEMENT
-        // rather than of the call — `lower.checkZeroTransitionZFilter` (E0518).
+        // §4.5.12 τ and t0. The emitted sampler steps abruptly at t = 0, which
+        // is exactly the clause's τ = 0 form ("the output is abruptly
+        // discontinuous") with t0 = 0. Any other value is a different
+        // waveform, so it is refused rather than silently approximated.
+        // Whether a τ = 0 filter may feed a branch directly is a property of
+        // the statement: `lower.checkZeroTransitionZFilter` (E0518).
         for (args[@min(dv.next + 1, args.len)..]) |a| {
             const c = g.an.foldConst(a, true) orelse return .{
                 .err = "LRM 4.5.12: the τ and t0 arguments of a zi_* filter must be constant expressions",
@@ -152,10 +132,9 @@ pub fn filterPlan(g: *Gen, inst: Mir.Inst, args: []const Mir.Value) Error!Filter
     return p;
 }
 
-/// Plan every §4.5.11/§4.5.12 operator ONCE, into `Gen.filters` (indexed by
-/// unit). Six emitters read a filter's plan — the Instance shape, the section
-/// reader, the operator call inside the core, and the accepted-step advance —
-/// and each used to re-derive it, folding and allocating the same polynomials.
+/// Plans every §4.5.11/§4.5.12 operator once into `Gen.filters`, indexed by
+/// unit, so the emitters that read a plan share one fold. Allocates in
+/// `g.arena`; must run before any `planOf`.
 pub fn planAll(g: *Gen) Error!void {
     g.filters = try g.arena.alloc(?FilterPlan, g.names.units.len);
     @memset(g.filters, null);
@@ -177,8 +156,9 @@ pub fn planAll(g: *Gen) Error!void {
     }
 }
 
-/// Filter unit `unit`'s plan, replaying the refusal planning raised the way
-/// `f64Expr` raises it (sticky `any_fatal`, first `fatal` wins).
+/// Returns filter unit `unit`'s plan, replaying the refusal planning raised the
+/// way `f64Expr` raises it (sticky `any_fatal`, first `fatal` wins).
+/// Precondition: `planAll` ran and `unit` is a `laplace`/`zi` unit.
 pub fn planOf(g: *Gen, unit: usize) FilterPlan {
     const p = g.filters[unit].?;
     if (p.fatal) |m| {
@@ -188,11 +168,13 @@ pub fn planOf(g: *Gen, unit: usize) FilterPlan {
     return p;
 }
 
+/// One flattened vector argument: its elements and the index of the argument
+/// after it.
 pub const Vec = struct { elems: []const Mir.Value, next: usize };
 
-/// Read one flattened vector argument: a literal count followed by that
-/// many elements. The count is always an `int_const` (lowering emits it);
-/// anything else means this argument was never a vector.
+/// Reads the flattened vector argument at `i`: a literal count followed by that
+/// many elements. Returns null when `args[i]` is not an `int_const` count, which
+/// means the argument was never a vector.
 pub fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
     if (i >= args.len) return null;
     const def = g.mir.valueDef(g.an.rv(args[i]));
@@ -202,9 +184,9 @@ pub fn readVec(g: *const Gen, args: []const Mir.Value, i: usize) ?Vec {
     return .{ .elems = args[i + 1 ..][0..n], .next = i + 1 + n };
 }
 
-/// Turn one side of a filter into its sections. `roots` selects the
-/// root-vector reading (pairs of real/imaginary parts) over the
-/// coefficient reading. Returns a diagnostic, or null on success.
+/// Appends one side of a filter to `out` as sections. `roots` selects the
+/// root-vector reading (real/imaginary pairs) over the coefficient reading.
+/// Returns an LRM diagnostic, or null on success.
 pub fn filterSide(
     g: *Gen,
     out: *std.ArrayList(Poly),
@@ -214,7 +196,7 @@ pub fn filterSide(
     is_den: bool,
 ) Error!?[]const u8 {
     if (elems.len == 0) {
-        // "The zeros argument may be represented as a null argument" — no
+        // "The zeros argument may be represented as a null argument": no
         // zeros means the numerator polynomial 1. An empty DENOMINATOR has
         // no such reading; it would be a division by nothing.
         if (is_den) return "LRM 4.5.11/4.5.12: the denominator of a filter shall not be empty";
@@ -244,8 +226,8 @@ pub fn filterSide(
     for (0..m) |k| {
         if (used[k]) continue;
         used[k] = true;
-        // The conjugate PAIRING is structural — it decides how many
-        // sections exist and of what degree — so the imaginary part has to
+        // The conjugate PAIRING is structural: it decides how many
+        // sections exist and of what degree), so the imaginary part has to
         // be known here. The real part may stay a runtime parameter.
         const im = g.an.foldConst(elems[2 * k + 1], true) orelse
             return "LRM 4.5.11/4.5.12: the imaginary part of a filter root must be a constant expression " ++
@@ -265,10 +247,9 @@ pub fn filterSide(
                 const negative = try std.fmt.allocPrint(g.arena, "-({s})", .{re});
                 try out.append(g.arena, try g.arena.dupe([]const u8, &.{ "1.0", negative }));
             } else {
-                // §4.5.11 (1 − s/ρ). A model card that sets ρ to 0 at run
-                // time divides by zero — the same class of defect as a
-                // zero-valued resistance, and LRM 4.2.4 makes only `%` by
-                // zero an error.
+                // §4.5.11 (1 − s/ρ). A card that sets ρ to 0 at run time
+                // divides by zero, like a zero resistance; LRM 4.2.4 makes
+                // only `%` by zero an error.
                 try out.append(g.arena, try g.arena.dupe([]const u8, &.{
                     "1.0", try std.fmt.allocPrint(g.arena, "-1.0 / ({s})", .{re}),
                 }));
@@ -280,15 +261,13 @@ pub fn filterSide(
             return "LRM 4.5.11/4.5.12: a complex filter root has no conjugate partner " ++
                 "(\"If a root is complex, its conjugate shall also be present\")";
         used[j] = true;
-        // Multiplied out as a REAL quadratic — never through complex
-        // arithmetic, and never by expanding the whole product.
+        // Multiplied out as a real quadratic, never through complex
+        // arithmetic and never by expanding the whole product.
         //   §4.5.11  (1 − s/ρ)(1 − s/ρ*) = 1 − 2a/(a²+b²)·s + 1/(a²+b²)·s²
         //   §4.5.12  (1 − z⁻¹ρ)(1 − z⁻¹ρ*) = 1 − 2a·z⁻¹ + (a²+b²)·z⁻²
         // ponytail: b ≠ 0 here, so a²+b² > 0 and the §4.5.11 divisions are
-        // safe for any real part, including a == 0 — which is a pole pair
-        // ON the imaginary axis, an UNDAMPED section that rings forever
-        // under the trapezoidal rule. That is the transfer function the
-        // model asked for, not a defect of this realisation.
+        // safe for any real part. a == 0 is an undamped pole pair on the
+        // imaginary axis; that is the transfer function the model asked for.
         const bb = try g.fmtF64(im.f * im.f);
         const mag = try std.fmt.allocPrint(g.arena, "(({0s}) * ({0s}) + {1s})", .{ re, bb });
         try out.append(g.arena, if (z) try g.arena.dupe([]const u8, &.{
@@ -304,28 +283,26 @@ pub fn filterSide(
     return null;
 }
 
-/// Index of the unused root that is the conjugate of (`re`, `im`): same
-/// real part, negated imaginary part. Real parts are compared as EMITTED
-/// TEXT, so `model.a` pairs with `model.a` without needing its value.
+/// Returns the index of the unused root conjugate to (`re`, `im`): same real
+/// part, negated imaginary part. Real parts compare as emitted text, so
+/// `model.a` pairs with `model.a` without its value.
 pub fn conjugateOf(g: *Gen, elems: []const Mir.Value, used: []const bool, re: []const u8, im: f64) ?usize {
     for (used, 0..) |u, j| {
         if (u) continue;
         const jm = g.an.foldConst(elems[2 * j + 1], true) orelse continue;
         if (jm.f != -im) continue;
-        // `f64Const`, not `f64Expr`: this is a SPECULATIVE render used only
-        // to pair roots, so a root that does not resolve is "not the
-        // conjugate", not a diagnostic. The real render reports it.
+        // `f64Const`, not `f64Expr`: a speculative render, so a root that does
+        // not resolve is "not the conjugate", not a diagnostic.
         const jre = (g.f64Const(elems[2 * j], 0, false) catch continue) orelse continue;
         if (std.mem.eql(u8, jre, re)) return j;
     }
     return null;
 }
 
-/// `<unit>__sec(model)` — the cascade's CONTINUOUS coefficients, rebuilt
-/// from Model on every call so a model-card override lands without a
-/// recompile. Public because it is also the exact transfer function: a host
-/// doing `.ac`/`.noise` builds `H(jω) = ∏ num_i(jω)/den_i(jω)` from exactly
-/// these numbers, which the real-valued residual cannot carry.
+/// Emits `pub fn <n>__sec(model)`, the cascade's coefficients read from Model
+/// on every call so a card override needs no recompile. It is `pub` in the
+/// device because a host doing `.ac`/`.noise` builds `H(jω)` from exactly these
+/// numbers. Returns the output offset where the fn starts.
 pub fn emitFilterSections(g: *Gen, n: []const u8, p: FilterPlan, z: bool) Error!usize {
     const var_name = if (z) "z⁻¹" else "s";
     try g.w(

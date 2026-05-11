@@ -1,45 +1,9 @@
-//! The FOREIGN compiler, plugged into the same harness — anything that takes a
-//! `.va` path and exits nonzero when it refuses one.
+//! A foreign Verilog-A compiler as a harness `Compiler`, for `zig build
+//! benchmark -- --against-openvaf`: fixture -> accepted or refused.
 //!
-//! NOT AN ENTRY POINT. `tests/bench.zig` owns `main` and the only step; this
-//! file is a value it imports, reached by `zig build benchmark --
-//! --against-openvaf` and pointed at the compiler named by `cc` below.
-//!
-//! It answers ONE question: does the compiler accept what the LRM says must
-//! compile and refuse what the LRM says must not? That is all of a fixture that
-//! travels. The `ok=` columns do not — they need a host that stamps the device
-//! and runs it, which only works for VerA — so this plug declares `runs =
-//! false`, the harness stops asking, and the report prints those columns in a
-//! section marked VerA-only rather than as a score this compiler lost.
-//!
-//! ACCEPT/REJECT IS A WEAKER TEST THAN THE `//! reject` LINES ASK FOR, on
-//! purpose. A reject directive names a substring of VerA's diagnostic, often a
-//! code like `E0313`; no other compiler will ever print that, and demanding it
-//! would score every foreign compiler zero for a reason that says nothing about
-//! conformance. So here a `//! reject` fixture passes if the compiler refused it
-//! AT ALL. The claim it makes is the LRM's — "§5.8 says this must not compile" —
-//! and it is the same claim VerA is held to, minus the wording.
-//!
-//! IT IS NOT THE FIXTURE'S FAULT THAT ANOTHER COMPILER NEEDS A PRELUDE. VerA
-//! knows the Annex D disciplines and constants without being told; OpenVAF (and
-//! the LRM, strictly) wants them included. Rather than edit 1102 fixtures for
-//! one consumer, each is compiled through a generated wrapper:
-//!
-//!     `include "disciplines.vams"
-//!     `include "constants.vams"
-//!     `include "<the fixture, by absolute path>"
-//!
-//! which leaves the fixture bytes untouched and keeps its own line numbers in
-//! the compiler's diagnostics. The two prelude lines are dropped for a fixture
-//! that declares its OWN natures or disciplines — those would collide with
-//! Annex D's, and reporting the collision as non-conformance would be a lie
-//! about the fixture. The wrapper itself is never dropped: a compiler that
-//! emits an object writes it beside its input, and that must not be
-//! `tests/fixtures`.
-//!
-//! A HANGING COMPILER IS NOT THIS FILE'S PROBLEM, deliberately: `cc` is a whole
-//! command line, so `"timeout 30 openvaf-r --dry-run"` is the answer, and there
-//! is no timeout knob here to keep in step with it.
+//! Only accept/refuse travels between compilers: `ok=` columns need VerA's host
+//! (`runs = false`), and a `//! reject` fixture passes on any refusal, since no
+//! other compiler prints VerA's codes. `tests/bench.zig` owns `main`.
 
 const std = @import("std");
 const vera = @import("vera");
@@ -50,25 +14,15 @@ const Io = std.Io;
 const Fixture = harness.Fixture;
 const Result = harness.Result;
 
-/// The Verilog-A compiler `benchmark -- --against-openvaf` runs beside VerA.
-///
-/// A CONSTANT and not a build option: it was `-Dopenvaf`, which meant a string
-/// plumbed from `build.zig` through the options module to be read in two files,
-/// for a value that changes when someone is benchmarking against a different
-/// compiler — one edit, right here. A whole command line, so a wrapper (`nice`,
-/// `timeout`) goes in front of it.
+/// The command line `benchmark -- --against-openvaf` runs beside VerA. A whole
+/// command line, so a wrapper (`nice`, `timeout 30`) goes in front; this file
+/// has no timeout of its own.
 pub const cc = "openvaf-r --dry-run";
 
-/// The compiler's command line, plus the out-parameters of the LAST `check`.
-///
-/// The head-to-head table wants two facts the `Result` vocabulary cannot carry
-/// — did it CRASH, and how many bytes did it emit — and inventing two more
-/// `Result` variants for them would push a foreign compiler's implementation
-/// detail into the verdict algebra both compilers are judged by. So they come
-/// back here instead, read by `tests/bench.zig` immediately after the `judge`
-/// call that filled them. Single-threaded by construction: the head-to-head
-/// pass is sequential, because a wall clock measured against a loaded machine
-/// is not a measurement.
+/// Out-parameters of the LAST `check`: facts the head-to-head table wants that
+/// `Result` does not carry (a crash, the artifact size). Read by
+/// `tests/bench.zig` right after the `judge` call that filled them; not
+/// thread-safe, and the head-to-head pass is sequential.
 pub const Ctx = struct {
     argv: []const []const u8,
     crashed: bool = false,
@@ -77,11 +31,10 @@ pub const Ctx = struct {
     artifact: ?u64 = null,
 };
 
+/// Returns the harness plug for `cc`; each `check` overwrites `ctx`.
 pub fn compiler(ctx: *Ctx) harness.Compiler {
     return .{
-        // The command AS WRITTEN, not `argv[0]`: with `cc = "timeout 30
-        // openvaf-r --dry-run"` the first word is `timeout`, and a report
-        // headed `timeout: 779/1150` names the wrong program.
+        // The command as written, not `argv[0]`, which may be `timeout`.
         .name = cc,
         .runs = false,
         // `//! xfail` is VerA's debt, and honouring it here would excuse this
@@ -102,23 +55,21 @@ pub const Outcome = struct {
     said: []const u8 = "",
 };
 
-/// The scratch directory and the wrapper path for one fixture.
-///
-/// Split out of `compileOnce` so that the `mkdir` and the wrapper write happen
-/// ONCE and OUTSIDE the timing loop: they are the harness's cost, and charging
-/// a foreign compiler for a file this suite wrote would be a thumb on the scale
-/// in the published direction.
+/// The scratch directory and the wrapper path for one fixture. Made once by
+/// `prepare`, outside the head-to-head timing loop, so the harness's file
+/// writes are not charged to the foreign compiler.
 pub const Job = struct { work: []const u8, root: []const u8 };
 
+/// Creates the fixture's scratch directory under the work root and writes its
+/// wrapper there (see `wrap`). Paths are `arena`-owned.
 pub fn prepare(io: Io, arena: std.mem.Allocator, f: Fixture, source: []const u8) !Job {
     const work = try std.fs.path.join(arena, &.{ options.work_root, "openvaf", f.slug });
     return .{ .work = work, .root = try wrap(io, arena, work, f, source) };
 }
 
-/// ONE compilation: spawn the compiler on the wrapped fixture and read the
-/// verdict off its exit status. Shared by `check` — which turns it into the
-/// harness's `Result` — and by the head-to-head's timing loop, so the thing
-/// being timed is the thing being scored and not a second spelling of it.
+/// Spawns the compiler once on the wrapped fixture and reads the verdict off
+/// its exit status. Both `check` and the head-to-head timing loop call it, so
+/// the thing timed is the thing scored.
 pub fn compileOnce(
     io: Io,
     arena: std.mem.Allocator,
@@ -183,11 +134,8 @@ fn check(
     // harness's cost, and the head-to-head calls `compileOnce` under a clock.
     c.artifact = if (r.crashed) null else emitted(io, job.work);
 
-    // A CRASH IS NOT A DIAGNOSTIC. It exits nonzero like a refusal does, so
-    // without this a compiler that segfaults on a `//! reject` fixture scores
-    // a pass for it — the one way this runner could report a defect as
-    // conformance. Reported unmet in both directions, because "it must not
-    // compile" is a claim about the compiler saying so, not about it dying.
+    // A crash is not a refusal: it exits nonzero too, and would otherwise pass
+    // a `//! reject` fixture. Reported unmet in both directions.
     if (r.crashed) {
         try w.print(
             "FAIL {s}: {s} did not survive the file — {s}.\n{s}\n",
@@ -212,10 +160,12 @@ fn check(
     return .unmet;
 }
 
-/// Write the wrapper and return its path. The Annex D prelude is skipped for a
-/// fixture that declares its OWN natures or disciplines, but the WRAPPER is not:
-/// a compiler that emits an object writes it beside its input, and pointing it
-/// at the fixture itself would leave build artifacts inside `tests/fixtures`.
+/// Writes the wrapper and returns its path: the Annex D prelude
+/// (`disciplines.vams`, `constants.vams`), which VerA knows unasked and other
+/// compilers need included, then an `include of the fixture by absolute path,
+/// keeping the fixture's bytes and line numbers. The prelude is skipped for a
+/// fixture that declares its own natures or disciplines. The wrapper itself is
+/// always used, so an emitted object lands in scratch, not `tests/fixtures`.
 fn wrap(
     io: Io,
     arena: std.mem.Allocator,
@@ -288,8 +238,9 @@ fn died(term: std.process.Child.Term, buf: []u8) ?[]const u8 {
     };
 }
 
-/// `"timeout 20 openvaf-r --dry-run"` → argv. Whitespace only; a compiler path
-/// with a space in it is the one case this does not cover, and has not come up.
+/// Splits `"timeout 20 openvaf-r --dry-run"` into argv on whitespace; a path
+/// containing a space is not supported. The list is `arena`-owned and its
+/// words borrow `cmd`; a blank command is `EmptyCompilerCommand`.
 pub fn splitCommand(arena: std.mem.Allocator, cmd: []const u8) ![]const []const u8 {
     var list: std.ArrayList([]const u8) = .empty;
     var it = std.mem.tokenizeAny(u8, cmd, " \t");

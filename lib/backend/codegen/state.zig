@@ -1,12 +1,9 @@
-//! §4.5.2 the analog-operator state machine, and §5.6.5 zero-parasitic collapse.
-//!
-//! In: the stateful operator calls. Out: `initState`/`updateState`/`stateCtl`, advancing each
-//! operator's `Instance` slots once per accepted timepoint.
-//!
-//! LRM clauses this file's code cites: §4.5.2, §4.5.7, §4.5.10, §4.5.12, §5.6.1.3, §5.6.5, §5.10.3, §5.10.3.3, §5.10.5, §9.13.1, §9.17.1, §9.17.2.
-//!
-//! Cut verbatim from `codegen.zig`. Functions take `self: *Gen` and are called
-//! directly, `gen_state.f(self, ...)`; `codegen.zig` aliases only what other modules call.
+//! Accepted-step emission: the stateful operator calls in; `State`,
+//! `initState`, `updateState`, `acceptQ`, `advanceIteration`, the collapse
+//! hooks and the breakpoint hooks out. Advances each operator's `Instance`
+//! slots once per accepted timepoint (§4.5.2) and emits §5.6.5 collapse.
+//! LRM clauses cited: §4.5.2, §4.5.7, §4.5.10, §4.5.12, §5.6.1.3, §5.6.5,
+//! §5.10.3, §5.10.5, §9.13.1, §9.17.
 
 const std = @import("std");
 const CollapsePair = @import("plan/topology.zig").CollapsePair;
@@ -27,10 +24,6 @@ const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const opHasState = codegen.opHasState;
 const enableArgIdx = codegen.enableArgIdx;
-
-// =======================================================================
-// §4.5.2 the analog-operator state machine
-// =======================================================================
 
 /// What the accepted-step body needs, decided once for `updateState` and
 /// `acceptQ` alike.
@@ -62,9 +55,60 @@ fn scanAccept(self: *Gen) Error!Accept {
     return a;
 }
 
-/// Advance every stateful operator once the step is accepted. State lives in
-/// `Instance` (eval reads it); `State` only carries the bookkeeping the
-/// contract wants in its own struct.
+/// Emits `<core>__state`, the core's slice computing only what `updateState`
+/// reads: the path-latch operands, every stateful operator's arguments the
+/// core carries, and the held values. Called from `emitUnits`, so its range
+/// tiles with the other unit declarations.
+pub fn emitCore(self: *Gen) Error!void {
+    if (!(try scanAccept(self)).uses_core) return;
+    const keep = try self.arena.alloc(bool, self.core.lo_vals.len);
+    @memset(keep, false);
+    for (self.core.prev_lo) |k| keep[k] = true;
+    for (self.core.acc_lo) |k| keep[k] = true;
+    for (self.core.held_idx) |k| if (k != none_u32) {
+        keep[k] = true;
+    };
+    for (self.names.units, 0..) |u, i| {
+        if (u.role != .analog_op or !opHasState(u.op)) continue;
+        const inst = self.names.opInstOf(@intCast(i)) orelse continue;
+        for (self.mir.instData(inst).call.args) |a| {
+            const k = self.core.lo_idx[@intFromEnum(self.an.rv(a))];
+            if (k != none_u32) keep[k] = true;
+        }
+    }
+    self.state_core = try gen_unit.sliceCore(self, "state", keep,
+        \\/// §4.5.2 what `updateState` reads off the core, and only what that
+        \\/// reads: the accepted point's operator inputs, latches and held values.
+        \\
+    );
+}
+
+/// Emits `<core>__iter`, the core's slice computing only the §9.17.3
+/// limiter values `advanceIteration` stores and the §9.17.1 request
+/// `checkConvergence` tests: both run once per Newton iterate.
+pub fn emitIterCore(self: *Gen) Error!void {
+    const keep = try self.arena.alloc(bool, self.core.lo_vals.len);
+    @memset(keep, false);
+    var any = false;
+    for (self.lowered.limit_slots.items) |slot| if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |k| {
+        keep[k] = true;
+        any = true;
+    };
+    if (self.lowered.uses.contains(.reject_iteration)) {
+        keep[gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).?] = true;
+        any = true;
+    }
+    if (!any) return;
+    self.iter_core = try gen_unit.sliceCore(self, "iter", keep,
+        \\/// §9.17 what the per-iterate hooks read off the core, and only what
+        \\/// that reads.
+        \\
+    );
+}
+
+/// Writes `State`, `initState`, `updateState`, `state_class`, `stateCtl`,
+/// `advanceIteration` and `acceptQ`. Operator history lives in `Instance`
+/// (eval reads it); `State` carries only the contract's bookkeeping.
 pub fn emitStateMachine(self: *Gen) Error!void {
     const acc = try scanAccept(self);
     const uses_core = acc.uses_core;
@@ -100,12 +144,14 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     const at_sim = self.out.items.len;
     try self.w("sim: contract.SimState) contract.UpdateResult {{\n", .{});
     const body = self.out.items.len;
-    // ONE core evaluation for every operator's input, not one per operator:
-    // the inputs are fields of the same struct, so the accepted-step sweep
-    // costs exactly one model evaluation however many operators there are.
-    // `model` is always live because that call reads it. `dt` is not.
-    if (uses_core) try self.w("    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
+    // One slice evaluation serves every operator's input.
+    const full = self.core;
+    if (uses_core) {
+        self.core = self.state_core;
+        try self.w("    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n", .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) });
+    }
     try emitAcceptBody(self, acc);
+    self.core = full;
     gen_unit.patchUnless(self, at_s, body, "S");
     gen_unit.patchUnless(self, at_model, body, "model");
     gen_unit.patchUnless(self, at_x, body, "x");
@@ -123,11 +169,9 @@ pub fn emitStateMachine(self: *Gen) Error!void {
     try emitAcceptQ(self, acc);
 }
 
-/// `contract.StateClass`, so a host's GPU gate reads one decl instead of
-/// inferring the class from which fields exist. `.path_latch`: the state is
-/// the §5.6.1.2 latches alone — `updateState` only stages `wb`/`wq` and
-/// `stateCtl(.commit)` latches them, with no operator history, held FSM or
-/// §9.13.1 seed to advance. Anything else `updateState` carries is `.history`.
+/// Writes `contract.StateClass`: `.path_latch` when the state is the §5.6.1.2
+/// latches alone (no operator history, held variable or §9.13.1 seed),
+/// `.history` otherwise.
 fn emitStateClass(self: *Gen) Error!void {
     const latch_only = gen_file.pathLatches(self) and !gen_file.hasStatefulOps(self) and
         self.lowered.rng_auto_sites == 0;
@@ -136,12 +180,9 @@ fn emitStateClass(self: *Gen) Error!void {
     });
 }
 
-/// §5.6.1.2 + §4.5.2 the accepted-point pass as ONE core evaluation: the
-/// charge `q` at `x` and everything `updateState` stages. Built from
-/// `emitFused`'s mechanism — both halves are written against one hoisted
-/// `core` call. Emitted beside `updateState` whenever the device has a
-/// reactive half; a host that fetches `q` at the accepted point calls this
-/// instead of `q` followed by `updateState`, which ran the core twice.
+/// Writes `acceptQ`: the accepted-point `q` and `updateState` work from one
+/// hoisted `core` call (§5.6.1.2, §4.5.2). Emitted only for a device with a
+/// reactive half.
 fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (!gen_dispatch.anyQ(self)) return;
     self.uses_x = false;
@@ -181,16 +222,15 @@ fn emitAcceptQ(self: *Gen, acc: Accept) Error!void {
     if (!self.uses_model) gen_unit.patchParam(self, at_model, "model".len);
 }
 
-/// The accepted-step body shared by `updateState` and `acceptQ`: stage the
-/// path latches, advance every operator, write the held variables back.
-/// Reads the core result `m`.
+/// Writes the accepted-step body shared by `updateState` and `acceptQ`:
+/// stages the path latches, advances every operator, writes the held
+/// variables back. The emitted code reads the core result `m`.
 fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     const val = ".val()";
     const uses_dt = acc.uses_dt;
-    // §5.6.1.2 stage this iterate's path-latch operands. They become the
-    // committed base ONLY at stateCtl(.commit): a rejected attempt leaves
-    // pb/pq untouched, so the retry reopens on the accepted charge with a
-    // zero α·Δq residual.
+    // §5.6.1.2 stage the path-latch operands. They commit only at
+    // stateCtl(.commit), so a rejected attempt leaves pb/pq untouched and
+    // the retry reopens on the accepted charge.
     for (self.core.prev_lo, 0..) |lo, k| {
         try self.w("    inst.wb__{d} = m.f{d}{s}; // path_prev staging\n", .{ k, lo, val });
     }
@@ -198,18 +238,15 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
         try self.w("    inst.wq__{d} = m.f{d}{s}; // path_acc staging\n", .{ k, lo, val });
     }
     if (uses_dt) try self.w("    const dt = sim.t - state.t_prev;\n", .{});
-    // §9.17 reset FIRST, unconditionally: a `$bound_step` that only fired on
-    // one arm of an `if` last step must not keep bounding this one, and the
-    // reset value is also the right answer for a model that never calls the
-    // task at all.
+    // §9.17 reset first, unconditionally: a `$bound_step` that fired on one
+    // arm last step must not keep bounding this one.
     try self.w(
         \\    inst.bound_step = std.math.inf(f64); // §9.17.2
         \\    inst.discontinuity_order = -1; // §9.17.1
         \\
     , .{});
-    // §9.13.1 the internal seed advances HERE and nowhere else: this is the
-    // accepted-step boundary, so a stream moves once per solved point and the
-    // residual it feeds is fixed for the whole Newton loop that produced it.
+    // §9.13.1 the internal seed advances only here, once per accepted point,
+    // so the residual it feeds is fixed across the Newton loop.
     if (self.lowered.rng_auto_sites != 0) try self.w(
         \\    // §9.13.1 "this internal seed gets updated every time the call
         \\    // to $arandom is made" — once per ACCEPTED point, per call site.
@@ -231,11 +268,9 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
         }
         switch (k) {
             .ddt => try self.w("        inst.{s}__prev = in;\n", .{n}),
-            // §4.5.4 with `assert`: "Once assert becomes zero, idt()
-            // returns the integral of the argument starting from the last
-            // instant where assert was nonzero" — so while assert is
-            // nonzero the accumulator is PINNED at ic, and integration
-            // resumes from there.
+            // §4.5.4 "Once assert becomes zero, idt() returns the integral
+            // of the argument starting from the last instant where assert
+            // was nonzero": while assert is nonzero the accumulator is ic.
             .idt => if (args.len >= 3) try self.w(
                 "        inst.{s}__acc = if (({s}) != 0.0) ({s}) else zIdtAcc(in, inst.{s}__acc, dt, {s});\n",
                 .{
@@ -254,11 +289,8 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             .absdelay => {
                 try self.w("        zHistPush(&inst.{s}__t, &inst.{s}__v, &inst.{s}__head, sim.t, in);\n", .{ n, n, n });
                 // §4.5.7 "the value of td when the absdelay() is first
-                // evaluated shall be used and any future changes to td
-                // shall be ignored" — the static point IS that first
-                // evaluation, and `zAbsdelay` passes its input straight
-                // through there, so latching here is before any delayed
-                // value has been answered.
+                // evaluated shall be used": the static point is that first
+                // evaluation, and `zAbsdelay` passes its input through there.
                 if (try gen_call.absdelayFreezes(self, args)) try self.w(
                     "        if (sim.t <= state.t_prev) inst.{s}__td = {s};\n",
                     .{ n, try gen_call.ctrlStep(self, args, 1, "0.0") },
@@ -269,14 +301,11 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     "        if (sim.t <= state.t_prev) inst.{s}__maxd = {s};\n",
                     .{ n, try gen_call.ctrlStep(self, args, 2, "0.0") },
                 );
-                // §9.17.2 the same self-defence the §4.5.12 filter mounts
-                // with its period: ask the host to keep the step at or
-                // under td, or a wide step flattens the delay to
-                // `zAbsdelay`'s short-side interpolation and the 32-sample
-                // ring records nothing finer than the steps taken. `td`
-                // may be a model expression (a parameter's overridden
-                // value), so the bound is computed at run time; only a
-                // positive one binds — `@min` with 0 would stop time.
+                // §9.17.2 bound the step at td, as the §4.5.12 filter does
+                // with its period: a wider step flattens the delay and the
+                // ring records nothing finer than the steps taken. `td` may
+                // be a model expression, so the bound is computed at run
+                // time; only a positive one binds, since 0 would stop time.
                 try self.w(
                     "        const zad_td = {s};\n        if (zad_td > 0.0) inst.bound_step = @min(inst.bound_step, zad_td);\n",
                     .{try gen_call.absdelayTd(self, n, args, true)},
@@ -296,21 +325,13 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     n, n, r[0], r[1],
                 });
             },
-            // §4.5.10 `last_crossing(expr, direction)`. The direction is the
-            // SAME closed argument as §5.10.3 `cross`'s — +1 rising, -1
-            // falling, 0 either — so it is decoded and honoured the same
-            // way; a bare sign change would report a falling edge to a
-            // `last_crossing(V(p), +1)`.
-            //
-            // `dt > 0.0` is not an optimisation, it is the SEEDING rule.
-            // `__prev` initialises to 0.0, which is a value the signal was
-            // never at, so on the very first accepted step the sign test
-            // compares against a sample that does not exist — a signal
-            // sitting at -1 V read as a falling crossing of zero, reported
-            // at `state.t_prev + f*dt` = 0.0, which is not the "negative
-            // value" §4.5.10's last sentence requires before the first real
-            // crossing. A crossing needs an INTERVAL, and the DC point
-            // (dt = 0) is not one: it only seeds the history.
+            // §4.5.10 `last_crossing(expr, direction)`: the direction is
+            // decoded as §5.10.3 `cross`'s is (+1 rising, -1 falling, 0
+            // either). `dt > 0.0` is the seeding rule: `__prev` starts at
+            // 0.0, a value the signal never had, so the DC point (dt = 0)
+            // only seeds the history. Otherwise a signal at -1 V would read
+            // as a crossing at t = 0, not the "negative value" §4.5.10
+            // requires before the first real crossing.
             .last_crossing => try self.w(
                 \\        if (dt > 0.0 and ({1s})) {{
                 \\            const f = inst.{0s}__prev / (inst.{0s}__prev - in);
@@ -319,28 +340,17 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                 \\        inst.{0s}__prev = in;
                 \\
             , .{ n, try gen_call.crossTest(self, n, args, "in") }),
-            // §5.10.3 only the HISTORY moves here; `eval` raises the event
-            // (see `emitOperator`), so nothing an accepted step writes can
-            // still be read one timepoint later than it happened. The
-            // `enable` is not consulted: it gates the EVENT, not the record
-            // of where the signal was, and a disabled operator that later
-            // re-enables must not compare against a stale sample.
-            // §5.10.3.2 same history, same reason: `eval` raises the event
-            // and this only records where the signal was on the ACCEPTED
-            // step, so a re-arm cannot be observed one timepoint late.
+            // §5.10.3 only the history moves here; `eval` raises the event,
+            // so nothing is observed one timepoint late. `enable` gates the
+            // event, not the record, so a re-enabled operator never compares
+            // against a stale sample.
             .cross, .above => try self.w("        inst.{s}__prev = in;\n", .{n}),
-            // §5.10.3.3 the schedule is absolute — "at start_time, and every
-            // period after that" — so it advances past the accepted time
-            // whether or not the enable let the event through.
-            //
-            // "If the start_time or period expressions change value during
-            // the evaluation of the analog block, the next event will be
-            // scheduled based on the latest value": a start_time other than
-            // the one `__next` was scheduled from replaces the schedule,
-            // EARLIER as well as later, and re-arms a spent one-shot. It
-            // used to be a clamp that only ever raised `__next`, so a
-            // re-armed LTRA wavefront timer landed on its first front only.
-            // A changed period takes effect at the next fire (a10_03).
+            // §5.10.3.3 the schedule is absolute ("at start_time, and every
+            // period after that"), so it advances whether or not enable let
+            // the event through. "the next event will be scheduled based on
+            // the latest value": a changed start_time replaces the schedule,
+            // earlier or later, and re-arms a spent one-shot. A changed
+            // period takes effect at the next fire.
             .timer => try self.w(
                 \\        const period = {1s};
                 \\        if (inst.{0s}__start != in) {{
@@ -351,18 +361,13 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                 \\        }}
                 \\
             , .{ n, try gen_call.timerPeriod(self, args) }),
-            // §9.17.2 "the next time step taken is no larger than the
-            // smallest $bound_step() argument currently ACTIVE". `in` is
-            // already the running minimum over every `$bound_step` that
-            // executed (lower.zig accumulates it through the CFG); the
-            // `@min` folds it against the §4.5.12 sampling periods, which
-            // are equally active and may be written by an earlier block.
+            // §9.17.2 "no larger than the smallest $bound_step() argument
+            // currently active". `in` is already the minimum over every
+            // executed `$bound_step` (lowering accumulates it); `@min` folds
+            // it with the §4.5.12 sampling periods written earlier.
             .bound_step => try self.w("        inst.bound_step = @min(inst.bound_step, in);\n", .{}),
-            // §9.17.1 same, and `inf` means "no announcement": the degree is
-            // a non-negative constant_expression, so a finite `in` is exact.
-            // `lossyCast` because "finite" is not "fits an i32", and the
-            // artifact is built ReleaseFast — a huge degree saturates
-            // instead of being UB.
+            // §9.17.1 `inf` means no announcement. `lossyCast` saturates a
+            // huge degree instead of UB in a ReleaseFast artifact.
             .discontinuity => try self.w(
                 "        inst.discontinuity_order = if (std.math.isFinite(in)) std.math.lossyCast(i32, in) else -1;\n",
                 .{},
@@ -375,11 +380,9 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
                     .{ p.ns, p.deg, n, n, n },
                 );
             },
-            // §4.5.12 the filter runs on ITS OWN timebase: sample when the
-            // accepted time reaches the next multiple of T, hold in
-            // between. Same shape as the §5.10.3 `timer` block above, and
-            // the step bound is what keeps the solver from stepping over a
-            // sample and aliasing the filter.
+            // §4.5.12 the filter runs on its own timebase: sample when the
+            // accepted time reaches the next multiple of T, hold between.
+            // The step bound keeps the solver from stepping over a sample.
             .zi => {
                 const p = cg_filters.planOf(self, i);
                 if (p.err == null) try self.w(
@@ -412,28 +415,22 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
         }
         try self.w("    }}\n", .{});
     }
-    // §5.10 store every held variable back. HERE and nowhere else: this
-    // function runs on the ACCEPTED solution, once per step, exactly like
-    // the operator history above — writing it from `eval` would latch a
-    // Newton iterate that the solver goes on to throw away.
+    // §5.10 store every held variable back, only here: writing from `eval`
+    // would latch a Newton iterate the solver may discard.
     for (self.lowered.held_vars.items, 0..) |h, i| {
         const k = self.core.held_idx[i];
         const n = self.names.held_names[i];
         if (k == none_u32) {
-            // The value folded away entirely (never assigned outside the
-            // §5.10 body on any reachable path, and the body's value is a
-            // literal zero); nothing to carry.
+            // Folded away: never assigned outside the §5.10 body, whose
+            // value is a literal zero.
             try self.w("    inst.{s} = 0;\n", .{n});
         } else if (h.array != none_u32) {
             // §3.2.2 a held array's core field is already its plain values.
             try self.w("    inst.{s} = m.f{d};\n", .{ n, k });
         } else {
-            // The core field is typed `zigTy(vty)` (unit.zig), so the read
-            // side of this store is decided by that SAME `vty`, never by the
-            // declared type: the two disagreed once (a three-deep join left
-            // at `.real`, ARPice vera-gaps `heldint`) and the device did not
-            // compile. The declared type only picks the destination, with
-            // the §4.2.1 conversion between them.
+            // The core field is typed by `vty`, not the declared type, and
+            // the two can disagree (a join left at `.real`). The declared
+            // type picks the destination, with the §4.2.1 conversion.
             const core_int = self.an.tyOf(self.core.lo_vals[k]) == .int;
             switch (h.ty) {
                 .integer => if (core_int)
@@ -450,10 +447,13 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
     if (acc.reads_t_prev) try self.w("    state.t_prev = sim.t;\n", .{});
 }
 
-/// Called after evaluating a Newton iterate, with that iterate's x.
-/// All return values are computed before any history slot is changed.
+/// Writes `advanceIteration` (the host calls it after each Newton iterate,
+/// with that iterate's x) and, for `$reject_iteration`, `checkConvergence`.
 fn emitAdvanceIteration(self: *Gen) Error!void {
     if (self.lowered.limit_slots.items.len == 0 and !self.lowered.uses.contains(.reject_iteration)) return;
+    const full = self.core;
+    defer self.core = full;
+    if (self.iter_core.lo_vals.len != 0) self.core = self.iter_core;
     var uses_core = false;
     for (self.lowered.limit_slots.items) |slot| uses_core = uses_core or gen_dispatch.coreIdx(self, self.an.rv(slot.final)) != null;
     const uses_inst = uses_core or self.lowered.limit_slots.items.len != 0;
@@ -462,8 +462,8 @@ fn emitAdvanceIteration(self: *Gen) Error!void {
         core_name, if (uses_core) "model" else "_", if (uses_inst) "inst" else "_", if (uses_core) "x" else "_", if (uses_core) "sim" else "_",
     });
     if (uses_core) try self.w(
-        "    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n",
-        .{ try gen_setup.probeInstance(self), self.heldArg(true) },
+        "    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n",
+        .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) },
     );
     for (self.lowered.limit_slots.items, 0..) |slot, k| {
         if (gen_dispatch.coreIdx(self, self.an.rv(slot.final))) |lo|
@@ -475,56 +475,15 @@ fn emitAdvanceIteration(self: *Gen) Error!void {
     if (self.lowered.uses.contains(.reject_iteration)) {
         try self.w("pub fn checkConvergence(comptime S: type, model: *const Model, inst: *const Instance, x: [n_u]f64, sim: contract.SimState) bool {{\n", .{});
         const probe_inst = try gen_setup.probeInstance(self);
-        try self.w("    return core(S, zVals(S, &x), model, {s}, sim{s}).f{d} == 0;\n}}\n\n", .{ probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
+        try self.w("    return {s}(S, zVals(S, &x), model, {s}, sim{s}).f{d} == 0;\n}}\n\n", .{ self.core.name, probe_inst, self.heldArg(true), gen_dispatch.coreIdx(self, self.an.rv(self.lowered.reject_iteration)).? });
     }
 }
 
-/// §5.10.5 `timer(start_time, period)` — the host's `nextBreakpoint` hook.
-///
-/// WHY THIS OPERATOR AND NO OTHER. `nextBreakpoint` asks "at what time must
-/// the transient loop PLACE a timepoint", so a discontinuity lands on a step
-/// instead of being smeared across one. Nothing else in Verilog-A says that:
-/// §9.17.2 `$bound_step` bounds step SIZE (a bound, not a location) and
-/// §9.17.1 `$discontinuity` only announces one after the fact. §5.10.5 is the
-/// exact wording — "the timer function schedules an event at `start_time`,
-/// and every `period` after that" — so the fire times ARE the breakpoints.
-///
-/// The signature `contract.zig` fixes is `fn (*const Model, f64) ?f64`: no
-/// `Instance`, so the live `__next` counter the state machine advances is out
-/// of reach and the schedule has to be RECOMPUTED from `(model, t)`. That is
-/// possible because §4.5.14 makes an analog-operator control argument a
-/// constant or parameter expression, which is exactly what `f64Const`
-/// renders — `model.<p>` leaves and arithmetic over them.
-///
-/// ALL OR NOTHING. If any one timer's arguments do not render, the whole
-/// function is dropped rather than emitted covering the others. A missing
-/// hook only costs accuracy (the host falls back to LTE step control, as it
-/// does for every device today); a hook that silently reports a SUBSET reads
-/// to the host as "this device wants no other timepoints", which is a claim
-/// this code would not be entitled to make.
-///
-// ponytail: the §5.10.3.3 `enable` is honoured here only where it folds
-// WITHOUT parameters (a genuinely-constant zero: that timer never fires,
-// so proposing its fire times would be a lie about where a discontinuity
-// is) or renders over the Model (a parameter enable: the guard is emitted
-// and evaluated at run time — folding it through the DECLARED default
-// used to veto a timer whose enable the model card overrode to nonzero).
-// A timer whose enable is a solved quantity keeps its breakpoints, because
-// this hook has no `Instance` to evaluate one against and an extra timepoint
-// costs a step, never an answer.
-// ---------------------------------------------- zero-parasitic collapse
-
-/// The host-side collapse hook — `seed`'s twin: it runs the core once at
-/// x = 0 (exact, since every admitted flag is `buildFree`) and reads the
-/// same §5.6.1.3 retention flags `eval` selects the branch row on. Flag
-/// set ⇒ the 0 V potential arm is retained ⇒ the branch is a dead short:
-/// the host aliases the internal node and the branch-flow unknown onto
-/// the far node, every stamp of the pair lands on one matrix slot and
-/// cancels exactly, and the LU never sees the short.
-///
-/// Consulted ONCE, at build — ngspice's own semantics (setup runs before
-/// the first load), and why `buildFree` refuses anything that can change
-/// between evaluations.
+/// Writes `collapse` and `collapse_full` (§5.6.5). `collapse` runs the core
+/// at x = 0 and reads the §5.6.1.3 retention flags `eval` selects branch rows
+/// on; a set flag is a dead short whose internal node and branch-flow unknown
+/// the host aliases onto the far node. The host calls it once, at build, so
+/// only `buildFree` flags are admitted.
 pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
     if (pairs.len == 0) return;
     try self.w(
@@ -586,13 +545,10 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
         \\    }}
         \\
     , .{});
-    // UNCONDITIONAL, unlike the union above. The flag decides whether the
-    // two NODES merge; the branch-flow unknown goes either way. Short
-    // taken: it is part of the merged set. Short not taken: the branch is
-    // `I(hi,lo) <+ <conductance>`, which wants no current row at all —
-    // `emitSwitchRow`'s else arm stamps it straight into KCL. Guarding this
-    // line on the flag cost the host one unknown and one matrix row per
-    // RETAINED parasitic, for a row the physics never writes.
+    // Unconditional, unlike the union: the flag decides whether the nodes
+    // merge, but the branch-flow unknown is aliased either way. Not taken,
+    // the branch is a conductance stamped straight into KCL
+    // (`emitSwitchRow`), so its current row is never written.
     for (pairs) |p| {
         try self.w("    out[@intFromEnum(U.{s})] = zCollapseRoot(&parent, @intFromEnum(U.{s}));\n", .{
             self.names.u_names[p.flow_u], self.names.u_names[p.target],
@@ -621,22 +577,10 @@ pub fn emitCollapse(self: *Gen, pairs: []const CollapsePair) Error!void {
     try emitCollapseFull(self, pairs);
 }
 
-/// `collapse` with EVERY retention flag set — the maximal collapse, at
-/// comptime.
-///
-/// `collapse` itself can only answer per instance, because the flags are
-/// parameters. A host that wants to SPECIALISE the fully collapsed
-/// instances needs the alias map before any instance exists: it sizes a
-/// reduced derivative basis (the merged set is ONE unknown, so it needs
-/// one seed lane and one Jacobian column, not |set| of each) and that is a
-/// type, not a value. So the two halves are split — this const is the
-/// shape, `collapse` is the per-instance test, and an instance qualifies
-/// for the narrow basis exactly when the two arrays are equal.
-///
-/// Every union below is unconditional here, which is the only difference
-/// from `collapse`: a flag that is clear at runtime merges strictly less,
-/// so `collapse(m, i) == collapse_full` is the honest "maximal" predicate
-/// and every other outcome falls back to the full width.
+/// Writes `collapse_full`: `collapse` with every retention flag set, as a
+/// comptime const. A host sizes a reduced derivative basis from it (a type,
+/// so it cannot wait for an instance); an instance qualifies exactly when its
+/// runtime `collapse` equals this.
 fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
     try self.w(
         \\/// The MAXIMAL collapse: `collapse` with every §5.6.1.3 retention
@@ -669,14 +613,10 @@ fn emitCollapseFull(self: *Gen, pairs: []const CollapsePair) Error!void {
     try self.w("    break :blk out;\n}};\n\n", .{});
 }
 
-/// §4.5.7 the per-site transport delays, model-frame like
-/// `nextBreakpoint` above — a delay argument is a §4.5.14
-/// constant/parameter expression, so it renders over `Model` alone.
-/// The host's transient uses these two ways (ngspice traload's habit):
-/// a landed breakpoint re-emits one echo at t + td so the ARRIVING
-/// wavefront gets its own timepoint instead of being smeared across a
-/// step, and dt_max is clamped under the shortest delay. A site whose
-/// delay is a solved quantity is skipped — no claim beats a wrong one.
+/// Writes `delays`: each §4.5.7 site's transport delay over `Model` alone
+/// (a §4.5.14 constant or parameter expression). The host lands an echo
+/// breakpoint at t + td and clamps dt_max under the shortest delay. A site
+/// whose delay is a solved quantity is skipped.
 pub fn emitDelays(self: *Gen) Error!void {
     const saved = self.uses_model;
     defer self.uses_model = saved;
@@ -702,14 +642,23 @@ pub fn emitDelays(self: *Gen) Error!void {
     try self.w(" }};\n}}\n\n\n", .{});
 }
 
+/// Writes `pendingBreakpoint` (the live per-instance schedule) and
+/// `nextBreakpoint` (the §5.10.5 `timer` fire times, recomputed from `Model`
+/// alone): the host places a timepoint on each fire instead of across it.
+///
+/// All or nothing: if any timer's start or period does not render over
+/// `Model`, `nextBreakpoint` is omitted. A missing hook costs accuracy; a
+/// subset would tell the host this device wants no other timepoints.
 pub fn emitNextBreakpoint(self: *Gen) Error!void {
+    // ponytail: `enable` is honoured only when it folds to a constant zero (the
+    // timer never fires) or renders over `Model` (a runtime guard). A solved
+    // enable keeps its breakpoints: an extra timepoint costs a step, never an
+    // answer.
     if (!gen_file.usesOp(self, .timer)) return;
 
-    // §5.10.3.3 the LIVE schedule, which `nextBreakpoint` cannot see: a
-    // start_time computed during the solve (the LTRA wavefront timer) exists
-    // only as the `__next` that `updateState` scheduled from it. Every timer
-    // is listed, whatever its arguments, because `__next` is always the
-    // truth; a disabled one costs the host a timepoint, never an answer.
+    // §5.10.3.3 the live schedule: a start_time computed during the solve
+    // exists only as `__next`. Every timer is listed; a disabled one costs
+    // the host a timepoint, never an answer.
     try self.w(
         \\/// §5.10.3.3 the earliest timer event this instance has scheduled
         \\/// strictly after `t` — re-armed start times included.
@@ -728,8 +677,8 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         \\
     , .{});
 
-    // Render FIRST, emit second: `f64Const` is what sets `uses_model`, and
-    // an unused `model` parameter does not compile.
+    // Render first: `f64Const` sets `uses_model`, and an unused `model`
+    // parameter does not compile.
     const saved = self.uses_model;
     defer self.uses_model = saved;
     self.uses_model = false;
@@ -740,8 +689,7 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
         const inst = self.names.opInstOf(@intCast(i)) orelse return;
         const args = self.mir.instData(inst).call.args;
         // §5.10.3.3 "if enable is specified and it is zero, then timer() is
-        // inactive": a constant-zero enable means this timer never fires, so
-        // it contributes no breakpoint — and it must not veto the others.
+        // inactive": such a timer adds no breakpoint and vetoes no other.
         var guard: ?[]const u8 = null;
         if (enableArgIdx(.timer)) |ei| {
             if (ei < args.len) {
@@ -752,9 +700,8 @@ pub fn emitNextBreakpoint(self: *Gen) Error!void {
                 }
             }
         }
-        // No diagnostic: `f64Expr` already fired one for the period if it is
-        // unrenderable, and a start_time that is a solved quantity is legal
-        // Verilog-A that this hook simply cannot describe.
+        // No diagnostic: an unrenderable period already has one, and a solved
+        // start_time is legal Verilog-A this hook cannot describe.
         const start = try gen_call.f64Const(self, if (args.len > 0) args[0] else .zero, 0, false) orelse return;
         const period = try gen_call.f64Const(self, if (args.len > 1) args[1] else .zero, 0, false) orelse return;
         try timers.append(self.arena, .{ start, period, guard });

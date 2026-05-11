@@ -1,15 +1,8 @@
-//! IR facts about each `Mir.Opcode`, one row per opcode.
-//!
-//! `table` is a `std.EnumArray`, so it is total by construction: add an opcode
-//! to `Mir.Opcode` and this file stops compiling until its row exists. That is
-//! the point. fix-lower's `.ipow` had to be found by hand at seven sites while
-//! a score of `else =>` arms took a default silently; here it is one row.
-//!
-//! IR facts only. `lib/ir` does not know the target is Zig (analysis.zig's
-//! header), so the Zig spellings of an opcode are the backend's table, not a
-//! column here.
-//!
-//! DOD: comptime rows in `.rodata`, read with one indexed load. No allocation.
+//! IR facts about each `Mir.Opcode`, one row per opcode: operand class, result
+//! type, LRM domain obligation (Tables 4-14/4-15), comparison relation and
+//! constant fold. `table` is a `std.EnumArray`, so a new opcode does not
+//! compile until its row exists. Target spellings live in the backend's
+//! `codegen/opcode_zig.zig`: lib/ir does not know the target is Zig.
 
 const std = @import("std");
 const Ast = @import("frontend").Ast;
@@ -19,9 +12,9 @@ const Mir = @import("mir.zig");
 const Opcode = Mir.Opcode;
 
 /// LRM Tables 4-14 / 4-15 domains. The operand of each must be proven in-domain
-/// (else compile error), EXCEPT the "All x" group which governs float mode only.
+/// (else compile error), except the "All x" group which governs float mode only.
 pub const Domain = enum {
-    all, // exp, expm1, sinh, cosh, tanh, sin, cos, floor, ceil, min, max, abs — §4.3.1/§4.3.2
+    all, // exp, expm1, sinh, cosh, tanh, sin, cos, floor, ceil, min, max, abs; §4.3.1/§4.3.2
     positive, // ln, log10                                   §4.3.1  (x > 0)
     gt_neg_one, // ln1p                                       §4.3.1  (x > -1)
     non_negative, // sqrt                                     §4.3.1  (x >= 0)
@@ -55,7 +48,7 @@ pub const Fold = union(enum) {
 };
 
 /// One kernel operation. The operands are first converted to the opcode's
-/// type — `int` or real — because a MIR opcode, unlike a source operator,
+/// type (`int` or real) because a MIR opcode, unlike a source operator,
 /// already names it: `fadd` is real whatever its operands folded to. `wrap`
 /// applies §3.2's 32 bits to the result where the device does (`wrap32`);
 /// `+ - * << /` and `**` already wrap in the kernel.
@@ -63,6 +56,7 @@ pub fn Kernel(comptime Op: type) type {
     return struct { f: Op, int: bool = false, wrap: bool = false };
 }
 
+/// One row of `table`.
 pub const Info = struct {
     /// Operand shape; drives `Mir.instData` decoding.
     class: Mir.OpClass,
@@ -72,7 +66,7 @@ pub const Info = struct {
     /// The result is 0 or 1: the relational, equality and logical operators.
     bool01: bool = false,
     /// A predicate the prover's `condFacts` can mine and if-conversion's
-    /// `peelToBool` may peel: the §4.2.5/§4.2.7 comparisons and `!`. NOT `&&`
+    /// `peelToBool` may peel: the §4.2.5/§4.2.7 comparisons and `!`. Not `&&`
     /// and `||`, which are 0/1 but carry no fact about an operand.
     predicate: bool = false,
     /// The §4.2.4/§4.2.5 relation a comparison tests, real or integer alike;
@@ -82,9 +76,9 @@ pub const Info = struct {
     /// operand (`nonzero_divisor`) or on BOTH (`pow_sign`); everything else
     /// constrains the single unary operand.
     ///
-    /// NOT `.fdiv`: §4.2.4 makes ONLY `%`-by-zero an error. `x/0.0` is an
-    /// exact IEEE ±inf and is spec-legal, so it must not reject — it forfeits
-    /// finiteness instead (see the prover's `.fdiv` transfer). `ipow`'s one
+    /// Not `.fdiv`: §4.2.4 makes only `%`-by-zero an error. `x/0.0` is an
+    /// exact IEEE ±inf and is legal, so it forfeits finiteness instead of
+    /// rejecting (see the prover's `.fdiv` transfer). `ipow`'s one
     /// undefined corner is pow's: a zero base under a negative exponent (IEEE
     /// 1364-2005 Table 5-6's 'bx).
     domain: Domain = .all,
@@ -95,6 +89,7 @@ pub const Info = struct {
     fold: Fold,
 };
 
+/// Per-opcode facts, total over `Mir.Opcode`.
 pub const table = std.EnumArray(Opcode, Info).init(.{
     .fadd = .{ .class = .binary, .fold = .{ .binary = .{ .f = .add } } },
     .fsub = .{ .class = .binary, .fold = .{ .binary = .{ .f = .sub } } },
@@ -179,11 +174,12 @@ pub const table = std.EnumArray(Opcode, Info).init(.{
     .call = .{ .class = .call, .fold = .none },
 });
 
+/// Returns `op`'s row of `table`.
 pub fn get(op: Opcode) Info {
     return table.get(op);
 }
 
-/// `op` over already-folded operands, through the one constant kernel: the
+/// Returns `op` over already-folded operands, through the one constant kernel: the
 /// per-instruction step every MIR folder shares (`analysis.foldConst`,
 /// `lower/contrib.scanFinite`). Null when `op` is not a constant operation or
 /// the kernel declines (a zero integer divisor, `0 ** -1`).
@@ -238,13 +234,13 @@ test "fold: an opcode's type, not its operands', decides the kernel's rule" {
     // §3.2: `~` and unary minus at 32 bits.
     try std.testing.expectEqual(@as(i64, -2147483648), fold(.ineg, &.{i(-2147483648)}).?.int);
     try std.testing.expectEqual(@as(i64, -1), fold(.bitnot, &.{i(0)}).?.int);
-    // §4.3.2 now folds (R4), and `fi_cast` rounds half away from zero.
+    // §4.3.2 folds, and `fi_cast` rounds half away from zero.
     try std.testing.expectEqual(@sin(@as(f64, 0.5)), fold(.sin, &.{.{ .real = 0.5 }}).?.real);
     try std.testing.expectEqual(@as(i64, -3), fold(.fi_cast, &.{.{ .real = -2.5 }}).?.int);
     try std.testing.expectEqual(@as(?Const, null), fold(.path_prev, &.{.{ .real = 1 }}));
 }
 
-/// Diagnostic spelling of `op` — see `Info.label`.
+/// Returns the diagnostic spelling of `op` (see `Info.label`).
 pub fn label(op: Opcode) []const u8 {
     return table.get(op).label orelse @tagName(op);
 }
