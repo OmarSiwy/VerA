@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const plan_topo = @import("plan/topology.zig");
+const plan_core = @import("plan/core.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
 const gen_call = @import("call.zig");
@@ -13,6 +14,7 @@ const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
 const gen_setup = @import("setup.zig");
+const gen_state = @import("state.zig");
 const gen_render = @import("render.zig");
 const family = @import("family.zig");
 const Mir = @import("ir").Mir;
@@ -43,6 +45,9 @@ pub fn emitUnits(self: *Gen) Error!void {
     if (self.core.name.len != 0) try self.w("const core = {s};\n\n", .{self.core.name});
     try emitCommon(self);
     try cg_limit.emitCore(self);
+    try gen_state.emitCore(self);
+    try gen_state.emitIterCore(self);
+    try gen_dispatch.emitNoiseCore(self);
     // §4.5.11/§4.5.12 the coefficient reader is named from the operator's
     // unit (`<unit>__sec`), not a Unit of its own, so the ordering in
     // naming.zig/proof.zig is untouched. It reads `Model` alone, so it is
@@ -96,16 +101,73 @@ const core_doc =
     \\/// devices/mos6_inverter: 45.3 ms inline vs 64.9 ms out-of-line
     \\/// (+43%), tran/fourbitadder +40%, scaling/parallel_inverters_500
     \\/// +51%. NOT `inline fn`, so the value-only `core(S, zVals(...))`
-    \\/// sites — updateState, noisePsd, collapse, seed — share ONE
+    \\/// sites — collapse, seed — share ONE
     \\/// out-of-line instantiation per family instead of each inlining the
     \\/// model.
     \\
 ;
 
+/// Emits declaration `name`, the core's slice returning only `vals` (`idx`
+/// maps each value to its field), under doc comment `doc`. Same MIR and
+/// float mode as the core, so every field is bit-identical to the core's.
+/// For a value-only caller: its reals are no `lane_masks` data.
+pub fn emitSlice(self: *Gen, name: []const u8, vals: []Mir.Value, idx: []u32, doc: []const u8) Error!void {
+    const saved = .{ self.core.lo_vals, self.plan.lo_idx, self.plan.lo_vals };
+    defer {
+        self.core.lo_vals = saved[0];
+        self.plan.lo_idx = saved[1];
+        self.plan.lo_vals = saved[2];
+    }
+    self.core.lo_vals = vals;
+    self.plan.lo_idx = idx;
+    self.plan.lo_vals = vals;
+    const n_masks = self.fam_masks.items.len;
+    defer self.fam_masks.shrinkRetainingCapacity(n_masks);
+    try emitCoreDecl(self, name, doc);
+}
+
+/// Emits `<core>__<suffix>`, the slice returning the core fields `keep`
+/// marks, in core order, and returns the core as that slice's caller reads
+/// it: `name` the slice, and `lo_idx`, `lo_vals`, `prev_lo`, `acc_lo` and
+/// `held_idx` renumbered onto its fields (`none_u32` where it has none).
+/// Swapped into `Gen.core` while the caller's body is written, every
+/// `m.f<k>` that body renders names the slice's field.
+pub fn sliceCore(self: *Gen, suffix: []const u8, keep: []const bool, doc: []const u8) Error!plan_core.Core {
+    const full = self.core;
+    const idx = try self.arena.alloc(u32, self.an.nv);
+    @memset(idx, none_u32);
+    const remap = try self.arena.alloc(u32, full.lo_vals.len);
+    @memset(remap, none_u32);
+    var vals: std.ArrayList(Mir.Value) = .empty;
+    for (full.lo_vals, keep, 0..) |v, kept, k| {
+        if (!kept) continue;
+        remap[k] = @intCast(vals.items.len);
+        idx[@intFromEnum(v)] = remap[k];
+        try vals.append(self.arena, v);
+    }
+    var sc = full;
+    sc.name = try std.fmt.allocPrint(self.arena, "{s}__{s}", .{ full.name, suffix });
+    sc.lo_idx = idx;
+    sc.lo_vals = vals.items;
+    sc.prev_lo = try remapAll(self, full.prev_lo, remap);
+    sc.acc_lo = try remapAll(self, full.acc_lo, remap);
+    sc.held_idx = try remapAll(self, full.held_idx, remap);
+    try emitSlice(self, sc.name, vals.items, idx, doc);
+    // `emitCoreDecl` drops an unread `held` parameter, and `heldArg` must
+    // then pass none.
+    if (!self.uses_held) sc.held_only = &.{};
+    return sc;
+}
+
+fn remapAll(self: *Gen, fields: []const u32, remap: []const u32) Error![]u32 {
+    const out = try self.arena.alloc(u32, fields.len);
+    for (out, fields) |*o, k| o.* = if (k == none_u32) none_u32 else remap[k];
+    return out;
+}
+
 /// Emits declaration `name` computing `self.core.lo_vals` and returning them
 /// as a struct: the shared core, or a caller's slice of it with `core.lo_vals`
-/// and `plan.lo_idx`/`lo_vals` swapped (`cg_limit.emitCore`), under doc
-/// comment `doc`.
+/// and `plan.lo_idx`/`lo_vals` swapped (`emitSlice`), under doc comment `doc`.
 pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     self.emitting_common = true;
     defer self.emitting_common = false;
@@ -187,6 +249,8 @@ pub fn emitCoreDecl(self: *Gen, name: []const u8, doc: []const u8) Error!void {
     if (!self.uses_inst) patchParam(self, at_inst, "inst".len);
     if (!self.uses_sim) patchParam(self, at_sim, "sim".len);
     if (self.core.held_only.len != 0 and !self.uses_held) patchParam(self, at_held, "held".len);
+    // A slice of integers and plain arrays alone never names `S`.
+    if (!try namesIdent(self, self.out.items[at_x..], "S")) patchParam(self, at_x - "S: type, ".len, "S".len);
     try self.w("}}\n\n", .{});
     try gen_file.recordUnitFile(self, name, lo, at_fn);
 }
@@ -279,6 +343,18 @@ pub fn patchUnless(self: *Gen, at: usize, from: usize, comptime ident: []const u
         if (before and after) return;
     }
     patchParam(self, at, ident.len);
+}
+
+/// Returns whether Zig source `text` names `ident` as an identifier token,
+/// outside any string literal or comment.
+fn namesIdent(self: *Gen, text: []const u8, ident: []const u8) Error!bool {
+    const src = try self.arena.dupeZ(u8, text);
+    var t: std.zig.Tokenizer = .init(src);
+    while (true) {
+        const tok = t.next();
+        if (tok.tag == .eof) return false;
+        if (tok.tag == .identifier and std.mem.eql(u8, src[tok.loc.start..tok.loc.end], ident)) return true;
+    }
 }
 
 fn isIdent(c: u8) bool {

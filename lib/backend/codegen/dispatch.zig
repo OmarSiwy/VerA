@@ -1013,11 +1013,11 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
     try self.w("inst: *const Instance, ", .{});
     const at_sim = self.out.items.len;
     try self.w("sim: contract.SimState) [noise_gens.len]contract.PsdTerm {{\n", .{});
-    const uses_core = for (self.noise.rows) |nr| {
-        if (coreIdx(self, nr.pwr) != null or coreIdx(self, nr.exp) != null or coreIdx(self, nr.coeff) != null) break true;
-    } else false;
-    if (uses_core) {
-        try self.w("    const m = core(S, zVals(S, &x), model, {s}, sim{s});\n", .{ try gen_setup.probeInstance(self), self.heldArg(true) });
+    const full = self.core;
+    defer self.core = full;
+    if (self.noise_core.lo_vals.len != 0) {
+        self.core = self.noise_core;
+        try self.w("    const m = {s}(S, zVals(S, &x), model, {s}, sim{s});\n", .{ self.core.name, try gen_setup.probeInstance(self), self.heldArg(true) });
     } else {
         gen_unit.patchParam(self, at_s, "S".len);
         gen_unit.patchParam(self, at_x, "x".len);
@@ -1045,6 +1045,27 @@ pub fn emitNoiseTable(self: *Gen) Error!void {
         }
     }
     try self.w("    }};\n}}\n\n", .{});
+}
+
+/// Emits `<core>__noise`, the core's slice computing only the PSD arguments
+/// `noisePsd` reads off it. Called from `emitUnits`, so its range tiles with
+/// the other unit declarations.
+pub fn emitNoiseCore(self: *Gen) Error!void {
+    if (self.noise.fatal != null or self.noise.rows.len == 0) return;
+    const keep = try self.arena.alloc(bool, self.core.lo_vals.len);
+    @memset(keep, false);
+    var any = false;
+    for (self.noise.rows) |nr| for ([_]Mir.Value{ nr.pwr, nr.exp, nr.coeff }) |v| {
+        const k = coreIdx(self, v) orelse continue;
+        keep[k] = true;
+        any = true;
+    };
+    if (!any) return;
+    self.noise_core = try gen_unit.sliceCore(self, "noise", keep,
+        \\/// §4.6.4 the PSD arguments the core computes, and only what they read:
+        \\/// `noisePsd` evaluates them at the operating point `x`.
+        \\
+    );
 }
 
 /// Emits `noiseTablePoints`: the knots of every §4.6.4.3 table as the model
