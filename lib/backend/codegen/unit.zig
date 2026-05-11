@@ -152,10 +152,9 @@ pub fn sliceCore(self: *Gen, suffix: []const u8, keep: []const bool, doc: []cons
     sc.prev_lo = try remapAll(self, full.prev_lo, remap);
     sc.acc_lo = try remapAll(self, full.acc_lo, remap);
     sc.held_idx = try remapAll(self, full.held_idx, remap);
+    // `sc.held_only` stays the core's: an unread `held` is renamed `_`, not
+    // dropped, so every caller still passes `heldArg`.
     try emitSlice(self, sc.name, vals.items, idx, doc);
-    // `emitCoreDecl` drops an unread `held` parameter, and `heldArg` must
-    // then pass none.
-    if (!self.uses_held) sc.held_only = &.{};
     return sc;
 }
 
