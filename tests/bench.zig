@@ -913,19 +913,23 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer arena_state.deinit();
 
     var filter: ?[]const u8 = null;
-    var native: ?[]const u8 = null;
+    var native: ?[]const []const u8 = null;
     while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--coverage")) return ieee1364.coverage(init);
         if (std.mem.eql(u8, a, "--native") or std.mem.eql(u8, a, "--native=fifo")) {
-            native = "--schedule=fifo";
+            native = &.{"--schedule=fifo"};
             continue;
         }
         if (std.mem.eql(u8, a, "--native=static")) {
-            native = "--schedule=static";
+            native = &.{"--schedule=static"};
+            continue;
+        }
+        if (std.mem.eql(u8, a, "--native=four")) {
+            native = &.{ "--schedule=fifo", "--state=4" };
             continue;
         }
         if (std.mem.eql(u8, a, "--native=two-state")) {
-            native = "--two-state";
+            native = &.{"--two-state"};
             continue;
         }
         if (std.mem.eql(u8, a, "--fuzz")) {
@@ -957,7 +961,7 @@ fn devices(init: std.process.Init, vera_exe: []const u8, args: *Args, dirs: []co
     defer scratch_dir.close(io);
     try std.process.setCurrentDir(io, scratch_dir);
 
-    if (native) |schedule| return nativeDevices(gpa, io, exe, schedule, cases, filter, w);
+    if (native) |flags| return nativeDevices(gpa, io, exe, flags, cases, filter, w);
 
     var ran: usize = 0;
     var failed: usize = 0;
@@ -1451,7 +1455,7 @@ const NativeJob = struct {
     gpa: Allocator,
     io: Io,
     vera_exe: []const u8,
-    schedule: []const u8,
+    flags: []const []const u8,
     cases: []const []const u8,
     slots: []NativeSlot,
     next: std.atomic.Value(usize) = .init(0),
@@ -1464,7 +1468,7 @@ const NativeJob = struct {
             if (i >= job.cases.len) return;
             _ = arena_state.reset(.retain_capacity);
             var aw: Io.Writer.Allocating = .init(job.gpa);
-            const v = nativeVerdict(arena_state.allocator(), job.io, job.vera_exe, job.schedule, job.cases[i], &aw.writer) catch |e| blk: {
+            const v = nativeVerdict(arena_state.allocator(), job.io, job.vera_exe, job.flags, job.cases[i], &aw.writer) catch |e| blk: {
                 aw.writer.print("FAIL {s}: the runner itself failed: {t}\n", .{ job.cases[i], e }) catch {};
                 break :blk NativeVerdict{ .pass = false, .fallback = null };
             };
@@ -1481,19 +1485,23 @@ const NativeJob = struct {
 /// `refused` is a case the shared elaboration rejected, so no executable
 /// was built at all; `xfail` is an unmet `//! xfail` case, which does not
 /// fail the run.
-const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false, xfail: bool = false };
+/// `state` is what a `--state=auto` executable ran (`rt.auto`'s
+/// `--vera-state` line): 4-state throughout, 2-state after a 4-state
+/// start, or that and then a 4-state rerun.
+const NativeVerdict = struct { pass: bool, fallback: ?[]const u8, refused: bool = false, xfail: bool = false, state: RunState = .four };
+const RunState = enum { four, two, rerun };
 
 /// `nativeCase` under `//! xfail`, with `digitalVerdict`'s algebra.
-fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
     const src =try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const xfail = harness.digitalXfail(try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20))) orelse
-        return nativeCase(arena, io, vera_exe, schedule, case, w);
+        return nativeCase(arena, io, vera_exe, flags, case, w);
     if (xfail.len == 0) {
         try w.print("FAIL {s}: `//! xfail` names no reason\n", .{case});
         return .{ .pass = false, .fallback = null };
     }
     var detail: Io.Writer.Allocating = .init(arena);
-    var v = try nativeCase(arena, io, vera_exe, schedule, case, &detail.writer);
+    var v = try nativeCase(arena, io, vera_exe, flags, case, &detail.writer);
     if (v.pass) {
         try w.print("FAIL {s}: XPASS — marked `//! xfail`, but VerA now does what the fixture says.\n" ++
             "  Delete the `//! xfail` line.\n", .{case});
@@ -1506,7 +1514,7 @@ fn nativeVerdict(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []con
 }
 const NativeSlot = struct { verdict: NativeVerdict = .{ .pass = false, .fallback = null }, output: []const u8 = "" };
 
-fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, schedule: []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
+fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, flags: []const []const u8, all: []const []const u8, filter: ?[]const u8, w: *Io.Writer) !u8 {
     var picked: std.ArrayList([]const u8) = .empty;
     defer picked.deinit(gpa);
     for (all) |c| if (filter == null or std.mem.indexOf(u8, c, filter.?) != null) try picked.append(gpa, c);
@@ -1517,7 +1525,7 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, schedule: []const u8, 
     const slots = try gpa.alloc(NativeSlot, picked.items.len);
     defer gpa.free(slots);
     @memset(slots, .{});
-    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .schedule = schedule, .cases = picked.items, .slots = slots };
+    var job: NativeJob = .{ .gpa = gpa, .io = io, .vera_exe = exe, .flags = flags, .cases = picked.items, .slots = slots };
     var group: Io.Group = .init;
     const jobs = std.Thread.getCpuCount() catch 1;
     var hands: usize = 0;
@@ -1529,8 +1537,17 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, schedule: []const u8, 
     var xfailed: usize = 0;
     var fell: usize = 0;
     var refused: usize = 0;
+    var twos: usize = 0;
+    var reruns: usize = 0;
     for (picked.items, slots) |case, s| {
         try w.writeAll(s.output);
+        switch (s.verdict.state) {
+            .four => {},
+            .two => twos += 1,
+            .rerun => reruns += 1,
+        }
+        if (s.verdict.state != .four) try w.print("AUTO2 {s}\n", .{case});
+        if (s.verdict.state == .rerun) try w.print("RERUN {s}\n", .{case});
         if (s.verdict.xfail) {
             xfailed += 1;
         } else if (!s.verdict.pass) failed += 1;
@@ -1547,7 +1564,7 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, schedule: []const u8, 
         .{ picked.items.len - failed - xfailed, picked.items.len, picked.items.len - fell - refused, fell, refused },
     );
     if (xfailed != 0) try w.print("; {d} XFAIL (a known gap, not a pass)", .{xfailed});
-    try w.writeAll("\n");
+    try w.print("; --state=auto turned 2-state in {d} (AUTO2), of which {d} reran 4-state (RERUN)\n", .{ twos + reruns, reruns });
     for (slots) |s| {
         gpa.free(s.output);
         if (s.verdict.fallback) |why| gpa.free(why);
@@ -1558,17 +1575,18 @@ fn nativeDevices(gpa: Allocator, io: Io, exe: []const u8, schedule: []const u8, 
 /// `digitalCase` through the executable. A rejection may come from `vera
 /// --emit-exe` (the shared elaboration) or from the executable at run time;
 /// either way its stderr is judged, the build's and the run's together.
-fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
+fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []const u8, case: []const u8, w: *Io.Writer) !NativeVerdict {
     const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
     const work = try std.fmt.allocPrint(arena, "native/{s}", .{case});
     try Io.Dir.cwd().createDirPath(io, work);
     var argv: std.ArrayList([]const u8) = .empty;
-    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", schedule, "--work-dir", work });
+    try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--work-dir", work });
+    try argv.appendSlice(arena, flags);
     if (harness.digitalStd(source)) |s| try argv.append(arena, s);
     try argv.append(arena, src);
     const built = try capture(arena, io, argv.items);
-    const two_state = std.mem.eql(u8, schedule, "--two-state");
+    const two_state = std.mem.eql(u8, flags[0], "--two-state");
     const fallback: ?[]const u8 = if (std.mem.indexOf(u8, built.stderr, "not native (")) |at| blk: {
         const rest = built.stderr[at + "not native (".len ..];
         break :blk rest[0 .. std.mem.indexOf(u8, rest, ")\n") orelse rest.len];
@@ -1584,25 +1602,50 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, schedule: []const 
         return .{ .pass = false, .fallback = fallback };
     }
     const bin = try Io.Dir.cwd().realPathFileAlloc(io, std.mem.trimEnd(u8, built.stdout, "\n"), arena);
-    const ran = try captureIn(arena, io, &.{bin}, work);
+    var ran = try captureIn(arena, io, &.{ bin, "--vera-state" }, work);
+    var state: RunState = .four;
+    if (std.mem.indexOf(u8, ran.stderr, "vera-state: ")) |at| {
+        const end = std.mem.indexOfScalarPos(u8, ran.stderr, at, '\n') orelse ran.stderr.len;
+        const line = ran.stderr[at..end];
+        state = if (std.mem.indexOf(u8, line, "rerun") != null) .rerun else if (std.mem.indexOf(u8, line, "2-state") != null) .two else .four;
+        ran.stderr = try std.mem.concat(arena, u8, &.{ ran.stderr[0..at], ran.stderr[@min(end + 1, ran.stderr.len)..] });
+    }
+    // `// native-state: 2|4|rerun` pins what the default `--state=auto` runs.
+    if (flags.len == 1 and !two_state) if (pinnedState(source)) |want| if (want != state) {
+        try w.print("FAIL {s}: `--state=auto` ran {t}, the fixture pins {t}\n", .{ case, state, want });
+        return .{ .pass = false, .fallback = fallback, .state = state };
+    };
     const stderr = try std.mem.concat(arena, u8, &.{ built.stderr, ran.stderr });
     if (negative) {
-        if (harness.digitalRejectionMatches(source, ran.exit, stderr)) return .{ .pass = true, .fallback = fallback };
+        if (harness.digitalRejectionMatches(source, ran.exit, stderr)) return .{ .pass = true, .fallback = fallback, .state = state };
         try w.print("FAIL {s}: digital rejection mismatch (exit {d})\n{s}\n", .{ case, ran.exit, stderr });
-        return .{ .pass = false, .fallback = fallback };
+        return .{ .pass = false, .fallback = fallback, .state = state };
     }
     if (ran.exit != 0) {
         try w.print("FAIL {s}: the executable exited {d}\n{s}\n", .{ case, ran.exit, stderr });
-        return .{ .pass = false, .fallback = fallback };
+        return .{ .pass = false, .fallback = fallback, .state = state };
     }
     if (!harness.digitalWarningsMatch(source, stderr)) {
         try w.print("FAIL {s}: successful digital run has missing warning evidence or error diagnostics\n{s}\n", .{ case, stderr });
-        return .{ .pass = false, .fallback = fallback };
+        return .{ .pass = false, .fallback = fallback, .state = state };
     }
-    if (harness.vcdExpectation(source)) |v| return .{ .pass = try vcdDiff(arena, io, w, case, work, v, two_state), .fallback = fallback };
+    if (harness.vcdExpectation(source)) |v| return .{ .pass = try vcdDiff(arena, io, w, case, work, v, two_state), .fallback = fallback, .state = state };
     const want = try Io.Dir.cwd().readFileAlloc(io, try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case }), arena, .limited(1 << 20));
-    if (two_state) return .{ .pass = try twoStateDiff(w, case, want, ran.stdout), .fallback = fallback };
-    return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback };
+    if (two_state) return .{ .pass = try twoStateDiff(w, case, want, ran.stdout), .fallback = fallback, .state = state };
+    return .{ .pass = try diff(w, case, want, ran.stdout), .fallback = fallback, .state = state };
+}
+
+/// A fixture's `// native-state:` line, if it has one.
+fn pinnedState(source: []const u8) ?RunState {
+    var lines = std.mem.splitScalar(u8, source, '\n');
+    while (lines.next()) |raw| {
+        const line = std.mem.trimEnd(u8, raw, " \t\r");
+        const word = if (std.mem.startsWith(u8, line, "// native-state: ")) line["// native-state: ".len..] else continue;
+        if (std.mem.eql(u8, word, "2")) return .two;
+        if (std.mem.eql(u8, word, "4")) return .four;
+        if (std.mem.eql(u8, word, "rerun")) return .rerun;
+    }
+    return null;
 }
 
 /// A `//! expect vcd` case: the file the executable wrote in `work` against
@@ -1698,11 +1741,14 @@ fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
     var done: u32 = 0;
     var file: u32 = 0;
     var failed = false;
+    var twos: u32 = 0;
+    var reruns: u32 = 0;
     while (done < count) : (file += 1) {
         _ = arena_state.reset(.retain_capacity);
         const a = arena_state.allocator();
         const n = @min(fuzz_per_file, count - done);
-        const src = try fuzzSource(a, rand, n);
+        const late = file % 2 == 1;
+        const src = try fuzzSource(a, rand, n, late);
         const path = try std.fmt.allocPrint(a, "{s}/fuzz{d}.v", .{ work, file });
         try Io.Dir.cwd().writeFile(io, .{ .sub_path = path, .data = src });
         const want = try capture(a, io, &.{ exe, "--run", path });
@@ -1715,7 +1761,12 @@ fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
             try w.print("FAIL {s}: not native\n{s}\n", .{ path, built.stderr });
             return 1;
         }
-        const got = try capture(a, io, &.{std.mem.trimEnd(u8, built.stdout, "\n")});
+        if (late and std.mem.indexOf(u8, built.stderr, "4-state: ") != null) {
+            try w.print("FAIL {s}: known operands, yet `--state=auto` built it 4-state\n{s}\n", .{ path, built.stderr });
+            return 1;
+        }
+        const got = try capture(a, io, &.{ std.mem.trimEnd(u8, built.stdout, "\n"), "--vera-state" });
+        if (std.mem.indexOf(u8, got.stderr, "rerun") != null) reruns += 1 else if (std.mem.indexOf(u8, got.stderr, "2-state") != null) twos += 1;
         if (!std.mem.eql(u8, want.stdout, got.stdout)) {
             failed = true;
             var wl = std.mem.splitScalar(u8, want.stdout, '\n');
@@ -1727,14 +1778,18 @@ fn fuzz(init: std.process.Init, vera_exe: []const u8, count: u32) !u8 {
         }
         done += n;
     }
-    try w.print("fuzz: {d} expressions in {d} files, native {s} --run\n", .{ count, file, if (failed) "DIFFERS from" else "equals" });
+    try w.print("fuzz: {d} expressions in {d} files, native {s} --run; --state=auto ran 2-state in {d} files, of which it reran {d} 4-state\n", .{ count, file, if (failed) "DIFFERS from" else "equals", twos + reruns, reruns });
     return if (failed) 1 else 0;
 }
 
 /// One design: `fuzz_vars` random four-state operands, then `n` lines, each
 /// one random expression printed self-determined or through an assignment
 /// to a random-width target (so its context width and signedness vary).
-fn fuzzSource(a: Allocator, rand: std.Random, n: u32) ![]const u8 {
+/// `late`: every operand and literal known, and the lines one tick after
+/// them, so `--state=auto` computes them in its 2-state phase, where an x
+/// an operator makes is printed as 4-state prints it and storing one reruns
+/// the design 4-state.
+fn fuzzSource(a: Allocator, rand: std.Random, n: u32, late: bool) ![]const u8 {
     var out: Io.Writer.Allocating = .init(a);
     const o = &out.writer;
     var vars: [fuzz_vars]FuzzVar = undefined;
@@ -1748,13 +1803,19 @@ fn fuzzSource(a: Allocator, rand: std.Random, n: u32) ![]const u8 {
     try o.writeAll("  initial begin\n");
     // Half the operands fully known, or arithmetic would almost always see
     // an x and never reach its known-value path.
-    for (vars, 0..) |v, i| try o.print("    v{d} = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = v.width, .known = i % 2 == 0 } });
-    for (2..6) |i| try o.print("    mem[{d}] = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = 8 } });
-    for (0..n) |_| {
-        var g: FuzzGen = .{ .rand = rand, .vars = &vars, .out = o };
+    for (vars, 0..) |v, i| try o.print("    v{d} = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = v.width, .known = late or i % 2 == 0 } });
+    for (2..6) |i| try o.print("    mem[{d}] = {f};\n", .{ i, FuzzBits{ .rand = rand, .width = 8, .known = late } });
+    if (late) {
+        for (fuzz_widths, 0..) |_, i| try o.print("    t{d} = 0;\n", .{i});
+        try o.writeAll("    #1;\n");
+    }
+    for (0..n) |line| {
+        var g: FuzzGen = .{ .rand = rand, .vars = &vars, .out = o, .known = late };
         // `%d` of more than 64 bits is refused by both engines alike, so it
-        // is asked of an expression only when its width is at most 64.
-        if (rand.boolean()) {
+        // is asked of an expression only when its width is at most 64. A
+        // late design stores only in its last tenth: storing an x ends the
+        // 2-state phase for every line after it.
+        if (rand.boolean() or (late and line < n - n / 10)) {
             var e: Io.Writer.Allocating = .init(a);
             g.out = &e.writer;
             const ew = try g.expr(3);
@@ -1787,6 +1848,8 @@ const FuzzGen = struct {
     rand: std.Random,
     vars: []const FuzzVar,
     out: *Io.Writer,
+    /// No x or z literal.
+    known: bool = false,
 
     /// Writes one expression; returns its self-determined width.
     fn expr(g: *FuzzGen, depth: u32) Io.Writer.Error!u32 {
@@ -1894,7 +1957,7 @@ const FuzzGen = struct {
                 return 32;
             },
             1 => {
-                try o.writeAll(([_][]const u8{ "'bx", "'bz", "'hx1", "'b1", "-4'sd3", "4'sb1x01", "'sd7", "3'bz0x" })[r.uintLessThan(usize, 8)]);
+                if (g.known) try o.writeAll(([_][]const u8{ "'b1", "-4'sd3", "'sd7", "'h5a" })[r.uintLessThan(usize, 4)]) else try o.writeAll(([_][]const u8{ "'bx", "'bz", "'hx1", "'b1", "-4'sd3", "4'sb1x01", "'sd7", "3'bz0x" })[r.uintLessThan(usize, 8)]);
                 return 32;
             },
             else => {
