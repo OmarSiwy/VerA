@@ -299,6 +299,15 @@ pub const Gen = struct {
     /// Value → field of `limit`'s slice of the core, or `none_u32`
     /// (`cg_limit.emitCore`); empty when `limit` reads nothing off the core.
     lim_idx: []u32 = &.{},
+    /// The core as `updateState` reads it: its slice (`gen_state.emitCore`),
+    /// or `.{}` when `updateState` reads nothing off the core.
+    state_core: plan_core.Core = .{},
+    /// The core as `noisePsd` reads it: its slice (`gen_dispatch.emitNoiseCore`),
+    /// or `.{}` when `noisePsd` reads nothing off the core.
+    noise_core: plan_core.Core = .{},
+    /// The core as `advanceIteration` and `checkConvergence` read it: their
+    /// slice (`gen_state.emitIterCore`), or `.{}` when they read nothing off it.
+    iter_core: plan_core.Core = .{},
     /// Solve invariance per value, block and loop (`plan/setup.zig`).
     sinv: plan_setup.Sinv = .{},
     /// §5.6.1.2 the charge sites `q` returns and the rows they stamp
