@@ -131,6 +131,21 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     // if no string had been supplied".
     if (std.mem.eql(u8, name, "$limit")) {
         const args = ex.args(e);
+        // Syntax 9-12 spells every form's first argument access_function_reference,
+        // and the prose says what it is for: "It returns a real value that is
+        // derived from its first argument (the access function reference, such as
+        // a branch voltage)". A.8.2's generic analog_system_function_call admits
+        // any expression; the clause's own syntax narrows it. Parentheses leave no
+        // node, so `(V(a,b))` passes.
+        if (args.len >= 1 and (args[0] == .none or
+            (ex.tag(args[0]) != .branch_access and ex.tag(args[0]) != .port_access)))
+        {
+            var b = self.errWith(ex.mainTok(e), .E0891);
+            b.msg("its first argument is not an access function reference", .{});
+            b.help("scale the result, not the probe: `type * $limit(V(a,b), ...)`, or pass the polarity as the trailing sign argument", .{});
+            try b.emit();
+            return poison;
+        }
         if (args.len >= 2) {
             if (lower_constfold.constEval(self, args[1])) |c| switch (c) {
                 .str => |s| {
@@ -290,6 +305,12 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         if (a == .none) continue;
         const tv = try lowerSysArg(self, a, takesNetRef(name));
         if (try checkDescriptor(self, name, i, a, tv)) return poison;
+        // §9.17.3 Syntax 9-12: a second argument is a string or an
+        // analog_function_identifier, and the function form returned above.
+        if (i == 1 and tv.ty != .string and tv.v != .undef and std.mem.eql(u8, name, "$limit")) {
+            try self.err(ex.mainTok(a), .E0891, "its second argument is neither a string nor an analog function", .{});
+            return poison;
+        }
         try vals.append(self.arena, tv.v);
     }
     const v = try self.call(name, vals.items);

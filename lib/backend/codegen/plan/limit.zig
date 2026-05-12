@@ -197,7 +197,7 @@ pub const LimitCall = struct {
     ///
     /// The alternative spellings do not survive lowering: `$limit` under
     /// `if (type > 0)` is declined (no CFG in the clamp list), and
-    /// `$limit(type*V(a,b), ...)` has no node pair to correct.
+    /// `$limit(type*V(a,b), ...)` is refused in lowering (E0891).
     sign: Mir.Value = .f_zero,
 };
 
@@ -243,7 +243,7 @@ pub fn plan(g: Input, u_names: []const []const u8) Error!Limits {
                 continue;
             };
             const pair = probePair(g, d.args) orelse {
-                try at.decline("its first argument is not a §4.4 potential probe of one or two nets", "limit `V(a,b)` itself; for a reversed-polarity junction pass the polarity as the trailing sign argument instead of scaling the probe");
+                try at.decline("its first argument is not a §4.4 potential probe of one or two nets", "limit the potential `V(a,b)` the flow depends on: the host corrects node voltages");
                 continue;
             };
             if (!g.an.dominates(bi, exit)) {
