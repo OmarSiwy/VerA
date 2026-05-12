@@ -387,6 +387,8 @@ pub const Code = enum(u16) {
     E0888,
     E0889,
     E0890,
+    /// §9.17.3 a `$limit` argument that is not the form Syntax 9-12 spells.
+    E0891,
     /// §9.17.3 a `$limit` site the device does not honour: the probe is
     /// returned unchanged, which the clause permits.
     W0853,
@@ -4563,6 +4565,34 @@ fn infoOf(c: Code) Info {
             \\Only a value that folds without the model card is judged here.
             ,
         },
+        .E0891 => .{
+            .title = "$limit argument is not the form Syntax 9-12 requires",
+            .lrm = "9.17.3",
+            .explain =
+            \\LRM 9.17.3 Syntax 9-12 gives `$limit` three forms:
+            \\
+            \\    $limit ( access_function_reference )
+            \\  | $limit ( access_function_reference , string , arg_list )
+            \\  | $limit ( access_function_reference , analog_function_identifier , arg_list )
+            \\
+            \\The first argument is the probe itself: "It returns a real value
+            \\that is derived from its first argument (the access function
+            \\reference, such as a branch voltage)". The limiter's state is the
+            \\history of that probe across Newton iterations, so an expression
+            \\such as `type*V(a,b)` has no place to keep it. The second argument
+            \\names the algorithm: a string for one built into the simulator, or
+            \\a user-defined analog function (4.7).
+            \\
+            \\Scale the result instead of the probe, or use VerA's trailing sign
+            \\argument for a reversed-polarity junction:
+            \\
+            \\    vbe = type * $limit(V(b,e), "pnjlim", vte, vcrit, type);
+            \\
+            \\A string VerA does not implement, or no string at all, is legal:
+            \\the simulator then chooses "just as if no string had been
+            \\supplied" (W0853).
+            ,
+        },
         .E0822 => .{
             .title = "binding detection argument is the wrong kind of name",
             .lrm = "9.19",
@@ -5794,7 +5824,8 @@ fn infoOf(c: Code) Info {
             \\    choice to the simulator "just as if no string had been
             \\    supplied", and VerA's choice is none;
             \\  - the first argument is a potential probe V(a) or V(a,b): there
-            \\    must be a node to correct. A flow, or `type*V(a,b)`, has none;
+            \\    must be a node to correct. A flow has none (`type*V(a,b)` is
+            \\    not an access function reference at all: E0891);
             \\  - the call is not under an `if`: the clamp list has no control
             \\    flow. A polarity guard is the trailing sign argument instead,
             \\    `$limit(V(b,e), "pnjlim", vte, vcrit, type)`;
