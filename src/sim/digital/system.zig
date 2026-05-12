@@ -1,9 +1,8 @@
-//! IEEE 1364-2005 §17 system tasks that keep state of their own: §17.2's
-//! file input (and §17.2.3's string output), §17.5's programmable logic
-//! arrays and §17.6's stochastic queues.
-//!
-//! In: a task's argument expressions and the `Run`. Out: values written to
-//! the task's output arguments, and (queues) `Run.queues`.
+//! IEEE 1364-2005 §17 system tasks that keep state of their own: a task's
+//! argument expressions and the `Run` in; values written to its output
+//! arguments (and, for queues, `Run.queues`) out.
+//! Clauses: §17.2 file input and output, §17.2.3 string output, §17.5
+//! programmable logic arrays, §17.6 stochastic queues, §17.9 distributions.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -68,6 +67,7 @@ pub fn queueTask(self: *Run, a: std.mem.Allocator, op: QueueOp, args: []const As
     try exec.assignInt(self, a, args[3], r.status);
 }
 
+/// The §17.6 queues, by `q_id`.
 pub const Queues = std.AutoHashMapUnmanaged(i64, Queue);
 
 /// A queue task's status and the values its output arguments take:
@@ -230,7 +230,7 @@ const fk = @import("kernels").file_kernels;
 /// 0..2 are the standard streams).
 pub const own: contract.FileIo = .{ .open = fk.zFOpen, .close = fk.zFClose, .put = fk.zFPut, .getc = fk.zFGetc, .ungetc = fk.zFUngetc, .tell = fk.zFTell, .seek = fk.zFSeek, .eof = fk.zFEof };
 
-/// VAMS §9.5.1.2: ONE descriptor table per simulation — the host's
+/// VAMS §9.5.1.2: one descriptor table per simulation, the host's
 /// (`Run.file_io`: a mixed simulation's device table), else this engine's
 /// own, which only an engine given filesystem access (`Options.io`) opens
 /// files through.
@@ -262,7 +262,7 @@ pub fn text(a: std.mem.Allocator, v: Int.Literal) Error!?[]const u8 {
 }
 
 /// A descriptor is "a 32-bit value" (§17.2.1): its low 32 bits, however the
-/// variable holding it is signed — `integer fd` is the clause's own example.
+/// variable holding it is signed (`integer fd` is the clause's own example).
 fn descriptor(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?i64 {
     return low32(try int(self, a, e));
 }
@@ -338,8 +338,8 @@ pub fn fclose(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!
 
 /// §17.2.2 `$fdisplay`/`$fwrite` and their radix forms: the `$display` text
 /// of the arguments after the descriptor, to every channel it names.
-/// ponytail: `$fstrobe` and `$fmonitor` are not implemented.
 pub fn fdisplay(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
+    // ponytail: `$fstrobe` and `$fmonitor` are not implemented.
     const d = (try descriptor(self, a, args[0])) orelse return;
     var buf: std.Io.Writer.Allocating = .init(a);
     const saved = self.out;
@@ -379,10 +379,10 @@ fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i6
 /// §17.2.4.3 `$sscanf(str, format, args...)`: C's scanf over the characters
 /// of `str`. Each `next` is one assignment to an output argument, in order;
 /// once it returns null, `result` is how many were assigned, or EOF (-1)
-/// when the input ends before the first conversion — and, the clause's own
-/// rule, when either `str` or `format` has an x or z bit (null here).
-/// ponytail: the integral conversions %d %h %x %o %b, %c and %s.
+/// when the input ends before the first conversion, and (the clause's own
+/// rule) when either `str` or `format` has an x or z bit (null here).
 pub const Scan = struct {
+    // ponytail: the integral conversions %d %h %x %o %b, %c and %s.
     input: []const u8,
     format: []const u8,
     /// Output arguments the call has.
@@ -396,6 +396,7 @@ pub const Scan = struct {
     /// integer or, from `%s`, characters.
     pub const Assign = struct { arg: usize, value: union(enum) { int: i64, chars: []const u8 } };
 
+    /// The scan of `input` by `format`; a null one ends it at once with EOF.
     pub fn init(input: ?[]const u8, format: ?[]const u8, outs: usize) Scan {
         if (input == null or format == null) return .{ .input = "", .format = "", .outs = outs, .result = -1, .done = true };
         return .{ .input = input.?, .format = format.?, .outs = outs };
@@ -478,10 +479,10 @@ fn stringValue(a: std.mem.Allocator, s: []const u8) Error!Int.Literal {
 /// first, assigned to the first "using the string assignment to variable
 /// rules". `compile` has already required `$sformat`'s format to be a literal,
 /// which is the one argument `display` reads as a format there.
-/// ponytail: a string literal AFTER `$sformat`'s format is read as a further
-/// format, where §17.2.3 says "No other arguments are interpreted as format
-/// strings"; split the walk when a source needs that.
 pub fn sformat(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, show: @import("display.zig").Show) Error!void {
+    // ponytail: a string literal after `$sformat`'s format is read as a further
+    // format, where §17.2.3 says "No other arguments are interpreted as format
+    // strings"; split the walk when a source needs that.
     var buf: std.Io.Writer.Allocating = .init(a);
     const saved = self.out;
     self.out = &buf.writer;
@@ -508,6 +509,7 @@ pub const Pla = struct {
     async_: bool,
 };
 
+/// The sixteen §17.5 PLA task names, each with its `Pla`.
 pub const pla_tasks = blk: {
     var list: [16]struct { []const u8, Pla } = undefined;
     var n = 0;
@@ -537,9 +539,9 @@ pub fn pla(self: *Run, a: std.mem.Allocator, p: Pla, args: []const Ast.ExprId) E
 /// a row, bit j of the personality governs input j, both counted from the
 /// left. An unknown input selected by a row makes it unknown unless the
 /// row's controlling value decides it.
-/// ponytail: rows are taken lowest address first, which is the declaration
-/// order of the ascending memories §17.5's examples use.
 pub fn plaEval(p: Pla, rows: []const Int.Literal, in: Int.Literal, out: Int.Literal) void {
+    // ponytail: rows are taken lowest address first, which is the declaration
+    // order of the ascending memories §17.5's examples use.
     const and_like = p.logic == .@"and" or p.logic == .nand;
     for (0..@min(rows.len, out.width)) |k| {
         const row = rows[k];
