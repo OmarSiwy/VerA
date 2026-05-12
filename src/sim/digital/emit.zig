@@ -251,7 +251,7 @@ fn fmtReach(wakes: plan.Reach) std.fmt.Alt(plan.Reach, reachText) {
 
 fn reachText(wakes: plan.Reach, out: *std.Io.Writer) std.Io.Writer.Error!void {
     try out.writeAll(".{");
-    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
+    inline for (.{ "fan", "comb", "watch", "terms", "mon", "dump", "comb_first" }) |f| if (@field(wakes, f)) try out.writeAll(" ." ++ f ++ " = true,");
     try out.writeAll(" }");
 }
 
@@ -1069,8 +1069,8 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
 fn waitFixed(self: *Emitter) Error!bool {
     switch (self.role) {
         .general => return false,
-        .triggered => |t| try self.print("            s.waiting[{d}] = true;\n            return;\n", .{t}),
-        .comb => try self.print("            return;\n", .{}),
+        .triggered => |t| try self.print("            s.waiting[{d}] = s.stamp();\n            return;\n", .{t}),
+        .comb => try self.print("            s.nodes_at = s.stamp();\n            return;\n", .{}),
     }
     return true;
 }

@@ -232,13 +232,18 @@ pub const Reach = packed struct(u8) {
     mon: bool = false,
     /// A §18 dump.
     dump: bool = false,
-    _: u2 = 0,
+    /// A continuous assignment is among the nodes: they settle before any
+    /// event control wakes, as `vera --run`'s fan-out runs first. Without
+    /// one, the nodes wake in suspension order among the event controls.
+    comb_first: bool = false,
+    _: u1 = 0,
 
     pub const all: Reach = .{ .fan = true, .comb = true, .watch = true, .terms = true, .mon = true, .dump = true };
 };
 
 /// `exec.Susp` without the task activation, which no native process has.
-const Susp = struct { pc: u32, gen: u32, alive: bool };
+/// `seq` is its `State.stamp`.
+const Susp = struct { pc: u32, gen: u32, alive: bool, seq: u64 = 0 };
 const Term = struct { susp: u32, gen: u32, edge: Edge };
 /// One §9.2.2 nonblocking update: the bits `m` of `slot` (words from
 /// `off`) become `v`/`x` when it matures, merged into the value the slot
@@ -466,8 +471,13 @@ pub const State = struct {
     settle: enum { idle, queued, running } = .idle,
     watch_start: []const u32,
     watchers: []const Watcher,
-    /// Per triggered process: it is waiting at its event control.
-    waiting: []bool,
+    /// Per triggered process: the `stamp` of its suspension at its event
+    /// control, 0 while it runs.
+    waiting: []u64,
+    /// The last `stamp`, and the one of the latest settle event or
+    /// time-0 node suspension (`wakeTerms`).
+    seq: u64 = 0,
+    nodes_at: u64 = 0,
     repeats: []u64,
     /// §9.8.2: per `fork`, the arms still running.
     joins: []u32,
@@ -543,7 +553,7 @@ pub const State = struct {
             .dirty = try gpa.alloc(u64, (d.nodes + 63) / 64),
             .watch_start = d.watch_start,
             .watchers = d.watchers,
-            .waiting = try gpa.alloc(bool, d.triggered),
+            .waiting = try gpa.alloc(u64, d.triggered),
             .repeats = try gpa.alloc(u64, d.repeats),
             .joins = try gpa.alloc(u32, d.joins),
             .active = try gpa.alloc(u32, d.subs),
@@ -567,7 +577,7 @@ pub const State = struct {
         @memset(self.pending, false);
         @memset(self.diff, 0);
         @memset(self.dirty, 0);
-        @memset(self.waiting, false);
+        @memset(self.waiting, 0);
         @memset(self.repeats, 0);
         @memset(self.joins, 0);
         @memset(self.active, 0);
@@ -607,6 +617,8 @@ pub const State = struct {
                 }
                 self.changed.clearRetainingCapacity();
                 self.settle = .running;
+                // No process suspends while the nodes run.
+                self.nodes_at = self.stamp();
                 return settle_pc;
             }
             if (event.payload >= net.drive_base and event.payload < nba_payload) {
@@ -1017,18 +1029,17 @@ pub const State = struct {
             self.armed[pc] = false;
             try self.run(pc, null);
         };
+        if (reach.terms) return self.wakeTerms(reach, slot, before, after);
         if (reach.comb and self.sensed(slot)) try self.dirtyReaders(slot);
-        if (reach.watch and slot + 1 < self.watch_start.len) for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
-            if (!self.waiting[w.proc] or !w.edge.matches(before, after)) continue;
-            self.waiting[w.proc] = false;
-            try self.run(w.pc, null);
-        };
-        if (reach.terms) try self.wakeTerms(slot, before, after);
+        if (reach.watch) try self.wakeWatchers(slot, before, after, std.math.maxInt(u64));
     }
 
     /// `wake` of the event controls filed under `slot`, in the order they
-    /// suspended.
-    fn wakeTerms(self: *State, slot: u32, before: Bit, after: Bit) Error!void {
+    /// suspended, each after the nodes and triggered processes that
+    /// suspended before it: `vera --run`'s order, so a process woken here
+    /// suspends again before they store what it waits for next.
+    fn wakeTerms(self: *State, comptime reach: Reach, slot: u32, before: Bit, after: Bit) Error!void {
+        var comb = reach.comb and self.sensed(slot);
         const list = &self.terms[slot];
         var keep: usize = 0;
         for (list.items) |t| {
@@ -1039,11 +1050,39 @@ pub const State = struct {
                 keep += 1;
                 continue;
             }
+            // ponytail: one stamp for every node, the latest; a stamp per
+            // node if a design needs `vera --run`'s order among them too.
+            if (comb and (reach.comb_first or self.nodes_at < s.seq)) {
+                comb = false;
+                try self.dirtyReaders(slot);
+            }
+            if (reach.watch) try self.wakeWatchers(slot, before, after, s.seq);
             const pc = s.pc;
             self.retire(t.susp);
             try self.run(pc, null);
         }
         list.shrinkRetainingCapacity(keep);
+        if (comb) try self.dirtyReaders(slot);
+        if (reach.watch) try self.wakeWatchers(slot, before, after, std.math.maxInt(u64));
+    }
+
+    /// `wake` of the triggered processes watching `slot` that suspended
+    /// before stamp `bound`.
+    fn wakeWatchers(self: *State, slot: u32, before: Bit, after: Bit, bound: u64) Error!void {
+        if (slot + 1 >= self.watch_start.len) return;
+        for (self.watchers[self.watch_start[slot]..self.watch_start[slot + 1]]) |w| {
+            const since = self.waiting[w.proc];
+            if (since == 0 or since >= bound or !w.edge.matches(before, after)) continue;
+            self.waiting[w.proc] = 0;
+            try self.run(w.pc, null);
+        }
+    }
+
+    /// The next suspension's order among all of them: `vera --run` wakes
+    /// the processes waiting on a change in this order (`wakeTerms`).
+    pub inline fn stamp(self: *State) u64 {
+        self.seq += 1;
+        return self.seq;
     }
 
     /// `exec.park`: suspend the running process, to resume at `pc`.
@@ -1056,6 +1095,7 @@ pub const State = struct {
         const s = &self.susps.items[id];
         s.pc = pc;
         s.alive = true;
+        s.seq = self.stamp();
         return id;
     }
 
