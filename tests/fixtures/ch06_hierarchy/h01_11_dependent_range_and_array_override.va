@@ -38,7 +38,7 @@
 // SIZE — ch06's dependent-parameter fixtures move values, not shapes. The
 // residual defect this file does NOT reach is noted in SPEC.md: the same two
 // rules applied to a HOST override (`//! param`) instead of an instance line are
-// not checked at all, and W0651 misreads `[0:hi]` as a range admitting infinity.
+// not checked at all.
 //
 //! lrm 3.4.2
 //! lrm 3.4.4
