@@ -934,4 +934,3 @@ pub const display_txt =
     \\}
     \\
 ;
-

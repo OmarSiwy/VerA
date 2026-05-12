@@ -891,5 +891,3 @@ pub fn parseWrealDecl(self: *Parser, b: *Body) Error!void {
     const disc = try optPortType(self, &ignored, &signed);
     try parse_decl.parseNetNames(self, b, disc, .wreal, false, .{}, signed);
 }
-
-

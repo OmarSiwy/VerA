@@ -655,7 +655,7 @@ fn emitSeedTree(g: *Gen) Error!void {
         try g.w("(", .{});
         try writeArg(g, seedValue(lc), g.core.lo_idx);
         try g.w("); // V({s},{s}) = {s}\n", .{
-            plan_limit.uName(g.names.u_names, lc.hi), plan_limit.uName(g.names.u_names, lc.lo),
+            plan_limit.uName(g.names.u_names, lc.hi),   plan_limit.uName(g.names.u_names, lc.lo),
             if (lc.seed != .undef) "seed" else "vcrit",
         });
     }

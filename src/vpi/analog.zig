@@ -491,4 +491,3 @@ pub fn putDerivative(dv: *Deriv, v: f64) bool {
     dv.value = v;
     return true;
 }
-
