@@ -379,6 +379,7 @@ Learned expensively, and none of it is style preference (`PLAN.md §6`):
 ## 9. Before you say you are done
 
 - [ ] `zig build test` exits 0. Checked `$?`, not a log tail.
+- [ ] `zig build test` includes `zig fmt --check` (`zig build fmt-check` alone).
 - [ ] FAIL/XFAIL **name lists** diffed (captured as §0 rule 3 shows, not from
       a build-runner log); nothing new entered either.
 - [ ] `zig build test-devices` still passes every digital case, and

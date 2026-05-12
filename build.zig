@@ -55,6 +55,15 @@ pub fn build(b: *std.Build) void {
 
     const test_step = b.step("test", "Run every test suite");
 
+    const fmt = b.addFmt(.{
+        .paths = &.{ "lib", "src", "tests", "tools", "build.zig" },
+        // TODO: drop once wave11/sim merges; src/sim is zig-fmt clean there.
+        .exclude_paths = &.{"src/sim"},
+        .check = true,
+    });
+    b.step("fmt-check", "Fail on any file `zig fmt` would change").dependOn(&fmt.step);
+    test_step.dependOn(&fmt.step);
+
     // One test artifact per module: `zig test` collects tests only from the
     // root module's own file set, so a cross-module `_ = @import(...)`
     // contributes none. Each also gets a step, so `zig build test-ir` runs
