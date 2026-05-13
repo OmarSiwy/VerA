@@ -37,7 +37,7 @@
 //     4'b0101 alone = 5. Rejection of this legal form fails the fixture, but an
 //     erroneous extra leading zero bit could still give the same integer value.
 //     The former width-proof claim moves to open EXPR-018 in
-//     docs/conformance-expressions.md; this observes value, not width.
+//     docs/conformance-expressions.md at 8b1514d4; this observes value, not width.
 //     audit_replication_zero_width.va now supplies the middle-bit discriminator.
 //
 // Not pinned here: 4.2.13's rule, "the operands shall be evaluated

@@ -30,7 +30,7 @@
 // wrong and passes the first.
 //
 // Powers are perfect squares (1, 4, 9 times 1e-18) so that the reported
-// V/sqrt(Hz) column has short exact decimals — see SPEC.md.
+// V/sqrt(Hz) column has short exact decimals — see tests/fixtures/ch04_expressions/a06_noisetables_SPEC.md at 8b1514d4.
 //
 // The conductance term is what makes the node solvable and sets the transfer
 // impedance; it declares no noise of its own, so S_I above is the WHOLE

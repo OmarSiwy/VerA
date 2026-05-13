@@ -509,9 +509,9 @@ pub fn fireAnalog(reason: c_int) void {
 /// time and backup to an earlier time)". Every callback runs; the solution
 /// is rejected if ANY returned non-zero.
 ///
-/// Implementation-defined (also in p03_SPEC.md): the LRM does not say which
-/// `int` rejects. 0 accepts, as 0 is every other callback's uneventful return;
-/// anything else rejects.
+/// Implementation-defined: the LRM does not say which `int` rejects. 0
+/// accepts, as 0 is every other callback's uneventful return; anything else
+/// rejects.
 pub fn convergenceRejected() bool {
     var rejected = false;
     const n = cbs.items.len;

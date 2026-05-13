@@ -101,7 +101,7 @@
 //
 // WHAT THIS FILE DELIBERATELY NO LONGER ASSERTS. Whether the analog block's
 // explicit `@(b_dig)` wake-up fires during that interior transit is precisely
-// §8.4.4's transition-filter question, and this row's SPEC.md defers the
+// §8.4.4's transition-filter question, and this row's tests/fixtures/ch07_mixed_signal/m02_SPEC.md at 8b1514d4 defers the
 // connectmodule driver machinery to M04. The old `ana_b == 0.0` check pinned it
 // to zero with tolerance 0.0, which a conforming implementation can fail and
 // which an implementer could "fix" by coalescing the NBAs. `ana_b` is still

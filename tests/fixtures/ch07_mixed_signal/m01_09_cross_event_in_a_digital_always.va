@@ -55,7 +55,7 @@
 // region, `n` may legitimately read 0 or 1, and the clause supplies no digits
 // to write down. The want is therefore `n` itself on the open interval
 // (5n, 10n), which asserts nothing there on purpose, and the exact integer
-// outside it. This is the §7.3.6.1 rounding window the row's SPEC.md assigns to
+// outside it. This is the §7.3.6.1 rounding window the row's tests/fixtures/ch07_mixed_signal/m01_SPEC.md at 8b1514d4 assigns to
 // M02; when M02 pins the placement, replace the middle arm with the digit.
 //
 // oracle ($abstime <= 5n) ? 0 : ($abstime >= 10n) ? 1 : n.

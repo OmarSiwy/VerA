@@ -25,7 +25,7 @@
 // — not on the spelling. So a full-AMS compiler must accept `===` in an analog
 // block. Annex C.5 ("not supported in Verilog-A") removes them from the
 // Verilog-A SUBSET only, and VerA targets full Verilog-AMS
-// (annex_c_analog_subset/COVERAGE.md).
+// (tests/fixtures/annex_c_analog_subset/COVERAGE.md at 8b1514d4).
 //
 // WHAT VERA DOES: on two-state operands a case comparison IS the logical one
 // (IEEE 1364 §5.1.8 differs from `==` only on x and z bits), so lowering emits

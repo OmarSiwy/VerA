@@ -9,7 +9,7 @@
 // ten, including `net_resolution`, which the 2023 edition removed from both
 // Annex B and C.16, and to spell `resolveto` as `resolvedto`; both were read
 // from an HTML transcription contaminated with Verilog-AMS 2.4 text, and the
-// corrected sources are cited in annex_c_analog_subset/COVERAGE.md.) The
+// corrected sources are cited in tests/fixtures/annex_c_analog_subset/COVERAGE.md at 8b1514d4.) The
 // earlier fixture here spelled a well-formed library/config source and demanded
 // an error, which a conforming AMS tool would refuse to give.
 //

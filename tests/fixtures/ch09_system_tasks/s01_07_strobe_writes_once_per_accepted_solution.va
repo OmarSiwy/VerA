@@ -62,12 +62,12 @@
 // per Newton iteration answers 2*N with N >= 2, so >= 4, and in practice far
 // more — the damped limexp walk from 0 V to 0.656 V is tens of iterations, so
 // the reading would be tens of bytes, not 2. An implementation that never
-// writes answers 0. SPEC.md lists it as a regression pin rather than as
+// writes answers 0. tests/fixtures/ch09_system_tasks/s01_SPEC.md at 8b1514d4 lists it as a regression pin rather than as
 // coverage of a gap, which is what it is.
 //
 // This is also the positive control for the $debug row of the same clause:
 // $debug is the one task §9.4.6 exempts, and what it owes — a record per
-// iteration — is NOT asserted here. See SPEC.md for why that one needs harness
+// iteration — is NOT asserted here. See tests/fixtures/ch09_system_tasks/s01_SPEC.md at 8b1514d4 for why that one needs harness
 // support rather than a fixture.
 //
 //! lrm 9.4.6

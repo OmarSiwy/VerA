@@ -21,7 +21,7 @@
 // whether §19.10 attaches at the module definition or at the instantiation that
 // leaves the terminal blank is not settled by anything in docs/ (IEEE Std 1364
 // §19.10 itself is not offline here; §6.2.2, the nearest on-disk sentence,
-// points at the connection). SPEC.md records that question as withdrawn. With
+// points at the connection). tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 records that question as withdrawn. With
 // definition and instantiation on the same side, both readings give the same
 // two numbers and this file tests only `resetall.
 //
@@ -34,7 +34,7 @@
 //     is not offline here. So this one is MEASURED, not cited: move the
 //     `include above the `resetall and the file dies at
 //     "error[E0115]: undefined macro: `CHECKX" on the first `CHECKX below
-//     (run against zig-out/bin/vera at HEAD; counterfactual in SPEC.md).
+//     (run against zig-out/bin/vera at HEAD; counterfactual in tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4).
 //     Included
 //     before the reset, `CHECKX would not exist by the time the
 //     top module needs it, and the fixture would fail for a reason that has

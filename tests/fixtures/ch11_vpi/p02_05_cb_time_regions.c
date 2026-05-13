@@ -51,7 +51,7 @@
  * A sequence counter additionally pins the only ordering 12.31.2 actually
  * states: both "before" callbacks must run before both "after" callbacks. The
  * relative order WITHIN each pair is not stated by the LRM and is deliberately
- * not asserted here (see SPEC.md).
+ * not asserted here (see tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4).
  *
  * cbAfterDelay's absolute time. It is registered from cbStartOfSimulation,
  * which 12.31.4 defines as "Start of simulation (beginning of time 0 simulation

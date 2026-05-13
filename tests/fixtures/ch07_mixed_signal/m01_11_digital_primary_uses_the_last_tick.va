@@ -6,7 +6,7 @@
 // than or equal to the analog time when the expression is evaluated."
 //
 // That sentence is the ONLY normative content of the clause, and no fixture in
-// the tree checks it: chapter 7's own COVERAGE.md records `s7-3-6-5` as "no
+// the tree checks it: chapter 7's own tests/fixtures/ch07_mixed_signal/COVERAGE.md at 8b1514d4 records `s7-3-6-5` as "no
 // fixture", having withdrawn the credit `analog_reads_integer.va` used to get
 // (its `integer` is written inside the analog block, so §7.2.2 makes it
 // continuous and no digital tick is involved).

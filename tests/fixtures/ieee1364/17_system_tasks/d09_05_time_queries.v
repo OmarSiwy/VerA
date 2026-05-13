@@ -36,7 +36,7 @@
 //   `cap = $time;` stores 7 into a 64-bit reg, rendered as 61 zeros and 111.
 //   This observes storage/formatting, NOT the function's return width: a
 //   32-bit result zero-extends to exactly the same value. The withdrawn width
-//   claim moves to TIME-IEEE-001 in conformance-ieee-tasks-review.md and
+//   claim moves to TIME-IEEE-001 in docs/conformance-ieee-tasks-review.md at 8b1514d4 and
 //   audit_time_stime_wrap.v, which observes bit32 of the actual time result.
 //
 //   `ahead = $time + 1;` is 8: the function's result is an ordinary integral

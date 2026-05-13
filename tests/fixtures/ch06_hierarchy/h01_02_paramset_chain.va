@@ -38,7 +38,7 @@
 // the same module parameter). A fixture a conforming implementation of the
 // second reading must fail is not a conformance fixture, so the claim is gone
 // from this row and is asserted NOWHERE ELSE in the suite — no row owns it, and
-// SPEC.md records it as withdrawn rather than covered. It comes back the day
+// tests/fixtures/ch06_hierarchy/h01_SPEC.md at 8b1514d4 records it as withdrawn rather than covered. It comes back the day
 // §6.4/§6.4.1 (or an erratum) says which of the two things a near-link statement
 // names; at that point this file grows a third check and the module grows back
 // its `k`.
