@@ -40,7 +40,7 @@
 //   A tool that kept both copies has two samples with the same abscissa; the
 //   interval between them has zero width, and the lookup at 1.5 either divides
 //   by that zero or brackets the wrong pair. These two assertions PASS AT HEAD
-//   (see SPEC.md) — they are the half of §9.21's duplicate rule VerA already
+//   (see tests/fixtures/ch09_system_tasks/a05_SPEC.md at 8b1514d4) — they are the half of §9.21's duplicate rule VerA already
 //   satisfies, and this file claims no pressure from them.
 //
 // CONFLICTING, reached at the second sweep point:

@@ -57,11 +57,11 @@
  *
  * This file follows the example (lines 149 and 159 below) because the example is
  * what an implementer copies and because P03's analog fixtures follow it too.
- * The consequence for src/vpi/vpi_user.h is stated in SPEC.md's header list: it
+ * The consequence for src/vpi/vpi_user.h is stated in tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4's header list: it
  * must typedef the name `t_vpi_stf_partials`, not only the tag, and the third
  * field must be reachable as `derivative_to`. An implementer who prefers
  * 12.32.2's `derivative_wrt` changes exactly one line here (159) and one line
- * of SPEC.md; nothing else in the row depends on the spelling.
+ * of tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4; nothing else in the row depends on the spelling.
  *
  * LRM 12.13: vpi_get_analog_systf_info() "shall return information about a
  * user-defined analog system task or function callback in an

@@ -61,7 +61,7 @@
 // WHY THERE IS NO NETLIST IN THIS FILE. `rsh` is written in Verilog-AMS, on a
 // primitive the tool always ships, so the fixture does not depend on the
 // `//! spice` channel and can be run singly today — which the other ten cannot
-// (see SPEC.md). It also keeps the reject attributable: there is exactly one
+// (see tests/fixtures/annex_e_spice/h04_SPEC.md at 8b1514d4). It also keeps the reject attributable: there is exactly one
 // thing wrong with this file.
 //
 // THE SUBSTRING. `E0907` is the code VerA already mints for this, and its text

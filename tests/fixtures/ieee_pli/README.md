@@ -21,7 +21,7 @@ Current disposition: **open required positive**. The current production
 only walks declarations after compiling the design. No runtime invocation
 interface exists here to execute this probe correctly. Missing registration
 is not an allowed exclusion. This folder does not yet enter an executable
-conformance denominator; `docs/conformance-ieee-pli-overview-review.md` records
+conformance denominator; `docs/conformance-ieee-pli-overview-review.md` (at 8b1514d4) records
 its source boundary and the observed header-check failure.
 
 `audit_end_compile_objects` is a separate plugin/deck. Startup performs only

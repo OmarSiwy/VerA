@@ -7,12 +7,11 @@ and `psd`, which your simulator compiles into its own Newton loop as a shared
 library, a standalone testbench, or a GPU kernel. Same emitted source for CPU,
 NVPTX and AMDGCN.
 
-**Pre V1.0.0, Not yet at Verilog-AMS conformance.**
+**Pre v1.0.0. Not yet a conforming Verilog-AMS implementation.**
 
-The [conformance audit](docs/CONFORMANCE.md) defines the full-AMS target,
-source-review process and evidence required for each rule. Its inventory is
-still incomplete; passing the current fixture suite would not establish full
-conformance. `--coverage` reports static clause citations, not verified rules.
+[docs/ROADMAP.md](docs/ROADMAP.md) says what v1.0.0 requires and lists what is
+still open. Passing the current fixture suite does not establish conformance,
+and `--coverage` counts clause citations, not verified rules.
 
 ## Install
 
@@ -75,17 +74,19 @@ domains. A model that would hand your solver a NaN fails at compile time instead
 
 ## Will it compile my model?
 
-Measured 2026-09-21. Reproduce with `zig build benchmark -- --strict`.
+Plain Verilog-A device models are the well-tested path. To see the current
+numbers, run the suites yourself:
 
-| Suite | Passing | | Step |
-|---|---|---|---|
-| va fixtures | 1497 / 1570 | 95.4% | `benchmark -- --strict` |
-| spice decks | 7 / 7 | 100% | `test-spice` |
-| vpi .c fixtures | 13 / 26 | 50% | `test-vpi-fixtures` |
-| lrm clauses | 197 / 612 | 32.2% | `benchmark -- --coverage` |
+| Suite | Step |
+|---|---|
+| `.va` and `.v` fixtures | `zig build benchmark -- --strict` |
+| LRM clause coverage | `zig build benchmark -- --coverage` |
+| IEEE 1364-2005 clause coverage | `zig build test-1364 -- --coverage` |
+| digital transcripts | `zig build test-devices` |
+| VPI `.c` fixtures | `zig build test-vpi-fixtures` |
+| SPICE decks (pair and compile only) | `zig build test-spice` |
 
-Plain Verilog-A device models are the well-tested path. The 73 fixtures that do
-not pass are concentrated in mixed-signal, not in analog modelling.
+Each release's `CHANGELOG.md` entry records the measured numbers.
 
 ## Tests
 
@@ -109,9 +110,9 @@ Fixtures live under `tests/fixtures/` and each names the clause it tests:
 
 ## Contributing
 
-`AGENTS.md` for contributing, `docs/ROADMAP.md` for the release ladder,
-`docs/CLAUSE-AUDIT.md` for what is still open. The 2023 LRM is in `docs/` as PDF
-and per-chapter HTML.
+Read `AGENTS.md` before contributing. `docs/ROADMAP.md` holds the v1.0.0
+definition and the open items, and `docs/CLAUSE-AUDIT.md` defines the evidence
+classes. The 2023 LRM is in `docs/` as PDF and per-chapter HTML.
 
 ## License
 

@@ -22,7 +22,7 @@
 // whose winner is decided by strength alone, and the contest's outcome is an
 // ordinary %b column. A build with no strength lattice cannot reproduce the
 // distinct `wn` and `wr` outcomes in row 2 below. Current implementation
-// limitations are recorded in conformance-ieee-primitives-review.md, not
+// limitations are recorded in docs/conformance-ieee-primitives-review.md at 8b1514d4, not
 // inferred from this source-derived expectation.
 //
 // THE LATTICE, eight levels, strongest first:

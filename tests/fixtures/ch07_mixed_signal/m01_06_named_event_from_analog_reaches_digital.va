@@ -45,7 +45,7 @@
 // read take "the digital value calculated for the greatest digital time tick
 // which is less than or equal to the analog time" — also tick 5. Whether the
 // increment at tick 5 precedes or follows this evaluation is a delta-cycle
-// ordering the LRM does not fix, and this row's SPEC.md defers exactly that to
+// ordering the LRM does not fix, and this row's tests/fixtures/ch07_mixed_signal/m01_SPEC.md at 8b1514d4 defers exactly that to
 // M02. At a point placed just BEYOND 5n the increment has certainly happened
 // and the oracle is exact again.
 //

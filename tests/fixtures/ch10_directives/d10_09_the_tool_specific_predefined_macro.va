@@ -6,7 +6,7 @@
 //      text specific to a particular simulator. This macro shall be documented
 //      in the Verilog-AMS section of the simulator manual."
 //
-// It is a "shall" on the IMPLEMENTATION, and ch10_directives/COVERAGE.md
+// It is a "shall" on the IMPLEMENTATION, and tests/fixtures/ch10_directives/COVERAGE.md at 8b1514d4
 // records it as "unnameable in a portable fixture" and stops there. That is the
 // right verdict for a portable suite and the wrong one for a conformance suite
 // aimed at a named tool: the clause cannot be satisfied by a tool that defines

@@ -50,7 +50,7 @@ Broad page-content crops intentionally retain headings, source notes and white
 space. `tools/test_lrm_ch11_figures.py` checks source identity, dimensions,
 links and subsection anchors; it does not execute the VPI API or certify each
 relationship's implementation. Detailed source/evidence limits are recorded
-in `../conformance-ch11-review-draft.md`.
+in `docs/conformance-ch11-review-draft.md` at git revision 8b1514d4.
 
 Annex E's schematic and three Table E.1 pages are reproduced with
 `tools/extract_annex_e_figures.py`. Main visually inspected all four crops,
@@ -63,5 +63,5 @@ pages 268, 276, and 277. The sampled isolines, intermediate interpolation constr
 strength encoding and driver/receiver circuit are not editorial redraws.
 All original captions are inside the crops; the HTML retains an explicitly
 labeled accessible transcription of Figure 9-3. Coordinates and SHA256 hashes
-are recorded in `../conformance-ch9-review.md`; literal source typography and
-separate behavioral obligations are audited there, without claiming closure.
+are recorded in `docs/conformance-ch9-review.md` at git revision 8b1514d4, with its
+audit of literal source typography.
