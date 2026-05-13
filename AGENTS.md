@@ -45,7 +45,7 @@ all cases pass as of 2026-09-24 and must keep passing).
 
 | Document | What it is | Use it for |
 |---|---|---|
-| `docs/ROADMAP.md` | what v1.0.0 means, how to measure where VerA stands, and the open items | what is left, and which row your work closes |
+| `docs/ROADMAP.md` | what v1.0.0 means, how to measure where VerA stands, the release ladder, and the open items | which release your work belongs to, and which row it closes |
 | `CHANGELOG.md` | measured conformance per release (written by `tools/conformance.sh`; absent until the next release) | where the project actually stands |
 | `git show 297e97d^:ARCHITECTURE.md` | target architecture (deleted from the tree); §6 is a 9-phase migration | where a new file goes, and why. All §6 phases have landed (4–5 on 2026-09-24: `codegen/plan/`, `codegen/float/`); §4.7's CLI flag table was measured and declined |
 | `git show d16471b^:TODO.md` §2 and §4 | expensive knowledge and ground rules (deleted from the tree) | how to run a fixture; the traps |
