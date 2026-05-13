@@ -1,15 +1,16 @@
 # Roadmap to v1.0.0
 
-This file defines v1.0.0, says how to see where VerA stands, and lists what is
-still open. It holds no measured numbers. The commands in §2 produce them, and
-`CHANGELOG.md` records them for each release (`AGENTS.md` §0 rule 1).
+This file defines v1.0.0, says how to see where VerA stands, lays out the
+releases that remain, and lists what is still open. It holds no measured
+numbers. The commands in §2 produce them, and `CHANGELOG.md` records them for
+each release (`AGENTS.md` §0 rule 1).
 
 An earlier version of this file carried a 26-rung release ladder, per-release
 detail and three appendices of reconciled numbers. Most of those rungs landed on
-`main` without a release being cut, and only `v0.0.1` is tagged. That version,
-and the audit notes this file's open items came from, are at git revision
-`8b1514d4` (local tag `audit-docs-2026-09`). Read one with
-`git show 8b1514d4:<path>`.
+`main` out of order and without a release being cut; only `v0.0.1` is tagged.
+§3 starts again at v0.1.0, the current tree. The old version, and the audit
+notes this file's open items came from, are at git revision `8b1514d4` (local
+tag `audit-docs-2026-09`). Read one with `git show 8b1514d4:<path>`.
 
 ---
 
@@ -100,16 +101,71 @@ its derivation in its header and is reviewed by someone who opened the clause.
 
 Every version is a published tag, made with the ritual in `AGENTS.md` §3.
 `publish.yaml` re-measures on a clean runner and refuses a tag whose
-`CHANGELOG.md` entry disagrees with the tree.
+`CHANGELOG.md` entry disagrees with the tree. `tools/conformance.sh` writes each
+entry's numbers; this table never carries them.
 
 Semver, applied literally. A **minor** (`0.N.0`) changes something a consumer can
 observe: source VerA newly accepts or refuses, device text it emits, or a row in
 `build.zig`'s `module_specs`. A **patch** (`0.N.M`) closes rows without changing
 any of those. A refactor that keeps goldens byte-identical is a patch.
 
-v1.0.0 adds no code. It publishes §1's measures at their targets, with the
-implementation-defined list and the resource-limit table. If it needs code, the
-work before it is not finished.
+### 3.1 The ladder
+
+v0.1.0 is the tree as it stands. The rows after it come from §5 and are
+ordered by dependency: tooling first, then the language gaps that evidence
+fixtures need, then the evidence itself. A row whose answer waits on a §5.1
+decision stays open without blocking the rest of its release.
+
+| Version | Content | Closes | Gate |
+|---|---|---|---|
+| **v0.1.0** | The current tree (§3.2) | the old ladder's v0.0.2 to v0.9.1 rungs, except the Windows port and what §5 lists | `tools/conformance.sh --changelog v0.1.0`; every `build.zig` step green |
+| v0.1.1 | Hygiene, no consumer-visible change: `zig fmt --check` clean over `lib/`, `src/`, `tests/`, `tools/` and run by `zig build test`; the §5.5 fixture headers; `CLAUSE-AUDIT.md` refreshed (§5.8); passing fixtures from branch `audit-wip/ch5`; `a04_rollback_rollback_host.zig` wired or deleted; CI builds amdgcn beside nvptx | §5.4 harness rows, §5.5, §5.8 | `--strict` name list unchanged except added fixtures; goldens byte-identical |
+| v0.2.0 | The Windows port, alone (§1 F) | clause F | `zig build -Dtarget=x86_64-windows` |
+| v0.3.0 | Native `.v` executables: the `--schedule=static` fork hang, then build time (native backend for Debug builds; one 2-state build under `--state=auto`) | §5.3 native row | `test-1364 -- --native` differential, `tools/vs-verilator.sh` |
+| v0.4.0 | AMS source the LRM forbids is refused, with named diagnostics; the diagnostic wording rows | §5.2 AMS rows, §5.4 AMS rows | `--strict`; one `//! reject` per row with a legal neighbour |
+| v0.5.0 | AMS source the LRM allows compiles and computes right | §5.3 AMS rows | `--strict`; each row's xfail fixture flips |
+| v0.6.0 | IEEE 1364 language gaps: net arrays, upward hierarchical references, continuous assignment in a generate block (the digital xfail), then §5.2 and §5.3's IEEE rows | §5.2, §5.3 IEEE rows | `test-1364`, `--strict` |
+| v0.6.x | Measure B evidence: positive and reject pairs for uncited and one-way IEEE 1364 clauses. Fixtures only; a defect they find ships in its own minor | §1 B | `test-1364 -- --coverage` |
+| v0.7.x | Measure C tail and §5.7: the clauses `--coverage` lists as one-way or uncited, and the untested obligations | §1 C, §5.7 | `benchmark -- --coverage` |
+| v0.8.0 | §1 E: the implementation-defined list (`CLAUSE-AUDIT.md` §5.3 plus §5.6's last row) published with a test per choice; each resource limit bounded by a fixture and a named diagnostic | §1 E | `zig build test`, `--strict` |
+| v1.0.0 | The conformance statement: §1's measures at their targets, the configuration it was measured on (§1 G), the implementation-defined list and the resource-limit table | nothing new | every `build.zig` step green, `publish.yaml --check` |
+
+v1.0.0 adds no code. If it needs code, the ladder is not finished.
+
+### 3.2 What v0.1.0 contains
+
+Each line names the file or command that shows it in the tree, and the merge
+that landed it.
+
+- **Contract ABI 5**, the only ABI: sparse scalar families, `SimState` by value,
+  `batch_ok`. `tools/contract.zig` (`abi_version = 5`); merge `5fe6d9c7`.
+- **Native executables for IEEE 1364 designs**, phases P0 to P6, with
+  `--schedule=static|fifo`, `--two-state` and `--state=auto|2|4`. Designs the
+  native path cannot express fall back to the interpreter with a stated reason
+  (`src/sim/digital/emit.zig`). Merges `78e1c8f0`, `3d2cdcfe`, `eb1191c7`,
+  `d16aab30`, `51bd3e57`, `5537c634`, `8b1514d4`.
+- **Language and build selection**: `--std=SPEC`, `-Dlanguage=verilog|ams`,
+  `--zig-backend=auto|llvm|native`, `--optimize`. `vera --help`, `build.zig`;
+  merges `7187908c`, `9495baa4`.
+- **Digital runtime**: procedural code, file I/O, `$readmem`, PLA,
+  force/release, `$random` and `$dist_*` (`src/sim/digital/system.zig`), VCD
+  (`src/sim/digital/vcd.zig`), wired-net strength resolution. Merges
+  `d16aab30`, `39c71b61`.
+- **Mixed signal**: the coordinator and the ch07 steps (`src/sim/mixed.zig`),
+  §7.8 connect modules, §9.22 driver access. `AGENTS.md` §7 lists what is not
+  done.
+- **VPI**: every `.c` fixture compiles, and the ones in `build.zig`'s
+  `vpi_runs` run in-process, analog routines included. Merge `7d6c6a9e`.
+- **Measure B as a command**: the IEEE 1364 suite split into
+  `tests/fixtures/ieee1364/` with its own `CLAUSES.tsv`,
+  `zig build test-1364 -- --coverage`, and `//! xfail` on `.v` fixtures.
+  Merges `622fae8a`, `63133e1d`.
+- **Measure C's bulk**: `zig build benchmark -- --coverage` reports no
+  refused-only clause and lists the few one-way and uncited ones by name.
+- **Fixture directives and vendor attributes**: `//! warn`, `//! nowarn`,
+  `vera_interp`, `vera_nodiff`, and `$limit` seeds (`AGENTS.md` §6). Merges
+  `401db13b`, `e73cbb94`, `c6b3a5c7`.
+- **All nine `ARCHITECTURE.md` §6 phases** (§1 D).
 
 ---
 
@@ -191,6 +247,12 @@ These need a call, not another agent pass.
     (`annex_f_resolution/COVERAGE.md:16-21`.)
 14. **§A.8.8: UTF-8 bytes above 0x7F** are accepted in string literals.
     (`annex_a_syntax/COVERAGE.md:332-335`.)
+15. **§9.17.3, Syntax 9-12: `$limit(typ*V(a,k), ...)`**, whose first argument is
+    not an access function reference. Error, or the W0853 warning VerA gives
+    today? A refusal makes it a minor. (found 2026-09-27.)
+16. **A `.v` design as a contract device.** It needs `src/sim/mixed.zig` split
+    into caller-driven steps (next event time, advance, post A2D, D2A outputs,
+    monitors). This is an extension, not conformance; ask before scheduling.
 
 ### 5.2 Accepted source the standard forbids
 
@@ -238,6 +300,9 @@ These need a call, not another agent pass.
 | IEEE A.2.8, 9.8 | A `reg` declared in a named block is refused (E0209). | `d04_SPEC.md:208-210` |
 | IEEE A.6.5 | A hierarchical event trigger (`-> u.ev;`) does not parse. | `d04_SPEC.md:211-213` |
 | IEEE 17.2.9 | `$readmem` refuses a variable file name and variable start/finish addresses (E1100). | `conformance-readmem-validation-edges.md:66-70` |
+| IEEE 6.1, 3.10 | A net array (`wire [3:0] w [0:1];`) does not parse (E0207). | found 2026-09-27 |
+| IEEE 12.5 | An upward hierarchical reference (`top.r` read from a child) is refused (E1100, "undeclared instance"). Downward references work. | found 2026-09-27 |
+| IEEE 11.4.1 | Native executables under `--schedule=static` (the default): a `fork` arm that waits on an edge the statement before it causes misses the edge and the join hangs; `--run` and `fifo` complete. §11.4.1 permits the order, but a hang is not acceptable. | reported by the native perf work, not reproduced here |
 
 ### 5.4 Diagnostics and harness
 
@@ -249,6 +314,7 @@ These need a call, not another agent pass.
 | AMS 5.9.3 | `break` in an analog `for` is refused as "outside a loop" (E0404). | `ch05_analog_behavior/COVERAGE.md:85` |
 | AMS A.6.4 | `force`, `fork`, `wait`, `#5` and analog `forever` all get the generic E0209. | `annex_a_syntax/COVERAGE.md:278-282` |
 | AMS 4.5.12 | A non-zero τ or t0 on `zi_*` gets the generic "codegen refused". | `ch04_expressions/COVERAGE.md:93` |
+| AMS 3.4.2 | W0651 may misfire: on `nonzero = 1.0 exclude 0` (`ch03_data_types/05_parameter_ranges.va`) with no closed infinite bound, and on `[0:hi]` (`h01_11:41`). Check against §3.4.2 before pinning. | `h01_11_dependent_range_and_array_override.va:39-41` |
 | harness | A second `//! analysis` line silently replaces the first. | `ch09_system_tasks/COVERAGE.md:56,67` |
 | IEEE 18.1.5 | `vcdTokens` drops `$version` and `$comment`, so the `$dumplimit` comment and version text are never checked. `tools/vcd_semantics.py` is not wired in. | `conformance-vcd-review.md:39-42,155-159` |
 | harness | `a04_rollback_rollback_host.zig` fails 2 of 2 and no build step runs it. Its premise may be outside the contract (`updateState` runs at accepted points). Delete it, or wire it and decide. | `a04_SPEC.md:106-113` |

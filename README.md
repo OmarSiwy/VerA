@@ -111,7 +111,7 @@ Fixtures live under `tests/fixtures/` and each names the clause it tests:
 ## Contributing
 
 Read `AGENTS.md` before contributing. `docs/ROADMAP.md` holds the v1.0.0
-definition and the open items, and `docs/CLAUSE-AUDIT.md` defines the evidence
+definition, the release ladder and the open items, and `docs/CLAUSE-AUDIT.md` defines the evidence
 classes. The 2023 LRM is in `docs/` as PDF and per-chapter HTML.
 
 ## License
