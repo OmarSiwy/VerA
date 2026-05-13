@@ -1,16 +1,16 @@
-//! VAMS-2023 §8.5 / IEEE1364-2005 §11 event queues.
-//! Payloads index caller-owned execution records. The caller executes each
-//! returned event before calling next again; this module does not evaluate HDL.
+//! Scheduled payloads -> the VAMS-2023 §8.5 / IEEE 1364-2005 §11 order
+//! they run in: time, then region. A payload indexes a caller-owned record;
+//! this module evaluates no HDL.
 const std = @import("std");
 
 /// Integer ticks at the design's finest time precision. Scaling/rounding belongs
 /// to elaboration; all 64 bits are retained, including times above 2^53.
 pub const Time = u64;
 
-/// Six current-time regions. The future heap is the seventh logical region.
-/// VAMS §8.5.1 and §8.5.3.6 put explicit D2A before inactive; §8.5.2's
-/// pseudocode reverses these two. We follow the explicit normative ordering;
-/// docs/conformance-scheduling.md (SCH-023) records the discrepancy.
+/// Six current-time regions; the future heap is the seventh. VAMS §8.5.1
+/// and §8.5.3.6 put explicit D2A before inactive and §8.5.2's pseudocode
+/// reverses the two: this follows the normative text
+/// (docs/conformance-scheduling.md SCH-023).
 pub const Region = enum(u3) { active, explicit_d2a, inactive, nba, analog, monitor };
 pub const FutureKind = enum(u1) {
     inactive,
@@ -154,8 +154,8 @@ pub const Scheduler = struct {
 
     /// Complete the preceding dispatch and return one active event. Promotion
     /// moves a whole region into active; newly scheduled active work joins its
-    /// tail. FIFO is our permitted choice among otherwise unordered active work,
-    /// while preserving the mandated order of NBA updates (§11.4.1).
+    /// tail. FIFO is one order §11.4.2 permits among active events; NBA
+    /// updates keep the order §11.4.1 requires.
     ///
     /// During a returned monitor event, schedule/cancel reject mutation until
     /// the caller invokes next again. Empty returns null without changing time.
@@ -167,8 +167,8 @@ pub const Scheduler = struct {
     /// at `now` is empty and the earliest future event lies after `limit`,
     /// this returns null and leaves `now` and the future heap untouched, so a
     /// later call with a larger limit resumes exactly where this one stopped.
-    /// The bound is what lets a caller outside the queue — VAMS §8.4.4's
-    /// "common global time" — hold the digital engine at a tick.
+    /// The bound lets a caller outside the queue (VAMS §8.4.4's "common
+    /// global time") hold the digital engine at a tick.
     pub fn nextUntil(self: *Scheduler, limit: Time) ?Event {
         if (self.phase == .stopped) return null;
         self.phase = .idle;
@@ -222,7 +222,7 @@ pub const Scheduler = struct {
     }
 
     /// Every time at which a live event waits, in no particular order and
-    /// with repeats — `now` included while a current-time region holds one.
+    /// with repeats, `now` included while a current-time region holds one.
     /// Read-only: the future heap is scanned, not popped. IEEE 1364 §26.6.25's
     /// `vpiTimeQueue` iteration is the reader (src/vpi/run.zig), which sorts.
     pub fn pendingTimes(self: *const Scheduler, a: std.mem.Allocator, out: *std.ArrayList(Time)) std.mem.Allocator.Error!void {
@@ -349,8 +349,8 @@ pub const Scheduler = struct {
     fn consumeAnalog(self: *Scheduler, payload: u32) void {
         // §8.5.3.7 consumes all ACTIVE requests for this macro-process in one
         // solve. A later request remains eligible for a new solve after feedback.
-        // ponytail: linear scan of this active wave; add a per-macro index only
-        // if measured large analog waves justify maintaining a second index.
+        // ponytail: linear scan of this active wave; a per-macro index if
+        // large analog waves make it matter.
         var previous: SlotId = .none;
         var cursor = self.heads[0];
         while (cursor != .none) {
