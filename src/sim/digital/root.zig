@@ -2589,8 +2589,7 @@ test "the net and array declaration boundaries are explicit" {
 test "§19.8 no timescale is the simulator's own unit, not an error" {
     // "If there is no `timescale specified or it has been reset by a
     // `resetall directive, the time unit and precision are simulator-specific."
-    try expectRun("module m; wire w; reg a; assign #3 w = a; initial begin a = 1; #2 $display(\"%b %0d\", w, $time); #1 $display(\"%b %t\", w, $time); end endmodule",
-        "z 2\n1                    3\n");
+    try expectRun("module m; wire w; reg a; assign #3 w = a; initial begin a = 1; #2 $display(\"%b %0d\", w, $time); #1 $display(\"%b %t\", w, $time); end endmodule", "z 2\n1                    3\n");
     try expectRun("`timescale 1ns/1ps\n`resetall\nmodule m; initial #1 $display(\"%0d %g\", $time, $realtime); endmodule", "1 1\n");
 }
 
