@@ -1,13 +1,9 @@
-//! §17 display, strobe, monitor, `%t` and memory-load formatting.
-//!
-//! In: a task's argument list and the values it names (or a memory file's
-//! text). Out: bytes on `Run.out` (or words stored into an unpacked array).
-//! With a null allocator the same walk validates the call without printing.
-//!
-//! Clauses: §9.4.1 Table 9-1 display families, §9.4.3 Table 9-22 conversions;
-//! IEEE 1364-2005 §17.1.1.3/§17.1.1.4 sizing and unknown digits, §17.1.2
-//! `$strobe`, §17.1.3 `$monitor`, §17.3 `$timeformat`/`%t`/`$printtimescale`, §17.7.2
-//! `$realtime`; IEEE 1364-2005 §17.2.9 `$readmemb`/`$readmemh`.
+//! §17 display, strobe, monitor, `%t` and memory-load formatting: a task's
+//! arguments and the values they name (or a memory file's text) in; bytes on
+//! `Run.out` (or words stored into an unpacked array) out. With a null
+//! allocator the same walk validates the call without printing.
+//! Clauses: §9.4.1 Table 9-1, §9.4.3 Table 9-22; IEEE 1364-2005 §17.1.1.3,
+//! §17.1.1.4, §17.1.2, §17.1.3, §17.2.9, §17.3, §17.7.2.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -94,9 +90,9 @@ fn validateMemWord(token: []const u8, radix: Radix) !void {
 }
 
 /// One data word, right-justified into the memory's declared width. §17.2.9
-/// says the digits may be `x` or `z` for either task, and an unknown DIGIT is
-/// unknown in every bit it covers — which is why this shares `Radix.perDigit`
-/// with the printer rather than parsing a number and losing the states.
+/// says the digits may be `x` or `z` for either task, and an unknown digit is
+/// unknown in every bit it covers, so this shares `Radix.perDigit` with the
+/// printer rather than parsing a number and losing the states.
 fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !Int.Literal {
     // Validation covers discarded high digits independently of stored width.
     try validateMemWord(token, radix);
@@ -123,16 +119,16 @@ fn memWord(a: std.mem.Allocator, token: []const u8, radix: Radix, width: u32) !I
 /// text: each `next` is one word to store, in file order. The one load walk
 /// the interpreter and a native executable share.
 ///
-/// The clause's four rules, and all four are observable:
+/// The clause's rules:
 ///   - the file holds white space, comments and numbers in the task's radix;
 ///   - with no address arguments loading goes from lowest to highest index;
 ///   - `@<hex>` relocates the load point, and loading continues from there;
-///   - an address the file never reaches is LEFT ALONE. The task loads; it
-///     does not clear, so an unwritten word keeps the X it started at.
+///   - an address the file never reaches is left alone: an unwritten word
+///     keeps the x it started at.
 ///
-/// With a start and a finish the load runs from one toward the other, which
-/// is DOWNWARD when start > finish — the direction is the argument order
-/// and not the declaration's.
+/// With a start and a finish the load runs from one toward the other,
+/// downward when start > finish: the direction is the argument order, not
+/// the declaration's.
 pub const MemLoad = struct {
     it: MemTokens,
     radix: Radix,
@@ -228,6 +224,7 @@ pub const MemLoad = struct {
         return .{ .found = self.words, .expected = expected };
     }
 
+    /// The diagnostic text of `e`, shared by both engines.
     pub fn message(e: Failure) []const u8 {
         return switch (e) {
             error.BadAddress => "the memory file has a malformed `@` address",
@@ -237,6 +234,7 @@ pub const MemLoad = struct {
         };
     }
 
+    /// The W1150 text; the arguments are `found` then `expected`.
     pub const mismatch_text = "memory file data word count does not match load range: found {d}, expected {d}";
 };
 
@@ -285,13 +283,13 @@ pub fn sideFile(io: std.Io, a: std.mem.Allocator, file_name: []const u8, name: [
 const Radix = fmt.Radix;
 
 /// §9.4.1 Table 9-1's display family, which is one task with two axes: the
-/// radix an argument with NO format specification is printed in, and whether
+/// radix an argument with no format specification is printed in, and whether
 /// the call ends with a newline. "The $write task provides the same
 /// capabilities as $display, but with no newline."
 pub const Show = struct { radix: Radix, newline: bool };
 
-/// The four display families of §9.4.1 Table 9-1 differ in WHEN they run, not
-/// in what they print — every one of them formats through `display`.
+/// The display families of §9.4.1 Table 9-1 differ in when they run, not in
+/// what they print: every one formats through `display`.
 ///
 ///   show    now, in the active region
 ///   strobe  at the end of the timestep (IEEE 1364-2005 §17.1.2: "display
@@ -334,6 +332,7 @@ fn showAs(radix: Radix, newline: bool) Show {
 
 const TaskRow = struct { []const u8, Task };
 
+/// Every system task this module runs, by name.
 pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.{
     .{ "$display", Task{ .show = showAs(.decimal, true) } },
     .{ "$displayb", Task{ .show = showAs(.binary, true) } },
@@ -396,9 +395,9 @@ pub const TimeFormat = fmt.TimeFormat;
 
 // ---- formatting (§9.4.3, §17.1.1.3, §17.1.1.4, §17.3) -----------------------
 
-// null allocator validates the complete format/expression surface without
-// producing output. Every conversion is width-exact per IEEE 1364-2005
-// §17.1.1.3, including separate X and Z states (§17.1.1.4).
+/// Prints `args` as §9.4.1's display tasks do, onto `Run.out`; with a null
+/// `allocator` it only validates the call. Every conversion is width-exact
+/// (IEEE 1364-2005 §17.1.1.3), x and z apart (§17.1.1.4).
 pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show) Error!void {
     const ex = &self.file.exprs;
     var arg: usize = 0;
@@ -411,10 +410,10 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
             if (allocator != null) try self.out.writeByte(' ');
             continue;
         }
-        // Only a STRING is a format. §9.4.3's last sentence before Table
+        // Only a string is a format. §9.4.3's last sentence before Table
         // 9-23: "Any expression argument with no corresponding format
-        // specification is displayed using the default decimal format" —
-        // default for THIS task, so $displayh's bare argument is hex.
+        // specification is displayed using the default decimal format",
+        // the default of this task, so $displayh's bare argument is hex.
         if (ex.tag(e) != .str_literal) {
             try compile.checkExpr(self, e);
             if (allocator) |a| try emitValue(self, try exec.eval(self, a, e, 0), show.radix, null);
@@ -458,13 +457,13 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 'd', 'D' => .decimal,
                 // §9.4.3 Table 9-23's real conversions, which "have the full
                 // formatting capabilities available in the C language".
-                // §9.4.7 adds the fourth row to THIS context: "the %r (or %R)
-                // format specifier may be used on real expressions in the
-                // digital context" — engineering notation, `zCReal`'s 'r'.
+                // §9.4.7 adds a fourth row here: "the %r (or %R) format
+                // specifier may be used on real expressions in the digital
+                // context", engineering notation, `zCReal`'s 'r'.
                 'e', 'E', 'f', 'F', 'g', 'G', 'r', 'R' => null,
-                // §17.3 `%t` is not a radix at all — it reads the
-                // $timeformat state and formats a TIME, whose operand is
-                // in the module's own time unit.
+                // §17.3 `%t` is no radix: it reads the $timeformat state
+                // and formats a time, whose operand is in the module's own
+                // time unit.
                 't', 'T' => {
                     arg += 1;
                     if (arg == args.len) return self.exprFail(e, "missing display argument");
@@ -518,7 +517,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
     if (allocator != null and show.newline) try self.out.writeByte('\n');
 }
 
-/// §17.1.1.6 `%m`: the hierarchical name of the scope the display runs in —
+/// §17.1.1.6 `%m`: the hierarchical name of the scope the display runs in,
 /// the instance path from the root, then every §5.3.2 named block around the
 /// running instruction, outermost first.
 pub fn emitScope(self: *Run) Error!void {
@@ -564,8 +563,8 @@ fn emitTime(self: *Run, v: Int.Literal) Error!void {
 /// IEEE 1364-2005 §17.3.1 `$printtimescale` with no argument: "the time unit
 /// and precision of the module that is the current scope", in the clause's
 /// format `Time scale of (module_name) is unit / precision`.
-/// ponytail: the no-argument form only; `compile` refuses a named module.
 pub fn printTimescale(self: *Run) Error!void {
+    // ponytail: the no-argument form only; `compile` refuses a named module.
     const mt = self.timeOf(self.scope);
     const prec_exp = mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)));
     const name = self.file.str(self.scope_info.items[self.scope].module);
@@ -583,9 +582,9 @@ fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
     };
 }
 
-/// Print the standing monitor's argument list, if there is one and it is on.
-/// WHETHER to print is decided before this is called — a watched slot
-/// changed (`exec.store`), or `$monitoron` ran — never by comparing text.
+/// Prints the standing monitor's argument list, if there is one and it is
+/// on. The caller decides whether to print (a watched slot changed in
+/// `exec.store`, or `$monitoron` ran), never by comparing text.
 pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
     const m = self.monitor orelse return;
     if (!self.monitor_on) return;
@@ -600,7 +599,7 @@ pub fn monitorPrint(self: *Run, a: std.mem.Allocator) Error!void {
 
 test "§17.1.3 monitor: clock queries do not trigger, a change and change back does" {
     // t1: only `u` (unwatched) changes and $time advances: no line. t2: a
-    // goes 1 then back to 0 via #0 — it "changes value", so one line with
+    // goes 1 then back to 0 via #0: it "changes value", so one line with
     // the settled 0. t3: a = 1 prints with the current time. $monitoron at
     // t4 prints although nothing changed and monitoring was already on.
     try expectRun(
@@ -742,8 +741,8 @@ test "readmem formfeeds delimit words and addresses without adding words" {
 test "§9.4.3 the radix conversions size themselves from the operand" {
     // IEEE 1364-2005 §17.1.1.3: a radix field is the operand's declared width
     // in that radix, and the default decimal field holds the largest value the
-    // operand can take — 255 for `reg [7:0]`, so three columns of leading
-    // SPACE and not zero. `%0d` is the escape from it.
+    // operand can take: 255 for `reg [7:0]`, so three columns of leading
+    // space, not zero. `%0d` is the escape from it.
     try expectRun(
         \\module m; reg [7:0] v; initial begin
         \\  v = 8'd7;
@@ -751,7 +750,7 @@ test "§9.4.3 the radix conversions size themselves from the operand" {
         \\end endmodule
         \\
     , "[  7][7][07][007][00000111]\n");
-    // §17.1.1.4: a group that is ENTIRELY unknown prints lowercase, a group
+    // §17.1.1.4: a group that is entirely unknown prints lowercase, a group
     // that is partly unknown prints uppercase. The `X` is the whole signal
     // that known bits were discarded.
     try expectRun(
@@ -762,7 +761,7 @@ test "§9.4.3 the radix conversions size themselves from the operand" {
         \\
     , "[1010xxxx][ax][2Xx]\n[z3][zZ3]\n");
     // §9.4.1: a null argument is one space, $write has no newline, and an
-    // argument with no format specification takes the TASK's default radix.
+    // argument with no format specification takes the task's default radix.
     try expectRun(
         \\module m; reg [7:0] v; initial begin
         \\  v = 8'hA5;

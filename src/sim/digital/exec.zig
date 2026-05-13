@@ -1,15 +1,9 @@
-//! The digital interpreter.
-//!
-//! In: a scheduled `Pending` row (a pc to run, a write, a delayed drive) and
-//! the `Run` state. Out: stored values, woken waiters, newly scheduled events
-//! and display output.
-//!
-//! Clauses: IEEE1364-2005 §5.5.2 context-determined evaluation, §3.9 array
-//! addressing, IEEE 1364-2005 17.11.1 `$clog2`; §5.10.1 edges and resumption;
-//! §6.1/§6.1.3 continuous assignment and its inertial delay; §7.9 resolution,
-//! §3.8 trireg charge decay, §7.8.5 gates; §8.5.3.3/§8.5.3.4 intra-assignment
-//! timing, §9.7.1 delays, IEEE1364-2005 §9.5.1 casex/casez, IEEE1364 §10.3
-//! `disable`; §17.1.2 `$strobe` and §17.1.3 `$monitor` scheduling.
+//! The digital interpreter: a scheduled `Pending` row (a pc to run, a write,
+//! a delayed drive) and the `Run` state -> stored values, woken waiters, new
+//! events and display output.
+//! Clauses: IEEE 1364-2005 §3.8, §3.9, §5.5.2, §5.10.1, §6.1/§6.1.3, §7.8.5,
+//! §7.9, §9.5.1, §9.7.1, §10.3, §17.1.2, §17.1.3, §17.11.1 `$clog2`;
+//! §8.5.3.3/§8.5.3.4 intra-assignment timing.
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -37,17 +31,16 @@ const driver = @import("driver.zig");
 
 // ---- scheduler rows and waiters (§6.1.3, §17.1.2, §17.1.3, §5.10.1) ---------
 
-// Each dispatch consumes all fields of one pending write. A `.write` value
-// lives in its row's own planes (see `Row`), never in mutable variable storage.
+/// One scheduled event's payload, consumed whole by its dispatch. A `.write`
+/// value lives in its row's own planes (`Row`), never in variable storage.
 pub const Pending = union(enum) {
     run_process: u32,
     /// A resumption inside a §10.2.3 task activation (`Run.acts`): `pc`
     /// runs with activation `ctx`'s storage resident.
     @"resume": struct { pc: u32, ctx: u32 },
     write: struct { target: u32, value: Int.Literal, sel: ?Sel = null },
-    /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs and
-    /// not when the call executed — the whole point of the task is that it
-    /// reports the settled value.
+    /// §17.1.2 one $strobe call, evaluated when the `.monitor` region runs,
+    /// not when the call executed, so it reports the settled value.
     strobe: struct { args: []const Ast.ExprId, show: Show, scope: u32, pc: u32 },
     /// §17.1.3 "something changed this timestep, ask the standing monitor".
     /// One per timestep, coalesced by `monitor_pending`.
@@ -60,13 +53,13 @@ pub const Pending = union(enum) {
     tran_switch: u32,
     /// A.6.1's `[ delay3 ]` on a continuous assignment: this driver's
     /// `transition.target` arrives now. §6.1.3's inertial cancel is the
-    /// scheduler's — see `Inertial`.
+    /// scheduler's (`Inertial`).
     drive: u32,
     /// A.2.1.3's `[ delay3 ]` on the net declaration: the same delay one level
-    /// down, on the RESOLVED value rather than on one driver's.
+    /// down, on the resolved value rather than on one driver's.
     net_update: u32,
-    /// A.2.1.3's third `delay3` value on a `trireg`: the charge that has now
-    /// been held long enough to be worth nothing.
+    /// A.2.1.3's third `delay3` value on a `trireg`: its held charge decays
+    /// now (§3.8).
     decay: u32,
     /// VAMS §7.3.6.1 an A2D event: wake the processes waiting on this
     /// monitor slot (`Run.deliverA2d`).
@@ -75,14 +68,14 @@ pub const Pending = union(enum) {
 
 /// One payload row. Rows are recycled: a row is live exactly while the
 /// scheduler holds its `handle` pending, and goes back on `Run.free_rows` when
-/// it dispatches or is cancelled — so the table is as large as the most
-/// events ever queued at once, not as the run is long. `buf` is the row's own
+/// it dispatches or is cancelled, so the table is as large as the most events
+/// ever queued at once, not as the run is long. `buf` is the row's own
 /// storage for a `.write` value, kept across reuse and grown only when a wider
 /// value arrives.
 pub const Row = struct { item: Pending, handle: Handle = undefined, buf: []u64 = &.{} };
 
-// §5.10.1: an edge is a change toward 1 (posedge) or away from 1 (negedge),
-// with x and z as the intermediate value on either side of the transition.
+/// §5.10.1: an edge is a change toward 1 (posedge) or away from 1 (negedge),
+/// with x and z as the intermediate value on either side of the transition.
 pub const Edge = enum(u2) {
     any,
     posedge,
@@ -113,12 +106,11 @@ pub const Term = struct { susp: u32, gen: u32, edge: Edge };
 
 // ---- expression evaluation (§5.5.2, §5.5.3, §3.9, 1364 17.11.1) -------------
 
-/// IEEE 1364-2005 17.11.1: interpret every operand bit as unsigned, regardless
-/// of declared signedness. The ceiling is the bit length, minus one exactly
-/// for powers of two. Scan all limbs without narrowing or allocating a copy.
+/// IEEE 1364-2005 §17.11.1 `$clog2`: every operand bit read as unsigned,
+/// whatever the declared signedness. The ceiling is the bit length, minus one
+/// exactly for powers of two.
 fn integerCeilingLog2(value: Int.Literal) u64 {
-    // Preserve the existing unknown-input policy; this is not a claim that
-    // the source mandates zero for an operand containing x/z.
+    // An x or z operand gives 0, a choice: §17.11.1 does not say.
     if (value.hasUnknown()) return 0;
     var length: u64 = 0;
     var power_of_two = true;
@@ -156,7 +148,7 @@ fn address(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
     return base + @as(u32, @intCast(offset));
 }
 
-/// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the DECLARED
+/// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the declared
 /// indices it names: `count` of them from `first`, one `step` apart. The
 /// selected value's bit i is declared index `first + i*step`.
 pub const Sel = struct { first: i64, count: u32, step: i2 };
@@ -179,7 +171,7 @@ fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
 }
 
 /// The bit position a declared index names in `slot`, against its declared
-/// range — `[3:0]` counts up from the right, `[0:3]` down — or null outside it.
+/// range (`[3:0]` counts up from the right, `[0:3]` down), or null outside it.
 fn position(self: *Run, slot: u32, index: i64) ?u32 {
     const width = self.values[slot].width;
     const range: @import("root.zig").VecRange = self.vec_ranges.get(slot) orelse .{ .msb = @as(i64, width) - 1, .lsb = 0 };
@@ -210,12 +202,8 @@ fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
     return .{ .slot = try self.slot(ex.lhs(e)), .sel = (try selection(self, a, e)) orelse return null };
 }
 
-/// Write `value` (already converted by `evalFor`) where `p` lands. A selection
-/// merges into the value the slot holds NOW — which for a nonblocking update
-/// is when it lands, so two NBAs to different bits both survive — and bits
-/// outside the declared range are dropped.
-/// Assign an integral `value` to the lvalue `target` under the assignment
-/// rules — what a system task does with an output argument.
+/// Assigns an integral `value` to the lvalue `target` under the assignment
+/// rules, as a system task does with an output argument.
 pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal) Error!void {
     const p = (try place(self, a, target)) orelse return;
     const tt = try targetType(self, target);
@@ -230,6 +218,10 @@ pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) E
     try assign(self, a, target, lit);
 }
 
+/// Writes `value` (already converted by `evalFor`) where `p` lands. A selection
+/// merges into the value the slot holds now, which for a nonblocking update is
+/// when it lands, so two NBAs to different bits both survive. Bits outside the
+/// declared range are dropped.
 pub fn write(self: *Run, a: std.mem.Allocator, p: Place, value: Int.Literal) Error!void {
     const sel = p.sel orelse return store(self, p.slot, value.planes);
     const cur = self.values[p.slot];
@@ -276,9 +268,9 @@ fn leaf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
     };
 }
 
-/// `value` in type `ty`. Already that type is returned as is, planes and all —
-/// so the result may BE a variable's storage, and a caller that keeps it past
-/// the next store copies it (as `claim` and the hold cells do).
+/// `value` in type `ty`. A value already of that type is returned as is,
+/// planes and all, so the result may be a variable's storage: a caller that
+/// keeps it past the next store copies it (as `claim` and the hold cells do).
 pub fn normalize(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.Literal {
     if (value.width == ty.width and value.signed == ty.signed) return value;
     var result = value.resize(a, ty.width, if (ty.signed) .sign else .zero) catch |e| switch (e) {
@@ -291,7 +283,7 @@ pub fn normalize(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.L
 
 /// IEEE 1364-2005 §3.5.1 / Table 5-22's note: "if the size of the unsized
 /// constant is smaller than the context, and its leftmost bit is x or z, the
-/// x or z shall be extended" — to the size of the EXPRESSION, not to 32 bits.
+/// x or z shall be extended", to the size of the expression, not to 32 bits.
 /// The parsed literal already carries the fill up to its own width, so it is
 /// its top bit that is replicated; a known top bit extends as usual.
 fn unsizedFill(a: std.mem.Allocator, v: Int.Literal, ty: Type) Error!Int.Literal {
@@ -304,7 +296,7 @@ fn unsizedFill(a: std.mem.Allocator, v: Int.Literal, ty: Type) Error!Int.Literal
     return out;
 }
 
-/// An assignment's conversion (§5.5.3): `value` extended by its OWN
+/// An assignment's conversion (§5.5.3): `value` extended by its own
 /// signedness or truncated to `ty.width`, then typed `ty`.
 pub fn convert(a: std.mem.Allocator, value: Int.Literal, ty: Type) Error!Int.Literal {
     var out = try normalize(a, value, .{ .width = ty.width, .signed = value.signed });
@@ -316,8 +308,8 @@ fn scalar(a: std.mem.Allocator, bit: Int.Bit) Error!Int.Literal {
     return filled(a, 1, false, bit);
 }
 
-// Assignment supplies width only (§5.5.3); its signedness cannot change
-// the RHS type. Operator contexts below propagate BOTH width and type.
+/// `e` evaluated at least `width` bits wide, in its own signedness: an
+/// assignment supplies width only (§5.5.3). `evalContext` propagates both.
 pub fn eval(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, width: u32) Error!Int.Literal {
     var ty = compile.typeOf(self, e);
     // An integral reading of a real is §4.8.2's rounded integer.
@@ -344,9 +336,9 @@ fn realOfInt(v: Int.Literal) f64 {
     return @floatFromInt(v.values()[0]);
 }
 
-/// §4.8.2 real-to-integer: "rounded off to the nearest integer" — 35.5 is
-/// 36 and -1.5 is -2 — as a 64-bit signed value; a non-finite real has no
-/// integer, and is x.
+/// §4.8.2 real-to-integer: "rounded off to the nearest integer" (35.5 is 36,
+/// -1.5 is -2), as a 64-bit signed value; a non-finite real has no integer
+/// and is x.
 fn intOfReal(a: std.mem.Allocator, r: f64) Error!Int.Literal {
     if (!std.math.isFinite(r) or @abs(r) >= 0x1p63) return filled(a, 64, true, .x);
     const out = try filled(a, 64, true, .zero);
@@ -468,9 +460,9 @@ fn scalarContext(a: std.mem.Allocator, bit: Int.Bit, ty: Type) Error!Int.Literal
     return normalize(a, try scalar(a, bit), ty);
 }
 
-// IEEE1364-2005 §5.5.2: propagate context before evaluating operands.
-// Fixed one-bit results stop propagation; their operands get the separate
-// self-determined or common comparison context prescribed by Table 5-22.
+/// `e` evaluated in context `ty` (IEEE 1364-2005 §5.5.2): the context reaches
+/// the operands before they are evaluated. A one-bit result stops it; its
+/// operands get Table 5-22's self-determined or common comparison context.
 pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Error!Int.Literal {
     const ex = &self.file.exprs;
     if (ex.tag(e) == .logic_literal and !ex.logicValue(e).sized) return unsizedFill(a, ex.logicValue(e), ty);
@@ -692,29 +684,30 @@ pub fn evalContext(self: *Run, a: std.mem.Allocator, e: Ast.ExprId, ty: Type) Er
 
 // ---- the write path and §7.9 resolution (§5.10.1, §6.1.3, §3.8, §7.8.5) -----
 
-/// The one write path for both the active and NBA regions, so §5.10.1
-/// resumption cannot be bypassed by whichever region a source used.
+/// Stores `planes` into slot `target` and wakes what watches it: the one
+/// write path for the active and NBA regions, so none bypasses §5.10.1
+/// resumption. A write to a slot a §9.3 override holds is dropped, unless
+/// `overriding`.
 pub fn store(self: *Run, target: u32, planes: []const u64) Error!void {
     // §9.3: while a procedural continuous assignment holds the slot, its own
-    // process is the only writer — an `assign` over a variable, a `force`
+    // process is the only writer: an `assign` over a variable, a `force`
     // over anything, including a net's resolution.
     if (self.overrides.count() != 0 and !self.overriding) if (self.overrides.get(target)) |o| {
         if (o.force != null or (o.assign != null and !self.net_of.contains(target))) return;
     };
     const dest = self.values[target];
     const before = dest.bit(0);
-    // A real changes when its VALUE does: -0.0 and +0.0 compare equal
-    // (VAMS §3.7 via IEEE 754 `==`, m04_03), and a NaN never equals itself.
+    // A real changes when its value does: -0.0 and +0.0 compare equal
+    // (VAMS §3.7, IEEE 754 `==`), and a NaN never equals itself.
     const changed = if (self.reals.contains(target))
         @as(f64, @bitCast(dest.planes[0])) != @as(f64, @bitCast(planes[0]))
     else
         !std.mem.eql(u64, dest.planes, planes);
-    // Not copied when unchanged — which also covers `planes` BEING
+    // Not copied when unchanged, which also covers `planes` aliasing
     // `dest.planes` (`a = a`), a copy @memcpy forbids.
     if (changed) @memcpy(dest.planes, planes);
     if (!changed) return driver.stored(self, target, false);
-    // The value-change hook: every watcher of this slot hears it here. Most
-    // slots have none, so one test skips the lot.
+    // Most slots have no watcher, so one test skips them all.
     const watchers = self.watch[target];
     if (watchers.count() != 0) {
         if (watchers.contains(.monitor)) try requestMonitor(self);
@@ -784,9 +777,9 @@ fn requestD2a(self: *Run, target: u32, before: Int.Bit, after: Int.Bit) Error!vo
 }
 
 /// §17.1.3: "the entire argument list is displayed at the end of the time
-/// step". One event however many watched values moved, and however often —
-/// a value that changes and changes back within the step still "changes
-/// value", so it still prints, with the settled values.
+/// step". One event however many watched values moved, and however often: a
+/// value that changes and changes back within the step still "changes value",
+/// so it prints, with the settled values.
 fn requestMonitor(self: *Run) Error!void {
     if (self.monitor == null or !self.monitor_on or self.monitor_pending) return;
     self.monitor_pending = true;
@@ -925,15 +918,15 @@ fn staticSlots(r: *const Run, ins: compile.Instruction) []const u32 {
     };
 }
 
-/// §7.9: a net's value is the wired-logic resolution of ALL its drivers, so
+/// §7.9: a net's value is the wired-logic resolution of all its drivers, so
 /// it is recomputed whole on every driver update and published through
-/// `store` — the same path a variable write takes, which is what lets
-/// `@(posedge w)` resume on a net.
+/// `store`, the path a variable write takes, so `@(posedge w)` resumes on a
+/// net.
 pub fn resolve(self: *Run, net: u32) Error!void {
     const n = self.nets[net];
     if (n.trans.len != 0) return resolveJoined(self, net);
     // VAMS §3.7: a wreal has at most one driver and is that driver's value
-    // — no four-state resolution, no strength — and 0.0 with none.
+    // (no four-state resolution, no strength), and 0.0 with none.
     if (n.kind == .wreal) {
         n.resolved.values()[0] = 0;
         n.resolved.unknowns()[0] = 0;
@@ -944,9 +937,8 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         return store(self, n.slot, n.resolved.planes);
     }
     const current = self.values[n.slot];
-    // ponytail: one bit at a time. The tables are 4x4 over two planes, so a
-    // plane-parallel fold is possible; do it when a wide bus resolves often
-    // enough to show up, not before.
+    // ponytail: one bit at a time; a plane-parallel fold over the 4x4 tables
+    // when a wide bus resolves often enough to matter.
     const tables = wiredLogic(n.kind);
     var floating: u32 = 0;
     if (plainCopy(self, n)) {
@@ -977,9 +969,8 @@ pub fn resolve(self: *Run, net: u32) Error!void {
         setBit(n.resolved, at, acc.collapse());
     }
     if (n.kind == .trireg) try chargeState(self, net, floating == n.resolved.width);
-    // A.2.1.3's `[ delay3 ]` delays the net's own transition, so it sits
-    // between the resolution and the publish — every driver has already
-    // been folded in by the time it applies.
+    // A.2.1.3's `[ delay3 ]` delays the net's own transition, so it applies
+    // between the resolution and the publish, after every driver is folded in.
     if (n.delay.present) {
         const st = &self.nets[net].transition;
         if (try schedule(self, self.values[n.slot], false, n.resolved, false, st))
@@ -1109,9 +1100,8 @@ fn switchPaths(self: *Run, a: std.mem.Allocator, y: Node, group: []const Node) E
 /// §7.6 what a MOS switch drives: its data's value, at the data's strength
 /// reduced by §7.12 (the resolved strength of a net, strong for anything
 /// else), when its gate conducts; z when it does not; §7.10.2's H or L when
-/// the gate is x or z. A z on the data is z whatever the gate — "a switch
-/// transmits the z through" (d08_switch_mos) — which is where a switch parts
-/// company with a bufif.
+/// the gate is x or z. A z on the data is z whatever the gate ("a switch
+/// transmits the z through"), where a switch differs from a bufif.
 fn mosValue(self: *Run, scratch: std.mem.Allocator, at: u32, m: @import("net.zig").Mos, or_z: *bool) Error!Int.Literal {
     const ex = &self.file.exprs;
     const g = (try eval(self, scratch, m.gate, 1)).bit(0);
@@ -1187,12 +1177,11 @@ fn cancel(self: *Run, h: Handle) Error!void {
     try self.free_rows.append(self.arena, row);
 }
 
-/// §3.8 charge decay. The countdown restarts on each ENTRY into the
-/// capacitive state, so this is called with the state and acts on the edge.
-///
-/// ponytail: whole-net, not per-bit. A vector `trireg` with some bits driven
-/// and some floating decays all of them together; per-bit needs one
-/// countdown per bit, which no fixture asks for.
+/// §3.8 charge decay. The countdown restarts on each entry into the
+/// capacitive state, so this takes the state and acts on its edge.
+// ponytail: whole-net, not per-bit: a vector `trireg` with some bits driven
+// and some floating decays all of them together; a countdown per bit if a
+// design needs it.
 fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
     const n = &self.nets[net];
     const was = n.capacitive;
@@ -1210,9 +1199,8 @@ fn chargeState(self: *Run, net: u32, floating: bool) Error!void {
 /// What a gate driver contributes: §7.8.5's one output bit, and whether it is
 /// §7.10.2's H/L.
 fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or_z: *bool) Error!Int.Literal {
-    // One scratch list per evaluation, which `execute` resets each
-    // instruction — the point is to keep `gateBit` a pure function of the
-    // input bits, where §7.8.5's tables can be read straight off.
+    // Scratch, which `execute` resets each instruction, so `gateBit` stays a
+    // pure function of the input bits, read straight off §7.8.5's tables.
     var bits: std.ArrayList(Int.Bit) = .empty;
     for (g.ins) |in| {
         const v = try eval(self, scratch, in, 1);
@@ -1295,8 +1283,8 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
     try watch(self, id, try self.slot(watched), edge);
 }
 
-/// The `.monitor` region at the CURRENT time — §17.1.2/§17.1.3's "end of
-/// the timestep", which the scheduler already orders after active,
+/// Queues `item` in the `.monitor` region of the current time, §17.1.2 and
+/// §17.1.3's "end of the timestep", which the scheduler orders after active,
 /// inactive and NBA.
 fn enqueueMonitor(self: *Run, item: Pending) Error!void {
     const at = try claim(self, item);
@@ -1326,25 +1314,14 @@ fn claim(self: *Run, item: Pending) Error!u32 {
     return at;
 }
 
-/// IEEE 1364-2005 §10.3's `disable`, which §1.1 makes part of this
-/// language: it "terminates the activity" of a named block, and "execution
-/// continues with the statement following the block".
-///
-/// A suspended process is nothing but a resumption point, so the first
-/// sentence is: drop every resumption whose pc lands inside the block —
-/// the waiters it parked on an event, and the scheduled `.run_process`
-/// rows a `#` delay left behind. The second sentence is then one enqueue at
-/// `end`, and only when something WAS cancelled: a block nobody is
-/// suspended inside has no activity to terminate, and resuming a process
-/// that is not there would run the tail of a body twice.
-///
-/// ponytail: an NBA update already scheduled from inside the block still
-/// lands. It is a write the block completed before it was disabled, not
-/// activity of its own, and no fixture measures the alternative.
-///
-/// The executing process has no queued resumption to retire. Its dispatch
-/// arm separately jumps past a containing target block (IEEE1364 §10.3);
-/// this helper handles only suspended activity in that target range.
+/// IEEE 1364-2005 §10.3 `disable`: it "terminates the activity" of a named
+/// block, and "execution continues with the statement following the block".
+/// Drops every resumption into [start, end) (`stopRange`) and, only if one
+/// was dropped, resumes at `end`: a block nobody is suspended in has no
+/// activity, and resuming there would run the tail of a body twice. The
+/// executing process's own jump past the block is its dispatch arm's.
+// ponytail: an NBA already scheduled from inside the block still lands; it is
+// a write the block completed before it was disabled.
 fn disableRange(self: *Run, start: u32, end: u32) Error!void {
     if (try stopRange(self, start, end)) _ = try enqueue(self, .{ .run_process = end }, null, false);
 }
@@ -1378,6 +1355,8 @@ fn resumption(pc: u32, ctx: u32) Pending {
     return if (ctx == 0) .{ .run_process = pc } else .{ .@"resume" = .{ .pc = pc, .ctx = ctx } };
 }
 
+/// Queues `item` now (active, or NBA when `nba`) or `delay` ticks later
+/// (inactive, or NBA), and returns its handle.
 pub fn enqueue(self: *Run, item: Pending, delay: ?u64, nba: bool) Error!Handle {
     const at = try claim(self, item);
     const h = (if (delay) |d|
@@ -1407,19 +1386,14 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
 
 // ---- synchronous subroutines (IEEE 1364-2005 §10) ----------------------------
 
-/// Run subroutine `idx` to completion as one activation (§10.2.2, §10.4):
-/// the arguments are evaluated in the caller BEFORE anything of the callee's
-/// changes — a recursive call's argument reads the calling activation — then
-/// copied into the formals, the body runs on a scratch arena of its own, and
-/// the outputs are copied back. An automatic subroutine's whole frame is
-/// saved and set to x first and restored after (§10.2.3, §10.4.2), which is
-/// per-activation storage for a call that cannot suspend. Returns a
-/// function's result, in `a`.
-///
-/// ponytail: `repeat` counters and intra-assignment cells are per SITE, so a
-/// recursive body that suspends in one — impossible here, since only
-/// untimed subroutines run this way — or loops with `repeat` across its own
-/// recursion would share them.
+/// Runs subroutine `idx` to completion as one activation (§10.2.2, §10.4) and
+/// returns a function's result, in `a`. The arguments are evaluated in the
+/// caller before anything of the callee's changes (a recursive call's argument
+/// reads the calling activation), copied into the formals, the body runs on a
+/// scratch arena of its own, and the outputs are copied back. An automatic
+/// subroutine's frame is saved, set to x, and restored after (§10.2.3, §10.4.2).
+// ponytail: `repeat` counters are per site, so a recursive body that loops
+// with `repeat` across its own recursion shares one.
 pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.ExprId) Error!Int.Literal {
     const sub = &self.subs.items[idx];
     const decl = sub.decl;
@@ -1473,9 +1447,8 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
 // ---- activations of a recursive timed task (IEEE 1364-2005 §10.2.3) ---------
 
 /// One activation of a task that suspends and reaches itself: where its
-/// caller resumes, the actuals its outputs copy back to, and — while another
-/// activation of the same automatic task is resident in the frame — its own
-/// storage, saved.
+/// caller resumes, the actuals its outputs copy back to, and its own storage,
+/// saved while another activation of the same automatic task is resident.
 pub const Act = struct { sub: u32, ret_pc: u32, ret_ctx: u32, args: []const Ast.ExprId, storage: []u64 = &.{} };
 
 /// §10.2.2 enable task `idx` as a new activation: the inputs are evaluated in
@@ -1585,6 +1558,8 @@ fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Erro
 
 // ---- the interpreter loop (A.6.5, §6.1, §8.5.3.3) ---------------------------
 
+/// Runs the process at `start` until it suspends, stops or finishes;
+/// `scratch_arena` is reset before each instruction.
 pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) Error!void {
     var pc = start;
     var restarted = false;
@@ -1593,7 +1568,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
         // once, each back into its caller, until `callSync` ends the unwind.
         if (self.unwind != null) return;
         // §6.2.2 / §12.7: the names an instruction reads are those of the
-        // scope it was compiled in — its instance's, or an inlined task's.
+        // scope it was compiled in: its instance's, or an inlined task's.
         self.scope = self.code_scope.items[pc];
         // Each instruction completes its copies/captures before scratch is
         // reused; an untimed loop therefore retains no iteration temporaries.
@@ -1643,7 +1618,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                     },
                     // "$monitoron shall produce a display immediately after
                     // it is invoked, regardless of whether a value change has
-                    // taken place" — so whether it was already on is not asked.
+                    // taken place", so whether it was already on is not asked.
                     // Turning it off is silent.
                     .monitor_enable => |on| {
                         self.monitor_on = on;
@@ -1700,7 +1675,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 return;
             },
             // A.6.5 a `wait` that is already satisfied does not suspend at
-            // all; one that is not comes back to THIS pc, not the next, so
+            // all; one that is not comes back to this pc, not the next, so
             // the level is re-tested rather than the edge trusted.
             .wait_level => |s| {
                 if (try truthOf(self, scratch, s.cond) == .one) {
@@ -1717,13 +1692,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .sample => |s| {
                 const a = self.file.stmt(s.statement).assign;
                 const tok = self.file.stmtTok(s.statement);
-                // The parked value is the target's width, and the target
-                // may be an array element, so the width comes from the
-                // lvalue's base slot rather than from `address` — which
-                // §8.5.3.3 says is not resolved until the process resumes.
-                // The cell's own planes, not scratch: the value has to
-                // outlive this dispatch, which is the whole point of parking
-                // it. The width is the site's, so the planes are sized once.
+                // The parked value takes the target's type from the lvalue's
+                // base slot, not `address`, which §8.5.3.3 resolves only on
+                // resumption. It outlives this dispatch, so it lives in the
+                // cell's own planes, sized once per site.
                 const parked = try evalFor(self, scratch, a.value, try targetType(self, a.target));
                 const cell = &self.holds.items[s.cell];
                 if (cell.planes.len != parked.planes.len) cell.planes = try self.arena.alloc(u64, parked.planes.len);
@@ -1751,8 +1723,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 return;
             },
             // §8.5.3.3 "the values at the time the process resumes are used
-            // to determine the target(s)" — so the address is resolved now,
-            // even though the value was fixed before the suspension.
+            // to determine the target(s)": the address is resolved now,
+            // though the value was fixed before the suspension.
             .deposit => |s| {
                 const a = self.file.stmt(s.statement).assign;
                 // §3.9: an out-of-range or X/Z index names no element, so
@@ -1776,10 +1748,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             // resumption point is this same pc, so a change re-drives.
             .continuous => |at| {
                 const d = self.drivers[at];
-                // A driver's expression is written in the instance that
-                // wrote the assignment — for a port connection that is the
-                // PARENT of the net it feeds, so it is the driver's scope
-                // and not the dispatch's that resolves its names.
+                // A driver's names resolve in the scope that wrote the
+                // assignment, which for a port connection is the parent of
+                // the net it feeds, not the dispatch's scope.
                 self.scope = d.scope;
                 var or_z = false;
                 const value = switch (d.source) {
@@ -1798,7 +1769,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         break :blk try evalFor(self, scratch, x.e, self.slotType(self.nets[d.net].slot));
                     },
                 };
-                // A.6.1's `[ delay3 ]` delays what this driver CONTRIBUTES,
+                // A.6.1's `[ delay3 ]` delays what this driver contributes,
                 // not what the net shows: the other drivers are unaffected
                 // and the net re-resolves when the delayed value lands.
                 // §8.5: a UDP's initial output is published at time 0; only
@@ -1823,8 +1794,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 self.armed[pc] = true;
                 return;
             },
-            // §17.5 an asynchronous PLA: its own process, which evaluates and
-            // waits on its inputs and personality, forever.
+            // §7.6 a controlled pass switch: read the control, re-resolve
+            // both sides, then wait on the control's operands.
             .switch_ctrl => |s| {
                 const t = &self.trans[s.tran];
                 const c = (try eval(self, scratch, t.ctrl, 1)).bit(0);
@@ -1878,6 +1849,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 if (self.joins.items[j.join] == 0) _ = try enqueue(self, resumption(j.end, self.ctx), null, false);
                 return;
             },
+            // §17.5 an asynchronous PLA: its own process, which evaluates and
+            // waits on its inputs and personality, forever.
             .pla_start => |loop| {
                 _ = try enqueue(self, .{ .run_process = loop }, null, false);
                 pc += 1;
@@ -2383,8 +2356,8 @@ test "a delayed continuous assignment is inertial and swallows a short pulse" {
     ,
     // The 1 at t=11 would have landed at 14; the 0 at t=12 cancels it and is
     // itself the value already published, so nothing happens at all. The rise
-    // at t=16 lands at 19 and the fall at t=19 lands at 26 — the two delays are
-    // chosen by the value transitioned TO, not by the direction of the source.
+    // at t=16 lands at 19 and the fall at t=19 lands at 26: the two delays are
+    // chosen by the value transitioned to, not by the direction of the source.
         \\t10 0
         \\pulse_gone 0
         \\t18 0
@@ -2415,11 +2388,10 @@ test "a trireg holds its charge for the decay time and then gives up" {
         \\end
         \\endmodule
     ,
-    // Released at t=5, so the decay is at t=25 — sampled at 24 and 26 and never
-    // AT it, because what a sample in the same timestep as the decay sees is an
-    // intra-timestep ordering this pins nothing about. The countdown then
-    // RESTARTS from the second release at t=28, which is what "restarted" is
-    // for: a decay measured from the FIRST release would have fired by t=46.
+    // Released at t=5, so the decay is at t=25, sampled at 24 and 26 and never
+    // at it: a sample in the decay's own timestep would pin an intra-timestep
+    // order. The countdown restarts from the second release at t=28; one
+    // measured from the first release would have fired by t=46.
         \\t24 1 1
         \\t26 x 1
         \\restarted 0 0
@@ -2447,9 +2419,9 @@ test "unpacked array elements are addressed, and an out-of-range index reads X" 
 }
 
 test "§9.7.1 a real delay rounds to the precision instead of truncating to the unit" {
-    // `#0.5` under 10ns/100ps is 50 precision units — half a time unit, not
-    // zero. A runner that truncated would print `0 0`, and one that ignored
-    // the fraction would print `0 0` too; only rounding gives 1.
+    // `#0.5` under 10ns/100ps is 50 precision units, half a time unit, not
+    // zero. Truncating it, or ignoring the fraction, would print `0 0`; only
+    // rounding gives 1.
     try expectRun(
         \\`timescale 10ns/100ps
         \\module m; initial begin #0.5 $display("%0d %g", $time, $realtime); end endmodule
@@ -2474,9 +2446,9 @@ test "unknown delay is zero and finish discards pending later processes" {
 }
 
 test "disable terminates a named block and resumes after it" {
-    // Both halves of IEEE 1364 §10.3's sentence, and they are separable:
-    // a `disable` that only cancelled would print 0001, and one that only
-    // resumed would let the block's own `#4` write 0010 land first.
+    // Both halves of IEEE 1364 §10.3's sentence: a `disable` that only
+    // cancelled would print 0001, and one that only resumed would let the
+    // block's own `#4` write 0010 land first.
     try expectRun(
         \\`timescale 1ns/1ns
         \\module example;

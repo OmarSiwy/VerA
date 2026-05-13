@@ -1,21 +1,9 @@
-//! IEEE 1364-2005 four-state operators for a native executable.
-//!
-//! In: operands as `T(w)` — a `W` up to 64 bits, a `Wide(n)` of `n` words
-//! per plane above — their widths and signedness known when the design is
-//! compiled (§5.5: every width is static), so the representation is chosen
-//! at compile time and nothing dispatches on width at run time. Out: the
-//! value `Integer.Literal`'s operator of the same name computes — which is
-//! the oracle the tests at the bottom compare against, bit for bit. Wide
-//! `* / % **` are that oracle itself.
-//!
-//! Clauses: §5.1.5 arithmetic, §5.1.7 relational, §5.1.8 equality, §5.1.9
-//! logical, §5.1.10 bitwise, §5.1.11 reduction, §5.1.12 shift, §5.1.13
-//! conditional, Tables 5-12..5-21; §5.5.2 extension; §9.5.1 casez/casex.
-//!
-//! Under `--two-state` (the executable's root declares `vera_two_state`)
-//! every x or z an operator would create is 0 instead: an out-of-range
-//! select, `/` or `%` by zero, `0 ** -n`. Operands then never hold x or z,
-//! so no other operator can make one.
+//! IEEE 1364-2005 four-state operators for a native executable: operands
+//! as `T(w)` (a `W` up to 64 bits, a `Wide(n)` above, the width fixed at
+//! compile time by §5.5) in; the value `Integer.Literal`'s operator of the
+//! same name computes out. Under `--two-state` an x or z an operator would
+//! make is 0. Clauses: §5.1.5 to §5.1.14 with Tables 5-12 to 5-21, §5.5.2
+//! extension, §9.5.1 casez/casex.
 const std = @import("std");
 const Int = @import("frontend").Integer;
 
@@ -35,6 +23,7 @@ pub fn Wide(comptime n: u32) type {
     return struct { v: [n]u64, x: [n]u64 };
 }
 
+/// The words per plane of a `w`-bit value.
 pub fn words(comptime w: u32) u32 {
     return (w + 63) / 64;
 }
@@ -61,7 +50,6 @@ fn wordsOf(comptime A: type) u32 {
     return if (V == u64) 1 else @typeInfo(V).array.len;
 }
 
-/// `a` as words: a `W` is one.
 /// `a` as words, one when it is a `W`.
 pub inline fn wide(a: anytype) Wide(wordsOf(@TypeOf(a))) {
     if (@FieldType(@TypeOf(a), "v") == u64) return .{ .v = .{a.v}, .x = .{a.x} };
@@ -143,6 +131,7 @@ fn orX(comptime w: u32, r: [words(w)]u64, unk: bool) T(w) {
 /// One bit, as `Integer.Bit` encodes it: `v | x << 1`.
 pub const Bit = enum(u2) { zero = 0, one = 1, z = 2, x = 3 };
 
+/// The mask of a `w`-bit value; `w` is 1 to 64.
 pub fn mask(comptime w: u32) u64 {
     comptime std.debug.assert(w >= 1 and w <= 64);
     return if (w == 64) std.math.maxInt(u64) else (@as(u64, 1) << w) - 1;
@@ -558,8 +547,8 @@ pub inline fn cond(c: Bit, y: anytype, n: @TypeOf(y)) @TypeOf(y) {
 
 /// §4.8.2 integer to real (`exec.realOfInt`): the value read by its own
 /// signedness; an x or z bit makes it 0.
-/// ponytail: the low 64 bits of a wider operand, as the interpreter reads it.
 pub inline fn toReal(a: anytype, comptime w: u32, comptime signed: bool) f64 {
+    // ponytail: the low 64 bits of a wider operand, as the interpreter reads it.
     if (anyX(a)) return 0;
     const lo = wide(a).v[0];
     if (signed and w <= 64) return @floatFromInt(@as(i64, @bitCast(sext(lo, w))));
