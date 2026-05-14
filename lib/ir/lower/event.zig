@@ -1297,7 +1297,7 @@ pub fn isDigitalOnlySysFunc(name: []const u8) bool {
         // "$bitstoreal and $realtobits,$rtoi and $itor can be used in the
         // analog context". Table 9-8's analog column agrees — only $signed and
         // $unsigned read No, and both presuppose a sized vector.
-        "$signed",           "$unsigned",
+                "$signed",           "$unsigned",
     };
     for (digital_only) |d| if (std.mem.eql(u8, name, d)) return true;
     return false;

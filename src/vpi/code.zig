@@ -1345,4 +1345,3 @@ fn putModelDelays(o: *const root.Obj, d: *const Delay) void {
     const idx = (@intFromPtr(o) - @intFromPtr(design.objects.ptr)) / @sizeOf(root.Obj);
     design.objects[idx].delays = out;
 }
-
