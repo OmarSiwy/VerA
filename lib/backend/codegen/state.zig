@@ -267,7 +267,6 @@ fn emitAcceptBody(self: *Gen, acc: Accept) Error!void {
             try self.w("    {{\n        const in = m.f{d}{s};\n", .{ lo, val });
         }
         switch (k) {
-            .ddt => try self.w("        inst.{s}__prev = in;\n", .{n}),
             // §4.5.4 "Once assert becomes zero, idt() returns the integral
             // of the argument starting from the last instant where assert
             // was nonzero": while assert is nonzero the accumulator is ic.

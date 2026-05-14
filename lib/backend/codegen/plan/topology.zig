@@ -129,7 +129,11 @@ pub fn isFlowUnknown(self: Input, i: u32) bool {
     if (i >= self.lowered.nodes.len) return true; // codegen-added branch current
     // §5.4.2/§5.4.3 lowering records the kind where it creates the slot; the
     // name cannot decide it, since §2.8.1 lets a net be declared `\flow(p,n)`.
-    if (self.lowered.nodes.items(.kind)[i] != .net) return true;
+    switch (self.lowered.nodes.items(.kind)[i]) {
+        .net => {},
+        .branch_flow, .port_flow => return true,
+        .op_state => return false,
+    }
     // §1.3.4.2 a flow signal-flow net has no potential ("Potential for such
     // a node is not defined"), so its one unknown is a flow even though it
     // is a plain node. Every caller (the host's `u_kinds`, the §3.6.1.2

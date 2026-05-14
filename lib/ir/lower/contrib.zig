@@ -1068,7 +1068,33 @@ fn firstDdt(self: *const Lower, e: Ast.ExprId) Ast.ExprId {
 /// the first suffixed one decides it.
 fn siteLte(self: *Lower, e: Ast.ExprId) Oom!bool {
     if (lteSuffix(self, e)) |a| return lteValue(self, a);
+    return stackLte(self);
+}
+
+/// `siteLte` for an operator call `e` that is its own site: its own suffix,
+/// then the nearest enclosing statement's, then yes.
+pub fn opSiteLte(self: *Lower, e: Ast.ExprId) Oom!bool {
+    if (self.file.exprLte(e, .vera_lte)) |a| return lteValue(self, a);
+    return stackLte(self);
+}
+
+fn stackLte(self: *const Lower) bool {
     return if (self.lte_stack.items.len != 0) self.lte_stack.items[self.lte_stack.items.len - 1] else true;
+}
+
+/// Writes the row of an operator unknown `s` (`lower_node.opStateNode`): a flow
+/// contribution on (s, ground) with resistive half `f` and one charge site `q`,
+/// stamped with sign -1 when `q_neg`. The resistive half starts as V(s) and
+/// the site ASSIGNS it, so a card-conditional arm that is off leaves the row
+/// `s = 0`, not an empty one that makes the system singular.
+pub fn stampOpRow(self: *Lower, tok: u32, s: u16, f: Mir.Value, q: Mir.Value, q_neg: bool, lte: bool) Oom!void {
+    const idx = try contribIndex(self, .{ .access = .flow, .hi = s, .lo = ground }, tok);
+    const acc = self.accum.items[idx];
+    try self.builder.writeVariable(acc.resist, .entry, try lower_node.probe(self, s));
+    try self.builder.writeVariable(acc.wrote, .entry, .f_one);
+    try self.builder.writeVariable(acc.resist, self.cur, f);
+    try self.builder.writeVariable(acc.react, self.cur, if (q_neg) try self.emit(.fneg, &.{q}) else q);
+    try addSite(self, idx, .{ .charge = q, .negate = q_neg, .lte = lte, .tok = tok }, false);
 }
 
 fn lteSuffix(self: *const Lower, e: Ast.ExprId) ?Ast.LteAttr {

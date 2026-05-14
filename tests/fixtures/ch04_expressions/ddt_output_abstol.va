@@ -26,7 +26,6 @@
 //! print none
 //! abstol ddt$0 = 1e-3
 //! abstol ddt$1 = 1e-12
-//! xfail C1: a ddt off a contribution's spine is no unknown of the host's, so its abstol reaches no table
 `include "disciplines.vams"
 `include "check.vh"
 module ddt_output_abstol(p);

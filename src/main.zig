@@ -509,6 +509,7 @@ pub fn main(init: std.process.Init) !u8 {
         const wd = work_dir orelse ".zig-cache/vera-tb";
         var dm = directives;
         dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
+        dm.op_states = try vera.tb.opStates(tb_arena.allocator(), result.lowered);
         const runner = try vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm);
         const built = vera.tb.buildExe(gpa, io, device, runner, .{
             .work_dir = wd,

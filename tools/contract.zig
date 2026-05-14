@@ -845,7 +845,9 @@ pub fn nU(comptime D: type) comptime_int {
 // check (VerA's `vera_lte` attribute clears it). A device without `n_q` and
 // `q_stamps` has one site per row, site k on row k with sign +1, all checked.
 // `jac_const.c`, `q_pattern` and `q_rows` stay per row; `q_site_pattern[k]`
-// is site k's column set.
+// is site k's column set. A §4.5.2 operator unknown (a `ddt` off a
+// contribution's spine) is an ordinary internal `.voltage` unknown with its
+// own row and site.
 
 /// One `q_stamps` entry: reactive row `row` gains `sign · q[site]`.
 pub fn QStamp(comptime U: type) type {
