@@ -171,6 +171,21 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
         else => {}, // else: anything else suspends where the interpreter says
     };
 
+    // A node whose output an event control waits on stays a queued driver
+    // or triggered process. `vera --run` queues each level of logic behind
+    // what was queued before it ran, so a process started in between waits
+    // before the output changes; one settle event would change it first.
+    const waited = try reachOf(self, procs, mon.items, &.{}, &.{}, &.{});
+    var kept: usize = 0;
+    for (cands.items) |c| {
+        if (for (c.outputs) |o| {
+            if (waited[o].terms) break true;
+        } else false) continue;
+        cands.items[kept] = c;
+        kept += 1;
+    }
+    cands.shrinkRetainingCapacity(kept);
+
     // Kahn's order over the candidates; one on or downstream of a cycle
     // stays event-driven.
     // ponytail: downstream of a cycle is demoted too; Tarjan keeps those if a design needs it.
@@ -259,13 +274,9 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
     };
     const watch = try per.table(Watcher, a, watch_lists);
 
-    const reach = try reachOf(self, procs, mon.items, fan.start, comb.start, watch.start);
-    for (cands.items) |c| if (node_of[c.proc] != null and r.code.items[procs[c.proc].entry] == .continuous) for (c.inputs) |s| {
-        reach[s].comb_first = reach[s].terms;
-    };
     return .{
         .watched = watched,
-        .reach = reach,
+        .reach = try reachOf(self, procs, mon.items, fan.start, comb.start, watch.start),
         .node_pc = node_pc,
         .comb_start = comb.start,
         .comb = comb.items,
@@ -280,7 +291,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
 /// Per slot, what its change can wake: the tables' rows, an event control
 /// a process files (every wait but a triggered process's or a node's entry;
 /// a subroutine a process calls never waits), the monitor, a dump.
-fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []const u32, comb_start: []const u32, watch_start: []const u32) Error![]Reach {
+fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []const u32, comb_start: []const u32, watch_start: []const u32) Error![]const Reach {
     const r = self.r;
     const reach = try self.arena.alloc(Reach, r.values.len);
     @memset(reach, .{});
