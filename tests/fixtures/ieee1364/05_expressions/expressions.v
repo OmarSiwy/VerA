@@ -32,7 +32,7 @@ module expressions;
     // unsigned comparison context yields 0x7fffffff after shifting, on every
     // permitted native integer width. The earlier native-integer operand and
     // unsized zero could instead yield a value above0x80000000 on wider hosts.
-    // WIDTH-CONTEXT in conformance-ieee-expression-width-review.md tracks this
+    // WIDTH-CONTEXT in docs/conformance-ieee-expression-width-review.md at 8b1514d4 tracks this
     // oracle correction; the required printed result remains1.
     $display("unsigned-arithmetic-shift %b",((32'shffffffff>>>count)+32'sd0)<32'h80000000);
     $display("signed-arithmetic-shift %b",((negative>>>count)+0)<32'sh80000000);

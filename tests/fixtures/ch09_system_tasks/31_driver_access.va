@@ -23,9 +23,9 @@
 // $receiver_count ( signal_name )", Syntax 9-18 — but VerA does not implement
 // it, so a call written here would pin a missing feature rather than the
 // paragraph-3 call-site rule this file exists for. That gap is pinned by the
-// M04 row (tests/fixtures/ch07_mixed_signal/m04_SPEC.md). A header once claimed
+// M04 row (tests/fixtures/ch07_mixed_signal/m04_SPEC.md at 8b1514d4). A header once claimed
 // the function had no subclause to cite; the subclause exists and the claim is
-// withdrawn — see COVERAGE.md §s9.22.2.
+// withdrawn — see tests/fixtures/ch09_system_tasks/COVERAGE.md at 8b1514d4 §s9.22.2.
 //
 //! lrm 9.22
 //! reject connect module

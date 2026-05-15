@@ -34,7 +34,7 @@
 // V(a,c) = V(a) - V(c). It is kept because the READ is what makes (a,c) a
 // potential probe at all — delete it and §5.4.2.1 no longer applies to this
 // circuit, so the other two assertions pin nothing. It is a precondition, not a
-// third claim, and SPEC.md counts it as one.
+// third claim, and tests/fixtures/ch05_analog_behavior/a02_SPEC.md at 8b1514d4 counts it as one.
 //
 // THIS FIXTURE PASSES TODAY — deliberately. VerA leaves every probe branch
 // unconnected, which is right for a potential probe and wrong for a flow probe;

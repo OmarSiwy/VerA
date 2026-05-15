@@ -1,6 +1,6 @@
 // AMS 9.4.3 gives real formats "the full formatting capabilities available
 // in the C language"; 9.5.3 applies the display formatter to string output.
-// See conformance-display.md for the C-source cross-check and the separate
+// See docs/conformance-display.md at 8b1514d4 for the C-source cross-check and the separate
 // unresolved wording around %g. These cases use exactly representable 0.5
 // and -0.5, so no decimal rounding-boundary choice affects the expected text.
 // With four fractional digits, %e gives 5.0000e-01 (ten characters);

@@ -40,7 +40,7 @@
 // arguments, and whether a conforming preprocessor may diagnose that is an IEEE
 // 1364 §19.11 question the offline docs cannot answer — so the line carries a
 // macro use in the `keyword = value` shape as documentation of the shape, and
-// the discrimination is not claimed. SPEC.md records it as out of reach.
+// the discrimination is not claimed. tests/fixtures/ch10_directives/d10_SPEC.md at 8b1514d4 records it as out of reach.
 //
 // THE ORACLE is arithmetic on two literals a human wrote three lines apart:
 // `D10_GAIN is 2.0 because line 1 says so and nothing supersedes it, `D10_SCALE

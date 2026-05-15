@@ -101,7 +101,7 @@
 //   contributing nothing but 0 V. It does NOT exclude a delay of one or two
 //   ticks. Sampling adjacent to the assignment would exclude that too, but it
 //   would then be asserting intra-timestep delivery order, which is M02's row
-//   and which this row's SPEC.md explicitly does not cover. The residual
+//   and which this row's tests/fixtures/ch07_mixed_signal/m04_SPEC.md at 8b1514d4 explicitly does not cover. The residual
 //   window is disclosed rather than papered over.
 //
 // HOW THIS FILE ASSERTS. Each sample is a check.vh CHECKI from a digital

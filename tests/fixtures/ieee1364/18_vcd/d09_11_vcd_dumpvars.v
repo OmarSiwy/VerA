@@ -1,7 +1,7 @@
 // IEEE 1364-2005 §§18.1–18.2: four-state VCD artifact witness.
 // The retained golden is an implementation-specific snapshot, not a portable
 // byte-for-byte conformance oracle. See VCD-ORACLE-001 in
-// docs/conformance-vcd-review.md and tools/vcd_semantics.py.
+// docs/conformance-vcd-review.md at 8b1514d4 and tools/vcd_semantics.py.
 //
 // The tasks used here:
 //   $dumpfile(name)       names the dump file.
@@ -68,7 +68,7 @@
 //     broken across lines, and the body of the $timescale section has its
 //     whitespace removed, so a writer emitting `1 ns` and one emitting `1ns`
 //     both normalise to `$timescale 1ns $end`. Every other line is compared
-//     byte for byte. SPEC.md carries the normaliser itself; it is token-based
+//     byte for byte. tests/fixtures/ch09_system_tasks/d09_SPEC.md at 8b1514d4 carries the normaliser itself; it is token-based
 //     rather than line-based, because a line-oriented `sed` range mis-deletes
 //     when `$date … $end` lands on a single line.
 // Arbitrary identifier assignment, independent variable ordering, free-format

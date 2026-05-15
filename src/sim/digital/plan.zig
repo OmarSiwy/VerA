@@ -1,16 +1,9 @@
-//! The processes of a native design -> how `rt.State` schedules each.
-//!
-//! In: every process `emit.native` found, as the pcs it reaches from its
-//! entry. Out: which slots anything can wait on (a store to any other slot
-//! wakes no one, so it is a plain store), and under the `static` schedule a
-//! role per process with the tables that run it: combinational nodes in
-//! topological order with the bits that dirty them (§5.2.1: a constant
-//! select reads only the bits it names), and the watchers of the processes
-//! that wait at one fixed event control. For `--state=auto`, the slots
-//! whose value at a time-step boundary nothing reads (`stepLocal`).
-//!
-//! Clauses: IEEE 1364-2005 §11.4.1 (active events in any order), §6.1
-//! continuous assignment, §9.7.5 `@*`, §9.7.2 edges.
+//! The processes of a native design -> how `rt.State` schedules each: the
+//! slots anything can wait on (a store to any other is a plain store), and
+//! under `static` a role per process with its tables: combinational nodes in
+//! topological order with the bits that dirty them, and the watchers of
+//! processes with one fixed event control. Also `stepLocal` for `--state=auto`.
+//! IEEE 1364-2005 §11.4.2 (active events in any order), §6.1, §9.7.2, §9.7.5, §5.2.1.
 const std = @import("std");
 const Ast = @import("frontend").Ast;
 const compile = @import("compile.zig");
@@ -30,7 +23,8 @@ pub const Role = union(enum) {
     /// Queued and woken by the interpreter's rules.
     general,
     /// Suspends only at its entry, an event control whose terms are
-    /// static: `rt.State.waiting[n]` while it waits there.
+    /// static; `rt.State.waiting[n]` holds its suspension stamp there,
+    /// 0 while it runs.
     triggered: u32,
     /// Combinational node n: run by a settle event in topological order,
     /// never queued after time 0.
@@ -56,8 +50,10 @@ pub const Plan = struct {
     /// (`rt.Design.comb`).
     comb_start: []const u32 = &.{},
     comb: []const Sense = &.{},
+    /// Per slot, the triggered processes it wakes (`rt.Design.watchers`).
     watch_start: []const u32 = &.{},
     watchers: []const Watcher = &.{},
+    /// The number of triggered processes.
     triggered: u32 = 0,
     fan_start: []const u32,
     fan: []const u32,
@@ -174,6 +170,21 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
         },
         else => {}, // else: anything else suspends where the interpreter says
     };
+
+    // A node whose output an event control waits on stays a queued driver
+    // or triggered process. `vera --run` queues each level of logic behind
+    // what was queued before it ran, so a process started in between waits
+    // before the output changes; one settle event would change it first.
+    const waited = try reachOf(self, procs, mon.items, &.{}, &.{}, &.{});
+    var kept: usize = 0;
+    for (cands.items) |c| {
+        if (for (c.outputs) |o| {
+            if (waited[o].terms) break true;
+        } else false) continue;
+        cands.items[kept] = c;
+        kept += 1;
+    }
+    cands.shrinkRetainingCapacity(kept);
 
     // Kahn's order over the candidates; one on or downstream of a cycle
     // stays event-driven.
@@ -331,7 +342,7 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
 /// by cone: a depth-first post-order over each node's writers, deepest
 /// first, from the last node back, so a node lands just after the nodes it
 /// reads, and mostly in their dirty word. Any topological order is one
-/// §11.4.1 permits for the settle event.
+/// §11.4.2 permits for the settle event.
 fn coneOrder(a: std.mem.Allocator, cands: anytype, acyclic: []const u32) Error![]const u32 {
     var writers: std.AutoHashMapUnmanaged(u32, std.ArrayList(u32)) = .empty;
     for (acyclic) |ci| for (cands[ci].outputs) |s| {

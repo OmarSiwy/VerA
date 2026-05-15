@@ -12,7 +12,7 @@
 // refused at `error[E0205]: unsupported module item` on the `function`
 // DECLARATION — VerA had no production for a non-`analog` function at all — so
 // no caller was ever analysed and the clause's rule was never reached. Chapter
-// 7's COVERAGE.md said so in as many words: "The other half is still masked".
+// 7's tests/fixtures/ch07_mixed_signal/COVERAGE.md at 8b1514d4 said so in as many words: "The other half is still masked".
 // The declaration is now accepted and the CALL is refused, as E0436.
 //
 // WHAT MUST HAPPEN INSTEAD. A Verilog-AMS compiler accepts the declaration —

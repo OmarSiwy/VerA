@@ -61,7 +61,7 @@
 // independent same-named sources combine as 4.0e-18 and not as
 // (√1e-18+√3e-18)² = 7.46e-18 — stays in the prose above, where a reviewer can
 // check it without a binary, and becomes a real assertion only when a host
-// prints a contribution summary; that is ARPice's side, and SPEC.md's
+// prints a contribution summary; that is ARPice's side, and tests/fixtures/ch04_expressions/a06_SPEC.md at 8b1514d4's
 // "Deliberately NOT covered" says so.
 //
 // WHAT REPLACES THEM is the one thing a noise generator IS observable through

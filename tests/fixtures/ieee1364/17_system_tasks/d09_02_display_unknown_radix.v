@@ -56,7 +56,7 @@
 //
 // %d is deliberately exercised only on the all-unknown operand. The mixed
 // known/unknown decimal spelling is a separate inherited sentence and is left
-// to the implementation phase rather than guessed at here; see SPEC.md.
+// to the implementation phase rather than guessed at here; see tests/fixtures/ch09_system_tasks/d09_SPEC.md at 8b1514d4.
 //
 //! lrm 9.4.3
 //! inherited IEEE 1364-2005 17.1 (17.1.1.4 unknown / high-impedance display)

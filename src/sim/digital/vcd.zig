@@ -1,16 +1,9 @@
-//! IEEE 1364-2005 §18.1/§18.2: the four-state value change dump.
-//!
-//! In: the `$dump*` task calls and every change of a dumped slot, which
-//! arrives through the engine's value-change hook (`Watcher.vcd` in
-//! `exec.store`, `rt.State.dumped`). Out: the VCD file — the header and
-//! definitions at the end of the time step `$dumpvars` ran in (§18.1.3), then
-//! one `#time` section per time step with the variables whose value differs
-//! from the last one dumped (§18.1.4 "values of variables that do not change
-//! ... are not dumped").
-//!
-//! The writer (`Vcd`) is shared by the interpreter and a native executable:
-//! it reads the design through `Catalog`, fixed at elaboration, and the
-//! values through the engine's `src` (see `Vcd.tick`).
+//! IEEE 1364-2005 §18.1/§18.2 four-state value change dump: the `$dump*`
+//! calls and every change of a dumped slot (the engine's value-change hook)
+//! in; the VCD file out, header at the end of the `$dumpvars` step (§18.1.3),
+//! then one `#time` section per step of the variables that changed (§18.1.4).
+//! `Vcd` is shared by the interpreter and a native executable: the design
+//! through `Catalog`, the values through the engine's `src` (`Vcd.tick`).
 const std = @import("std");
 const Front = @import("frontend");
 const Ast = Front.Ast;
@@ -36,6 +29,7 @@ pub const Catalog = struct {
     finest: i32,
 };
 
+/// One scope of a `Catalog`.
 pub const Scope = struct {
     /// `$scope module name $end`, or `begin` for a generate iteration.
     line: []const u8,
@@ -53,8 +47,8 @@ pub const Var = struct { slot: u32, off: u32 = 0, width: u32, real: bool, head: 
 pub const Target = union(enum) { scope: u32, slot: u32 };
 
 /// One identifier code (§18.2.1): a catalog variable and the value last
-/// written for it, both planes. Two references to one slot — a port
-/// collapsed onto its parent's net — share the code, which §18.2.3.7 b)
+/// written for it, both planes. Two references to one slot (a port
+/// collapsed onto its parent's net) share the code, which §18.2.3.7 b)
 /// permits.
 const Code = struct { v: u32, last: []u64 };
 
@@ -71,6 +65,7 @@ pub fn message(e: Failure) []const u8 {
     };
 }
 
+/// The dump's state and writer.
 pub const Vcd = struct {
     name: []const u8 = "dump.vcd",
     /// §18.1.2 the `$dumpvars` selection: scopes with their level count
@@ -102,7 +97,7 @@ pub const Vcd = struct {
 
     /// §18.1.2 one `$dumpvars` at time `now`: `levels` applies to the scopes
     /// in `targets` ("and not to individual variables"). Dumping starts at
-    /// the END of the time unit (§18.1.3), so the engine queues a tick.
+    /// the end of the time unit (§18.1.3), so the engine queues a tick.
     pub fn select(self: *Vcd, gpa: std.mem.Allocator, now: u64, tok: u32, levels: u32, targets: []const Target) Failure!void {
         if (self.selected_at) |t| if (t != now or self.started) return error.DumpvarsTime;
         self.selected_at = now;
@@ -228,8 +223,8 @@ pub const Vcd = struct {
         try w.print("#{d}\n", .{now});
     }
 
-    /// §18.2.3.9-§18.2.3.12: a section holding every dumped variable — as x
-    /// for `$dumpoff` — which then counts as dumped.
+    /// §18.2.3.9-§18.2.3.12: a section holding every dumped variable (as x
+    /// for `$dumpoff`), which then counts as dumped.
     fn checkpoint(self: *Vcd, a: std.mem.Allocator, io: ?std.Io, cat: *const Catalog, src: anytype, now: u64, keyword: []const u8, as_x: bool) Failure!void {
         var w: std.Io.Writer.Allocating = .init(a);
         try self.time(&w.writer, now);
@@ -291,7 +286,7 @@ fn value(w: *std.Io.Writer, v: Var, p: []const u64, code: u32, as_x: bool) std.I
         var i = v.width;
         if (as_x) i = 1;
         // Table 18-1: a leading digit the next one would extend to anyway is
-        // dropped — 0 before 0 or 1, x before x, z before z.
+        // dropped: 0 before 0 or 1, x before x, z before z.
         while (i > 1) : (i -= 1) {
             const top = lit.bit(i - 1);
             const next = lit.bit(i - 2);
@@ -316,6 +311,7 @@ fn digit(b: Front.Integer.Bit) u8 {
 
 // ---- compile time -----------------------------------------------------------
 
+/// Refuses a malformed §18.1 call before the run.
 pub fn check(r: *Run, op: Op, args: []const Ast.ExprId, tok: u32) Error!void {
     for (args) |a| if (a == .none) return r.fail(tok, "the §18.1 dump tasks take no null arguments", .{});
     switch (op) {
@@ -336,8 +332,8 @@ pub fn check(r: *Run, op: Op, args: []const Ast.ExprId, tok: u32) Error!void {
     }
 }
 
-/// §18.1.2 `module_or_variable`: a module instance — the root by its module
-/// name, or a downward path — or a variable, by slot.
+/// §18.1.2 `module_or_variable`: a module instance (the root by its module
+/// name, or a downward path) or a variable, by slot.
 pub fn target(r: *Run, e: Ast.ExprId) Error!Target {
     const ex = &r.file.exprs;
     const parts: []const Ast.StrId = switch (ex.tag(e)) {
@@ -444,6 +440,7 @@ fn failed(r: *Run, e: Failure) Error {
     };
 }
 
+/// The interpreter's run of one §18.1 task.
 pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok: u32) Error!void {
     const v = &r.vcd;
     switch (op) {

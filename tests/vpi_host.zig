@@ -67,8 +67,8 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     try vpi.open(gpa, res.lowered);
     defer vpi.close();
 
-    // The analyses the application asks for (`*! analysis` in its banner,
-    // p03_SPEC.md's tag grammar). None: declarations only.
+    // The analyses the application asks for (`*! analysis` lines in its
+    // banner, grammar at `readAnalyses`). None: declarations only.
     var arena_state: std.heap.ArenaAllocator = .init(gpa);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
@@ -104,7 +104,7 @@ fn analogHost(path: []const u8, app: ?[]const u8) !u8 {
     return 0;
 }
 
-/// p03_SPEC.md's `*! analysis <op | tran <start> <stop> [<max step>]>`, one
+/// The banner's `*! analysis <op | tran <start> <stop> [<max step>]>`, one
 /// per line, run in order. Numbers take SPICE's scale suffixes, as the
 /// banners write them (`tran 0 5m`). An `ac` line is refused: no small-signal
 /// analysis runs in this process.

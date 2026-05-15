@@ -1,39 +1,9 @@
-//! VAMS §8 the mixed-signal coordinator: one global time over a digital `Run`
-//! and an analog solver.
+//! A digital `Run` and an analog solver -> one mixed-signal analysis on a
+//! common global time (VAMS §8.4.4, §7.3.6).
 //!
-//! §8.4.4 describes "a single event queue logically with a common global time",
-//! and §7.3.6 allows "any synchronization method ... provided the semantics
-//! [are] preserved". This loop is that global time. It belongs to neither
-//! engine: the digital queue is integer ticks and cannot hold a real-valued
-//! analog time, and the analog solver in a testbench is generated text that
-//! cannot be unit-tested without generating code. So the analog side is a
-//! comptime interface `A` (see `run`), and the tests below drive the real
-//! digital engine against a fake one.
-//!
-//! What is here is the DIGITAL-TO-ANALOG half of §8:
-//!   - §7.3.6.5: the analog solve at `t` sees every digital tick <= `t`;
-//!   - §8.5 / §8.4.7: an implicit D2A — a change of a value the analog block
-//!     reads — forces an analog solution at the time it occurs, including off
-//!     the declared grid;
-//!   - §8.5.1 / §8.5.3.7: that solve is the region-3b macro-process event, so
-//!     it sees the tick's nonblocking updates (region 3) and runs once per tick;
-//!   - §8.4.2: the digital activity at or before the first analog time is
-//!     settled before the DC solve.
-//! A solution is FINISHED (printed, committed) only once the digital engine
-//! has consumed every tick at or before it, so a later D2A at the same time
-//! re-solves instead of adding a second point.
-//!
-//! And the ANALOG-TO-DIGITAL half, once a digital process waits on an analog
-//! event or probes the analog solution:
-//!   - §7.3.5 / §5.10.3.1: `cross`/`above` in a digital event control is
-//!     monitored against every tentative solution, and a step that jumps a
-//!     crossing is cut back to within the event's `time_tol` after it;
-//!   - §7.3.6.1 / §8.4.3.3: the A2D is delivered at the NEAREST tick, never
-//!     earlier than the current digital time, and a D2A it causes at a tick
-//!     already passed is solved at the analog time of the event (Figure 8-4);
-//!   - §7.3.6.3: a probe in a digital expression reads the analog solution
-//!     interpolated at the promoted digital time.
-//!
+//! The analog side is a comptime interface (`run`'s `A`), so the tests below
+//! drive the real digital engine against a fake solver.
+//! Clauses: VAMS §7.3.5, §7.3.6, §8.4, §8.5, §5.10.3.
 // ponytail: the analog never steps past the next digital event (Figure 8-7's
 // conservative half), so nothing is ever rolled back (§8.4.6) and an A2D is
 // delivered once, from the solution that is kept. A step the analog device
@@ -67,7 +37,22 @@ pub fn tickAtOrBefore(t: f64, tick: f64) Tick {
 /// fraction of a tick however many ticks the run is long.
 const ulps = 4 * std.math.floatEps(f64);
 
-/// Run one analysis over `opts.times`.
+/// Runs one analysis over `opts.times`.
+///
+/// Digital to analog: the solve at `t` sees every tick <= `t` (§7.3.6.5); a
+/// change of a value the analog block reads forces a solve at its own time,
+/// on or off the declared grid (§8.5, §8.4.7), once per tick after the
+/// tick's nonblocking updates (§8.5.1 region 3b); activity at or before the
+/// first time is settled into the DC point (§8.4.2). A solution is final
+/// only once every tick at or before it has run, so a later D2A at the same
+/// time re-solves it instead of adding a point.
+///
+/// Analog to digital: a `cross`/`above` in a digital event control is
+/// checked against every tentative solution, and a step that jumps a
+/// crossing is cut back to within its `time_tol` (§7.3.5, §5.10.3.1); the
+/// event is delivered at the nearest tick, never before the current digital
+/// time (§7.3.6.1, §8.4.3.3); a probe reads the solution interpolated at the
+/// promoted digital time (§7.3.6.3).
 ///
 /// `A` provides these methods, each fallible:
 ///   setInputs(a, dig, fired)      copy the discrete inputs the analog block reads

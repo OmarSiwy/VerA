@@ -18,9 +18,9 @@
 // symbol, and the conforming answer to it as a `.va` is a refusal.
 //
 // This row used to be an xfail wanting the file to compile and run; that want
-// was one no conforming tool could meet (docs/conformance-annex-a-review.md,
+// was one no conforming tool could meet (docs/conformance-annex-a-review.md at 8b1514d4,
 // A-EVID-001). The positive obligation, a library map file read as its own
-// input and binding a separate design, moved to COVERAGE.md row `a-1-1` /
+// input and binding a separate design, moved to docs/ROADMAP.md (Open items) as
 // A-EVID-001, where it stays open. What is left here is the refusal, pinned to
 // its code: E0232 "library map text in a source file".
 //

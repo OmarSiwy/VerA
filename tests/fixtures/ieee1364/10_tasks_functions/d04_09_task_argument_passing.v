@@ -13,7 +13,7 @@
 // One task, all three directions, tests the copied input values and final
 // output/inout values. It does not distinguish value passing from reference
 // passing or establish when outputs become visible; those obligations are
-// TF-EVID-001 in docs/conformance-ieee-task-functions-review.md and the
+// TF-EVID-001 in docs/conformance-ieee-task-functions-review.md at 8b1514d4 and the
 // independent audit_task_copy_timing.v fixture.
 //
 // HAND DERIVATION — decimal literals, four bits wide.

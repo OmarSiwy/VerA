@@ -32,7 +32,7 @@
  * An earlier revision of this header closed the quotation after
  * cbEndOfSimulation and called them "the three action reasons that shall occur
  * in all VPI-compliant products", which read as though 12.31.4 defined three.
- * It defines six. SPEC.md's "Deliberately NOT covered" now names the other
+ * It defines six. tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4's "Deliberately NOT covered" now names the other
  * three and what each would need.
  *
  * LRM 12.31.4: "The only fields in the s_cb_data structure which need to be
@@ -70,7 +70,7 @@
  *
  * The stdout half of that is checked by the harness, not from inside C: this
  * application's only stdout is its own census line, so the expected transcript
- * is exactly one line (see SPEC.md).
+ * is exactly one line (see tests/fixtures/ch11_vpi/p02_SPEC.md at 8b1514d4).
  */
 
 //! lrm 11.2.1
