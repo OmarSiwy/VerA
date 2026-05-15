@@ -36,6 +36,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     var qsites: std.ArrayList([]const u8) = .empty;
     var acstim: std.ArrayList(AcWant) = .empty;
     var seeds: std.ArrayList(Binding) = .empty;
+    var abstols: std.ArrayList(Binding) = .empty;
     var limits: std.ArrayList(tb.LimitCase) = .empty;
 
     var lines = std.mem.splitScalar(u8, source, '\n');
@@ -135,6 +136,9 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
             if (rest.len == 0) return error.BadSyntax;
             if (!std.mem.eql(u8, rest, "none")) try parseBindings(arena, rest, &seeds);
             d.asserts_seed = true;
+        } else if (std.mem.eql(u8, kw, "abstol")) {
+            if (rest.len == 0) return error.BadSyntax;
+            try parseBindings(arena, rest, &abstols);
         } else if (std.mem.eql(u8, kw, "limit")) {
             const at = std.mem.indexOf(u8, rest, "->") orelse return error.BadSyntax;
             var old: std.ArrayList(Binding) = .empty;
@@ -189,6 +193,7 @@ pub fn parse(arena: Allocator, source: []const u8) Error!Directives {
     d.qsites = qsites.items;
     d.acstim = acstim.items;
     d.seeds = seeds.items;
+    d.abstols = abstols.items;
     d.limits = limits.items;
     // One text blob, in source order: `spice_cards` wants netlist text, not a
     // list of lines, and joining here keeps the continuation rule in one place.

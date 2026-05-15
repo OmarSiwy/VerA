@@ -98,6 +98,10 @@ pub const NodeKind = union(enum) {
     branch_flow: u16,
     /// §5.4.3 the current through a port, carrying the port.
     port_flow: u16,
+    /// §4.5.2 the unknown an analog operator site introduces ("new equations
+    /// and new unknowns"), carrying its tolerance: the operator's abstol or
+    /// nature argument, else the 1e-6 an undisciplined net gets. A potential.
+    op_state: f64,
 };
 
 /// §5.4.2 the identity of an unnamed branch: its ordered node pair, the key of
@@ -1487,18 +1491,14 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // §5.6.1.3 the contribution accumulators' final values, and beside each the
     // final value of its retention flag — the "is a value retained [this
     // cycle]?" question the clause's three-way rule turns on.
-    for (self.out.contributions.items, self.accum.items) |*c, acc| {
-        c.resist_val = try self.builder.readVariable(acc.resist, self.cur);
-        c.react_val = try self.builder.readVariable(acc.react, self.cur);
-        c.wrote_val = try self.builder.readVariable(acc.wrote, self.cur);
-    }
+    try self.readContribFinals(0);
     // §5.6.8.1 needs the final retention flags just read.
     try lower_contrib.checkSourceLoops(self);
     // §5.10 the same, for every held variable. Reads only (no `call`), so the
     // unit enumeration below is untouched.
     for (self.out.held_vars.items, self.held_places.items) |*h, p| h.final = try self.builder.readVariable(p, self.cur);
     // §5.6.1.2 and the same for every charge site.
-    for (self.out.charge_sites.items, self.site_places.items) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
+    try self.readSiteFinals(0);
     // §9.17.3 and the same again for every `$limit` state slot: the value the
     // last site on that access function returned this evaluation, or the
     // `$limit$old` seed if none ran.
@@ -1511,12 +1511,32 @@ fn lowerModule(self: *Lower, module: *const Ast.ModuleDecl) Oom!void {
     // units, and inserting anything ahead would renumber every Instance state
     // field. Deferred §9.4.1 operands are lowered inside, after the accumulator
     // finals above, which is what "converged" means here.
+    const contribs_before = self.out.contributions.items.len;
+    const sites_before = self.out.charge_sites.items.len;
     try self.finishDisplays();
+    // §4.5.2 an operator in a deferred operand adds its unknown's row there.
+    try self.readContribFinals(contribs_before);
+    try self.readSiteFinals(sites_before);
     if (self.table_effect_place) |p| self.out.table_effect = try self.builder.readVariable(p, self.cur);
 
     // After `finishDisplays`: a deferred display operand appends its
     // `branch_reads` there, and §1.3.1's probe test has to see every read.
     try lower_contrib.checkProbeBranches(self);
+}
+
+/// Reads each contribution's accumulators from `from` on at the end of the
+/// block, beside its §5.6.1.3 retention flag.
+fn readContribFinals(self: *Lower, from: usize) Oom!void {
+    for (self.out.contributions.items[from..], self.accum.items[from..]) |*c, acc| {
+        c.resist_val = try self.builder.readVariable(acc.resist, self.cur);
+        c.react_val = try self.builder.readVariable(acc.react, self.cur);
+        c.wrote_val = try self.builder.readVariable(acc.wrote, self.cur);
+    }
+}
+
+/// Reads each §5.6.1.2 charge site's charge from `from` on at the end of the block.
+fn readSiteFinals(self: *Lower, from: usize) Oom!void {
+    for (self.out.charge_sites.items[from..], self.site_places.items[from..]) |*s, p| s.final = try self.builder.readVariable(p, self.cur);
 }
 
 /// §9.17.1/§9.17.2. Turns each accumulated kernel-control place into exactly one

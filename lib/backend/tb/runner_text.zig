@@ -737,6 +737,14 @@ pub const runner_body =
     \\            } else {
     \\                a[i] = r[i].d;
     \\                b[i] = -r[i].v;
+    \\                // A forced column's dx is known, so it moves to the right-
+    \\                // hand side. Left in, a large coupling (a charge over dt)
+    \\                // wins that column's pivot from the constraint row, and the
+    \\                // free column it displaces can fall under `eps`.
+    \\                for (0..n_u) |j| if (forced[j]) |v| {
+    \\                    b[i] -= a[i][j] * (v - x[j]);
+    \\                    a[i][j] = 0.0;
+    \\                };
     \\            }
     \\            for (a[i]) |e| scale = @max(scale, @abs(e));
     \\        }

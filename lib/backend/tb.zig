@@ -123,6 +123,9 @@ pub const Directives = struct {
     seeds: []const Binding = &.{},
     /// Whether any `//! seed` line was written (see `asserts_noise`).
     asserts_seed: bool = false,
+    /// `//! abstol <unknown> = v, ...`: the §3.6.1.2 tolerance the device
+    /// publishes for each named unknown (`u_abstol`). Lines accumulate.
+    abstols: []const Binding = &.{},
     /// `//! limit V(a) = v, ... -> V(b) = w, ..., converged = 0|1`, one case per
     /// line: `limit` run at the first point's `x` as `cur`, with `old` = `cur`
     /// except the lanes left of `->`, must return the lanes right of it (and
@@ -150,6 +153,10 @@ pub const Directives = struct {
     /// the module has a discrete half, so the runner drives the device from
     /// `sim.mixed` instead of fixed operating points.
     mixed: ?Mixed = null,
+    /// Not a directive: the `U` indices of the §4.5.2 operator unknowns
+    /// (`opStates`). Never forced, even without `//! solve`: each row is its
+    /// operator's own equation, and a tied one would pin the operator at 0.
+    op_states: []const u16 = &.{},
 };
 
 /// What a mixed-signal testbench needs from the compile besides the device:
@@ -258,6 +265,7 @@ const tb_runner = @import("tb/runner.zig");
 pub const renderRunner = tb_runner.renderRunner;
 pub const renderVpiLib = tb_runner.renderVpiLib;
 pub const mixedPlan = tb_runner.mixedPlan;
+pub const opStates = tb_runner.opStates;
 pub const shapeOverrides = tb_runner.shapeOverrides;
 
 const tb_runner_text = @import("tb/runner_text.zig");

@@ -12,8 +12,14 @@ const op = @import("op.zig");
 /// spelling, so no second name table exists.
 pub const Callee = enum(u8) {
     // §4.5 analog operators (Table 4-19) and §4.5.13/§4.5.14 limexp, ddx.
-    ddt,
-    idt,
+    // §4.5.3/§4.5.4 ddt and idt are unknowns of the host's
+    // (`Lower.NodeKind.op_state`); their rows and values read these two.
+    /// §4.5.4 `idt(x, ic, assert)`'s value, from (V(s), ic, assert): ic while
+    /// assert is nonzero, else V(s) less the offset latched while it was.
+    @"idt$hold",
+    /// 1 in the static solve an operator's DC form keys on: dt = 0 outside a
+    /// small-signal analysis (DC, IC, a transient's first point).
+    @"op$static",
     idtmod,
     absdelay,
     transition,
@@ -418,8 +424,7 @@ pub fn takesFormat(c: Callee) bool {
 /// no `else`, so a new callee must state whether it owns state.
 pub fn opKind(c: Callee) op.OpKind {
     return switch (c) {
-        .ddt => .ddt,
-        .idt => .idt,
+        .@"idt$hold" => .idt_hold,
         .idtmod => .idtmod,
         .absdelay, .@"absdelay$quad" => .absdelay,
         .transition => .transition,
@@ -436,6 +441,7 @@ pub fn opKind(c: Callee) op.OpKind {
         // here owns per-instance state or a monitored event.
         .limexp,
         .ddx,
+        .@"op$static",
         .initial_step,
         .final_step,
         .analog_initial,
@@ -592,10 +598,11 @@ test "a callee name round-trips; anything else is .systf" {
 
 test "opKind: every stateful spelling maps to a kind, and the pure ones do not" {
     const names = [_][]const u8{
-        "ddt",        "idt",           "idtmod",     "absdelay",    "transition",
-        "slew",       "last_crossing", "laplace_zd", "laplace_zp",  "laplace_nd",
-        "laplace_np", "zi_zd",         "zi_zp",      "zi_nd",       "zi_np",
-        "cross",      "above",         "timer",      "$bound_step", "$discontinuity",
+        "idt$hold",   "idtmod",        "absdelay",       "transition",
+        "slew",       "last_crossing", "laplace_zd",     "laplace_zp",
+        "laplace_nd", "laplace_np",    "zi_zd",          "zi_zp",
+        "zi_nd",      "zi_np",         "cross",          "above",
+        "timer",      "$bound_step",   "$discontinuity",
     };
     for (names) |n| try std.testing.expect(opKind(Callee.fromName(n)) != .none);
 

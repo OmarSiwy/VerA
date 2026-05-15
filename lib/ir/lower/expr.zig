@@ -938,7 +938,8 @@ fn lowerBranchAccess(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 const r = try self.builder.readVariable(acc.resist, self.cur);
                 const q = try self.builder.readVariable(acc.react, self.cur);
                 const v = if (q == .f_zero) r else blk: {
-                    const dq = try self.call("ddt", &.{q});
+                    // The charge's own sites already carry its truncation check.
+                    const dq = try lower_analog_op.opDdt(self, self.file.exprs.mainTok(e), q, flowAbstol(self, t.hi), false);
                     break :blk if (r == .f_zero) dq else try self.emit(.fadd, &.{ r, dq });
                 };
                 return .{ .v = if (t.neg) try self.emit(.fneg, &.{v}) else v, .ty = .real };
@@ -967,6 +968,14 @@ fn flowAccum(self: *const Lower, t: lower_contrib.Target) ?Accum {
             return acc;
     }
     return null;
+}
+
+/// §3.6.1.2 the flow tolerance of the discipline at node `n`, which is what
+/// codegen's `abstolOf` gives a branch current; annex D's 1e-12 without one.
+fn flowAbstol(self: *const Lower, n: u16) f64 {
+    if (n == ground) return 1e-12;
+    const info = self.out.disciplines.get(self.out.nodes.items(.disc)[n]) orelse return 1e-12;
+    return info.flow_abstol;
 }
 
 /// §5.6.8.1: "Direct contribution statements can contribute to a branch between

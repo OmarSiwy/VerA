@@ -13,6 +13,7 @@ const lower_control = @import("control.zig");
 const lower_discipline = @import("discipline.zig");
 const lower_expr = @import("expr.zig");
 const lower_hier_name = @import("hier_name.zig");
+const lower_node = @import("node.zig");
 const lower_param = @import("param.zig");
 const lower_table_model = @import("table_model.zig");
 const Ast = @import("frontend").Ast;
@@ -183,8 +184,88 @@ pub fn lowerFilter(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const tv = try lower_expr.lowerExpr(self, a);
         try vals.append(self.arena, if (tv.ty == .string) tv.v else try self.toReal(tv));
     }
+    if (std.mem.eql(u8, name, "ddt"))
+        return .{ .v = try opDdt(self, ex.mainTok(e), vals.items[0], opAbstol(self, args, 1), try lower_contrib.opSiteLte(self, e)), .ty = .real };
+    if (std.mem.eql(u8, name, "idt"))
+        return .{ .v = try opIdt(self, e, vals.items), .ty = .real };
     const callee = if (std.mem.eql(u8, name, "absdelay") and try absdelayQuad(self, e)) "absdelay$quad" else name;
     return .{ .v = try self.call(callee, vals.items), .ty = .real };
+}
+
+/// §4.5.3 `ddt(x)` as the unknown §4.5.2 introduces: s, with the row
+/// s - d/dt(x) = 0 and x its charge. So DC reads the clause's zero, and the
+/// host integrates and truncation-checks x like any charge. Returns V(s).
+pub fn opDdt(self: *Lower, tok: u32, x: Mir.Value, abstol: f64, lte: bool) Oom!Mir.Value {
+    const s = try lower_node.opStateNode(self, "ddt", abstol);
+    const v = try lower_node.probe(self, s);
+    try lower_contrib.stampOpRow(self, tok, s, v, x, true, lte);
+    return v;
+}
+
+/// §4.5.4 `idt` as the unknown §4.5.2 introduces: s, whose charge is s
+/// itself and whose resistive half is -x, so the host solves ds/dt = x. The
+/// static solve swaps that half for s - ic, since idt() "returns the initial
+/// condition (ic) if specified" there, and without an ic keeps -x: "the idt
+/// operator must be contained within a negative feedback loop that forces its
+/// argument to zero". Returns the operator's value.
+///
+/// ponytail: §4.5.5 idtmod stays in the device (`zIdtmod`), wrapped every
+/// step. As a host unknown its state grows without bound, and a free-running
+/// VCO's phase drifts with the rounding of |s|. Upgrade: a host that re-bases
+/// the unknown on each wrap.
+fn opIdt(self: *Lower, e: Ast.ExprId, vals: []const Mir.Value) Oom!Mir.Value {
+    const x = vals[0];
+    const s = try lower_node.opStateNode(self, "idt", opAbstol(self, self.file.exprs.args(e), abstolSlot("idt").?));
+    const v = try lower_node.probe(self, s);
+    // An argument that reads no unknown has no loop to force it, and the
+    // undefined DC output takes the 0 an ic of 0 gives, which keeps the
+    // static solve regular.
+    const ic: ?Mir.Value = if (vals.len > 1) vals[1] else if (!try readsUnknown(self, x)) .f_zero else null;
+    // assert: s holds still while it is nonzero (`idt$hold`).
+    const hold: ?Mir.Value = if (vals.len > 2) try self.emit(.fne, &.{ vals[2], .f_zero }) else null;
+    var f = try self.emit(.fneg, &.{x});
+    if (hold) |h| f = try self.emit(.select, &.{ h, .f_zero, f });
+    if (ic) |c| f = try self.emit(.select, &.{ try self.call("op$static", &.{}), try self.emit(.fsub, &.{ v, c }), f });
+    try lower_contrib.stampOpRow(self, self.file.exprs.mainTok(e), s, f, v, false, try lower_contrib.opSiteLte(self, e));
+    return if (hold != null) self.call("idt$hold", &.{ v, ic.?, vals[2] }) else v;
+}
+
+/// Whether `v` can read an unknown of the solve: a probe, or anything the walk
+/// does not see through (a phi, an array, a committed latch).
+fn readsUnknown(self: *Lower, v: Mir.Value) Oom!bool {
+    var seen: std.AutoHashMapUnmanaged(Mir.Value, void) = .empty;
+    defer seen.deinit(self.arena);
+    return unknownWalk(self, v, &seen);
+}
+
+fn unknownWalk(self: *Lower, v0: Mir.Value, seen: *std.AutoHashMapUnmanaged(Mir.Value, void)) Oom!bool {
+    const v = self.mir.resolveAlias(v0);
+    if ((try seen.getOrPut(self.arena, v)).found_existing) return false;
+    const inst = switch (self.mir.valueDef(v)) {
+        .undef, .float_const, .int_const, .str_const, .param_ref => return false,
+        .block_param => return true,
+        .inst_result => |i| i,
+    };
+    return switch (self.mir.instData(inst)) {
+        .unary => |u| u.op == .path_prev or u.op == .path_acc or try unknownWalk(self, u.operand, seen),
+        .binary => |b| try unknownWalk(self, b.lhs, seen) or try unknownWalk(self, b.rhs, seen),
+        .ternary => |t| try unknownWalk(self, t.cond, seen) or try unknownWalk(self, t.then_val, seen) or
+            try unknownWalk(self, t.else_val, seen),
+        .call => |c| for (c.args) |a| {
+            if (try unknownWalk(self, a, seen)) break true;
+        } else false,
+        .phi, .branch, .jump, .anew, .load, .store => true,
+    };
+}
+
+/// The tolerance of an operator's unknown: its §4.5.3/§4.5.4 abstol or nature
+/// argument in `slot`, folded at the parameters' declared defaults, else the
+/// 1e-6 an undisciplined net gets.
+fn opAbstol(self: *Lower, args: []const Ast.ExprId, slot: usize) f64 {
+    if (slot >= args.len or args[slot] == .none) return 1e-6;
+    if (natureAbstol(self, args[slot])) |t| return t;
+    const c = lower_constfold.constEval(self, args[slot]) orelse return 1e-6;
+    return if (c == .str) 1e-6 else c.asReal();
 }
 
 /// Reports whether `absdelay` call `e` interpolates quadratically, from VerA's
