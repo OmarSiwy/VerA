@@ -83,6 +83,8 @@ pub const Code = enum(u16) {
     E0143,
     E0144,
     E0145,
+    // Out of scope (IEEE 1364-2005 §28) — preprocessor.zig.
+    E0146,
 
     // ---------------------------------------------------------------- class 2
     // Syntax / annex A — parser.zig.
@@ -363,6 +365,7 @@ pub const Code = enum(u16) {
     E1004,
     E1100,
     E1101,
+    E1102,
     W1150,
     W1151,
     W1050,
@@ -986,6 +989,24 @@ fn infoOf(c: Code) Info {
             \\
             \\A string literal has to open and close inside one macro's text.
             \\Define the whole string, or pass the text in as an argument.
+            ,
+        },
+        .E0146 => .{
+            .title = "protected envelopes are not supported",
+            .lrm = "IEEE 1364-2005 28",
+            .explain =
+            \\IEEE 1364-2005 19.10 lets a tool ignore a `pragma it does not
+            \\recognize, but `protect` is not such a pragma: clause 28 reserves
+            \\it for protected envelopes, and 28.2 says a tool "shall perform
+            \\envelope decryption for all decryption envelopes contained in the
+            \\source text". Ignoring the directive would compile the ciphertext
+            \\of a decryption envelope as Verilog, or the cleartext of an
+            \\encryption envelope as if nobody had asked for it to be hidden.
+            \\
+            \\VerA does not implement clause 28: it neither encrypts nor
+            \\decrypts, so any `pragma protect is refused. Compile the cleartext
+            \\source with the protect directives removed. Any other pragma name
+            \\still has no effect.
             ,
         },
 
@@ -5734,6 +5755,23 @@ fn infoOf(c: Code) Info {
             .title = "digital source execution failed",
             .lrm = "8.5",
             .explain = "The digital executor supports a documented subset of source processes. Unsupported forms are diagnosed before simulation; timing and capacity failures stop execution explicitly. This does not make legal unsupported Verilog-AMS forms illegal.",
+        },
+        .E1102 => .{
+            .title = "back-annotation from an SDF file is not supported",
+            .lrm = "IEEE 1364-2005 17.2.10",
+            .explain =
+            \\$sdf_annotate (IEEE 1364-2005 17.2.10) runs the SDF annotator of
+            \\clause 16, which replaces a design's specify path delays, specparams,
+            \\timing check limits and interconnect delays with values read from
+            \\an SDF file. VerA does not implement clause 16, and it applies no
+            \\specify block timing for one to replace (W0251). Running on as if
+            \\the call had succeeded would simulate a design whose timing the
+            \\file was meant to set, so the call is refused.
+            \\
+            \\Write the delays the design needs in its source: a delay control,
+            \\a continuous assignment or gate delay, or a module-level specparam
+            \\that one of those reads.
+            ,
         },
         .E1101 => .{
             .title = "design refused under --two-state",

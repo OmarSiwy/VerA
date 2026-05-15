@@ -20,7 +20,8 @@ const Error = parser.Error;
 // -----------------------------------------------------------------------
 
 /// Parses one A.7.1 `specify_block ::= specify { specify_item } endspecify`
-/// into `b.paths` and `b.timing_checks`, then warns W0251.
+/// into `b.paths` and `b.timing_checks`, then warns W0251, naming the block's
+/// timing checks.
 ///
 /// The block is legal source under §1.1, and annex C.16 does not exempt it.
 /// Its content is §8 scheduling (A.7.2 path delays, A.7.5 timing checks):
@@ -29,6 +30,7 @@ const Error = parser.Error;
 /// a typo in a path declaration is still an error.
 pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
     const open = self.pos;
+    const first = b.timing_checks.items.len;
     self.pos += 1; // `specify`
     while (!self.reservedIs(self.pos, "endspecify")) {
         if (self.peek() == .eof or self.peek() == .kw_endmodule)
@@ -36,12 +38,20 @@ pub fn parseSpecifyBlock(self: *Parser, b: *parse_module.Body) Error!void {
         try parseSpecifyItem(self, b);
     }
     self.pos += 1; // `endspecify`
+    // A timing check is the one item whose loss a design notices by name (a
+    // violation it expected to be told about), so each is listed.
+    var names: std.ArrayList(u8) = .empty;
+    for (b.timing_checks.items[first..], 0..) |t, i| {
+        if (i != 0) try names.appendSlice(self.arena, ", ");
+        try names.appendSlice(self.arena, self.tokenText(t.main_tok));
+    }
+    if (names.items.len != 0) try names.appendSlice(self.arena, " never evaluated");
     try self.bag.add(
         .parse,
         .W0251,
         lexer.tokenSpan(self.src, self.starts, open),
-        "",
-        .{},
+        "{s}",
+        .{names.items},
     );
 }
 

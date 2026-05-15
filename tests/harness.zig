@@ -576,6 +576,10 @@ fn reportCoverage(
 /// its positive fixtures are the whole obligation and there is nothing to
 /// reject. That one kind is checked against the evidence: it is refused unless
 /// a positive fixture cites the clause.
+///
+/// `not_supported` (CLAUSE-AUDIT §5.7) is IEEE 1364-only: a clause
+/// `ROADMAP.md` §1 B puts out of scope, which VerA refuses or warns about by
+/// name. An AMS `CLAUSES.tsv` row naming it is rejected.
 pub const ClassKind = enum {
     non_normative,
     no_prohibition,
@@ -583,6 +587,7 @@ pub const ClassKind = enum {
     implementation_defined,
     resource_limit,
     unspecified,
+    not_supported,
 };
 
 const ClassRow = struct { kind: ClassKind, file: []const u8 };
@@ -657,6 +662,7 @@ fn classifyRow(
     const spelled = try arena.dupe(u8, kind_text);
     std.mem.replaceScalar(u8, spelled, '-', '_');
     const kind = std.meta.stringToEnum(ClassKind, spelled) orelse return error.UnknownKind;
+    if (kind == .not_supported) return error.NotSupportedIsIeee1364Only;
     const evidence = std.mem.trim(u8, cols.rest(), " \t");
     if (evidence.len == 0) return error.MissingEvidence;
     if (kind == .no_prohibition) {
