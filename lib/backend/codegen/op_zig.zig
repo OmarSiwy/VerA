@@ -63,12 +63,12 @@ pub const table = std.EnumArray(OpKind, Row).init(.{
         .enable_arg = null,
         .shape = .none,
     },
-    .idt = .{
+    .idt_hold = .{
         .lrm = "§4.5.4",
         .needs_input = true,
-        .needs_dt = true,
+        .needs_dt = false,
         .enable_arg = null,
-        .slots = &.{.{ .suffix = "acc", .default = "0.0", .note = "§4.5.4" }},
+        .slots = &.{.{ .suffix = "off", .default = "0.0", .note = "§4.5.4 V(s) - ic while assert was last nonzero" }},
     },
     .idtmod = .{
         .lrm = "§4.5.5",

@@ -512,7 +512,8 @@ pub const AnalysisKind = enum(u8) { static, ic, nodeset, dc, tran, ac, noise };
 /// The analysis in force, passed by value to every entry point that reads it.
 /// The host is its only writer, and one value serves every instance of a batch.
 ///   t: §9.10 `$abstime`, the time the solve is targeting.
-///   dt: the timestep `ddt`/`idt` integrate over; 0 in a static analysis.
+///   dt: the step since the last accepted point. 0 marks the static solve
+///     (DC, IC, a transient's first point) an operator's DC form keys on.
 ///   kind: §4.6.1 `analysis()`.
 ///   initial_step, final_step: the §5.10.2 global events.
 ///   analog_initial: this evaluation is the first of a §5.2.1 sub-task (each
@@ -845,9 +846,9 @@ pub fn nU(comptime D: type) comptime_int {
 // check (VerA's `vera_lte` attribute clears it). A device without `n_q` and
 // `q_stamps` has one site per row, site k on row k with sign +1, all checked.
 // `jac_const.c`, `q_pattern` and `q_rows` stay per row; `q_site_pattern[k]`
-// is site k's column set. A §4.5.2 operator unknown (a `ddt` off a
-// contribution's spine) is an ordinary internal `.voltage` unknown with its
-// own row and site.
+// is site k's column set. A §4.5.2 operator unknown (each idt site, and a
+// ddt off a contribution's spine) is an ordinary internal `.voltage` unknown
+// with its own row and site.
 
 /// One `q_stamps` entry: reactive row `row` gains `sign · q[site]`.
 pub fn QStamp(comptime U: type) type {

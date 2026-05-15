@@ -536,7 +536,8 @@ pub fn heldIdx(self: *const Gen, args: []const Mir.Value) usize {
 pub fn readsHostState(self: *const Gen, inst: Mir.Inst) bool {
     const d = self.mir.instData(inst).call;
     return switch (d.callee) {
-        .idt,
+        .@"idt$hold",
+        .@"op$static",
         .idtmod,
         .absdelay,
         .@"absdelay$quad",
@@ -719,15 +720,16 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
     const name = d.name;
     const args = d.args;
     const k = Mir.callee.opKind(c);
-    // idt and the §4.5.11/§4.5.12 filters stay lane-exact: they branch
-    // only on `dt` and are S-linear over shared state. Every other operator
-    // steers on or collapses a `.val()` of its input, so it pins.
+    // idt's hold and the §4.5.11/§4.5.12 filters stay lane-exact: they
+    // branch only on `dt` or a control argument and are S-linear over shared
+    // state. Every other operator steers on or collapses a `.val()` of its
+    // input, so it pins.
     switch (k) {
-        .none, .idt, .laplace, .zi, .bound_step, .discontinuity => {},
+        .none, .idt_hold, .laplace, .zi, .bound_step, .discontinuity => {},
         .idtmod, .absdelay, .transition, .slew, .last_crossing, .cross, .above, .timer => for (args) |arg| float_lanes.pinLanes(self, arg),
     }
     switch (c) {
-        .idt,
+        .@"idt$hold",
         .idtmod,
         .absdelay,
         .@"absdelay$quad",
@@ -777,6 +779,16 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .analog_initial => {
             self.uses_sim = true;
             try self.b("S.con(if (sim.analog_initial) 1.0 else 0.0)", .{});
+            return;
+        },
+
+        // §4.5.4/§4.5.5 the solve an operator's DC form keys on. `dt`, not
+        // `analysis("static")`: a host opens a transient with its own kind and
+        // dt = 0. A small-signal analysis linearizes at dt = 0 too, and there
+        // the operator is its transfer function, not its DC value.
+        .@"op$static" => {
+            self.uses_sim = true;
+            try self.b("S.con(if (sim.dt == 0.0 and sim.kind != .ac and sim.kind != .noise) 1.0 else 0.0)", .{});
             return;
         },
 
@@ -1336,16 +1348,12 @@ pub fn emitOperator(self: *Gen, inst: Mir.Inst, args: []const Mir.Value, k: OpKi
             );
             try opClose(self);
         },
-        // §4.5.4 `idt(expr, ic, assert)` "returns the initial conditions
-        // during DC and IC analyses, and whenever assert is nonzero". The
-        // reset is a select; `updateState` holds the accumulator at `ic`.
-        .idt => {
+        // §4.5.4 `idt(expr, ic, assert)` "returns the initial conditions ...
+        // whenever assert is nonzero"; otherwise V(s) less the latched offset.
+        .idt_hold => {
             try opOpen(self, fm);
-            if (args.len >= 3) try self.b(
-                "zIdtReset({s}, {s}, inst.{s}__acc, sim.dt, {s}, {s})",
-                .{ kS, in, n, try ctrlEval(self, args, 1, "0.0"), try ctrlEval(self, args, 2, "0.0") },
-            ) else try self.b("zIdt({s}, {s}, inst.{s}__acc, sim.dt, {s})", .{
-                kS, in, n, try ctrlEval(self, args, 1, "0.0"),
+            try self.b("zIdtHold({s}, {s}, inst.{s}__off, {s}, {s})", .{
+                kS, in, n, try ctrlEval(self, args, 1, "0.0"), try ctrlEval(self, args, 2, "0.0"),
             });
             try opClose(self);
         },

@@ -235,7 +235,7 @@ test "codegen: `constant` is declared exactly for a Jacobian no x can move" {
 
 test "codegen: State.t_prev exists only for a reader, and state_class is declared" {
     // A constant-td `absdelay` pushes its ring on `sim.t` and never
-    // reads `t_prev`; `idt` integrates over `dt = abstime - t_prev`. A
+    // reads `t_prev`; `idtmod` integrates over `dt = abstime - t_prev`. A
     // nonlinear `ddt` lowers to the §5.6.1.2 path latches alone.
     const cases = [_]struct { src: []const u8, t_prev: bool, class: []const u8 }{
         .{ .src =
@@ -247,7 +247,7 @@ test "codegen: State.t_prev exists only for a reader, and state_class is declare
         .{ .src =
         \\module l(p, n);
         \\  inout p, n; electrical p, n;
-        \\  analog I(p, n) <+ idt(V(p, n), 0.0);
+        \\  analog I(p, n) <+ idtmod(V(p, n), 0.0, 1.0);
         \\endmodule
         , .t_prev = true, .class = ".history" },
         .{ .src =

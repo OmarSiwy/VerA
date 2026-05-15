@@ -26,7 +26,6 @@
 //! bias V(i) = 0.75
 //! solve
 //! print none
-//! xfail C1: a no-ic idt answers 0 at DC instead of the value its feedback loop forces
 `include "check.vh"
 module idt_no_ic_dc_feedback(i, o);
     inout i, o;
