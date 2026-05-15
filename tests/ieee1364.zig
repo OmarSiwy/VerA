@@ -132,7 +132,8 @@ pub fn coverage(init: std.process.Init) !u8 {
         "\nPOSITIVE CITATIONS ONLY — no rejection fixture cites these:\n",
         "\nREJECTION CITATIONS ONLY — no positive behaviour is established:\n",
         "\nUNCITED — no fixture names these at all:\n",
-        "\nCLASSIFIED — CLAUSES.tsv says the clause states no obligation a fixture pins:\n",
+        "\nCLASSIFIED — CLAUSES.tsv says the clause states no obligation a fixture pins,\n" ++
+            "or (not_supported) that ROADMAP §1 B scopes it out and VerA refuses or warns:\n",
     };
     for ([_]Bucket{ .pos_only, .neg_only, .uncited, .classified }) |want| {
         var printed = false;

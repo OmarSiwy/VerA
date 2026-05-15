@@ -68,7 +68,7 @@ reduces to another. Every change you make should say which one it moves.
 | | Measure | Command |
 |---|---|---|
 | **A** | Fixtures behaving as stated | `zig build benchmark -- --strict` |
-| **B** | IEEE 1364-2005 clauses with **two-way** evidence | `zig build test-1364 -- --coverage` (§§17-18 obligation detail: `CLAUSE-AUDIT.md` §7.1) |
+| **B** | IEEE 1364-2005 clauses with **two-way** evidence; out-of-scope chapters `not-supported` (`ROADMAP.md` §1 B, `CLAUSE-AUDIT.md` §5.7) | `zig build test-1364 -- --coverage` (§§17-18 obligation detail: `CLAUSE-AUDIT.md` §7.1) |
 | **C** | LRM clauses with **two-way** evidence | `zig build benchmark -- --coverage` |
 | **D** | `ARCHITECTURE.md` §6 phases landed | hand-read against its §6/§8 (`git show 297e97d^:ARCHITECTURE.md`) |
 

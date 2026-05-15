@@ -371,7 +371,7 @@ Was: missing 11 · partial 2 · implemented-without-evidence 4 · verified 0.
 | 17.2-19 | **17.2.7** `$ferror` returns an error code and a description | **verified**; the numeric errno **unspecified** | `file_kernels.zig:411` `zFError`, `:419` `zFErrorStr`, values from `:142-152`; `053_ferror.va:45-48` pins both directions. §9.5.7 says only "an error code is returned" and `:141-143` records that no fixture may assert the value — correctly unasserted |
 | 17.2-20 | 17.2.8 `$feof` | **verified** | `file_kernels.zig:399` `zFEof`, flag set in `:348` `zFTake`; `054_feof.va` puts the descriptor in both states, and `s01_08:91,95` adds the discrimination the clause turns on — stopping on a newline is **not** EOF, input ending before a conversion **is** |
 | 17.2-21 | 17.2.9 `$readmemb`/`$readmemh`: comments, addresses, ranges, direction, x/z, malformed and excess data | **partial** | **A digital loader now exists** — `src/sim/digital.zig:615-616` task table, `:1565-1621` `readMemory`, `:1626-1634` `readSideFile`, `:2423` dispatch. Verified halves: `tests/fixtures/ieee1364/17_system_tasks/d09_08_readmemh.v` (comments ignored, load starts at the left declared index, `@<hex>` relocates, untouched addresses keep their X) and `d09_09_readmemb_range.v` (four-argument form, `start > finish` loads **downward**, `x`/`z` digits) both reproduce their `.expected.txt` exactly. **Missing half — excess data**: `:1611-1618` breaks on reaching `last` and never counts the surplus; measured, five words into `reg [7:0] m [0:3]` prints four and **exits 0, silently**. Left-index rule holds only for ascending declarations (`:1587-1590` sorts `arr.low`/`.high`). Analog correctly refused (`lib/ir/lower.zig:7537-7538`, pinned by `153`). Table 9-2 `Yes/No`. **See §7.5 item 3 — its refusal fixture `d09_91` is run by nothing** |
-| 17.2-22 | 17.2.10 `$sdf_annotate` | **missing** | `lib/ir/lower.zig:7538`. No implementation in `lib/` or `src/`; not in the digital task table. Blocked on D07/D09 specify blocks |
+| 17.2-22 | 17.2.10 `$sdf_annotate` | **missing** (scoped out since: §5.7, refused E1102; §7.1's dated tally still counts it here) | `lib/ir/lower.zig:7538`. No implementation in `lib/` or `src/`; not in the digital task table. Blocked on D07/D09 specify blocks |
 | 17.2-23 | §9.5.1.1 reopening a write-mode file across analyses appends | **missing (untestable today)** | The append machinery exists (`file_kernels.zig:132-133`) but the rule's subject is the SECOND analysis, and `lib/backend/tb.zig:98` `analysis: Analysis = .dc` is a single enum — one analysis per process, and a second `//! analysis` line is dropped in silence. Remains UNCITED |
 | 17.2-24 | §9.5.1.2 descriptor sharing between analog and digital contexts | **partial** (was missing) | 2026-09-24: an `initial` block that calls the §9.5 family runs on the digital kernel (`lib/ir/lower/context.zig` `usesFiles`), and a mixed simulation has ONE descriptor table — the mixed runner routes the digital kernel's file tasks through the device's (`contract.FileIo`, `src/sim/digital/system.zig` `table`). `194_file_descriptor_shared_across_contexts.va` PASSES: the analog context writes through the descriptor the digital context opened. Positive evidence only — no invalid-input fixture yet, so **partial** |
 | 17.2-25 | §9.5.9 file position rolled back on a rejected iteration, `$fdebug` excepted | **implemented-without-evidence** | `lib/backend/codegen.zig:438-447` `emitting_display`, whose doc quotes §9.5.9 verbatim: every §9.5 call runs in the one unit `planCommon` keeps out of the shared core, so nothing writes during a rejected iteration. Enforced negatively by W0850 (`lib/ir/lower.zig:6531`). The *`$fdebug` exception* is therefore also not implemented — see 17.1-14 |
@@ -674,6 +674,27 @@ supported in the analog context of a connect module**. The reading came from the
 `ch09_system_tasks/COVERAGE.md:103` records the contamination. The row is now
 `missing` — see **AMS-05**, and §7.3 item 12 for the two source comments that
 still repeat the withdrawn claim.
+
+### 5.7 Not supported — IEEE 1364 only, measure B
+
+`ROADMAP.md` §1 B scopes measure B to the IEEE 1364-2005 chapters VerA
+implements. A clause outside that scope is `not-supported` in
+`tests/fixtures/ieee1364/CLAUSES.tsv`, and its evidence column names the
+diagnostic that stops a design depending on it. Unlike the five kinds above,
+the clause does oblige a tool; VerA declines the obligation and says so, never
+silently. Measure C has no such kind: `zig build benchmark -- --coverage`
+rejects an AMS `CLAUSES.tsv` row that names it.
+
+| Chapters | What is declined | How VerA says so |
+|---|---|---|
+| 16, and §14.6.3, §17.2.10 | SDF back-annotation | `$sdf_annotate` is refused, E1102 |
+| 28 | protected envelopes | any `` `pragma protect `` is refused, E0146 |
+
+Chapters 21 to 25 (the PLI 1.0 TF and ACC routines) are not in this table:
+IEEE 1364-2005 §1.6 removed their text, each is one sentence pointing at 1.6,
+and they stay `non-normative`. No Verilog source names a TF or ACC routine
+(§20.2 to §20.7 bind a `$` name identically for PLI 1.0 and VPI), so there is
+nothing in a design for VerA to refuse.
 
 ---
 
