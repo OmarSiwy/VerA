@@ -1303,8 +1303,12 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     const nw = try self.slotWidth(n.slot);
     if (plainDriver(r, i)) {
         if (self.role == .comb and pureNode(self, pc)) {
-            try self.print("            ", .{});
-            try self.store(n.slot, .blocking);
+            // Only the time-0 queue runs this process (`plan.Role.comb`):
+            // one out-of-line store serves every node of its width.
+            if (self.watched[n.slot])
+                try self.print("            try M.putCold(s, {f}, {d}, {d}, ", .{ fmtReach(self.reach[n.slot]), n.slot, self.off[n.slot] })
+            else
+                try self.print("            try M.setCold(s, {d}, ", .{self.off[n.slot]});
             try self.print("val{d}(s.view()), {f});\n            return;\n", .{ self.role.comb, full(nw) });
             return;
         }
