@@ -406,8 +406,17 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try emitShows(self);
 
     try self.print("fn none(_: *S, _: u32) rt.Error!void {{\n    unreachable;\n}}\n\n", .{});
+    // A pure node's process runs only in the time-0 queue, which the
+    // 2-state phase never sees (`rt.auto`): that phase leaves it uncompiled.
+    const time0 = try self.arena.alloc(bool, r.code.items.len);
+    @memset(time0, false);
+    if (self.auto) for (procs.items) |pr| if (pr.role == .comb and pureNode(self, pr.entry)) {
+        time0[pr.entry] = true;
+    };
     try self.print("const procs = [_]*const fn (*S, u32) rt.Error!void{{", .{});
-    for (entry_of) |t| if (t) |lo| try self.print(" proc{d},", .{lo}) else try self.print(" none,", .{});
+    for (entry_of) |t| if (t) |lo| {
+        if (time0[lo]) try self.print(" if (two) none else proc{d},", .{lo}) else try self.print(" proc{d},", .{lo});
+    } else try self.print(" none,", .{});
     try self.print(" }};\n\n", .{});
     try self.print(
         \\pub fn dispatch(s: *S, pc: u32) rt.Error!void {{
@@ -1040,7 +1049,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                 const at = for (r.code.items, 0..) |ins, i| {
                     if (ins == .continuous and ins.continuous == drivers[0]) break i;
                 } else return self.refuse("releasing a net whose driver is not a process");
-                try self.print("            if (try s.release({d}, true)) try procs[{d}](s, {d});\n", .{ o.slot, at, at });
+                try self.print("            if (try s.release({d}, true)) try proc{d}(s, {d});\n", .{ o.slot, at, at });
             } else try self.print("            _ = try s.release({d}, {});\n", .{ o.slot, o.force });
             try self.print("            continue :sw {d};\n", .{next});
         },
@@ -1294,8 +1303,12 @@ fn continuous(self: *Emitter, pc: u32, i: u32) Error!void {
     const nw = try self.slotWidth(n.slot);
     if (plainDriver(r, i)) {
         if (self.role == .comb and pureNode(self, pc)) {
-            try self.print("            ", .{});
-            try self.store(n.slot, .blocking);
+            // Only the time-0 queue runs this process (`plan.Role.comb`):
+            // one out-of-line store serves every node of its width.
+            if (self.watched[n.slot])
+                try self.print("            try M.putCold(s, {f}, {d}, {d}, ", .{ fmtReach(self.reach[n.slot]), n.slot, self.off[n.slot] })
+            else
+                try self.print("            try M.setCold(s, {d}, ", .{self.off[n.slot]});
             try self.print("val{d}(s.view()), {f});\n            return;\n", .{ self.role.comb, full(nw) });
             return;
         }

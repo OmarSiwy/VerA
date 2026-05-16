@@ -97,6 +97,9 @@ pub fn buildExe(
         .self_hosted => &.{ "-fno-llvm", "-fno-lld" },
         .llvm => &.{"-fllvm"},
     });
+    // No debug info where there are no safety checks to trace: emitting it
+    // is most of an unsafe build's LLVM time.
+    if (opts.optimize == .ReleaseFast or opts.optimize == .ReleaseSmall) try argv.append(arena, "-fstrip");
     if (opts.shared_lib) try argv.append(arena, "-dynamic");
     if (device_zig != null) try argv.appendSlice(arena, &.{ "--dep", "device" });
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
