@@ -1022,7 +1022,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 .collapse => |net| try e.wires.append(arena, .{
                     .net = net,
                     .scope = scope,
-                    .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(width, e.nets.items[net].resolved.width) } },
+                    .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(e.values.items[var_slot].width, e.nets.items[net].resolved.width) } },
                     .tok = p.main_tok,
                 }),
                 .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
