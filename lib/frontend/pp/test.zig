@@ -821,6 +821,7 @@ test "`--no-std-defs` gets no seed, and lexes the same either way" {
 pub fn expectDeepEqual(comptime T: type, a: T, b: T) !void {
     switch (@typeInfo(T)) {
         .pointer => |p| {
+            if (p.size == .one) return expectDeepEqual(p.child, a.*, b.*);
             comptime std.debug.assert(p.size == .slice);
             if (p.child == u8) return testing.expectEqualStrings(a, b);
             try testing.expectEqual(a.len, b.len);

@@ -5,17 +5,13 @@
 // model." With `if (1)` the block is selected, so the assignment below exists
 // and drives `y` from `a`.
 //
+// The `else` arm is not selected, so its assignment does not exist; were it
+// instantiated as well, y would have two opposing drivers and read x.
+//
 // HAND DERIVATION: t=0 a<-1, so `assign y = a` drives y to 1; at t=1 the
 // display reads y = 1.
 //
-// VerA has no generate scope for a continuous assignment and refuses this
-// legal source with E0235, "not supported inside a generate block" (it used to
-// drop the assignment silently). That refusal is VerA's gap, hence the xfail;
-// this file was audit_generate_block_continuous_assign_rejected.v, a
-// `//! reject E0235` pin of the refusal.
-//
 //! inherited IEEE 1364-2005 12.4.2
-//! xfail VerA refuses a continuous assignment inside a generate block (E0235) instead of instantiating it
 `timescale 1ns/1ns
 module audit_generate_block_continuous_assign;
   wire y;
@@ -23,6 +19,8 @@ module audit_generate_block_continuous_assign;
   generate
     if (1) begin : g
       assign y = a;
+    end else begin : h
+      assign y = ~a;
     end
   endgenerate
   initial begin a = 1; #1 $display("%b", y); $finish(0); end
