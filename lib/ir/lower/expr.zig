@@ -54,6 +54,9 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     switch (ex.tag(e)) {
         .int_literal => return .{ .v = try self.mir.addIntConst(self.arena, ex.intValue(e)), .ty = .integer }, // §2.6.1
         .logic_literal => {
+            // §2.6.1 sets no size limit: a wide two-state literal whose value
+            // an i64 holds exactly is that integer.
+            if (ex.logicValue(e).asExactInt()) |value| return .{ .v = try self.mir.addIntConst(self.arena, value), .ty = .integer };
             try self.err(ex.mainTok(e), .E0130, "digital literal requires a four-state execution backend", .{});
             return poison;
         },
