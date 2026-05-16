@@ -3620,24 +3620,13 @@ fn infoOf(c: Code) Info {
             .lrm = "4.5.3",
             .explain = "`ddt(expr)` differentiates its operand with respect to time.",
         },
-        .E0503 => .{
-            .title = "ddt() must be a linear factor of a contribution",
-            .lrm = "5.6.1.2",
-            .explain =
-            \\A contribution splits into a resistive part and a reactive part,
-            \\and the reactive part is what `ddt` produces. The solver needs
-            \\that split to build the charge/flux vector separately from the
-            \\residual, so `ddt(...)` must appear as a term or as a linear
-            \\factor of one:
-            \\
-            \\    I(a,b) <+ c * ddt(V(a,b));       // ok
-            \\    I(a,b) <+ ddt(V(a,b)) / r;       // ok
-            \\    I(a,b) <+ sin(ddt(V(a,b)));      // not a linear factor
-            \\
-            \\Assign the derivative to a variable first if the nonlinear form
-            \\is really what the model needs.
-            ,
-        },
+        .E0503 => retiredInfo(
+            \\"ddt() must be a linear factor of a contribution". Retired: a term
+            \\whose ddt is not a linear factor, such as sin(ddt(V(a,b))), is now
+            \\resistive, and each ddt in it is one of the new unknowns 4.5.2 lets
+            \\an analog operator introduce, with its own row and charge site. So
+            \\the condition does not exist to report. The number is not reused.
+        ),
         .E0504 => .{
             .title = "ddx() second argument must be an access function",
             .lrm = "4.5.6",

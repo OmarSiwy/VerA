@@ -393,18 +393,21 @@ test "lower: §5.6.7 indirect is banned under a runtime condition, allowed under
     try std.testing.expectEqual(Kind.indirect, ok.low.out.contributions.items[0].kind);
 }
 
-test "lower: a ddt that is not a linear factor is a diagnostic, not wrong physics" {
+test "lower: a ddt that is not a linear factor is its own unknown, row and charge site (§4.5.2)" {
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
-        \\module bad(p, n);
+        \\module nonlinear(p, n);
         \\  inout p, n;
         \\  electrical p, n;
         \\  analog I(p,n) <+ sin(ddt(V(p,n)));
         \\endmodule
     , &h);
     defer h.deinit();
-    try std.testing.expectError(error.DiagnosticsReported, h.low.lowerFile());
-    try std.testing.expectEqual(diag.Code.E0503, h.code(0));
+    _ = try h.low.lowerFile();
+    try std.testing.expectEqual(@as(usize, 3), h.low.out.nodes.len);
+    try std.testing.expect(h.low.out.nodes.items(.kind)[2] == .op_state);
+    try std.testing.expectEqual(@as(usize, 1), h.low.out.charge_sites.items.len);
+    try std.testing.expectEqual(@as(f64, -1.0), h.low.out.charge_sites.items[0].sign);
 }
 
 test "lower: genvar loops unroll, procedural loops do not" {
