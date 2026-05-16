@@ -11,7 +11,6 @@
 // A compiler that compared the signed carrier would evaluate -1 > 1 = 0.
 //
 //! lrm 4.2.11
-//! xfail E0364: the analog MIR carries no expression signedness, so an unsigned context over a signed shift is refused rather than evaluated
 `include "check.vh"
 module dependent_control_shift_mixed(p);
   inout p; electrical p;
