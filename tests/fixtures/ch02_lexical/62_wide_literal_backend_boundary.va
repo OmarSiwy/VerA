@@ -10,7 +10,6 @@
 //   value = 1
 //
 //! lrm 2.6.1
-//! xfail E0130: the analog backend stores integers in 64 bits and refuses a wider literal instead of truncating it
 `include "check.vh"
 module ch02_wide_literal_backend_boundary(p);
     inout p; electrical p;

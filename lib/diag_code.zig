@@ -2822,13 +2822,14 @@ fn infoOf(c: Code) Info {
             .title = "mixed signedness around a shift is not implemented",
             .lrm = "4.2.11",
             .explain =
-            \\The analog MIR does not preserve enough expression signedness to
-            \\apply an unsigned comparison context to a signed shift operand.
-            \\For example, (a >> n) > 32'h1 with integer a = -1 and n = 0
-            \\requires unsigned comparison; comparing the signed i64 carrier
-            \\would silently give the wrong result. VerA rejects this known
-            \\mixed case until context typing is implemented. This is an
-            \\implementation limitation, not an illegal Verilog-AMS expression.
+            \\A comparison with an operand unsigned is unsigned at the wider
+            \\operand's width (LRM 4.2.9), and the shift under it must run at
+            \\that width. VerA shifts at 32 bits (3.2), so a comparison against
+            \\a sized literal wider than 32 bits, such as (a >> n) > 40'h1 with
+            \\integer a = -1, would zero-extend the operand after the shift
+            \\instead of before it. VerA rejects this mixed case until
+            \\expression widths are carried. This is an implementation
+            \\limitation, not an illegal Verilog-AMS expression.
             ,
         },
         .E0368 => .{
@@ -3619,24 +3620,13 @@ fn infoOf(c: Code) Info {
             .lrm = "4.5.3",
             .explain = "`ddt(expr)` differentiates its operand with respect to time.",
         },
-        .E0503 => .{
-            .title = "ddt() must be a linear factor of a contribution",
-            .lrm = "5.6.1.2",
-            .explain =
-            \\A contribution splits into a resistive part and a reactive part,
-            \\and the reactive part is what `ddt` produces. The solver needs
-            \\that split to build the charge/flux vector separately from the
-            \\residual, so `ddt(...)` must appear as a term or as a linear
-            \\factor of one:
-            \\
-            \\    I(a,b) <+ c * ddt(V(a,b));       // ok
-            \\    I(a,b) <+ ddt(V(a,b)) / r;       // ok
-            \\    I(a,b) <+ sin(ddt(V(a,b)));      // not a linear factor
-            \\
-            \\Assign the derivative to a variable first if the nonlinear form
-            \\is really what the model needs.
-            ,
-        },
+        .E0503 => retiredInfo(
+            \\"ddt() must be a linear factor of a contribution". Retired: a term
+            \\whose ddt is not a linear factor, such as sin(ddt(V(a,b))), is now
+            \\resistive, and each ddt in it is one of the new unknowns 4.5.2 lets
+            \\an analog operator introduce, with its own row and charge site. So
+            \\the condition does not exist to report. The number is not reused.
+        ),
         .E0504 => .{
             .title = "ddx() second argument must be an access function",
             .lrm = "4.5.6",

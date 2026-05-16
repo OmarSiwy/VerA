@@ -973,8 +973,9 @@ pub const PendingSite = struct { charge: Mir.Value, negate: bool, lte: bool, tok
 /// The split is on the additive terms: a term with no `ddt` is resistive; a term
 /// with one is reactive, and its value is the term with the `ddt` stripped
 /// (`C*ddt(V)` → `C*V`), the charge codegen differentiates. That is exact when
-/// `ddt` appears once on a multiplicative spine. Anything else (`ddt` inside a
-/// call, two `ddt`s multiplied) is a diagnostic.
+/// `ddt` appears once on a multiplicative spine (`linearDdt`). Any other term
+/// (`ddt` inside a call, two `ddt`s multiplied) is resistive: each of its `ddt`s
+/// is §4.5.2's new unknown with its own row and charge site (`opDdt`).
 fn splitContribution(self: *Lower, rhs: Ast.ExprId) Oom!Split {
     var out: Split = .{ .resist = null, .react = null };
     try splitTerm(self, rhs, false, &out);
@@ -1006,7 +1007,7 @@ fn splitTerm(self: *Lower, e: Ast.ExprId, negate: bool, out: *Split) Oom!void {
         else => {}, // else: not a sum or a sign, so one term, lowered whole below
     }
 
-    if (containsDdt(self, e)) {
+    if (linearDdt(self, e)) {
         const t = try lowerReactive(self, e) orelse return;
         const q = try finishReactive(self, t);
         try accumulate(self, &out.react, q, negate);
@@ -1132,6 +1133,27 @@ fn containsDdt(self: *const Lower, e: Ast.ExprId) bool {
     return false;
 }
 
+/// Is `e` a ddt on the linear spine `lowerReactive` strips: one `ddt` under
+/// signs, factors and divisors free of `ddt`, or a sum of such terms?
+fn linearDdt(self: *const Lower, e: Ast.ExprId) bool {
+    if (e == .none) return false;
+    const ex = &self.file.exprs;
+    return switch (ex.tag(e)) {
+        .filter_call => self.file.strings.eql(ex.strOf(e), "ddt"),
+        .unary => (ex.unOp(e) == .plus or ex.unOp(e) == .minus) and linearDdt(self, ex.lhs(e)),
+        .binary => switch (ex.binOp(e)) {
+            .mul => if (containsDdt(self, ex.lhs(e)))
+                !containsDdt(self, ex.rhs(e)) and linearDdt(self, ex.lhs(e))
+            else
+                linearDdt(self, ex.rhs(e)),
+            .div => !containsDdt(self, ex.rhs(e)) and linearDdt(self, ex.lhs(e)),
+            .add, .sub => linearDdt(self, ex.lhs(e)) and linearDdt(self, ex.rhs(e)),
+            .mod, .pow, .eq, .neq, .case_eq, .case_neq, .lt, .le, .gt, .ge, .logical_and, .logical_or, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr => false,
+        },
+        else => false, // else: no other node keeps a ddt on a linear spine
+    };
+}
+
 /// One reactive term with its multiplicative spine split apart: `b` is the
 /// `ddt` operand, `coeff` the accumulated product of everything that rode
 /// outside the ddt (null = 1), `coeff_nonconst` whether any factor depends
@@ -1184,9 +1206,10 @@ fn mulCoeff(self: *Lower, t: *ReactiveTerm, c: Mir.Value, op: Mir.Opcode) Oom!vo
 /// The charge/flux of a reactive term: strip exactly one `ddt` from a
 /// multiplicative spine (§5.6.1.2), collecting the spine's coefficients
 /// LIVE (no gradient suppression — `finishReactive` decides the form).
+/// Asserts `linearDdt(e)`.
 fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
     const ex = &self.file.exprs;
-    spine: switch (ex.tag(e)) {
+    switch (ex.tag(e)) {
         .filter_call => {
             if (self.file.strings.eql(ex.strOf(e), "ddt")) {
                 if (!try lower_analog_op.checkOperatorPlace(self, e, "ddt")) return null;
@@ -1218,14 +1241,11 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
                 t.coeff = if (t.coeff) |old| try self.emit(.fneg, &.{old}) else try self.mir.addFloatConst(self.arena, -1.0);
                 return t;
             },
-            else => {}, // else: no other unary operator keeps a ddt on a linear spine: E0503 below
+            else => {}, // else: no other unary operator keeps a ddt on a linear spine
         },
         .binary => switch (ex.binOp(e)) {
             .mul => {
-                const l_has = containsDdt(self, ex.lhs(e));
-                const r_has = containsDdt(self, ex.rhs(e));
-                if (l_has and r_has) break :spine;
-                if (l_has) {
+                if (containsDdt(self, ex.lhs(e))) {
                     var t = try lowerReactive(self, ex.lhs(e)) orelse return null;
                     try mulCoeff(self, &t, try self.toReal(try lower_expr.lowerExpr(self, ex.rhs(e))), .fmul);
                     return t;
@@ -1236,7 +1256,6 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
                 return t;
             },
             .div => {
-                if (containsDdt(self, ex.rhs(e))) break :spine; // ddt in a divisor
                 var t = try lowerReactive(self, ex.lhs(e)) orelse return null;
                 try mulCoeff(self, &t, try self.toReal(try lower_expr.lowerExpr(self, ex.rhs(e))), .fdiv);
                 return t;
@@ -1248,9 +1267,8 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
             // charge first, so a side with its own non-constant factor keeps
             // its capacitance form. A side WITHOUT a ddt is a resistive term
             // the factor would also have to scale, which this spine cannot
-            // return — still E0503.
+            // return, so `linearDdt` sends that term down the resistive path.
             .add, .sub => {
-                if (!containsDdt(self, ex.lhs(e)) or !containsDdt(self, ex.rhs(e))) break :spine;
                 const l = try lowerReactive(self, ex.lhs(e)) orelse return null;
                 const lq = try finishReactive(self, l);
                 const r = try lowerReactive(self, ex.rhs(e)) orelse return null;
@@ -1280,12 +1298,9 @@ fn lowerReactive(self: *Lower, e: Ast.ExprId) Oom!?ReactiveTerm {
             .ashr,
             => {},
         },
-        else => {}, // else: no other node keeps a ddt on a linear spine: E0503 below
+        else => {}, // else: no other node keeps a ddt on a linear spine
     }
-    var b = self.errWith(self.file.exprs.mainTok(e), .E0503);
-    b.help("assign the derivative to a variable, then use that variable in the contribution", .{});
-    try b.emit();
-    return null;
+    unreachable; // `linearDdt` admitted only the spine above
 }
 
 /// §4.6.4.1/.2/.3 the optional `name`, read straight off the AST: the label is

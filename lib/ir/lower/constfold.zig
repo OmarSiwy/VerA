@@ -171,38 +171,11 @@ fn operandsSigned(self: *const Lower, a: Ast.ExprId, b: Ast.ExprId, depth: u32) 
     return sa and sb;
 }
 
-/// Returns the zero-extension mask for comparison `e`, or null when no operand is
-/// known unsigned and the signed compare stands. "When one or both operands are
-/// unsigned, the expression shall be interpreted as a comparison between unsigned
-/// values" (LRM §4.2.9). Masking both sides to the wider width makes them
-/// non-negative, so `cmp`'s signed i64 opcodes compare them as unsigned:
-/// `a < 32'd1` with `a` at -1 is 4294967295 < 1. Unsized operands are 32 bits (§3.2).
-///
-/// ponytail: a 64-bit-or-wider sized literal declines the mask rather than
-/// widening the carrier. `Lower`'s integer carrier is i64 and the top bit is its
-/// sign, so a 64-bit unsigned comparison has nowhere to be performed; the
-/// upgrade path is a u64 compare opcode pair in `cmp`.
+/// `constfold.unsignedMask` for comparison `e`, from the source signedness of
+/// its operands: the mask `cmp`'s signed opcodes need to compare as unsigned.
 pub fn unsignedCompareMask(self: *const Lower, e: Ast.ExprId) ?i64 {
     const ex = &self.file.exprs;
-    const l = ex.lhs(e);
-    const r = ex.rhs(e);
-    const sl = integerSourceSigned(self, l, 0);
-    const sr = integerSourceSigned(self, r, 0);
-    const unsigned = (sl != null and !sl.?) or (sr != null and !sr.?);
-    if (!unsigned) return null;
-    const w = @max(operandWidth(self, l), operandWidth(self, r));
-    if (w >= 64) return null;
-    return (@as(i64, 1) << @intCast(w)) - 1;
-}
-
-/// §3.2's 32 bits, or a §2.6.1 sized literal's own declared size.
-fn operandWidth(self: *const Lower, e: Ast.ExprId) u32 {
-    const ex = &self.file.exprs;
-    if (e != .none and ex.tag(e) == .int_literal) {
-        const w = ex.intLiteral(e).width;
-        if (w != 0) return w;
-    }
-    return 32;
+    return constfold.unsignedMask(ex, ex.lhs(e), ex.rhs(e), integerSourceSigned(self, ex.lhs(e), 0), integerSourceSigned(self, ex.rhs(e), 0));
 }
 
 fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
@@ -215,8 +188,11 @@ fn isShiftOperand(self: *const Lower, e: Ast.ExprId, depth: u32) bool {
     };
 }
 
-/// Reports whether comparison `e` has a logical-shift operand and operands of known,
-/// differing signedness. Lowering refuses it (E0364) and constant folding leaves it alone.
+/// Reports whether comparison `e` has a logical-shift operand, operands of known,
+/// differing signedness, and a width over §3.2's 32 bits. `>>` and `<<` run at
+/// 32 bits, so the wider unsigned context `unsignedMask` imposes after them
+/// would not be the one §4.2.9 imposes before. Lowering refuses it (E0364) and
+/// constant folding leaves it alone.
 pub fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
     const ex = &self.file.exprs;
     switch (ex.binOp(e)) {
@@ -228,5 +204,5 @@ pub fn mixedShiftComparison(self: *const Lower, e: Ast.ExprId) bool {
     if (!isShiftOperand(self, a, 0) and !isShiftOperand(self, b, 0)) return false;
     const sa = integerSourceSigned(self, a, 0) orelse return false;
     const sb = integerSourceSigned(self, b, 0) orelse return false;
-    return sa != sb;
+    return sa != sb and @max(constfold.operandWidth(ex, a), constfold.operandWidth(ex, b)) > 32;
 }
