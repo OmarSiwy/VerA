@@ -700,46 +700,15 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
     // keyword is what tells the arms apart. A variable port gets a `VarDecl`
     // as well as the direction, and only it may carry A.2.3's
     // `[ = constant_expression ]`.
-    const var_storage: ?@FieldType(Ast.VarDecl, "storage") = switch (self.peek()) {
-        .kw_integer => .variable, // A.2.2.1 output_variable_type
-        .kw_time => .time, // …its other alternative
-        .kw_reg => .reg, // A.2.1.2's second arm
-        else => null, // else: not a variable-storage keyword
-    };
-    if (var_storage != null) {
-        if (dir != .output) return self.failAt(
-            self.pos,
-            .E0207,
-            "found {s}: A.2.1.2 gives a variable type to `output` only",
-            .{self.found(self.pos)},
-        );
-        self.pos += 1;
-        signed = self.eat(.kw_signed);
-    }
+    const var_storage = try optVarStorage(self, dir);
+    if (var_storage != null) signed = self.eat(.kw_signed);
     // §6.5.2.2's "port direction declaration" range. Lowering compares it
     // with the port type declaration's, so it lands in its own field.
     const range: ?Ast.Dim = try optDim(self);
     while (true) {
         const tok = self.pos;
         const name = try self.expectIdent();
-        if (var_storage) |storage| {
-            // A.2.3 `list_of_variable_port_identifiers ::= port_identifier
-            // [ = constant_expression ] { , ... }`.
-            const init_expr: Ast.ExprId = if (self.eat(.assign_eq)) try parse_expr.parseExpr(self) else .none;
-            try b.vars.append(self.arena, .{
-                .name = name,
-                // Both arms are integral: A.2.2.1's `output_variable_type`
-                // is `integer | time`, and §3.4.1 folds `time` to the same
-                // representation VerA gives an `integer`; Table 7-1 does
-                // the same for a `reg`'s bits.
-                .ty = .integer,
-                .init = init_expr,
-                .storage = storage,
-                .packed_range = range,
-                .is_signed = signed,
-                .main_tok = tok,
-            });
-        }
+        if (var_storage) |storage| try varPort(self, b, storage, name, range, signed, tok);
         if (findPort(b, name)) |p| {
             if (signed) p.is_signed = true;
             // §6.2 "Ports declared in the list of port declarations shall
@@ -760,6 +729,47 @@ pub fn parsePortDecl(self: *Parser, b: *parse_module.Body) Error!void {
         if (!self.eat(.comma)) break;
     }
     _ = try self.expect(.semicolon);
+}
+
+/// A.2.1.2's variable arms of `output_declaration`, cursor after the
+/// direction and any net type: consumes `integer`, `time` or `reg` and
+/// returns the storage it names, or null when none is there. Another
+/// direction with one is E0207.
+pub fn optVarStorage(self: *Parser, dir: Ast.Direction) Error!?@FieldType(Ast.VarDecl, "storage") {
+    const storage: @FieldType(Ast.VarDecl, "storage") = switch (self.peek()) {
+        .kw_integer => .variable, // A.2.2.1 output_variable_type
+        .kw_time => .time, // …its other alternative
+        .kw_reg => .reg, // A.2.1.2's second arm
+        else => return null, // else: not a variable-storage keyword
+    };
+    if (dir != .output) return self.failAt(
+        self.pos,
+        .E0207,
+        "found {s}: A.2.1.2 gives a variable type to `output` only",
+        .{self.found(self.pos)},
+    );
+    self.pos += 1;
+    return storage;
+}
+
+/// The `VarDecl` of one variable port `name`, cursor after the name: A.2.3
+/// `list_of_variable_port_identifiers ::= port_identifier
+/// [ = constant_expression ] { , ... }`.
+pub fn varPort(self: *Parser, b: *parse_module.Body, storage: @FieldType(Ast.VarDecl, "storage"), name: Ast.StrId, range: ?Ast.Dim, signed: bool, tok: u32) Error!void {
+    const init_expr: Ast.ExprId = if (self.eat(.assign_eq)) try parse_expr.parseExpr(self) else .none;
+    try b.vars.append(self.arena, .{
+        .name = name,
+        // Both arms are integral: A.2.2.1's `output_variable_type` is
+        // `integer | time`, and §3.4.1 folds `time` to the same
+        // representation VerA gives an `integer`; Table 7-1 does the same
+        // for a `reg`'s bits.
+        .ty = .integer,
+        .init = init_expr,
+        .storage = storage,
+        .packed_range = range,
+        .is_signed = signed,
+        .main_tok = tok,
+    });
 }
 
 /// Returns the header port named `name`, or null. The pointer is invalidated
@@ -963,6 +973,11 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         // dotted name never matches `findPort`, so it lands as a net
         // declaration under its path and elaboration reads it as one.
         const name = try parseDottedName(self, false);
+        // A.2.3 `ams_net_identifier ::= net_identifier { dimension }`. The
+        // digital engine makes one net per element; analog lowering has no
+        // array of nodes, so an analog parse refuses it here.
+        const dims = try parseDims(self);
+        if (dims.len != 0 and !self.digital) try self.report(tok, .E0205, "a net array (IEEE 1364-2005 §4.9.1) in an analog compilation", .{});
         // §3.6.3.2 `net_decl_assignment`: "the initializer shall be a
         // constant_expression and will be used as a nodeset value for the
         // potential of the net by the analog solver". It is an initial guess
@@ -1005,6 +1020,7 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
                 .discipline = disc,
                 .is_ground = is_ground,
                 .range = range,
+                .dims = dims,
                 .is_signed = signed,
                 .charge = st.charge,
                 .strength0 = st.strength0,

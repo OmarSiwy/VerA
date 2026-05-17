@@ -126,8 +126,9 @@ pub inline fn parseIf(self: *Parser, gen: anytype, tok: u32) Error!Ast.StmtId {
 /// The items are collected into a scratch `Body` and split by scope. §6.6
 /// gives the block its own scope, so its parameters and variables become the
 /// `SeqBlock`'s; nets, branches, genvars and analog functions are hoisted to
-/// the module. Items whose existence the scheme decides but that have no
-/// home yet are refused with E0235.
+/// the module. Instances, and in a digital parse events, processes and
+/// drivers, stay on the block (`Ast.GenItems`). Defparams and tasks, whose
+/// existence the scheme decides but that have no home yet, are E0235.
 ///
 /// ponytail: hoisting is right for a conditional generate, which elaborates
 /// at most once, and short of the LRM for a loop generate, which should get
@@ -200,28 +201,41 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     try b.branches.appendSlice(self.arena, gb.branches.items);
     // §6.6: a generate block "brings the objects, behavioral constructs, and
     // module instances within the block into existence" only as its scheme
-    // selects. Hoisted to the module, a defparam or an `initial`/`always`
-    // would exist exactly once whatever the scheme said, so these are refused
-    // (E0235), and not hoisted, so an enclosing block does not report them
-    // again. Instances stay on the block: the digital engine decides their
+    // selects. Instances stay on the block: the digital engine decides their
     // scheme (`src/sim/digital/root.zig`), and analog elaboration gates an
     // if-generate's instances and refuses the rest (`Flatten.genInstances`).
-    // ponytail: interim. Per-block items selected or unrolled in elaboration
-    // replace this refusal. Every Body list is hoisted, kept under `blk`, or
+    // A digital parse keeps the events, processes and drivers on the block
+    // too, for the digital engine to elaborate per selected block. An analog
+    // parse hoists them, so lowering sees the digital half it reads; a hoisted
+    // process is marked `generated`, which sends the module to the kernel,
+    // and the kernel's digital parse is the one that decides the scheme.
+    // A hoisted defparam or task would exist whatever the scheme said, so
+    // those are refused (E0235), and not hoisted, so an enclosing block does
+    // not report them again. Every Body list is hoisted, kept under `blk`, or
     // refused; none may be dropped silently.
     blk.instances = gb.instances.items;
     for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
-    for (gb.discrete.items) |d|
-        try self.report(d.main_tok, .E0235, "an `{s}` block", .{if (d.is_always) "always" else "initial"});
-    // A continuous assignment (A.6.1), a gate (A.3.1) or a switch is a driver
-    // whose existence the scheme decides, and a named event (§5.10.4) is a
-    // declaration of the block's scope.
-    for (gb.assigns.items) |a| try self.report(a.main_tok, .E0235, "a continuous assignment", .{});
-    for (gb.gates.items) |g| try self.report(g.main_tok, .E0235, "a gate instance", .{});
-    for (gb.pulls.items) |g| try self.report(g.main_tok, .E0235, "a pull gate instance", .{});
     for (gb.tasks.items) |t| try self.report(t.main_tok, .E0235, "a task or function declaration", .{});
-    for (gb.switches.items) |sw| try self.report(sw.main_tok, .E0235, "a switch instance", .{});
-    if (gb.events.items.len != 0) try self.report(tok, .E0235, "an event declaration (`{s}`)", .{self.file.str(gb.events.items[0])});
+    if (self.digital) {
+        const items = try self.arena.create(Ast.GenItems);
+        items.* = .{
+            .events = gb.events.items,
+            .discrete = gb.discrete.items,
+            .assigns = gb.assigns.items,
+            .gates = gb.gates.items,
+            .pulls = gb.pulls.items,
+            .switches = gb.switches.items,
+        };
+        blk.gen = items;
+    } else {
+        for (gb.discrete.items) |*d| d.generated = true;
+        try b.events.appendSlice(self.arena, gb.events.items);
+        try b.discrete.appendSlice(self.arena, gb.discrete.items);
+        try b.assigns.appendSlice(self.arena, gb.assigns.items);
+        try b.gates.appendSlice(self.arena, gb.gates.items);
+        try b.pulls.appendSlice(self.arena, gb.pulls.items);
+        try b.switches.appendSlice(self.arena, gb.switches.items);
+    }
     try b.genvars.appendSlice(self.arena, gb.genvars.items);
     try b.functions.appendSlice(self.arena, gb.functions.items);
     // Nested block names ride up to the module with the nets: VerA has no

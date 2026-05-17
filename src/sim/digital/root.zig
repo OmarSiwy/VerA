@@ -1,6 +1,6 @@
 //! Verilog source -> its IEEE 1364-2005 §17 transcript on `out`, or E1100
 //! diagnostics before any process prints anything. The `Run` driver: engine
-//! state, §6.2.2 per-instance names (§12.4 downward references), elaboration
+//! state, §6.2.2 per-instance names (§12.5/§12.6 hierarchical references), elaboration
 //! into slots, nets and driver rows (§6.5, §6.5.7.1, §19.10), and `run`, which
 //! compiles every driver and process, then drains the §11 scheduler.
 //! Siblings: compile.zig (AST -> bytecode), exec.zig (interpreter), net.zig.
@@ -121,7 +121,7 @@ pub const TyState = enum(u8) { untyped, one, many };
 ///
 /// §4.9 a multidimensional array keeps its first dimension in `low`/`high`
 /// and the others in `rest`, addressed row-major.
-const Array = struct { count: u32, low: i64, high: i64, rest: []const Span = &.{} };
+pub const Array = struct { count: u32, low: i64, high: i64, rest: []const Span = &.{} };
 pub const Span = struct { low: i64, high: i64 };
 
 /// A packed vector's declared `[msb:lsb]` (§3.3).
@@ -626,6 +626,25 @@ pub const Run = struct {
         return .idle;
     }
 
+    /// IEEE 1364-2005 §12.6 the scope a hierarchical name's first part
+    /// names, seen from the executing instance: an instance declared there
+    /// (a downward reference, step a), else in each enclosing instance in
+    /// turn (steps b and c), where an enclosing instance of the module so
+    /// named also answers (Syntax 12-7 `module_identifier.item_name`). The
+    /// root is an instance of its module. Null when nothing up to the root
+    /// has that name.
+    /// ponytail: instance scopes only; a generate block name (§12.6's other
+    /// `scope_name`) is not a scope here.
+    pub fn upward(self: *const Run, name: Ast.StrId) ?u32 {
+        var s = self.instanceOf(self.scope);
+        while (true) {
+            if (self.instances.get(.{ .scope = s, .str = name })) |child| return child;
+            if (self.scope_info.items[s].module == name) return s;
+            if (s == 0) return null;
+            s = self.instanceOf(self.scope_info.items[s].parent);
+        }
+    }
+
     /// The slot a name is stored in, or null when the design declares no such
     /// variable or net. `name` is a root-scope name or a §6.7 downward path
     /// (`u.v.q`: every part but the last an instance), which is the spelling
@@ -656,17 +675,16 @@ pub const Run = struct {
     pub fn exprFail(self: *Run, e: Ast.ExprId, comptime msg: []const u8) Error {
         return self.fail(self.file.exprs.mainTok(e), "{s}", .{msg});
     }
-    /// §12.4 a DOWNWARD hierarchical reference: every part but the last names an
-    /// instance declared in the scope before it, and the last is a declared name
-    /// in the scope the final instance minted. Upward references (§12.5) resolve
-    /// by searching enclosing scopes and are not implemented: a name that does
-    /// not descend from the referring scope is undeclared here.
+    /// §12.5 a hierarchical reference: the first part is a scope `upward`
+    /// finds, every later part but the last names an instance declared in
+    /// the scope before it, and the last is a declared name in the scope the
+    /// final instance minted.
     pub fn slot(self: *Run, e: Ast.ExprId) Error!u32 {
         const ex = &self.file.exprs;
         if (ex.tag(e) == .hier_ident) {
             const parts = ex.nameParts(e);
-            var scope = self.instanceOf(self.scope);
-            for (parts[0 .. parts.len - 1]) |part|
+            var scope = self.upward(parts[0]) orelse return self.exprFail(e, "undeclared instance in a hierarchical reference");
+            for (parts[1 .. parts.len - 1]) |part|
                 scope = self.instances.get(.{ .scope = scope, .str = part }) orelse
                     return self.exprFail(e, "undeclared instance in a hierarchical reference");
             return self.names.get(.{ .scope = scope, .str = parts[parts.len - 1] }) orelse
@@ -859,6 +877,8 @@ pub const Elab = struct {
     insts: std.ArrayList(struct { module: *const Ast.ModuleDecl, scope: u32 }) = .empty,
     /// §7.6 pass switches, with the instance scope their control is read in.
     trans: std.ArrayList(struct { tran: Tran, scope: u32, tok: u32 }) = .empty,
+    /// §6.6 the processes of each elaborated generate block, with its scope.
+    procs: std.ArrayList(struct { scope: u32, blocks: []const Ast.DiscreteBlock }) = .empty,
 };
 
 /// §6.2.2: the root of the design is the description nothing instantiates.
@@ -940,15 +960,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try e.values.append(arena, slot_value);
         try r.params.put(arena, at, {});
     }
-    // §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
-    // point on the waiter list; the stored value is never read or written.
-    for (m.events) |name| {
-        if (e.values.items.len == std.math.maxInt(u32)) return r.fail(m.main_tok, "too many digital storage slots", .{});
-        const at: u32 = @intCast(e.values.items.len);
-        try r.bind(name, at, m.main_tok);
-        try e.values.append(arena, try filled(arena, 1, false, .x));
-        try r.events.put(arena, at, {});
-    }
+    try declareEvents(r, e, m.events, m.main_tok);
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
     for (m.vars) |v| {
         // VAMS §7.3.6.4: an analog variable a digital expression reads is
@@ -989,28 +1001,36 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         if (!r.mixed and (n.discipline != .none or n.is_ground))
             return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
         const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
-        const at = try mintNet(r, e, n.kind, width, n.is_signed, n.name, n.main_tok);
-        if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
-            .msb = try r.declaredBound(range.msb, n.main_tok),
-            .lsb = try r.declaredBound(range.lsb, n.main_tok),
-        });
-        var net = &e.nets.items[at];
-        net.delay = try r.declaredDelay3(n.delay, n.main_tok);
-        // A.2.1.3 gives `trireg` its own alternatives, and in them the third
-        // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
-        // a trireg in the capacitive state does not turn off, it holds, so the
-        // net's own turn-off falls back to §7.14's "smallest of the delays".
-        if (n.kind == .trireg and n.delay.off != .none) {
-            net.decay = net.delay.off;
-            net.delay.off = @min(net.delay.rise, net.delay.fall);
+        // A.2.4 `net_decl_assignment` names no dimension.
+        if (n.dims.len != 0 and n.init != .none) return r.fail(n.main_tok, "a net array declaration takes no assignment", .{});
+        // §4.9.1 a net array is one net per element, on consecutive slots,
+        // the layout a variable array's elements have.
+        const base: u32 = @intCast(e.values.items.len);
+        const count = try declareArray(r, base, n.dims, n.main_tok);
+        for (0..count) |k| {
+            const at = try mintNet(r, e, n.kind, width, n.is_signed, if (k == 0) n.name else .none, n.main_tok);
+            if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
+                .msb = try r.declaredBound(range.msb, n.main_tok),
+                .lsb = try r.declaredBound(range.lsb, n.main_tok),
+            });
+            var net = &e.nets.items[at];
+            net.delay = try r.declaredDelay3(n.delay, n.main_tok);
+            // A.2.1.3 gives `trireg` its own alternatives, and in them the third
+            // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
+            // a trireg in the capacitive state does not turn off, it holds, so the
+            // net's own turn-off falls back to §7.14's "smallest of the delays".
+            if (n.kind == .trireg and n.delay.off != .none) {
+                net.decay = net.delay.off;
+                net.delay.off = @min(net.delay.rise, net.delay.fall);
+            }
+            net.charge = n.charge;
+            // A.2.4 `net_decl_assignment` is a continuous assignment written on the
+            // declaration: one more driver of that net. Its delay is the net's
+            // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
+            // not on the `=`), so the row it contributes carries none.
+            if (n.init != .none)
+                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
         }
-        net.charge = n.charge;
-        // A.2.4 `net_decl_assignment` is a continuous assignment written on the
-        // declaration: one more driver of that net. Its delay is the net's
-        // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
-        // not on the `=`), so the row it contributes carries none.
-        if (n.init != .none)
-            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
     }
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
@@ -1028,7 +1048,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 .collapse => |net| try e.wires.append(arena, .{
                     .net = net,
                     .scope = scope,
-                    .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(width, e.nets.items[net].resolved.width) } },
+                    .source = .{ .bridge = .{ .src = var_slot, .src_lo = 0, .dst_lo = 0, .width = @min(e.values.items[var_slot].width, e.nets.items[net].resolved.width) } },
                     .tok = p.main_tok,
                 }),
                 .receive, .send => return r.fail(p.main_tok, "an output variable port connects to one whole net", .{}),
@@ -1095,15 +1115,37 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             },
         }
     }
-    for (m.assigns) |a| {
-        const target = try r.scalarSlot(a.target);
+    try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
+    for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
+    for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
+}
+
+/// §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
+/// point on the waiter list; the stored value is never read or written.
+fn declareEvents(r: *Run, e: *Elab, names: []const Ast.StrId, tok: u32) Error!void {
+    for (names) |name| {
+        if (e.values.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
+        const at: u32 = @intCast(e.values.items.len);
+        try r.bind(name, at, tok);
+        try e.values.append(r.arena, try filled(r.arena, 1, false, .x));
+        try r.events.put(r.arena, at, {});
+    }
+}
+
+/// The driver rows of `items`' continuous assignments, gates, switches and
+/// pull sources, their names resolved in `scope`. `items.events` and
+/// `items.discrete` are not read.
+fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void {
+    r.scope = scope;
+    for (items.assigns) |a| {
+        const target = try netSlot(r, a.target, a.main_tok);
         const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
-        try e.wires.append(arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
+        try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
-    for (m.gates) |g| {
-        const target = try r.scalarSlot(g.out);
+    for (items.gates) |g| {
+        const target = try netSlot(r, g.out, g.main_tok);
         const net = r.net_of.get(target) orelse return r.fail(g.main_tok, "a gate's output terminal must be a net", .{});
         const width = e.nets.items[net].resolved.width;
         // IEEE 1364-2005 §7.1.5/§7.1.6: an instance array is one gate per
@@ -1115,7 +1157,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         if (width != 1 and width != lanes) return r.fail(g.main_tok, "a gate's output terminal is one bit, or one per instance of an array", .{});
         for (0..lanes) |j| {
             const lane: ?u32 = if (g.range == null) null else @intCast(lanes - 1 - j);
-            try e.wires.append(arena, .{
+            try e.wires.append(r.arena, .{
                 .net = net,
                 .scope = scope,
                 .source = .{ .gate = .{ .kind = g.kind, .ins = g.ins, .lane = lane, .lanes = lanes, .out_bit = if (width == 1) null else lane } },
@@ -1131,7 +1173,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // p-type sharing data and output. A pass switch joins its two nets into
     // one resolution while it conducts.
     // ponytail: a MOS or CMOS switch's terminals are scalar nets.
-    for (m.switches) |sw| {
+    for (items.switches) |sw| {
         const resistive = switch (sw.kind) {
             .rcmos, .rnmos, .rpmos, .rtran, .rtranif0, .rtranif1 => true,
             .cmos, .nmos, .pmos, .tran, .tranif0, .tranif1 => false,
@@ -1142,7 +1184,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 if (e.nets.items[out].resolved.width != 1) return r.fail(sw.main_tok, "only scalar MOS switch terminals are implemented", .{});
                 const cmos = sw.kind == .cmos or sw.kind == .rcmos;
                 const n_type = sw.kind == .nmos or sw.kind == .rnmos;
-                for (0..@as(usize, if (cmos) 2 else 1)) |half| try e.wires.append(arena, .{
+                for (0..@as(usize, if (cmos) 2 else 1)) |half| try e.wires.append(r.arena, .{
                     .net = out,
                     .scope = scope,
                     .source = .{ .mos = .{ .data = sw.terms[1], .gate = sw.terms[2 + half], .n_type = if (cmos) half == 0 else n_type, .resistive = resistive } },
@@ -1157,7 +1199,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 if (sw.delay.off != .none) return r.fail(sw.main_tok, "§7.6: a pass switch takes at most two delays", .{});
                 const ta = try switchTerminal(r, e, sw.terms[0], sw.main_tok);
                 const tb = try switchTerminal(r, e, sw.terms[1], sw.main_tok);
-                try e.trans.append(arena, .{
+                try e.trans.append(r.arena, .{
                     .tran = .{
                         .a = ta.net,
                         .b = tb.net,
@@ -1179,12 +1221,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // IEEE 1364-2005 §7.8 a pullup/pulldown "shall place a logic value 1 [0]
     // on the nets connected", at pull strength unless one is written: a
     // constant driver, the same row `unconnected_drive` contributes.
-    for (m.pulls) |p| {
-        const net = r.net_of.get(try r.scalarSlot(p.out)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
-        try e.wires.append(arena, .{ .net = net, .scope = scope, .source = .{ .pull = if (p.one) .one else .zero }, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
+    for (items.pulls) |p| {
+        const net = r.net_of.get(try netSlot(r, p.out, p.main_tok)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
+        try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .pull = if (p.one) .one else .zero }, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
     }
-    for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
-    if (!r.mixed) for (m.analog) |ab| try generate(r, e, scope, ab.body, depth);
 }
 
 /// VAMS §7.8.4 `m`'s instances at `scope` as the analog compile's connect
@@ -1300,10 +1340,12 @@ fn genvarOf(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, f: anytype) ?
 /// (§12.4.1), and only the selected blocks' instances come into existence
 /// (§12.1.1: an instance in an unselected arm still makes its module no
 /// top-level one).
-/// ponytail: instances only; a block's other items are refused by the
-/// parser. A part-select bound written with a genvar is folded once, with
+/// A block's events, drivers and processes are declared in the scope it is
+/// elaborated in (`Ast.GenItems`).
+/// ponytail: an if or case generate's block is not a scope of its own, so its
+/// names are the enclosing scope's, as its hoisted nets are. A part-select bound written with a genvar is folded once, with
 /// the first iteration's value; a bit-select is read per iteration.
-fn generate(r: *Run, e: *Elab, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
+fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
     if (s == .none) return;
     const tok = r.file.stmtTok(s);
     switch (r.file.stmt(s)) {
@@ -1311,7 +1353,7 @@ fn generate(r: *Run, e: *Elab, scope: u32, s: Ast.StmtId, depth: u16) Error!void
         .if_stmt => |i| {
             r.scope = scope;
             const cond = (try r.constant(i.cond, tok)).truth();
-            try generate(r, e, scope, if (cond == .one) i.then_s else i.else_s, depth);
+            try generate(r, e, m, scope, if (cond == .one) i.then_s else i.else_s, depth);
         },
         // §12.4.2: "the case_generate_item selected is the one whose
         // expression matches the case expression", the default otherwise.
@@ -1329,13 +1371,12 @@ fn generate(r: *Run, e: *Elab, scope: u32, s: Ast.StmtId, depth: u16) Error!void
                     if ((try exec.convert(r.arena, value, ty)).equality(.case_equal, try exec.convert(r.arena, l, ty)) == .one) chosen = arm.body;
                 }
             }
-            try generate(r, e, scope, chosen orelse fallback, depth);
+            try generate(r, e, m, scope, chosen orelse fallback, depth);
         },
         // §12.4.1: the genvar steps through its values in the module's scope,
         // and each iteration's block is a scope of its own, `name[value]`, in
         // which the genvar is a local parameter holding that value.
         .for_stmt => |f| {
-            const m = findModule(r, r.scope_info.items[r.instanceOf(scope)].module, tok) catch unreachable; // the instance was minted from it
             const gv = genvarOf(r.file, m, f) orelse return r.fail(tok, "§12.4.1: a loop generate's index is a genvar", .{});
             const step = switch (r.file.stmt(f.step)) {
                 .assign => |a| a,
@@ -1362,14 +1403,20 @@ fn generate(r: *Run, e: *Elab, scope: u32, s: Ast.StmtId, depth: u16) Error!void
                 try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .module = m.name, .lexical = true, .index = value });
                 r.scope = iter;
                 try setGenvar(r, e, try genvarSlot(r, e, gv, tok), e.values.items[at]);
-                try generate(r, e, iter, f.body, depth);
+                try generate(r, e, m, iter, f.body, depth);
                 r.scope = scope;
                 try setGenvar(r, e, at, try r.constant(step.value, tok));
             }
         },
         .block => |b| {
+            r.scope = scope;
+            try declareEvents(r, e, b.gen.events, tok);
+            try declareDrivers(r, e, scope, b.gen.*);
+            if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
             for (b.instances) |*inst| try instantiate(r, e, scope, inst, depth);
-            for (b.body) |inner| try generate(r, e, scope, inner, depth);
+            // A mixed design's generate block also holds its analog blocks,
+            // which are the analog compile's.
+            for (b.body) |inner| if (!r.mixed or isGenerate(r.file, m, inner)) try generate(r, e, m, scope, inner, depth);
         },
         else => return r.fail(tok, "only generate constructs of instances are implemented by digital execution", .{}), // else: analog behaviour inside a generate block
     }
@@ -1603,18 +1650,7 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
         .msb = try r.declaredBound(range.msb, v.main_tok),
         .lsb = try r.declaredBound(range.lsb, v.main_tok),
     });
-    var count: u32 = 1;
-    if (v.dims.len != 0) {
-        const spans = try r.arena.alloc(Span, v.dims.len);
-        for (v.dims, spans) |d, *s| {
-            const lo = try r.declaredBound(d.lsb, v.main_tok);
-            const hi = try r.declaredBound(d.msb, v.main_tok);
-            s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
-            const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
-            count = std.math.mul(u32, count, size) catch return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
-        }
-        try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
-    }
+    const count = try declareArray(r, base, v.dims, v.main_tok);
     if (count > std.math.maxInt(u32) - g.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
     const signed = switch (v.storage) {
         .reg => v.is_signed,
@@ -1629,6 +1665,40 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     }
     r.values = g.items;
     return base;
+}
+
+/// §4.9 the `arrays` row of the array whose first element is `base`, declared
+/// with `dims`, and its element count; 1, and no row, for no dimensions.
+fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
+    if (dims.len == 0) return 1;
+    var count: u32 = 1;
+    const spans = try r.arena.alloc(Span, dims.len);
+    for (dims, spans) |d, *s| {
+        const lo = try r.declaredBound(d.lsb, tok);
+        const hi = try r.declaredBound(d.msb, tok);
+        s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
+        const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
+        count = std.math.mul(u32, count, size) catch return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
+    }
+    try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
+    return count;
+}
+
+/// §4.9.1 the slot a driver or a port connection drives: a whole net, or one
+/// element of a net array named with a constant index per dimension.
+fn netSlot(r: *Run, e: Ast.ExprId, tok: u32) Error!u32 {
+    const arr = (try r.indexedArray(e)) orelse return r.scalarSlot(e);
+    const ex = &r.file.exprs;
+    const c = r.chainBase(e);
+    var indices: [16]i64 = undefined;
+    var x = e;
+    var k = c.depth;
+    while (k != 0) : (x = ex.lhs(x)) {
+        k -= 1;
+        indices[k] = try r.declaredBound(ex.rhs(x), tok);
+    }
+    const offset = exec.elementOffset(arr, indices[0..c.depth]) orelse return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
+    return try r.slot(c.base) + offset;
 }
 
 /// §10 one subroutine as the engine runs it: the declaration, the instance
@@ -1792,13 +1862,16 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
         // §6.5.2.2 an input port is a receiver: the child puts no driver on the
         // outside, so whatever the parent wrote feeds the port net.
         .input => .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok } },
+        // A net array element (§4.9.1) is sent to, not collapsed onto: the
+        // array's name and its first element share a slot, which a child
+        // port bound to that slot would read as the whole array.
+        // ponytail: so a child's drive strength does not reach the element.
         .output => blk: {
-            if (ex.tag(conn.expr) != .concat) return r.exprFail(conn.expr, "an output port connects to a net or a concatenation of nets");
-            const args = ex.args(conn.expr);
+            const args = if (ex.tag(conn.expr) == .concat) ex.args(conn.expr) else &.{conn.expr};
             const operands = try r.arena.alloc(u32, args.len);
             for (args, operands) |arg, *out| {
-                if (ex.tag(arg) != .ident) return r.exprFail(arg, "an output port connects to a net or a concatenation of nets");
-                out.* = r.net_of.get(try r.scalarSlot(arg)) orelse return r.exprFail(arg, "an output port can only drive a net");
+                if (ex.tag(arg) != .ident and try r.indexedArray(arg) == null) return r.exprFail(arg, "an output port connects to a net, a net array element or a concatenation of them");
+                out.* = r.net_of.get(try netSlot(r, arg, conn.main_tok)) orelse return r.exprFail(arg, "an output port can only drive a net");
             }
             break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
         },
@@ -2062,15 +2135,11 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             for (inst.module.discrete) |process| try (N{ .f = r.file, .out = &named, .a = arena }).stmt(process.body);
             try r.analogTriggers(inst.module, &named);
         }
-        for (inst.module.discrete) |process| {
-            const start: u32 = @intCast(r.code.items.len);
-            try compile.compileStmt(&r, process.body, 0);
-            _ = try compile.append(&r, if (process.is_always)
-                .{ .restart = .{ .target = start, .tok = process.main_tok } }
-            else
-                .stop);
-            _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
-        }
+        try processes(&r, inst.module.discrete);
+    }
+    for (e.procs.items) |p| {
+        r.scope = p.scope;
+        try processes(&r, p.blocks);
     }
     // A.6.5's `disable` names a block that needs no declaration before its
     // use (it may be in another process), so the ranges are bound here, once
@@ -2100,6 +2169,19 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     try exec.buildFanout(&r);
     try driver.arm(&r);
     return r;
+}
+
+/// Compiles each of `blocks` in `r.scope` and queues it at time 0.
+fn processes(r: *Run, blocks: []const Ast.DiscreteBlock) Error!void {
+    for (blocks) |process| {
+        const start: u32 = @intCast(r.code.items.len);
+        try compile.compileStmt(r, process.body, 0);
+        _ = try compile.append(r, if (process.is_always)
+            .{ .restart = .{ .target = start, .tok = process.main_tok } }
+        else
+            .stop);
+        _ = try exec.enqueue(r, .{ .run_process = start }, null, false);
+    }
 }
 
 // ---- tests ------------------------------------------------------------------

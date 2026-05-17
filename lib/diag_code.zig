@@ -1068,7 +1068,8 @@ fn infoOf(c: Code) Info {
             \\this context: an annex B spelling with no production here yet, a
             \\digital `task` in an analog compilation, a `case` generate with
             \\no generate region above it, a `wreal` in a Verilog-A source
-            \\(annex C.4).
+            \\(annex C.4), a net array in an analog compilation (the digital
+            \\engine runs one; analog lowering has no array of nodes).
             \\
             \\Text that is not a module item at all is E0240, a syntax error.
             ,
@@ -1576,18 +1577,20 @@ fn infoOf(c: Code) Info {
             \\... from a set of alternatives".
             \\
             \\VerA keeps the analog bodies of a generate block under its scheme,
-            \\and an if-generate's module instances too (each child's analog
-            \\blocks run under the scheme that brings it into existence), but
-            \\has no generate scope for a loop or case generate's instance, a
-            \\defparam, an initial/always block, a continuous assignment, a
-            \\gate or a named event. The first three used to be moved to the module and
-            \\elaborated exactly once whatever the scheme said, and the last
-            \\three were dropped without a word, so
+            \\an if-generate's module instances too (each child's analog blocks
+            \\run under the scheme that brings it into existence), and the
+            \\block's initial/always blocks, continuous assignments, gates and
+            \\named events, which the digital engine brings into existence as
+            \\the scheme selects. It has no generate scope for a loop or case
+            \\generate's analog instance, a defparam, or a task or function.
+            \\Moved to the module, each would exist exactly once whatever the
+            \\scheme said, so
             \\
             \\    if (use_r) begin res #(.r(2k)) u1(p, n); end
             \\
-            \\stamped u1 with use_r = 0, and an if/else built both arms. That is a
-            \\wrong circuit with no message, so the construct is refused.
+            \\would stamp u1 with use_r = 0, and an if/else would build both
+            \\arms. That is a wrong circuit with no message, so the construct
+            \\is refused.
             \\
             \\The source is legal: this is a limitation of VerA, not an error in
             \\the model. Write the instance at module level, or select between
