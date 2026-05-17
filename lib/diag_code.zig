@@ -1068,7 +1068,8 @@ fn infoOf(c: Code) Info {
             \\this context: an annex B spelling with no production here yet, a
             \\digital `task` in an analog compilation, a `case` generate with
             \\no generate region above it, a `wreal` in a Verilog-A source
-            \\(annex C.4).
+            \\(annex C.4), a net array in an analog compilation (the digital
+            \\engine runs one; analog lowering has no array of nodes).
             \\
             \\Text that is not a module item at all is E0240, a syntax error.
             ,

@@ -629,6 +629,9 @@ pub const NetDecl = struct {
     is_ground: bool = false,
     /// §6.5.2 vector net range; `null` for a scalar.
     range: ?Dim = null,
+    /// A.2.3 `net_identifier { dimension }`: a net array (IEEE 1364-2005
+    /// §4.9.1), one net per element. Only a digital parse keeps one.
+    dims: []const Dim = &.{},
     /// A.2.1.3 `[ signed ]`. IEEE 1364-2005 §12.3.11: signedness belongs to the
     /// declaration, so each side of a port keeps its own.
     is_signed: bool = false,

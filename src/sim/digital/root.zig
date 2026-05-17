@@ -121,7 +121,7 @@ pub const TyState = enum(u8) { untyped, one, many };
 ///
 /// §4.9 a multidimensional array keeps its first dimension in `low`/`high`
 /// and the others in `rest`, addressed row-major.
-const Array = struct { count: u32, low: i64, high: i64, rest: []const Span = &.{} };
+pub const Array = struct { count: u32, low: i64, high: i64, rest: []const Span = &.{} };
 pub const Span = struct { low: i64, high: i64 };
 
 /// A packed vector's declared `[msb:lsb]` (§3.3).
@@ -1001,28 +1001,36 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         if (!r.mixed and (n.discipline != .none or n.is_ground))
             return r.fail(n.main_tok, "disciplined and ground nets are not implemented by digital execution", .{});
         const width = if (n.range) |range| try r.declaredWidth(range, n.main_tok) else 1;
-        const at = try mintNet(r, e, n.kind, width, n.is_signed, n.name, n.main_tok);
-        if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
-            .msb = try r.declaredBound(range.msb, n.main_tok),
-            .lsb = try r.declaredBound(range.lsb, n.main_tok),
-        });
-        var net = &e.nets.items[at];
-        net.delay = try r.declaredDelay3(n.delay, n.main_tok);
-        // A.2.1.3 gives `trireg` its own alternatives, and in them the third
-        // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
-        // a trireg in the capacitive state does not turn off, it holds, so the
-        // net's own turn-off falls back to §7.14's "smallest of the delays".
-        if (n.kind == .trireg and n.delay.off != .none) {
-            net.decay = net.delay.off;
-            net.delay.off = @min(net.delay.rise, net.delay.fall);
+        // A.2.4 `net_decl_assignment` names no dimension.
+        if (n.dims.len != 0 and n.init != .none) return r.fail(n.main_tok, "a net array declaration takes no assignment", .{});
+        // §4.9.1 a net array is one net per element, on consecutive slots,
+        // the layout a variable array's elements have.
+        const base: u32 = @intCast(e.values.items.len);
+        const count = try declareArray(r, base, n.dims, n.main_tok);
+        for (0..count) |k| {
+            const at = try mintNet(r, e, n.kind, width, n.is_signed, if (k == 0) n.name else .none, n.main_tok);
+            if (n.range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
+                .msb = try r.declaredBound(range.msb, n.main_tok),
+                .lsb = try r.declaredBound(range.lsb, n.main_tok),
+            });
+            var net = &e.nets.items[at];
+            net.delay = try r.declaredDelay3(n.delay, n.main_tok);
+            // A.2.1.3 gives `trireg` its own alternatives, and in them the third
+            // `delay3` value is the CHARGE DECAY TIME. It is not a turn-off delay:
+            // a trireg in the capacitive state does not turn off, it holds, so the
+            // net's own turn-off falls back to §7.14's "smallest of the delays".
+            if (n.kind == .trireg and n.delay.off != .none) {
+                net.decay = net.delay.off;
+                net.delay.off = @min(net.delay.rise, net.delay.fall);
+            }
+            net.charge = n.charge;
+            // A.2.4 `net_decl_assignment` is a continuous assignment written on the
+            // declaration: one more driver of that net. Its delay is the net's
+            // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
+            // not on the `=`), so the row it contributes carries none.
+            if (n.init != .none)
+                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
         }
-        net.charge = n.charge;
-        // A.2.4 `net_decl_assignment` is a continuous assignment written on the
-        // declaration: one more driver of that net. Its delay is the net's
-        // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
-        // not on the `=`), so the row it contributes carries none.
-        if (n.init != .none)
-            try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
     }
     // §6.5 the ports, after the body nets: a port net minted here is the one a
     // body `wire w;` on the same name was folded into by the parser.
@@ -1130,14 +1138,14 @@ fn declareEvents(r: *Run, e: *Elab, names: []const Ast.StrId, tok: u32) Error!vo
 fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void {
     r.scope = scope;
     for (items.assigns) |a| {
-        const target = try r.scalarSlot(a.target);
+        const target = try netSlot(r, a.target, a.main_tok);
         const net = r.net_of.get(target) orelse return r.fail(a.main_tok, "a continuous assignment can only drive a net", .{});
         try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .expr = .{ .e = a.value } }, .s0 = a.strength0, .s1 = a.strength1, .delay = a.delay, .tok = a.main_tok });
     }
     // §7.1 a gate instance is one more driver of its output net, so it joins
     // the same list an `assign` does and resolves against them.
     for (items.gates) |g| {
-        const target = try r.scalarSlot(g.out);
+        const target = try netSlot(r, g.out, g.main_tok);
         const net = r.net_of.get(target) orelse return r.fail(g.main_tok, "a gate's output terminal must be a net", .{});
         const width = e.nets.items[net].resolved.width;
         // IEEE 1364-2005 §7.1.5/§7.1.6: an instance array is one gate per
@@ -1214,7 +1222,7 @@ fn declareDrivers(r: *Run, e: *Elab, scope: u32, items: Ast.GenItems) Error!void
     // on the nets connected", at pull strength unless one is written: a
     // constant driver, the same row `unconnected_drive` contributes.
     for (items.pulls) |p| {
-        const net = r.net_of.get(try r.scalarSlot(p.out)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
+        const net = r.net_of.get(try netSlot(r, p.out, p.main_tok)) orelse return r.fail(p.main_tok, "a pull source's terminal must be a net", .{});
         try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .pull = if (p.one) .one else .zero }, .s0 = p.strength, .s1 = p.strength, .tok = p.main_tok });
     }
 }
@@ -1642,18 +1650,7 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
         .msb = try r.declaredBound(range.msb, v.main_tok),
         .lsb = try r.declaredBound(range.lsb, v.main_tok),
     });
-    var count: u32 = 1;
-    if (v.dims.len != 0) {
-        const spans = try r.arena.alloc(Span, v.dims.len);
-        for (v.dims, spans) |d, *s| {
-            const lo = try r.declaredBound(d.lsb, v.main_tok);
-            const hi = try r.declaredBound(d.msb, v.main_tok);
-            s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
-            const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
-            count = std.math.mul(u32, count, size) catch return r.fail(v.main_tok, "unpacked array size is outside the supported u32 range", .{});
-        }
-        try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
-    }
+    const count = try declareArray(r, base, v.dims, v.main_tok);
     if (count > std.math.maxInt(u32) - g.items.len) return r.fail(v.main_tok, "too many digital storage slots", .{});
     const signed = switch (v.storage) {
         .reg => v.is_signed,
@@ -1668,6 +1665,40 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     }
     r.values = g.items;
     return base;
+}
+
+/// §4.9 the `arrays` row of the array whose first element is `base`, declared
+/// with `dims`, and its element count; 1, and no row, for no dimensions.
+fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
+    if (dims.len == 0) return 1;
+    var count: u32 = 1;
+    const spans = try r.arena.alloc(Span, dims.len);
+    for (dims, spans) |d, *s| {
+        const lo = try r.declaredBound(d.lsb, tok);
+        const hi = try r.declaredBound(d.msb, tok);
+        s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
+        const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
+        count = std.math.mul(u32, count, size) catch return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
+    }
+    try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
+    return count;
+}
+
+/// §4.9.1 the slot a driver or a port connection drives: a whole net, or one
+/// element of a net array named with a constant index per dimension.
+fn netSlot(r: *Run, e: Ast.ExprId, tok: u32) Error!u32 {
+    const arr = (try r.indexedArray(e)) orelse return r.scalarSlot(e);
+    const ex = &r.file.exprs;
+    const c = r.chainBase(e);
+    var indices: [16]i64 = undefined;
+    var x = e;
+    var k = c.depth;
+    while (k != 0) : (x = ex.lhs(x)) {
+        k -= 1;
+        indices[k] = try r.declaredBound(ex.rhs(x), tok);
+    }
+    const offset = exec.elementOffset(arr, indices[0..c.depth]) orelse return r.fail(tok, "§4.9: an array index is outside its declared range", .{});
+    return try r.slot(c.base) + offset;
 }
 
 /// §10 one subroutine as the engine runs it: the declaration, the instance
@@ -1831,13 +1862,16 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
         // §6.5.2.2 an input port is a receiver: the child puts no driver on the
         // outside, so whatever the parent wrote feeds the port net.
         .input => .{ .receive = .{ .expr = conn.expr, .scope = scope, .tok = conn.main_tok } },
+        // A net array element (§4.9.1) is sent to, not collapsed onto: the
+        // array's name and its first element share a slot, which a child
+        // port bound to that slot would read as the whole array.
+        // ponytail: so a child's drive strength does not reach the element.
         .output => blk: {
-            if (ex.tag(conn.expr) != .concat) return r.exprFail(conn.expr, "an output port connects to a net or a concatenation of nets");
-            const args = ex.args(conn.expr);
+            const args = if (ex.tag(conn.expr) == .concat) ex.args(conn.expr) else &.{conn.expr};
             const operands = try r.arena.alloc(u32, args.len);
             for (args, operands) |arg, *out| {
-                if (ex.tag(arg) != .ident) return r.exprFail(arg, "an output port connects to a net or a concatenation of nets");
-                out.* = r.net_of.get(try r.scalarSlot(arg)) orelse return r.exprFail(arg, "an output port can only drive a net");
+                if (ex.tag(arg) != .ident and try r.indexedArray(arg) == null) return r.exprFail(arg, "an output port connects to a net, a net array element or a concatenation of them");
+                out.* = r.net_of.get(try netSlot(r, arg, conn.main_tok)) orelse return r.exprFail(arg, "an output port can only drive a net");
             }
             break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
         },

@@ -973,6 +973,11 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
         // dotted name never matches `findPort`, so it lands as a net
         // declaration under its path and elaboration reads it as one.
         const name = try parseDottedName(self, false);
+        // A.2.3 `ams_net_identifier ::= net_identifier { dimension }`. The
+        // digital engine makes one net per element; analog lowering has no
+        // array of nodes, so an analog parse refuses it here.
+        const dims = try parseDims(self);
+        if (dims.len != 0 and !self.digital) try self.report(tok, .E0205, "a net array (IEEE 1364-2005 §4.9.1) in an analog compilation", .{});
         // §3.6.3.2 `net_decl_assignment`: "the initializer shall be a
         // constant_expression and will be used as a nodeset value for the
         // potential of the net by the analog solver". It is an initial guess
@@ -1015,6 +1020,7 @@ pub fn parseNetNames(self: *Parser, b: *parse_module.Body, disc: Ast.StrId, kind
                 .discipline = disc,
                 .is_ground = is_ground,
                 .range = range,
+                .dims = dims,
                 .is_signed = signed,
                 .charge = st.charge,
                 .strength0 = st.strength0,
