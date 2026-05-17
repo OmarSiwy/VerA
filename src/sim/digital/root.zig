@@ -1,6 +1,6 @@
 //! Verilog source -> its IEEE 1364-2005 §17 transcript on `out`, or E1100
 //! diagnostics before any process prints anything. The `Run` driver: engine
-//! state, §6.2.2 per-instance names (§12.4 downward references), elaboration
+//! state, §6.2.2 per-instance names (§12.5/§12.6 hierarchical references), elaboration
 //! into slots, nets and driver rows (§6.5, §6.5.7.1, §19.10), and `run`, which
 //! compiles every driver and process, then drains the §11 scheduler.
 //! Siblings: compile.zig (AST -> bytecode), exec.zig (interpreter), net.zig.
@@ -626,6 +626,25 @@ pub const Run = struct {
         return .idle;
     }
 
+    /// IEEE 1364-2005 §12.6 the scope a hierarchical name's first part
+    /// names, seen from the executing instance: an instance declared there
+    /// (a downward reference, step a), else in each enclosing instance in
+    /// turn (steps b and c), where an enclosing instance of the module so
+    /// named also answers (Syntax 12-7 `module_identifier.item_name`). The
+    /// root is an instance of its module. Null when nothing up to the root
+    /// has that name.
+    /// ponytail: instance scopes only; a generate block name (§12.6's other
+    /// `scope_name`) is not a scope here.
+    pub fn upward(self: *const Run, name: Ast.StrId) ?u32 {
+        var s = self.instanceOf(self.scope);
+        while (true) {
+            if (self.instances.get(.{ .scope = s, .str = name })) |child| return child;
+            if (self.scope_info.items[s].module == name) return s;
+            if (s == 0) return null;
+            s = self.instanceOf(self.scope_info.items[s].parent);
+        }
+    }
+
     /// The slot a name is stored in, or null when the design declares no such
     /// variable or net. `name` is a root-scope name or a §6.7 downward path
     /// (`u.v.q`: every part but the last an instance), which is the spelling
@@ -656,17 +675,16 @@ pub const Run = struct {
     pub fn exprFail(self: *Run, e: Ast.ExprId, comptime msg: []const u8) Error {
         return self.fail(self.file.exprs.mainTok(e), "{s}", .{msg});
     }
-    /// §12.4 a DOWNWARD hierarchical reference: every part but the last names an
-    /// instance declared in the scope before it, and the last is a declared name
-    /// in the scope the final instance minted. Upward references (§12.5) resolve
-    /// by searching enclosing scopes and are not implemented: a name that does
-    /// not descend from the referring scope is undeclared here.
+    /// §12.5 a hierarchical reference: the first part is a scope `upward`
+    /// finds, every later part but the last names an instance declared in
+    /// the scope before it, and the last is a declared name in the scope the
+    /// final instance minted.
     pub fn slot(self: *Run, e: Ast.ExprId) Error!u32 {
         const ex = &self.file.exprs;
         if (ex.tag(e) == .hier_ident) {
             const parts = ex.nameParts(e);
-            var scope = self.instanceOf(self.scope);
-            for (parts[0 .. parts.len - 1]) |part|
+            var scope = self.upward(parts[0]) orelse return self.exprFail(e, "undeclared instance in a hierarchical reference");
+            for (parts[1 .. parts.len - 1]) |part|
                 scope = self.instances.get(.{ .scope = scope, .str = part }) orelse
                     return self.exprFail(e, "undeclared instance in a hierarchical reference");
             return self.names.get(.{ .scope = scope, .str = parts[parts.len - 1] }) orelse
