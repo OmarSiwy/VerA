@@ -147,7 +147,8 @@ fn loop(s: *State, comptime four: Dispatch, comptime two_: ?Dispatch) ?Error {
 }
 
 fn report(init_: std.process.Init, comptime f: []const u8, values: anytype) void {
-    var args = init_.minimal.args.iterate();
+    var args = init_.minimal.args.iterateAllocator(init_.gpa) catch return;
+    defer args.deinit();
     _ = args.skip();
     const asked = while (args.next()) |a| {
         if (std.mem.eql(u8, a, "--vera-state")) break true;
