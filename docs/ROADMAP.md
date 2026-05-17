@@ -59,11 +59,14 @@ limit is stated and fails loudly with a named diagnostic; the RNG row is the
 template. No test asserts one outcome for unspecified behaviour.
 
 **F. The binary builds for every supported target.** `publish.yaml`
-cross-compiles `x86_64-linux`, `aarch64-linux`, `x86_64-macos` and
-`aarch64-macos`. `x86_64-windows` does not build: `src/main.zig:127` calls
-`init.minimal.args.iterate()`, which Zig 0.16 refuses on Windows in favour of
-`initAllocator`. It is one call site, and changing it changes CLI behaviour, so
-it ships as its own minor release.
+cross-compiles `x86_64-linux`, `aarch64-linux`, `x86_64-macos`,
+`aarch64-macos` and `x86_64-windows`. Every target reads its arguments through
+`iterateAllocator`, the one path Zig 0.16 allows on Windows, and a testbench
+lands at `<work_dir>/<module>.exe` there. Nothing is run on Windows in CI: the
+binary is cross-compiled only. The VPI runtime (`src/vpi/`) does not compile
+for Windows: its variadic exports (`vpi_sim_control`, `vpi_printf`, ...) use
+`@cVaStart`, which Zig 0.16 disables on `x86_64-windows`, so `zig build test
+-Dtarget=x86_64-windows` fails in `vpi` and `vera-vpi-host` alone.
 
 **G. The release names the configuration it was measured on**: the supported
 host, API and analyses.
@@ -95,7 +98,8 @@ Read from those commands on 2026-09-27:
   cited in one direction only.
 - **C** is close. §4.5.3, §5.6.1.2 and §6.3.4 have no rejection citation, and
   §7.4.4.2 (detail discipline resolution) has none at all.
-- **F** is open: the Windows call site above.
+- **F** holds for the binary; the VPI runtime on Windows waits on Zig's C
+  varargs there.
 
 **How the long pole gets done.** Each B or C clause needs the clause read, an
 expected value derived by hand, and usually the missing half of a pair. The
