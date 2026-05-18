@@ -3,7 +3,8 @@
 //! tests/bench.zig with the built `vera` path and `b.args`.
 //!
 //! Anything whose input is `vera`'s output (generated devices, transcripts,
-//! VPI applications) is spawned by the suite runner, not modelled as artifacts.
+//! VPI applications) is spawned by the suite runner, not modelled as artifacts,
+//! except the `host_tests` devices, which a test artifact imports.
 
 const std = @import("std");
 
@@ -251,7 +252,43 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(&r.step);
         test_vpi.dependOn(&r.step);
     }
+
+    // Only the AMS `vera` emits devices.
+    if (language != .ams) return;
+    const contract = byName(mods, "contract");
+    for (host_tests) |h| {
+        const gen = b.addRunArtifact(exe);
+        gen.addArgs(&.{ "--emit-zig", "-I" });
+        gen.addDirectoryArg(b.path("tests/fixtures"));
+        gen.addFileArg(b.path(h.va));
+        gen.addArg("-o");
+        const device = gen.addOutputFileArg("device.zig");
+        _ = gen.captureStdErr(.{}); // the fixture's warnings are not this test's
+        const host = b.createModule(.{
+            .root_source_file = b.path(h.host),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "contract", .module = contract },
+                .{ .name = "device", .module = b.createModule(.{
+                    .root_source_file = device,
+                    .target = target,
+                    .optimize = optimize,
+                    .imports = &.{.{ .name = "contract", .module = contract }},
+                }) },
+            },
+        });
+        test_step.dependOn(testRun(b, std.fs.path.stem(h.host), host, runner));
+    }
 }
+
+/// A host driver and the `.va` its `device` import is emitted from: device
+/// hooks called in an order the fixture directives cannot express.
+const host_tests = [_]struct { host: []const u8, va: []const u8 }{
+    .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
+    .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
+    .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
+};
 
 /// The `vera` CLI. It imports the engine as modules; an `@import` by path
 /// would compile the engine a second time into its file set.

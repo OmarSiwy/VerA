@@ -108,12 +108,16 @@ pub fn emitIterCore(self: *Gen) Error!void {
 
 /// Writes `State`, `initState`, `updateState`, `state_class`, `stateCtl`,
 /// `advanceIteration` and `acceptQ`. Operator history lives in `Instance`
-/// (eval reads it); `State` carries only the contract's bookkeeping.
+/// (eval reads it); `State` carries the contract's bookkeeping and the
+/// accepted copies, which `eval` never reads.
 pub fn emitStateMachine(self: *Gen) Error!void {
     const acc = try scanAccept(self);
     const uses_core = acc.uses_core;
     try self.w(
-        \\/// §4.5.2 accepted-step bookkeeping for the analog operators.
+        \\const z_inst0: Instance = .{{}};
+        \\
+        \\/// §4.5.2 accepted-step bookkeeping for the analog operators, and
+        \\/// `stateCtl`'s accepted copy of the history `updateState` advances.
         \\pub const State = struct {{
         \\
     , .{});
@@ -122,6 +126,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         "    limiter_previous: [{d}]f64 = @splat(0.0),\n",
         .{self.lowered.limit_slots.items.len},
     );
+    try gen_file.emitStateTwins(self, acc.reads_t_prev);
     try self.w(
         \\}};
         \\
@@ -164,7 +169,7 @@ pub fn emitStateMachine(self: *Gen) Error!void {
         \\
     , .{});
     try emitStateClass(self);
-    if (gen_file.emitsStateCtl(self)) try gen_file.emitStateCtl(self);
+    try gen_file.emitStateCtl(self, acc.reads_t_prev);
     try emitAdvanceIteration(self);
     try emitAcceptQ(self, acc);
 }

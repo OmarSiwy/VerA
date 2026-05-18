@@ -3072,11 +3072,12 @@ test "codegen: §5.2.1 an `analog initial` variable is a setup root, not a per-e
     try std.testing.expect(std.mem.indexOf(u8, s, "if (inst.is_analog_initial)") == null);
 }
 
-test "codegen: cross-fed held state emits stateCtl with accepted twins" {
+test "codegen: cross-fed held state is what stateCtl's query compares" {
     // The hysteresis-FSM hook (contract.zig StateCtlOp): a module whose held
-    // state is written from cross edges gets stateCtl + accepted-copy twins,
-    // so the transient can land its conductance flip sharp. A held variable
-    // fed only by a timer does NOT: breakpoints already place those edges.
+    // state is written from cross edges answers `query` from its accepted
+    // twin, so the transient can land its conductance flip sharp. A held
+    // variable fed only by a timer is reverted but never queried: breakpoints
+    // already place those edges.
     var h: Harness = undefined;
     try Harness.run(std.testing.allocator,
         \\module sw(p, n, c);
@@ -3092,8 +3093,8 @@ test "codegen: cross-fed held state emits stateCtl with accepted twins" {
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s, "__held__latched__acc") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s, "__prev__acc = inst.") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "return (inst.sw__held__latched != state.sw__held__latched);") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "__cross__prev = state.") != null);
 
     var h2: Harness = undefined;
     try Harness.run(std.testing.allocator,
@@ -3108,8 +3109,8 @@ test "codegen: cross-fed held state emits stateCtl with accepted twins" {
     , &h2);
     defer h2.deinit();
     const s2 = try h2.gen(std.testing.allocator);
-    try std.testing.expect(std.mem.indexOf(u8, s2, "stateCtl") == null);
-    try std.testing.expect(std.mem.indexOf(u8, s2, "__acc") == null);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "if (op == .query) {\n        return false;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s2, "inst.tmr__held__armed = state.tmr__held__armed;") != null);
 }
 
 test "codegen: an assert-form idt's offset is committed and reverted by stateCtl" {
@@ -3125,8 +3126,8 @@ test "codegen: an assert-form idt's offset is committed and reverted by stateCtl
     defer h.deinit();
     const s = try h.gen(std.testing.allocator);
     try std.testing.expect(std.mem.indexOf(u8, s, "pub fn stateCtl(") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s, "__idt__off__acc = inst.m__analog_op__idt__off;") != null);
-    try std.testing.expect(std.mem.indexOf(u8, s, "__idt__off = inst.m__analog_op__idt__off__acc;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "state.m__analog_op__idt__off = inst.m__analog_op__idt__off;") != null);
+    try std.testing.expect(std.mem.indexOf(u8, s, "inst.m__analog_op__idt__off = state.m__analog_op__idt__off;") != null);
 }
 
 test "codegen: a $prev-only model still gets latch staging and commit" {
