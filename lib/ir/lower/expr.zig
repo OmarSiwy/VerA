@@ -597,11 +597,6 @@ fn twoState(self: *Lower, e: Ast.ExprId) Oom!Mir.Value {
 pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
     const ex = &self.file.exprs;
     const op = ex.binOp(e);
-    if (lower_constfold.mixedShiftComparison(self, e)) {
-        try self.err(ex.mainTok(e), .E0364, "comparison mixes signed and unsigned operands around a logical shift wider than 32 bits", .{});
-        return poison;
-    }
-
     // §4.2.7 && and || short-circuit: the rhs must not be evaluated when the
     // lhs already decides the result, so this needs real control flow.
     if (op == .logical_and or op == .logical_or) return lowerShortCircuit(self, e, op);
@@ -675,12 +670,11 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
                 return poison;
             }
             const op_cmp: Ast.BinaryOp = if (!case) op else if (op == .case_eq) .eq else .neq;
-            // §4.2.9's unsigned context, applied to the pair rather than to
-            // either operand. See `unsignedCompareMask`.
-            if (a.ty == .integer and b.ty == .integer) if (lower_constfold.unsignedCompareMask(self, e)) |m| {
-                const k = try self.mir.addIntConst(self.arena, m);
-                const az: TypedValue = .{ .v = try self.emit(.bitand, &.{ a.v, k }), .ty = .integer };
-                const bz: TypedValue = .{ .v = try self.emit(.bitand, &.{ b.v, k }), .ty = .integer };
+            // §4.2.9's unsigned comparison: each operand zero-extended from
+            // its own width. See `constfold.UnsignedCompare`.
+            if (a.ty == .integer and b.ty == .integer) if (lower_constfold.unsignedCompare(self, e)) |u| {
+                const az: TypedValue = .{ .v = try extendUnsigned(self, a.v, u.mask[0], u.flip), .ty = .integer };
+                const bz: TypedValue = .{ .v = try extendUnsigned(self, b.v, u.mask[1], u.flip), .ty = .integer };
                 return .{ .v = try cmp(self, op_cmp, az, bz), .ty = .integer };
             };
             return .{ .v = try cmp(self, op_cmp, a, b), .ty = .integer };
@@ -712,6 +706,14 @@ pub fn lowerBinary(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         // `lowerShortCircuit` returned for both at the top.
         .logical_and, .logical_or => unreachable,
     }
+}
+
+/// `constfold.UnsignedCompare.extend` as MIR.
+fn extendUnsigned(self: *Lower, v: Mir.Value, mask: ?i64, flip: bool) Oom!Mir.Value {
+    var z = v;
+    if (mask) |m| z = try self.emit(.bitand, &.{ z, try self.mir.addIntConst(self.arena, m) });
+    if (flip) z = try self.emit(.bitxor, &.{ z, try self.mir.addIntConst(self.arena, std.math.minInt(i64)) });
+    return z;
 }
 
 /// §4.2.4 relational / §4.2.5 equality — integer 0/1 result either way.
