@@ -247,6 +247,10 @@ pub const Gen = struct {
     /// Deduplicated by name, because `vpi_register_analog_systf()` registers
     /// names and requires them unique. Linear scan: the list is tiny.
     systf_names: std.ArrayList([]const u8) = .empty,
+    /// The `Instance` fields `updateState` advances, in declaration order
+    /// (`file.emitInstance` fills it). `stateCtl` commits each to, and reverts
+    /// it from, the `State` field of the same name.
+    hist: std.ArrayList([]const u8) = .empty,
     /// Distinguishes one emitted systf block's `break` label from another's.
     /// Blocks nest, so the label has to be unique within a unit and a counter
     /// is the cheapest thing that is.
