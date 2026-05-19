@@ -205,14 +205,14 @@
 9.9	no-prohibition	Structured procedures	"The initial construct shall execute only once ... the always construct shall execute repeatedly." "There shall be no limit to the number of initial and always constructs". "There shall be no implied order of execution between initial and always constructs" is unspecified (CLAUSE-AUDIT §5.5). Nothing is illegal (the null-statement ban is §9.9.1/§9.9.2's). Positive: 09_behavioral_modeling/b_9_9_initial_and_always.v.
 9.9.1	-	Initial construct
 9.9.2	-	Always construct
-10	-	Tasks and functions
+10	non-normative	Tasks and functions	"Tasks and functions provide the ability to execute common procedures from several different places in a description." The chapter preamble; its rules are in §10.1 to §10.4.5, each cited both ways.
 10.1	-	Distinctions between tasks and functions
 10.2	-	Tasks and task enabling
 10.2.1	-	Task declarations
 10.2.2	-	Task enabling and argument passing
 10.2.3	-	Task memory usage and concurrent activation
 10.3	-	Disabling of named blocks and tasks
-10.4	-	Functions and function calling
+10.4	non-normative	Functions and function calling	"The purpose of a function is to return a value that is to be used in an expression. The rest of this clause explains how to define and use functions." An introduction; the rules are §10.4.1 to §10.4.5, each cited both ways.
 10.4.1	-	Function declarations
 10.4.2	-	Returning a value from a function
 10.4.3	-	Calling a function
