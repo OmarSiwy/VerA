@@ -26,26 +26,26 @@
 1.8	non-normative	Examples	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
 1.9	non-normative	Prerequisites	Clause 1 Overview: scope, document conventions, BNF notation, contents; states no rule of the language.
 2	non-normative	Normative references	Normative references: a bibliography of other standards.
-3	-	Lexical conventions
+3	non-normative	Lexical conventions	"This clause describes the lexical tokens used in Verilog HDL source text and their conventions." An introduction that states no rule; the rules are §3.1 to §3.8.2.
 3.1	-	Lexical tokens
-3.2	-	White space
+3.2	no-prohibition	White space	"White space shall contain the characters for spaces, tabs, newlines, and formfeeds. These characters shall be ignored except when they serve to separate other lexical tokens. However, blanks and tabs shall be considered significant characters in strings" Defines white space and where it counts; no form is illegal (a token split by white space is §3.1's, cited both ways). Positive: 03_lexical_conventions/b_3_2_white_space.v (tab, formfeed and newline separators; blanks and a raw tab stored in a string).
 3.3	-	Comments
 3.4	-	Operators
 3.5	-	Numbers
 3.5.1	-	Integer constants
 3.5.2	-	Real constants
-3.5.3	-	Conversion
+3.5.3	no-prohibition	Conversion	"Real numbers shall be converted to integers by rounding the real number to the nearest integer, rather than by truncating it. ... The ties shall be rounded away from zero." A conversion rule; nothing is illegal. Positive: 03_lexical_conventions/b_3_5_3_real_to_integer_rounding.v (the clause's five values, ties on both sides of zero).
 3.6	-	Strings
-3.6.1	-	String variable declaration
-3.6.2	-	String manipulation
-3.6.3	-	Special characters in strings
+3.6.1	no-prohibition	String variable declaration	"String variables are variables of reg type (see 4.2) with width equal to the number of characters in the string multiplied by 8." The width a string needs; nothing is illegal (a narrower or wider reg is §3.6.2's truncation and padding). Positive: 03_lexical_conventions/audit_lexical_packed_strings.v, 05_expressions/b_5_2_3_string_test.v.
+3.6.2	no-prohibition	String manipulation	"Strings can be manipulated using the Verilog HDL operators. The value being manipulated by the operator is the sequence of 8-bit ASCII values." and the right-justify, zero-pad, left-truncate rule. Permissive; nothing is illegal. Positive: 05_expressions/b_5_2_3_string_test.v (the clause's string_test, which §5.2.3 repeats), 03_lexical_conventions/audit_lexical_packed_strings.v (padding and truncation).
+3.6.3	no-prohibition	Special characters in strings	Table 3-1's escapes \n \t \\ \" \ddd. "If less than three characters are used, the following character shall not be an octal digit." fixes how an escape is read (at most three octal digits) rather than forbidding a source; "Implementations may issue an error if the character represented is greater than \377" is optional. Positive: 03_lexical_conventions/audit_lexical_packed_strings.v (every escape; 1-, 2- and 3-digit octal).
 3.7	-	Identifiers, keywords, and system names
 3.7.1	-	Escaped identifiers
 3.7.2	-	Keywords
 3.7.3	-	System tasks and functions
 3.7.4	-	Compiler directives
 3.8	-	Attributes
-3.8.1	-	Examples
+3.8.1	non-normative	Examples	Eight examples of attribute placement; §1.8: "These examples are informative." The rules are §3.8 and §3.8.2 (cited both ways). Positive: 03_lexical_conventions/b_3_8_1_examples.v (xfail: any attribute instance stops digital execution, E1100).
 3.8.2	-	Syntax
 4	non-normative	Data types	"The set of Verilog HDL data types is designed to represent the data storage and transmission elements found in digital hardware." The chapter preamble; its rules are in §4.1 to §4.11.
 4.1	no-prohibition	Value set	The four values, z at a gate input or in an expression acting as x except through MOS switches, and "All bits of vectors can be independently set to one of the four basic values." Nothing is illegal. Positive: 04_data_types/b_4_1_value_set.v.
