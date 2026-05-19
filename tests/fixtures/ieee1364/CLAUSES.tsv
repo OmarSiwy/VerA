@@ -168,13 +168,13 @@
 8.1.4	-	UDP state table
 8.1.5	-	Z values in UDP
 8.1.6	-	Summary of symbols
-8.2	-	Combinational UDPs
+8.2	no-prohibition	Combinational UDPs	"In combinational UDPs, the output state is determined solely as a function of the current input states." ... "All combinations of the inputs that are not explicitly specified will drive the output state to the unknown value x." Evaluation rules; nothing is illegal (the table-shape bans are §8.1.4's, an edge in a combinational table is A.5.3's: 08_udp/d08_reject_udp_comb_edge.v). Positive: 08_udp/b_8_2_multiplexer.v (the clause's two tables over all 27 input combinations), audit_udp_comb_level.v, d08_udp_comb.v.
 8.3	-	Level-sensitive sequential UDPs
 8.4	-	Edge-sensitive sequential UDPs
 8.5	-	Sequential UDP initialization
 8.6	-	UDP instances
-8.7	-	Mixing level-sensitive and edge-sensitive descriptions
-8.8	-	Level-sensitive dominance
+8.7	no-prohibition	Mixing level-sensitive and edge-sensitive descriptions	"UDP definitions allow a mixing of the level-sensitive and the edge-sensitive constructs in the same table. When the input changes, the edge-sensitive cases are processed first, followed by level-sensitive cases." Nothing is illegal. Positive: 08_udp/b_8_7_jk_edge_ff.v (the clause's jk_edge_ff), audit_udp_potential_edges_dominance.v.
+8.8	no-prohibition	Level-sensitive dominance	Table 8-3 and "When the edge-sensitive case is processed first, followed by the level-sensitive case, the output changes to 1." An explanation of §8.7's order; nothing is illegal. Positive: 08_udp/audit_udp_potential_edges_dominance.v (an edge row and a level row match one input change with different outputs and the level row wins); no input sequence reaches Table 8-3's own case (b_8_7_jk_edge_ff.v says why).
 9	-	Behavioral modeling
 9.1	-	Behavioral model overview
 9.2	-	Procedural assignments
