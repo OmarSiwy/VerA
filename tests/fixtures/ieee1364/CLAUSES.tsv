@@ -473,9 +473,9 @@
 18.4.3.2	-	Drivers
 18.4.4	-	Extended VCD file format example
 19	-	Compiler directives
-19.1	-	`celldefine and `endcelldefine
+19.1	no-prohibition	`celldefine and `endcelldefine	"It is advisable to pair each `celldefine with an `endcelldefine, but it is not required." ... "These directives may appear anywhere in the source description". The cell tag is read only by PLI routines; nothing is illegal. Positive: 19_compiler_directives/b_19_1_celldefine.v (a pair, a pair inside a module definition, an unpaired `celldefine; the design computes as without them).
 19.2	-	`default_nettype
-19.3	-	`define and `undef
+19.3	no-prohibition	`define and `undef	"The text macro facility is not affected by the compiler directive `resetall." The rest introduces §19.3.1 and §19.3.2, each cited both ways. Positive: 19_compiler_directives/b_19_6_resetall_restores_defaults.v (a macro defined before `resetall still expands after it).
 19.3.1	-	`define
 19.3.2	-	`undef
 19.4	-	`ifdef, `else, `elsif, `endif, `ifndef
@@ -485,7 +485,7 @@
 19.8	-	`timescale
 19.9	-	`unconnected_drive and `nounconnected_drive
 19.10	-	`pragma
-19.10.1	-	Standard pragmas
+19.10.1	no-prohibition	Standard pragmas	"The reset and resetall pragmas shall restore the default values and state of pragma_keywords associated with the affected pragmas." A rule on pragma state, nothing illegal; VerA recognizes no stateful pragma_name, so reset and resetall leave the design as it is. Positive: 19_compiler_directives/b_19_10_1_standard_pragmas.v.
 19.11	-	`begin_keywords, `end_keywords
 20	-	Programming language interface (PLI) overview
 20.1	-	PLI purpose and history
