@@ -128,7 +128,7 @@
 6.2	-	Procedural assignments
 6.2.1	-	Variable declaration assignment
 6.2.2	-	Variable declaration syntax
-7	-	Gate- and switch-level modeling
+7	non-normative	Gate- and switch-level modeling	"There are 14 logic gates and 12 switches predefined in the Verilog HDL" and two advantages of gate modeling; an overview that states no rule. The inventory is Table 7-1 (§7.1.1, cited both ways; 07_gate_switch_level/b_7_1_1_every_primitive.v instantiates all 26).
 7.1	-	Gate and switch declaration syntax
 7.1.1	-	The gate type specification
 7.1.2	-	The drive strength specification
@@ -144,22 +144,22 @@
 7.7	-	CMOS switches
 7.8	-	pullup and pulldown sources
 7.9	-	Logic strength modeling
-7.10	-	Strengths and values of combined signals
-7.10.1	-	Combined signals of unambiguous strength
-7.10.2	-	Ambiguous strengths: sources and combinations
-7.10.3	-	Ambiguous strength signals and unambiguous signals
-7.10.4	-	Wired logic net types
-7.11	-	Strength reduction by nonresistive devices
-7.12	-	Strength reduction by resistive devices
-7.13	-	Strengths of net types
-7.13.1	-	tri0 and tri1 net strengths
+7.10	no-prohibition	Strengths and values of combined signals	"a net shall have either a single unambiguous strength level or an ambiguous strength consisting of more than one level. When signals combine, their strengths and values shall determine the strength and value of the resulting signal in accordance with the principles in 7.10.1 through 7.10.4." A resolution rule; nothing is illegal. Positive: 07_gate_switch_level/b_7_10_figure_combinations.v (Figures 7-4, 7-9, 7-16).
+7.10.1	no-prohibition	Combined signals of unambiguous strength	"the stronger signal shall dominate all the weaker drivers and determine the result. The combination of two or more signals of like value shall result in the same value with the greater of all the strengths." Resolution; nothing is illegal. Positive: 07_gate_switch_level/d03_01_drive_strength_dominance.v, d03_14_wired_unequal_strength.v, b_7_9_strength_levels.v.
+7.10.2	no-prohibition	Ambiguous strengths: sources and combinations	"When two signals of equal strength and opposite value combine, the result shall be a value x" and "The combination of two signals of ambiguous strength shall result in a signal of ambiguous strength." Resolution; nothing is illegal. Positive: 07_gate_switch_level/b_7_10_figure_combinations.v, d03_13_wired_equal_strength_table.v, d03_15_wired_ambiguous_strength.v, audit_primitive_ambiguous_same_polarity.v.
+7.10.3	no-prohibition	Ambiguous strength signals and unambiguous signals	Rules a) to c): levels above the unambiguous signal remain, levels at or below it disappear, a gap between opposite values is filled. Resolution; nothing is illegal. Positive: 07_gate_switch_level/d03_04_ambiguous_strength_range.v, audit_primitive_ambiguous_same_polarity.v, d03_05_tri0_tri1_pull_strength.v, b_7_10_figure_combinations.v (PuH against St0 -> 0).
+7.10.4	no-prohibition	Wired logic net types	"The net types triand, wand, trior, and wor shall resolve conflicts when multiple drivers have the same strength." Resolution; nothing is illegal. Positive: 07_gate_switch_level/d03_07_wired_logic_under_strength.v, d03_13_wired_equal_strength_table.v, d03_14_wired_unequal_strength.v, d03_15_wired_ambiguous_strength.v.
+7.11	no-prohibition	Strength reduction by nonresistive devices	"The nmos, pmos, and cmos switches shall pass the strength from the data input to the output, except that a supply strength shall be reduced to a strong strength." (and the same for tran, tranif0, tranif1). A propagation rule; nothing is illegal. Positive: 07_gate_switch_level/b_7_11_supply_reduced_to_strong.v (supply through nmos, pmos, cmos, tran, tranif1 meets St0 -> x; pull passes unchanged), audit_switch_bits_strength_delay.v.
+7.12	no-prohibition	Strength reduction by resistive devices	"The rnmos, rpmos, rcmos, rtran, rtranif1, and rtranif0 devices shall reduce the strength of signals that pass through them according to Table 7-8." A propagation rule; nothing is illegal. Positive: 07_gate_switch_level/b_7_12_resistive_reduction_table.v (supply->pull, pull->weak, weak->medium, highz->highz across all six devices), d08_strength_reduction.v, audit_switch_bits_strength_delay.v.
+7.13	no-prohibition	Strengths of net types	"The tri0, tri1, supply0, and supply1 net types shall generate signals with specific strength levels. The trireg declaration can specify either of two signal strength levels other than a default strength level." Nothing is illegal here (the charge-strength form is §7.13.2, cited both ways). Positive: 07_gate_switch_level/d03_05_tri0_tri1_pull_strength.v, d03_06_supply_net_strength.v.
+7.13.1	no-prohibition	tri0 and tri1 net strengths	"In the absence of an overriding source, such a signal shall have a value 0 and a pull strength." (tri1: 1 and pull). Nothing is illegal. Positive: 07_gate_switch_level/d03_05_tri0_tri1_pull_strength.v.
 7.13.2	-	trireg strength
-7.13.3	-	supply0 and supply1 net strengths
+7.13.3	no-prohibition	supply0 and supply1 net strengths	"The supply0 and supply1 net types shall have supply driving strengths." Nothing is illegal. Positive: 07_gate_switch_level/d03_06_supply_net_strength.v, b_7_11_supply_reduced_to_strong.v.
 7.14	-	Gate and net delays
-7.14.1	-	min:typ:max delays
-7.14.2	-	trireg net charge decay
-7.14.2.1	-	Charge decay process
-7.14.2.2	-	Delay specification for charge decay time
+7.14.1	no-prohibition	min:typ:max delays	"There shall be no required relation (e.g., min ≤ typ ≤ max) between the expressions for minimum, typical, and maximum delays. These can be any three expressions." Permissive; nothing is illegal. Positive: 05_expressions/audit_expr_mintypmax_context.v (3:2:1 accepted); 07_gate_switch_level/b_7_14_1_unordered_delay_triples.v (xfail: #(5:3:1) on a gate, net or assign does not parse).
+7.14.2	no-prohibition	trireg net charge decay	"The third delay shall specify the charge decay time instead of the delay in a transition to the z logic state." and "The z value shall not propagate from the drivers of a trireg net to a trireg net." Behaviour rules; nothing is illegal. Positive: 07_gate_switch_level/d03_08_trireg_charge_decay.v, d03_09_trireg_capacitive_hold.v.
+7.14.2.1	no-prohibition	Charge decay process	The decay "shall begin when the drivers of the trireg net turn off" and ends when the decay time elapses (1 or 0 -> x) or a driver turns on. Nothing is illegal. Positive: 07_gate_switch_level/d03_08_trireg_charge_decay.v (both end conditions).
+7.14.2.2	no-prohibition	Delay specification for charge decay time	"The third delay in a trireg net declaration shall specify the charge decay time." The decay is the third position of delay3, so no expressible source violates "preceded by a rise and a fall delay". Positive: 07_gate_switch_level/d03_08_trireg_charge_decay.v (#(0, 0, 50)).
 8	-	User-defined primitives (UDPs)
 8.1	-	UDP definition
 8.1.1	-	UDP header
