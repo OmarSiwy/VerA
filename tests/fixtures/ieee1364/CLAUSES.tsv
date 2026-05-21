@@ -218,23 +218,23 @@
 10.4.3	-	Calling a function
 10.4.4	-	Function rules
 10.4.5	-	Use of constant functions
-11	-	Scheduling semantics
-11.1	-	Execution of a model
-11.2	-	Event simulation
-11.3	-	The stratified event queue
-11.4	-	Verilog simulation reference model
-11.4.1	-	Determinism
-11.4.2	-	Nondeterminism
-11.5	-	Race conditions
-11.6	-	Scheduling implication of assignments
-11.6.1	-	Continuous assignment
-11.6.2	-	Procedural continuous assignment
-11.6.3	-	Blocking assignment
-11.6.4	-	Nonblocking assignment
-11.6.5	-	Switch (transistor) processing
+11	non-normative	Scheduling semantics	The chapter heading; it states no rule of its own. Its rules are §11.1 to §11.6.7.
+11.1	non-normative	Execution of a model	"This clause gives an overview of the interactions between these elements, especially with respect to the scheduling and execution of events." An introduction; states no rule.
+11.2	no-prohibition	Event simulation	"These resulting definitions provide the standard Verilog reference model for simulation, which all compliant simulators shall implement." ... "Every change in value of a net or variable ..., as well as the named event, is considered an update event." Definitions of the model; nothing is illegal. Positive: 11_scheduling/b_11_2_update_events.v (a named event, a net change and a variable change wake their waiters; a write of the same value does not).
+11.3	no-prohibition	The stratified event queue	The five regions and their order: inactive after active, nonblocking assign updates after both, monitor events last; #0 makes the process an inactive event. An ordering, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v (two #0 resumptions before a pending NBA, $strobe after it), scheduling.v, 09_behavioral_modeling/d06_intra_assign_delay.v.
+11.4	no-prohibition	Verilog simulation reference model	The reference algorithm (inactive, then nonblocking assign update, then monitor events are activated when no active event is left). An algorithm, nothing is illegal. Positive: 11_scheduling/b_11_3_region_order.v.
+11.4.1	no-prohibition	Determinism	"Statements within a begin-end block shall be executed in the order in which they appear" and "Nonblocking assignments shall be performed in the order the statements were executed". Guarantees; nothing is illegal. Positive: 11_scheduling/scheduling.v, 09_behavioral_modeling/audit_nba_same_time_updates.v (two NBAs to one variable in one time step, both performed, in order).
+11.4.2	unspecified	Nondeterminism	"active events can be taken off the queue and processed in any order" and "At any time while evaluating a behavioral statement, the simulator may suspend execution" (statements without time control "do not have to be executed as one event"); the order is "nondeterministic and not under control of the user", so no test may assert one outcome (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v asserts only membership in the permitted set; the audit_sched_*_order.v fixtures pin VerA's own order and say the LRM also accepts others.
+11.5	unspecified	Race conditions	"The simulator is correct in displaying either a 1 or a 0." The clause's example race has two permitted outcomes, so no test may assert one (CLAUSE-AUDIT §5.5). 11_scheduling/audit_sched_allowed_active_race.v is the example, asserting only that the value is one of the two.
+11.6	non-normative	Scheduling implication of assignments	"Assignments are translated into processes and events as detailed in 11.6.1 through 11.6.7." An introduction; the rules are §11.6.1 to §11.6.7.
+11.6.1	no-prohibition	Continuous assignment	"A continuous assignment process is also evaluated at time 0 to ensure that constant values are propagated." Event semantics; nothing is illegal (a continuous assignment to a variable is §6.1.2's ban). Positive: 11_scheduling/audit_sched_constant_ports.v, 06_assignments/d06_cont_assign_reeval.v.
+11.6.2	no-prohibition	Procedural continuous assignment	An assign or force "corresponds to a process that is sensitive to the source elements in the expression" and "A deassign or a release statement deactivates any corresponding assign or force statement(s)." Event semantics; nothing is illegal (the target restrictions are §9.3.1's and §9.3.2's). Positive: 11_scheduling/b_11_6_2_procedural_continuous_tracks_sources.v.
+11.6.3	no-prohibition	Blocking assignment	"The values at the time the process resumes are used to determine the target(s)." Event semantics; nothing is illegal. Positive: 11_scheduling/audit_sched_blocking_target_return.v, 09_behavioral_modeling/d04_05_intra_assignment_delay_blocking.v.
+11.6.4	no-prohibition	Nonblocking assignment	"The values in effect when the update is placed on the event queue are used to compute both the right-hand value and the left-hand target." Event semantics; nothing is illegal. Positive: 09_behavioral_modeling/audit_nba_index_snapshot.v, d04_07_intra_assignment_delay_nonblocking.v.
+11.6.5	no-prohibition	Switch (transistor) processing	"Switch processing shall consider all the devices in a bidirectional switch-connected net before it can determine the appropriate value for any node on the net" and the x-gate rule (a node with one level in every conducting/nonconducting combination takes it, any other x). Nothing is illegal. Positive: 11_scheduling/b_11_6_5_switch_x_gate.v, 07_gate_switch_level/d08_bidirectional.v.
 11.6.6	-	Port connections
-11.6.7	-	Functions and tasks
-12	-	Hierarchical structures
+11.6.7	no-prohibition	Functions and tasks	"Task/function argument passing is by value, and it copies in on invocation and copies out on return." Nothing is illegal. Positive: 11_scheduling/audit_sched_task_copy_timing.v.
+12	non-normative	Hierarchical structures	"The Verilog HDL supports a hierarchical hardware description structure by allowing modules to be embedded within other modules. ... Each module definition stands alone; the definitions are not nested." The chapter preamble; its rules are §12.1 to §12.8 (the no-nesting rule is §12.1.2's, cited both ways).
 12.1	-	Modules
 12.1.1	-	Top-level modules
 12.1.2	-	Module instantiation
@@ -243,8 +243,8 @@
 12.2.2	-	Module instance parameter value assignment
 12.2.2.1	-	Parameter value assignment by ordered list
 12.2.2.2	-	Parameter value assignment by name
-12.2.3	-	Parameter dependence
-12.3	-	Ports
+12.2.3	no-prohibition	Parameter dependence	"overriding a parameter, whether by a defparam statement or in a module instantiation statement, effectively replaces the parameter definition with the new expression." A rule of evaluation; nothing is illegal. Positive: 12_hierarchy/b_12_2_3_parameter_dependence.v (the clause's word_size/memory_size under no override, override of either, defparam and ordered list).
+12.3	non-normative	Ports	"Ports provide a means of interconnecting a hardware description consisting of modules and primitives." An introduction; the rules are §12.3.1 to §12.3.11.
 12.3.1	-	Port definition
 12.3.2	-	List of ports
 12.3.3	-	Port declarations
@@ -256,11 +256,11 @@
 12.3.9	-	Port connection rules
 12.3.9.1	-	Rule 1
 12.3.9.2	-	Rule 2
-12.3.9.3	-	Rule 3
-12.3.10	-	Net types resulting from dissimilar port connections
-12.3.10.1	-	Net type resolution rule
-12.3.10.2	-	Net type table
-12.3.11	-	Connecting signed values via ports
+12.3.9.3	no-prohibition	Rule 3	"If the net on either side of a port has the net type uwire, a warning shall be issued if the nets are not merged into a single net". The warning is owed only by a tool that does not merge, and §12.3.10 makes merging permissible; nothing is illegal. Positive: 12_hierarchy/b_12_3_9_3_uwire_port.v (a uwire input port, value independent of merging). The fixture pins only the merge-independent value: whether VerA merges, and so whether it owes the warning, is not observable from it.
+12.3.10	no-prohibition	Net types resulting from dissimilar port connections	Table 12-1's net type for two nets merged through a port, and its warn cells ("A warning shall be issued"); connecting dissimilar net types is legal. Positive: 12_hierarchy/b_12_3_10_net_type_warning.v (xfail: no warning for the internal wand / external wor warn cell).
+12.3.10.1	unspecified	Net type resolution rule	"When the two nets connected by a port are of different net type, the resulting single net can be assigned one of the following". It types the single net of a merge, and §12.3.10 leaves merging to the tool ("It is permissible to merge the dominating and dominated nets into a single net"); merged and unmerged dissimilar nets resolve differently when both sides drive, so no test may assert the resolved type (CLAUSE-AUDIT §5.5). Not optional: CLAUSE-AUDIT §5.2 is for language subsets a tool opts into, and nothing in the source selects merging. The merge-independent obligations, the warn cells, are §12.3.10's (12_hierarchy/b_12_3_10_net_type_warning.v, xfail).
+12.3.10.2	unspecified	Net type table	"The simulated net shall take the net type specified in the table and the delay specified for that net." The simulated net exists only when a tool merges, which §12.3.10 permits and does not require, so no test may assert its type or delay (CLAUSE-AUDIT §5.5). The warn cells, owed either way, are pinned by 12_hierarchy/b_12_3_10_net_type_warning.v (xfail).
+12.3.11	no-prohibition	Connecting signed values via ports	"The sign attribute shall not cross hierarchy." ... "It shall be typed, sized, and evaluated, and the resulting value assigned to the object on the other side of the port using the same rules as an assignment." Nothing is illegal. Positive: 12_hierarchy/audit_hierarchy_port_signedness.v (signed and unsigned children of unsigned and signed parents).
 12.4	-	Generate constructs
 12.4.1	-	Loop generate constructs
 12.4.2	-	Conditional generate constructs
@@ -268,19 +268,19 @@
 12.5	-	Hierarchical names
 12.6	-	Upwards name referencing
 12.7	-	Scope rules
-12.8	-	Elaboration
-12.8.1	-	Order of elaboration
+12.8	non-normative	Elaboration	"Elaboration is the process that occurs between parsing and simulation." An introduction; its rules are §12.8.1 (no-prohibition) and §12.8.2 (cited both ways).
+12.8.1	no-prohibition	Order of elaboration	The three-step algorithm (expand, apply parameter overrides and defparams, then evaluate generate schemes); an order, nothing is illegal (the defparam that resolves differently is §12.8.2's error). Positive: 12_hierarchy/b_12_8_1_defparam_before_generate.v (a defparam deciding an if-generate).
 12.8.2	-	Early resolution of hierarchical names
-13	-	Configuring the contents of a design
+13	non-normative	Configuring the contents of a design	The chapter heading; it states no rule of its own. Its rules are §13.1 to §13.7.
 13.1	-	Introduction
 13.1.1	-	Library notation
-13.1.2	-	Basic configuration elements
-13.2	-	Libraries
+13.1.2	non-normative	Basic configuration elements	Walks through the §13.1 example (design rtlLib.top, default liblist, instance top.a2 liblist gateLib); the rules it narrates are §13.3.1.1, §13.3.1.2, §13.3.1.3 and §13.3.1.5, each cited both ways.
+13.2	non-normative	Libraries	"a library is a logical collection of cells that are mapped to particular source description files." An introduction; the mapping rules are §13.2.1 to §13.2.3.
 13.2.1	-	Specifying libraries—the library map file
 13.2.1.1	-	File path resolution
 13.2.2	-	Using multiple library map files
 13.2.3	-	Mapping source files to libraries
-13.3	-	Configurations
+13.3	non-normative	Configurations	"a configuration is simply a set of rules to apply when searching for library cells to which to bind instances. The syntax for configurations is shown in 13.3.1." An introduction; §13.3.1 to §13.3.2 carry the rules.
 13.3.1	-	Basic configuration syntax
 13.3.1.1	-	Design statement
 13.3.1.2	-	The default clause
@@ -289,22 +289,22 @@
 13.3.1.5	-	The liblist clause
 13.3.1.6	-	The use clause
 13.3.2	-	Hierarchical configurations
-13.4	-	Using libraries and configs
-13.4.1	-	Precompiling in a single-pass use model
-13.4.2	-	Elaboration-time compiling in a single-pass use model
-13.4.3	-	Precompiling using a separate compilation tool
+13.4	non-normative	Using libraries and configs	"This subclause describes potential use models for referencing configs on the command line. It is included for clarification purposes."
+13.4.1	non-normative	Precompiling in a single-pass use model	A use model under §13.4, which "is included for clarification purposes"; the precompiling strategy is a tool's choice. VerA is single-pass: one source file, from which every instance must bind (§13.1, cited both ways).
+13.4.2	non-normative	Elaboration-time compiling in a single-pass use model	A use model under §13.4, which "is included for clarification purposes"; whether a single-pass tool compiles cells as it binds them is not observable in a design.
+13.4.3	non-normative	Precompiling using a separate compilation tool	A use model under §13.4, which "is included for clarification purposes"; "The exact format and location for holding these compiled forms shall be vendor- or tool-specific." VerA has no separate compilation tool.
 13.4.4	-	Command line considerations
-13.5	-	Configuration examples
+13.5	non-normative	Configuration examples	The source files and lib.map the §13.5.x examples assume, and the library structure they yield. States no rule of its own.
 13.5.1	-	Default configuration from library map file
-13.5.2	-	Using default clause
-13.5.3	-	Using cell clause
-13.5.4	-	Using instance clause
-13.5.5	-	Using hierarchical config
-13.6	-	Displaying library binding information
-13.7	-	Library mapping examples
+13.5.2	non-normative	Using default clause	Worked examples (cfg1, cfg2) of §13.3.1.2 default and §13.3.1.5 liblist over the §13.5 libraries; the rules are cited both ways there. The multi-library search itself needs a map (§13.5.1).
+13.5.3	non-normative	Using cell clause	Worked example (cfg3) of §13.3.1.4 cell with §13.3.1.6 use; the rule is pinned by 13_configuration/b_13_3_1_4_cell_use_binds_named_cell.v (xfail: config rules bind nothing, W0253).
+13.5.4	non-normative	Using instance clause	Worked example (cfg4) of §13.3.1.3 instance with §13.3.1.5 liblist inheritance; the rules are cited both ways there. The multi-library search needs a map (§13.5.1).
+13.5.5	non-normative	Using hierarchical config	Worked example (cfg5, cfg6) of §13.3.2 hierarchical configs; the rule is pinned by 13_configuration/b_13_3_2_hierarchical_config.v and b_13_3_2_rule_inside_other_config_rejected.v (both xfail).
+13.6	no-prohibition	Displaying library binding information	"The format specifier %l or %L shall print out the library.cell binding information for the module instance containing the display". Nothing is illegal. Positive: 13_configuration/audit_config_binding_display.v, b_13_1_every_instance_bound.v (%l and %L at three hierarchy levels). Not pinned: the vpiLibrary, vpiCell and vpiConfig properties the clause requires are absent from src/vpi/vpi_user.h.
+13.7	non-normative	Library mapping examples	"In the absence of a configuration, it is possible to perform basic control of the library searching order when binding a design." An introduction to §13.7.1 to §13.7.3; states no rule of its own (the command-line rule is §13.7.1).
 13.7.1	-	Using the command line to control library searching
-13.7.2	-	File path specification examples
-13.7.3	-	Resolving multiple path specifications
+13.7.2	non-normative	File path specification examples	"For example:" Worked examples of file_path_spec wildcard resolution; the rules are §13.2.1's file_path_spec details. States no rule of its own.
+13.7.3	non-normative	Resolving multiple path specifications	"For example:" A worked example of §13.2.1.1's resolution order and its multiple-match error; the rules are §13.2.1.1's. States no rule of its own.
 14	-	Specify blocks
 14.1	-	Specify block declaration
 14.2	-	Module path declarations
@@ -473,9 +473,9 @@
 18.4.3.2	-	Drivers
 18.4.4	-	Extended VCD file format example
 19	-	Compiler directives
-19.1	-	`celldefine and `endcelldefine
+19.1	no-prohibition	`celldefine and `endcelldefine	"It is advisable to pair each `celldefine with an `endcelldefine, but it is not required." ... "These directives may appear anywhere in the source description". The cell tag is read only by PLI routines; nothing is illegal. Positive: 19_compiler_directives/b_19_1_celldefine.v (a pair, a pair inside a module definition, an unpaired `celldefine; the design computes as without them).
 19.2	-	`default_nettype
-19.3	-	`define and `undef
+19.3	no-prohibition	`define and `undef	"The text macro facility is not affected by the compiler directive `resetall." The rest introduces §19.3.1 and §19.3.2, each cited both ways. Positive: 19_compiler_directives/b_19_6_resetall_restores_defaults.v (a macro defined before `resetall still expands after it).
 19.3.1	-	`define
 19.3.2	-	`undef
 19.4	-	`ifdef, `else, `elsif, `endif, `ifndef
@@ -485,7 +485,7 @@
 19.8	-	`timescale
 19.9	-	`unconnected_drive and `nounconnected_drive
 19.10	-	`pragma
-19.10.1	-	Standard pragmas
+19.10.1	no-prohibition	Standard pragmas	"The reset and resetall pragmas shall restore the default values and state of pragma_keywords associated with the affected pragmas." A rule on pragma state, nothing illegal; VerA recognizes no stateful pragma_name, so reset and resetall leave the design as it is. Positive: 19_compiler_directives/b_19_10_1_standard_pragmas.v.
 19.11	-	`begin_keywords, `end_keywords
 20	-	Programming language interface (PLI) overview
 20.1	-	PLI purpose and history

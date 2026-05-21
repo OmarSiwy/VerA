@@ -1,0 +1,18 @@
+// IEEE 1364-2005 §12.3.1, p. 173, Syntax 12-3: "port ::= [ port_expression ] |
+// . port_identifier ( [ port_expression ] ) port_expression ::= port_reference
+// | { port_reference { , port_reference } } port_reference ::= port_identifier
+// [ [ constant_range_expression ] ]".
+//
+// a + b is no port_reference: a port expression is an identifier, a select of
+// one, or a concatenation of them, never an operator. Legal neighbour:
+// b_12_1_module_header_forms.v (b_12_1_plain(a, y)).
+// digital-runner: reject
+//! inherited IEEE 1364-2005 12.3.1
+//! reject E0207
+//! reject unexpected token: found `+`
+module m(a + b);
+  input a, b;
+endmodule
+module b_12_3_1_port_expression_operator_rejected;
+  m u(1'b1);
+endmodule
