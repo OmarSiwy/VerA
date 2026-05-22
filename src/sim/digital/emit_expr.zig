@@ -569,6 +569,7 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
             try self.print(") |a{d}| M.getw(s, {d} + (a{d} - {d}) * {d}, {d})", .{lb} ++ at ++ .{nw});
         return self.print(" else L.xs({d}), {d}, {d}, {})", .{ n.width, n.width, w, sg });
     }
+    try nativeSelect(self, e);
     const at = try self.slot(ex.lhs(e));
     const sw = try self.slotWidth(at);
     const range = vecRange(r, at, sw);
@@ -594,6 +595,16 @@ fn index(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
     try self.print(", L.asInt(", .{});
     const t = try selfDetermined(self, rg);
     try self.print(", {d}, {}), {d}, {d}, {d}), 1, {d}, {})", .{ t.width, t.signed, range.msb, range.lsb, sw, w, sg });
+}
+
+/// Refuses the vector selects the executable leaves to the embedded
+/// interpreter.
+/// ponytail: a §5.2.2 select of an array element and a §5.2.1 indexed
+/// part-select are not native; emit them when a design needs the speed.
+pub fn nativeSelect(self: *Emitter, e: Ast.ExprId) Error!void {
+    const ex = &self.r.file.exprs;
+    if (ex.tag(ex.lhs(e)) == .index) return self.refuse("a select of an array element");
+    if (ex.tag(ex.rhs(e)) == .indexed_range) return self.refuse("an indexed part-select");
 }
 
 /// `exec.address` as a Zig `?u32`: the element's slot, or null. `label`
@@ -635,14 +646,8 @@ pub const Place = struct { shift: i64, count: u32 };
 pub fn partPlace(self: *Emitter, e: Ast.ExprId, range: VecRange) Error!Place {
     const r = self.r;
     const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = e }).?;
-    const count: u32 = @intCast(@abs(b.msb - b.lsb) + 1);
-    const step: i64 = if (b.msb >= b.lsb) 1 else -1;
-    const up = range.msb >= range.lsb;
-    // `exec.position` of declared index `lsb + i*step` is `p0 + i*d`.
-    const d: i64 = if (up) step else -step;
-    if (d != 1 and count > 1) return self.refuse("a part-select against its vector's direction");
-    const p0: i64 = if (up) b.lsb - range.lsb else range.lsb - b.lsb;
-    return .{ .shift = p0, .count = count };
+    // `infer` refused a part-select against its vector's direction (§5.2.1).
+    return .{ .shift = range.position(b.lsb), .count = @intCast(@abs(b.msb - b.lsb) + 1) };
 }
 
 pub fn maskOf(w: u32) u64 {

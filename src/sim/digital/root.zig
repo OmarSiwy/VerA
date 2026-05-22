@@ -125,7 +125,16 @@ pub const Array = struct { count: u32, low: i64, high: i64, rest: []const Span =
 pub const Span = struct { low: i64, high: i64 };
 
 /// A packed vector's declared `[msb:lsb]` (§3.3).
-pub const VecRange = struct { msb: i64, lsb: i64 };
+pub const VecRange = struct {
+    msb: i64,
+    lsb: i64,
+
+    /// The bit position, counted from the least significant, that declared
+    /// index `index` names; outside `[0, width)` it names no bit.
+    pub fn position(r: VecRange, index: i64) i64 {
+        return if (r.msb >= r.lsb) index - r.lsb else r.lsb - index;
+    }
+};
 
 /// Who is told when a slot's value changes. `analog` is VAMS §8.5's implicit
 /// D2A: the slot is read by an analog block, so a change posts a region-3b
@@ -802,6 +811,16 @@ pub const Run = struct {
         if (entry.found_existing) return self.fail(tok, "duplicate digital variable", .{});
         entry.value_ptr.* = at;
     }
+    /// A vector slot's declared `[msb:lsb]` (an array's first element's is
+    /// every element's), `[w-1:0]` when it declares none.
+    pub fn vecRange(self: *const Run, at: u32) VecRange {
+        return self.vec_ranges.get(at) orelse .{ .msb = @as(i64, self.values[at].width) - 1, .lsb = 0 };
+    }
+    /// §4.3: "A net or reg declaration without a range specification shall
+    /// be considered 1 bit wide and is known as a scalar."
+    pub fn isScalar(self: *const Run, at: u32) bool {
+        return self.values[at].width == 1 and !self.vec_ranges.contains(at) and !self.params.contains(at);
+    }
     /// The slot an lvalue's width comes from: an array element reference is as
     /// wide as element zero, so a parked value can be sized before §8.5.3.3
     /// resolves which element it lands in.
@@ -1080,6 +1099,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // header port into the `Port` (`inout t; tri0 t;` is one `Port`), and
         // §7.9 resolution and `netPull`'s undriven value both read the net type.
         const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
+        if (p.kind != .wreal) if (p.range orelse p.type_range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
+            .msb = try r.declaredBound(range.msb, p.main_tok),
+            .lsb = try r.declaredBound(range.lsb, p.main_tok),
+        });
         switch (bind) {
             // IEEE 1364 §19.10: an unconnected input port declared in an
             // `unconnected_drive` region is pulled to a logic level through a

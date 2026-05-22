@@ -1080,6 +1080,7 @@ fn targetType(self: *Emitter, target: Ast.ExprId) Error!Type {
     const ex = &r.file.exprs;
     if (ex.tag(target) != .index) return slotType(self, try self.slot(target));
     if (try self.element(target)) return slotType(self, try self.slot(r.chainBase(target).base));
+    try expr.nativeSelect(self, target);
     const rg = ex.rhs(target);
     if (ex.tag(rg) != .range) return .{ .width = 1, .signed = false };
     const b = r.part_selects.get(.{ .spec = r.specOf(r.scope), .e = target }).?;
@@ -1109,6 +1110,7 @@ fn assignment(self: *Emitter, target: Ast.ExprId, val: Rhs, how: How) Error!void
         return self.print(", {f});\n", .{full(try self.slotWidth(base))});
     }
     // §5.2.1 a select of a vector: unsigned, as wide as it selects.
+    try expr.nativeSelect(self, target);
     const at = try self.slot(ex.lhs(target));
     const sw = try self.slotWidth(at);
     const range = expr.vecRange(r, at, sw);

@@ -422,6 +422,14 @@ fn replicationCount(self: *Run, e: Ast.ExprId) Error!u32 {
     return @intCast(value.values()[0]);
 }
 
+/// A part-select bound or an indexed part-select's width: §5.2.1's constant
+/// integer expression, which §4.8.1 keeps a real out of.
+fn partBound(self: *Run, e: Ast.ExprId) Error!i64 {
+    const v = try self.constant(e, self.file.exprs.mainTok(e));
+    if (typeOf(self, e).real) return self.exprFail(e, "§4.8.1: a real is not a part-select bound");
+    return v.asInt() orelse self.exprFail(e, "a part-select bound cannot contain x or z");
+}
+
 // IEEE1364-2005 Table 5-22, §5.5.1: infer natural size/type bottom-up.
 // ponytail: recursive evaluation is bounded to 256 AST levels; an explicit
 // stack can remove this ceiling when deeper expressions are needed.
@@ -437,31 +445,57 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         // is self-determined and never widens the result.
         .index => blk: {
             if (try self.indexedArray(e) == null) {
-                // IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector:
-                // unsigned, as wide as it selects; the index is
-                // self-determined and a part-select's bounds are constant.
-                // ponytail: no indexed part-select (`+:`/`-:`), which the
-                // parser does not read.
+                // IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, or
+                // §5.2.2 of an array element: unsigned, as wide as it
+                // selects; the index is self-determined, a part-select's
+                // bounds and an indexed one's width constant.
                 const lhs = ex.lhs(e);
-                if (ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident)
+                if (ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident and try self.indexedArray(lhs) == null)
                     return self.exprFail(e, "a select is of a whole vector or an unpacked array element");
-                if (self.reals.contains(try self.scalarSlot(lhs))) return self.exprFail(e, "§4.8: a real has no bits to select");
+                if (ex.tag(lhs) == .index) _ = try inferValue(self, lhs, depth + 1);
+                const at = try self.baseSlot(lhs);
+                if (self.reals.contains(at)) return self.exprFail(e, "§4.8: a real has no bits to select");
+                if (self.isScalar(at)) return self.exprFail(e, "§5.2.1: a scalar has no bits to select");
                 const rg = ex.rhs(e);
-                if (ex.tag(rg) == .range) {
-                    const tok = ex.mainTok(rg);
-                    const msb = (try self.constant(ex.lhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
-                    const lsb = (try self.constant(ex.rhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
-                    if (@abs(msb - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
-                    try self.part_selects.put(self.arena, key, .{ .msb = msb, .lsb = lsb });
-                    break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
+                switch (ex.tag(rg)) {
+                    .range => {
+                        const msb = try partBound(self, ex.lhs(rg));
+                        const lsb = try partBound(self, ex.rhs(rg));
+                        if (@abs(msb - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
+                        // "The first expression has to address a more
+                        // significant bit than the second expression."
+                        const range = self.vecRange(at);
+                        if (msb != lsb and (msb > lsb) != (range.msb >= range.lsb))
+                            return self.exprFail(rg, "§5.2.1: a part-select names its more significant bit first");
+                        try self.part_selects.put(self.arena, key, .{ .msb = msb, .lsb = lsb });
+                        break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
+                    },
+                    .indexed_range => {
+                        const base = try inferValue(self, ex.lhs(rg), depth + 1);
+                        if (base.real) return self.exprFail(ex.lhs(rg), "§4.8.1: a real is not a part-select index");
+                        if (base.width > 64) return self.exprFail(ex.lhs(rg), "bit indices wider than 64 bits are not implemented");
+                        // "the width_expr shall be a positive constant
+                        // integer expression". Kept as the part-select
+                        // `[width-1:0]`, which only its width is read from.
+                        const width = try partBound(self, ex.rhs(rg));
+                        if (width < 1 or width >= std.math.maxInt(u32)) return self.exprFail(ex.rhs(rg), "§5.2.1: an indexed part-select's width is a positive constant");
+                        try self.part_selects.put(self.arena, key, .{ .msb = width - 1, .lsb = 0 });
+                        break :blk .{ .width = @intCast(width), .signed = false };
+                    },
+                    else => { // else: any other expression is a bit-select's index
+                        const index = try inferValue(self, rg, depth + 1);
+                        if (index.real) return self.exprFail(rg, "§4.8.1: a real is not a bit-select index");
+                        if (index.width > 64) return self.exprFail(rg, "bit indices wider than 64 bits are not implemented");
+                        break :blk .{ .width = 1, .signed = false };
+                    },
                 }
-                const index = try inferValue(self, ex.rhs(e), depth + 1);
-                if (index.real) return self.exprFail(ex.rhs(e), "§4.8.1: a real is not a bit-select index");
-                if (index.width > 64) return self.exprFail(ex.rhs(e), "bit indices wider than 64 bits are not implemented");
-                break :blk .{ .width = 1, .signed = false };
             }
             var x = e;
             while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
+                // §5.2.2: "the desired word shall first be selected by
+                // supplying an address for each dimension".
+                if (ex.tag(ex.rhs(x)) == .range or ex.tag(ex.rhs(x)) == .indexed_range)
+                    return self.exprFail(ex.rhs(x), "§5.2.2: each array dimension takes an index, not a part-select");
                 const index = try inferValue(self, ex.rhs(x), depth + 1);
                 if (index.width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
             }
@@ -1205,11 +1239,11 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
                 var x = e;
                 while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivity(self, ex.rhs(x), out);
             } else {
-                try watch(self, try self.slot(ex.lhs(e)), out);
+                try sensitivity(self, ex.lhs(e), out);
                 try sensitivity(self, ex.rhs(e), out);
             }
         },
-        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range, .call => {
+        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range, .indexed_range, .call => {
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| if (c != .none) try sensitivity(self, c, out);
         },
@@ -1289,7 +1323,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     // §5.2.1 a bit- or part-select of a variable writes those bits only;
     // typing it as a read folds its bounds and checks its index.
     if (ex.tag(e) == .index) try checkExpr(self, e);
-    const at = if (ex.tag(e) == .index) try self.scalarSlot(ex.lhs(e)) else try self.scalarSlot(e);
+    const at = try self.baseSlot(e);
     if (self.net_of.contains(at))
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");

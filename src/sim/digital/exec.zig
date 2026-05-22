@@ -155,47 +155,64 @@ pub fn elementOffset(arr: @import("root.zig").Array, indices: []const i64) ?u32 
     return @intCast(offset);
 }
 
-/// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the declared
-/// indices it names: `count` of them from `first`, one `step` apart. The
-/// selected value's bit i is declared index `first + i*step`.
-pub const Sel = struct { first: i64, count: u32, step: i2 };
+/// IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, as the bit
+/// positions it names: the selected value's bit i is bit `first + i` of the
+/// slot, and names no bit where the slot has none.
+pub const Sel = struct { first: i64, count: u32 };
 
 /// Where an assignment lands: a whole slot, or a selection of one (§5.2.1).
 pub const Place = struct { slot: u32, sel: ?Sel = null };
 
-/// The selection an `.index` of a vector makes right now. A bit-select's
-/// index is evaluated; a part-select's bounds were folded by `infer`. Null is
-/// an x/z index, which names no bit.
-fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
-    const ex = &self.file.exprs;
-    const rhs = ex.rhs(e);
-    if (ex.tag(rhs) == .range) {
-        const b = self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?; // infer folded it
-        return .{ .first = b.lsb, .count = @intCast(@abs(b.msb - b.lsb) + 1), .step = if (b.msb >= b.lsb) 1 else -1 };
-    }
-    const index = (try eval(self, a, rhs, 0)).asInt() orelse return null;
-    return .{ .first = index, .count = 1, .step = 1 };
+/// The slot the vector a select `e` selects from lives in right now: a named
+/// vector, or the §5.2.2 array element its operand addresses. Null is an
+/// element address that names no storage.
+fn selectSlot(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
+    const v = self.file.exprs.lhs(e);
+    return if (self.file.exprs.tag(v) == .index) try address(self, a, v) else try self.slot(v);
 }
 
-/// The bit position a declared index names in `slot`, against its declared
-/// range (`[3:0]` counts up from the right, `[0:3]` down), or null outside it.
-fn position(self: *Run, slot: u32, index: i64) ?u32 {
-    const width = self.values[slot].width;
-    const range: @import("root.zig").VecRange = self.vec_ranges.get(slot) orelse .{ .msb = @as(i64, width) - 1, .lsb = 0 };
-    const pos = if (range.msb >= range.lsb) index - range.lsb else range.lsb - index;
-    return if (pos < 0 or pos >= width) null else @intCast(pos);
+/// The selection an `.index` of a vector makes right now. A bit-select's
+/// index and an indexed part-select's base are evaluated; a part-select's
+/// bounds and an indexed one's width were folded by `infer`. Null is an x/z
+/// index, which names no bit.
+fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
+    const ex = &self.file.exprs;
+    const rg = ex.rhs(e);
+    const range = self.vecRange(try self.baseSlot(ex.lhs(e)));
+    // The declared index of the selected value's least significant bit.
+    var low: i64 = undefined;
+    var count: u32 = 1;
+    switch (ex.tag(rg)) {
+        .range => {
+            const b = self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?; // infer folded it
+            low = b.lsb;
+            count = @intCast(@abs(b.msb - b.lsb) + 1);
+        },
+        // §5.2.1: `+:` selects `count` bits "starting at the base and
+        // ascending the bit range", `-:` descending, so the least
+        // significant end is the lower index of an ascending range.
+        .indexed_range => {
+            count = @intCast(self.part_selects.get(.{ .spec = self.specOf(self.scope), .e = e }).?.msb + 1); // infer folded it
+            const base = (try eval(self, a, ex.lhs(rg), 0)).asInt() orelse return null;
+            const first = if (ex.extraOf(rg) == 0) base else base - count + 1;
+            low = if (range.msb >= range.lsb) first else first + count - 1;
+        },
+        else => low = (try eval(self, a, rg, 0)).asInt() orelse return null, // else: a bit-select's index
+    }
+    return .{ .first = range.position(low), .count = count };
 }
 
 /// §5.2.1: the selected bits, x wherever the index is x/z or outside the
 /// declared range. A select is unsigned whatever its vector is.
 fn readSelect(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Literal {
-    const at = try self.slot(self.file.exprs.lhs(e));
     const width = compile.typeOf(self, e).width;
     const out = try filled(a, width, false, .x);
+    const at = (try selectSlot(self, a, e)) orelse return out;
     const sel = (try selection(self, a, e)) orelse return out;
+    const v = self.values[at];
     for (0..sel.count) |i| {
-        const pos = position(self, at, sel.first + @as(i64, @intCast(i)) * sel.step) orelse continue;
-        setBit(out, @intCast(i), self.values[at].bit(pos));
+        const pos = sel.first + @as(i64, @intCast(i));
+        if (pos >= 0 and pos < v.width) setBit(out, @intCast(i), v.bit(@intCast(pos)));
     }
     return out;
 }
@@ -206,7 +223,7 @@ fn place(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Place {
     const ex = &self.file.exprs;
     if (ex.tag(e) != .index) return .{ .slot = try self.slot(e) };
     if (try self.indexedArray(e) != null) return .{ .slot = (try address(self, a, e)) orelse return null };
-    return .{ .slot = try self.slot(ex.lhs(e)), .sel = (try selection(self, a, e)) orelse return null };
+    return .{ .slot = (try selectSlot(self, a, e)) orelse return null, .sel = (try selection(self, a, e)) orelse return null };
 }
 
 /// Assigns an integral `value` to the lvalue `target` under the assignment
@@ -235,8 +252,8 @@ pub fn write(self: *Run, a: std.mem.Allocator, p: Place, value: Int.Literal) Err
     const merged = try filled(a, cur.width, cur.signed, .zero);
     @memcpy(merged.planes, cur.planes);
     for (0..sel.count) |i| {
-        const pos = position(self, p.slot, sel.first + @as(i64, @intCast(i)) * sel.step) orelse continue;
-        setBit(merged, pos, value.bit(@intCast(i)));
+        const pos = sel.first + @as(i64, @intCast(i));
+        if (pos >= 0 and pos < cur.width) setBit(merged, @intCast(pos), value.bit(@intCast(i)));
     }
     return store(self, p.slot, merged.planes);
 }
