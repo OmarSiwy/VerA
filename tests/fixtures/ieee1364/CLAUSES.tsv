@@ -431,47 +431,47 @@
 17.11	no-prohibition	Math functions	"There are integer and real math functions. The math system functions may be used in constant expressions, as specified in Clause 5." Permissive; the argument rules are §17.11.1 and §17.11.2 (cited both ways). Positive: 17_system_tasks/audit_ieee_math_constant_expression.v, d09_10_clog2.v.
 17.11.1	-	Integer math functions
 17.11.2	-	Real math functions
-18	-	Value change dump (VCD) files
-18.1	-	Creating four-state VCD file
+18	non-normative	Value change dump (VCD) files	"A VCD file contains information about value changes on selected variables in the design stored by VCD system tasks. Two types of VCD files exist" The chapter preamble; its rules are in §18.1 to §18.4.
+18.1	no-prohibition	Creating four-state VCD file	"The steps involved in creating the four-state VCD file are listed below" (insert the VCD system tasks, run the simulation) and "A VCD file is an ASCII file that contains header information, variable definitions, and the value changes for all variables specified in the task calls." A description of the flow; the tasks and their refusals are §18.1.1 to §18.1.6, each cited both ways. Positive: 18_vcd/d09_11_vcd_dumpvars.v, d09_12_vcd_dumpoff_on.v.
 18.1.1	-	Specifying name of dump file ($dumpfile)
 18.1.2	-	Specifying variables to be dumped ($dumpvars)
 18.1.3	-	Stopping and resuming the dump ($dumpoff/$dumpon)
 18.1.4	-	Generating a checkpoint ($dumpall)
 18.1.5	-	Limiting size of dump file ($dumplimit)
 18.1.6	-	Reading dump file during simulation ($dumpflush)
-18.2	-	Format of four-state VCD file
+18.2	no-prohibition	Format of four-state VCD file	"The dump file is structured in a free format. White space is used to separate commands and to make the file easily readable by a text editor." Binds the writer; no source construct can break it (the harness compares dumps as white-space separated tokens). Positive: 18_vcd/d09_11_vcd_dumpvars.v, d09_12_vcd_dumpoff_on.v.
 18.2.1	-	Syntax of four-state VCD file
-18.2.2	-	Formats of variable values
-18.2.3	-	Description of keyword commands
-18.2.3.1	-	$comment
-18.2.3.2	-	$date
-18.2.3.3	-	$enddefinitions
-18.2.3.4	-	$scope
-18.2.3.5	-	$timescale
-18.2.3.6	-	$upscope
-18.2.3.7	-	$var
-18.2.3.8	-	$version
-18.2.3.9	-	$dumpall
-18.2.3.10	-	$dumpoff
-18.2.3.11	-	$dumpon
-18.2.3.12	-	$dumpvars
-18.2.4	-	Four-state VCD file format example
-18.3	-	Creating extended VCD file
+18.2.2	no-prohibition	Formats of variable values	"Dumps of value changes to scalar variables shall not have any white space between the value and the identifier code. Dumps of value changes to vectors shall not have any white space between the base letter and the value digits, but they shall have one white space between the value digits and the identifier code." and Tables 18-1/18-2 shortening; events dump as scalars. Rules on the writer; nothing a design writes is illegal. Positive: 18_vcd/b_18_2_2_table_18_2_shortening.v (every Table 18-2 row), d09_13_vcd_dumpvars_levels.v; b_18_2_2_event_marker.v (xfail: events are not dumped).
+18.2.3	no-prohibition	Description of keyword commands	"The general information in the VCD file is presented as a series of sections surrounded by keywords. Keyword commands provide a means of inserting information in the VCD file. Keyword commands can be inserted either by the dumper or manually." Table 18-3 lists them; each is its own subclause. Nothing is forbidden. Positive: 18_vcd/b_18_2_3_7_var_sections.v.
+18.2.3.1	no-prohibition	$comment	"The $comment section provides a means of inserting a comment in the VCD file." Syntax 18-9. Permissive; the one comment a writer must insert is the §18.1.5 limit notice. Positive: 18_vcd/b_18_1_5_dumplimit_stops_with_comment.v (the $comment closing a limited dump).
+18.2.3.2	no-prohibition	$date	"The $date section indicates the date on which the VCD file was generated." Syntax 18-10. The date_text is the writer's and cannot be asserted; its presence can. Positive: 18_vcd/b_18_2_3_8_version_names_dumpfile_literal.v (a non-empty $date section before $enddefinitions, read back).
+18.2.3.3	no-prohibition	$enddefinitions	"The $enddefinitions section marks the end of the header information and definitions." Syntax 18-11. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v.
+18.2.3.4	no-prohibition	$scope	"The $scope section defines the scope of the variables being dumped." Syntax 18-12 scope_type begin | fork | function | module | task. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (nested module scopes); b_18_2_3_4_task_function_scopes.v (xfail: task and function scopes are not dumped).
+18.2.3.5	no-prohibition	$timescale	"The $timescale keyword specifies what timescale was used for the simulation." Syntax 18-13 time_number 1 | 10 | 100. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (`timescale 100ps/100ps -> $timescale 100ps).
+18.2.3.6	no-prohibition	$upscope	"The $upscope section indicates a change of scope to the next higher level in the design hierarchy." Syntax 18-14. Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (two levels closed).
+18.2.3.7	no-prohibition	$var	"The $var section prints the names and identifier codes of the variables being dumped." Syntax 18-15, "Size specifies how many bits are in the variable", the msb/lsb reference, "a net of net type uwire shall have a variable type of wire". Binds the writer. Positive: 18_vcd/b_18_2_3_7_var_sections.v (every net type, uwire as wire, reg, ascending range, integer, time); b_18_2_2_event_marker.v (xfail: no event $var).
+18.2.3.8	no-prohibition	$version	"The $version section indicates which version of the VCD writer was used to produce the VCD file and the $dumpfile system task used to create the file. If a variable or an expression was used to specify the filename within $dumpfile, the unevaluated variable or expression literal shall appear in the $version string." Binds the writer. Positive: 18_vcd/b_18_2_3_8_version_names_dumpfile_literal.v; b_18_2_3_8_version_names_dumpfile_variable.v (xfail: the evaluated name is written).
+18.2.3.9	no-prohibition	$dumpall	"The $dumpall keyword specifies current values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.3.10	no-prohibition	$dumpoff	"The $dumpoff keyword indicates all variables dumped with X values." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.3.11	no-prohibition	$dumpon	"The $dumpon keyword indicates resumption of dumping and lists current values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.3.12	no-prohibition	$dumpvars	"The section beginning with $dumpvars keyword lists initial values of all variables dumped." A section the writer produces for the §18.1 task of the same name (whose refusals are §18.1.2 to §18.1.4). Positive: 18_vcd/b_18_2_4_example_value_changes.v.
+18.2.4	no-prohibition	Four-state VCD file format example	"The following example illustrates the format of the four-state VCD file." An example of §18.2.1 to §18.2.3; nothing is forbidden. Positive: 18_vcd/b_18_2_4_example_value_changes.v (the example's every value-change section, $dumpvars at #500 to #2010).
+18.3	no-prohibition	Creating extended VCD file	"The four-state VCD file rules and syntax apply to the extended VCD file unless otherwise stated in this subclause." A description of the flow; the tasks and their refusals are §18.3.1 to §18.3.5, each cited both ways. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (xfail: $dumpports is not implemented, E1100).
 18.3.1	-	Specifying dump file name and ports to be dumped ($dumpports)
 18.3.2	-	Stopping and resuming the dump ($dumpportsoff/$dumpportson)
 18.3.3	-	Generating a checkpoint ($dumpportsall)
 18.3.4	-	Limiting size of dump file ($dumpportslimit)
 18.3.5	-	Reading dump file during simulation ($dumpportsflush)
-18.3.6	-	Description of keyword commands
-18.3.6.1	-	$vcdclose
-18.3.7	-	General rules for extended VCD system tasks
-18.4	-	Format of extended VCD file
-18.4.1	-	Syntax of extended VCD file
-18.4.2	-	Extended VCD node information
-18.4.3	-	Value changes
-18.4.3.1	-	State characters
-18.4.3.2	-	Drivers
-18.4.4	-	Extended VCD file format example
+18.3.6	no-prohibition	Description of keyword commands	"The general information in the extended VCD file is presented as a series of sections surrounded by keywords. ... Extended VCD provides one additional keyword command to that of the four-state VCD." Binds the writer. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v (the $dumpports, $dumpportsoff, $dumpportson and $dumpportsall sections) (xfail: $dumpports is not implemented, E1100).
+18.3.6.1	no-prohibition	$vcdclose	"The $vcdclose keyword indicates the final simulation time at the time the extended VCD file is closed." Syntax 18-26. A section the writer adds at close, after the last point a design can read its own dump; no source construct names it. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v derives the file's closing `$vcdclose #17 $end` in its header; its transcript cannot show it (xfail: $dumpports is not implemented, E1100).
+18.3.7	no-prohibition	General rules for extended VCD system tasks	"If a file_pathname is specified that does not match a file_pathname specified in a $dumpports call, the control task shall be ignored." and the bare-name and () forms of the tasks with only optional arguments "shall" run their defaults. Ignoring and defaulting, not refusal. Positive: 18_vcd/b_18_3_2_dumpports_control_tasks.v ($dumpportsoff of an unknown file, $dumpportsoff; $dumpportson(); $dumpportsflush;) (xfail: $dumpports is not implemented, E1100).
+18.4	no-prohibition	Format of extended VCD file	"The format of the extended VCD file is similar to that of the four-state VCD file, as it is also structured in a free format." Binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (xfail: $dumpports is not implemented, E1100).
+18.4.1	no-prohibition	Syntax of extended VCD file	Syntax 18-27 and "A four-state VCD construct name that matches an extended VCD construct shall be considered equivalent, except if preceded by an *." The file grammar; it binds the writer. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v ($var port sections, <n codes) (xfail: $dumpports is not implemented, E1100).
+18.4.2	no-prohibition	Extended VCD node information	"var_type The keyword port. No other keyword is allowed." size 1 or the port's index, codes "<" from zero "in the order found in the module declaration". Rules on the writer's node information; no source construct can break them. Positive: 18_vcd/b_18_4_2_dumpports_node_information.v (the clause's own test_device example) (xfail: $dumpports is not implemented, E1100).
+18.4.3	no-prohibition	Value changes	Syntax 18-29 pport_value 0_strength_component 1_strength_component identifier_code; "There is no space between the p and the port_value." Binds the writer. Positive: 18_vcd/b_18_4_3_port_value_changes.v (xfail: $dumpports is not implemented, E1100).
+18.4.3.1	no-prohibition	State characters	The state characters for input (D U N Z d u), output (L H X T l h) and unknown-direction (0 1 ? F A a B b C c f) values. A table the writer follows. Positive: 18_vcd/b_18_4_3_port_value_changes.v (D U N H X l f and 1) (xfail: $dumpports is not implemented, E1100).
+18.4.3.2	no-prohibition	Drivers	"Drivers are considered only in terms of primitives, continuous assignments, and procedural continuous assignments." and the three conflict rules (same value and strength range: 0/1 and the stronger strength; strong input over weak output: d/u; weak input under strong output: l/h). How the writer resolves a port; nothing is illegal. Positive: 18_vcd/b_18_4_3_port_value_changes.v (p1 0 6 and pl 6 0) (xfail: $dumpports is not implemented, E1100).
+18.4.4	no-prohibition	Extended VCD file format example	"The following example illustrates the format of the extended VCD file." An example of §18.4.1 to §18.4.3. Positive: 18_vcd/b_18_4_3_port_value_changes.v (the example's pD 6 0, pU 0 6, pN 6 6, pX 6 6, pH 0 6 and pf 0 0 lines) (xfail: $dumpports is not implemented, E1100).
 19	-	Compiler directives
 19.1	-	`celldefine and `endcelldefine
 19.2	-	`default_nettype
