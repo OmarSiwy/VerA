@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 4.3.1
 //! reject E1100
 //! reject constant integer expression
-//! xfail VerA accepts a real constant as a vector range bound
 module b_4_3_1_real_range_bound_rejected;
   reg [3.5:0] v;
   initial $display("%b", v);

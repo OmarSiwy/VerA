@@ -755,7 +755,11 @@ pub const Run = struct {
     /// sign (the §4.3.1 example `[-2:1]`).
     fn declaredBound(self: *Run, e: Ast.ExprId, tok: u32) Error!i64 {
         if (self.file.exprs.tag(e) == .int_literal) return self.file.exprs.intValue(e);
-        return (try self.constant(e, tok)).asInt() orelse self.fail(tok, "a declaration bound cannot contain x or z", .{});
+        const v = try self.constant(e, tok);
+        // §4.3.1: "Both the msb constant expression and the lsb constant
+        // expression shall be constant integer expressions."
+        if (compile.typeOf(self, e).real) return self.fail(tok, "§4.3.1: a bound is a constant integer expression, not a real", .{});
+        return v.asInt() orelse self.fail(tok, "a declaration bound cannot contain x or z", .{});
     }
     /// A.2.2.3 `delay_value ::= unsigned_number | real_number | identifier`, in
     /// scheduler ticks. Folded at elaboration: a net's or a driver's delay is
