@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 4.8.1
 //! reject E1100
 //! reject posedge
-//! xfail VerA accepts posedge on a real variable
 module b_4_8_1_posedge_real_rejected;
   real r;
   always @(posedge r) $display("edge");
