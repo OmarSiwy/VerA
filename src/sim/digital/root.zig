@@ -2115,6 +2115,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         for (inst.module.vars) |v| if (v.init != .none) {
             const at = r.names.get(.{ .scope = inst.scope, .str = v.name }) orelse continue;
             try compile.checkExpr(&r, v.init);
+            // §6.2.1: "The assignment shall be to a constant expression."
+            if (!compile.constantExpression(&r, v.init)) return r.exprFail(v.init, "§6.2.1: a constant expression is required here");
             const start = try compile.append(&r, .{ .init_var = .{ .slot = at, .value = v.init } });
             _ = try compile.append(&r, .stop);
             _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
