@@ -697,14 +697,20 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             // `(strong1, strong0)` and needs no flag.
             var st: Ast.NetStrength = .{};
             if (self.peek() == .lparen) {
-                if (parse_decl.strengthWord(self, self.pos + 1) != null and self.peekAt(2) == .comma)
-                    try parse_decl.parseDriveStrength(self, &st.strength0, &st.strength1)
-                else
-                    st.charge = try parse_decl.parseChargeStrength(self, kind);
+                if (parse_decl.strengthWord(self, self.pos + 1) != null and self.peekAt(2) == .comma) {
+                    try parse_decl.parseDriveStrength(self, &st.strength0, &st.strength1);
+                    st.drive = true;
+                } else st.charge = try parse_decl.parseChargeStrength(self, kind);
             }
+            // IEEE 1364-2005 §4.3.2's advisory `vectored | scalared`, which
+            // Syntax 4-1 admits only in the alternatives that carry a range.
+            const advisory = self.pos;
+            const advised = self.eat(.kw_scalared) or self.eat(.kw_vectored);
             var signed = false;
             var ignored: Ast.NetKind = .wire;
             const disc = try optPortType(self, &ignored, &signed);
+            if (advised and self.peek() != .lbracket)
+                return self.failAt(advisory, .E0207, "§4.3.2: scalared and vectored are only legal on a vector net, which declares a range", .{});
             try parse_decl.parseNetNames(self, b, disc, kind, false, st, signed);
         },
         // A.6.1 `continuous_assign ::= assign [ drive_strength ] [ delay3 ]

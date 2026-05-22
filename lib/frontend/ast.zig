@@ -593,6 +593,9 @@ pub const NetStrength = struct {
     charge: Strength = .medium,
     strength0: Strength = .strong,
     strength1: Strength = .strong,
+    /// A `drive_strength` was written, which A.2.1.3 allows only before a
+    /// `list_of_net_decl_assignments` (IEEE 1364-2005 §4.4).
+    drive: bool = false,
 };
 
 /// A.2.2.3 `delay3 ::= # delay_value | # ( delay_value [ , delay_value [ , delay_value ] ] )`.
