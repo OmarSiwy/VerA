@@ -310,6 +310,10 @@ fn leafType(self: *Run, e: Ast.ExprId) Error!Type {
             // §5.10: events "do not hold any data", so a named event has no
             // value an expression could read.
             if (self.events.contains(at)) return self.exprFail(e, "§5.10: a named event holds no data; it can only be triggered and waited on");
+            // IEEE 1364-2005 §4.10.3: "A specify parameter declared outside a
+            // specify block shall be declared before it is referenced."
+            if (self.specparams.get(at)) |decl| if (ex.tag(e) == .ident and ex.mainTok(e) < decl)
+                return self.exprFail(e, "§4.10.3: a specify parameter is declared before it is referenced");
             if (self.reals.contains(at)) break :blk real_type;
             const v = self.values[at];
             const own = if (ex.tag(e) == .ident) self.port_signed.get(.{ .scope = self.scope, .str = ex.strOf(e) }) else null;
@@ -373,7 +377,18 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
             const at = self.lookup(self.scope, ex.strOf(e)) orelse return false;
             return self.params.contains(at);
         },
-        .unary, .binary, .multi_concat, .ternary, .concat => {},
+        // §5: "constant bit-selects and part-selects of parameters" are
+        // constant; the base is a name, which the arm above judges.
+        .unary, .binary, .multi_concat, .ternary, .concat, .index, .range, .indexed_range => {},
+        // §10.4.5: "A constant function call shall be a function invocation
+        // of a constant function local to the calling module where the
+        // arguments to the function are constant expressions", "evaluated at
+        // elaboration time", so only while elaboration folds.
+        .call => {
+            if (self.growing == null) return false;
+            const idx = self.sub_by_name.get(.{ .scope = self.instanceOf(self.scope), .str = ex.strOf(e) }) orelse return false;
+            if (!self.subs.items[idx].framed or !(constantFunction(self, idx) catch false)) return false;
+        },
         // §17.7: a call that reads the clock is never constant, however
         // constant its (absent) arguments are. Without this `$time`
         // would be accepted as a replication count.
@@ -385,6 +400,64 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (!constantExpression(self, c)) return false;
     return true;
+}
+
+/// IEEE 1364-2005 §10.4.5: is function `idx` a constant function?
+pub fn constantFunction(self: *Run, idx: u32) Error!bool {
+    return try notConstant(self, idx) == null;
+}
+
+/// Why function `idx` is no §10.4.5 constant function, or null when it is
+/// one: every name its body uses is its own (a formal, a local, its result)
+/// or a parameter, it holds no hierarchical reference, every function it
+/// calls is a constant function of the same module, and every system function
+/// it calls may be in a constant expression. Asked of a framed function; one
+/// it calls is framed early (`earlyFrame`) if need be. A recursive call is
+/// taken as constant while it is being asked about.
+/// ponytail: a system task is refused, not ignored as §10.4.5 says, and a
+/// named block's own locals are not the function's.
+pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
+    const sub = &self.subs.items[idx];
+    if (sub.constant) |c| return if (c) null else "it is not a constant function";
+    if (!sub.decl.is_function) return "it is a task";
+    sub.constant = true;
+    const V = struct {
+        r: *Run,
+        sub: *const @import("root.zig").Sub,
+        why: ?[]const u8 = null,
+        pub fn expr(v: *@This(), x: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {
+            if (x == .none or v.why != null) return;
+            const ex = &v.r.file.exprs;
+            const f = v.sub.frame;
+            v.why = switch (ex.tag(x)) {
+                .ident => if (v.r.lookup(f.scope, ex.strOf(x))) |at|
+                    if ((at >= f.first and at < f.first + f.count) or v.r.params.contains(at)) null else "it reads a name that is neither its own nor a parameter"
+                else
+                    "it reads a name that is neither its own nor a parameter",
+                .hier_ident => "it contains a hierarchical reference",
+                .call => if (v.r.sub_by_name.get(.{ .scope = v.sub.inst, .str = ex.strOf(x) })) |callee| blk: {
+                    if (!v.r.subs.items[callee].framed) try @import("root.zig").earlyFrame(v.r, callee, ex.mainTok(x));
+                    break :blk if (try notConstant(v.r, callee) == null) null else "it calls a function that is not a constant function";
+                } else "it calls a function that is not a constant function",
+                .sys_call => if (sys_fns.get(v.r.file.str(ex.strOf(x)))) |sf| if (sf.constant()) null else "it calls a system function no constant expression may" else "it calls a system function no constant expression may",
+                else => null, // else: every other form is constant when its operands are
+            };
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(x, &buf)) |c| try v.expr(c, .read);
+        }
+        pub fn stmt(v: *@This(), st: Ast.StmtId) Error!void {
+            if (st == .none or v.why != null) return;
+            if (v.r.file.stmt(st) == .sys_task) {
+                v.why = "it enables a system task";
+                return;
+            }
+            try v.r.file.stmtEdges(st, v);
+        }
+    };
+    var v: V = .{ .r = self, .sub = sub };
+    try v.stmt(sub.decl.body);
+    sub.constant = v.why == null;
+    return v.why;
 }
 
 // Bare unsized numbers are prohibited by §5.1.14. Its application to
@@ -422,6 +495,14 @@ fn replicationCount(self: *Run, e: Ast.ExprId) Error!u32 {
     return @intCast(value.values()[0]);
 }
 
+/// A part-select bound or an indexed part-select's width: §5.2.1's constant
+/// integer expression, which §4.8.1 keeps a real out of.
+fn partBound(self: *Run, e: Ast.ExprId) Error!i64 {
+    const v = try self.constant(e, self.file.exprs.mainTok(e));
+    if (typeOf(self, e).real) return self.exprFail(e, "§4.8.1: a real is not a part-select bound");
+    return v.asInt() orelse self.exprFail(e, "a part-select bound cannot contain x or z");
+}
+
 // IEEE1364-2005 Table 5-22, §5.5.1: infer natural size/type bottom-up.
 // ponytail: recursive evaluation is bounded to 256 AST levels; an explicit
 // stack can remove this ceiling when deeper expressions are needed.
@@ -437,30 +518,57 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         // is self-determined and never widens the result.
         .index => blk: {
             if (try self.indexedArray(e) == null) {
-                // IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector:
-                // unsigned, as wide as it selects; the index is
-                // self-determined and a part-select's bounds are constant.
-                // ponytail: no indexed part-select (`+:`/`-:`), which the
-                // parser does not read.
+                // IEEE 1364-2005 §5.2.1 a bit- or part-select of a vector, or
+                // §5.2.2 of an array element: unsigned, as wide as it
+                // selects; the index is self-determined, a part-select's
+                // bounds and an indexed one's width constant.
                 const lhs = ex.lhs(e);
-                if (ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident)
+                if (ex.tag(lhs) != .ident and ex.tag(lhs) != .hier_ident and try self.indexedArray(lhs) == null)
                     return self.exprFail(e, "a select is of a whole vector or an unpacked array element");
-                if (self.reals.contains(try self.scalarSlot(lhs))) return self.exprFail(e, "§4.8: a real has no bits to select");
+                if (ex.tag(lhs) == .index) _ = try inferValue(self, lhs, depth + 1);
+                const at = try self.baseSlot(lhs);
+                if (self.reals.contains(at)) return self.exprFail(e, "§4.8: a real has no bits to select");
+                if (self.isScalar(at)) return self.exprFail(e, "§5.2.1: a scalar has no bits to select");
                 const rg = ex.rhs(e);
-                if (ex.tag(rg) == .range) {
-                    const tok = ex.mainTok(rg);
-                    const msb = (try self.constant(ex.lhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
-                    const lsb = (try self.constant(ex.rhs(rg), tok)).asInt() orelse return self.exprFail(rg, "a part-select bound cannot contain x or z");
-                    if (@abs(msb - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
-                    try self.part_selects.put(self.arena, key, .{ .msb = msb, .lsb = lsb });
-                    break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
+                switch (ex.tag(rg)) {
+                    .range => {
+                        const msb = try partBound(self, ex.lhs(rg));
+                        const lsb = try partBound(self, ex.rhs(rg));
+                        if (@abs(msb - lsb) >= std.math.maxInt(u32)) return self.exprFail(rg, "part-select width is outside the supported u32 range");
+                        // "The first expression has to address a more
+                        // significant bit than the second expression."
+                        const range = self.vecRange(at);
+                        if (msb != lsb and (msb > lsb) != (range.msb >= range.lsb))
+                            return self.exprFail(rg, "§5.2.1: a part-select names its more significant bit first");
+                        try self.part_selects.put(self.arena, key, .{ .msb = msb, .lsb = lsb });
+                        break :blk .{ .width = @intCast(@abs(msb - lsb) + 1), .signed = false };
+                    },
+                    .indexed_range => {
+                        const base = try inferValue(self, ex.lhs(rg), depth + 1);
+                        if (base.real) return self.exprFail(ex.lhs(rg), "§4.8.1: a real is not a part-select index");
+                        if (base.width > 64) return self.exprFail(ex.lhs(rg), "bit indices wider than 64 bits are not implemented");
+                        // "the width_expr shall be a positive constant
+                        // integer expression". Kept as the part-select
+                        // `[width-1:0]`, which only its width is read from.
+                        const width = try partBound(self, ex.rhs(rg));
+                        if (width < 1 or width >= std.math.maxInt(u32)) return self.exprFail(ex.rhs(rg), "§5.2.1: an indexed part-select's width is a positive constant");
+                        try self.part_selects.put(self.arena, key, .{ .msb = width - 1, .lsb = 0 });
+                        break :blk .{ .width = @intCast(width), .signed = false };
+                    },
+                    else => { // else: any other expression is a bit-select's index
+                        const index = try inferValue(self, rg, depth + 1);
+                        if (index.real) return self.exprFail(rg, "§4.8.1: a real is not a bit-select index");
+                        if (index.width > 64) return self.exprFail(rg, "bit indices wider than 64 bits are not implemented");
+                        break :blk .{ .width = 1, .signed = false };
+                    },
                 }
-                const index = try inferValue(self, ex.rhs(e), depth + 1);
-                if (index.width > 64) return self.exprFail(ex.rhs(e), "bit indices wider than 64 bits are not implemented");
-                break :blk .{ .width = 1, .signed = false };
             }
             var x = e;
             while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
+                // §5.2.2: "the desired word shall first be selected by
+                // supplying an address for each dimension".
+                if (ex.tag(ex.rhs(x)) == .range or ex.tag(ex.rhs(x)) == .indexed_range)
+                    return self.exprFail(ex.rhs(x), "§5.2.2: each array dimension takes an index, not a part-select");
                 const index = try inferValue(self, ex.rhs(x), depth + 1);
                 if (index.width > 64) return self.exprFail(ex.rhs(x), "array indices wider than 64 bits are not implemented");
             }
@@ -472,9 +580,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         .unary => blk: {
             const operand = try inferValue(self, ex.lhs(e), depth + 1);
             const op = ex.unOp(e);
-            // §4.1.1 Table 4-2: a real takes the arithmetic, relational and
-            // logical operators, and none of the bitwise ones.
-            if (operand.real and op != .plus and op != .minus and op != .logical_not) return self.exprFail(e, "§4.1.1: this operator does not take a real operand");
+            // IEEE 1364-2005 §5.1.1 Table 5-2: a real takes the arithmetic,
+            // relational and logical operators, and none of the bitwise ones.
+            if (operand.real and op != .plus and op != .minus and op != .logical_not) return self.exprFail(e, "§5.1.1: this operator does not take a real operand");
             break :blk switch (op) {
                 .plus, .minus, .bit_not => operand,
                 .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => .{ .width = 1, .signed = false },
@@ -486,7 +594,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             const op = ex.binOp(e);
             if (lhs.real or rhs.real) switch (op) {
                 .add, .sub, .mul, .div, .pow, .eq, .neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => {},
-                .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr, .case_eq, .case_neq => return self.exprFail(e, "§4.1.1: this operator does not take a real operand"),
+                .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr, .case_eq, .case_neq => return self.exprFail(e, "§5.1.1: this operator does not take a real operand"),
             };
             break :blk switch (op) {
                 .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => common(lhs, rhs),
@@ -619,8 +727,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         .call => blk: {
             const inst = self.instanceOf(self.scope);
             const idx = self.sub_by_name.get(.{ .scope = inst, .str = ex.strOf(e) }) orelse return self.exprFail(e, "undeclared function");
+            if (!self.subs.items[idx].decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
+            if (!self.subs.items[idx].framed) try @import("root.zig").earlyFrame(self, idx, ex.mainTok(e));
             const sub = self.subs.items[idx];
-            if (!sub.decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
             try checkArgs(self, sub.decl, ex.args(e), ex.mainTok(e));
             try self.call_subs.put(self.arena, e, idx - self.sub_base.get(inst).?);
             const result = self.values[sub.frame.result];
@@ -630,7 +739,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             var width: u32 = 0;
             for (ex.args(e)) |arg| {
                 const operand = try infer(self, arg, depth + 1);
-                if (operand.real) return self.exprFail(arg, "§4.1.14: a real cannot be a concatenation operand");
+                if (operand.real) return self.exprFail(arg, "§5.1.1: a real cannot be a concatenation operand");
                 if (unsizedConcatOperand(self, arg)) {
                     if (ex.tag(arg) == .int_literal or ex.tag(arg) == .logic_literal)
                         return self.exprFail(arg, "unsized constant numbers are not allowed as concatenation operands");
@@ -1054,15 +1163,20 @@ fn compileFork(self: *Run, body: []const Ast.StmtId, depth: u16) Error!void {
 /// entered by `.call`: every function, and every task with no timing control
 /// (§10.2.1 allows one in a task; §10.4.4 forbids it in a function).
 pub fn compileSubs(self: *Run) Error!void {
-    for (self.subs.items, 0..) |*sub, i| {
-        if (try timed(self, @intCast(i))) continue;
-        self.scope = sub.frame.scope;
-        self.in_function = sub.decl.is_function;
-        defer self.in_function = false;
-        sub.entry = position(self);
-        try compileStmt(self, sub.decl.body, 0);
-        _ = try append(self, .stop);
-    }
+    for (0..self.subs.items.len) |i| try compileSub(self, @intCast(i));
+}
+
+/// Subroutine `idx`'s body at a pc range of its own, unless it is a timed
+/// task, which is inlined where it is enabled.
+pub fn compileSub(self: *Run, idx: u32) Error!void {
+    if (try timed(self, idx)) return;
+    const sub = &self.subs.items[idx];
+    self.scope = sub.frame.scope;
+    self.in_function = sub.decl.is_function;
+    defer self.in_function = false;
+    sub.entry = position(self);
+    try compileStmt(self, sub.decl.body, 0);
+    _ = try append(self, .stop);
 }
 
 /// Task `idx`'s body compiled once, jumped over where it is emitted, for
@@ -1204,11 +1318,11 @@ pub fn sensitivity(self: *Run, e: Ast.ExprId, out: *std.ArrayList(u32)) Error!vo
                 var x = e;
                 while (ex.tag(x) == .index) : (x = ex.lhs(x)) try sensitivity(self, ex.rhs(x), out);
             } else {
-                try watch(self, try self.slot(ex.lhs(e)), out);
+                try sensitivity(self, ex.lhs(e), out);
                 try sensitivity(self, ex.rhs(e), out);
             }
         },
-        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range, .call => {
+        .unary, .binary, .multi_concat, .ternary, .sys_call, .concat, .range, .indexed_range, .call => {
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(e, &buf)) |c| if (c != .none) try sensitivity(self, c, out);
         },
@@ -1288,7 +1402,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     // §5.2.1 a bit- or part-select of a variable writes those bits only;
     // typing it as a read folds its bounds and checks its index.
     if (ex.tag(e) == .index) try checkExpr(self, e);
-    const at = if (ex.tag(e) == .index) try self.scalarSlot(ex.lhs(e)) else try self.scalarSlot(e);
+    const at = try self.baseSlot(e);
     if (self.net_of.contains(at))
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
@@ -1312,7 +1426,10 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
             try checkEvent(self, ex.lhs(e));
             try checkEvent(self, ex.rhs(e));
         },
-        .event_posedge, .event_negedge => _ = try self.scalarSlot(ex.lhs(e)),
+        // §4.8.1: real variables are prohibited in "Edge descriptors
+        // (posedge, negedge) applied to real variables".
+        .event_posedge, .event_negedge => if (self.reals.contains(try self.scalarSlot(ex.lhs(e))))
+            return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable"),
         .ident => _ = try self.scalarSlot(e),
         // VAMS §7.3.5 an analog event in a discrete event control: the
         // mixed-signal kernel monitors it and delivers an A2D event.
@@ -1392,7 +1509,8 @@ test "unsupported source is rejected before any process side effect" {
     // strength `%v` is refused, and the refusal names the table.
     try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
     // §17.7: a real conversion needs a real, and `$realtime` is the only one.
-    // §4.1.1 Table 4-2: a real takes no bitwise, modulus or case operator.
+    // IEEE 1364-2005 §5.1.1 Table 5-3: a real takes no bitwise, modulus or
+    // case operator.
     try expectRejected("module m; real a; integer b; initial b = a % 2; endmodule", "does not take a real operand");
     try expectRejected("module m; real a; reg [3:0] b; initial b = a[1]; endmodule", "a real has no bits");
     try expectRejected("module m; reg a; initial a=1; integer a; endmodule", "duplicate digital");

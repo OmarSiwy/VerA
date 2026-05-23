@@ -46,6 +46,8 @@ fn parseExprPrec(self: *Parser, min_prec: u8) Error!Ast.ExprId {
             });
             continue;
         }
+        // IEEE 1364-2005 A.8.3 `+:` / `-:` end an indexed part-select's base.
+        if ((t == .plus or t == .minus) and self.peekAt(1) == .colon) return lhs;
         const op = binOp(t) orelse return lhs;
         const prec = binopPrec(op);
         if (prec < min_prec) return lhs;
@@ -106,13 +108,19 @@ pub fn parsePostfix(self: *Parser) Error!Ast.ExprId {
     return e;
 }
 
-/// One select on `base`, `[i]` or `[msb:lsb]`, the cursor on the `[`.
+/// One select on `base`, `[i]`, `[msb:lsb]` or IEEE 1364-2005 §5.2.1's
+/// `[base +: width]` / `[base -: width]`, the cursor on the `[`.
 pub fn parseSelect(self: *Parser, base: Ast.ExprId) Error!Ast.ExprId {
     const tok = try self.expect(.lbracket);
     var idx = try parseExpr(self);
     if (self.eat(.colon)) { // A.8.3 analog_range_expression
         const lsb = try parseExpr(self);
         idx = try self.file.exprs.add(self.arena, .{ .tag = .range, .main_tok = tok, .lhs = idx, .rhs = lsb });
+    } else if (self.peek() == .plus or self.peek() == .minus) {
+        const down = self.peek() == .minus;
+        self.pos += 2; // `+:` or `-:`, which `parseExprPrec` stopped at
+        const width = try parseExpr(self);
+        idx = try self.file.exprs.add(self.arena, .{ .tag = .indexed_range, .main_tok = tok, .lhs = idx, .rhs = width, .extra = @intFromBool(down) });
     }
     _ = try self.expect(.rbracket);
     return self.file.exprs.add(self.arena, .{ .tag = .index, .main_tok = tok, .lhs = base, .rhs = idx });

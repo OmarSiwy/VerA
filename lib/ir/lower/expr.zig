@@ -143,7 +143,7 @@ pub fn lowerExpr(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
             try self.err(self.file.exprs.mainTok(e), .E0509, "", .{});
             return poison;
         },
-        .range => {
+        .range, .indexed_range => {
             try self.err(self.file.exprs.mainTok(e), .E0329, "", .{});
             return poison;
         },

@@ -5,11 +5,12 @@
 //
 // `wire (strong1, strong0) w;` declares no assignment. Legal neighbour:
 // b_4_4_2_net_declaration_drive_strength.v's `wire (pull1, pull0) w = a;`.
+// The rule is Syntax 4-1's, so the parser refuses it (E0207), not the
+// digital engine.
 // digital-runner: reject
 //! inherited IEEE 1364-2005 4.4.2 4.4
-//! reject E1100
+//! reject E0207
 //! reject drive strength
-//! xfail VerA accepts a drive strength on a net declaration that has no assignment
 module b_4_4_2_drive_strength_without_assignment_rejected;
   wire (strong1, strong0) w;
   initial $display("%b", w);

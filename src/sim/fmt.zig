@@ -125,10 +125,15 @@ pub fn decade(out: *std.Io.Writer, e: i32) std.Io.Writer.Error!void {
 /// unknown), which is why §17.1.1.4 gives it its own rule.
 pub fn value(out: *std.Io.Writer, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
     var buf: [1024]u8 = undefined;
-    const t = if (radix == .decimal)
+    var t = if (radix == .decimal)
         try decimalText(&buf, v)
     else
         groupText(&buf, v, radix);
+    // §17.1.1.3: a zero width overrides the automatic size, so a group radix
+    // loses its leading zero digits too (`%0h` of 12'd10 is "a").
+    if (width == 0) while (t.len > 1 and t[0] == '0') {
+        t = t[1..];
+    };
     // §17.1.1.3's automatic size. Right-justified with leading spaces, not
     // zeros: `%d` of an 8-bit 7 is "  7" and not "007". A group radix is
     // already exactly its own width, so padding only ever shows up under

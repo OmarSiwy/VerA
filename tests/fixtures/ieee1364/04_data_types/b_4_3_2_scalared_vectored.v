@@ -13,7 +13,6 @@
 //   tri vectored [31:0] data: legal to declare; read whole (no select, which
 //     vectored may forbid): undriven tri -> zzzzzzzz (%h)
 //! inherited IEEE 1364-2005 4.3.2
-//! xfail the scalared and vectored keywords do not parse (E0208 "expected an identifier: found `scalared`")
 module b_4_3_2_scalared_vectored;
   tri1 scalared [63:0] bus64;
   tri vectored [31:0] data;

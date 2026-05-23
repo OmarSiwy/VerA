@@ -125,7 +125,16 @@ pub const Array = struct { count: u32, low: i64, high: i64, rest: []const Span =
 pub const Span = struct { low: i64, high: i64 };
 
 /// A packed vector's declared `[msb:lsb]` (§3.3).
-pub const VecRange = struct { msb: i64, lsb: i64 };
+pub const VecRange = struct {
+    msb: i64,
+    lsb: i64,
+
+    /// The bit position, counted from the least significant, that declared
+    /// index `index` names; outside `[0, width)` it names no bit.
+    pub fn position(r: VecRange, index: i64) i64 {
+        return if (r.msb >= r.lsb) index - r.lsb else r.lsb - index;
+    }
+};
 
 /// Who is told when a slot's value changes. `analog` is VAMS §8.5's implicit
 /// D2A: the slot is read by an analog block, so a change posts a region-3b
@@ -223,6 +232,9 @@ pub const Run = struct {
     /// unconnected input port; `lib/ir/lower/node.zig`'s `applyUnconnectedDrive` is
     /// the analog half of the same directive.
     drives: []const Front.Preprocessor.DriveRegion = &.{},
+    /// IEEE 1364 §19.2's `default_nettype regions, in text-stream order: the
+    /// type of a §4.5 implicit net.
+    nettypes: []const Front.Preprocessor.NetTypeRegion = &.{},
     /// Variables, array elements and nets share one slot space, so one `store`
     /// wakes event waiters for all three.
     values: []Int.Literal,
@@ -396,6 +408,9 @@ pub const Run = struct {
     /// §12.2 parameter slots: constants an expression may fold, never a
     /// target.
     params: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// IEEE 1364-2005 §4.10.3 the parameters that are specparams, each to
+    /// its declaration's token: "declared before it is referenced".
+    specparams: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// IEEE 1364-2005 §4.8 `real` variables and VAMS §3.7 `wreal` nets: slots
     /// holding a double's 64 bits, which typing, conversion and change
     /// detection read as a real.
@@ -755,7 +770,11 @@ pub const Run = struct {
     /// sign (the §4.3.1 example `[-2:1]`).
     fn declaredBound(self: *Run, e: Ast.ExprId, tok: u32) Error!i64 {
         if (self.file.exprs.tag(e) == .int_literal) return self.file.exprs.intValue(e);
-        return (try self.constant(e, tok)).asInt() orelse self.fail(tok, "a declaration bound cannot contain x or z", .{});
+        const v = try self.constant(e, tok);
+        // §4.3.1: "Both the msb constant expression and the lsb constant
+        // expression shall be constant integer expressions."
+        if (compile.typeOf(self, e).real) return self.fail(tok, "§4.3.1: a bound is a constant integer expression, not a real", .{});
+        return v.asInt() orelse self.fail(tok, "a declaration bound cannot contain x or z", .{});
     }
     /// A.2.2.3 `delay_value ::= unsigned_number | real_number | identifier`, in
     /// scheduler ticks. Folded at elaboration: a net's or a driver's delay is
@@ -794,6 +813,16 @@ pub const Run = struct {
         const entry = try self.names.getOrPut(self.arena, .{ .scope = self.scope, .str = name });
         if (entry.found_existing) return self.fail(tok, "duplicate digital variable", .{});
         entry.value_ptr.* = at;
+    }
+    /// A vector slot's declared `[msb:lsb]` (an array's first element's is
+    /// every element's), `[w-1:0]` when it declares none.
+    pub fn vecRange(self: *const Run, at: u32) VecRange {
+        return self.vec_ranges.get(at) orelse .{ .msb = @as(i64, self.values[at].width) - 1, .lsb = 0 };
+    }
+    /// §4.3: "A net or reg declaration without a range specification shall
+    /// be considered 1 bit wide and is known as a scalar."
+    pub fn isScalar(self: *const Run, at: u32) bool {
+        return self.values[at].width == 1 and !self.vec_ranges.contains(at) and !self.params.contains(at);
     }
     /// The slot an lvalue's width comes from: an array element reference is as
     /// wide as element zero, so a parked value can be sized before §8.5.3.3
@@ -935,6 +964,18 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // parameters are the analog block's alone (VAMS §7.2.2): this engine holds
     // no parameter of those kinds, and a digital read of one is undeclared.
     for (m.defparams) |d| try r.defparams.put(arena, .{ .scope = scope, .str = d.path }, d);
+    // §10: the instance's tasks and functions, named before its parameters
+    // so a §10.4.5 constant function call in one can find its function.
+    try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
+    for (m.tasks) |*t| {
+        // A mixed module's real-valued function is the analog side's to call
+        // (VAMS §4.7); this engine holds no real, so it declares none.
+        if (r.mixed and usesReal(t)) continue;
+        const entry = try r.sub_by_name.getOrPut(arena, .{ .scope = scope, .str = t.name });
+        if (entry.found_existing) return r.fail(t.main_tok, "duplicate task or function", .{});
+        entry.value_ptr.* = @intCast(r.subs.items.len);
+        try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = undefined });
+    }
     var positional: usize = 0;
     for (m.params) |p| {
         const pos = positional;
@@ -959,6 +1000,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         @memcpy(slot_value.planes, converted.planes);
         try e.values.append(arena, slot_value);
         try r.params.put(arena, at, {});
+        if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
     }
     try declareEvents(r, e, m.events, m.main_tok);
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
@@ -984,17 +1026,12 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // IEEE 1364-2005 §10.2/§10.4: each task and function is a scope of this
     // instance holding its formals, its locals and a function's result: the
     // storage a static subroutine shares between activations (§10.2.3).
-    try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
-    for (m.tasks) |*t| {
-        // A mixed module's real-valued function is the analog side's to call
-        // (VAMS §4.7); this engine holds no real, so it declares none.
-        if (r.mixed and usesReal(t)) continue;
-        const f = try frame(r, t, scope);
-        const entry = try r.sub_by_name.getOrPut(arena, .{ .scope = scope, .str = t.name });
-        if (entry.found_existing) return r.fail(t.main_tok, "duplicate task or function", .{});
-        entry.value_ptr.* = @intCast(r.subs.items.len);
-        try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = f });
-    }
+    // Framed after the parameters its widths may read, unless a §10.4.5
+    // constant function call framed it first (`earlyFrame`).
+    for (r.subs.items[r.sub_base.get(scope).?..]) |*sub| if (!sub.framed) {
+        sub.frame = try frame(r, sub.decl, scope);
+        sub.framed = true;
+    };
     for (m.nets) |n| {
         // §7.2.1: a disciplined net is continuous, the analog solver's.
         if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
@@ -1029,7 +1066,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             // (`wire #3 y = ~a;`: A.2.1.3 puts the `delay3` before the name list,
             // not on the `=`), so the row it contributes carries none.
             if (n.init != .none)
-                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .tok = n.main_tok });
+                try e.wires.append(arena, .{ .net = at, .scope = scope, .source = .{ .expr = .{ .e = n.init } }, .s0 = n.strength0, .s1 = n.strength1, .tok = n.main_tok });
         }
     }
     // §6.5 the ports, after the body nets: a port net minted here is the one a
@@ -1073,6 +1110,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         // header port into the `Port` (`inout t; tri0 t;` is one `Port`), and
         // §7.9 resolution and `netPull`'s undriven value both read the net type.
         const at = try mintNet(r, e, p.kind, width, p.is_signed, p.name, p.main_tok);
+        if (p.kind != .wreal) if (p.range orelse p.type_range) |range| try r.vec_ranges.put(arena, e.nets.items[at].slot, .{
+            .msb = try r.declaredBound(range.msb, p.main_tok),
+            .lsb = try r.declaredBound(range.lsb, p.main_tok),
+        });
         switch (bind) {
             // IEEE 1364 §19.10: an unconnected input port declared in an
             // `unconnected_drive` region is pulled to a logic level through a
@@ -1115,9 +1156,34 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             },
         }
     }
+    try implicitNets(r, e, scope, m);
     try declareDrivers(r, e, scope, .{ .assigns = m.assigns, .gates = m.gates, .pulls = m.pulls, .switches = m.switches });
     for (try bridged(r, e, m, scope)) |*inst| try instantiate(r, e, scope, inst, depth);
     for (m.analog) |ab| if (isGenerate(r.file, m, ab.body)) try generate(r, e, m, scope, ab.body, depth);
+}
+
+/// IEEE 1364-2005 §4.5: an undeclared identifier in the terminal list of a
+/// module or primitive instance, or on the left of a continuous assignment,
+/// is an implicit scalar net of the `default_nettype in force there (§19.2).
+fn implicitNets(r: *Run, e: *Elab, scope: u32, m: *const Ast.ModuleDecl) Error!void {
+    for (m.instances) |inst| for (inst.ports) |c| try implicitNet(r, e, scope, c.expr);
+    for (m.gates) |g| {
+        try implicitNet(r, e, scope, g.out);
+        for (g.ins) |x| try implicitNet(r, e, scope, x);
+    }
+    for (m.switches) |sw| for (sw.terms) |x| try implicitNet(r, e, scope, x);
+    for (m.pulls) |p| try implicitNet(r, e, scope, p.out);
+    for (m.assigns) |a| try implicitNet(r, e, scope, a.target);
+}
+
+fn implicitNet(r: *Run, e: *Elab, scope: u32, x: Ast.ExprId) Error!void {
+    const ex = &r.file.exprs;
+    if (x == .none or ex.tag(x) != .ident or r.names.contains(.{ .scope = scope, .str = ex.strOf(x) })) return;
+    const tok = ex.mainTok(x);
+    const t = Front.Preprocessor.NetTypeRegion.inForce(r.nettypes, r.starts[@min(tok, r.starts.len - 1)], .default);
+    // `default_nettype none: the name stays undeclared.
+    const kind = std.meta.stringToEnum(Ast.NetKind, @tagName(t)) orelse return;
+    _ = try mintNet(r, e, kind, 1, false, ex.strOf(x), tok);
 }
 
 /// §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
@@ -1487,7 +1553,14 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
     r.scope = src.scope;
     defer r.scope = scope;
     if (r.mixed and !compile.constantExpression(r, src.e)) return null;
+    // Parameters bind before any other name of the instance, so a name that
+    // does not resolve yet is no previously defined parameter.
+    if (unresolved(r, src.e)) |x| return r.exprFail(x, "§4.10.1: a parameter's value is a constant expression of numbers and previously defined parameters, and this name is neither");
     const value = try r.constant(src.e, p.main_tok);
+    // §4.10.3: "module parameters shall not be assigned a constant
+    // expression that includes any specify parameters".
+    if (!p.is_spec and readsSpecparam(r, src.e))
+        return r.exprFail(src.e, "§4.10.3: a module parameter cannot be assigned an expression that includes a specify parameter");
     if (r.mixed and compile.typeOf(r, src.e).real) return null;
     if (scope == 0 and !p.is_local) for (r.card) |c| if (std.mem.eql(u8, c.name, r.file.str(p.name))) {
         // VAMS §6.3: the card sets the root's parameter as a `#( … )` would;
@@ -1497,6 +1570,24 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         return try exec.normalize(r.arena, w, .{ .width = 32, .signed = true });
     };
     return value;
+}
+
+/// The first name in `e` that does not resolve in the current scope.
+fn unresolved(r: *Run, e: Ast.ExprId) ?Ast.ExprId {
+    const ex = &r.file.exprs;
+    if (ex.tag(e) == .ident) return if (r.lookup(r.scope, ex.strOf(e)) == null) e else null;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none) if (unresolved(r, c)) |x| return x;
+    return null;
+}
+
+/// Does `e`, read in the current scope, name a specparam?
+fn readsSpecparam(r: *Run, e: Ast.ExprId) bool {
+    const ex = &r.file.exprs;
+    if (ex.tag(e) == .ident) return if (r.lookup(r.scope, ex.strOf(e))) |at| r.specparams.contains(at) else false;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none and readsSpecparam(r, c)) return true;
+    return false;
 }
 
 /// §6.2.2 one module or UDP instance, declared in `scope`, or IEEE 1364
@@ -1710,8 +1801,12 @@ pub const Sub = struct {
     decl: *const Ast.Subroutine,
     inst: u32,
     frame: Frame,
+    /// `frame` is minted: every sub is once its instance is declared.
+    framed: bool = false,
     entry: u32 = 0,
     timed: ?bool = null,
+    /// A §10.4.5 constant function, once asked (`compile.constantFunction`).
+    constant: ?bool = null,
     /// Synchronous activations in progress.
     active: u32 = 0,
     /// Being inlined right now, which a timed task reaching itself would be.
@@ -1764,6 +1859,21 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
         _ = try mintVar(r, v);
     }
     return .{ .scope = scope, .ports = ports, .result = result, .first = first, .count = @as(u32, @intCast(g.items.len)) - first };
+}
+
+/// §10.4.5: function `idx`, called by a constant function call before its
+/// instance's frames exist (a parameter's value), framed, judged a constant
+/// function and compiled now, so `exec.callSync` can run it during
+/// elaboration.
+pub fn earlyFrame(r: *Run, idx: u32, tok: u32) Error!void {
+    const sub = &r.subs.items[idx];
+    sub.frame = try frame(r, sub.decl, sub.inst);
+    sub.framed = true;
+    if (try compile.notConstant(r, idx)) |why|
+        return r.fail(tok, "§10.4.5: a function called during elaboration is a constant function, and {s}", .{why});
+    const saved = r.scope;
+    defer r.scope = saved;
+    try compile.compileSub(r, idx);
 }
 
 /// VAMS §3.7's port merge: a wire or tri joined to a wreal port becomes one
@@ -1929,7 +2039,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
         if (file.strings.eql(c.name, mx.top)) break c;
     } else return r.fail(0, "the mixed-signal root module is not in the source", .{}) else blk: {
@@ -2111,6 +2221,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         for (inst.module.vars) |v| if (v.init != .none) {
             const at = r.names.get(.{ .scope = inst.scope, .str = v.name }) orelse continue;
             try compile.checkExpr(&r, v.init);
+            // §6.2.1: "The assignment shall be to a constant expression."
+            if (!compile.constantExpression(&r, v.init)) return r.exprFail(v.init, "§6.2.1: a constant expression is required here");
             const start = try compile.append(&r, .{ .init_var = .{ .slot = at, .value = v.init } });
             _ = try compile.append(&r, .stop);
             _ = try exec.enqueue(&r, .{ .run_process = start }, null, false);
@@ -2372,6 +2484,61 @@ test "§12.1.2 an instance array is one instance per element, each connected" {
         \\leaf u[1:0](r);
         \\endmodule
     , "across an instance array");
+}
+
+// IEEE 1364-2005 §10.4.5's clogb2, per instance: ceil(log2(421)) = 9 and
+// ceil(log2(256)) = 8, so `address` is 9 and 8 bits wide. The call leaves the
+// function's variables as it found them, so a second call at run time reads
+// clogb2(5) = 3 from a fresh `value`.
+test "§10.4.5 a constant function call in a parameter's value runs at elaboration" {
+    try expectRun(
+        \\module ram_model;
+        \\parameter ram_depth = 256;
+        \\localparam addr_width = clogb2(ram_depth);
+        \\reg [addr_width - 1:0] address;
+        \\function integer clogb2;
+        \\  input [31:0] value;
+        \\  begin
+        \\    value = value - 1;
+        \\    for (clogb2 = 0; value > 0; clogb2 = clogb2 + 1)
+        \\      value = value >> 1;
+        \\  end
+        \\endfunction
+        \\initial #1 $display("%0d %0d %b", addr_width, clogb2(5), address);
+        \\endmodule
+        \\module top;
+        \\ram_model #(421) a();
+        \\ram_model b();
+        \\endmodule
+    , "9 3 xxxxxxxxx\n8 3 xxxxxxxx\n");
+    try expectRejected(
+        \\module m;
+        \\reg [3:0] g;
+        \\function integer f;
+        \\  input integer x;
+        \\  f = x + g;
+        \\endfunction
+        \\localparam P = f(1);
+        \\endmodule
+    , "§10.4.5");
+}
+
+// IEEE 1364-2005 §4.5 with §19.2: an implicit net takes the `default_nettype
+// in force, so an undriven `tri0` one reads 0; under `none` there is none.
+test "§4.5 an implicit net is of the default net type; `default_nettype none makes none" {
+    try expectRun(
+        \\`default_nettype tri0
+        \\module top;
+        \\assign k = 1'bz;
+        \\initial #1 $display("%b", k);
+        \\endmodule
+    , "0\n");
+    try expectRejected(
+        \\`default_nettype none
+        \\module top;
+        \\assign k = 1'b1;
+        \\endmodule
+    , "undeclared");
 }
 
 // IEEE 1364 §19.10. The directive drives at pull strength, so the level it

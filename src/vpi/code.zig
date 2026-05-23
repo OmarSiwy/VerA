@@ -835,7 +835,7 @@ pub const Builder = struct {
             },
             // Not modelled: a hierarchical reference, the analog operators
             // and filters, event functions, patterns, infinities. No object.
-            .hier_ident, .builtin_call, .filter_call, .noise_call, .port_access, .assign_pattern, .pattern_repl, .range, .pos_inf, .neg_inf, .event_initial_step, .event_final_step, .event_driver_update, .event_function => none,
+            .hier_ident, .builtin_call, .filter_call, .noise_call, .port_access, .assign_pattern, .pattern_repl, .range, .indexed_range, .pos_inf, .neg_inf, .event_initial_step, .event_final_step, .event_driver_update, .event_function => none,
         };
     }
 
@@ -857,8 +857,10 @@ pub const Builder = struct {
     /// §11.6.19's part select.
     fn select(b: *Builder, id: Ast.ExprId) Error!u32 {
         const ex = &b.file.exprs;
-        const base = try b.expr(ex.lhs(id));
         const ix = ex.rhs(id);
+        // Not modelled: an IEEE 1364-2005 §5.2.1 indexed part-select.
+        if (ex.tag(ix) == .indexed_range) return none;
+        const base = try b.expr(ex.lhs(id));
         if (base != none) {
             const bo = b.objects.items[base];
             if (bo.members.len != 0 and ex.tag(ix) == .int_literal) {

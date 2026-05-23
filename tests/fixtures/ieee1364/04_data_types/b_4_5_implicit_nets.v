@@ -16,7 +16,6 @@
 //   k: undeclared, LHS of assign k = 2'b10: a scalar net, so it keeps the
 //      LSB (§5.6) -> 0
 //! inherited IEEE 1364-2005 4.5
-//! xfail an implicit net is not created: each of q, o and k is "undeclared digital variable"
 module b_4_5_implicit_nets;
   reg r;
   sub u(q, r);
