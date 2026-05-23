@@ -22,15 +22,7 @@
 //!
 //! A revert that leaves the trial's offset reads 8.5 - 1 = 7.5 at the retry.
 //!
-//! HOW TO RUN IT:
-//!
-//!     ./zig-out/bin/vera --emit-zig -I tests/fixtures \
-//!       tests/fixtures/ch04_expressions/a04_idt_hold_revert.va \
-//!       -o /tmp/a04_idt_hold.zig
-//!     zig test --dep device --dep contract \
-//!              -Mroot=tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig \
-//!              --dep contract -Mdevice=/tmp/a04_idt_hold.zig \
-//!              -Mcontract=tools/contract.zig
+//! `zig build test` emits the device and runs this file.
 
 const std = @import("std");
 const contract = @import("contract");

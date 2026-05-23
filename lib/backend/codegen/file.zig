@@ -731,6 +731,7 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\    systf: ?*const contract.SystfHost = null,
         \\
     , .{});
+    try self.hist.appendSlice(self.arena, &.{ "bound_step", "discontinuity_order" });
     // §9.12 / IEEE 1364 §17.10: only a model that searches the plusargs has
     // somewhere for the host to write them.
     if (self.lowered.uses.contains(.plusargs)) try self.w(
@@ -765,6 +766,7 @@ pub fn emitInstance(self: *Gen) Error!void {
             if (k == 0) "" else ", ", 1 + 7919 * @as(u32, @intCast(k)),
         });
         try self.w("}},\n", .{});
+        try self.hist.append(self.arena, "rng_auto");
     }
     for (self.names.units, 0..) |u, i| {
         if (u.role != .analog_op) continue;
@@ -776,6 +778,7 @@ pub fn emitInstance(self: *Gen) Error!void {
             } else {
                 try self.w("    {s}__{s}: f64 = {s}, // {s}\n", .{ n, s.suffix, s.default, s.note });
             }
+            try keepHist(self, "{s}__{s}", .{ n, s.suffix });
         }
         // Operators whose field count depends on the call (`shape = .from_args`).
         switch (u.op) {
@@ -786,17 +789,20 @@ pub fn emitInstance(self: *Gen) Error!void {
                         "    {s}__head: u32 = 0,\n",
                     .{ n, hist_len, n, hist_len, n },
                 );
+                // The ring itself is not copied: `stateCtl` keeps the one
+                // sample the next push overwrites (`emitStateCtl`).
+                try keepHist(self, "{s}__head", .{n});
                 // §4.5.7 the frozen td of the two-argument form. Emitted only
                 // for a signal-valued td; a constant or parameter one is
                 // already its own first value.
-                if (try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i))) try self.w(
-                    "    {s}__td: f64 = 0.0, // §4.5.7 td, frozen at the first evaluation\n",
-                    .{n},
-                );
-                if (try gen_call.absdelayMaxdSampled(self, self.names.opArgs(self.mir, i))) try self.w(
-                    "    {s}__maxd: f64 = 0.0, // §4.5.14 maxdelay, sampled at the start of the analysis\n",
-                    .{n},
-                );
+                if (try gen_call.absdelayFreezes(self, self.names.opArgs(self.mir, i))) {
+                    try self.w("    {s}__td: f64 = 0.0, // §4.5.7 td, frozen at the first evaluation\n", .{n});
+                    try keepHist(self, "{s}__td", .{n});
+                }
+                if (try gen_call.absdelayMaxdSampled(self, self.names.opArgs(self.mir, i))) {
+                    try self.w("    {s}__maxd: f64 = 0.0, // §4.5.14 maxdelay, sampled at the start of the analysis\n", .{n});
+                    try keepHist(self, "{s}__maxd", .{n});
+                }
             },
             // §4.5.11/§4.5.12 direct-form-I history of the cascade: `deg`
             // past inputs and past outputs per section, newest first. The
@@ -810,14 +816,17 @@ pub fn emitInstance(self: *Gen) Error!void {
                     n, p.ns * p.deg, if (u.op == .zi) "12" else "11",
                 });
                 try self.w("    {s}__y: [{d}]f64 = @splat(0.0),\n", .{ n, p.ns * p.deg });
+                try keepHist(self, "{s}__u", .{n});
+                try keepHist(self, "{s}__y", .{n});
                 // §4.5.12 the filter's clock as a count of samples taken, not
                 // the next sample time: `next += zn*T` drifts off the k·T grid
                 // by an ulp or two (1e-9 + 1e-9 + 1e-9 > 3e-9 in f64), and a
                 // timepoint under the drifted clock loses a sample for good.
-                if (u.op == .zi) try self.w(
-                    "    {s}__nk: f64 = 0.0, // §4.5.12 samples taken\n    {s}__out: f64 = 0.0,\n",
-                    .{ n, n },
-                );
+                if (u.op == .zi) {
+                    try self.w("    {s}__nk: f64 = 0.0, // §4.5.12 samples taken\n    {s}__out: f64 = 0.0,\n", .{ n, n });
+                    try keepHist(self, "{s}__nk", .{n});
+                    try keepHist(self, "{s}__out", .{n});
+                }
             },
             // Every `.static` and `.none` row: already handled above, or
             // (§9.17) writing the two unconditional fields and no per-unit
@@ -845,6 +854,7 @@ pub fn emitInstance(self: *Gen) Error!void {
         // spec default, like every §4.5 operator control argument, because a
         // struct field default is comptime and a model card is not. Upgrade
         // path: write it in `initState`, which already takes `*Instance`.
+        try self.hist.append(self.arena, self.names.held_names[i]);
         if (h.array != none_u32) {
             try emitHeldArrayField(self, h, self.names.held_names[i], "// §5.10 held across evaluations");
             continue;
@@ -863,43 +873,6 @@ pub fn emitInstance(self: *Gen) Error!void {
             });
         }
     }
-    // FSM accepted/working twins: `stateCtl`'s accepted copy. Emitted only
-    // for modules whose hook has an FSM half (`fsmStateCtl`), so a plain
-    // cross observer or path-latch model carries no dead fields.
-    if (fsmStateCtl(self)) {
-        for (self.lowered.held_vars.items, 0..) |h, i| {
-            if (h.array != none_u32) {
-                try emitHeldArrayField(self, h, try std.fmt.allocPrint(self.arena, "{s}__acc", .{self.names.held_names[i]}), "// stateCtl accepted copy");
-                continue;
-            }
-            const init = self.an.foldConst(self.an.rv(h.init), true);
-            const v: f64 = if (init) |c| c.f else 0.0;
-            if (h.ty == .integer) {
-                try self.w("    {s}__acc: i64 = {d}, // stateCtl accepted copy\n", .{
-                    self.names.held_names[i], std.math.lossyCast(i64, @round(v)),
-                });
-            } else {
-                try self.w("    {s}__acc: f64 = {s}, // stateCtl accepted copy\n", .{
-                    self.names.held_names[i], try fmtF64(self, v),
-                });
-            }
-        }
-        for (self.names.units, 0..) |u, i| {
-            if (u.role != .analog_op) continue;
-            switch (u.op) {
-                .cross, .above => try self.w(
-                    "    {s}__prev__acc: f64 = 0.0, // stateCtl accepted copy\n",
-                    .{self.names.unit_names[i]},
-                ),
-                .none, .idt_hold, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
-            }
-        }
-    }
-    // §4.5.4 the `idt` assert offset's `stateCtl` accepted copy.
-    for (self.names.units, 0..) |u, i| {
-        if (u.role == .analog_op and u.op == .idt_hold)
-            try self.w("    {s}__off__acc: f64 = 0.0, // stateCtl accepted copy\n", .{self.names.unit_names[i]});
-    }
     // The setup roots (`Setup`), LAST for the same insert-tolerance reason as
     // the held block above. `su_ok` exists only where it is asserted.
     if (self.su.vals.len != 0) try self.w(
@@ -908,6 +881,11 @@ pub fn emitInstance(self: *Gen) Error!void {
         \\
     , .{});
     try self.w("}};\n\n", .{});
+}
+
+/// Records `Instance` field `fmt` as history `stateCtl` commits and reverts.
+fn keepHist(self: *Gen, comptime fmt: []const u8, args: anytype) Error!void {
+    try self.hist.append(self.arena, try std.fmt.allocPrint(self.arena, fmt, args));
 }
 
 /// Emits a §3.2.2/§5.10 held array's `Instance` field: plain values,
@@ -959,39 +937,45 @@ pub fn pathLatches(self: *const Gen) bool {
     return self.core.acc_lo.len != 0 or self.core.prev_lo.len != 0;
 }
 
-/// Returns whether the module needs `stateCtl`: an FSM, a §4.5.15 `$limit`
-/// slot, any §5.6.1.2 path latch or a §4.5.4 `idt` assert offset. The host's
-/// `.commit` calls (operating-point exit, accepted transient step) are the
-/// boundary the latches advance on; latches and offsets add nothing to
-/// `query`, since the base moving is not a step-reject condition.
-pub fn emitsStateCtl(self: *const Gen) bool {
-    return fsmStateCtl(self) or pathLatches(self) or self.lowered.limit_slots.items.len != 0 or usesOp(self, .idt_hold);
+/// Emits `State`'s `stateCtl` twins: one per `Gen.hist` field, typed and
+/// defaulted as that `Instance` field, plus `t_prev__acc` when `t_prev` and
+/// each §4.5.7 ring's overwritten sample. Requires `emitInstance` to have run
+/// and `z_inst0` (a default `Instance`) to be declared.
+pub fn emitStateTwins(self: *Gen, t_prev: bool) Error!void {
+    if (t_prev) try self.w("    t_prev__acc: f64 = 0.0,\n", .{});
+    for (self.hist.items) |h| try self.w("    {s}: @TypeOf(z_inst0.{s}) = z_inst0.{s},\n", .{ h, h, h });
+    for (self.names.units, 0..) |u, i| {
+        if (u.role == .analog_op and u.op == .absdelay)
+            try self.w("    {0s}__t__acc: f64 = 0.0,\n    {0s}__v__acc: f64 = 0.0,\n", .{self.names.unit_names[i]});
+    }
 }
 
-/// Emits the `stateCtl` hook. `query` compares the held (discrete) state
-/// only; cross histories are committed or reverted alongside, so a rejected
-/// attempt leaves no half-advanced edge test that would suppress the refire.
-/// Path latches commit `pb = wb`, `pq += wq` and zero `wq`; revert needs
-/// nothing. An `idt` assert offset, which `updateState` writes in place, is
-/// committed to and reverted from its `__off__acc` twin. Tag order mirrors contract.StateCtlOp, which the host converts
-/// by ordinal.
-pub fn emitStateCtl(self: *Gen) Error!void {
-    // ponytail: topology is fixed during emission; scan once for all three actions.
+/// Emits the `stateCtl` hook; every `updateState` has one. `query` compares
+/// the held state a `cross`/`above` FSM writes (`fsmStateCtl`) and nothing
+/// else, since other history moving is not a step-reject condition. `commit`
+/// latches the §5.6.1.2 path latches (`pb = wb`, `pq += wq`, `wq = 0`) and
+/// copies every field `updateState` advances into its `State` twin
+/// (`emitStateTwins`); `revert` copies the twins back, so a rejected step
+/// leaves the device as the last accepted point did (§4.5). A §4.5.7 ring
+/// keeps only the sample the next push overwrites, which is exact while one
+/// `updateState` runs between `stateCtl` calls. Tag order mirrors
+/// contract.StateCtlOp, which the host converts by ordinal.
+pub fn emitStateCtl(self: *Gen, t_prev: bool) Error!void {
     const fsm = fsmStateCtl(self);
     try self.w(
-        \\pub fn stateCtl(_: *const Model, inst: *Instance, {s}: *State, op: contract.StateCtlOp) bool {{
+        \\pub fn stateCtl(_: *const Model, inst: *Instance, state: *State, op: contract.StateCtlOp) bool {{
         \\    if (op == .query) {{
         \\        return
-    , .{if (self.lowered.limit_slots.items.len != 0) "state" else "_"});
+    , .{});
     var first = true;
     for (self.names.held_names, self.lowered.held_vars.items) |n, h| {
         if (!fsm) break;
         if (h.why != .event) continue;
         // §3.2.2 a held array compares element by element.
         if (h.array != none_u32)
-            try self.w("{s}!std.meta.eql(inst.{s}, inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n })
+            try self.w("{s}!std.meta.eql(inst.{s}, state.{s})", .{ if (first) " " else "\n            or ", n, n })
         else
-            try self.w("{s}(inst.{s} != inst.{s}__acc)", .{ if (first) " " else "\n            or ", n, n });
+            try self.w("{s}(inst.{s} != state.{s})", .{ if (first) " " else "\n            or ", n, n });
         first = false;
     }
     if (first) try self.w(" false", .{});
@@ -1007,31 +991,28 @@ pub fn emitStateCtl(self: *Gen) Error!void {
     );
     for (0..self.core.prev_lo.len) |k| try self.w("        inst.pb__{d} = inst.wb__{d};\n", .{ k, k });
     for (0..self.core.acc_lo.len) |k| try self.w("        inst.pq__{d} += inst.wq__{d};\n        inst.wq__{d} = 0.0;\n", .{ k, k, k });
-    if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s}__acc = inst.{s};\n", .{ n, n });
+    for (self.hist.items) |h| try self.w("        state.{s} = inst.{s};\n", .{ h, h });
     for (self.names.units, 0..) |u, i| {
-        if (u.role != .analog_op) continue;
-        const n = self.names.unit_names[i];
-        switch (u.op) {
-            .cross, .above => if (fsm) try self.w("        inst.{s}__prev__acc = inst.{s}__prev;\n", .{ n, n }),
-            .idt_hold => try self.w("        inst.{s}__off__acc = inst.{s}__off;\n", .{ n, n }),
-            .none, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
-        }
+        if (u.role == .analog_op and u.op == .absdelay) try self.w(
+            "        state.{0s}__t__acc = inst.{0s}__t[inst.{0s}__head % {1d}];\n        state.{0s}__v__acc = inst.{0s}__v[inst.{0s}__head % {1d}];\n",
+            .{ self.names.unit_names[i], hist_len },
+        );
     }
+    if (t_prev) try self.w("        state.t_prev__acc = state.t_prev;\n", .{});
     try self.w("    }} else {{\n", .{});
     if (self.lowered.limit_slots.items.len != 0) try self.w(
         "        inst.limiter_previous = state.limiter_previous;\n",
         .{},
     );
-    if (fsm) for (self.names.held_names) |n| try self.w("        inst.{s} = inst.{s}__acc;\n", .{ n, n });
+    for (self.hist.items) |h| try self.w("        inst.{s} = state.{s};\n", .{ h, h });
+    // After `__head` is back: the slot the rejected push overwrote.
     for (self.names.units, 0..) |u, i| {
-        if (u.role != .analog_op) continue;
-        const n = self.names.unit_names[i];
-        switch (u.op) {
-            .cross, .above => if (fsm) try self.w("        inst.{s}__prev = inst.{s}__prev__acc;\n", .{ n, n }),
-            .idt_hold => try self.w("        inst.{s}__off = inst.{s}__off__acc;\n", .{ n, n }),
-            .none, .idtmod, .absdelay, .transition, .slew, .last_crossing, .laplace, .zi, .timer, .bound_step, .discontinuity => {},
-        }
+        if (u.role == .analog_op and u.op == .absdelay) try self.w(
+            "        inst.{0s}__t[inst.{0s}__head % {1d}] = state.{0s}__t__acc;\n        inst.{0s}__v[inst.{0s}__head % {1d}] = state.{0s}__v__acc;\n",
+            .{ self.names.unit_names[i], hist_len },
+        );
     }
+    if (t_prev) try self.w("        state.t_prev = state.t_prev__acc;\n", .{});
     try self.w(
         \\    }}
         \\    return false;

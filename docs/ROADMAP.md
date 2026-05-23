@@ -325,7 +325,6 @@ These need a call, not another agent pass.
 | AMS 3.4.2 | W0651 may misfire: on `nonzero = 1.0 exclude 0` (`ch03_data_types/05_parameter_ranges.va`) with no closed infinite bound, and on `[0:hi]` (`h01_11:41`). Check against §3.4.2 before pinning. | `h01_11_dependent_range_and_array_override.va:39-41` |
 | harness | A second `//! analysis` line silently replaces the first. | `ch09_system_tasks/COVERAGE.md:56,67` |
 | IEEE 18.1.5 | `vcdTokens` drops `$version` and `$comment`, so the `$dumplimit` comment and version text are never checked. `tools/vcd_semantics.py` is not wired in. | `conformance-vcd-review.md:39-42,155-159` |
-| harness | `a04_rollback_rollback_host.zig` fails 2 of 2 (no revert hook for operator history) and no build step runs it. Its subject is `slew`: idt and ddt are host unknowns (§4.5.2) and keep no device history to revert. Its premise may be outside the contract (`updateState` runs at accepted points). Delete it, or wire it and decide. | `a04_SPEC.md:106-113` |
 | fixtures | Branch `audit-wip/ch5` (`59da3dcd`) holds ch09 fixtures that were never merged, including ones for the `$arandom`, `$clog2` and geometry rows above. | found 2026-09-27 |
 
 ### 5.5 Fixture headers to correct

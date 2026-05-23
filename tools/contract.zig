@@ -499,10 +499,14 @@ pub fn stateClass(comptime D: type) StateClass {
 }
 
 /// The operations of `stateCtl`, which a transient loop uses to reject and
-/// retry a step whose converged solution flipped a device state:
-///   query: does the working state differ from the last accepted one?
+/// retry a step after `updateState` has run on it. The host commits every
+/// accepted point, the operating point included, before it may revert.
+///   query: does the working state differ from the last accepted one in a
+///     way that should reject the step (a flipped device state)?
 ///   commit: the step is accepted; accepted := working.
-///   revert: the step is rejected; working := accepted.
+///   revert: the step is rejected; working := accepted, for every field
+///     `updateState` advances and `State.t_prev`. Exact when at most one
+///     `updateState` ran since the last commit or revert.
 pub const StateCtlOp = enum(u8) { query, commit, revert };
 
 /// §4.6.1 `analysis()`, Table 4-21: the analysis a `SimState` describes.
