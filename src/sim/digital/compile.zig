@@ -575,9 +575,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         .unary => blk: {
             const operand = try inferValue(self, ex.lhs(e), depth + 1);
             const op = ex.unOp(e);
-            // §4.1.1 Table 4-2: a real takes the arithmetic, relational and
-            // logical operators, and none of the bitwise ones.
-            if (operand.real and op != .plus and op != .minus and op != .logical_not) return self.exprFail(e, "§4.1.1: this operator does not take a real operand");
+            // IEEE 1364-2005 §5.1.1 Table 5-2: a real takes the arithmetic,
+            // relational and logical operators, and none of the bitwise ones.
+            if (operand.real and op != .plus and op != .minus and op != .logical_not) return self.exprFail(e, "§5.1.1: this operator does not take a real operand");
             break :blk switch (op) {
                 .plus, .minus, .bit_not => operand,
                 .logical_not, .reduce_and, .reduce_nand, .reduce_or, .reduce_nor, .reduce_xor, .reduce_xnor => .{ .width = 1, .signed = false },
@@ -589,7 +589,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             const op = ex.binOp(e);
             if (lhs.real or rhs.real) switch (op) {
                 .add, .sub, .mul, .div, .pow, .eq, .neq, .lt, .le, .gt, .ge, .logical_and, .logical_or => {},
-                .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr, .case_eq, .case_neq => return self.exprFail(e, "§4.1.1: this operator does not take a real operand"),
+                .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor, .shl, .shr, .ashl, .ashr, .case_eq, .case_neq => return self.exprFail(e, "§5.1.1: this operator does not take a real operand"),
             };
             break :blk switch (op) {
                 .add, .sub, .mul, .div, .mod, .bit_and, .bit_or, .bit_xor, .bit_xnor => common(lhs, rhs),
@@ -734,7 +734,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             var width: u32 = 0;
             for (ex.args(e)) |arg| {
                 const operand = try infer(self, arg, depth + 1);
-                if (operand.real) return self.exprFail(arg, "§4.1.14: a real cannot be a concatenation operand");
+                if (operand.real) return self.exprFail(arg, "§5.1.1: a real cannot be a concatenation operand");
                 if (unsizedConcatOperand(self, arg)) {
                     if (ex.tag(arg) == .int_literal or ex.tag(arg) == .logic_literal)
                         return self.exprFail(arg, "unsized constant numbers are not allowed as concatenation operands");
@@ -1504,7 +1504,8 @@ test "unsupported source is rejected before any process side effect" {
     // strength `%v` is refused, and the refusal names the table.
     try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
     // §17.7: a real conversion needs a real, and `$realtime` is the only one.
-    // §4.1.1 Table 4-2: a real takes no bitwise, modulus or case operator.
+    // IEEE 1364-2005 §5.1.1 Table 5-3: a real takes no bitwise, modulus or
+    // case operator.
     try expectRejected("module m; real a; integer b; initial b = a % 2; endmodule", "does not take a real operand");
     try expectRejected("module m; real a; reg [3:0] b; initial b = a[1]; endmodule", "a real has no bits");
     try expectRejected("module m; reg a; initial a=1; integer a; endmodule", "duplicate digital");
