@@ -19,7 +19,6 @@
 // Each instance prints at t = data_width (8 and 32), so no two lines race:
 //   "8 255 3" then "9 511 3".
 //! inherited IEEE 1364-2005 10.4.5
-//! xfail a constant function call in a parameter or localparam value is refused as "undeclared function"
 `timescale 1ns/1ns
 module b_10_4_5_constant_function_clogb2;
   wire [7:0] w0;

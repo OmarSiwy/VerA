@@ -402,48 +402,53 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     return true;
 }
 
-/// IEEE 1364-2005 §10.4.5: is function `idx` a constant function? Every
-/// name its body uses is its own (a formal, a local, its result) or a
-/// parameter, every function it calls is a constant function of the same
-/// module, and every system function it calls may be in a constant
-/// expression. Asked of a framed function; one it calls is framed early
-/// (`earlyFrame`) if need be. A recursive call is taken as constant while it
-/// is being asked about.
+/// IEEE 1364-2005 §10.4.5: is function `idx` a constant function?
+pub fn constantFunction(self: *Run, idx: u32) Error!bool {
+    return try notConstant(self, idx) == null;
+}
+
+/// Why function `idx` is no §10.4.5 constant function, or null when it is
+/// one: every name its body uses is its own (a formal, a local, its result)
+/// or a parameter, it holds no hierarchical reference, every function it
+/// calls is a constant function of the same module, and every system function
+/// it calls may be in a constant expression. Asked of a framed function; one
+/// it calls is framed early (`earlyFrame`) if need be. A recursive call is
+/// taken as constant while it is being asked about.
 /// ponytail: a system task is refused, not ignored as §10.4.5 says, and a
 /// named block's own locals are not the function's.
-pub fn constantFunction(self: *Run, idx: u32) Error!bool {
+pub fn notConstant(self: *Run, idx: u32) Error!?[]const u8 {
     const sub = &self.subs.items[idx];
-    if (sub.constant) |c| return c;
-    if (!sub.decl.is_function) return false;
+    if (sub.constant) |c| return if (c) null else "it is not a constant function";
+    if (!sub.decl.is_function) return "it is a task";
     sub.constant = true;
     const V = struct {
         r: *Run,
         sub: *const @import("root.zig").Sub,
-        ok: bool = true,
+        why: ?[]const u8 = null,
         pub fn expr(v: *@This(), x: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {
-            if (x == .none or !v.ok) return;
+            if (x == .none or v.why != null) return;
             const ex = &v.r.file.exprs;
             const f = v.sub.frame;
-            v.ok = switch (ex.tag(x)) {
+            v.why = switch (ex.tag(x)) {
                 .ident => if (v.r.lookup(f.scope, ex.strOf(x))) |at|
-                    (at >= f.first and at < f.first + f.count) or v.r.params.contains(at)
+                    if ((at >= f.first and at < f.first + f.count) or v.r.params.contains(at)) null else "it reads a name that is neither its own nor a parameter"
                 else
-                    false,
-                .hier_ident => false,
+                    "it reads a name that is neither its own nor a parameter",
+                .hier_ident => "it contains a hierarchical reference",
                 .call => if (v.r.sub_by_name.get(.{ .scope = v.sub.inst, .str = ex.strOf(x) })) |callee| blk: {
                     if (!v.r.subs.items[callee].framed) try @import("root.zig").earlyFrame(v.r, callee, ex.mainTok(x));
-                    break :blk try constantFunction(v.r, callee);
-                } else false,
-                .sys_call => if (sys_fns.get(v.r.file.str(ex.strOf(x)))) |sf| sf.constant() else false,
-                else => true, // else: every other form is constant when its operands are
+                    break :blk if (try notConstant(v.r, callee) == null) null else "it calls a function that is not a constant function";
+                } else "it calls a function that is not a constant function",
+                .sys_call => if (sys_fns.get(v.r.file.str(ex.strOf(x)))) |sf| if (sf.constant()) null else "it calls a system function no constant expression may" else "it calls a system function no constant expression may",
+                else => null, // else: every other form is constant when its operands are
             };
             var buf: [3]Ast.ExprId = undefined;
             for (ex.children(x, &buf)) |c| try v.expr(c, .read);
         }
         pub fn stmt(v: *@This(), st: Ast.StmtId) Error!void {
-            if (st == .none or !v.ok) return;
+            if (st == .none or v.why != null) return;
             if (v.r.file.stmt(st) == .sys_task) {
-                v.ok = false;
+                v.why = "it enables a system task";
                 return;
             }
             try v.r.file.stmtEdges(st, v);
@@ -451,8 +456,8 @@ pub fn constantFunction(self: *Run, idx: u32) Error!bool {
     };
     var v: V = .{ .r = self, .sub = sub };
     try v.stmt(sub.decl.body);
-    sub.constant = v.ok;
-    return v.ok;
+    sub.constant = v.why == null;
+    return v.why;
 }
 
 // Bare unsized numbers are prohibited by §5.1.14. Its application to
