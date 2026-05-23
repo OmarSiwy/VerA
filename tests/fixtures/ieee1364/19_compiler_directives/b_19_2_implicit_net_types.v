@@ -19,7 +19,6 @@
 //   p_reset (`resetall, then only `timescale): wire again, 1 vs 0 -> x
 // Read at time 1 in each parent, printed in order by distinct delays.
 //! inherited IEEE 1364-2005 19.2 19.6
-//! xfail VerA declares no implicit net: an undeclared identifier in a port connection is "undeclared digital variable" (§4.5 gap, b_4_5_implicit_nets.v)
 `timescale 1ns/1ns
 module b_19_2_one(output o); assign o = 1'b1; endmodule
 module b_19_2_zero(output o); assign o = 1'b0; endmodule
