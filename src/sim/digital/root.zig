@@ -1553,6 +1553,9 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
     r.scope = src.scope;
     defer r.scope = scope;
     if (r.mixed and !compile.constantExpression(r, src.e)) return null;
+    // Parameters bind before any other name of the instance, so a name that
+    // does not resolve yet is no previously defined parameter.
+    if (unresolved(r, src.e)) |x| return r.exprFail(x, "§4.10.1: a parameter's value is a constant expression of numbers and previously defined parameters, and this name is neither");
     const value = try r.constant(src.e, p.main_tok);
     // §4.10.3: "module parameters shall not be assigned a constant
     // expression that includes any specify parameters".
@@ -1567,6 +1570,15 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         return try exec.normalize(r.arena, w, .{ .width = 32, .signed = true });
     };
     return value;
+}
+
+/// The first name in `e` that does not resolve in the current scope.
+fn unresolved(r: *Run, e: Ast.ExprId) ?Ast.ExprId {
+    const ex = &r.file.exprs;
+    if (ex.tag(e) == .ident) return if (r.lookup(r.scope, ex.strOf(e)) == null) e else null;
+    var buf: [3]Ast.ExprId = undefined;
+    for (ex.children(e, &buf)) |c| if (c != .none) if (unresolved(r, c)) |x| return x;
+    return null;
 }
 
 /// Does `e`, read in the current scope, name a specparam?
