@@ -373,7 +373,18 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
             const at = self.lookup(self.scope, ex.strOf(e)) orelse return false;
             return self.params.contains(at);
         },
-        .unary, .binary, .multi_concat, .ternary, .concat => {},
+        // §5: "constant bit-selects and part-selects of parameters" are
+        // constant; the base is a name, which the arm above judges.
+        .unary, .binary, .multi_concat, .ternary, .concat, .index, .range, .indexed_range => {},
+        // §10.4.5: "A constant function call shall be a function invocation
+        // of a constant function local to the calling module where the
+        // arguments to the function are constant expressions", "evaluated at
+        // elaboration time", so only while elaboration folds.
+        .call => {
+            if (self.growing == null) return false;
+            const idx = self.sub_by_name.get(.{ .scope = self.instanceOf(self.scope), .str = ex.strOf(e) }) orelse return false;
+            if (!self.subs.items[idx].framed or !(constantFunction(self, idx) catch false)) return false;
+        },
         // §17.7: a call that reads the clock is never constant, however
         // constant its (absent) arguments are. Without this `$time`
         // would be accepted as a replication count.
@@ -385,6 +396,59 @@ pub fn constantExpression(self: *Run, e: Ast.ExprId) bool {
     var buf: [3]Ast.ExprId = undefined;
     for (ex.children(e, &buf)) |c| if (!constantExpression(self, c)) return false;
     return true;
+}
+
+/// IEEE 1364-2005 §10.4.5: is function `idx` a constant function? Every
+/// name its body uses is its own (a formal, a local, its result) or a
+/// parameter, every function it calls is a constant function of the same
+/// module, and every system function it calls may be in a constant
+/// expression. Asked of a framed function; one it calls is framed early
+/// (`earlyFrame`) if need be. A recursive call is taken as constant while it
+/// is being asked about.
+/// ponytail: a system task is refused, not ignored as §10.4.5 says, and a
+/// named block's own locals are not the function's.
+pub fn constantFunction(self: *Run, idx: u32) Error!bool {
+    const sub = &self.subs.items[idx];
+    if (sub.constant) |c| return c;
+    if (!sub.decl.is_function) return false;
+    sub.constant = true;
+    const V = struct {
+        r: *Run,
+        sub: *const @import("root.zig").Sub,
+        ok: bool = true,
+        pub fn expr(v: *@This(), x: Ast.ExprId, _: Ast.SourceFile.Edge) Error!void {
+            if (x == .none or !v.ok) return;
+            const ex = &v.r.file.exprs;
+            const f = v.sub.frame;
+            v.ok = switch (ex.tag(x)) {
+                .ident => if (v.r.lookup(f.scope, ex.strOf(x))) |at|
+                    (at >= f.first and at < f.first + f.count) or v.r.params.contains(at)
+                else
+                    false,
+                .hier_ident => false,
+                .call => if (v.r.sub_by_name.get(.{ .scope = v.sub.inst, .str = ex.strOf(x) })) |callee| blk: {
+                    if (!v.r.subs.items[callee].framed) try @import("root.zig").earlyFrame(v.r, callee, ex.mainTok(x));
+                    break :blk try constantFunction(v.r, callee);
+                } else false,
+                .sys_call => if (sys_fns.get(v.r.file.str(ex.strOf(x)))) |sf| sf.constant() else false,
+                else => true, // else: every other form is constant when its operands are
+            };
+            var buf: [3]Ast.ExprId = undefined;
+            for (ex.children(x, &buf)) |c| try v.expr(c, .read);
+        }
+        pub fn stmt(v: *@This(), st: Ast.StmtId) Error!void {
+            if (st == .none or !v.ok) return;
+            if (v.r.file.stmt(st) == .sys_task) {
+                v.ok = false;
+                return;
+            }
+            try v.r.file.stmtEdges(st, v);
+        }
+    };
+    var v: V = .{ .r = self, .sub = sub };
+    try v.stmt(sub.decl.body);
+    sub.constant = v.ok;
+    return v.ok;
 }
 
 // Bare unsized numbers are prohibited by §5.1.14. Its application to
@@ -654,8 +718,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         .call => blk: {
             const inst = self.instanceOf(self.scope);
             const idx = self.sub_by_name.get(.{ .scope = inst, .str = ex.strOf(e) }) orelse return self.exprFail(e, "undeclared function");
+            if (!self.subs.items[idx].decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
+            if (!self.subs.items[idx].framed) try @import("root.zig").earlyFrame(self, idx, ex.mainTok(e));
             const sub = self.subs.items[idx];
-            if (!sub.decl.is_function) return self.exprFail(e, "§10.2: a task is enabled as a statement, not called in an expression");
             try checkArgs(self, sub.decl, ex.args(e), ex.mainTok(e));
             try self.call_subs.put(self.arena, e, idx - self.sub_base.get(inst).?);
             const result = self.values[sub.frame.result];
@@ -1089,15 +1154,20 @@ fn compileFork(self: *Run, body: []const Ast.StmtId, depth: u16) Error!void {
 /// entered by `.call`: every function, and every task with no timing control
 /// (§10.2.1 allows one in a task; §10.4.4 forbids it in a function).
 pub fn compileSubs(self: *Run) Error!void {
-    for (self.subs.items, 0..) |*sub, i| {
-        if (try timed(self, @intCast(i))) continue;
-        self.scope = sub.frame.scope;
-        self.in_function = sub.decl.is_function;
-        defer self.in_function = false;
-        sub.entry = position(self);
-        try compileStmt(self, sub.decl.body, 0);
-        _ = try append(self, .stop);
-    }
+    for (0..self.subs.items.len) |i| try compileSub(self, @intCast(i));
+}
+
+/// Subroutine `idx`'s body at a pc range of its own, unless it is a timed
+/// task, which is inlined where it is enabled.
+pub fn compileSub(self: *Run, idx: u32) Error!void {
+    if (try timed(self, idx)) return;
+    const sub = &self.subs.items[idx];
+    self.scope = sub.frame.scope;
+    self.in_function = sub.decl.is_function;
+    defer self.in_function = false;
+    sub.entry = position(self);
+    try compileStmt(self, sub.decl.body, 0);
+    _ = try append(self, .stop);
 }
 
 /// Task `idx`'s body compiled once, jumped over where it is emitted, for

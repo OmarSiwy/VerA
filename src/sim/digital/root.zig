@@ -961,6 +961,18 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // parameters are the analog block's alone (VAMS §7.2.2): this engine holds
     // no parameter of those kinds, and a digital read of one is undeclared.
     for (m.defparams) |d| try r.defparams.put(arena, .{ .scope = scope, .str = d.path }, d);
+    // §10: the instance's tasks and functions, named before its parameters
+    // so a §10.4.5 constant function call in one can find its function.
+    try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
+    for (m.tasks) |*t| {
+        // A mixed module's real-valued function is the analog side's to call
+        // (VAMS §4.7); this engine holds no real, so it declares none.
+        if (r.mixed and usesReal(t)) continue;
+        const entry = try r.sub_by_name.getOrPut(arena, .{ .scope = scope, .str = t.name });
+        if (entry.found_existing) return r.fail(t.main_tok, "duplicate task or function", .{});
+        entry.value_ptr.* = @intCast(r.subs.items.len);
+        try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = undefined });
+    }
     var positional: usize = 0;
     for (m.params) |p| {
         const pos = positional;
@@ -1010,17 +1022,12 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // IEEE 1364-2005 §10.2/§10.4: each task and function is a scope of this
     // instance holding its formals, its locals and a function's result: the
     // storage a static subroutine shares between activations (§10.2.3).
-    try r.sub_base.put(arena, scope, @intCast(r.subs.items.len));
-    for (m.tasks) |*t| {
-        // A mixed module's real-valued function is the analog side's to call
-        // (VAMS §4.7); this engine holds no real, so it declares none.
-        if (r.mixed and usesReal(t)) continue;
-        const f = try frame(r, t, scope);
-        const entry = try r.sub_by_name.getOrPut(arena, .{ .scope = scope, .str = t.name });
-        if (entry.found_existing) return r.fail(t.main_tok, "duplicate task or function", .{});
-        entry.value_ptr.* = @intCast(r.subs.items.len);
-        try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = f });
-    }
+    // Framed after the parameters its widths may read, unless a §10.4.5
+    // constant function call framed it first (`earlyFrame`).
+    for (r.subs.items[r.sub_base.get(scope).?..]) |*sub| if (!sub.framed) {
+        sub.frame = try frame(r, sub.decl, scope);
+        sub.framed = true;
+    };
     for (m.nets) |n| {
         // §7.2.1: a disciplined net is continuous, the analog solver's.
         if (r.mixed and (n.is_ground or continuous(r.file, n.discipline))) continue;
@@ -1765,8 +1772,12 @@ pub const Sub = struct {
     decl: *const Ast.Subroutine,
     inst: u32,
     frame: Frame,
+    /// `frame` is minted: every sub is once its instance is declared.
+    framed: bool = false,
     entry: u32 = 0,
     timed: ?bool = null,
+    /// A §10.4.5 constant function, once asked (`compile.constantFunction`).
+    constant: ?bool = null,
     /// Synchronous activations in progress.
     active: u32 = 0,
     /// Being inlined right now, which a timed task reaching itself would be.
@@ -1819,6 +1830,21 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
         _ = try mintVar(r, v);
     }
     return .{ .scope = scope, .ports = ports, .result = result, .first = first, .count = @as(u32, @intCast(g.items.len)) - first };
+}
+
+/// §10.4.5: function `idx`, called by a constant function call before its
+/// instance's frames exist (a parameter's value), framed, judged a constant
+/// function and compiled now, so `exec.callSync` can run it during
+/// elaboration.
+pub fn earlyFrame(r: *Run, idx: u32, tok: u32) Error!void {
+    const sub = &r.subs.items[idx];
+    sub.frame = try frame(r, sub.decl, sub.inst);
+    sub.framed = true;
+    if (!try compile.constantFunction(r, idx))
+        return r.fail(tok, "§10.4.5: a function called during elaboration is a constant function, which uses only its own variables and parameters", .{});
+    const saved = r.scope;
+    defer r.scope = saved;
+    try compile.compileSub(r, idx);
 }
 
 /// VAMS §3.7's port merge: a wire or tri joined to a wreal port becomes one
@@ -2429,6 +2455,43 @@ test "§12.1.2 an instance array is one instance per element, each connected" {
         \\leaf u[1:0](r);
         \\endmodule
     , "across an instance array");
+}
+
+// IEEE 1364-2005 §10.4.5's clogb2, per instance: ceil(log2(421)) = 9 and
+// ceil(log2(256)) = 8, so `address` is 9 and 8 bits wide. The call leaves the
+// function's variables as it found them, so a second call at run time reads
+// clogb2(5) = 3 from a fresh `value`.
+test "§10.4.5 a constant function call in a parameter's value runs at elaboration" {
+    try expectRun(
+        \\module ram_model;
+        \\parameter ram_depth = 256;
+        \\localparam addr_width = clogb2(ram_depth);
+        \\reg [addr_width - 1:0] address;
+        \\function integer clogb2;
+        \\  input [31:0] value;
+        \\  begin
+        \\    value = value - 1;
+        \\    for (clogb2 = 0; value > 0; clogb2 = clogb2 + 1)
+        \\      value = value >> 1;
+        \\  end
+        \\endfunction
+        \\initial #1 $display("%0d %0d %b", addr_width, clogb2(5), address);
+        \\endmodule
+        \\module top;
+        \\ram_model #(421) a();
+        \\ram_model b();
+        \\endmodule
+    , "9 3 xxxxxxxxx\n8 3 xxxxxxxx\n");
+    try expectRejected(
+        \\module m;
+        \\reg [3:0] g;
+        \\function integer f;
+        \\  input integer x;
+        \\  f = x + g;
+        \\endfunction
+        \\localparam P = f(1);
+        \\endmodule
+    , "§10.4.5");
 }
 
 // IEEE 1364-2005 §4.5 with §19.2: an implicit net takes the `default_nettype
