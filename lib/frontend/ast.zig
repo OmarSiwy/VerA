@@ -504,6 +504,9 @@ pub const ParamDecl = struct {
     ty: Type, // §3.4.1 (`.unspecified` ⇒ infer from `default`)
     default: ExprId, // §3.4 default expression (constant_mintypmax_expression)
     is_local: bool = false, // §3.4.5 localparam
+    /// A.2.1.1 `parameter signed`: IEEE 1364-2005 §12.2 converts an override
+    /// to a signed value.
+    is_signed: bool = false,
     /// IEEE 1364-2005 §4.10.3 a module-body `specparam`, kept as a
     /// `localparam` (`is_local`) that no module parameter may read.
     is_spec: bool = false,

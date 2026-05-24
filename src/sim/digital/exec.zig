@@ -475,7 +475,7 @@ fn convertSlot(self: *Run, a: std.mem.Allocator, slot: u32, target: Type) Error!
     return convertValue(a, self.values[slot], self.reals.contains(slot), target);
 }
 
-fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
+pub fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
     if (target.real) return if (from_real) v else realLiteral(a, realOfInt(v));
     const i = if (from_real) try intOfReal(a, @bitCast(v.values()[0])) else v;
     return normalize(a, i, .{ .width = target.width, .signed = i.signed });

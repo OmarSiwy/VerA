@@ -42,7 +42,7 @@ pub fn parseAliasparam(self: *Parser) Error!Ast.AliasParam {
 pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!void {
     const is_local = self.peek() == .kw_localparam;
     self.pos += 1;
-    _ = self.eat(.kw_signed);
+    const signed = self.eat(.kw_signed);
     // §3.4.1: no type keyword is `.unspecified`, inferred from the default
     // by lowering.
     const ty = varType(self.peek()) orelse .unspecified;
@@ -75,6 +75,7 @@ pub fn parseParamDecl(self: *Parser, out: *std.ArrayList(Ast.ParamDecl)) Error!v
             .ty = ty,
             .default = default,
             .is_local = is_local,
+            .is_signed = signed,
             .dims = dims,
             .packed_range = packed_range,
             .ranges = ranges.items,
