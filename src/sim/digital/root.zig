@@ -1641,6 +1641,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         .block => |b| {
             r.scope = scope;
+            for (b.gen.defparams) |d| try r.defparams.put(r.arena, .{ .scope = scope, .str = d.path }, d);
             try declareEvents(r, b.gen.events, tok);
             try declareDrivers(r, e, scope, b.gen.*);
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
