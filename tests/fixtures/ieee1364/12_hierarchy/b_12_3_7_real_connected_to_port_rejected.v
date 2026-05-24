@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 12.3.7
 //! reject E1100
 //! reject a real cannot be connected to a port
-//! xfail VerA accepts a real variable connected directly to a port
 module m(a, y);
   input a;
   output y;

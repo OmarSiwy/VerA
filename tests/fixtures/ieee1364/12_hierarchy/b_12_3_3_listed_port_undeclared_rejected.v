@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 12.3.3 12.1
 //! reject E1100
 //! reject has no direction declaration
-//! xfail VerA accepts a listed port that has no input, output or inout declaration
 module m(a, b);
   input a;
 endmodule

@@ -1124,6 +1124,14 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
     // body `wire w;` on the same name was folded into by the parser.
     for (m.ports, 0..) |p, i| {
         if (r.mixed and continuous(r.file, p.discipline)) continue; // §7.2.1 continuous
+        if (p.external_name != .none and !p.concat_rest) for (m.ports[0..i]) |q| if (q.external_name == p.external_name)
+            return r.fail(p.main_tok, "§12.3.2: a port defined twice in the list of ports: `{s}`", .{r.file.str(p.external_name)});
+        if (p.direction == .unspecified) return r.fail(p.main_tok, "§12.3.3: port `{s}` has no direction declaration", .{r.file.str(p.name)});
+        // §12.3.3: "the range specification between the two declarations of
+        // a port shall be identical".
+        if (p.range) |a| if (p.type_range) |b| if (try r.declaredBound(a.msb, p.main_tok) != try r.declaredBound(b.msb, p.main_tok) or
+            try r.declaredBound(a.lsb, p.main_tok) != try r.declaredBound(b.lsb, p.main_tok))
+            return r.fail(p.main_tok, "§12.3.3: the net declaration's range differs from its port declaration's: `{s}`", .{r.file.str(p.name)});
         const bind = if (i < binds.len) binds[i] else PortBind.open;
         const width = if (p.kind == .wreal) 64 else if (p.range orelse p.type_range) |range| try r.declaredWidth(range, p.main_tok) else 1;
         // IEEE 1364-2005 §12.3.3: an output port "declared as a variable"
@@ -1589,8 +1597,10 @@ fn paramValue(r: *Run, p: Ast.ParamDecl, scope: u32, over: []const Ast.ParamOver
         var at = scope;
         var path: []const u8 = r.file.str(p.name);
         while (true) {
-            if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d|
+            if (r.file.strings.find(path)) |str| if (r.defparams.get(.{ .scope = at, .str = str })) |d| {
+                if (p.is_local) return r.fail(d.main_tok, "§12.2: `{s}` is a local parameter, which a defparam cannot override", .{r.file.str(p.name)});
                 break :blk .{ .e = d.value, .scope = at };
+            };
             if (isRoot(r, at)) {
                 // §12.2.1: a defparam in one top-level module may name a
                 // parameter under another by its full hierarchical name.
@@ -1681,6 +1691,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
         const bound = try binding.child(r, scope, inst);
         const child = try connectable(r, &r.file.modules[bound.def], inst.main_tok);
+        try checkLists(r, child, inst);
         const binds_out = try arena.alloc(PortBind, child.ports.len);
         @memset(binds_out, .open);
         for (inst.ports, 0..) |conn, i| {
@@ -1695,7 +1706,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
                 if (index != null) return r.fail(conn.main_tok, "§12.1.2: a concatenated port across an instance array is not implemented by digital execution", .{});
                 var total: u32 = 0;
                 var last = first;
-                while (last < child.ports.len and child.ports[last].external_name == conn.name) : (last += 1)
+                while (last < child.ports.len and (last == first or child.ports[last].concat_rest)) : (last += 1)
                     total += try portWidth(r, child.ports[last]);
                 var lo = total;
                 for (child.ports[first..last], first..) |p, k| {
@@ -1726,6 +1737,35 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
         if (inst.name != .none and index == null) try r.instances.put(arena, .{ .scope = scope, .str = inst.name }, child_scope);
         try declare(r, e, child, child_scope, binds_out, inst.params, depth + 1);
         r.scope = scope;
+    }
+}
+
+/// IEEE 1364-2005 §12.2.2 and §12.3.6: an instance's parameter value
+/// assignments, and its port connections, are each all ordered or all named;
+/// a named one names a parameter (not a local one) or a port once; and no
+/// more ordered values are given than the module has parameters.
+fn checkLists(r: *Run, child: *const Ast.ModuleDecl, inst: *const Ast.Instance) Error!void {
+    for (inst.params, 0..) |o, i| {
+        if ((o.name == .none) != (inst.params[0].name == .none))
+            return r.fail(o.main_tok, "§12.2.2: a parameter value assignment mixes ordered and named parameter assignments", .{});
+        if (o.name == .none) continue;
+        const name = r.file.str(o.name);
+        for (inst.params[0..i]) |q| if (q.name == o.name) return r.fail(o.main_tok, "§12.2.2.2: parameter `{s}` is assigned twice", .{name});
+        const p = for (child.params) |p| {
+            if (p.name == o.name) break p;
+        } else return r.fail(o.main_tok, "§12.2.2.2: the module has no such parameter: `{s}`", .{name});
+        if (p.is_local) return r.fail(o.main_tok, "§12.2: `{s}` is a local parameter, which a parameter value assignment cannot override", .{name});
+    }
+    if (inst.params.len != 0 and inst.params[0].name == .none) {
+        var n: usize = 0;
+        for (child.params) |p| n += @intFromBool(!p.is_local);
+        if (inst.params.len > n) return r.fail(inst.params[n].main_tok, "§12.2.2.1: more parameter values than the module has parameters", .{});
+    }
+    for (inst.ports, 0..) |c, i| {
+        if ((c.name == .none) != (inst.ports[0].name == .none))
+            return r.fail(c.main_tok, "§12.3.6: an instance mixes ordered and named port connections", .{});
+        if (c.name == .none) continue;
+        for (inst.ports[0..i]) |q| if (q.name == c.name) return r.fail(c.main_tok, "§12.3.6: port `{s}` is connected twice", .{r.file.str(c.name)});
     }
 }
 
@@ -2005,9 +2045,13 @@ fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *cons
 
 /// A port by the name a named connection may use: its own, when the header
 /// gave it no external name.
+/// A concatenation with no external name has none (§12.3.6: it connects by
+/// position only).
 fn portByName(m: *const Ast.ModuleDecl, name: Ast.StrId) ?usize {
-    for (m.ports, 0..) |p, k| if (p.name == name and p.external_name == .none) return k;
-    for (m.ports, 0..) |p, k| if (p.external_name == name and (k + 1 == m.ports.len or m.ports[k + 1].external_name != name) and (k == 0 or m.ports[k - 1].external_name != name)) return k;
+    for (m.ports, 0..) |p, k| {
+        if (p.concat_rest or (k + 1 < m.ports.len and m.ports[k + 1].concat_rest)) continue;
+        if (if (p.external_name == .none) p.name == name else p.external_name == name) return k;
+    }
     return null;
 }
 
@@ -2023,6 +2067,9 @@ fn portWidth(r: *Run, p: Ast.Port) Error!u32 {
 fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
     if (conn.expr == .none) return .open;
     const ex = &r.file.exprs;
+    // §12.3.7: "The real data type shall not be directly connected to a port."
+    if (ex.tag(conn.expr) == .ident) if (r.lookup(scope, ex.strOf(conn.expr))) |at| if (r.reals.contains(at) and !r.net_of.contains(at))
+        return r.exprFail(conn.expr, "§12.3.7: a real cannot be connected to a port");
     // One whole net on the outside is a collapse, the only arm under which
     // the child's drive strengths reach the parent's resolution unchanged
     // (IEEE 1364 clause 12: a port is a connection). `declare` size-checks

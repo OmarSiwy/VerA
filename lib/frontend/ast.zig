@@ -702,6 +702,9 @@ pub const Port = struct {
     /// port is named by the net it carries. Several consecutive ports share one
     /// external name when the port expression is a concatenation (§6.5.1).
     external_name: StrId = .none,
+    /// A.1.3 this port_reference continues the previous one's port_expression,
+    /// a concatenation: `{c, d}` is two `Port`s, the second one `concat_rest`.
+    concat_rest: bool = false,
     /// A.2.1.2 `[ signed ]` on the direction or the net declaration of this
     /// port. §12.3.3: "If either ... is declared as signed, then the other
     /// shall also be considered signed."
