@@ -100,11 +100,11 @@ fn listOr(r: *Run, list: ?[]const Ast.StrId, parent_lib: Ast.StrId) Error![]cons
     return r.arena.dupe(Ast.StrId, &.{parent_lib});
 }
 
-/// The design's top: the `design` cell of the configuration no `use` clause
-/// names (§13.4.4: "the specified cell shall be the top-level module,
+/// The design's tops: the `design` cells of the configuration no `use`
+/// clause names (§13.4.4: "the specified cell shall be the top-level module,
 /// regardless of the presence of any uninstantiated cells"), or null when the
-/// source holds no configuration. Records the root's `Ctx`.
-pub fn top(r: *Run) Error!?u32 {
+/// source holds no configuration. Records scope 0's `Ctx`.
+pub fn top(r: *Run) Error!?[]const u32 {
     const configs = r.file.configs;
     var root_cfg: ?u32 = null;
     for (configs, 0..) |c, i| {
@@ -117,20 +117,22 @@ pub fn top(r: *Run) Error!?u32 {
         return null;
     };
     const c = configs[ci];
-    // ponytail: one top cell; §13.3.1.1's list of several needs an engine
-    // with several roots.
-    if (c.design.len != 1) return r.fail(c.main_tok, "digital execution requires exactly one top-level module", .{});
-    const d = try designCell(r, ci);
-    try r.binds.put(r.arena, 0, .{ .cfg = ci, .path = r.file.str(c.design[0].cell), .liblist = defaultList(c) });
-    return d;
+    const defs = try r.arena.alloc(u32, c.design.len);
+    for (c.design, defs) |cell, *d| d.* = try designCell(r, ci, cell);
+    try r.binds.put(r.arena, 0, rootCtx(r, ci, defs[0]));
+    return defs;
 }
 
-/// §13.3.1.1 a config's (one) design cell: "If the library identifier is
-/// omitted, then the library that contains the config shall be used".
-fn designCell(r: *Run, ci: u32) Error!u32 {
-    const c = r.file.configs[ci];
-    const d = c.design[0];
-    return module(r, if (d.lib != .none) d.lib else r.cfg_lib[ci], d.cell, c.main_tok);
+/// The `Ctx` of config `ci`'s top-level module `def`: §13.3.1.3's instance
+/// names start at "the name of the cell in the design statement".
+pub fn rootCtx(r: *const Run, ci: u32, def: u32) Ctx {
+    return .{ .cfg = ci, .path = r.file.str(r.file.modules[def].name), .liblist = defaultList(r.file.configs[ci]) };
+}
+
+/// §13.3.1.1 a config's design cell: "If the library identifier is omitted,
+/// then the library that contains the config shall be used".
+fn designCell(r: *Run, ci: u32, d: Ast.LibCell) Error!u32 {
+    return module(r, if (d.lib != .none) d.lib else r.cfg_lib[ci], d.cell, r.file.configs[ci].main_tok);
 }
 
 fn defaultList(c: Ast.ConfigDecl) ?[]const Ast.StrId {
@@ -204,10 +206,8 @@ pub fn child(r: *Run, parent: u32, inst: *const Ast.Instance) Error!struct { def
                 };
                 const s = r.file.configs[sub];
                 if (s.design.len != 1) return r.fail(s.main_tok, "a configuration bound to an instance names one design cell (IEEE 1364-2005 §13.3.2)", .{});
-                return .{
-                    .def = try designCell(r, sub),
-                    .ctx = .{ .cfg = sub, .path = r.file.str(s.design[0].cell), .liblist = defaultList(s) },
-                };
+                const d = try designCell(r, sub, s.design[0]);
+                return .{ .def = d, .ctx = rootCtx(r, sub, d) };
             };
             if (u.config) return r.fail(x.main_tok, "library `{s}` holds no configuration `{s}`", .{ r.file.str(lib), r.file.str(u.cell) });
             // §13.3.1.6 "The use clause has no effect on the current value of

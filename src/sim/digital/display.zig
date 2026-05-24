@@ -528,7 +528,7 @@ pub fn emitScope(self: *Run) Error!void {
     while (true) {
         chain[depth] = s;
         depth += 1;
-        if (s == 0 or depth == chain.len) break;
+        if (self.scope_info.items[s].parent == s or s == 0 or depth == chain.len) break;
         s = self.scope_info.items[s].parent;
     }
     while (depth != 0) {
