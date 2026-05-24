@@ -206,6 +206,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
 
     var params: std.ArrayList(Ast.ParamDecl) = .empty;
     var vars: std.ArrayList(Ast.VarDecl) = .empty;
+    var events: std.ArrayList(Ast.StrId) = .empty;
     while (true) {
         const before_attrs = self.pos;
         const attr_mark = self.attrs.items.len;
@@ -218,6 +219,25 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
             .kw_integer, .kw_real, .kw_string, .kw_realtime, .kw_time => {
                 try parse_decl.parseVarDecl(self, &vars);
                 _ = try self.expect(.semicolon);
+            },
+            // IEEE 1364-2005 A.2.8 `block_item_declaration`'s digital arms,
+            // which A.6.3 gives a named block only.
+            .kw_reg => if (self.digital and blk.name != .none) try parse_decl.parseRegDecl(self, &vars) else {
+                self.pos = before_attrs;
+                self.attrs.shrinkRetainingCapacity(attr_mark);
+                break;
+            },
+            .kw_event => if (self.digital and blk.name != .none) {
+                self.pos += 1;
+                while (true) {
+                    try events.append(self.arena, try self.expectIdent());
+                    if (!self.eat(.comma)) break;
+                }
+                _ = try self.expect(.semicolon);
+            } else {
+                self.pos = before_attrs;
+                self.attrs.shrinkRetainingCapacity(attr_mark);
+                break;
             },
             else => { // else: not a declaration: the block's statements start here
                 // The attributes just read prefix the first statement
@@ -248,6 +268,7 @@ fn parseSeqBlock(self: *Parser) Error!Ast.StmtId {
 
     blk.params = params.items;
     blk.vars = vars.items;
+    blk.events = events.items;
     blk.body = body.items;
     return self.file.addStmt(self.arena, .{ .block = blk }, tok);
 }

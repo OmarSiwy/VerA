@@ -1345,6 +1345,9 @@ pub const SeqBlock = struct {
     parallel: bool = false,
     params: []const ParamDecl = &.{},
     vars: []const VarDecl = &.{},
+    /// IEEE 1364-2005 A.2.8 a named block's `event` declarations; only a
+    /// digital parse keeps one.
+    events: []const StrId = &.{},
     body: []const StmtId = &.{},
     /// A generate block's module instances (§6.6). The digital engine decides a
     /// digital parse's scheme; elaboration gates an analog if-generate's

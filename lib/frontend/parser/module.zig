@@ -741,45 +741,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             }
             _ = try self.expect(.semicolon);
         },
-        // An analog parse keeps Table 7-1's integer mapping and its 31-bit
-        // width gate. A digital parse keeps packed width and signedness.
-        .kw_reg => {
-            const tok = self.pos;
-            self.pos += 1;
-            const signed = self.digital and self.eat(.kw_signed);
-            const range: ?Ast.Dim = try parse_decl.optDim(self);
-            if (!self.digital) if (range) |d| if (parse_decl.literalWidth(self, d)) |w| {
-                if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
-            };
-            while (true) {
-                const name_tok = self.pos;
-                const name = try self.expectIdent();
-                // A.2.1.3 reg_declaration ends in A.2.3's
-                // list_of_variable_identifiers, whose A.2.2.1 `variable_type`
-                // takes dimensions and an initializer:
-                //
-                //     variable_type ::=
-                //         variable_identifier { dimension } [ = constant_assignment_pattern ]
-                //         | variable_identifier = constant_expression
-                //
-                // `integer`/`time` reach the same production through
-                // `parseVarDecl`, so neither is gated on `digital` here.
-                const dims = try parse_decl.parseDims(self);
-                const value = if (self.eat(.assign_eq)) try parse_expr.parseExpr(self) else Ast.ExprId.none;
-                try b.vars.append(self.arena, .{
-                    .name = name,
-                    .ty = .integer,
-                    .main_tok = name_tok,
-                    .storage = .reg,
-                    .packed_range = range,
-                    .is_signed = signed,
-                    .dims = dims,
-                    .init = value,
-                });
-                if (!self.eat(.comma)) break;
-            }
-            _ = try self.expect(.semicolon);
-        },
+        .kw_reg => try parse_decl.parseRegDecl(self, &b.vars),
         // A.3.1 `gate_instantiation ::= … | pass_switchtype
         // pass_switch_instance { , pass_switch_instance } ;`: the two
         // A.3.4 switch spellings with tags of their own. The other eight
