@@ -15,7 +15,6 @@
 // design statement names work.gate, so top.u is bound to gate. It prints its
 // %m and %l (§13.6): "gate top.u work.gate". top finishes at t=1.
 //! inherited IEEE 1364-2005 13.3.2
-//! xfail every config's design cells become tops ("digital execution requires exactly one top-level module"), and `use ...:config` binds nothing
 `timescale 1ns/1ns
 config sub;
   design work.gate;
