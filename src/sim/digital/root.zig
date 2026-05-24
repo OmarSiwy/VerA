@@ -1475,9 +1475,9 @@ fn genvarOf(file: *const Ast.SourceFile, m: *const Ast.ModuleDecl, f: anytype) ?
 /// (§12.1.1: an instance in an unselected arm still makes its module no
 /// top-level one).
 /// A block's events, drivers and processes are declared in the scope it is
-/// elaborated in (`Ast.GenItems`).
-/// ponytail: an if or case generate's block is not a scope of its own, so its
-/// names are the enclosing scope's, as its hoisted nets are. A part-select bound written with a genvar is folded once, with
+/// elaborated in (`Ast.GenItems`), which is the block's own (`armScope`).
+/// ponytail: the parser hoists a generate block's nets to the module, so they
+/// are the enclosing instance's names. A part-select bound written with a genvar is folded once, with
 /// the first iteration's value; a bit-select is read per iteration.
 fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.StmtId, depth: u16) Error!void {
     if (s == .none) return;
@@ -1487,7 +1487,8 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         .if_stmt => |i| {
             r.scope = scope;
             const cond = (try r.constant(i.cond, tok)).truth();
-            try generate(r, e, m, scope, if (cond == .one) i.then_s else i.else_s, depth);
+            const arm = if (cond == .one) i.then_s else i.else_s;
+            try generate(r, e, m, try armScope(r, scope, arm, tok), arm, depth);
         },
         // §12.4.2: "the case_generate_item selected is the one whose
         // expression matches the case expression", the default otherwise.
@@ -1505,7 +1506,8 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                     if ((try exec.convert(r.arena, value, ty)).equality(.case_equal, try exec.convert(r.arena, l, ty)) == .one) chosen = arm.body;
                 }
             }
-            try generate(r, e, m, scope, chosen orelse fallback, depth);
+            const arm = chosen orelse fallback;
+            try generate(r, e, m, try armScope(r, scope, arm, tok), arm, depth);
         },
         // §12.4.1: the genvar steps through its values in the module's scope,
         // and each iteration's block is a scope of its own, `name[value]`, in
@@ -1524,7 +1526,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             const at = r.names.get(.{ .scope = scope, .str = gv }) orelse try genvarSlot(r, e, gv, tok);
             try setGenvar(r, e, at, try r.constant(r.file.stmt(f.init).assign.value, tok));
             const name: Ast.StrId = switch (r.file.stmt(f.body)) {
-                .block => |b| b.name,
+                .block => |b| b.gen_name,
                 else => .none, // else: a lone item is an unnamed generate block
             };
             var seen: std.ArrayList(i64) = .empty;
@@ -1554,6 +1556,22 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         },
         else => return r.fail(tok, "only generate constructs of instances are implemented by digital execution", .{}), // else: analog behaviour inside a generate block
     }
+}
+
+/// IEEE 1364-2005 §12.4.2/§12.4.3 the scope a conditional generate's chosen
+/// block `s` is elaborated in: a new one under `scope`, named as the block or
+/// `genblk<n>`, unless `s` is no block or a directly nested construct (the
+/// parser leaves those unnamed), which is not a scope.
+fn armScope(r: *Run, scope: u32, s: Ast.StmtId, tok: u32) Error!u32 {
+    if (s == .none) return scope;
+    const name = switch (r.file.stmt(s)) {
+        .block => |b| b.gen_name,
+        else => return scope, // else: an empty arm declares nothing
+    };
+    if (name == .none) return scope;
+    const at = try newScope(r, tok);
+    try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = r.scope_info.items[scope].def, .lexical = true });
+    return at;
 }
 
 /// A genvar's storage in the current scope: a 32-bit signed constant
