@@ -22,6 +22,9 @@ pub const spice_cards = @import("spice_cards.zig");
 /// digital runner.
 pub const wreal = @import("wreal.zig");
 
+/// IEEE 1364-2005 §13.2 library map files.
+pub const libmap = @import("libmap.zig");
+
 test {
     _ = Integer;
     _ = token;
@@ -32,4 +35,5 @@ test {
     _ = constfold;
     _ = spice_cards;
     _ = wreal;
+    _ = libmap;
 }

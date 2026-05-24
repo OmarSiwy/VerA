@@ -375,9 +375,7 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
         sc.* = .{ .line = line.written(), .parent = info.parent, .lexical = info.lexical, .child = !(info.lexical and info.index == null) };
         var_start[s] = @intCast(vars.items.len);
         if (info.lexical) continue;
-        const m = for (r.file.modules) |*m| {
-            if (m.name == info.module) break m;
-        } else unreachable; // every instance scope was minted from a module
+        const m = &r.file.modules[info.def];
         var names: std.ArrayList(Ast.StrId) = .empty;
         for (m.ports) |p| try names.append(a, p.name);
         for (m.nets) |n| try names.append(a, n.name);
