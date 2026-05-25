@@ -33,7 +33,9 @@
 //
 // √2/2 = 0.7071067811865476, π/4·√2/2 = 0.5553603672697958,
 // 3π/4·√2/2 = 1.6660811018093873. At f = 0 the delay is transparent,
-// e^0 = 1, the DC gain §4.5.7 gives in operating point analyses. A transparent
+// e^0 = 1, the DC gain §4.5.7 gives in operating point analyses, so each row
+// reads its DC partial EXACTLY (tol=0): 1, 1.5 (= 2·0.75, dyadic), 1, and 0
+// for the charge (jω·C at ω = 0). A transparent
 // small-signal delay (the answer before this fixture) reads (1, 0) at every f
 // and fails every non-zero row; a phase of +jωtd fails every imaginary part.
 // The operating point itself is the clause's DC sentence, which the model can
@@ -43,7 +45,10 @@
 //! lrm 4.5.7
 //! bias V(in) = 0.75
 //! print none
-//! acdyn (a,in) f=0 re=1 im=0
+//! acdyn (a,in) f=0 re=1 im=0 tol=0
+//! acdyn (b,in) f=0 re=1.5 im=0 tol=0
+//! acdyn (c,in) f=0 re=1 im=0 tol=0
+//! acdyn (d,in) f=0 re=0 im=0 tol=0
 //! acdyn (a,in) f=125M re=0.7071067811865476 im=-0.7071067811865476
 //! acdyn (a,in) f=250M re=0 im=-1
 //! acdyn (a,in) f=375M re=-0.7071067811865476 im=-0.7071067811865476

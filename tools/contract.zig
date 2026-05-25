@@ -752,8 +752,13 @@ pub const AcPhasor = struct {
 ///     A(ω)[slot] = G[slot] + jω·C[slot] + out[k]
 ///
 /// with G and C from the same `x` and `sim` passed to `acDyn`; `out[k]`
-/// already carries the jω of a charge an operator feeds. Pure, so a host may
-/// call it per frequency, in any order. A superset: a listed slot may read 0.
+/// already carries the jω of a charge an operator feeds. `F` is `f64` or
+/// `@Vector(W, f64)`: `omega` holds W frequencies and each `out[k]` part their
+/// W terms, lane for lane, with no branch across lanes. At ω = 0 `out[k].re`
+/// is exactly the partial the operator's DC form gives (absdelay 1, a
+/// `laplace_*` H(0), a `zi_*` H(1), times the chain rule around it) and
+/// `out[k].im` is 0. Pure, so a host may call it per frequency, in any
+/// order. A superset: a listed slot may read 0.
 /// `validate` checks the list is sorted and unique, inside `jac_pattern |
 /// q_pattern`, and every column in `derivReads`.
 pub fn acDynSlots(comptime D: type) []const u32 {
@@ -769,7 +774,7 @@ fn acDynError(comptime D: type) ?[]const u8 {
     if (info != .array or info.array.child != u32) return name ++ ".ac_dyn_slots must be [k]u32";
     const f = @typeInfo(@TypeOf(D.acDyn));
     if (f != .@"fn" or f.@"fn".params.len != 7 or f.@"fn".params[0].type != type)
-        return name ++ ".acDyn: expected fn (comptime F: type, *const Model, InstancePtr, *const [n_u]f64, SimState, f64, *[ac_dyn_slots.len]std.math.Complex(F)) void";
+        return name ++ ".acDyn: expected fn (comptime F: type, *const Model, InstancePtr, *const [n_u]f64, SimState, F, *[ac_dyn_slots.len]std.math.Complex(F)) void";
     const n = nU(D);
     for (D.ac_dyn_slots, 0..) |s, i| {
         if (s >= n * n) return name ++ ".ac_dyn_slots: a slot at or past n_u * n_u";
@@ -1647,7 +1652,7 @@ pub fn InstancePtr(comptime D: type) type {
 ///                                a §9.7 `$finish`/`$stop`/`$fatal` exits the process
 ///   noisePsd / acStim            at any state vector, positional on
 ///                                `noise_gens` / `ac_gens`
-///   acDyn(F, ..., omega, &out)   per small-signal frequency, positional on
+///   acDyn(F, ..., omega, &out)   per small-signal frequency (or lane of them), positional on
 ///                                `ac_dyn_slots` (`acDynSlots`)
 ///   nextBreakpoint / pendingBreakpoint / delays
 ///                                transient breakpoint scheduling
@@ -2603,8 +2608,9 @@ const MockAll = struct {
     }
     // §4.5.7 a 1 ns delay on the (p, n) partial.
     pub const ac_dyn_slots = [_]u32{1};
-    pub fn acDyn(comptime F: type, _: *const Model, _: *const Instance, _: *const [n_u]f64, _: SimState, omega: f64, out: *[ac_dyn_slots.len]std.math.Complex(F)) void {
-        out[0] = .init(@floatCast(@cos(omega * 1e-9)), @floatCast(-@sin(omega * 1e-9)));
+    pub fn acDyn(comptime F: type, _: *const Model, _: *const Instance, _: *const [n_u]f64, _: SimState, omega: F, out: *[ac_dyn_slots.len]std.math.Complex(F)) void {
+        const td: F = if (@typeInfo(F) == .vector) @splat(1e-9) else 1e-9;
+        out[0] = .init(@cos(omega * td), -@sin(omega * td));
     }
     pub fn derive(comptime _: type, _: *Model) void {}
     pub fn checkShape(m: *const Model) ?[]const u8 {
@@ -2792,7 +2798,7 @@ test "ac_dyn_slots: each rule refuses its own mistake" {
                 pub const jac_pattern = [2]u64{ 0b10, 0b00 };
                 pub const deriv_reads: u64 = dr;
                 pub const ac_dyn_slots = slots[0..slots.len].*;
-                pub fn acDyn(comptime F: type, _: *const void, _: *const void, _: *const [2]f64, _: SimState, _: f64, _: *[slots.len]std.math.Complex(F)) void {}
+                pub fn acDyn(comptime F: type, _: *const void, _: *const void, _: *const [2]f64, _: SimState, _: F, _: *[slots.len]std.math.Complex(F)) void {}
             };
         }
     };
