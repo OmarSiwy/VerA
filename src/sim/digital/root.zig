@@ -1847,8 +1847,7 @@ fn readsSpecparam(r: *Run, e: Ast.ExprId) bool {
 fn instantiate(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, depth: u16) Error!void {
     r.scope = scope;
     const range = inst.range orelse return instantiateOne(r, e, scope, inst, depth, null);
-    if (findUdp(r.file, inst.module) != null)
-        return r.fail(inst.main_tok, "§12.1.2: arrays of UDP instances are not implemented by digital execution", .{});
+    if (findUdp(r.file, inst.module)) |u| return declareUdp(r, e, scope, inst, u);
     const msb = try r.declaredBound(range.msb, inst.main_tok);
     const lsb = try r.declaredBound(range.lsb, inst.main_tok);
     var k = @min(msb, lsb);
@@ -2196,32 +2195,75 @@ fn findUdp(file: *const Ast.SourceFile, name: Ast.StrId) ?*const Ast.UdpDecl {
     return null;
 }
 
-/// IEEE 1364-2005 §8 one UDP instance: one more driver of its output net, as
-/// a gate is (§8.1: "UDPs are instantiated exactly the same way as gate
-/// primitives"), whose value is its table's. §8.5: a sequential UDP's state
-/// starts at its `initial` value, or x, and that value is on the output at
-/// time 0 whatever the instance delay.
+/// IEEE 1364-2005 §8 one UDP instance, or §8.6's array of them: one more
+/// driver of its output net per instance, as a gate is (§8.1: "UDPs are
+/// instantiated exactly the same way as gate primitives"), whose value is its
+/// table's. An array's instances split a vector terminal one bit each, the
+/// leftmost index the most significant (§7.1.6). §8.5: a sequential UDP's
+/// state starts at its `initial` value, or x, and that value is on the output
+/// at time 0 whatever the instance delay.
 fn declareUdp(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, u: *const Ast.UdpDecl) Error!void {
     const net_mod = @import("net.zig");
-    if (inst.ports.len != u.ports.len) return r.fail(inst.main_tok, "§8: a UDP instance connects its output and every input, in order", .{});
+    const tok = inst.main_tok;
+    try checkUdp(r, u);
+    if (inst.ports.len != u.ports.len) return r.fail(tok, "§8: a UDP instance connects its output and every input, in order", .{});
     for (inst.ports) |c| if (c.name != .none or c.expr == .none)
         return r.fail(c.main_tok, "§8: a UDP instance connects its terminals by position, none left open", .{});
-    const net = r.net_of.get(try r.scalarSlot(inst.ports[0].expr)) orelse return r.fail(inst.main_tok, "a UDP's output terminal must be a net", .{});
-    if (e.nets.items[net].resolved.width != 1) return r.fail(inst.main_tok, "only scalar UDP terminals are implemented", .{});
+    // `inv #(2, 3) g(q, a)` parses as a parameter value assignment; on a
+    // UDP it is A.5.4's `delay2`.
+    var delay = inst.delay;
+    if (inst.params.len != 0) {
+        if (inst.params.len > 2) return r.fail(tok, "§8.6: a UDP instance takes at most two delays", .{});
+        for (inst.params) |o| if (o.name != .none) return r.fail(o.main_tok, "§8.6: a UDP instance's `#( )` is a delay, not a parameter value assignment", .{});
+        delay = .{ .rise = inst.params[0].value, .fall = inst.params[inst.params.len - 1].value, .off = if (inst.params.len == 1) inst.params[0].value else .none };
+    }
+    const out = try sink(r, e, inst.ports[0].expr, tok);
+    const lanes: u32 = if (inst.range) |rg| try r.declaredWidth(rg, tok) else 1;
+    if (out.width != 1 and out.width != lanes) return r.fail(tok, "§8.6: a UDP's output terminal is one bit, or one per instance of an array", .{});
+    const wide = e.nets.items[out.net].resolved.width != 1;
     const rows = (try net_mod.udpRows(r.arena, u)) orelse return r.fail(u.main_tok, "a UDP table entry needs one field per input", .{});
     const ins = try r.arena.alloc(Ast.ExprId, u.ports.len - 1);
     for (inst.ports[1..], ins) |c, *in| in.* = c.expr;
-    const prev = try r.arena.alloc(Int.Bit, ins.len);
-    @memset(prev, .x);
     const ex = &r.file.exprs;
     const state: Int.Bit = if (u.init == .none) .x else switch (ex.tag(u.init)) {
         .int_literal => if (ex.intValue(u.init) == 0) .zero else .one,
         .logic_literal => ex.logicValue(u.init).bit(0),
         else => return r.exprFail(u.init, "a UDP initial value is 0, 1 or x"), // else: A.5.3 init_val is a literal
     };
-    const udp = try r.arena.create(Udp);
-    udp.* = .{ .rows = rows, .sequential = u.is_sequential, .ins = ins, .prev = prev, .state = state };
-    try e.wires.append(r.arena, .{ .net = net, .scope = scope, .source = .{ .udp = udp }, .s0 = inst.strength0, .s1 = inst.strength1, .delay = inst.delay, .tok = inst.main_tok });
+    for (0..lanes) |j| {
+        const lane: u32 = @intCast(lanes - 1 - j);
+        const prev = try r.arena.alloc(Int.Bit, ins.len);
+        @memset(prev, .x);
+        const udp = try r.arena.create(Udp);
+        udp.* = .{
+            .rows = rows,
+            .sequential = u.is_sequential,
+            .ins = ins,
+            .prev = prev,
+            .state = state,
+            .lane = if (inst.range == null) null else lane,
+            .out_bit = if (!wide) null else out.lo + if (out.width == 1) 0 else lane,
+        };
+        try e.wires.append(r.arena, .{ .net = out.net, .scope = scope, .source = .{ .udp = udp }, .s0 = inst.strength0, .s1 = inst.strength1, .delay = delay, .tok = tok });
+    }
+}
+
+/// The IEEE 1364-2005 §8.1 rules on a UDP declaration itself.
+fn checkUdp(r: *Run, u: *const Ast.UdpDecl) Error!void {
+    const tok = u.main_tok;
+    if (u.outputs != 1) return r.fail(tok, "§8.1.1: a UDP has exactly one output port", .{});
+    if (u.output != u.ports[0]) return r.fail(tok, "§8.1.1: the output port shall be the first port of a UDP", .{});
+    if (u.is_sequential and !u.has_reg) return r.fail(tok, "§8.1.2: a sequential UDP's output needs a reg declaration", .{});
+    if (!u.is_sequential and u.has_reg) return r.fail(tok, "§8.1.2: a combinational UDP cannot contain a reg declaration", .{});
+    if (u.init == .none) return;
+    if (u.init_target != u.ports[0]) return r.fail(tok, "§8.1.3: a UDP initial statement assigns the output", .{});
+    const ex = &r.file.exprs;
+    const width: u32 = switch (ex.tag(u.init)) {
+        .int_literal => ex.intLiteral(u.init).width,
+        .logic_literal => ex.logicValue(u.init).width,
+        else => 1, // else: `declareUdp` refuses anything but a literal
+    };
+    if (width > 1) return r.exprFail(u.init, "§8.1.3: a UDP initial value is a single-bit literal");
 }
 
 /// A port by the name a named connection may use: its own, when the header
@@ -2494,7 +2536,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             },
             .udp => |u| for (u.ins) |in| {
                 try compile.checkExpr(&r, in);
-                if (compile.typeOf(&r, in).width != 1) return r.exprFail(in, "only scalar UDP terminals are implemented");
+                if (compile.typeOf(&r, in).width != 1 and u.lane == null) return r.exprFail(in, "a UDP's input terminal is one bit, or one per instance of an array");
                 try compile.sensitivity(&r, in, &watched);
             },
             .expr => |x| {
@@ -2509,15 +2551,15 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
             .scope = a.scope,
             .sensitivity = watched.items,
             // A sequential UDP's output is its state from the start (§8.5).
-            .current = try filled(arena, r.nets[a.net].resolved.width, false, switch (a.source) {
-                .udp => |u| if (u.sequential) u.state else .z,
-                .expr, .bridge, .gate, .mos, .pull => .z,
-            }),
+            .current = try filled(arena, r.nets[a.net].resolved.width, false, .z),
             .s0 = a.s0,
             .s1 = a.s1,
             .delay = try r.declaredDelay3(a.delay, a.tok),
             .tok = a.tok,
         };
+        // A UDP's output bit starts at its state: §8.5's initial value for a
+        // sequential one, x for a combinational one until its first value.
+        if (a.source == .udp) setBit(r.drivers[i].current, a.source.udp.out_bit orelse 0, a.source.udp.state);
         try grouped[a.net].append(arena, @intCast(i));
         _ = try exec.enqueue(&r, .{ .run_process = try compile.append(&r, .{ .continuous = @intCast(i) }) }, null, false);
     }

@@ -1410,6 +1410,15 @@ pub const UdpDecl = struct {
     /// A.5.3 `udp_initial_statement ::= initial output_port_identifier =
     /// init_val ;`; `.none` when the declaration carries none.
     init: ExprId = .none,
+    /// The identifier the initial statement assigns (§8.1.3: the output).
+    init_target: StrId = .none,
+    /// The ports declared `output`, the last one's name, and whether any
+    /// `reg` is declared: IEEE 1364-2005 §8.1.1 wants exactly one output,
+    /// first in the list; §8.1.2 a `reg` for a sequential UDP's output and
+    /// none in a combinational one. The digital engine judges them.
+    outputs: u8 = 0,
+    output: StrId = .none,
+    has_reg: bool = false,
     rows: []const UdpRow = &.{},
     main_tok: u32 = 0,
 };

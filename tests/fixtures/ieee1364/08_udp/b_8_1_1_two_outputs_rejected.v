@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 8 8.1.1
 //! reject E1100
 //! reject exactly one output
-//! xfail two output declarations are accepted; the definition is refused only because the table then lacks a field for q2, read as an input
 primitive two_out(q1, q2, a);
   output q1, q2;
   input a;
