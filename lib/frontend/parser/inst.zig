@@ -423,6 +423,10 @@ pub fn parseDiscrete(self: *Parser, b: *parse_module.Body) Error!void {
     const main_tok = self.pos;
     const is_always = self.peek() == .kw_always;
     self.pos += 1;
+    // IEEE 1364-2005 A.6.2 `initial_construct ::= initial statement`: a
+    // statement, not `statement_or_null`.
+    if (self.digital and self.peek() == .semicolon)
+        return self.failAt(self.pos, .E0209, "found `;`: an {s} construct takes a statement, not a null one", .{if (is_always) "always" else "initial"});
     const saved = self.in_discrete;
     self.in_discrete = true;
     defer self.in_discrete = saved;
