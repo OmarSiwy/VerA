@@ -32,3 +32,14 @@ pub const OpKind = enum {
 pub fn hasState(k: OpKind) bool {
     return k != .none;
 }
+
+/// Returns whether the operator's small-signal response depends on frequency:
+/// §4.5.7 `absdelay` is e^(−jω·td), §4.5.11 `laplace_*` is H(jω) and §4.5.12
+/// `zi_*` is H(e^(jωT)). Every other operator is flat in ω (§4.5.8
+/// `transition` is unity, §4.5.9 `slew` 1 or 0) or has no small-signal path.
+pub fn acDynamic(k: OpKind) bool {
+    return switch (k) {
+        .absdelay, .laplace, .zi => true,
+        .none, .idt_hold, .idtmod, .transition, .slew, .last_crossing, .cross, .above, .timer, .bound_step, .discontinuity => false,
+    };
+}
