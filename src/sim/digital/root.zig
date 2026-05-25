@@ -1456,7 +1456,8 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             const at = r.names.get(.{ .scope = scope, .str = gv }) orelse try genvarSlot(r, e, gv, tok);
             try setGenvar(r, e, at, try r.constant(r.file.stmt(f.init).assign.value, tok));
             const name: Ast.StrId = switch (r.file.stmt(f.body)) {
-                .block => |b| b.name,
+                // §12.4.3 an unnamed block's external name, genblk<n>.
+                .block => |b| b.gen_name,
                 else => .none, // else: a lone item is an unnamed generate block
             };
             var seen: std.ArrayList(i64) = .empty;
