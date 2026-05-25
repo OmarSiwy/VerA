@@ -1,0 +1,46 @@
+// §4.5.12 a Z-transform filter in a small-signal analysis. §4.5.12.4 defines
+// zi_nd by its transfer function,
+//
+//   H(z) = Σ n_k z^(−k) / Σ d_k z^(−k)
+//
+// with T "the sampling period of the filter". A sampled linear filter's
+// small-signal response at ω is H on the unit circle, z = e^(jωT); the clause
+// prints no small-signal digits, so they are derived here. It adds no
+// zero-order-hold factor: "A filter with unity transfer function acts like a
+// simple sample-and-hold which samples every T seconds and exhibits no
+// delay", so H = 1 must read 1 at every ω. A host reads the response through
+// `acDyn` (`contract.acDynSlots`): `//! acdyn (row,col) f= re= im=` at ω = 2πf.
+//
+// THE NUMBERS. zi_nd(V(in), {1}, {1, −0.5}, 1u): H(z) = 1/(1 − 0.5·z^(−1)),
+// T = 1 µs, so ωT = 2π·f·1µs and z^(−1) = e^(−jωT). Slot (a, in) is H itself,
+// a KCL current into `a`:
+//
+//   f = 0      z^(−1) = 1     H = 1/0.5             = (2, 0)   §4.5.12's DC gain
+//   f = 250k   z^(−1) = −j    H = 1/(1 + 0.5j) = (1 − 0.5j)/1.25 = (0.8, −0.4)
+//   f = 500k   z^(−1) = −1    H = 1/1.5             = (2/3, 0)
+//
+// Row `b` is the unity filter, zi_nd(V(in), {1}, {1}, 1u): (1, 0) at 250k.
+// A filter left at its DC gain in AC (the answer before this fixture) reads
+// (2, 0) at every f on row `a`. The operating point is the DC gain the model
+// can see: H(1)·V(in) = 2·0.5 = 1.
+//
+//! lrm 4.5.12
+//! lrm 4.5.12.4
+//! bias V(in) = 0.5
+//! print none
+//! acdyn (a,in) f=0 re=2 im=0
+//! acdyn (a,in) f=250k re=0.8 im=-0.4
+//! acdyn (a,in) f=500k re=0.6666666666666666 im=0
+//! acdyn (b,in) f=250k re=1 im=0
+`include "check.vh"
+module zi_ac_response(in, a, b);
+    inout in, a, b;
+    electrical in, a, b;
+
+    analog begin
+        `CHECK("zi_nd at the operating point is H(1)·V(in)",
+               zi_nd(V(in), {1.0}, {1.0, -0.5}, 1u), 1.0, 1e-12);
+        I(a) <+ zi_nd(V(in), {1.0}, {1.0, -0.5}, 1u);
+        I(b) <+ zi_nd(V(in), {1.0}, {1.0}, 1u);
+    end
+endmodule
