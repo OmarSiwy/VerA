@@ -19,7 +19,7 @@
 //! lrm annex A.2.2.2
 //! lrm 1.1
 //! timescale 1ns/1ns
-//! inherited IEEE 1364-2005 4.6.6 7.13.3 7.10.1
+//! inherited IEEE 1364-2005 4.6.6 7.13 7.13.3 7.10.1
 //
 // HAND DERIVATION — levels supply = 7, strong = 6.
 //   vdd : supply1 net (s1 = 7 always) + (strong1, strong0) driver `a`
