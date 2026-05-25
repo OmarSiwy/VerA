@@ -371,6 +371,7 @@ pub const Code = enum(u16) {
     W1150,
     W1151,
     W1152,
+    W1160,
     W1050,
     W0950,
     E0820,
@@ -5853,6 +5854,19 @@ fn infoOf(c: Code) Info {
             \\invocation of the compiler, then a warning message shall be
             \\issued." This is that warning; the later definition is the one
             \\every instance binds.
+            ,
+        },
+        .W1160 => .{
+            .title = "dissimilar net types joined through a port",
+            .lrm = "IEEE 1364-2005 12.3.10",
+            .explain =
+            \\IEEE 1364-2005 Table 12-1 gives, for each pair of internal (the
+            \\module's) and external (the instantiation's) net types joined by a
+            \\port, the net type that dominates, and marks some pairs "warn = A
+            \\warning shall be issued": two wired-logic types that disagree
+            \\(wand with wor), a pull or charge-storage net meeting another, a
+            \\uwire meeting a resolved net, supply0 meeting supply1. VerA joins
+            \\the two into the external net and issues this warning.
             ,
         },
         .E1004 => .{

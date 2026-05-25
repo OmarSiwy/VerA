@@ -931,10 +931,15 @@ const PortBind = union(enum) {
     collapse: u32,
     /// An input port fed by a parent expression that is not one whole net.
     receive: struct { expr: Ast.ExprId, scope: u32, tok: u32, slice: ?Slice = null },
-    /// An output port whose parent side is a concatenation: the operand nets,
-    /// leftmost first (§6.5.7.1 joins them highest-order first).
-    send: struct { operands: []const u32, tok: u32 },
+    /// An output port whose parent side is not one whole net: the operands
+    /// of its §12.3.9.2 structural net expression, leftmost first (§6.5.7.1
+    /// joins them highest-order first).
+    send: struct { operands: []const Sink, tok: u32 },
 };
+
+/// One operand of a structural net expression: `width` bits of net `net`
+/// from bit position `lo` up.
+const Sink = struct { net: u32, lo: u32, width: u32 };
 
 /// Everything §6.2.2 elaboration accumulates before any expression is compiled:
 /// a name lookup in pass two must not run against a slot space a later
@@ -1158,6 +1163,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             if (merging and p.kind == .wreal) try promoteWreal(r, e, bind.collapse);
             if (!merging and outer.resolved.width != width)
                 return r.fail(p.main_tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
+            if (warnCell(p.kind, outer.kind)) {
+                const at = r.starts[@min(p.main_tok, r.starts.len - 1)];
+                try r.bag.add(.lower, .W1160, .{ .start = at, .end = at }, "§12.3.10: a `{s}` port joined to a `{s}` net is a Table 12-1 warn cell of the net type table", .{ @tagName(p.kind), @tagName(outer.kind) });
+            }
             try r.bind(p.name, outer.slot, p.main_tok);
             if (p.is_signed != e.values.items[outer.slot].signed)
                 try r.port_signed.put(arena, .{ .scope = scope, .str = p.name }, p.is_signed);
@@ -1198,13 +1207,13 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
                 var k = c.operands.len;
                 while (k != 0) {
                     k -= 1;
-                    const dst = &e.nets.items[c.operands[k]];
-                    const w = dst.resolved.width;
+                    const op = c.operands[k];
+                    const w = op.width;
                     if (lo + w > width) return r.fail(c.tok, "§6.5.7.1: the sizes of the port and the net connected to it shall match", .{});
                     try e.wires.append(arena, .{
-                        .net = c.operands[k],
+                        .net = op.net,
                         .scope = scope,
-                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = 0, .width = w } },
+                        .source = .{ .bridge = .{ .src = e.nets.items[at].slot, .src_lo = lo, .dst_lo = op.lo, .width = w } },
                         .tok = c.tok,
                     });
                     lo += w;
@@ -1255,6 +1264,40 @@ fn declareParams(r: *Run, scope: u32, params: []const Ast.ParamDecl, over: []con
         if (p.is_spec) try r.specparams.put(arena, at, p.main_tok);
     }
     r.values = g.items;
+}
+
+/// IEEE 1364-2005 §12.3.10 Table 12-1: is the pair of an internal (port)
+/// and external (connected) net type a "warn" cell?
+fn warnCell(internal: Ast.NetKind, external: Ast.NetKind) bool {
+    const Col = enum { wire, wand, wor, trireg, tri0, tri1, uwire, supply0, supply1, wreal };
+    const col = struct {
+        fn of(k: Ast.NetKind) Col {
+            return switch (k) {
+                .wire, .tri => .wire,
+                .wand, .triand => .wand,
+                .wor, .trior => .wor,
+                .trireg => .trireg,
+                .tri0 => .tri0,
+                .tri1 => .tri1,
+                .uwire => .uwire,
+                .supply0 => .supply0,
+                .supply1 => .supply1,
+                .wreal => .wreal,
+            };
+        }
+    }.of;
+    const warns: []const Col = switch (col(internal)) {
+        .wire, .wreal => &.{},
+        .wand => &.{ .wor, .trireg, .tri0, .tri1, .uwire },
+        .wor => &.{ .wand, .trireg, .tri0, .tri1, .uwire },
+        .trireg => &.{ .wand, .wor, .uwire },
+        .tri0 => &.{ .wand, .wor, .tri1, .uwire },
+        .tri1 => &.{ .wand, .wor, .tri0, .uwire },
+        .uwire => &.{ .wand, .wor, .trireg, .tri0, .tri1 },
+        .supply0 => &.{.supply1},
+        .supply1 => &.{.supply0},
+    };
+    return std.mem.indexOfScalar(Col, warns, col(external)) != null;
 }
 
 /// IEEE 1364-2005 §4.5: an undeclared identifier in the terminal list of a
@@ -1864,7 +1907,7 @@ fn instantiateOne(r: *Run, e: *Elab, scope: u32, inst: *const Ast.Instance, dept
             // as the child's own port loop skips it.
             if (r.mixed and continuous(r.file, child.ports[at].discipline)) continue;
             if (index != null and conn.expr != .none) try arrayConn(r, e, child.ports[at], conn);
-            binds_out[at] = try bindPort(r, child.ports[at], conn, scope);
+            binds_out[at] = try bindPort(r, e, child.ports[at], conn, scope);
         }
         const child_scope = try newScope(r, inst.main_tok);
         try r.scope_info.append(arena, .{ .parent = scope, .name = inst.name, .def = bound.def, .index = index });
@@ -2202,7 +2245,7 @@ fn portWidth(r: *Run, p: Ast.Port) Error!u32 {
 }
 
 /// §6.5.7 one port connection, decided in the PARENT's scope.
-fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
+fn bindPort(r: *Run, e: *Elab, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortBind {
     if (conn.expr == .none) return .open;
     const ex = &r.file.exprs;
     // §12.3.7: "The real data type shall not be directly connected to a port."
@@ -2225,11 +2268,8 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
         // ponytail: so a child's drive strength does not reach the element.
         .output => blk: {
             const args = if (ex.tag(conn.expr) == .concat) ex.args(conn.expr) else &.{conn.expr};
-            const operands = try r.arena.alloc(u32, args.len);
-            for (args, operands) |arg, *out| {
-                if (ex.tag(arg) != .ident and try r.indexedArray(arg) == null) return r.exprFail(arg, "an output port connects to a net, a net array element or a concatenation of them");
-                out.* = r.net_of.get(try netSlot(r, arg, conn.main_tok)) orelse return r.exprFail(arg, "an output port can only drive a net");
-            }
+            const operands = try r.arena.alloc(Sink, args.len);
+            for (args, operands) |arg, *out| out.* = try sink(r, e, arg, conn.main_tok);
             break :blk .{ .send = .{ .operands = operands, .tok = conn.main_tok } };
         },
         // A collapse already covers the useful `inout`; anything else would
@@ -2237,6 +2277,32 @@ fn bindPort(r: *Run, port: Ast.Port, conn: Ast.PortConn, scope: u32) Error!PortB
         .inout => r.fail(conn.main_tok, "an inout port connection must name one whole net", .{}),
         .unspecified => r.fail(port.main_tok, "§6.5.2.2: this port has no direction declaration", .{}),
     };
+}
+
+/// IEEE 1364-2005 §12.3.9.2 one operand of a structural net expression: a
+/// net, a net array element, or a constant bit-select or part-select of a
+/// vector net.
+fn sink(r: *Run, e: *Elab, arg: Ast.ExprId, tok: u32) Error!Sink {
+    const ex = &r.file.exprs;
+    r.values = e.values.items;
+    if (ex.tag(arg) == .ident or try r.indexedArray(arg) != null) {
+        const net = r.net_of.get(try netSlot(r, arg, tok)) orelse return r.exprFail(arg, "an output port can only drive a net");
+        return .{ .net = net, .lo = 0, .width = e.nets.items[net].resolved.width };
+    }
+    const refused = "§12.3.9.2: an output port connects to a net, a net array element, a constant bit-select or part-select of a vector net, or a concatenation of them";
+    if (ex.tag(arg) != .index or ex.tag(ex.lhs(arg)) != .ident) return r.exprFail(arg, refused);
+    const rg = ex.rhs(arg);
+    const index = switch (ex.tag(rg)) {
+        .range => Ast.ExprId.none,
+        .indexed_range => ex.lhs(rg),
+        else => rg, // else: a bit-select's index
+    };
+    try compile.checkExpr(r, arg);
+    if (index != .none and !compile.constantExpression(r, index)) return r.exprFail(arg, refused);
+    const net = r.net_of.get(try r.scalarSlot(ex.lhs(arg))) orelse return r.exprFail(arg, "an output port can only drive a net");
+    const sel = (try exec.selection(r, r.arena, arg)) orelse return r.exprFail(arg, "§12.3.9.2: the select's index is x or z");
+    if (sel.first < 0 or sel.first + sel.count > e.nets.items[net].resolved.width) return r.exprFail(arg, "§12.3.9.2: the select is outside its net");
+    return .{ .net = net, .lo = @intCast(sel.first), .width = sel.count };
 }
 
 // ---- the driver (§6.2.2, §6.1, §7.9, §17.3) ---------------------------------
