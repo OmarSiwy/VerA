@@ -784,7 +784,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try int(self, t.args[3]);
                     try self.print(") }};\n", .{});
                 },
-                .printtimescale => try static(self, display.printTimescale),
+                .printtimescale => try static(self, display.printTimescale, .{t.args}),
                 // §17.1.2: the call is queued, its arguments are read then.
                 .strobe => try self.print("            try s.strobe({d});\n", .{try site(self, pc)}),
                 // §17.1.3: one standing monitor, which a change of any
@@ -1470,17 +1470,17 @@ fn int(self: *Emitter, e: Ast.ExprId) Error!void {
 
 /// Text the interpreter prints from `r` alone at this pc (`%m`,
 /// `$printtimescale`), captured once and written as a literal.
-fn staticText(self: *Emitter, f: fn (*Run) root.Error!void) Error![]const u8 {
+fn staticText(self: *Emitter, comptime f: anytype, args: anytype) Error![]const u8 {
     var buf: std.Io.Writer.Allocating = .init(self.arena);
     const saved = self.r.out;
     self.r.out = &buf.writer;
     defer self.r.out = saved;
-    f(self.r) catch return self.refuse("text the engine prints only at run time");
+    @call(.auto, f, .{self.r} ++ args) catch return self.refuse("text the engine prints only at run time");
     return buf.written();
 }
 
-fn static(self: *Emitter, f: fn (*Run) root.Error!void) Error!void {
-    try self.print("            try s.out.writeAll(\"{f}\");\n", .{std.zig.fmtString(try staticText(self, f))});
+fn static(self: *Emitter, comptime f: anytype, args: anytype) Error!void {
+    try self.print("            try s.out.writeAll(\"{f}\");\n", .{std.zig.fmtString(try staticText(self, f, args))});
 }
 
 /// `display.display` walked at compile time: literal text is written as is,
@@ -1548,7 +1548,7 @@ fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show) Error!void {
                     const t = try expr.selfDetermined(self, args[arg]);
                     try self.print(", {d}, {}, {?d});\n", .{ t.width, format[i] == 'c' or format[i] == 'C', width });
                 },
-                'm', 'M' => try text.appendSlice(self.arena, try staticText(self, display.emitScope)),
+                'm', 'M' => try text.appendSlice(self.arena, try staticText(self, display.emitScope, .{})),
                 'l', 'L' => {
                     try text.appendSlice(self.arena, "work.");
                     try text.appendSlice(self.arena, r.file.str(r.scope_info.items[r.scope].module));

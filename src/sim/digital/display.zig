@@ -560,19 +560,33 @@ fn emitTime(self: *Run, v: Int.Literal) Error!void {
     try fmt.time(self.out, v, self.time_format, self.timeOf(self.scope).unit_exp);
 }
 
-/// IEEE 1364-2005 §17.3.1 `$printtimescale` with no argument: "the time unit
-/// and precision of the module that is the current scope", in the clause's
-/// format `Time scale of (module_name) is unit / precision`.
-pub fn printTimescale(self: *Run) Error!void {
-    // ponytail: the no-argument form only; `compile` refuses a named module.
-    const mt = self.timeOf(self.scope);
+/// IEEE 1364-2005 §17.3.1 `$printtimescale`: "the time unit and precision of
+/// the module that is the current scope", or with an argument "of the module
+/// passed to it", in the clause's format `Time scale of (name) is unit /
+/// precision`. The name is the current module's, or the argument as written.
+pub fn printTimescale(self: *Run, args: []const Ast.ExprId) Error!void {
+    const scope = if (args.len == 1) try timescaleScope(self, args[0]) else self.scope;
+    const mt = self.timeOf(scope);
     const prec_exp = mt.unit_exp - @as(i32, std.math.log10_int(@as(u64, mt.scale.local_per_unit)));
-    const name = self.file.str(self.scope_info.items[self.scope].module);
-    try self.out.print("Time scale of ({s}) is ", .{name});
+    try self.out.writeAll("Time scale of (");
+    if (args.len == 0) try self.out.writeAll(self.file.str(self.scope_info.items[self.scope].module)) else {
+        const ex = &self.file.exprs;
+        const parts: []const Ast.StrId = if (ex.tag(args[0]) == .ident) &.{ex.strOf(args[0])} else ex.nameParts(args[0]);
+        for (parts, 0..) |p, i| try self.out.print("{s}{s}", .{ if (i == 0) "" else ".", self.file.str(p) });
+    }
+    try self.out.writeAll(") is ");
     try fmt.decade(self.out, mt.unit_exp);
     try self.out.writeAll(" / ");
     try fmt.decade(self.out, prec_exp);
     try self.out.writeByte('\n');
+}
+
+/// §17.3.1 the module instance `$printtimescale`'s argument names.
+pub fn timescaleScope(self: *Run, e: Ast.ExprId) Error!u32 {
+    return switch (try @import("vcd.zig").target(self, e)) {
+        .scope => |sc| sc,
+        .slot => self.exprFail(e, "§17.3.1: $printtimescale names a module instance"),
+    };
 }
 
 fn emitValue(self: *Run, v: Int.Literal, radix: Radix, width: ?u32) Error!void {
