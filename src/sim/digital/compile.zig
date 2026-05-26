@@ -1016,6 +1016,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                         }
                         if (s.args[2] == .none or ex.tag(s.args[2]) != .str_literal)
                             return self.exprFail(s.args[2], "$timeformat's suffix must be a string literal");
+                        // "The units number argument shall be an integer in
+                        // the range from 0 to -15" (Table 17-10).
+                        if (constantExpression(self, s.args[0])) if ((try self.constant(s.args[0], tok)).asInt()) |u|
+                            if (u > 0 or u < -15) return self.exprFail(s.args[0], "§17.3.2: $timeformat's units number shall be in the range from 0 to -15");
                     }
                 },
                 .readmem => {
