@@ -235,6 +235,13 @@ pub fn assign(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.L
     try write(self, a, p, converted);
 }
 
+/// `assign` of a real, which an integral target takes rounded (§4.8.2).
+pub fn assignReal(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, r: f64) Error!void {
+    const p = (try place(self, a, target)) orelse return;
+    const tt = try targetType(self, target);
+    try write(self, a, p, try convertValue(a, try realLiteral(a, r), true, tt));
+}
+
 /// `assign` of an integer.
 pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) Error!void {
     const lit = try filled(a, 64, true, .zero);

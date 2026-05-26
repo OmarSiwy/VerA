@@ -476,8 +476,14 @@ fn scanCall(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId) Error!i6
 fn scanInto(self: *Run, a: std.mem.Allocator, input: ?[]const u8, format: ?[]const u8, outs: []const Ast.ExprId) Error!struct { code: i64, used: usize } {
     var sc: Scan = .init(input, format, outs.len);
     while (sc.next()) |x| switch (x.value) {
-        .int => |v| try exec.assignInt(self, a, outs[x.arg], v),
+        .bits => |b| {
+            const v = try filled(a, 64, true, .zero);
+            v.values()[0] = b[0];
+            v.unknowns()[0] = b[1];
+            try exec.assign(self, a, outs[x.arg], v);
+        },
         .chars => |c| try exec.assign(self, a, outs[x.arg], try stringValue(a, c)),
+        .real => |r| try exec.assignReal(self, a, outs[x.arg], r),
     };
     return .{ .code = sc.result, .used = sc.at };
 }
@@ -487,8 +493,10 @@ fn scanInto(self: *Run, a: std.mem.Allocator, input: ?[]const u8, format: ?[]con
 /// once it returns null, `result` is how many were assigned, or EOF (-1)
 /// when the input ends before the first conversion, and (the clause's own
 /// rule) when either `str` or `format` has an x or z bit (null here).
+/// A conversion is `%`, an optional `*` (match, do not assign or count), an
+/// optional maximum field width, and one of %b %o %d %h %x %c %s %f %e %g.
 pub const Scan = struct {
-    // ponytail: the integral conversions %d %h %x %o %b, %c and %s.
+    // ponytail: %t %v %m %u %z stop the scan; add them when a source reads them.
     input: []const u8,
     format: []const u8,
     /// Output arguments the call has.
@@ -498,9 +506,10 @@ pub const Scan = struct {
     result: i64 = 0,
     done: bool = false,
 
-    /// Output argument `arg` (0 = the first after the format) takes an
-    /// integer or, from `%s`, characters.
-    pub const Assign = struct { arg: usize, value: union(enum) { int: i64, chars: []const u8 } };
+    /// Output argument `arg` (0 = the first after the format) takes a 64-bit
+    /// 4-state value (`bits`: value and unknown planes, signed), characters
+    /// (`%s`, `%c`) or a real (`%f %e %g`).
+    pub const Assign = struct { arg: usize, value: union(enum) { bits: [2]u64, chars: []const u8, real: f64 } };
 
     /// The scan of `input` by `format`; a null one ends it at once with EOF.
     pub fn init(input: ?[]const u8, format: ?[]const u8, outs: usize) Scan {
@@ -531,45 +540,121 @@ pub const Scan = struct {
                 continue;
             }
             self.i += 1;
-            const conv = std.ascii.toLower(format[self.i]);
-            if (conv == '%') {
+            if (format[self.i] == '%') {
                 if (self.at >= input.len or input[self.at] != '%') return self.stop(false);
                 self.at += 1;
                 continue;
             }
+            const suppress = format[self.i] == '*';
+            if (suppress) self.i += 1;
+            var width: usize = 0;
+            while (self.i < format.len and std.ascii.isDigit(format[self.i])) : (self.i += 1) width = width *| 10 +| (format[self.i] - '0');
+            if (self.i == format.len) return self.stop(false);
+            const conv = std.ascii.toLower(format[self.i]);
             if (conv != 'c') while (self.at < input.len and std.ascii.isWhitespace(input[self.at])) : (self.at += 1) {};
             if (self.at >= input.len) return self.stop(true);
-            const arg: usize = @intCast(self.result);
-            if (arg >= self.outs) return self.stop(false);
-            const value: @FieldType(Assign, "value") = switch (conv) {
-                'c' => blk: {
-                    self.at += 1;
-                    break :blk .{ .int = input[self.at - 1] };
-                },
+            // "it extends to the next inappropriate character or until the
+            // maximum field width, if one is specified, is exhausted".
+            const field = input[self.at..if (width == 0) input.len else @min(input.len, self.at + width)];
+            const n, const value: @FieldType(Assign, "value") = switch (conv) {
+                'c' => .{ 1, .{ .bits = .{ field[0], 0 } } },
                 's' => blk: {
-                    const start = self.at;
-                    while (self.at < input.len and !std.ascii.isWhitespace(input[self.at])) self.at += 1;
-                    break :blk .{ .chars = input[start..self.at] };
+                    const len = std.mem.indexOfAny(u8, field, &std.ascii.whitespace) orelse field.len;
+                    break :blk .{ len, .{ .chars = field[0..len] } };
                 },
-                'd', 'h', 'x', 'o', 'b' => blk: {
-                    const radix: u8 = switch (conv) {
-                        'd' => 10,
-                        'o' => 8,
-                        'b' => 2,
-                        else => 16,
-                    };
-                    const start = self.at;
-                    if (conv == 'd' and (input[self.at] == '-' or input[self.at] == '+')) self.at += 1;
-                    while (self.at < input.len and (std.fmt.charToDigit(input[self.at], radix) catch null) != null) self.at += 1;
-                    break :blk .{ .int = std.fmt.parseInt(i64, input[start..self.at], radix) catch return self.stop(false) };
-                },
+                'd', 'h', 'x', 'o', 'b' => number(field, conv) orelse return self.stop(false),
+                'f', 'e', 'g' => float(field) orelse return self.stop(false),
                 else => return self.stop(false),
             };
+            self.at += n;
+            if (suppress) continue;
+            const arg: usize = @intCast(self.result);
+            if (arg >= self.outs) return self.stop(false);
             self.i += 1;
             self.result += 1;
             return .{ .arg = arg, .value = value };
         }
         return self.stop(false);
+    }
+
+    /// The characters of `field` one integral conversion matches, and their
+    /// value, or null on a matching failure. `%d` is an optional sign and
+    /// decimal digits, or a single x, z or ?; the others take their radix's
+    /// digits and x, z, ?, which give §3.5.1's bits (an x or z leftmost pads
+    /// the value with itself). `_` separates digits in every radix.
+    fn number(field: []const u8, conv: u8) ?struct { usize, @FieldType(Assign, "value") } {
+        if (conv == 'd') {
+            const neg = field[0] == '-';
+            const sign: usize = @intFromBool(neg or field[0] == '+');
+            if (sign == 0) switch (std.ascii.toLower(field[0])) {
+                'x' => return .{ 1, .{ .bits = .{ ~@as(u64, 0), ~@as(u64, 0) } } },
+                'z', '?' => return .{ 1, .{ .bits = .{ 0, ~@as(u64, 0) } } },
+                else => {},
+            };
+            var n = sign;
+            var acc: u64 = 0;
+            while (n < field.len and (std.ascii.isDigit(field[n]) or field[n] == '_')) : (n += 1) {
+                if (field[n] != '_') acc = acc *% 10 +% (field[n] - '0');
+            }
+            if (std.mem.indexOfNone(u8, field[sign..n], "_") == null) return null;
+            return .{ n, .{ .bits = .{ if (neg) 0 -% acc else acc, 0 } } };
+        }
+        const per: u6 = switch (conv) {
+            'b' => 1,
+            'o' => 3,
+            else => 4, // else: 'h' and 'x'
+        };
+        var n: usize = 0;
+        var v: u64 = 0;
+        var u: u64 = 0;
+        var top: ?[2]u64 = null;
+        const ones = (@as(u64, 1) << per) - 1;
+        while (n < field.len) : (n += 1) {
+            const ch = std.ascii.toLower(field[n]);
+            if (ch == '_') continue;
+            const digit: [2]u64 = switch (ch) {
+                'x' => .{ ones, ones },
+                'z', '?' => .{ 0, ones },
+                else => .{ (std.fmt.charToDigit(ch, @as(u8, 1) << @intCast(per)) catch break), 0 },
+            };
+            top = top orelse digit;
+            v = v << per | digit[0];
+            u = u << per | digit[1];
+        }
+        const first = top orelse return null;
+        // §3.5.1: an unknown leftmost digit pads to the left with itself.
+        if (first[1] != 0) {
+            var bits: u32 = 0;
+            for (field[0..n]) |ch| bits += if (ch == '_') 0 else per;
+            if (bits < 64) {
+                const pad = ~@as(u64, 0) << @intCast(bits);
+                u |= pad;
+                if (first[0] != 0) v |= pad;
+            }
+        }
+        return .{ n, .{ .bits = .{ v, u } } };
+    }
+
+    /// "Matches a floating point number": C's sign, digits, fraction and
+    /// exponent.
+    fn float(field: []const u8) ?struct { usize, @FieldType(Assign, "value") } {
+        var n: usize = @intFromBool(field[0] == '+' or field[0] == '-');
+        var digits: usize = 0;
+        while (n < field.len and std.ascii.isDigit(field[n])) : (n += 1) digits += 1;
+        if (n < field.len and field[n] == '.') {
+            n += 1;
+            while (n < field.len and std.ascii.isDigit(field[n])) : (n += 1) digits += 1;
+        }
+        if (digits == 0) return null;
+        if (n < field.len and (field[n] == 'e' or field[n] == 'E')) {
+            var k = n + 1;
+            if (k < field.len and (field[k] == '+' or field[k] == '-')) k += 1;
+            if (k < field.len and std.ascii.isDigit(field[k])) {
+                while (k < field.len and std.ascii.isDigit(field[k])) k += 1;
+                n = k;
+            }
+        }
+        return .{ n, .{ .real = std.fmt.parseFloat(f64, field[0..n]) catch return null } };
     }
 };
 
