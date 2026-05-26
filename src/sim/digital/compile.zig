@@ -680,7 +680,9 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 .test_plusargs, .value_plusargs => {
                     const want: usize = if (f == .test_plusargs) 1 else 2;
                     if (args.len != want or args[0] == .none) return self.exprFail(e, "$test$plusargs takes (string) and $value$plusargs (format, variable)");
-                    _ = try inferValue(self, args[0], depth + 1);
+                    // §17.10.1: "either a string or a nonreal variable".
+                    if ((try inferValue(self, args[0], depth + 1)).real) return self.exprFail(args[0], "§17.10: the plusarg string is a string or a nonreal variable");
+                    if (f == .value_plusargs and ex.tag(args[0]) == .str_literal) try plusargFormat(self, args[0]);
                     if (f == .value_plusargs) {
                         if (args[1] == .none) return self.exprFail(e, "$value$plusargs needs a variable to write");
                         try checkTarget(self, args[1]);
@@ -782,6 +784,20 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
         .many => {},
     }
     return ty;
+}
+
+/// §17.10.2: a literal user_string's conversions are "the only valid ones",
+/// `%d %o %h %b %e %f %g %s` in either case, with a leading 0 allowed.
+fn plusargFormat(self: *Run, e: Ast.ExprId) Error!void {
+    const text = self.file.str(self.file.exprs.strOf(e));
+    var i: usize = 0;
+    while (std.mem.indexOfScalarPos(u8, text, i, '%')) |at| {
+        i = at + 1;
+        while (i < text.len and text[i] == '0') i += 1;
+        if (i == text.len or std.mem.indexOfScalar(u8, "dohbefgsDOHBEFGS", text[i]) == null)
+            return self.fail(self.file.exprs.mainTok(e), "§17.10.2: a $value$plusargs format is one of %d %o %h %b %e %f %g %s, not `%{s}`", .{text[@min(i, text.len)..@min(i + 1, text.len)]});
+        i += 1;
+    }
 }
 
 // ---- statements -> bytecode (A.6.5, §8.5.3.3, §9.7.5) -----------------------
