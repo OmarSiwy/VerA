@@ -1272,7 +1272,7 @@ pub const State = struct {
     }
 
     /// A run-time warning in `vera --run`'s words, on stderr.
-    fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
+    pub fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
         self.out.flush() catch {};
         var buf: [512]u8 = undefined;
         var e = std.Io.File.stderr().writer(self.io, &buf);

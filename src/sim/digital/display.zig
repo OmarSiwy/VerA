@@ -321,8 +321,10 @@ pub const Task = union(enum) {
     fflush,
     /// §17.2.2 `$fdisplay`/`$fwrite`: `show` to a descriptor.
     fshow: Show,
-    /// §17.2.3 `$swrite`/`$sformat`: `show` into the first argument, a variable.
+    /// §17.2.3 `$swrite`: `show` into the first argument, a variable.
     sshow: Show,
+    /// §17.2.3 `$sformat`: `sformat`'s text into the first argument.
+    sformat,
     /// §17.3.1 `$printtimescale`.
     printtimescale,
     /// §18.1 the value change dump tasks.
@@ -377,7 +379,7 @@ pub const tasks = std.StaticStringMap(Task).initComptime(@as([]const TaskRow, &.
     .{ "$swriteb", Task{ .sshow = showAs(.binary, false) } },
     .{ "$swriteo", Task{ .sshow = showAs(.octal, false) } },
     .{ "$swriteh", Task{ .sshow = showAs(.hex, false) } },
-    .{ "$sformat", Task{ .sshow = showAs(.decimal, false) } },
+    .{ "$sformat", .sformat },
     .{ "$printtimescale", .printtimescale },
     .{ "$dumpfile", Task{ .dump = .file } },
     .{ "$dumpvars", Task{ .dump = .vars } },
@@ -403,10 +405,37 @@ pub const TimeFormat = fmt.TimeFormat;
 /// `allocator` it only validates the call. Every conversion is width-exact
 /// (IEEE 1364-2005 §17.1.1.3), x and z apart (§17.1.1.4).
 pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show) Error!void {
+    return walk(self, args, allocator, show, false);
+}
+
+/// §17.2.3 `$sformat`'s text of `args` (after its variable): "always
+/// interprets its second argument, and only its second argument as a format
+/// string", which "can be a static string ... or can be a reg variable whose
+/// content is interpreted as the format string". Specifiers and arguments
+/// that do not pair up at run time warn (W1152) and the task continues.
+pub fn sformat(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator) Error!void {
+    return walk(self, args, allocator, .{ .radix = .decimal, .newline = false }, true);
+}
+
+/// The W1152 text.
+pub const sformat_mismatch = "$sformat: the format's specifiers and the arguments after it do not pair up";
+
+fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
+    const at = self.starts[@min(self.file.exprs.mainTok(e), self.starts.len - 1)];
+    try self.bag.add(.lower, .W1152, .{ .start = at, .end = at }, sformat_mismatch, .{});
+}
+
+fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
     const ex = &self.file.exprs;
     var arg: usize = 0;
     while (arg < args.len) : (arg += 1) {
         const e = args[arg];
+        if (only_first and arg != 0) {
+            // Arguments left over once the format is used up.
+            for (args[arg..]) |rest| if (rest != .none) try compile.checkExpr(self, rest);
+            if (allocator != null) try sformatMismatch(self, e);
+            return;
+        }
         // §9.4.1: "Any null argument produces a single space character in
         // the display. (A null argument is characterized by two adjacent
         // commas (,,) in the argument list.)"
@@ -414,16 +443,22 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
             if (allocator != null) try self.out.writeByte(' ');
             continue;
         }
+        // A format held in a variable is known only when the task runs.
+        const dynamic = only_first and ex.tag(e) != .str_literal;
         // Only a string is a format. §9.4.3's last sentence before Table
         // 9-23: "Any expression argument with no corresponding format
         // specification is displayed using the default decimal format",
         // the default of this task, so $displayh's bare argument is hex.
-        if (ex.tag(e) != .str_literal) {
+        if (ex.tag(e) != .str_literal and !dynamic) {
             try compile.checkExpr(self, e);
             if (allocator) |a| try emitValue(self, try exec.eval(self, a, e, 0), show.radix, null);
             continue;
         }
-        const format = self.file.str(ex.strOf(e));
+        if (dynamic and allocator == null) {
+            for (args) |x| if (x != .none) try compile.checkExpr(self, x);
+            return;
+        }
+        const format = if (dynamic) (try system.text(allocator.?, try exec.eval(self, allocator.?, e, 0))) orelse "" else self.file.str(ex.strOf(e));
         var i: usize = 0;
         while (i < format.len) : (i += 1) {
             if (format[i] != '%') {
@@ -431,7 +466,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 continue;
             }
             i += 1;
-            if (i == format.len) return self.exprFail(e, "unterminated display format");
+            if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
             if (format[i] == '%') {
                 if (allocator != null) try self.out.writeByte('%');
                 continue;
@@ -453,7 +488,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 while (i < format.len and format[i] >= '0' and format[i] <= '9') : (i += 1)
                     precision = precision *| 10 +| (format[i] - '0');
             }
-            if (i == format.len) return self.exprFail(e, "unterminated display format");
+            if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
             const radix: ?Radix = switch (format[i]) {
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
@@ -470,7 +505,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 // time unit.
                 't', 'T' => {
                     arg += 1;
-                    if (arg == args.len) return self.exprFail(e, "missing display argument");
+                    if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
                     if (allocator) |a| try emitTime(self, try exec.eval(self, a, args[arg], 0));
                     continue;
@@ -489,7 +524,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 // `%c` (its low eight bits as one character).
                 's', 'S', 'c', 'C' => {
                     arg += 1;
-                    if (arg == args.len) return self.exprFail(e, "missing display argument");
+                    if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
                     if (allocator) |a| try fmt.text(self.out, try exec.eval(self, a, args[arg], 0), format[i] == 'c' or format[i] == 'C', width);
                     continue;
@@ -500,7 +535,7 @@ pub fn display(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocat
                 ),
             };
             arg += 1;
-            if (arg == args.len) return self.exprFail(e, "missing display argument");
+            if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
             if (radix) |r| {
                 try compile.checkExpr(self, args[arg]);
                 if (allocator) |a| try emitValue(self, try exec.eval(self, a, args[arg], 0), r, width);
