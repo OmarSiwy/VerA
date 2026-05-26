@@ -849,6 +849,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print(", {d}, {d}, {d});\n", .{ in.width, at, ty.width });
                     try assignment(self, t.args[2], .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
                 },
+                .fflush => {},
                 .fclose => {
                     try self.print("            s.fclose(", .{});
                     try int64(self, t.args[0]);

@@ -141,15 +141,20 @@ pub const SysFn = enum {
     driver_next_state,
     driver_next_strength,
     driver_type,
-    /// §17.2 the file functions: open, the character reads, positioning,
-    /// end-of-file, and §17.2.4.3's `$sscanf`.
+    /// §17.2 the file functions: open, the character, line, formatted and
+    /// binary reads, positioning, end-of-file, errors, and §17.2.4.3's
+    /// `$sscanf`.
     fopen,
     fgetc,
     ungetc,
+    fgets,
+    fscanf,
+    fread,
     ftell,
     fseek,
     rewind,
     feof,
+    ferror,
     sscanf,
     /// §17.7.3, the clock as a real in the module's unit.
     realtime,
@@ -196,7 +201,7 @@ pub const SysFn = enum {
     /// operation, a draw from a distribution and a driver query never are.
     fn constant(self: SysFn) bool {
         return switch (self) {
-            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => false,
+            .time, .stime, .realtime, .test_plusargs, .value_plusargs, .q_full, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => false,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => false,
             .driver_count, .receiver_count, .driver_state, .driver_strength, .driver_delay, .driver_next_state, .driver_next_strength, .driver_type => false,
             else => true, // else: a pure function of its arguments
@@ -217,7 +222,7 @@ pub const SysFn = enum {
     /// writes back, `$random`'s seed, a file's position or table?
     pub fn effects(self: SysFn) bool {
         return switch (self) {
-            .q_full, .sscanf, .fopen, .fgetc, .ungetc, .fseek, .rewind => true,
+            .q_full, .sscanf, .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ferror, .fseek, .rewind => true,
             .random, .dist_uniform, .dist_normal, .dist_exponential, .dist_poisson, .dist_chi_square, .dist_t, .dist_erlang => true,
             else => false, // else: a function of its arguments, the clock or the design alone
         };
@@ -259,6 +264,10 @@ const sys_fns = std.StaticStringMap(SysFn).initComptime(.{
     .{ "$fopen", .fopen },
     .{ "$fgetc", .fgetc },
     .{ "$ungetc", .ungetc },
+    .{ "$fgets", .fgets },
+    .{ "$fscanf", .fscanf },
+    .{ "$fread", .fread },
+    .{ "$ferror", .ferror },
     .{ "$ftell", .ftell },
     .{ "$fseek", .fseek },
     .{ "$rewind", .rewind },
@@ -644,18 +653,32 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
                 },
                 // §17.2: every file function returns an integer; the
                 // descriptor of `$fopen` is 32 bits with the MSB set.
-                .fopen, .fgetc, .ungetc, .ftell, .fseek, .rewind, .feof, .sscanf => {
+                .fopen, .fgetc, .ungetc, .fgets, .fscanf, .fread, .ftell, .fseek, .rewind, .feof, .ferror, .sscanf => {
                     const lo: usize, const hi: usize = switch (f) {
                         .fopen => .{ 1, 2 },
-                        .ungetc => .{ 2, 2 },
+                        .ungetc, .fgets, .ferror => .{ 2, 2 },
                         .fseek => .{ 3, 3 },
-                        .sscanf => .{ 2, std.math.maxInt(usize) },
+                        .fread => .{ 2, 4 },
+                        .sscanf, .fscanf => .{ 2, std.math.maxInt(usize) },
                         else => .{ 1, 1 },
                     };
                     if (args.len < lo or args.len > hi) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
                     for (args, 0..) |arg, i| {
+                        // §17.2.4.4 `$fread(mem, fd, , count)` omits start.
+                        if (arg == .none and f == .fread and i == 2) continue;
                         if (arg == .none) return self.exprFail(e, "wrong number of arguments to a §17.2 file function");
-                        if (f == .sscanf and i >= 2) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
+                        // §17.2.4.4 "the reg myreg or the memory mem".
+                        if (f == .fread and i == 0 and ex.tag(arg) == .ident) if (self.arrays.get(try self.slot(arg))) |arr| {
+                            if (arr.rest.len != 0) return self.exprFail(arg, "§17.2.4.4: $fread loads a one-dimensional memory");
+                            continue;
+                        };
+                        const written = switch (f) {
+                            .sscanf, .fscanf => i >= 2,
+                            .fgets, .fread => i == 0,
+                            .ferror => i == 1,
+                            else => false, // else: every other file function only reads its arguments
+                        };
+                        if (written) try checkTarget(self, arg) else _ = try inferValue(self, arg, depth + 1);
                     }
                     break :blk .{ .width = 32, .signed = f != .fopen };
                 },
@@ -1123,6 +1146,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                 .fclose => {
                     if (s.args.len != 1 or s.args[0] == .none) return self.fail(tok, "$fclose takes one descriptor", .{});
                     try checkExpr(self, s.args[0]);
+                },
+                // §17.2.6 `$fflush ( mcd )`, `( fd )` or `( )`.
+                .fflush => {
+                    if (s.args.len > 1) return self.fail(tok, "$fflush takes at most one descriptor", .{});
+                    for (s.args) |a| if (a != .none) try checkExpr(self, a);
                 },
                 // §17.4.1: the argument is an expression selecting how much
                 // is printed (0, 1 or 2), read when the task runs.
