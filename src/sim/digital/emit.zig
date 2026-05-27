@@ -591,7 +591,7 @@ fn catalog(self: *Emitter) Error!void {
     try self.print("\n    }},\n", .{});
     try table(self, "var_start", c.var_start);
     try self.print("    .vars = &.{{", .{});
-    for (c.vars) |v| try self.print("\n        .{{ .slot = {d}, .off = {d}, .width = {d}, .real = {}, .head = \"{f}\", .tail = \"{f}\" }},", .{ v.slot, v.off, v.width, v.real, std.zig.fmtString(v.head), std.zig.fmtString(v.tail) });
+    for (c.vars) |v| try self.print("\n        .{{ .slot = {d}, .off = {d}, .width = {d}, .real = {}, .event = {}, .head = \"{f}\", .tail = \"{f}\" }},", .{ v.slot, v.off, v.width, v.real, v.event, std.zig.fmtString(v.head), std.zig.fmtString(v.tail) });
     try self.print("\n    }},\n    .finest = {d},\n}};\n\n", .{c.finest});
 }
 
@@ -965,7 +965,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             for (x.slots) |at| try self.print("            try s.watch(id, {d}, .any);\n", .{at});
             try self.print("            return;\n", .{});
         },
-        .trigger => |at| try self.print("            try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ at, next }),
+        .trigger => |at| try self.print("            {s}try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ if (dumps(r)) try std.fmt.allocPrint(self.arena, "s.fire({d});\n            ", .{at}) else "", at, next }),
         .restart => |x| try self.print(
             \\            if (restarted) return s.fail("this always process completed an iteration without suspending; it needs a delay or event control", .{{}});
             \\            restarted = true;

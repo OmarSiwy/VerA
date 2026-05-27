@@ -21,7 +21,6 @@
 //     #2: none (a changed, e did not)                      -> at2=0
 //     #3: a marker                                         -> at3=1
 //! inherited IEEE 1364-2005 18.2.2 18.2.3.7
-//! xfail an event is never dumped: $dumpvars leaves named events out of the $var sections, so no marker is written when one is triggered
 `timescale 1ns/1ns
 module b_18_2_2_event_dut;
   reg a;

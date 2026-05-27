@@ -1258,6 +1258,12 @@ pub const State = struct {
         if (two) @memset(out[n..], 0) else @memcpy(out[n..], self.x[v.off..][0..n]);
     }
 
+    /// §18.2.2 named event `slot` was triggered (`vcd.Vcd.fire`); the
+    /// `wake` that follows asks for the dump event.
+    pub fn fire(self: *State, slot: u32) void {
+        if (self.dumped.len != 0 and self.dumped[slot]) self.dump.fire(self.catalog.?, slot);
+    }
+
     /// `vcd.Vcd`'s hook: a change of `slot` asks for a dump event.
     pub fn dumpSlot(self: *State, slot: u32) void {
         self.dumped[slot] = true;

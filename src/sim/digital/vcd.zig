@@ -17,8 +17,8 @@ const Run = @import("root.zig").Run;
 pub const Op = enum { file, vars, off, on, all, limit, flush };
 
 /// What `$dumpvars` can select, fixed at elaboration: every scope, and each
-/// instance scope's variables in declaration order (ports, nets, then
-/// variables; no arrays, parameters or events).
+/// instance scope's variables in declaration order (ports, nets, variables,
+/// then named events; no arrays or parameters).
 pub const Catalog = struct {
     scopes: []const Scope,
     /// Scope s's variables: `vars[var_start[s]..var_start[s + 1]]`.
@@ -40,7 +40,7 @@ pub const Scope = struct {
 
 /// One `$var`: `head` up to its identifier code, `tail` after it. `off` is
 /// the slot's first plane word in a native executable.
-pub const Var = struct { slot: u32, off: u32 = 0, width: u32, real: bool, head: []const u8, tail: []const u8 };
+pub const Var = struct { slot: u32, off: u32 = 0, width: u32, real: bool, event: bool = false, head: []const u8, tail: []const u8 };
 
 /// `$dumpvars` names a scope (with its level count) or a variable.
 pub const Target = union(enum) { scope: u32, slot: u32 };
@@ -49,7 +49,12 @@ pub const Target = union(enum) { scope: u32, slot: u32 };
 /// written for it, both planes. Two references to one slot (a port
 /// collapsed onto its parent's net) share the code, which §18.2.3.7 b)
 /// permits.
-const Code = struct { v: u32, last: []u64 };
+const Code = struct {
+    v: u32,
+    last: []u64,
+    /// An event's code: triggered in this time step (§18.2.2).
+    fired: bool = false,
+};
 
 pub const Failure = error{ NoFilesystem, CannotCreate, CannotWrite, DumpvarsTime } || std.mem.Allocator.Error || std.Io.Writer.Error;
 
@@ -108,6 +113,16 @@ pub const Vcd = struct {
         for (targets) |t| switch (t) {
             .scope => |sc| try self.scopes.put(gpa, sc, levels),
             .slot => |sl| try self.slots.put(gpa, sl, {}),
+        };
+    }
+
+    /// §18.2.2 named event `slot` was triggered: its code is written as a
+    /// marker at the end of the step. The engine asks for the tick.
+    pub fn fire(self: *Vcd, cat: *const Catalog, slot: u32) void {
+        // ponytail: a scan of the codes per trigger; a slot index when a
+        // design dumps many events.
+        for (self.codes.items) |*c| if (cat.vars[c.v].slot == slot) {
+            c.fired = true;
         };
     }
 
@@ -237,6 +252,8 @@ pub const Vcd = struct {
         try self.time(&w.writer, now);
         try w.writer.print("{s}\n", .{keyword});
         for (self.codes.items, 0..) |c, i| {
+            // An event holds no value to checkpoint.
+            if (cat.vars[c.v].event) continue;
             src.dumpPlanes(cat.vars[c.v], c.last);
             try value(&w.writer, cat.vars[c.v], c.last, @intCast(i), as_x);
         }
@@ -251,7 +268,18 @@ pub const Vcd = struct {
         // ponytail: every dumped variable is compared each dumped step; a changed
         // list fed by `store` replaces the scan when a design dumps thousands.
         var buf: std.ArrayList(u64) = .empty;
-        for (self.codes.items, 0..) |c, i| {
+        for (self.codes.items, 0..) |*c, i| {
+            // §18.2.2: "Events are dumped in the same format as scalars ...
+            // the value ... is irrelevant", a marker of a trigger.
+            if (cat.vars[c.v].event) {
+                if (!c.fired) continue;
+                c.fired = false;
+                if (w.written().len == 0) try self.time(&w.writer, now);
+                try w.writer.writeByte('1');
+                try codeText(&w.writer, @intCast(i));
+                try w.writer.writeByte('\n');
+                continue;
+            }
             try buf.resize(a, c.last.len);
             src.dumpPlanes(cat.vars[c.v], buf.items);
             if (std.mem.eql(u64, c.last, buf.items)) continue;
@@ -438,10 +466,11 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
         for (m.ports) |p| try names.append(a, p.name);
         for (m.nets) |n| try names.append(a, n.name);
         for (m.vars) |x| try names.append(a, x.name);
+        for (m.events) |x| try names.append(a, x);
         for (names.items, 0..) |name, i| {
             if (std.mem.indexOfScalar(Ast.StrId, names.items[0..i], name) != null) continue;
             const at = r.names.get(.{ .scope = @intCast(s), .str = name }) orelse continue;
-            if (r.arrays.contains(at) or r.params.contains(at) or r.events.contains(at)) continue;
+            if (r.arrays.contains(at) or r.params.contains(at)) continue;
             try vars.append(a, try variable(r, a, m, name, at, if (offs.len == 0) 0 else offs[at]));
         }
     }
@@ -451,7 +480,7 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
 
 /// §18.2.3.7 `$var var_type size identifier_code reference $end`.
 fn variable(r: *Run, a: std.mem.Allocator, m: *const Ast.ModuleDecl, name: Ast.StrId, at: u32, off: u32) Error!Var {
-    const kind: []const u8 = if (r.net_of.get(at)) |n| switch (r.nets[n].kind) {
+    const kind: []const u8 = if (r.events.contains(at)) "event" else if (r.net_of.get(at)) |n| switch (r.nets[n].kind) {
         // "a net of net type uwire shall have a variable type of wire"
         .uwire => "wire",
         .wreal => "real",
@@ -463,13 +492,14 @@ fn variable(r: *Run, a: std.mem.Allocator, m: *const Ast.ModuleDecl, name: Ast.S
             .variable => "integer",
         };
     } else "reg";
-    const width = r.values[at].width;
+    const event = r.events.contains(at);
+    const width = if (event) 1 else r.values[at].width;
     const head = try std.fmt.allocPrint(a, "$var {s} {d} ", .{ kind, width });
     var tail: std.Io.Writer.Allocating = .init(a);
     try tail.writer.print(" {s}", .{r.file.str(name)});
     if (r.vec_ranges.get(at)) |range| try tail.writer.print(" [{d}:{d}]", .{ range.msb, range.lsb });
     try tail.writer.writeAll(" $end\n");
-    return .{ .slot = at, .off = off, .width = width, .real = r.reals.contains(at), .head = head, .tail = tail.written() };
+    return .{ .slot = at, .off = off, .width = width, .real = r.reals.contains(at), .event = event, .head = head, .tail = tail.written() };
 }
 
 /// The interpreter as `Vcd`'s `src`.
