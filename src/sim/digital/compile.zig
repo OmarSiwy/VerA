@@ -1571,9 +1571,9 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; reg c; initial -> c; endmodule", "triggers a named event");
     try expectRejected("module m; reg a; initial begin $display(\"before\"); a=(a+1)+$bogus(1); end endmodule", "expression form");
     try expectRejected("module m; wire [3:0] w; initial w[0]=1; endmodule", "no procedural assignment to a net");
-    // Past Table 9-22 and §17.1.1's %c %s %m %l %t, a conversion such as the
-    // strength `%v` is refused, and the refusal names the table.
-    try expectRejected("module m; initial $display(\"%v\",1); endmodule", "Table 9-22");
+    // Past Table 9-22 and §17.1.1's %c %s %m %l %t %v, a conversion such as
+    // the unformatted `%u` is refused, and the refusal names the table.
+    try expectRejected("module m; initial $display(\"%u\",1); endmodule", "Table 9-22");
     // §17.7: a real conversion needs a real, and `$realtime` is the only one.
     // IEEE 1364-2005 §5.1.1 Table 5-3: a real takes no bitwise, modulus or
     // case operator.
