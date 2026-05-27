@@ -1167,7 +1167,7 @@ pub const State = struct {
     /// channels (`system.channels`).
     pub fn fshow(self: *State, d: i64) Error!void {
         const bytes = self.captured();
-        try system.channels(system.own, self.io, self.out, d & 0xffff_ffff, bytes);
+        if (try system.channels(system.own, self.io, self.out, d & 0xffff_ffff, bytes)) self.warn("W1153", system.unwritten, .{});
     }
 
     /// The characters `bytes` in the `w`-bit cell at word `off`, the last
