@@ -1572,7 +1572,7 @@ fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_f
                     try flush(self, &text);
                     try self.print("            try s.time(", .{});
                     const t = try expr.selfDetermined(self, args[arg]);
-                    try self.print(", {d}, {}, {d});\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp });
+                    try self.print(", {d}, {}, {d}, {?d});\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp, width });
                 },
                 's', 'S', 'c', 'C' => {
                     arg += 1;

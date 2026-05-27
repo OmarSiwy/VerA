@@ -1357,9 +1357,11 @@ pub const State = struct {
     }
 
     /// One `%t` operand, in a module whose unit is 10^`unit_exp` s (§17.3).
-    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32) Error!void {
+    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32, width: ?u32) Error!void {
         var buf = logic.planesOf(a);
-        try fmt.time(self.out, literal(&buf, w, signed), self.time_format, unit_exp);
+        var f = self.time_format;
+        if (width) |fw| f.width = fw;
+        try fmt.time(self.out, literal(&buf, w, signed), f, unit_exp);
     }
 
     /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,

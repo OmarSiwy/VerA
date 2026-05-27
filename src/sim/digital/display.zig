@@ -507,7 +507,7 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     arg += 1;
                     if (arg == args.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "missing display argument");
                     try compile.checkExpr(self, args[arg]);
-                    if (allocator) |a| try emitTime(self, try exec.eval(self, a, args[arg], 0));
+                    if (allocator) |a| try emitTime(self, try exec.eval(self, a, args[arg], 0), width);
                     continue;
                 },
                 // §17.1.1.6 `%m` and §13.6 `%l` consume no argument: they
@@ -595,8 +595,12 @@ pub fn emitScope(self: *Run) Error!void {
     for (found[0..count]) |b| try self.out.print(".{s}", .{self.file.str(b.name)});
 }
 
-fn emitTime(self: *Run, v: Int.Literal) Error!void {
-    try fmt.time(self.out, v, self.time_format, self.timeOf(self.scope).unit_exp);
+/// `%t`; a field width in the format (`%0t`: none) replaces §17.3.2's
+/// minimum field width.
+fn emitTime(self: *Run, v: Int.Literal, width: ?u32) Error!void {
+    var f = self.time_format;
+    if (width) |w| f.width = w;
+    try fmt.time(self.out, v, f, self.timeOf(self.scope).unit_exp);
 }
 
 /// IEEE 1364-2005 §17.3.1 `$printtimescale`: "the time unit and precision of
