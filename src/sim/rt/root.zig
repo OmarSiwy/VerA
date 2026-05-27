@@ -1208,11 +1208,12 @@ pub const State = struct {
         }
     }
 
-    /// §18.1 `$dumpfile` of the characters of a `w`-bit `name`.
-    pub fn dumpFile(self: *State, name: anytype, comptime w: u32) Error!void {
+    /// §18.1 `$dumpfile` of the characters of a `w`-bit `name`; `call` is
+    /// the call as written.
+    pub fn dumpFile(self: *State, name: anytype, comptime w: u32, call: []const u8) Error!void {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
-        self.dump.setFile(self.gpa, try chars(arena.allocator(), name, w)) catch |e| return self.dumpFail(e);
+        self.dump.setFile(self.gpa, try chars(arena.allocator(), name, w), call) catch |e| return self.dumpFail(e);
     }
 
     /// §18.1.2 one `$dumpvars` (`vcd.Vcd.select`); its dump starts at the

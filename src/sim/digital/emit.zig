@@ -882,7 +882,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     .file => if (t.args.len == 1) {
                         try self.print("            try s.dumpFile(", .{});
                         const n = try expr.selfDetermined(self, t.args[0]);
-                        try self.print(", {d});\n", .{n.width});
+                        try self.print(", {d}, \"{f}\");\n", .{ n.width, std.zig.fmtString(vcd.callText(r.text, r.starts[t.tok])) });
                     },
                     .vars => {
                         try self.print("            try s.dumpVars(", .{});
