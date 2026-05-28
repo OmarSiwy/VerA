@@ -36,6 +36,8 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     self.pat[1] = try self.arena.alloc(u64, self.names.n_u);
     @memset(self.pat[0], 0);
     @memset(self.pat[1], 0);
+    self.dpat = try self.arena.alloc(u64, self.names.n_u);
+    @memset(self.dpat, 0);
     self.rows = .{ 0, 0 };
     if (self.names.n_u <= 64) for (&self.lin) |*l| {
         l.* = try self.arena.alloc(f64, self.names.n_u * self.names.n_u);
@@ -52,6 +54,7 @@ pub fn emitDispatchers(self: *Gen) Error!void {
     }
     // After the dispatchers: the pattern is accumulated as each row is written.
     try emitPattern(self, any_q);
+    try emitAcDyn(self, any_q);
     try emitDisplay(self);
     if (self.vpi_contribs) try emitVpiContribs(self);
 }
@@ -113,6 +116,7 @@ fn qPattern(self: *Gen) void {
         const k = self.qs.sites[st.slot];
         const bits = self.an.unknownDeps(self.lowered.charge_sites.items[k].final);
         if (self.pat[1].len != 0) self.pat[1][st.row] |= bits;
+        self.dpat[st.row] |= self.an.acDynDeps(self.lowered.charge_sites.items[k].final);
         self.rows[1] |= uBit(st.row);
     }
 }
@@ -195,6 +199,66 @@ fn emitPattern(self: *Gen, any_q: bool) Error!void {
     try self.w("/// Same, for `q`'s reactive residual (`dQ/dx`).\n", .{});
     try emitPatternRows(self, "q_pattern", self.pat[1]);
     try emitWrittenRows(self, "q_rows", "q", self.rows[1]);
+}
+
+/// Emits `ac_dyn_slots` and `acDyn` (`contract.acDynSlots`) when a
+/// frequency-dependent operator reaches a residual row. Above 64 unknowns
+/// `dpat` is folded, so a reached row lists every column.
+fn emitAcDyn(self: *Gen, any_q: bool) Error!void {
+    const n = self.names.n_u;
+    var slots: std.ArrayList(u32) = .empty;
+    for (self.dpat, 0..) |m, r| for (0..n) |c| {
+        const hit = if (n > 64) m != 0 else (m >> @intCast(c)) & 1 != 0;
+        if (hit) try slots.append(self.arena, @intCast(r * n + c));
+    };
+    if (slots.items.len == 0) return;
+    try self.w(
+        \\/// §4.5.7/§4.5.11/§4.5.12 the slots `row * n_u + col` whose small-signal
+        \\/// value depends on frequency; `acDyn` supplies them (`contract.acDynSlots`).
+        \\pub const ac_dyn_slots = [_]u32{{
+    , .{});
+    for (slots.items, 0..) |k, i| try self.w("{s}{d}", .{ if (i == 0) " " else ", ", k });
+    try self.w(
+        \\ }};
+        \\
+        \\/// Each `ac_dyn_slots` entry's complex term at `omega`, one per lane of `F`
+        \\/// (`contract.acDynSlots`).
+        \\pub fn acDyn(comptime F: type, model: *const Model, inst: InstancePtr, x: *const [n_u]f64, sim: contract.SimState, omega: F, out: *[ac_dyn_slots.len]std.math.Complex(F)) void {{
+        \\    const S = zAc(F);
+        \\    var xs = zProbe(S, x);
+        \\    inline for (0..n_u) |u| xs[u].w = &omega;
+        \\    const m = @call(.always_inline, core, .{{ S, xs, model, inst, sim{s} }});
+        \\    const g = zResidual(S, xs, m);
+        \\
+    , .{self.heldArg(false)});
+    if (any_q) {
+        try self.b("    const c = contract.qRows(Self, S, ", .{});
+        try writeSites(self);
+        try self.b(");\n", .{});
+    }
+    try self.w(
+        \\    inline for (ac_dyn_slots, 0..) |s, k| {{
+        \\        const r = s / n_u;
+        \\        const u = s % n_u;
+        \\
+    , .{});
+    // A = G + jωC: the charge's complex lanes enter rotated by jω.
+    if (any_q) try self.w(
+        \\        const re = g[r].acRe(u) - omega * c[r].acIm(u);
+        \\        const im = g[r].acIm(u) + omega * c[r].acRe(u);
+        \\
+    , .{}) else try self.w(
+        \\        const re = g[r].acRe(u);
+        \\        const im = g[r].acIm(u);
+        \\
+    , .{});
+    try self.w(
+        \\        out[k] = .{{ .re = re, .im = im }};
+        \\    }}
+        \\}}
+        \\
+        \\
+    , .{});
 }
 
 /// Emits which §5.6 residual rows the half ever writes. A row outside the set
@@ -309,6 +373,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
 
     for (self.lowered.contributions.items, 0..) |c, i| {
         const val = if (react) self.an.rv(c.react_val) else self.an.rv(c.resist_val);
+        self.cur_dyn = contribDyn(self, i, c, react);
         // §5.6.1.3 a `.flow` entry whose branch row is runtime-selected is
         // consumed by that row (`I_b − value`); its KCL current is the ±I_b
         // the potential entry already stamps. Stamping the value here too
@@ -467,6 +532,8 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         try self.b("}}\n", .{});
     }
 
+    self.cur_dyn = 0;
+
     // §5.4.2 the branch-flow unknowns no branch row defines (`FreeFlow`).
     // Both rows are purely resistive: a §5.6.6 implicit sum's reactive half
     // is already on this row as `−Σ q`, and a §5.4.2.1 probe is a short,
@@ -518,6 +585,7 @@ pub fn emitStamps(self: *Gen, react: bool) Error!u32 {
         try self.ind(1);
         // Reads the finished res[port], so this row's columns are that row's.
         patRow(self, pp.u, patOf(self, pp.port) | (if (react) 0 else uBit(pp.u)));
+        self.dpat[pp.u] |= self.dpat[pp.port];
         try linPortProbe(self, pp.u, pp.port, !react);
         if (react) {
             try rowSet(self, pp.u);
@@ -801,6 +869,9 @@ pub fn patRow(self: *Gen, node: u16, bits: u64) void {
     if (node == Lower.ground) return;
     if (self.pat[@intFromBool(self.pat_react)].len == 0) return;
     self.pat[@intFromBool(self.pat_react)][node] |= bits;
+    // A superset: a stamp of `x[u]` itself (an `ib`) is marked when the
+    // contribution reaches `u` through an operator too.
+    self.dpat[node] |= self.cur_dyn & bits;
     self.rows[@intFromBool(self.pat_react)] |= uBit(node);
 }
 
@@ -916,6 +987,19 @@ fn nodeBit(node: u16) u64 {
 fn patOf(self: *const Gen, u: u32) u64 {
     const half = self.pat[@intFromBool(self.pat_react)];
     return if (half.len == 0) std.math.maxInt(u64) else half[u];
+}
+
+/// Returns the columns contribution `i`'s rows reach through a
+/// frequency-dependent operator: its value's, and a §5.6.5 switch partner's,
+/// whose value the same row selects (`switchRowDeps`).
+fn contribDyn(self: *const Gen, i: usize, c: Lower.Contribution, react: bool) u64 {
+    if (self.an.acdyn.len == 0) return 0;
+    var acc = self.an.acDynDeps(if (react) c.react_val else c.resist_val);
+    if (plan_topo.switchFlowOf(self.input(), i)) |j| {
+        const f = self.lowered.contributions.items[j];
+        acc |= self.an.acDynDeps(if (react) f.react_val else f.resist_val);
+    }
+    return acc;
 }
 
 /// Returns the columns of the row `emitSwitchRow` emits. The `S.sel` arm is

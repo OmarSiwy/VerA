@@ -190,6 +190,8 @@ pub const analog_payload: u32 = std.math.maxInt(u32);
 pub const Run = struct {
     arena: std.mem.Allocator,
     file: *const Ast.SourceFile,
+    /// The preprocessed text `starts` indexes.
+    text: []const u8 = "",
     starts: []const u32,
     bag: *diag.Bag,
     out: *std.Io.Writer,
@@ -457,6 +459,8 @@ pub const Run = struct {
     vcd: @import("vcd.zig").Vcd = .{},
     /// `vcd.catalog` of this run, built at the first dump.
     vcd_catalog: ?@import("vcd.zig").Catalog = null,
+    /// §18.3 the `$dumpports` calls compile has checked.
+    ports_dump: @import("vcd.zig").PortsCheck = .{},
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -1663,6 +1667,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
             const at = r.names.get(.{ .scope = scope, .str = gv }) orelse try genvarSlot(r, e, gv, tok);
             try setGenvar(r, e, at, try r.constant(r.file.stmt(f.init).assign.value, tok));
             const name: Ast.StrId = switch (r.file.stmt(f.body)) {
+                // §12.4.3 an unnamed block's external name, genblk<n>.
                 .block => |b| b.gen_name,
                 else => .none, // else: a lone item is an unnamed generate block
             };
@@ -2398,7 +2403,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
     try binding.libraries(&r, file, opts, pp.more_starts);
     var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
@@ -2634,6 +2639,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         r.scope = p.scope;
         try processes(&r, p.blocks);
     }
+    // Refused once every call is checked, so a malformed one is named first.
+    if (r.ports_dump.tok) |tok| return r.fail(tok, "digital system task `$dumpports` is not implemented", .{});
     // A.6.5's `disable` names a block that needs no declaration before its
     // use (it may be in another process), so the ranges are bound here, once
     // every process has a pc range.
