@@ -990,7 +990,8 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain an event trigger", .{});
             const at = self.lookup(self.scope, s.name) orelse
                 return self.fail(tok, "undeclared named event", .{});
-            if (!self.events.contains(at)) return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
+            const decl = self.events.get(at) orelse return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
+            if (tok < decl) return self.fail(tok, "§9.7.3: a named event is declared before it is used", .{});
             _ = try append(self, .{ .trigger = at });
         },
         .event_control => |s| {
@@ -1476,6 +1477,7 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     if (self.net_of.contains(at))
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
+    if (self.events.contains(at)) return self.exprFail(e, "§9.7.3: a named event holds no data; it cannot be assigned");
 }
 
 /// §10.2.3: an automatic task's variables "shall not be assigned values
@@ -1512,16 +1514,48 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         },
         // §4.8.1: real variables are prohibited in "Edge descriptors
         // (posedge, negedge) applied to real variables".
-        .event_posedge, .event_negedge => if (self.reals.contains(try self.scalarSlot(ex.lhs(e))))
-            return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable"),
-        .ident => _ = try self.scalarSlot(e),
+        .event_posedge, .event_negedge => {
+            const x = ex.lhs(e);
+            if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) try exprTerm(self, x);
+            if (self.reals.contains(try self.termSlot(x)))
+                return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable");
+        },
+        .hier_ident => _ = try self.scalarSlot(e),
+        .ident => if (self.events.get(try self.scalarSlot(e))) |decl| if (ex.mainTok(e) < decl)
+            return self.exprFail(e, "§9.7.3: a named event is declared before it is used"),
         // VAMS §7.3.5 an analog event in a discrete event control: the
         // mixed-signal kernel monitors it and delivers an A2D event.
         .event_function => try self.registerMonitor(e),
         // VAMS §9.22.5 `driver_update signal`.
         .event_driver_update => try driver.checkUpdate(self, e),
-        else => return self.exprFail(e, "only variable and posedge/negedge event terms are implemented"), // else: every other event term, refused out loud
+        else => try exprTerm(self, e), // else: every other term is an expression (A.6.5 `event_expression ::= expression`)
     }
+}
+
+/// IEEE 1364-2005 §9.7.2: "An implicit event shall be detected on any change
+/// in the value of the expression", and not on an operand change that leaves
+/// it alone. A hidden slot follows `e`, kept equal to it by an out-of-line
+/// process of its own started at time 0, and the term watches that slot.
+fn exprTerm(self: *Run, e: Ast.ExprId) Error!void {
+    try checkExpr(self, e);
+    const entry = try self.term_slots.getOrPut(self.arena, .{ .scope = self.scope, .e = e });
+    if (entry.found_existing) return;
+    const g = self.growing.?;
+    const ty = typeOf(self, e);
+    const at: u32 = @intCast(g.items.len);
+    entry.value_ptr.* = at;
+    try g.append(self.arena, try filled(self.arena, ty.width, ty.signed, if (ty.real) .zero else .x));
+    if (ty.real) try self.reals.put(self.arena, at, {});
+    self.values = g.items;
+    var watched: std.ArrayList(u32) = .empty;
+    try sensitivity(self, e, &watched);
+    const skip = try append(self, .{ .jump = 0 });
+    const start = position(self);
+    _ = try append(self, .{ .init_var = .{ .slot = at, .value = e } });
+    _ = try append(self, .{ .wait_slots = watched.items });
+    _ = try append(self, .{ .jump = start });
+    self.code.items[skip].jump = position(self);
+    _ = try exec.enqueue(self, .{ .run_process = start }, null, false);
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -1582,7 +1616,7 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; wire [1:0] a, b; tran(a,b); initial $display(\"before\"); endmodule", "a scalar net or a bit-select of a vector net");
     try expectRejected("module m; initial $display(\"%b\",2147483648); endmodule", "unsized constants");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
-    try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");
+    try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "no bits to select");
     // §5.10 "events do not hold any data", so neither direction of the
     // event/variable confusion compiles.
     try expectRejected("module m; event e; initial $display(\"%b\", e); endmodule", "holds no data");

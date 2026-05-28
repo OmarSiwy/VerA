@@ -1335,10 +1335,10 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
         },
         // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
         .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
-        else => .any, // else: a plain name, the one other term checkEvent admits
+        else => .any, // else: a name, or an expression checkEvent gave a slot
     };
     const watched = if (edge == .any) e else ex.lhs(e);
-    try watch(self, id, try self.slot(watched), edge);
+    try watch(self, id, try self.termSlot(watched), edge);
 }
 
 /// Queues `item` in the `.monitor` region of the current time, §17.1.2 and

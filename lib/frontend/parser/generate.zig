@@ -221,6 +221,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
         const items = try self.arena.create(Ast.GenItems);
         items.* = .{
             .events = gb.events.items,
+            .event_toks = gb.event_toks.items,
             .discrete = gb.discrete.items,
             .assigns = gb.assigns.items,
             .gates = gb.gates.items,
@@ -232,6 +233,7 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     } else {
         for (gb.discrete.items) |*d| d.generated = true;
         try b.events.appendSlice(self.arena, gb.events.items);
+        try b.event_toks.appendSlice(self.arena, gb.event_toks.items);
         try b.discrete.appendSlice(self.arena, gb.discrete.items);
         try b.assigns.appendSlice(self.arena, gb.assigns.items);
         try b.gates.appendSlice(self.arena, gb.gates.items);

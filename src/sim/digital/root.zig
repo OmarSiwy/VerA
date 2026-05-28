@@ -237,6 +237,9 @@ pub const Run = struct {
     sync_depth: u16 = 0,
     /// Compiling a function body, which §10.4.4 restricts.
     in_function: bool = false,
+    /// §9.7.2 each event term that is an expression, by the scope it is
+    /// compiled in: the hidden slot `compile.exprTerm` keeps equal to it.
+    term_slots: std.AutoHashMapUnmanaged(struct { scope: u32, e: Ast.ExprId }, u32) = .empty,
     /// The storage of automatic tasks and functions, which §10.2.3 keeps
     /// out of constructs that might outlive an activation.
     auto_slots: std.AutoHashMapUnmanaged(u32, void) = .empty,
@@ -281,8 +284,9 @@ pub const Run = struct {
     arrays: std.AutoHashMapUnmanaged(u32, Array) = .empty,
     /// The slots that are §5.10.4 named events. They occupy a slot only so that
     /// `@(e)` and `-> e` can meet on the waiter list; nothing is ever stored
-    /// there, because §5.10's events "do not hold any data".
-    events: std.AutoHashMapUnmanaged(u32, void) = .empty,
+    /// there, because §5.10's events "do not hold any data". Each to its
+    /// declaration's token, or 0 where no use can precede it (a named block's).
+    events: std.AutoHashMapUnmanaged(u32, u32) = .empty,
     /// Natural types (§5.5.1), indexed by AST ExprId. An ExprId is shared by
     /// every instance of its module, and IEEE 1364-2005 §12.2 gives each
     /// instance its own parameter values, so the truth is `spec_types`, keyed
@@ -758,6 +762,11 @@ pub const Run = struct {
         if (ex.tag(e) != .ident) return self.exprFail(e, "only whole-variable lvalues are implemented");
         return self.lookup(self.scope, ex.strOf(e)) orelse self.exprFail(e, "undeclared digital variable");
     }
+    /// The slot event term `e` watches: a name's own, or the hidden one a
+    /// §9.7.2 expression term keeps (`term_slots`).
+    pub fn termSlot(self: *Run, e: Ast.ExprId) Error!u32 {
+        return self.term_slots.get(.{ .scope = self.scope, .e = e }) orelse self.slot(e);
+    }
     /// The type a slot's value has, for an assignment to it.
     pub fn slotType(self: *const Run, at: u32) compile.Type {
         if (self.reals.contains(at)) return compile.real_type;
@@ -1055,7 +1064,7 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
         try r.subs.append(arena, .{ .decl = t, .inst = scope, .frame = undefined });
     }
     try declareParams(r, scope, m.params, over);
-    try declareEvents(r, m.events, m.main_tok);
+    try declareEvents(r, m.events, m.event_toks, m.main_tok);
     const written = if (r.mixed) try digitalWrites(r, m) else std.AutoHashMapUnmanaged(Ast.StrId, void).empty;
     for (m.vars) |v| {
         // VAMS §7.3.6.4: an analog variable a digital expression reads is
@@ -1343,14 +1352,14 @@ fn implicitNet(r: *Run, e: *Elab, scope: u32, x: Ast.ExprId) Error!void {
 
 /// §5.10.4 a named event gets a slot so `-> e` and `@(e)` have a rendezvous
 /// point on the waiter list; the stored value is never read or written.
-fn declareEvents(r: *Run, names: []const Ast.StrId, tok: u32) Error!void {
+fn declareEvents(r: *Run, names: []const Ast.StrId, toks: []const u32, tok: u32) Error!void {
     const g = r.growing.?;
-    for (names) |name| {
+    for (names, 0..) |name, i| {
         if (g.items.len == std.math.maxInt(u32)) return r.fail(tok, "too many digital storage slots", .{});
         const at: u32 = @intCast(g.items.len);
         try r.bind(name, at, tok);
         try g.append(r.arena, try filled(r.arena, 1, false, .x));
-        try r.events.put(r.arena, at, {});
+        try r.events.put(r.arena, at, if (i < toks.len) toks[i] else 0);
     }
     r.values = g.items;
 }
@@ -1412,7 +1421,7 @@ pub fn blockScope(r: *Run, scope: u32, s: Ast.StmtId) Error!u32 {
     defer r.scope = saved;
     r.scope = at;
     try declareParams(r, at, b.params, &.{});
-    try declareEvents(r, b.events, tok);
+    try declareEvents(r, b.events, &.{}, tok);
     for (b.vars) |v| {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized block-local variable is not implemented", .{});
         _ = try mintVar(r, v);
@@ -1703,7 +1712,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
         .block => |b| {
             r.scope = scope;
             for (b.gen.defparams) |d| try r.defparams.put(r.arena, .{ .scope = scope, .str = d.path }, d);
-            try declareEvents(r, b.gen.events, tok);
+            try declareEvents(r, b.gen.events, b.gen.event_toks, tok);
             try declareDrivers(r, e, scope, b.gen.*);
             if (b.gen.discrete.len != 0) try e.procs.append(r.arena, .{ .scope = scope, .blocks = b.gen.discrete });
             for (b.gen.discrete) |d| try blockScopes(r, scope, d.body);
