@@ -763,6 +763,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             const sub = self.subs.items[idx];
             try checkArgs(self, sub.decl, ex.args(e), ex.mainTok(e));
             try self.call_subs.put(self.arena, e, idx - self.sub_base.get(inst).?);
+            if (self.reals.contains(sub.frame.result)) break :blk real_type;
             const result = self.values[sub.frame.result];
             break :blk .{ .width = result.width, .signed = result.signed };
         },
@@ -960,6 +961,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (self.in_function and s.nonblocking) return self.fail(tok, "§10.4.4: a function body cannot contain a nonblocking assignment", .{});
             if (self.in_function and s.timing != .none) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
             try checkTarget(self, s.target);
+            if (s.nonblocking) try notAutomatic(self, s.target, "a nonblocking assignment");
             try checkExpr(self, s.value);
             if (s.timing == .none) {
                 _ = try append(self, .{ .assign = .{ .target = s.target, .value = s.value, .nonblocking = s.nonblocking } });
@@ -1042,7 +1044,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             switch (task) {
                 // All three format the same surface, so all three are
                 // validated by the same dry run.
-                .show, .strobe, .monitor => |sh| try display.display(self, s.args, null, sh),
+                .show, .strobe, .monitor => |sh| {
+                    if (task == .monitor) for (s.args) |a| if (a != .none) try notAutomatic(self, a, "$monitor");
+                    try display.display(self, s.args, null, sh);
+                },
                 .monitor_enable => if (s.args.len != 0)
                     return self.fail(tok, "$monitoron and $monitoroff take no arguments", .{}),
                 .timeformat => {
@@ -1184,6 +1189,7 @@ fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind
     // of them (and, for `force`, net selects), which no fixture writes.
     if (ex.tag(target) != .ident and ex.tag(target) != .hier_ident) return self.exprFail(target, "a procedural continuous assignment names one whole variable or net");
     const at = try self.scalarSlot(target);
+    try notAutomatic(self, target, "a procedural continuous assignment");
     const force = kind == .force or kind == .release;
     if (!force and self.net_of.contains(at)) return self.exprFail(target, "§9.3.1: assign/deassign take a variable; a net is forced");
     if (kind == .deassign or kind == .release) {
@@ -1470,6 +1476,20 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     if (self.net_of.contains(at))
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
+}
+
+/// §10.2.3: an automatic task's variables "shall not be assigned values
+/// using nonblocking assignments or procedural continuous assignments" and
+/// "shall not be traced with system tasks such as $monitor". `e` is the
+/// target, or a traced argument.
+fn notAutomatic(self: *Run, e: Ast.ExprId, comptime what: []const u8) Error!void {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .concat => for (ex.args(e)) |x| try notAutomatic(self, x, what),
+        .ident, .hier_ident, .index => if (self.auto_slots.contains(try self.slot(self.chainBase(e).base)))
+            return self.exprFail(e, "§10.2.3: " ++ what ++ " cannot name a variable of an automatic task or function"),
+        else => {}, // else: an expression names no storage to outlive the activation, its operands are read now
+    }
 }
 
 /// §9.7.1 a delay is a "delay_value", which A.8.3 makes

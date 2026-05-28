@@ -237,6 +237,9 @@ pub const Run = struct {
     sync_depth: u16 = 0,
     /// Compiling a function body, which §10.4.4 restricts.
     in_function: bool = false,
+    /// The storage of automatic tasks and functions, which §10.2.3 keeps
+    /// out of constructs that might outlive an activation.
+    auto_slots: std.AutoHashMapUnmanaged(u32, void) = .empty,
     /// The saved storage of the automatic activations in progress.
     saved_planes: std.ArrayList(u64) = .empty,
     /// §10.2.3 the activations of recursive timed tasks: the one the
@@ -744,8 +747,10 @@ pub const Run = struct {
                 const next = if (k == 0) self.upward(part) else self.instances.get(.{ .scope = scope, .str = part });
                 scope = next orelse return if (std.mem.indexOfScalar(u8, self.file.str(part), '[') != null)
                     self.fail(self.file.exprs.mainTok(e), "§12.5: `{s}`: an instance select out of range, or of no array", .{self.file.str(part)})
+                else if (self.sub_by_name.get(.{ .scope = if (k == 0) self.instanceOf(self.scope) else scope, .str = part })) |idx| if (self.subs.items[idx].decl.automatic)
+                    self.fail(self.file.exprs.mainTok(e), "§10.2.1: `{s}` is automatic: its items cannot be accessed by hierarchical references", .{self.file.str(part)})
                 else
-                    self.exprFail(e, "undeclared instance in a hierarchical reference");
+                    self.exprFail(e, "undeclared instance in a hierarchical reference") else self.exprFail(e, "undeclared instance in a hierarchical reference");
             }
             return self.names.get(.{ .scope = scope, .str = parts[parts.len - 1] }) orelse
                 self.exprFail(e, "undeclared digital variable");
@@ -1087,6 +1092,10 @@ fn declare(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, binds: []con
             sub.frame = try frame(r, sub.decl, scope);
             sub.framed = true;
         }
+        // §12.5: a task or function is a scope a hierarchical name reaches;
+        // §10.2.1: "Automatic task items cannot be accessed by hierarchical
+        // references" (`slot` names why).
+        if (!sub.decl.automatic) try r.instances.put(r.arena, .{ .scope = scope, .str = sub.decl.name }, sub.frame.scope);
         try blockScopes(r, sub.frame.scope, sub.decl.body);
     }
     for (m.discrete) |d| try blockScopes(r, scope, d.body);
@@ -2155,6 +2164,7 @@ pub fn frame(r: *Run, t: *const Ast.Subroutine, inst: u32) Error!Frame {
         if (v.init != .none) return r.fail(v.main_tok, "an initialized task or function variable is not implemented", .{});
         _ = try mintVar(r, v);
     }
+    if (t.automatic) for (first..g.items.len) |at| try r.auto_slots.put(r.arena, @intCast(at), {});
     return .{ .scope = scope, .ports = ports, .result = result, .first = first, .count = @as(u32, @intCast(g.items.len)) - first };
 }
 
