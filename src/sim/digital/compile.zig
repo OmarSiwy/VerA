@@ -43,7 +43,9 @@ pub const Instruction = union(enum(u5)) {
     branch: struct { condition: Ast.ExprId, otherwise: u32 },
     jump: u32,
     case_select: struct { statement: Ast.StmtId, targets: u32, fallback: u32, ty: Type },
-    repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32 },
+    /// `clamp`: §9.7.7's repeat event control, where a count <= 0 is no
+    /// occurrence; the §9.6 statement refuses a negative one.
+    repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32, clamp: bool = false },
     repeat_next: struct { counter: u32, body: u32 },
     /// §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
@@ -90,7 +92,8 @@ pub const Instruction = union(enum(u5)) {
     call_timed: struct { sub: u32, args: []const Ast.ExprId },
     /// The end of a `call_timed` activation of task `n`.
     task_return: u32,
-    /// §17.5 start an asynchronous PLA's own process at this pc.
+    /// Start a process of its own at this pc: §17.5 an asynchronous PLA's,
+    /// or §9.7.7 the wait of a nonblocking assignment's event control.
     pla_start: u32,
     /// §9.8.2 `fork`: start every arm as a process of its own; join cell
     /// `join` counts them back, and the parent resumes at `end`.
@@ -971,20 +974,49 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             }
             // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
             if (s.timing_is_delay) try checkDelay(self, s.timing) else {
-                // ponytail: no `<= @(e) rhs`. §8.5.3.4's nonblocking form
-                // does not suspend, so the parked value would have to be
-                // held by the waiter, not a per-site cell; give `Waiter` a
-                // payload when something needs it.
-                if (s.nonblocking) return self.fail(tok, "an event control inside a nonblocking assignment is not implemented", .{});
                 try checkEvent(self, s.timing);
+                if (s.timing_repeat != .none) {
+                    try checkExpr(self, s.timing_repeat);
+                    if (typeOf(self, s.timing_repeat).width > 64) return self.exprFail(s.timing_repeat, "repeat counts wider than 64 bits are not implemented");
+                }
             }
             if (self.holds.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many intra-assignment timing controls", .{});
             const cell: u32 = @intCast(self.holds.items.len);
             try self.holds.append(self.arena, try filled(self.arena, 1, false, .x));
             _ = try append(self, .{ .sample = .{ .statement = id, .cell = cell } });
-            // §8.5.3.4: a nonblocking one schedules the update and falls
-            // through, so it has no resumption point and needs no `deposit`.
-            if (!s.nonblocking) _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
+            // §8.5.3.4: a nonblocking one with a delay schedules the update
+            // and falls through, so it has no resumption point and needs no
+            // `deposit`.
+            if (s.nonblocking and s.timing_is_delay) return;
+            if (!parksOnly(s)) {
+                _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
+                return;
+            }
+            // A nonblocking one with an event control falls through too: a
+            // process of its own waits and then queues the update.
+            // ponytail: the value is parked per site, so a second sample
+            // before the first's event replaces it.
+            var skip: ?u32 = null;
+            if (s.nonblocking) {
+                _ = try append(self, .{ .pla_start = position(self) + 2 });
+                skip = try append(self, .{ .jump = 0 });
+            }
+            // §9.7.7 `repeat (n) @(e)`: n occurrences, none when n <= 0.
+            if (s.timing_repeat != .none) {
+                if (self.repeats.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many repeat counters", .{});
+                const counter: u32 = @intCast(self.repeats.items.len);
+                try self.repeats.append(self.arena, 0);
+                const test_pc = try append(self, .{ .repeat_start = .{ .count = s.timing_repeat, .counter = counter, .end = 0, .clamp = true } });
+                const body_pc = position(self);
+                _ = try append(self, .{ .wait_event = s.timing });
+                _ = try append(self, .{ .repeat_next = .{ .counter = counter, .body = body_pc } });
+                self.code.items[test_pc].repeat_start.end = position(self);
+            } else _ = try append(self, .{ .wait_event = s.timing });
+            _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
+            if (skip) |at| {
+                _ = try append(self, .stop);
+                self.code.items[at].jump = position(self);
+            }
         },
         // A.6.5 `event_trigger`. The slot is resolved here, not at run
         // time, so a trigger cannot fail in the middle of a dispatch.
@@ -1510,6 +1542,13 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
     if (self.events.contains(at)) return self.exprFail(e, "§9.7.3: a named event holds no data; it cannot be assigned");
+}
+
+/// Does intra-assignment control `s` leave its `.sample` only parking the
+/// value, the wait compiled after it: a `repeat` count, or an event control
+/// on a nonblocking assignment (§9.7.7)?
+pub fn parksOnly(s: @FieldType(Ast.Stmt, "assign")) bool {
+    return !s.timing_is_delay and (s.nonblocking or s.timing_repeat != .none);
 }
 
 /// §10.2.3: an automatic task's variables "shall not be assigned values

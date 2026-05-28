@@ -456,6 +456,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
             .nonblocking = true,
             .timing = timing.expr,
             .timing_is_delay = timing.is_delay,
+            .timing_repeat = timing.count,
         } }, tok);
     }
     // A.6.4 `task_enable ::= hierarchical_task_identifier [ ( expression
@@ -487,6 +488,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
                 .value = value,
                 .timing = timing.expr,
                 .timing_is_delay = timing.is_delay,
+                .timing_repeat = timing.count,
             } }, tok);
         },
         .colon => { // §5.6.7 / A.6.10 indirect contribution
@@ -509,9 +511,7 @@ fn parseExprOrContributeStmt(self: *Parser) Error!Ast.StmtId {
 /// operator: A.6.5 `delay_control | event_control`. Analog has no such
 /// production, so outside the discrete grammar this reads nothing and the
 /// expression parser reports a `#` or `@`.
-fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool } {
-    // ponytail: no `repeat ( n ) @(e)`. A.6.5's third alternative needs a
-    // countdown around the waiter; add it beside the `.at` arm when asked.
+fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bool, count: Ast.ExprId = .none } {
     if (!self.discreteGrammar()) return .{ .expr = .none, .is_delay = false };
     switch (self.peek()) {
         .hash => {
@@ -521,6 +521,15 @@ fn parseIntraTiming(self: *Parser) Error!struct { expr: Ast.ExprId, is_delay: bo
         .at => {
             self.pos += 1;
             return .{ .expr = try parseEvent(self), .is_delay = false };
+        },
+        // A.6.5 `repeat ( expression ) event_control`.
+        .kw_repeat => {
+            self.pos += 1;
+            _ = try self.expect(.lparen);
+            const count = try parse_expr.parseExpr(self);
+            _ = try self.expect(.rparen);
+            _ = try self.expect(.at);
+            return .{ .expr = try parseEvent(self), .is_delay = false, .count = count };
         },
         else => return .{ .expr = .none, .is_delay = false }, // else: no intra-assignment timing control
     }
