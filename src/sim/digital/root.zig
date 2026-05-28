@@ -433,6 +433,8 @@ pub const Run = struct {
     vcd: @import("vcd.zig").Vcd = .{},
     /// `vcd.catalog` of this run, built at the first dump.
     vcd_catalog: ?@import("vcd.zig").Catalog = null,
+    /// §18.3 the `$dumpports` calls compile has checked.
+    ports_dump: @import("vcd.zig").PortsCheck = .{},
 
     /// VAMS §8.5 / §8.4.3.2: the analog block reads `slot` outside any event
     /// guard, so it is implicitly sensitive to it and every change is an
@@ -2256,6 +2258,8 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
         r.scope = p.scope;
         try processes(&r, p.blocks);
     }
+    // Refused once every call is checked, so a malformed one is named first.
+    if (r.ports_dump.tok) |tok| return r.fail(tok, "digital system task `$dumpports` is not implemented", .{});
     // A.6.5's `disable` names a block that needs no declaration before its
     // use (it may be in another process), so the ranges are bound here, once
     // every process has a pc range.

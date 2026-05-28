@@ -1040,6 +1040,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             // §17.4.2 Syntax 17-12 `$stop [ ( n ) ]`, refused by the runner
             // below either way.
             if (std.mem.eql(u8, name, "$stop") and s.args.len > 1) return self.fail(tok, "$stop accepts zero or one argument", .{});
+            if (@import("vcd.zig").ports_tasks.get(name)) |op| return @import("vcd.zig").checkPorts(self, op, s.args, tok);
             const task = tasks.get(name) orelse return self.fail(tok, "digital system task `{s}` is not implemented", .{name});
             switch (task) {
                 // All three format the same surface, so all three are

@@ -443,6 +443,70 @@ pub fn target(r: *Run, e: Ast.ExprId) Error!Target {
     return .{ .scope = scope };
 }
 
+/// §18.3 the extended VCD tasks.
+pub const PortsOp = enum { ports, off, on, all, limit, flush };
+
+pub const ports_tasks = std.StaticStringMap(PortsOp).initComptime(.{
+    .{ "$dumpports", .ports },
+    .{ "$dumpportsoff", .off },
+    .{ "$dumpportson", .on },
+    .{ "$dumpportsall", .all },
+    .{ "$dumpportslimit", .limit },
+    .{ "$dumpportsflush", .flush },
+});
+
+/// What §18.3.1's rules across `$dumpports` calls need: the scopes and
+/// literal file names already given, and the first call.
+pub const PortsCheck = struct {
+    tok: ?u32 = null,
+    scopes: std.ArrayList(u32) = .empty,
+    files: std.ArrayList(Ast.StrId) = .empty,
+};
+
+/// Refuses a malformed §18.3 call (Syntax 18-21 to 18-25).
+// ponytail: the checks only; the dump itself is refused once every call is
+// checked (`root.elaborate`).
+pub fn checkPorts(r: *Run, op: PortsOp, args: []const Ast.ExprId, tok: u32) Error!void {
+    const ex = &r.file.exprs;
+    const given: []const Ast.ExprId = if (args.len == 1 and args[0] == .none) &.{} else args;
+    for (given) |a| if (a == .none) return r.fail(tok, "the §18.3 dump tasks take no null arguments", .{});
+    switch (op) {
+        // `$dumpports ( scope_list , file_pathname )`: "Only modules are
+        // allowed (not variables)", "Each scope specified in the scope_list
+        // shall be unique", and "Specifying the same file_pathname multiple
+        // times is not allowed". The last argument is the file unless it
+        // names an instance.
+        .ports => {
+            r.ports_dump.tok = r.ports_dump.tok orelse tok;
+            for (given, 0..) |a, i| {
+                const last = i + 1 == given.len;
+                if (last and ex.tag(a) == .str_literal) {
+                    const f = ex.strOf(a);
+                    if (std.mem.indexOfScalar(Ast.StrId, r.ports_dump.files.items, f) != null)
+                        return r.exprFail(a, "§18.3.1: the same file_pathname shall not be given to two $dumpports calls");
+                    try r.ports_dump.files.append(r.arena, f);
+                    continue;
+                }
+                if (ex.tag(a) != .ident and ex.tag(a) != .hier_ident) {
+                    if (last) continue;
+                    return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance");
+                }
+                const sc = switch (try target(r, a)) {
+                    .scope => |sc| sc,
+                    .slot => if (last) continue else return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance: only modules are allowed, not variables"),
+                };
+                if (std.mem.indexOfScalar(u32, r.ports_dump.scopes.items, sc) != null)
+                    return r.exprFail(a, "§18.3.1: each $dumpports scope shall be unique");
+                try r.ports_dump.scopes.append(r.arena, sc);
+            }
+        },
+        .off, .on, .all, .flush => if (given.len > 1) return r.fail(tok, "$dumpportsoff, $dumpportson, $dumpportsall and $dumpportsflush take at most one file_pathname argument", .{}),
+        // "The filesize argument is required".
+        .limit => if (given.len == 0 or given.len > 2) return r.fail(tok, "$dumpportslimit takes a filesize, then optionally a file_pathname", .{}),
+    }
+    for (given) |a| if (ex.tag(a) != .ident and ex.tag(a) != .hier_ident) try compile.checkExpr(r, a);
+}
+
 // ---- the interpreter's half ---------------------------------------------------
 
 /// `r`'s `Catalog`: `offs` gives each slot's first plane word (a native
