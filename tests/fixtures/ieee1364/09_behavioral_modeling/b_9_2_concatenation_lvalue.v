@@ -12,7 +12,6 @@
 //     two bits to r[1:0] = 01, the last four to m[1] = a; r[7:2] untouched
 //     (r = 8'hff before -> r = 11111101)
 //! inherited IEEE 1364-2005 9.2 9.2.1
-//! xfail a concatenation on the left of a procedural assignment is refused ("only whole-variable lvalues are implemented"), even of whole variables
 module b_9_2_concatenation_lvalue;
   reg [7:0] rega, regb, acc, r;
   reg carry;
