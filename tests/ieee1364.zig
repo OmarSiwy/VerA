@@ -96,10 +96,15 @@ pub fn coverage(init: std.process.Init) !u8 {
         if (e.kind != .file or !std.mem.endsWith(u8, e.path, ".v")) continue;
         const path = try arena.dupe(u8, e.path);
         const source = try dir.readFileAlloc(io, path, arena, .limited(1 << 20));
+        const neg = harness.digitalNegative(source) or hasReject(source);
+        // A source a case reads through `// digital-runner: files` has no
+        // golden and is not a case.
+        if (!neg) for ([_][]const u8{ ".expected.txt", ".expected.vcd" }) |ext| {
+            if (dir.access(io, try std.mem.concat(arena, u8, &.{ path[0 .. path.len - 2], ext }), .{})) |_| break else |_| {}
+        } else continue;
         const ch = try chapterOf(&chapters, arena, path);
         fixtures += 1;
         ch.fixtures += 1;
-        const neg = harness.digitalNegative(source) or hasReject(source);
         var cites: std.ArrayList([]const u8) = .empty;
         try inheritedCites(arena, source, &cites);
         if (cites.items.len == 0) {

@@ -5,12 +5,12 @@
 // operation", zero when it "did not result in an error".
 //
 // "A" is written and the descriptor closed; the $fwrite of "B" after the
-// close is not allowed, so it writes nothing (VerA warns, W1153) and is an
+// close is not allowed, so it writes nothing (VerA warns, W1154) and is an
 // error $ferror reports. The file, read back, holds "A" alone:
 //   $ferror after the refused write -> nonzero -> "1"
 //   the file: 65 (A), then EOF -> "65 -1"
 //! inherited IEEE 1364-2005 17.2.1
-// digital-runner: warning W1153
+// digital-runner: warning W1154
 module b_17_2_1_closed_channel_not_written;
   integer fd, errno, c;
   reg [639:0] str;

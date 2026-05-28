@@ -196,7 +196,9 @@ pub const Vcd = struct {
         const units = [_][]const u8{ "fs", "ps", "ns", "us", "ms", "s" };
         const k: i32 = @divFloor(e, 3);
         try w.writer.print("$timescale {d}{s} $end\n", .{ std.math.pow(u32, 10, @intCast(e - 3 * k)), units[@intCast(k + 5)] });
-        try self.dumpScope(gpa, &w, cat, src, 0, null);
+        // Every top-level module is a root: scope 0 and each scope that is
+        // its own parent.
+        for (cat.scopes, 0..) |sc, i| if (i == 0 or sc.parent == i) try self.dumpScope(gpa, &w, cat, src, @intCast(i), null);
         try w.writer.writeAll("$enddefinitions $end\n");
         try self.put(io, w.written());
     }
@@ -431,8 +433,8 @@ pub fn target(r: *Run, e: Ast.ExprId) Error!Target {
         const last = i + 1 == parts.len;
         if (r.instances.get(.{ .scope = scope, .str = p })) |child| {
             scope = child;
-        } else if (first and p == r.scope_info.items[0].name) {
-            scope = 0;
+        } else if (if (first) rootNamed(r, p) else null) |t| {
+            scope = t;
         } else if (last) {
             const at = (if (parts.len == 1) r.lookup(scope, p) else r.names.get(.{ .scope = scope, .str = p })) orelse
                 return r.exprFail(e, "$dumpvars names a module instance or a variable");
@@ -507,6 +509,12 @@ pub fn checkPorts(r: *Run, op: PortsOp, args: []const Ast.ExprId, tok: u32) Erro
     for (given) |a| if (ex.tag(a) != .ident and ex.tag(a) != .hier_ident) try compile.checkExpr(r, a);
 }
 
+/// The top-level module named `name`.
+fn rootNamed(r: *const Run, name: Ast.StrId) ?u32 {
+    for (r.roots) |t| if (r.scope_info.items[t].name == name) return t;
+    return null;
+}
+
 // ---- the interpreter's half ---------------------------------------------------
 
 /// `r`'s `Catalog`: `offs` gives each slot's first plane word (a native
@@ -537,9 +545,7 @@ pub fn catalog(r: *Run, a: std.mem.Allocator, offs: []const u32) Error!Catalog {
             try decls.appendSlice(a, t.vars);
         } else {
             if (info.lexical) continue;
-            const m = for (r.file.modules) |*m| {
-                if (m.name == info.module) break m;
-            } else unreachable; // every instance scope was minted from a module
+            const m = &r.file.modules[info.def];
             for (m.ports) |p| try names.append(a, p.name);
             for (m.nets) |n| try names.append(a, n.name);
             try decls.appendSlice(a, m.vars);
@@ -617,7 +623,9 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
         .vars => {
             var targets: std.ArrayList(Target) = .empty;
             var levels: u32 = 0;
-            if (args.len == 0) try targets.append(a, .{ .scope = 0 }) else {
+            if (args.len == 0) {
+                for (r.roots) |s| try targets.append(a, .{ .scope = s });
+            } else {
                 levels = std.math.lossyCast(u32, (try exec.eval(r, a, args[0], 0)).asInt() orelse 0);
                 for (args[1..]) |e| try targets.append(a, try target(r, e));
             }

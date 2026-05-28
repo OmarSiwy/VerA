@@ -1,7 +1,6 @@
 // IEEE1364-2005 §13.3.1.4: an unqualified cell selector may pair with
 // `liblist`. Declaration acceptance only: the configuration binds the one
 // module there is.
-// digital-runner: warning W0253
 //! inherited IEEE 1364-2005 13.3.1.4
 config config_legal;
   design config_host;

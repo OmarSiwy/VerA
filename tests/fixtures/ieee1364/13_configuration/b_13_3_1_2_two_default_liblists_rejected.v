@@ -10,7 +10,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 13.3.1.2
 //! reject more than one default
-//! xfail VerA accepts a second `default liblist` in one config (W0253 only) and runs the design
+//! reject E0243
 config cfg;
   design work.top;
   default liblist work;
