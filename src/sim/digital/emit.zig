@@ -598,7 +598,7 @@ fn catalog(self: *Emitter) Error!void {
     try self.print("\n    }},\n", .{});
     try table(self, "var_start", c.var_start);
     try self.print("    .vars = &.{{", .{});
-    for (c.vars) |v| try self.print("\n        .{{ .slot = {d}, .off = {d}, .width = {d}, .real = {}, .head = \"{f}\", .tail = \"{f}\" }},", .{ v.slot, v.off, v.width, v.real, std.zig.fmtString(v.head), std.zig.fmtString(v.tail) });
+    for (c.vars) |v| try self.print("\n        .{{ .slot = {d}, .off = {d}, .width = {d}, .real = {}, .event = {}, .head = \"{f}\", .tail = \"{f}\" }},", .{ v.slot, v.off, v.width, v.real, v.event, std.zig.fmtString(v.head), std.zig.fmtString(v.tail) });
     try self.print("\n    }},\n    .finest = {d},\n}};\n\n", .{c.finest});
 }
 
@@ -791,7 +791,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try int(self, t.args[3]);
                     try self.print(") }};\n", .{});
                 },
-                .printtimescale => try static(self, display.printTimescale),
+                .printtimescale => try static(self, display.printTimescale, .{t.args}),
                 // §17.1.2: the call is queued, its arguments are read then.
                 .strobe => try self.print("            try s.strobe({d});\n", .{try site(self, pc)}),
                 // §17.1.3: one standing monitor, which a change of any
@@ -856,6 +856,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try self.print(", {d}, {d}, {d});\n", .{ in.width, at, ty.width });
                     try assignment(self, t.args[2], .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
                 },
+                .fflush => {},
                 .fclose => {
                     try self.print("            s.fclose(", .{});
                     try int64(self, t.args[0]);
@@ -876,13 +877,19 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try show(self, t.args[1..], sh);
                     try assignChars(self, t.args[0], "s.captured()");
                 },
+                .sformat => {
+                    if (r.file.exprs.tag(t.args[1]) != .str_literal) return self.refuse("a $sformat format held in a variable");
+                    try self.print("            s.capture();\n", .{});
+                    try showFormat(self, t.args[1..], .{ .radix = .decimal, .newline = false }, true);
+                    try assignChars(self, t.args[0], "s.captured()");
+                },
                 // §18.1: the arguments are read now; the targets were
                 // resolved at elaboration.
                 .dump => |op| switch (op) {
                     .file => if (t.args.len == 1) {
                         try self.print("            try s.dumpFile(", .{});
                         const n = try expr.selfDetermined(self, t.args[0]);
-                        try self.print(", {d});\n", .{n.width});
+                        try self.print(", {d}, \"{f}\");\n", .{ n.width, std.zig.fmtString(vcd.callText(r.text, r.starts[t.tok])) });
                     },
                     .vars => {
                         try self.print("            try s.dumpVars(", .{});
@@ -969,7 +976,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
             for (x.slots) |at| try self.print("            try s.watch(id, {d}, .any);\n", .{at});
             try self.print("            return;\n", .{});
         },
-        .trigger => |at| try self.print("            try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ at, next }),
+        .trigger => |at| try self.print("            {s}try s.wake({d}, .x, .x);\n            continue :sw {d};\n", .{ if (dumps(r)) try std.fmt.allocPrint(self.arena, "s.fire({d});\n            ", .{at}) else "", at, next }),
         .restart => |x| try self.print(
             \\            if (restarted) return s.fail("this always process completed an iteration without suspending; it needs a delay or event control", .{{}});
             \\            restarted = true;
@@ -1454,15 +1461,31 @@ pub fn assignInt(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
     try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
 }
 
+/// `exec.assign` of the Zig `[2]u64` `v`, a signed 64-bit value's value and
+/// unknown planes, to `target`.
+pub fn assignPlanes(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
+    const at = try cellOf(self, std.math.maxInt(u32), 64);
+    try self.print("            try M.set(s, {d}, L.k({s}[0], {s}[1]), 0x{x});\n", .{ at, v, v, std.math.maxInt(u64) });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = 64, .signed = true } } }, .blocking);
+}
+
+/// `exec.assignReal` of the Zig `f64` `v` to `target`.
+pub fn assignReal(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
+    const at = try cellOf(self, std.math.maxInt(u32), 64);
+    try self.print("            try M.set(s, {d}, L.k(@bitCast(@as(f64, {s})), 0), 0x{x});\n", .{ at, v, std.math.maxInt(u64) });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = compile.real_type } }, .blocking);
+}
+
 /// `system.stringValue` of the Zig `[]const u8` `v` assigned to `target`,
 /// through a scratch cell as wide as the target (§17.2.3: "the string
 /// assignment to variable rules").
 pub fn assignChars(self: *Emitter, target: Ast.ExprId, v: []const u8) Error!void {
-    const ty = try targetType(self, target);
-    if (ty.real) return self.refuse("characters assigned to a real");
-    const at = try cellOf(self, std.math.maxInt(u32) - words(ty.width), ty.width);
-    try self.print("            s.setChars({d}, {d}, {s});\n", .{ at, ty.width, v });
-    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
+    // A real takes the characters' low 64 bits as an unsigned number.
+    const tt = try targetType(self, target);
+    const w = if (tt.real) 64 else tt.width;
+    const at = try cellOf(self, std.math.maxInt(u32) - words(w), w);
+    try self.print("            s.setChars({d}, {d}, {s});\n", .{ at, w, v });
+    try assignment(self, target, .{ .stored = .{ .off = at, .ty = .{ .width = w, .signed = false } } }, .blocking);
 }
 
 /// `exec.eval(e, 0).asInt()` as a Zig `?i64`.
@@ -1481,28 +1504,38 @@ fn int(self: *Emitter, e: Ast.ExprId) Error!void {
 
 /// Text the interpreter prints from `r` alone at this pc (`%m`,
 /// `$printtimescale`), captured once and written as a literal.
-fn staticText(self: *Emitter, f: fn (*Run) root.Error!void) Error![]const u8 {
+fn staticText(self: *Emitter, comptime f: anytype, args: anytype) Error![]const u8 {
     var buf: std.Io.Writer.Allocating = .init(self.arena);
     const saved = self.r.out;
     self.r.out = &buf.writer;
     defer self.r.out = saved;
-    f(self.r) catch return self.refuse("text the engine prints only at run time");
+    @call(.auto, f, .{self.r} ++ args) catch return self.refuse("text the engine prints only at run time");
     return buf.written();
 }
 
-fn static(self: *Emitter, f: fn (*Run) root.Error!void) Error!void {
-    try self.print("            try s.out.writeAll(\"{f}\");\n", .{std.zig.fmtString(try staticText(self, f))});
+fn static(self: *Emitter, comptime f: anytype, args: anytype) Error!void {
+    try self.print("            try s.out.writeAll(\"{f}\");\n", .{std.zig.fmtString(try staticText(self, f, args))});
 }
 
 /// `display.display` walked at compile time: literal text is written as is,
 /// and each conversion becomes one call on its operand (§17.1, Table 9-22).
 fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show) Error!void {
+    return showFormat(self, args, sh, false);
+}
+
+/// `show`, or with `only_first` `display.sformat`'s walk of a literal format.
+fn showFormat(self: *Emitter, args: []const Ast.ExprId, sh: display.Show, only_first: bool) Error!void {
     const r = self.r;
     const ex = &r.file.exprs;
     var text: std.ArrayList(u8) = .empty;
     var arg: usize = 0;
     while (arg < args.len) : (arg += 1) {
         const e = args[arg];
+        if (only_first and arg != 0) {
+            try flush(self, &text);
+            try self.print("            s.warn(\"W1153\", \"{f}\", .{{}});\n", .{std.zig.fmtString(display.sformat_mismatch)});
+            return;
+        }
         if (e == .none) {
             try text.append(self.arena, ' ');
             continue;
@@ -1550,7 +1583,7 @@ fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show) Error!void {
                     try flush(self, &text);
                     try self.print("            try s.time(", .{});
                     const t = try expr.selfDetermined(self, args[arg]);
-                    try self.print(", {d}, {}, {d});\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp });
+                    try self.print(", {d}, {}, {d}, {?d});\n", .{ t.width, t.signed, r.timeOf(r.scope).unit_exp, width });
                 },
                 's', 'S', 'c', 'C' => {
                     arg += 1;
@@ -1559,7 +1592,7 @@ fn show(self: *Emitter, args: []const Ast.ExprId, sh: display.Show) Error!void {
                     const t = try expr.selfDetermined(self, args[arg]);
                     try self.print(", {d}, {}, {?d});\n", .{ t.width, format[i] == 'c' or format[i] == 'C', width });
                 },
-                'm', 'M' => try text.appendSlice(self.arena, try staticText(self, display.emitScope)),
+                'm', 'M' => try text.appendSlice(self.arena, try staticText(self, display.emitScope, .{})),
                 'l', 'L' => {
                     const def = r.scope_info.items[r.scope].def;
                     try text.appendSlice(self.arena, try std.fmt.allocPrint(self.arena, "{s}.{s}", .{ r.file.str(r.def_lib[def]), r.file.str(r.file.modules[def].name) }));

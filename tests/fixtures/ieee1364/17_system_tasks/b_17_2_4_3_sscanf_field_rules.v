@@ -31,7 +31,6 @@
 //   "2.5e1" %f into a real: 25.0 -> "1 25.000000"
 //   "-1.5"  %e into a real -> "1 -1.500000"
 //! inherited IEEE 1364-2005 17.2.4.3
-//! xfail VerA's $sscanf stops a number at _, x, z or ?, ignores a field width (%3d matches nothing), does not implement %* suppression, and assigns nothing for %f/%e/%g
 module b_17_2_4_3_sscanf_field_rules;
   integer code, a, b;
   reg [7:0] h;

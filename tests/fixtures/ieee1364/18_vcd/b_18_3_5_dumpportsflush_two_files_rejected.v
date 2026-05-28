@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 18.3.5
 //! reject E1100
 //! reject argument
-//! xfail extended VCD is not implemented: every $dumpports-family call is refused as "not implemented", not for this rule
 `timescale 1ns/1ns
 module b_18_3_5_dumpportsflush_two_files_rejected_dev(a, y);
   input a;
