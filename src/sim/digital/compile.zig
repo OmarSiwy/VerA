@@ -985,6 +985,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
         // A.6.5 `event_trigger`. The slot is resolved here, not at run
         // time, so a trigger cannot fail in the middle of a dispatch.
         .event_trigger => |s| {
+            if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain an event trigger", .{});
             const at = self.lookup(self.scope, s.name) orelse
                 return self.fail(tok, "undeclared named event", .{});
             if (!self.events.contains(at)) return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
