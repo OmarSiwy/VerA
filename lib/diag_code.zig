@@ -368,11 +368,17 @@ pub const Code = enum(u16) {
     E1100,
     E1101,
     E1102,
+    /// A `.v` design that cannot be a contract device.
+    E1103,
+    /// A SystemVerilog source.
+    E1104,
     W1150,
     W1151,
     W1152,
     W1153,
     W1154,
+    /// A `.v` device whose digital tick is 1 s.
+    W1155,
     W1050,
     W0950,
     E0820,
@@ -5834,6 +5840,41 @@ fn infoOf(c: Code) Info {
             \\`--two-state` to run it with 4-state logic.
             ,
         },
+        .E1103 => .{
+            .title = "design cannot be a contract device",
+            .lrm = "7.8",
+            .explain =
+            \\`vera --emit-zig`, `--check` and `--emit-so` of a `.v` design build a
+            \\contract device an analog host loads: every bit of the top module's
+            \\ports is a pin, an `input` bit sensed through an analog-to-digital
+            \\bridge and an `output` bit driven through a digital-to-analog one, the
+            \\connect modules LRM 7.8 inserts where a digital port meets an
+            \\electrical net. The design's processes run natively inside the
+            \\device, which saves and restores their state at every tick so a host
+            \\can reject a time step.
+            \\
+            \\The message names what the device cannot hold: an `inout` port (the
+            \\analog side would be a driver of a resolved net), a real, integer or
+            \\time port, more than 64 pins, a construct the native code generator
+            \\does not compile, a file a device would read, a procedural continuous
+            \\assignment, or a logic mode other than 4-state (`--state=4`, the
+            \\default for a device; `--state=auto` reruns a design from time 0,
+            \\which a host that owns time cannot allow). `vera --run` and
+            \\`--emit-exe` still run such a design on its own.
+            ,
+        },
+        .E1104 => .{
+            .title = "a SystemVerilog source is not supported",
+            .lrm = "",
+            .explain =
+            \\A `.sv` file is SystemVerilog (IEEE 1800), a different language from
+            \\the IEEE 1364-2005 Verilog and Verilog-AMS VerA compiles. Its
+            \\constructs (`always_ff`, `logic`, `interface` and the rest) would
+            \\otherwise surface as misleading Verilog parse errors, so the file is
+            \\refused by its extension. Write the design in IEEE 1364-2005 Verilog
+            \\and name it `.v`.
+            ,
+        },
         .W1150 => .{
             .title = "memory file word count mismatch",
             .lrm = "IEEE 1364-2005 17.2.9",
@@ -5866,6 +5907,11 @@ fn infoOf(c: Code) Info {
             .title = "file output not written",
             .lrm = "IEEE 1364-2005 17.2.1",
             .explain = "$fclose closes the channels a descriptor names and does not allow any further output to them. A $fdisplay or $fwrite whose descriptor names only closed channels, or a file opened only for reading, writes nothing; $ferror reports the error. The simulation continues.",
+        },
+        .W1155 => .{
+            .title = "device digital tick is 1 s",
+            .lrm = "IEEE 1364-2005 19.8",
+            .explain = "A design with no `timescale directive runs at the simulator's default time unit and precision, which for VerA is 1 s. A contract device built from it delivers every analog-to-digital event at a whole second and schedules every delay in seconds, which an analog host rarely means. Add a `timescale directive (for example `timescale 1ns/1ps) to the design.",
         },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",
