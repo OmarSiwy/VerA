@@ -281,7 +281,28 @@ pub fn build(b: *std.Build) void {
         test_step.dependOn(testRun(b, std.fs.path.stem(h.host), host, runner));
     }
 
-    // The `.v` designs a contract device refuses (`rt.Device`), by name.
+    // `.v` contract devices (`rt.Device`) under a mock analog host, each
+    // imported by its design's name, and the designs a device refuses.
+    const vdev_host = b.createModule(.{
+        .root_source_file = b.path("tests/vdev_host.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "contract", .module = contract }},
+    });
+    for ([_][]const u8{ "v_inv", "v_buf", "v_count", "v_a2d" }) |name| {
+        const gen = b.addRunArtifact(exe);
+        gen.addArg("--emit-zig");
+        gen.addFileArg(b.path(b.fmt("tests/vdev/{s}.v", .{name})));
+        gen.addArg("-o");
+        const device = gen.addOutputFileArg(b.fmt("{s}.zig", .{name}));
+        vdev_host.addImport(name, b.createModule(.{
+            .root_source_file = device,
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{ .{ .name = "contract", .module = contract }, .{ .name = "sim", .module = byName(mods, "sim") } },
+        }));
+    }
+    test_step.dependOn(testRun(b, "vdev_host", vdev_host, runner));
     for ([_]struct { args: []const []const u8, file: []const u8, exit: u8, says: []const u8 }{
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_inout.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_inout`: an inout port" },
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_integer.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_integer`: an integer or time port" },
