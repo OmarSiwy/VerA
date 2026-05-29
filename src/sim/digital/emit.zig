@@ -427,9 +427,9 @@ fn native(self: *Emitter, file_name: []const u8, schedule: Schedule) Error![]con
     try self.print(" }};\n\n", .{});
     try self.print(
         \\pub fn dispatch(s: *S, pc: u32) rt.Error!void {{
-        \\    if (pc < rt.show_base) return procs[pc](s, pc);
+        \\    if (pc < rt.show_base) {s};
         \\
-    , .{});
+    , .{if (entry_of.len == 0) "unreachable" else "return procs[pc](s, pc)"});
     if (p.node_pc.len != 0) try self.print("    if (pc == rt.settle_pc) return settle(s.view());\n", .{});
     try self.print("    return show(s, pc - rt.show_base);\n}}\n\n", .{});
     // The settle event: the nodes in topological order, 64 to a dirty word,
