@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 17.10.2
 //! reject E1100
 //! reject %t
-//! xfail VerA accepts "%t" in a $value$plusargs user_string
 `timescale 1 ns / 1 ns
 module b_17_10_2_value_plusargs_format_rejected;
   integer r, v;

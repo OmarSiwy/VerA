@@ -699,6 +699,10 @@ pub const FileIo = struct {
     tell: *const fn (d: i64) i64,
     seek: *const fn (d: i64, off: i64, op: i64) i64,
     eof: *const fn (d: i64) i64,
+    /// §9.5.7 `$ferror`'s code for the most recent operation on `d`, or on
+    /// the failed open that returned `d` = 0. Optional: without it every
+    /// `$ferror` answers 0, "no error".
+    err: ?*const fn (d: i64) i64 = null,
     /// §9.5.1.1: a host running several analyses in one process calls this
     /// at the first point of each analysis after the first, so a file one
     /// analysis opened "w" and a later one reopens "w" is appended to rather

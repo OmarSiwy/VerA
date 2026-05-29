@@ -137,7 +137,7 @@ pub fn emitFile(self: *Gen) Error!void {
     if (f.files) try depublish(self.gpa, &self.out, file_txt);
     // §9.5.1.2 the same table, public for a host's second context to share
     // (`contract.FileIo`, optional: a host that runs one context ignores it).
-    if (f.files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .new_analysis = zFNewAnalysis };\n\n");
+    if (f.files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .err = zFError, .new_analysis = zFNewAnalysis };\n\n");
     if (f.tbl) try depublish(self.gpa, &self.out, table_txt);
     if (f.rng) try depublish(self.gpa, &self.out, rng_txt);
     if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, limit_txt);

@@ -371,6 +371,8 @@ pub const Code = enum(u16) {
     W1150,
     W1151,
     W1152,
+    W1153,
+    W1154,
     W1050,
     W0950,
     E0820,
@@ -5854,6 +5856,16 @@ fn infoOf(c: Code) Info {
             \\issued." This is that warning; the later definition is the one
             \\every instance binds.
             ,
+        },
+        .W1153 => .{
+            .title = "format specifiers and arguments do not pair up",
+            .lrm = "IEEE 1364-2005 17.2.3",
+            .explain = "The arguments after $sformat's format are consumed by its format specifiers. If not enough arguments are supplied for the specifiers, or too many are supplied, the application shall issue a warning and continue execution: the variable receives the text formatted so far.",
+        },
+        .W1154 => .{
+            .title = "file output not written",
+            .lrm = "IEEE 1364-2005 17.2.1",
+            .explain = "$fclose closes the channels a descriptor names and does not allow any further output to them. A $fdisplay or $fwrite whose descriptor names only closed channels, or a file opened only for reading, writes nothing; $ferror reports the error. The simulation continues.",
         },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",

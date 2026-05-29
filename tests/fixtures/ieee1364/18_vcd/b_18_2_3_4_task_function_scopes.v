@@ -25,7 +25,6 @@
 //   #1 calls t1, which sets accumulator = 5, dumped as the vector
 //   change `b101` followed by accumulator's code               -> acc5=1
 //! inherited IEEE 1364-2005 18.2.3.4
-//! xfail task and function scopes are not dumped: $dumpvars walks module instances and generate blocks only, so a task's or function's variables get no $scope and no $var
 `timescale 1ns/1ns
 module b_18_2_3_4_dut;
   reg [1:0] r;

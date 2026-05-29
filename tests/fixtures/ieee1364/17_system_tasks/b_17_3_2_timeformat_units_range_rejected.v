@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 17.3.2
 //! reject E1100
 //! reject 0 to -15
-//! xfail VerA accepts $timeformat(-16, ...) and formats %t with it
 `timescale 1 ns / 1 ps
 module b_17_3_2_timeformat_units_range_rejected;
   initial begin

@@ -1213,7 +1213,7 @@ pub const State = struct {
     pub fn fshow(self: *State, d: i64) Error!void {
         const bytes = self.captured();
         if (self.quiet) return;
-        try system.channels(system.own, self.io, self.out, d & 0xffff_ffff, bytes);
+        if (try system.channels(system.own, self.io, self.out, d & 0xffff_ffff, bytes)) self.warn("W1154", system.unwritten, .{});
     }
 
     /// The characters `bytes` in the `w`-bit cell at word `off`, the last
@@ -1254,12 +1254,13 @@ pub const State = struct {
         }
     }
 
-    /// §18.1 `$dumpfile` of the characters of a `w`-bit `name`.
-    pub fn dumpFile(self: *State, name: anytype, comptime w: u32) Error!void {
+    /// §18.1 `$dumpfile` of the characters of a `w`-bit `name`; `call` is
+    /// the call as written.
+    pub fn dumpFile(self: *State, name: anytype, comptime w: u32, call: []const u8) Error!void {
         if (self.quiet) return;
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
-        self.dump.setFile(self.gpa, try chars(arena.allocator(), name, w)) catch |e| return self.dumpFail(e);
+        self.dump.setFile(self.gpa, try chars(arena.allocator(), name, w), call) catch |e| return self.dumpFail(e);
     }
 
     /// §18.1.2 one `$dumpvars` (`vcd.Vcd.select`); its dump starts at the
@@ -1306,6 +1307,13 @@ pub const State = struct {
         if (two) @memset(out[n..], 0) else @memcpy(out[n..], self.x[v.off..][0..n]);
     }
 
+    /// §18.2.2 named event `slot` was triggered (`vcd.Vcd.fire`); the
+    /// `wake` that follows asks for the dump event.
+    pub fn fire(self: *State, slot: u32) void {
+        if (self.quiet) return;
+        if (self.dumped.len != 0 and self.dumped[slot]) self.dump.fire(self.catalog.?, slot);
+    }
+
     /// `vcd.Vcd`'s hook: a change of `slot` asks for a dump event.
     pub fn dumpSlot(self: *State, slot: u32) void {
         self.dumped[slot] = true;
@@ -1321,7 +1329,7 @@ pub const State = struct {
     }
 
     /// A run-time warning in `vera --run`'s words, on stderr.
-    fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
+    pub fn warn(self: *State, comptime code: []const u8, comptime message: []const u8, args: anytype) void {
         if (self.quiet) return;
         self.out.flush() catch {};
         var buf: [512]u8 = undefined;
@@ -1408,9 +1416,11 @@ pub const State = struct {
     }
 
     /// One `%t` operand, in a module whose unit is 10^`unit_exp` s (§17.3).
-    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32) Error!void {
+    pub fn time(self: *State, a: anytype, w: u32, signed: bool, unit_exp: i32, width: ?u32) Error!void {
         var buf = logic.planesOf(a);
-        try fmt.time(self.out, literal(&buf, w, signed), self.time_format, unit_exp);
+        var f = self.time_format;
+        if (width) |fw| f.width = fw;
+        try fmt.time(self.out, literal(&buf, w, signed), f, unit_exp);
     }
 
     /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,
