@@ -331,6 +331,8 @@ pub const Task = union(enum) {
     printtimescale,
     /// §18.1 the value change dump tasks.
     dump: @import("vcd.zig").Op,
+    /// §18.3 the extended value change dump tasks.
+    ports: @import("evcd.zig").Op,
 };
 
 fn showAs(radix: Radix, newline: bool) Show {

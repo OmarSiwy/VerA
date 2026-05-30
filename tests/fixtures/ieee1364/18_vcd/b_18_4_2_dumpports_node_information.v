@@ -37,7 +37,6 @@
 // `$enddefinitions $end`. (Dumping starts at the end of time 0; the reader
 // runs at #1.)
 //! inherited IEEE 1364-2005 18.3 18.3.1 18.3.5 18.4 18.4.1 18.4.2
-//! xfail extended VCD is not implemented: $dumpports is refused (E1100 "digital system task `$dumpports` is not implemented")
 `timescale 1ns/1ns
 module test_device(count_out, carry, data, reset);
   output count_out, carry;

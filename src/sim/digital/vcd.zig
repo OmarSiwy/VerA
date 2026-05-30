@@ -178,24 +178,10 @@ pub const Vcd = struct {
         self.file = std.Io.Dir.cwd().createFile(io, self.name, .{}) catch return error.CannotCreate;
         self.started = true;
         var w: std.Io.Writer.Allocating = .init(a);
-        const t = std.time.epoch.EpochSeconds{ .secs = @intCast(@max(0, @divFloor(std.Io.Clock.real.now(io).nanoseconds, std.time.ns_per_s))) };
-        const yd = t.getEpochDay().calculateYearDay();
-        const md = yd.calculateMonthDay();
-        const ds = t.getDaySeconds();
-        try w.writer.print("$date\n\t{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}\n$end\n", .{ yd.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() });
         // §18.2.3.8: "If a variable or an expression was used to specify the
         // filename within $dumpfile, the unevaluated variable or expression
         // literal shall appear in the $version string."
-        if (self.call) |c|
-            try w.writer.print("$version\n\tVerA\n\t{s}\n$end\n", .{c})
-        else
-            try w.writer.print("$version\n\tVerA\n\t$dumpfile(\"{s}\")\n$end\n", .{self.name});
-        // Ticks are the precision (`Time.Scale`'s global), so the file's unit
-        // is the precision: `time_number` 1, 10 or 100 of an SI unit.
-        const e = cat.finest;
-        const units = [_][]const u8{ "fs", "ps", "ns", "us", "ms", "s" };
-        const k: i32 = @divFloor(e, 3);
-        try w.writer.print("$timescale {d}{s} $end\n", .{ std.math.pow(u32, 10, @intCast(e - 3 * k)), units[@intCast(k + 5)] });
+        try preamble(&w.writer, io, self.call orelse try std.fmt.allocPrint(a, "$dumpfile(\"{s}\")", .{self.name}), cat.finest);
         // Every top-level module is a root: scope 0 and each scope that is
         // its own parent.
         for (cat.scopes, 0..) |sc, i| if (i == 0 or sc.parent == i) try self.dumpScope(gpa, &w, cat, src, @intCast(i), null);
@@ -310,6 +296,23 @@ pub fn callText(text: []const u8, start: u32) []const u8 {
         else => {},
     };
     return text[start..];
+}
+
+/// §18.2.3.1-§18.2.3.8's opening sections, shared with the extended VCD
+/// (§18.4.1): `$date`, `$version` naming the task `call` that made the file,
+/// and `$timescale` of the tick, 10^`finest` s.
+pub fn preamble(w: *std.Io.Writer, io: std.Io, call: []const u8, finest: i32) std.Io.Writer.Error!void {
+    const t = std.time.epoch.EpochSeconds{ .secs = @intCast(@max(0, @divFloor(std.Io.Clock.real.now(io).nanoseconds, std.time.ns_per_s))) };
+    const yd = t.getEpochDay().calculateYearDay();
+    const md = yd.calculateMonthDay();
+    const ds = t.getDaySeconds();
+    try w.print("$date\n\t{d}-{d:0>2}-{d:0>2} {d:0>2}:{d:0>2}:{d:0>2}\n$end\n", .{ yd.year, md.month.numeric(), md.day_index + 1, ds.getHoursIntoDay(), ds.getMinutesIntoHour(), ds.getSecondsIntoMinute() });
+    try w.print("$version\n\tVerA\n\t{s}\n$end\n", .{call});
+    // Ticks are the precision (`Time.Scale`'s global), so the file's unit
+    // is the precision: `time_number` 1, 10 or 100 of an SI unit.
+    const units = [_][]const u8{ "fs", "ps", "ns", "us", "ms", "s" };
+    const k: i32 = @divFloor(finest, 3);
+    try w.print("$timescale {d}{s} $end\n", .{ std.math.pow(u32, 10, @intCast(finest - 3 * k)), units[@intCast(k + 5)] });
 }
 
 fn words(w: u32) u32 {
@@ -445,70 +448,6 @@ pub fn target(r: *Run, e: Ast.ExprId) Error!Target {
     return .{ .scope = scope };
 }
 
-/// §18.3 the extended VCD tasks.
-pub const PortsOp = enum { ports, off, on, all, limit, flush };
-
-pub const ports_tasks = std.StaticStringMap(PortsOp).initComptime(.{
-    .{ "$dumpports", .ports },
-    .{ "$dumpportsoff", .off },
-    .{ "$dumpportson", .on },
-    .{ "$dumpportsall", .all },
-    .{ "$dumpportslimit", .limit },
-    .{ "$dumpportsflush", .flush },
-});
-
-/// What §18.3.1's rules across `$dumpports` calls need: the scopes and
-/// literal file names already given, and the first call.
-pub const PortsCheck = struct {
-    tok: ?u32 = null,
-    scopes: std.ArrayList(u32) = .empty,
-    files: std.ArrayList(Ast.StrId) = .empty,
-};
-
-/// Refuses a malformed §18.3 call (Syntax 18-21 to 18-25).
-// ponytail: the checks only; the dump itself is refused once every call is
-// checked (`root.elaborate`).
-pub fn checkPorts(r: *Run, op: PortsOp, args: []const Ast.ExprId, tok: u32) Error!void {
-    const ex = &r.file.exprs;
-    const given: []const Ast.ExprId = if (args.len == 1 and args[0] == .none) &.{} else args;
-    for (given) |a| if (a == .none) return r.fail(tok, "the §18.3 dump tasks take no null arguments", .{});
-    switch (op) {
-        // `$dumpports ( scope_list , file_pathname )`: "Only modules are
-        // allowed (not variables)", "Each scope specified in the scope_list
-        // shall be unique", and "Specifying the same file_pathname multiple
-        // times is not allowed". The last argument is the file unless it
-        // names an instance.
-        .ports => {
-            r.ports_dump.tok = r.ports_dump.tok orelse tok;
-            for (given, 0..) |a, i| {
-                const last = i + 1 == given.len;
-                if (last and ex.tag(a) == .str_literal) {
-                    const f = ex.strOf(a);
-                    if (std.mem.indexOfScalar(Ast.StrId, r.ports_dump.files.items, f) != null)
-                        return r.exprFail(a, "§18.3.1: the same file_pathname shall not be given to two $dumpports calls");
-                    try r.ports_dump.files.append(r.arena, f);
-                    continue;
-                }
-                if (ex.tag(a) != .ident and ex.tag(a) != .hier_ident) {
-                    if (last) continue;
-                    return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance");
-                }
-                const sc = switch (try target(r, a)) {
-                    .scope => |sc| sc,
-                    .slot => if (last) continue else return r.exprFail(a, "§18.3.1: a $dumpports scope is a module instance: only modules are allowed, not variables"),
-                };
-                if (std.mem.indexOfScalar(u32, r.ports_dump.scopes.items, sc) != null)
-                    return r.exprFail(a, "§18.3.1: each $dumpports scope shall be unique");
-                try r.ports_dump.scopes.append(r.arena, sc);
-            }
-        },
-        .off, .on, .all, .flush => if (given.len > 1) return r.fail(tok, "$dumpportsoff, $dumpportson, $dumpportsall and $dumpportsflush take at most one file_pathname argument", .{}),
-        // "The filesize argument is required".
-        .limit => if (given.len == 0 or given.len > 2) return r.fail(tok, "$dumpportslimit takes a filesize, then optionally a file_pathname", .{}),
-    }
-    for (given) |a| if (ex.tag(a) != .ident and ex.tag(a) != .hier_ident) try compile.checkExpr(r, a);
-}
-
 /// The top-level module named `name`.
 fn rootNamed(r: *const Run, name: Ast.StrId) ?u32 {
     for (r.roots) |t| if (r.scope_info.items[t].name == name) return t;
@@ -641,8 +580,12 @@ pub fn task(r: *Run, a: std.mem.Allocator, op: Op, args: []const Ast.ExprId, tok
 }
 
 /// The end of a time step with dumped changes (`Vcd.tick`).
+/// The step's `.vcd_tick` serves the four-state dump, once `$dumpvars`
+/// selected it, and the extended one (`evcd.tick`).
 pub fn tick(r: *Run, a: std.mem.Allocator) Error!void {
-    r.vcd.tick(r.arena, a, r.io, try catalogOf(r), Values{ .r = r }, r.scheduler.now) catch |e| return failed(r, e);
+    r.vcd.pending = false;
+    if (r.vcd.selected_at != null) r.vcd.tick(r.arena, a, r.io, try catalogOf(r), Values{ .r = r }, r.scheduler.now) catch |e| return failed(r, e);
+    try @import("evcd.zig").tick(r, a);
 }
 
 /// §17.4.1 `$finish` ends the run before the step's `.vcd_tick` dispatches;
