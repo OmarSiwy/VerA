@@ -857,6 +857,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
                     try assignment(self, t.args[2], .{ .stored = .{ .off = at, .ty = .{ .width = ty.width, .signed = false } } }, .blocking);
                 },
                 .fflush => {},
+                .ports => return self.refuse("§18.3 extended VCD, whose port states need the driver strengths an executable does not keep"),
                 .fclose => {
                     try self.print("            s.fclose(", .{});
                     try int64(self, t.args[0]);
