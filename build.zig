@@ -282,7 +282,7 @@ pub fn build(b: *std.Build) void {
     }
 
     // `.v` contract devices (`rt.Device`) under a mock analog host, each
-    // imported by its design's name, and the designs a device refuses.
+    // imported by its design's name; the designs a device refuses, and W1155.
     const vdev_host = b.createModule(.{
         .root_source_file = b.path("tests/vdev_host.zig"),
         .target = target,
@@ -309,6 +309,7 @@ pub fn build(b: *std.Build) void {
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_tran.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: module `v_tran`: a §7.6 pass switch" },
         .{ .args = &.{ "--emit-zig", "--state=auto" }, .file = "tests/vdev/v_inv.v", .exit = 1, .says = "error[E1103]: design cannot be a contract device: a contract device is 4-state: --state=auto" },
         .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_sv.sv", .exit = 2, .says = "error[E1104]: a SystemVerilog source is not supported" },
+        .{ .args = &.{"--emit-zig"}, .file = "tests/vdev/v_seconds.v", .exit = 0, .says = "warning[W1155]: device digital tick is 1 s" },
     }) |r| {
         const run = b.addRunArtifact(exe);
         run.addArgs(r.args);
