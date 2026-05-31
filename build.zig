@@ -621,6 +621,13 @@ const vpi_runs = [_]VpiRun{
         .design = "tests/fixtures/ch11_vpi/p04_scopes.v",
         .stdout = "p02: p04_11_instance_scopes checks=23\n",
     },
+    // IEEE 1364-2005 §20, §26, §27 and Annex G (measure B). An `xfail N.N:`
+    // line in `stdout` is a requirement VerA does not meet yet (b_check.h).
+    .{
+        .c = "tests/fixtures/ieee_pli/b_20_4_timing_checks.c",
+        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
+        .stdout = "p02: b_20_4_timing_checks checks=7\n",
+    },
 };
 
 /// `vpi_runs`' C paths, for the suite's `--coverage` (see `vpi_runs` option).
