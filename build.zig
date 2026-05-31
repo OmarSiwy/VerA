@@ -707,7 +707,7 @@ const vpi_runs = [_]VpiRun{
     .{
         .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
         .design = "tests/fixtures/ch11_vpi/p04_objects.v",
-        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 178 of Annex G's 441 constant names are not defined\nxfail G: 10 of Annex G's routines are not provided\np02: b_G_vpi_user checks=265\n",
+        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 175 of Annex G's 441 constant names are not defined\nxfail G: 10 of Annex G's routines are not provided\np02: b_G_vpi_user checks=268\n",
     },
 };
 
