@@ -1399,11 +1399,7 @@ fn digitalVerdict(arena: Allocator, io: Io, vera_exe: []const u8, case: []const 
 fn digitalCase(arena: Allocator, io: Io, vera_exe: []const u8, case: []const u8, w: *Io.Writer) !bool {
     const src = try std.fmt.allocPrint(arena, "{s}/{s}.v", .{ options.fixture_root, case });
     const source = try Io.Dir.cwd().readFileAlloc(io, src, arena, .limited(1 << 20));
-    var argv_buf: [4][]const u8 = .{ vera_exe, "--run", src, undefined };
-    const argv: []const []const u8 = if (harness.digitalStd(source)) |s| blk: {
-        argv_buf[3] = s;
-        break :blk &argv_buf;
-    } else argv_buf[0..3];
+    const argv = try std.mem.concat(arena, []const u8, &.{ &.{ vera_exe, "--run", src }, try harness.digitalArgs(arena, source, std.fs.path.dirname(src).?) });
     if (harness.digitalNegative(source)) {
         const golden = try std.fmt.allocPrint(arena, "{s}/{s}.expected.txt", .{ options.fixture_root, case });
         if (Io.Dir.cwd().access(io, golden, .{})) |_| {
@@ -1585,8 +1581,8 @@ fn nativeCase(arena: Allocator, io: Io, vera_exe: []const u8, flags: []const []c
     var argv: std.ArrayList([]const u8) = .empty;
     try argv.appendSlice(arena, &.{ vera_exe, "--emit-exe", "--work-dir", work });
     try argv.appendSlice(arena, flags);
-    if (harness.digitalStd(source)) |s| try argv.append(arena, s);
     try argv.append(arena, src);
+    try argv.appendSlice(arena, try harness.digitalArgs(arena, source, std.fs.path.dirname(src).?));
     const built = try capture(arena, io, argv.items);
     const two_state = std.mem.eql(u8, flags[0], "--two-state");
     const fallback: ?[]const u8 = if (std.mem.indexOf(u8, built.stderr, "not native (")) |at| blk: {

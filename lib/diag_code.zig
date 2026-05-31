@@ -130,6 +130,8 @@ pub const Code = enum(u16) {
     E0240,
     E0241,
     E0242,
+    E0243,
+    E0244,
     E0296,
     W0250,
     W0251,
@@ -368,6 +370,9 @@ pub const Code = enum(u16) {
     E1102,
     W1150,
     W1151,
+    W1152,
+    W1153,
+    W1154,
     W1050,
     W0950,
     E0820,
@@ -1533,13 +1538,12 @@ fn infoOf(c: Code) Info {
             \\why it has a code of its own: no version of VerA that grows the
             \\analog subset will ever make it legal here.
             \\
-            \\A `config_declaration` IS in A.1.2's list and is accepted (W0253
-            \\says what it binds, which is nothing). The preprocessor's
-            \\`` `include `` of 10.3 is a different construct from A.1.1's bare
-            \\`include` and is unaffected.
+            \\A `config_declaration` IS in A.1.2's list and is accepted. The
+            \\preprocessor's `` `include `` of 10.3 is a different construct
+            \\from A.1.1's bare `include` and is unaffected.
             \\
-            \\VerA reads no library map files at all, so there is nowhere else
-            \\to put this text today.
+            \\Library map text goes in a map file: `vera --run --libmap FILE`
+            \\(IEEE 1364-2005 13.2.1).
             ,
         },
         .E0233 => .{
@@ -1719,6 +1723,54 @@ fn infoOf(c: Code) Info {
             \\the nested `begin` blocks.
             ,
         },
+        .E0243 => .{
+            .title = "a configuration rule IEEE 1364-2005 §13.3 forbids",
+            .lrm = "IEEE 1364-2005 13.3",
+            .explain =
+            \\A configuration parses (A.1.5) and still breaks a rule clause 13
+            \\states in prose:
+            \\
+            \\  13.3.1.2  "there cannot be more than one default clause that
+            \\            specifies the expansion clause": two `default liblist`.
+            \\  13.3.1.4  "It is an error if a library name is included in a
+            \\            cell selection clause and the corresponding expansion
+            \\            clause is a library list expansion clause":
+            \\            `cell lib.c liblist ...`.
+            \\  13.3.2    "It shall be an error for an instance clause to specify
+            \\            a hierarchical path to an instance that occurs within a
+            \\            hierarchy specified by another config."
+            \\  13.3.1.1  "The cell or cells identified cannot be configurations
+            \\            themselves."
+            \\
+            \\and, for a file holding several configurations, the one that
+            \\configures the design is the one no `use` clause names; more than
+            \\one such configuration leaves the design unnamed (13.4.4).
+            ,
+        },
+        .E0244 => .{
+            .title = "library map refused",
+            .lrm = "IEEE 1364-2005 13.2",
+            .explain =
+            \\`vera --libmap FILE` reads an IEEE 1364-2005 13.2 library map, and
+            \\`-L LIB` names the library search order (13.7.1). Refused:
+            \\
+            \\  - text other than `library` and `include` statements and
+            \\    comments (13.2.2: "The syntax of a lib.map file is limited to
+            \\    library specifications, include statements, and standard
+            \\    Verilog comment syntax");
+            \\  - a `library` naming no file_path_spec (Syntax 13-2);
+            \\  - a map file that cannot be read, `include`d or given;
+            \\  - a source file matching the path specifications of two
+            \\    libraries after 13.2.1.1's resolution order ("it shall be an
+            \\    error");
+            \\  - `-L` naming a library no map declares (13.7.1: "with the
+            \\    definitions of these libraries to be taken from the library
+            \\    map file");
+            \\  - `-incdir`, which VerA does not implement.
+            \\
+            \\A file no specification matches is compiled into `work` (13.2.1).
+            ,
+        },
         .E0296 => .{
             .title = "a forever loop needs a statement, not a null statement",
             .lrm = "A.6.8",
@@ -1865,12 +1917,13 @@ fn infoOf(c: Code) Info {
             \\
             \\What a configuration does is bind an instance to a CELL of a
             \\LIBRARY, at elaboration, through the map its `liblist` and `use`
-            \\clauses name. VerA reads no library maps: an instance resolves to
-            \\a module declared in the source it was given, by name, and that
-            \\is the only binding it has. So the `design` statement selects
-            \\nothing, every `config_rule_statement` below it applies to
-            \\nothing, and the elaborated design is exactly what it would have
-            \\been with the configuration deleted.
+            \\clauses name. A digital run (`vera --run`/`--emit-exe` on a .v)
+            \\binds through it (IEEE 1364-2005 13.3). An analog compile does
+            \\not: an instance resolves to a module declared in the source it
+            \\was given, by name, so the `design` statement selects nothing,
+            \\every `config_rule_statement` below it applies to nothing, and
+            \\the elaborated design is exactly what it would have been with the
+            \\configuration deleted.
             \\
             \\Same call as W0250 and W0251: silence would be worse, because a
             \\configuration exists precisely to make one instance resolve
@@ -5790,6 +5843,29 @@ fn infoOf(c: Code) Info {
             .title = "probabilistic distribution argument not positive",
             .lrm = "IEEE 1364-2005 17.9.2",
             .explain = "The mean of $dist_exponential, $dist_poisson and $dist_erlang, the degree of freedom of $dist_chi_square and $dist_t, and the k_stage of $dist_erlang shall be greater than 0. The 17.9.3 reference listing prints a warning for such a call and returns 0 without drawing, so the seed argument is not written.",
+        },
+        .W1152 => .{
+            .title = "two cells with one name in one library",
+            .lrm = "IEEE 1364-2005 13.2.1.1",
+            .explain =
+            \\IEEE 1364-2005 13.2.1.1: "If multiple cells with the same name map
+            \\to the same library, then the LAST cell encountered shall be
+            \\written to the library. ... In the case where multiple modules
+            \\with the same name are mapped to the same library in a single
+            \\invocation of the compiler, then a warning message shall be
+            \\issued." This is that warning; the later definition is the one
+            \\every instance binds.
+            ,
+        },
+        .W1153 => .{
+            .title = "format specifiers and arguments do not pair up",
+            .lrm = "IEEE 1364-2005 17.2.3",
+            .explain = "The arguments after $sformat's format are consumed by its format specifiers. If not enough arguments are supplied for the specifiers, or too many are supplied, the application shall issue a warning and continue execution: the variable receives the text formatted so far.",
+        },
+        .W1154 => .{
+            .title = "file output not written",
+            .lrm = "IEEE 1364-2005 17.2.1",
+            .explain = "$fclose closes the channels a descriptor names and does not allow any further output to them. A $fdisplay or $fwrite whose descriptor names only closed channels, or a file opened only for reading, writes nothing; $ferror reports the error. The simulation continues.",
         },
         .E1004 => .{
             .title = "unsupported dependent parameter expression",

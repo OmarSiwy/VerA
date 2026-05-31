@@ -336,6 +336,24 @@ test "§4.6.3 `//! acstim` states the exported stimulus table" {
     try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! acstim (,b) mag=1\n"));
 }
 
+test "`//! acdyn` names a slot, a frequency and the complex term" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const d = try tb_directive.parse(arena, "//! acdyn (out, in) f=125M re=0.5 im=-0.5 tol=1e-9\n");
+    try testing.expectEqual(@as(usize, 1), d.acdyn.len);
+    try testing.expectEqualStrings("out", d.acdyn[0].row);
+    try testing.expectEqualStrings("in", d.acdyn[0].col);
+    try testing.expectEqual(@as(f64, 125e6), d.acdyn[0].f);
+    try testing.expectEqual(@as(f64, -0.5), d.acdyn[0].im);
+    try testing.expectEqual(@as(f64, 1e-9), d.acdyn[0].tol);
+    // f, re and im are each required; an unknown key is refused.
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! acdyn (out,in) re=1 im=0\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! acdyn (out,in) f=1 im=0\n"));
+    try testing.expectError(error.BadSyntax, tb_directive.parse(arena, "//! acdyn (out,in) f=1 re=1 im=0 phase=0\n"));
+}
+
 test "plusargs preserves tokens, duplicate arguments and repeated-line order" {
     var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
     defer arena_state.deinit();

@@ -74,6 +74,8 @@ const Features = struct {
     /// `hist_quad_txt`: an `absdelay` under `(* vera_interp = 2 *)`.
     hist_quad: bool,
     filt: bool,
+    /// `ac_txt`: an operator whose small-signal response depends on ω.
+    ac: bool,
     timer: bool,
     strs: bool,
     tbl: bool,
@@ -90,6 +92,7 @@ pub fn emitFile(self: *Gen) Error!void {
         .hist = usesOp(self, .absdelay),
         .hist_quad = usesQuad(self),
         .filt = usesOp(self, .laplace) or usesOp(self, .zi),
+        .ac = usesOp(self, .absdelay) or usesOp(self, .laplace) or usesOp(self, .zi),
         .timer = usesOp(self, .timer),
         // §9.5.3/§9.5.4.2. Set at the call in lowering, because once the MIR
         // is sliced the formatter's call may sit in any unit. A printing
@@ -125,6 +128,8 @@ pub fn emitFile(self: *Gen) Error!void {
     // contract-recognized public names. So they are depublished; every other
     // helper block is written private and made public by `publish`.
     if (f.filt) try depublish(self.gpa, &self.out, filt_txt);
+    if (f.ac) try self.out.appendSlice(self.gpa, gen_kernel_text.ac_txt);
+    if (f.ac) try self.out.appendSlice(self.gpa, gen_kernel_text.ac_fam_txt);
     // §9.4.3's padding helper serves §9.5.3 too (`$sformat` is the same
     // formatter), so a device that never prints still needs it to format.
     if (f.strs) try self.out.appendSlice(self.gpa, display_txt);
@@ -132,7 +137,7 @@ pub fn emitFile(self: *Gen) Error!void {
     if (f.files) try depublish(self.gpa, &self.out, file_txt);
     // §9.5.1.2 the same table, public for a host's second context to share
     // (`contract.FileIo`, optional: a host that runs one context ignores it).
-    if (f.files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .new_analysis = zFNewAnalysis };\n\n");
+    if (f.files) try self.out.appendSlice(self.gpa, "pub const file_io: contract.FileIo = .{ .open = zFOpen, .close = zFClose, .put = zFPut, .getc = zFGetc, .ungetc = zFUngetc, .tell = zFTell, .seek = zFSeek, .eof = zFEof, .err = zFError, .new_analysis = zFNewAnalysis };\n\n");
     if (f.tbl) try depublish(self.gpa, &self.out, table_txt);
     if (f.rng) try depublish(self.gpa, &self.out, rng_txt);
     if (self.limits.calls.len != 0) try depublish(self.gpa, &self.out, limit_txt);
@@ -194,6 +199,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.hist_quad) try p.appendSlice(self.arena, gen_kernel_text.prelude_hist_quad_txt);
     if (f.arrs) try p.appendSlice(self.arena, prelude_arr_txt);
     if (f.filt) try p.appendSlice(self.arena, prelude_filt_txt);
+    if (f.ac) try p.appendSlice(self.arena, gen_kernel_text.prelude_ac_txt);
     if (self.display == .emit or f.strs) try p.appendSlice(self.arena, prelude_display_txt);
     if (f.strs) try p.appendSlice(self.arena, prelude_str_txt);
     if (f.files) try p.appendSlice(self.arena, prelude_file_txt);
@@ -220,6 +226,7 @@ fn buildPrelude(self: *Gen, f: Features) Error!void {
     if (f.hist_quad) try publish(self.arena, &hz, hist_quad_txt);
     if (f.arrs) try publish(self.arena, &hz, arr_txt);
     if (f.filt) try publish(self.arena, &hz, filt_txt);
+    if (f.ac) try publish(self.arena, &hz, gen_kernel_text.ac_txt);
     if (self.display == .emit or f.strs) try publish(self.arena, &hz, display_txt);
     if (f.strs) try publish(self.arena, &hz, str_txt);
     if (f.files) try publish(self.arena, &hz, file_txt);

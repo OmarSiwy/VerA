@@ -12,14 +12,13 @@
 // specific rule: it names exactly this case (same-named modules, one library,
 // one compiler invocation) and prescribes a warning and last-wins, not an
 // error; §4.11's text predates libraries. A tool that refuses the file under
-// §4.11 is also defensible; VerA does neither (see the xfail).
+// §4.11 is also defensible; VerA follows §13.2.1.1.
 //
 // Both leaf modules are in work (no map, §13.2.1); the second is the last
 // encountered, so work.leaf is the second and top.u prints "second". The
-// clause's warning is not asserted here: it names no text, and VerA has no
-// code for it yet to name.
+// clause's warning names no text; VerA's is W1152.
+// digital-runner: warning W1152
 //! inherited IEEE 1364-2005 13.2.1.1
-//! xfail VerA binds the FIRST of two same-named modules (prints "first") and issues no warning
 module leaf;
   initial $display("first");
 endmodule

@@ -11,7 +11,7 @@
 // digital-runner: reject
 //! inherited IEEE 1364-2005 13.3.1.4
 //! reject library name
-//! xfail VerA accepts a library-qualified cell clause with a liblist (W0253 only) and runs the design
+//! reject E0243
 config cfg;
   design work.top;
   cell work.top liblist work;

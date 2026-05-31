@@ -6,7 +6,6 @@
 // the left, §5.2.3.2). As a format, %h takes 8'hc3 -> "x=c3!", so
 // $display("[%s]", s) prints [x=c3!].
 //! inherited IEEE 1364-2005 17.2.3
-//! xfail $sformat with a reg format is refused: "$sformat with a format that is not a string literal is not implemented" (E1100)
 module b_17_2_3_sformat_variable_format;
   reg [8*8:1] s, fmt;
   initial begin
