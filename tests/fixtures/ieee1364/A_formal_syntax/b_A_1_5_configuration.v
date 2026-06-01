@@ -16,26 +16,28 @@
 // with its library (work.b_A_1_5_top); all five config_rule_statement forms;
 // an inst_name of two identifiers (b_A_1_5_top.u); a cell_clause with and
 // without a library; a liblist of one library and an empty liblist; use
-// clauses with and without a library. The only library is work (no map,
+// clauses with and without a library. The cell_clause with a library takes
+// the use_clause: §13.3.1.4, p. 204, "It is an error if a library name is
+// included in a cell selection clause and the corresponding expansion clause
+// is a library list expansion clause." The only library is work (no map,
 // §13.2.1), and every use binds b_A_1_5_leaf to itself, so the binding is the
 // default one: u is work.b_A_1_5_leaf. §13.3.1.5, p. 204: "If no library list
 // clause is selected or if the selected library list is empty, then the
 // library list contains the single name that is the library in which the cell
 // containing the unbound instance is found (i.e., the parent cell's library)."
 // Output: t=0 "b_A_1_5_top", t=1 "b_A_1_5_top.u".
-// With work the only library this is also the output with no config at all
-// (W0253: VerA binds nothing through it), so what the fixture establishes is
-// that every production above is accepted, not the binding.
-// digital-runner: warning W0253
+// With work the only library this is also the output with no config at all,
+// so what the fixture establishes is that every production above is
+// accepted, not the binding.
 //! inherited IEEE 1364-2005 A.1.5
 `timescale 1ns/1ns
 config b_A_1_5_cfg;
   design work.b_A_1_5_top;
   default liblist work;
   instance b_A_1_5_top.u liblist;
-  instance b_A_1_5_top.u use work.b_A_1_5_leaf;
-  cell work.b_A_1_5_leaf liblist work;
-  cell b_A_1_5_leaf use b_A_1_5_leaf;
+  instance b_A_1_5_top.u use b_A_1_5_leaf;
+  cell work.b_A_1_5_leaf use work.b_A_1_5_leaf;
+  cell b_A_1_5_leaf liblist work;
 endconfig
 module b_A_1_5_leaf;
   initial #1 $display("%m");
