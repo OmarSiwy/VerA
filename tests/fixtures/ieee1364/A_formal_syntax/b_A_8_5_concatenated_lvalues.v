@@ -13,7 +13,6 @@
 //   {c, s[1:0]} = 3'b101: c = 1, s[1:0] = 2'b01 -> s = 4'b1101
 // Output: "co=1 sum=0001 n=z101 c=1 s=1101".
 //! inherited IEEE 1364-2005 A.8.5
-//! xfail VerA's digital execution implements only whole-variable lvalues: a concatenated lvalue, or a select of a net on the left of a continuous assignment, is refused (E1100)
 `timescale 1ns/1ns
 module b_A_8_5_concatenated_lvalues;
   reg [3:0] a, b, s;

@@ -9,7 +9,6 @@
 // variable: half(3) = 3 / 2.0 = 1.5, rt(2) = 2 + 0.25 = 2.25.
 // Output: "half=1.50 rt=2.25".
 //! inherited IEEE 1364-2005 A.2.6
-//! xfail VerA returns a real or realtime function's value as its raw 64-bit pattern (half prints 4609434218613702656.00)
 module b_A_2_6_real_functions;
   function real half(input integer n);
     half = n / 2.0;
