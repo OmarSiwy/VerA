@@ -1074,7 +1074,11 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             // §17.4.2 Syntax 17-12 `$stop [ ( n ) ]`, refused by the runner
             // below either way.
             if (std.mem.eql(u8, name, "$stop") and s.args.len > 1) return self.fail(tok, "$stop accepts zero or one argument", .{});
-            if (@import("vcd.zig").ports_tasks.get(name)) |op| return @import("vcd.zig").checkPorts(self, op, s.args, tok);
+            if (@import("evcd.zig").tasks.get(name)) |op| {
+                try @import("evcd.zig").check(self, op, s.args, tok);
+                _ = try append(self, .{ .task = .{ .task = .{ .ports = op }, .args = s.args, .tok = tok } });
+                return;
+            }
             const task = tasks.get(name) orelse return self.fail(tok, "digital system task `{s}` is not implemented", .{name});
             switch (task) {
                 // All three format the same surface, so all three are
@@ -1166,6 +1170,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
                     }
                 },
                 .dump => |op| try @import("vcd.zig").check(self, op, s.args, tok),
+                .ports => unreachable, // `evcd.tasks` is looked up first
                 // §17.2.2: the descriptor, then `$display`'s own arguments.
                 .fshow => |sh| {
                     if (s.args.len == 0 or s.args[0] == .none) return self.fail(tok, "a §17.2.2 file output task's first argument is a descriptor", .{});

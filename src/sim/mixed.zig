@@ -12,6 +12,10 @@
 const std = @import("std");
 const digital = @import("digital/root.zig");
 const Tick = digital.Tick;
+const time = @import("time.zig");
+const tickAtOrBefore = time.tickAtOrBefore;
+const crosses = time.crosses;
+const ulps = time.ulps;
 
 pub const Options = struct {
     /// The declared analog timepoints, in seconds, ascending. `times[0]` is the
@@ -21,21 +25,6 @@ pub const Options = struct {
     /// One scheduler tick, in seconds: the design's finest time precision.
     tick: f64,
 };
-
-/// The greatest tick whose time is <= `t` (§7.3.6.5's "greatest digital time
-/// tick which is less than or equal to the analog time"). A `t` within a few
-/// ulps of a tick IS that tick: 4e-9 / 1e-9 is 3.9999999999999996 in
-/// binary64, and flooring it would put the analog solve one tick early.
-pub fn tickAtOrBefore(t: f64, tick: f64) Tick {
-    const x = t / tick;
-    const r = @round(x);
-    if (@abs(x - r) <= ulps * @abs(r)) return @intFromFloat(@max(r, 0.0));
-    return @intFromFloat(@max(@floor(x), 0.0));
-}
-
-/// The relative distance within which two times are one: rounding, never a
-/// fraction of a tick however many ticks the run is long.
-const ulps = 4 * std.math.floatEps(f64);
 
 /// Runs one analysis over `opts.times`.
 ///
@@ -192,15 +181,6 @@ const Mon = struct {
         return true;
     }
 };
-
-/// §5.10.3.1: "If dir is +1, the event ... only occur[s] on rising edge
-/// transitions", -1 on falling ones, 0 on both, and any other value on none.
-/// The same test the device's `cross` makes against its accepted value.
-fn crosses(dir: f64, v0: f64, v1: f64) bool {
-    const rise = v0 <= 0 and v1 > 0;
-    const fall = v0 >= 0 and v1 < 0;
-    return if (dir == 1) rise else if (dir == -1) fall else if (dir == 0) rise or fall else false;
-}
 
 fn State(comptime A: type) type {
     return struct {
@@ -422,14 +402,6 @@ fn expectPoints(f: Fake, want: []const [2]f64) !void {
         try testing.expectApproxEqAbs(w[0], p.t, 1e-18);
         try testing.expectEqual(@as(i64, @intFromFloat(w[1])), p.v);
     }
-}
-
-test "tickAtOrBefore: a time within rounding of a tick is that tick" {
-    try testing.expectEqual(@as(Tick, 4), tickAtOrBefore(4e-9, 1e-9));
-    try testing.expectEqual(@as(Tick, 4), tickAtOrBefore(4.5e-9, 1e-9));
-    try testing.expectEqual(@as(Tick, 0), tickAtOrBefore(0, 1e-9));
-    try testing.expectEqual(@as(Tick, 20), tickAtOrBefore(20e-9, 1e-9));
-    try testing.expectEqual(@as(Tick, 600000000), tickAtOrBefore(0.6000000006, 1e-9));
 }
 
 test "§7.3.6.5 the solve at t reads the greatest tick <= t, not the next and not the one before" {
