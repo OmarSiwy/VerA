@@ -1,9 +1,12 @@
-//! `zig build test-1364 -- --coverage`: `tests/fixtures/ieee1364/CLAUSES.tsv`
-//! and every `.v` under `ieee1364/` -> the AMS coverage report's work lists
-//! and summary, over IEEE 1364-2005 clauses, plus one row per chapter.
+//! `zig build test-1364 -- --coverage`: `tests/fixtures/ieee1364/CLAUSES.tsv`,
+//! every `.v` under `ieee1364/` and every `.c` in build.zig's `vpi_runs` -> the
+//! AMS coverage report's work lists and summary, over IEEE 1364-2005 clauses,
+//! plus one row per chapter.
 //!
 //! Static: nothing is compiled or run, so a cite (`//! inherited IEEE 1364-2005
-//! <clause>`) says what a fixture claims, not that it passes.
+//! <clause>`) says what a fixture claims, not that it passes. A `.c` fixture's
+//! polarity is per line (`//! inherited-reject IEEE 1364-2005 <clause>` for a
+//! refusal), as `harness.cCites` reads its AMS tags.
 
 const std = @import("std");
 const harness = @import("harness.zig");
@@ -106,7 +109,7 @@ pub fn coverage(init: std.process.Init) !u8 {
         fixtures += 1;
         ch.fixtures += 1;
         var cites: std.ArrayList([]const u8) = .empty;
-        try inheritedCites(arena, source, &cites);
+        try inheritedCites(arena, source, pos_key, &cites);
         if (cites.items.len == 0) {
             ch.uncited_fixtures += 1;
             try uncited_paths.append(arena, path);
@@ -120,6 +123,30 @@ pub fn coverage(init: std.process.Init) !u8 {
                 continue;
             };
             if (neg) clauses.items[i].neg = true else clauses.items[i].pos = true;
+        }
+    }
+
+    // Only a `.c` fixture that runs is evidence, the rule `harness.cCites`
+    // applies: `vpi_runs` is build.zig's list of those, relative to the root.
+    const repo = std.fs.path.dirname(std.fs.path.dirname(options.fixture_root).?).?;
+    for (options.vpi_runs) |rel| {
+        const source = try Io.Dir.cwd().readFileAlloc(io, try std.fs.path.join(arena, &.{ repo, rel }), arena, .limited(1 << 20));
+        var pos: std.ArrayList([]const u8) = .empty;
+        var neg: std.ArrayList([]const u8) = .empty;
+        try inheritedCites(arena, source, pos_key, &pos);
+        try inheritedCites(arena, source, neg_key, &neg);
+        if (pos.items.len + neg.items.len == 0) continue;
+        fixtures += 1;
+        citing += 1;
+        for ([_][]const []const u8{ pos.items, neg.items }, [_]bool{ false, true }) |ids, is_neg| {
+            for (ids) |id| {
+                const i = index.get(id) orelse {
+                    try w.print("UNRESOLVED — {s} cites §{s}, which CLAUSES.tsv does not list\n", .{ rel, id });
+                    unresolved += 1;
+                    continue;
+                };
+                if (is_neg) clauses.items[i].neg = true else clauses.items[i].pos = true;
+            }
         }
     }
 
@@ -258,12 +285,15 @@ fn hasReject(source: []const u8) bool {
     return false;
 }
 
-/// `//! inherited IEEE 1364-2005 17.5.1,17.5.3 (note)` -> `17.5.1`, `17.5.3`.
-/// Clauses are the words before a parenthesised note, split on spaces and
-/// commas; a word that is not a clause number is returned as-is and so
-/// reported unresolved rather than silently dropped.
-fn inheritedCites(arena: Allocator, source: []const u8, out: *std.ArrayList([]const u8)) !void {
-    const key = "inherited IEEE 1364-2005 ";
+const pos_key = "inherited IEEE 1364-2005 ";
+const neg_key = "inherited-reject IEEE 1364-2005 ";
+
+/// `//! inherited IEEE 1364-2005 17.5.1,17.5.3 (note)` -> `17.5.1`, `17.5.3`,
+/// for `key` the text after `//!`. Clauses are the words before a
+/// parenthesised note, split on spaces and commas; a word that is not a clause
+/// number is returned as-is and so reported unresolved rather than silently
+/// dropped.
+fn inheritedCites(arena: Allocator, source: []const u8, key: []const u8, out: *std.ArrayList([]const u8)) !void {
     var lines = std.mem.splitScalar(u8, source, '\n');
     while (lines.next()) |raw| {
         const line = std.mem.trim(u8, raw, " \t\r");
@@ -286,10 +316,14 @@ test "inherited cites: lists, commas, and a note that is not a clause" {
         \\//! lrm 9.8
         \\//! inherited IEEE 1364-2005 17.5.1,17.5.3
         \\  //! inherited IEEE 1364-2005 12.4.1 5.2.1 (loop generate, 17.1)
-    , &got);
+        \\//! inherited-reject IEEE 1364-2005 27.14
+    , pos_key, &got);
     const want = [_][]const u8{ "17.5.1", "17.5.3", "12.4.1", "5.2.1" };
     try std.testing.expectEqual(want.len, got.items.len);
     for (want, got.items) |a, b| try std.testing.expectEqualStrings(a, b);
+    got.clearRetainingCapacity();
+    try inheritedCites(arena, "//! inherited-reject IEEE 1364-2005 27.14\n", neg_key, &got);
+    try std.testing.expectEqual(@as(usize, 1), got.items.len);
     try std.testing.expect(hasReject("//! reject E0235\n"));
     try std.testing.expect(!hasReject("// reject E0235\n//! rejected\n"));
 }
