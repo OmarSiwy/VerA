@@ -12,7 +12,8 @@
 //
 // a11/lib.map is a library_text of two library_descriptions: the
 // library_declaration `library liba cells/a.v, "cells/b.v";` (two
-// file_path_specs, the second quoted) and the include_statement
+// file_path_specs, the second quoted as §13.7.3's example, p. 209, writes
+// `library lib1 "/proj/lib1/foo*.v";`) and the include_statement
 // `include more.map;`, whose library_declaration `library libc cells/c*.v;`
 // reads as though it stood in its place (§13.2.2). Each cell prints %m %l at
 // its D; this file matches no file_path_spec and is work's (§13.2.1):
