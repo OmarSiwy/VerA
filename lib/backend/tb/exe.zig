@@ -109,6 +109,8 @@ pub fn buildExe(
     if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim", "--dep", "diag" });
     if (device_zig) |text| {
         try argv.appendSlice(arena, &.{ "--dep", "contract", m_root });
+        // A `.v` device (`sim.digital.emitDevice`) runs on `sim`'s engine.
+        if (opts.mixed) try argv.appendSlice(arena, &.{ "--dep", "sim" });
         try argv.appendSlice(arena, &.{ "--dep", "contract", try bind(arena, io, dir, opts, "device", "device", text) });
     } else try argv.append(arena, m_root);
     try argv.append(arena, try std.fmt.allocPrint(arena, "-Mcontract={s}", .{opts.contract}));

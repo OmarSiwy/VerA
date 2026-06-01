@@ -60,6 +60,63 @@ pub fn save(s: *const State, w: *std.Io.Writer) std.Io.Writer.Error!void {
     }
 }
 
+/// The most bytes `save` writes for design `d`: the part the design fixes,
+/// exactly, and an allowance for what is pending at a boundary (events,
+/// suspensions, their event-control terms) of 256 bytes per process, driver
+/// and net, plus 4 KiB. A `save` into a buffer this long fails rather than
+/// overrun when a boundary holds more.
+/// ponytail: the allowance is a guess that fits control logic; an exact bound
+/// needs the scheduler's high-water mark, which only a run knows.
+pub fn bound(comptime d: *const root.Design) usize {
+    @setEvalBranchQuota(1 << 24);
+    var drv_words: usize = 0;
+    for (d.drivers) |dr| drv_words += 2 * ((d.nets[dr.net].width + 63) / 64);
+    var net_words: usize = 0;
+    for (d.nets) |nt| net_words += 2 * ((nt.width + 63) / 64);
+    var ins: usize = 0;
+    for (d.udps) |u| ins += u.ins;
+    // How many elements each slice `save` writes whole holds.
+    const lens = .{
+        .v = d.v.len,
+        .armed = d.code_len,
+        .waiting = d.triggered,
+        .repeats = d.repeats,
+        .joins = d.joins,
+        .monitored = d.slots,
+        .layers = if (@hasDecl(@import("root"), "vera_overrides")) d.slots else 0,
+        .cur = drv_words,
+        .tgt = drv_words,
+        .or_z = d.drivers.len,
+        .tgt_or_z = d.drivers.len,
+        .s0 = d.drivers.len,
+        .s1 = d.drivers.len,
+        .flight = d.drivers.len,
+        .started = d.drivers.len,
+        .res = net_words,
+        .ntgt = net_words,
+        .nflight = d.nets.len,
+        .capacitive = d.nets.len,
+        .decay_ev = d.nets.len,
+        .sig0 = d.nets.len,
+        .prev = ins,
+        .state = d.udps.len,
+    };
+    const Sched = @FieldType(State, "sched");
+    var n: usize = 8;
+    for (.{ "now", "heads", "tails", "free", "sequence", "phase" }) |f| n += @sizeOf(@FieldType(Sched, f));
+    for (fixed) |f| n += size(@FieldType(State, f), lens, f);
+    if (!root.logic.two) n += 8 * d.x.len;
+    for (nets) |f| n += size(@FieldType(@FieldType(State, "nets"), f), lens, f);
+    return n + 4096 + 256 * (d.order.len + d.drivers.len + d.nets.len);
+}
+
+/// The bytes `bytes` gives a field of type `T` named `f`: a slice's
+/// elements (`@field(lens, f)` of them), else the value.
+fn size(comptime T: type, comptime lens: anytype, comptime f: []const u8) usize {
+    if (@typeInfo(T) != .pointer) return @sizeOf(T);
+    return @sizeOf(@typeInfo(T).pointer.child) * @field(lens, f);
+}
+
 fn count(w: *std.Io.Writer, n: usize) std.Io.Writer.Error!void {
     try w.writeAll(std.mem.asBytes(&@as(u32, @intCast(n))));
 }

@@ -1,5 +1,6 @@
-//! Exact decimal timescale factors and integer digital delay counts.
-//! IEEE 1364-2005 §§4.8, 4.8.2, 9.7.1 and 19.8.
+//! Exact decimal timescale factors and integer digital delay counts, and an
+//! analog time as the digital tick it falls in.
+//! IEEE 1364-2005 §§4.8, 4.8.2, 9.7.1 and 19.8; VAMS §5.10.3.1, §7.3.6.5.
 const std = @import("std");
 
 pub const Error = error{
@@ -104,6 +105,30 @@ pub const Scale = struct {
         return multiply(local, self.global_per_local);
     }
 };
+
+/// The greatest tick whose time is <= `t` (§7.3.6.5's "greatest digital time
+/// tick which is less than or equal to the analog time"). A `t` within a few
+/// ulps of a tick IS that tick: 4e-9 / 1e-9 is 3.9999999999999996 in
+/// binary64, and flooring it would put the analog solve one tick early.
+pub fn tickAtOrBefore(t: f64, tick: f64) u64 {
+    const x = t / tick;
+    const r = @round(x);
+    if (@abs(x - r) <= ulps * @abs(r)) return @intFromFloat(@max(r, 0.0));
+    return @intFromFloat(@max(@floor(x), 0.0));
+}
+
+/// The relative distance within which two times are one: rounding, never a
+/// fraction of a tick however many ticks the run is long.
+pub const ulps = 4 * std.math.floatEps(f64);
+
+/// §5.10.3.1: "If dir is +1, the event ... only occur[s] on rising edge
+/// transitions", -1 on falling ones, 0 on both, and any other value on none.
+/// The same test the device's `cross` makes against its accepted value.
+pub fn crosses(dir: f64, v0: f64, v1: f64) bool {
+    const rise = v0 <= 0 and v1 > 0;
+    const fall = v0 >= 0 and v1 < 0;
+    return if (dir == 1) rise else if (dir == -1) fall else if (dir == 0) rise or fall else false;
+}
 
 fn power10(exponent: u5) u57 {
     var value: u57 = 1;
@@ -220,4 +245,12 @@ test "dyadic real delays match independent rational rounding oracle across scale
             }
         }
     }
+}
+
+test "tickAtOrBefore: a time within rounding of a tick is that tick" {
+    try testing.expectEqual(@as(u64, 4), tickAtOrBefore(4e-9, 1e-9));
+    try testing.expectEqual(@as(u64, 4), tickAtOrBefore(4.5e-9, 1e-9));
+    try testing.expectEqual(@as(u64, 0), tickAtOrBefore(0, 1e-9));
+    try testing.expectEqual(@as(u64, 20), tickAtOrBefore(20e-9, 1e-9));
+    try testing.expectEqual(@as(u64, 600000000), tickAtOrBefore(0.6000000006, 1e-9));
 }
