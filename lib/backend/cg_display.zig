@@ -120,6 +120,7 @@ fn buildArgs(
     args: []const Mir.Value,
     fmt: *std.ArrayList(u8),
     ops: *std.ArrayList(PrintArg),
+    site: usize,
 ) Error!void {
     var i: usize = 0;
     while (i < args.len) {
@@ -131,7 +132,27 @@ fn buildArgs(
             i += 1;
         }
     }
+    // One call's conversions become one Zig format call, and Zig's formatter
+    // takes at most 32 arguments (`std.fmt.ArgSetType`). Refused here (E1010)
+    // rather than as a compile error in generated Zig; the empty record keeps
+    // the rest of the device emittable.
+    if (ops.items.len > max_format_args) {
+        if (g.diags) |bag| try bag.add(
+            .codegen,
+            .E1010,
+            g.lowered.tokenSpan(g.mir.instTok(@enumFromInt(site))),
+            "this call formats {d} values; one call formats at most {d}",
+            .{ ops.items.len, max_format_args },
+        );
+        g.any_fatal = true;
+        if (g.fatal == null) g.fatal = "a display or format call has more than 32 conversions";
+        fmt.clearRetainingCapacity();
+        ops.clearRetainingCapacity();
+    }
 }
+
+/// E1010's bound: the argument count Zig's `std.fmt` accepts in one call.
+pub const max_format_args = 32;
 
 /// The per-op scratch declarations of one emitted display block.
 fn emitScratch(g: *Gen, ops: []const PrintArg) Error!void {
@@ -169,7 +190,7 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
         args[1..]
     else
         args;
-    try buildArgs(g, body, &fmt, &ops);
+    try buildArgs(g, body, &fmt, &ops, site);
     // §9.4.1: `$write` is the family member that does NOT end the line.
     if (endsLine(c)) try fmt.append(g.arena, '\n');
 
@@ -244,7 +265,7 @@ pub fn emitSimCtl(g: *Gen, name: []const u8, args: []const Mir.Value) Error!void
 pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!void {
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
-    try buildArgs(g, args, &fmt, &ops);
+    try buildArgs(g, args, &fmt, &ops, site);
     try g.b("zs: {{ ", .{});
     try emitScratch(g, ops.items);
     // An overrun formats to the empty string: §9.5.3 states no truncation rule,
@@ -396,7 +417,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     const rest = if (all.len > 0) all[1..] else all;
     var fmt: std.ArrayList(u8) = .empty;
     var ops: std.ArrayList(PrintArg) = .empty;
-    try buildArgs(g, rest, &fmt, &ops);
+    try buildArgs(g, rest, &fmt, &ops, site);
     // The §9.4.1 task §9.5.2 names this one after decides the newline:
     // `$write` is the member that does not end the line, and so is `$fwrite`.
     if (endsLine(c)) try fmt.append(g.arena, '\n');
