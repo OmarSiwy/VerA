@@ -366,6 +366,7 @@ pub const Code = enum(u16) {
     E1010,
     E1011,
     E1012,
+    E1013,
     E1100,
     E1101,
     E1102,
@@ -5860,6 +5861,21 @@ fn infoOf(c: Code) Info {
             \\The count is of accepted timepoints, not of time. Take fewer,
             \\larger steps across the delay (a larger maximum step in the host),
             \\or shorten td.
+            ,
+        },
+        .E1013 => .{
+            .title = "a file is larger than VerA reads",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA reads a file whole
+            \\before it uses it, and stops at a fixed size: 16 MiB for an
+            \\`include file (LRM 10.3) and for the data file of a
+            \\`$table_model` (LRM 9.21) or `noise_table` (LRM 4.6.4.3) call,
+            \\and 64 MiB for the source file named on the command line and
+            \\for a `--spice` netlist. The LRM bounds none of these.
+            \\
+            \\The message names the file. A table file this large is usually
+            \\better resampled: the device searches it on every evaluation.
             ,
         },
         .W1050 => .{
