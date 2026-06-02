@@ -720,11 +720,11 @@ pub const hist_txt =
     \\        // Older than the whole ring. There is no honest answer here: the
     \\        // clause bounds no lookback, so shortening the delay to whatever the
     \\        // ring still holds is not an implementation-defined limit, it is a
-    \\        // different transport delay reported as this one. This used to
-    \\        // `return vs[head]` and say nothing.
-    \\        @panic("VerA: absdelay history underrun — td spans more accepted timepoints than " ++
-    \\            "the per-site history ring holds (codegen.hist_len); the host must take " ++
-    \\            "fewer, larger steps across the delay");
+    \\        // different transport delay reported as this one. E1012 ends the
+    \\        // run instead.
+    \\        std.debug.print("error[E1012]: absdelay needs a sample older than its " ++
+    \\            "{d}-sample history holds; see `vera --explain E1012`\n", .{n});
+    \\        std.process.exit(1);
     \\    }
     \\    var i: u32 = 0;
     \\    var newer: usize = (head + n - 1) % n;

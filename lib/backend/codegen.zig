@@ -589,9 +589,10 @@ pub fn isAnalysisName(s: []const u8) bool {
 /// Length of the §4.5.7 absdelay history ring, in samples.
 // ponytail: a fixed 1024 samples with linear interpolation. SPICE's
 // maxstep = min(tstep, span/50) already allows td/dt = 100 steps per delay,
-// and ch04_expressions/a04_05 needs 515. A query older than the ring @panics
-// in `zHistAt` rather than clamping: §4.5.7 bounds no lookback, so a clamp
-// would silently shorten the delay. Upgrade path: host-owned growable history.
+// and ch04_expressions/a04_05 needs 515. A query older than the ring ends the
+// run with E1012 in `zHistAt` rather than clamping: §4.5.7 bounds no lookback,
+// so a clamp would silently shorten the delay. Upgrade path: host-owned
+// growable history.
 pub const hist_len: usize = 1024;
 
 // ===========================================================================
