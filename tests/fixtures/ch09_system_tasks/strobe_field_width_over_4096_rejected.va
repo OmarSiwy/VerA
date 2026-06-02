@@ -1,0 +1,15 @@
+// An engine limit, not a language rule: §9.4.3 gives the real conversions
+// "the full formatting capabilities available in the C language", and C bounds
+// no field width. VerA composes one call's text in a 4096-byte buffer
+// (docs/IMPLEMENTATION.md), so a width above 4096 is refused at the call with
+// E1011 rather than clamped to a narrower field than the one written.
+//
+//! lrm 9.4.3
+//! reject E1011
+module strobe_field_width_over_4096_rejected(p, n);
+  inout p, n; electrical p, n;
+  analog begin
+    $strobe("%5000d", 1);
+    I(p,n) <+ V(p,n);
+  end
+endmodule

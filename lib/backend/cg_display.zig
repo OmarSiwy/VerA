@@ -33,18 +33,17 @@ pub const Spec = struct {
     width: usize = 0, // 0 = no width given
     prec: ?usize = null, // null = no precision given
 
-    // ponytail: the scratch for a composed field is a stack array in the
-    // emitted block, so `%99999999d` would otherwise emit a 100 MB frame.
-    // 4096 matches `str_kernels.zSBuf`'s row and `file_kernels.ZFSlot.line`,
-    // so a record this formatter composes is one a §9.5.2 write can emit and a
-    // §9.5.4.1 `$fgets` can read back whole; a wider request is clamped, not
-    // honored. Upgrade path: spill to zSBuf if a real model ever wants more.
+    // The scratch for a composed field is a stack array in the emitted block,
+    // so a width or precision above this is refused (E1011) rather than
+    // emitted as a huge frame. 4096 matches `str_kernels.zSBuf`'s row and
+    // `file_kernels.ZFSlot.line`, so a record this formatter composes is one a
+    // §9.5.2 write can emit and a §9.5.4.1 `$fgets` can read back whole.
     const max_field = 4096;
     fn w(self: Spec) usize {
-        return @min(self.width, max_field);
+        return self.width;
     }
     fn p(self: Spec, default: usize) usize {
-        return @min(self.prec orelse default, max_field);
+        return self.prec orelse default;
     }
 };
 
@@ -133,22 +132,30 @@ fn buildArgs(
         }
     }
     // One call's conversions become one Zig format call, and Zig's formatter
-    // takes at most 32 arguments (`std.fmt.ArgSetType`). Refused here (E1010)
-    // rather than as a compile error in generated Zig; the empty record keeps
-    // the rest of the device emittable.
-    if (ops.items.len > max_format_args) {
-        if (g.diags) |bag| try bag.add(
-            .codegen,
-            .E1010,
-            g.lowered.tokenSpan(g.mir.instTok(@enumFromInt(site))),
-            "this call formats {d} values; one call formats at most {d}",
-            .{ ops.items.len, max_format_args },
-        );
-        g.any_fatal = true;
-        if (g.fatal == null) g.fatal = "a display or format call has more than 32 conversions";
-        fmt.clearRetainingCapacity();
-        ops.clearRetainingCapacity();
-    }
+    // takes at most 32 arguments (`std.fmt.ArgSetType`). Refused here rather
+    // than as a compile error in generated Zig.
+    if (ops.items.len > max_format_args)
+        return refuse(g, fmt, ops, site, .E1010, "this call formats {d} values; one call formats at most {d}", .{ ops.items.len, max_format_args });
+    for (ops.items) |p| if (p.spec.width > Spec.max_field or (p.spec.prec orelse 0) > Spec.max_field)
+        return refuse(g, fmt, ops, site, .E1011, "a field width or precision here exceeds {d}", .{Spec.max_field});
+}
+
+/// Reports `code` at call `site` and marks the build fatal. The emptied record
+/// keeps the rest of the device emittable.
+fn refuse(
+    g: *Gen,
+    fmt: *std.ArrayList(u8),
+    ops: *std.ArrayList(PrintArg),
+    site: usize,
+    code: diag.Code,
+    comptime msg: []const u8,
+    args: anytype,
+) Error!void {
+    if (g.diags) |bag| try bag.add(.codegen, code, g.lowered.tokenSpan(g.mir.instTok(@enumFromInt(site))), msg, args);
+    g.any_fatal = true;
+    if (g.fatal == null) g.fatal = "a display or format call exceeds a formatter limit";
+    fmt.clearRetainingCapacity();
+    ops.clearRetainingCapacity();
 }
 
 /// E1010's bound: the argument count Zig's `std.fmt` accepts in one call.
@@ -202,13 +209,13 @@ pub fn emitDisplayTask(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: us
     if (mon) {
         // §9.4.1's mechanism: format into this site's scratch row, then report
         // only when a watched argument VALUE differs from the step this site
-        // last reported (`monitorValues`). An overrun formats to the empty
-        // string, `emitStringFormat`'s rule.
+        // last reported (`monitorValues`). An overrun is `emitStringFormat`'s
+        // E1011.
         try g.b("if (zMonitor({d}, ", .{monitorKey(g, args)});
         try monitorValues(g, ops.items);
         try g.b(", std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
         try renderPrintArgs(g, ops.items);
-        try g.b("}}) catch \"\")) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
+        try g.b("}}) catch zSOver())) |zt| std.debug.print(\"{{s}}\", .{{zt}}); ", .{});
     } else {
         try g.b("std.debug.print(\"{f}\", .{{", .{std.zig.fmtString(fmt.items)});
         try renderPrintArgs(g, ops.items);
@@ -268,11 +275,11 @@ pub fn emitStringFormat(g: *Gen, args: []const Mir.Value, site: usize) Error!voi
     try buildArgs(g, args, &fmt, &ops, site);
     try g.b("zs: {{ ", .{});
     try emitScratch(g, ops.items);
-    // An overrun formats to the empty string: §9.5.3 states no truncation rule,
-    // and half a number is a worse answer than none. See `zSBuf`'s size note.
+    // An overrun ends the run with E1011 (`zSOver`): §9.5.3 states no
+    // truncation rule, and an empty or half string is a wrong answer.
     try g.b("break :zs zStringStore(std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
     try renderPrintArgs(g, ops.items);
-    try g.b("}}) catch \"\"); }}", .{});
+    try g.b("}}) catch zSOver()); }}", .{});
 }
 
 // ------------------------------------------------------- §9.5 file I/O ----
@@ -424,8 +431,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
 
     // The text is formatted into this call site's own scratch row and then
     // written, which is `emitStringFormat`'s sink with a descriptor instead of a
-    // string variable. An overrun writes nothing rather than half a line: §9.5.2
-    // states no truncation rule, same as §9.5.3.
+    // string variable. An overrun is E1011, as for §9.5.3.
     try g.b("zf: {{ ", .{});
     try emitScratch(g, ops.items);
     // §9.5.2 makes `$fmonitor` "just like" `$monitor` with a descriptor in
@@ -438,7 +444,7 @@ fn emitFileWrite(g: *Gen, c: Mir.Callee, args: []const Mir.Value, site: usize) E
     }
     try g.b("std.fmt.bufPrint(zSBuf({d}), \"{f}\", .{{", .{ site, std.zig.fmtString(fmt.items) });
     try renderPrintArgs(g, ops.items);
-    try g.b("}}) catch \"\"", .{});
+    try g.b("}}) catch zSOver()", .{});
     if (mon) {
         try g.b("; break :zf if (zMonitor({d}, ", .{monitorKey(g, args)});
         try monitorValues(g, ops.items);
@@ -566,12 +572,12 @@ pub fn translateFormat(
         const width_at = i;
         while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) {}
         if (i > width_at)
-            spec.width = std.fmt.parseUnsigned(usize, src[width_at..i], 10) catch Spec.max_field;
+            spec.width = std.fmt.parseUnsigned(usize, src[width_at..i], 10) catch std.math.maxInt(usize);
         if (i < src.len and src[i] == '.') {
             i += 1;
             const prec_at = i;
             while (i < src.len and src[i] >= '0' and src[i] <= '9') : (i += 1) {}
-            spec.prec = std.fmt.parseUnsigned(usize, src[prec_at..i], 10) catch 0;
+            spec.prec = std.fmt.parseUnsigned(usize, src[prec_at..i], 10) catch std.math.maxInt(usize);
         }
         if (i >= src.len) break;
         const conv = src[i];
@@ -813,7 +819,7 @@ pub fn renderPrintArg(g: *Gen, p: PrintArg, i: usize) Error!void {
                 p.conv,
                 flags,
                 p.spec.w(),
-                if (p.spec.prec) |pr| @as(i64, @intCast(@min(pr, Spec.max_field))) else -1,
+                if (p.spec.prec) |pr| @as(i64, @intCast(pr)) else -1,
             });
         },
         .plain => switch (p.want) {
