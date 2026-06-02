@@ -367,6 +367,7 @@ pub const Code = enum(u16) {
     E1011,
     E1012,
     E1013,
+    E1014,
     E1100,
     E1101,
     E1102,
@@ -5876,6 +5877,21 @@ fn infoOf(c: Code) Info {
             \\
             \\The message names the file. A table file this large is usually
             \\better resampled: the device searches it on every evaluation.
+            ,
+        },
+        .E1014 => .{
+            .title = "a system function name VerA reserves",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. LRM 2.8.3 lets any `$` name
+            \\be a user system function, but VerA spells some of its own
+            \\internal calls as `$` names (`$held_real`, `$idx`, `$limit$old`,
+            \\`$str$cat`, the `$rng$` family and a few more), and a source call
+            \\with one of those spellings would reach code that expects
+            \\VerA's own arguments. The call is refused where it is written.
+            \\
+            \\Rename the system function; a VPI application can register it
+            \\under any other `$` name.
             ,
         },
         .W1050 => .{
