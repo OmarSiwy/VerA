@@ -8,7 +8,6 @@
 //
 // Legal neighbour: audit_type_net_array.v runs a net array.
 // digital-runner: reject
-//! inherited IEEE 1364-2005 4.9.1
 //! reject E1100
 //! reject arrays of more than 16 dimensions
 module b_4_9_net_array_17_dimensions_rejected;
