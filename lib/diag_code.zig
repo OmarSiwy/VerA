@@ -370,6 +370,7 @@ pub const Code = enum(u16) {
     E1014,
     E1015,
     E1016,
+    E1017,
     E1100,
     E1101,
     E1102,
@@ -5924,6 +5925,20 @@ fn infoOf(c: Code) Info {
             \\
             \\An array this size belongs in a data file read by `$table_model`
             \\(LRM 9.21) or `$fscanf` (LRM 9.5.4).
+            ,
+        },
+        .E1017 => .{
+            .title = "a UDP has more than 64 inputs",
+            .lrm = "",
+            .explain =
+            \\An implementation limit the language allows. IEEE 1364-2005 8.1.2:
+            \\"Implementations may limit the maximum number of inputs to a UDP,
+            \\but they shall allow at least 9 inputs for sequential UDPs and 10
+            \\inputs for combinational UDPs." VerA's limit is 64 inputs, for
+            \\both kinds.
+            \\
+            \\Split the table: two UDPs whose outputs feed a third compute the
+            \\same function.
             ,
         },
         .W1050 => .{
