@@ -369,6 +369,7 @@ pub const Code = enum(u16) {
     E1013,
     E1014,
     E1015,
+    E1016,
     E1100,
     E1101,
     E1102,
@@ -5909,6 +5910,20 @@ fn infoOf(c: Code) Info {
             \\
             \\A device this size would also pass the 256-unknown bound on the
             \\generated Jacobian (E1003). Split the module.
+            ,
+        },
+        .E1016 => .{
+            .title = "an array or assignment pattern has more than 1048576 elements",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. VerA turns each element of
+            \\an analog-context array (LRM 3.2, 3.4.4) and each element of an
+            \\assignment pattern (LRM 4.2.14) into its own scalar, and stops at
+            \\2^20 elements rather than unroll without bound. The LRM bounds
+            \\neither.
+            \\
+            \\An array this size belongs in a data file read by `$table_model`
+            \\(LRM 9.21) or `$fscanf` (LRM 9.5.4).
             ,
         },
         .W1050 => .{
