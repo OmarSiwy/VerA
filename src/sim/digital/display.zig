@@ -244,8 +244,10 @@ pub fn readMemory(self: *Run, a: std.mem.Allocator, args: []const Ast.ExprId, ra
     const base = try self.slot(args[1]);
     const arr = self.arrays.get(base).?;
     const name = self.file.str(ex.strOf(args[0]));
-    const text = readSideFile(self, a, name) catch
-        return self.exprFail(args[0], "the memory file cannot be read");
+    const text = readSideFile(self, a, name) catch |e| return if (e == error.StreamTooLong)
+        self.exprFail(args[0], too_large)
+    else
+        self.exprFail(args[0], "the memory file cannot be read");
     const start = if (args.len >= 3) (try exec.eval(self, a, args[2], 0)).asInt() else null;
     const finish = if (args.len == 4) (try exec.eval(self, a, args[3], 0)).asInt() else null;
     var load: MemLoad = .init(text, radix, self.values[base].width, arr.low, arr.high, @intCast(args.len - 2), start, finish);
@@ -267,13 +269,19 @@ pub fn readSideFile(self: *Run, a: std.mem.Allocator, name: []const u8) ![]const
     return sideFile(self.io orelse return error.NoIo, a, self.file_name, name);
 }
 
+/// `sideFile`'s cap. IEEE 1364-2005 §17.2.9 bounds no memory file.
+pub const side_file_limit: usize = 1 << 22;
+/// The refusal past `side_file_limit`, which `sideFile` reports as
+/// `error.StreamTooLong`.
+pub const too_large = std.fmt.comptimePrint("the memory file is larger than the {d} bytes VerA reads", .{side_file_limit});
+
 /// `readSideFile` for the source `file_name`.
 pub fn sideFile(io: std.Io, a: std.mem.Allocator, file_name: []const u8, name: []const u8) ![]const u8 {
-    const limit: usize = 1 << 22;
+    const limit = side_file_limit;
     const cwd = std.Io.Dir.cwd();
     if (std.fs.path.dirname(file_name)) |dir| {
         const joined = try std.fs.path.join(a, &.{ dir, name });
-        if (cwd.readFileAlloc(io, joined, a, .limited(limit))) |text| return text else |_| {}
+        if (cwd.readFileAlloc(io, joined, a, .limited(limit))) |text| return text else |e| if (e == error.StreamTooLong) return e;
     }
     return cwd.readFileAlloc(io, name, a, .limited(limit));
 }
