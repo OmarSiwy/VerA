@@ -371,6 +371,7 @@ pub const Code = enum(u16) {
     E1015,
     E1016,
     E1017,
+    E1018,
     E1100,
     E1101,
     E1102,
@@ -5939,6 +5940,21 @@ fn infoOf(c: Code) Info {
             \\
             \\Split the table: two UDPs whose outputs feed a third compute the
             \\same function.
+            ,
+        },
+        .E1018 => .{
+            .title = "the instance tree is more than 64 instances deep",
+            .lrm = "",
+            .explain =
+            \\An engine limit, not a language rule. LRM 6.2.2 elaborates a
+            \\finite instance tree and bounds nothing about its depth. VerA
+            \\elaborates at most 64 nested instances below the top module and
+            \\stops at the 65th with this error rather than recurse without
+            \\bound. A cycle, which no depth
+            \\would finish, is E0905 instead.
+            \\
+            \\Flatten a level: a module that only passes its ports to one child
+            \\can be replaced by that child.
             ,
         },
         .W1050 => .{
