@@ -1428,6 +1428,10 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
 
 // ---- synchronous subroutines (IEEE 1364-2005 §10) ----------------------------
 
+/// The stack `callSync`'s nested activations may use: half of the smallest
+/// main-thread stack VerA runs on (8 MiB on Linux and macOS).
+const max_sync_stack = 4 << 20;
+
 /// Runs subroutine `idx` to completion as one activation (§10.2.2, §10.4) and
 /// returns a function's result, in `a`. The arguments are evaluated in the
 /// caller before anything of the callee's changes (a recursive call's argument
@@ -1440,7 +1444,11 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     const sub = &self.subs.items[idx];
     const decl = sub.decl;
     const f = sub.frame;
-    if (self.sync_depth == 1024) return self.fail(decl.main_tok, "task and function calls nested deeper than 1024 are not implemented", .{});
+    // An activation's frames are large and the stack is the host thread's,
+    // so the bound is on the stack used as well as the depth.
+    if (self.sync_depth == 0) self.sync_stack = @frameAddress();
+    if (self.sync_depth == 1024 or self.sync_stack -| @frameAddress() > max_sync_stack)
+        return self.fail(decl.main_tok, "task and function calls nested deeper than 1024, or past 4 MiB of stack, are not implemented", .{});
     const inputs = try a.alloc(?Int.Literal, args.len);
     for (decl.ports, args, inputs, f.ports) |p, arg, *in, slot| {
         in.* = null;
