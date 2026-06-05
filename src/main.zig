@@ -17,6 +17,7 @@ const Io = std.Io;
 
 const usage_text =
     \\usage: vera [options] FILE.va
+    \\       vera --run|--emit-exe [options] FILE.v [MORE.v ...]
     \\       vera --explain CODE
     \\
     \\  --lint                  frontend only (parse, lower, prove); no codegen
@@ -36,6 +37,11 @@ const usage_text =
     \\                          NOT IEEE 1364 4-state logic (2, E1101); 4-state
     \\  --two-state             --state=2
     \\  --run                   run a .v initial-process program, or an analog testbench
+    \\  --libmap FILE           read an IEEE 1364 §13.2 library map (repeatable, read
+    \\                          in order); each .v file compiles into the library
+    \\                          whose file_path_spec matches it, else `work`
+    \\  -L LIB                  search LIB for an instance's cell (repeatable, in
+    \\                          order; IEEE 1364 §13.7.1); default: map order, then work
     \\  --display=drop|emit     ch9 display tasks: void (device) or printed (exe)
     \\  --jac-f32               mark the device as tolerating an f32 Jacobian
     \\  --jac-f32-host          ...and ask the host to use it on its CPU path
@@ -91,7 +97,12 @@ pub fn main(init: std.process.Init) !u8 {
     var overrides: std.ArrayList(vera.ParamOverride) = .empty;
     defer overrides.deinit(gpa);
 
-    var path: ?[]const u8 = null;
+    var paths: std.ArrayList([]const u8) = .empty;
+    defer paths.deinit(gpa);
+    var libmaps: std.ArrayList([]const u8) = .empty;
+    defer libmaps.deinit(gpa);
+    var search: std.ArrayList([]const u8) = .empty;
+    defer search.deinit(gpa);
     var emit_zig = false;
     var json = false;
     var color: enum { auto, always, never } = .auto;
@@ -217,6 +228,10 @@ pub fn main(init: std.process.Init) !u8 {
             expect_module = arg["--expect-module=".len..];
         } else if (std.mem.eql(u8, arg, "--spice")) {
             spice_path = args.next() orelse return missing(err, "--spice", "a path");
+        } else if (std.mem.eql(u8, arg, "--libmap")) {
+            try libmaps.append(gpa, args.next() orelse return missing(err, "--libmap", "a library map file"));
+        } else if (std.mem.eql(u8, arg, "-L")) {
+            try search.append(gpa, args.next() orelse return missing(err, "-L", "a library name"));
         } else if (std.mem.eql(u8, arg, "-I")) {
             try include_dirs.append(gpa, args.next() orelse return missing(err, "-I", "a directory"));
         } else if (std.mem.startsWith(u8, arg, "--std=")) {
@@ -262,12 +277,7 @@ pub fn main(init: std.process.Init) !u8 {
                 try err.print("error: unknown option `{s}`\n", .{arg});
                 return 2;
             }
-        } else if (path == null) {
-            path = arg;
-        } else {
-            try err.writeAll("error: more than one input file\n");
-            return 2;
-        }
+        } else try paths.append(gpa, arg);
     }
 
     // A testbench compiles for seconds and runs for microseconds; a `.so` is
@@ -296,10 +306,11 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     };
 
-    const in_path = path orelse {
+    if (paths.items.len == 0) {
         try err.writeAll(usage_text);
         return 2;
-    };
+    }
+    const in_path = paths.items[0];
 
     // Digital Verilog uses the shared frontend below. Other language families
     // need their own standard-conforming frontend and remain explicit refusals.
@@ -332,6 +343,16 @@ pub fn main(init: std.process.Init) !u8 {
     };
 
     const digital_source = std.mem.eql(u8, std.fs.path.extension(in_path), ".v");
+    if (!digital_source) {
+        if (paths.items.len > 1) {
+            try err.writeAll("error: more than one input file\n");
+            return 2;
+        }
+        if (libmaps.items.len != 0 or search.items.len != 0) {
+            try err.writeAll("error: --libmap and -L configure a .v design's libraries\n");
+            return 2;
+        }
+    }
     if (logic_flag) |f| if (!digital_source or run_exe) {
         try err.print("error: {s} builds a .v design's executable; it takes --emit-exe and a .v file\n", .{f});
         return 2;
@@ -345,7 +366,8 @@ pub fn main(init: std.process.Init) !u8 {
         defer arena.deinit();
         var digital_bag = diag.Bag.init(arena.allocator());
         digital_bag.levels = levels;
-        const opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language };
+        var opts: digital.Options = .{ .file_name = in_path, .include_dirs = include_dirs.items, .io = io, .language = language };
+        if (!try libraries(arena.allocator(), io, paths.items, libmaps.items, search.items, &opts, err, json, use_color)) return 1;
         const wd = work_dir orelse ".zig-cache/vera-tb";
         if (!run_exe) return emitDigital(gpa, io, arena.allocator(), &digital_bag, source, opts, .{
             .work_dir = wd,
@@ -654,6 +676,9 @@ fn emitDigital(
         .file_name = opts.file_name,
         .include_dirs = opts.include_dirs,
         .language = opts.language,
+        .lib = opts.lib,
+        .more = opts.more,
+        .search = opts.search,
     }, schedule, logic);
     if (prog.fallback) |why| {
         if (logic == .two) {
@@ -688,6 +713,64 @@ fn emitDigital(
         .ok => |p| try out.print("{s}\n", .{p}),
     }
     return 0;
+}
+
+/// IEEE 1364-2005 §13.2 reads the library maps, then fills `opts` with each
+/// file after the first and the library every file maps into, and the
+/// §13.5.1/§13.7.1 search order. False when it reported a refusal.
+fn libraries(
+    arena: std.mem.Allocator,
+    io: Io,
+    paths: []const []const u8,
+    libmaps: []const []const u8,
+    search: []const []const u8,
+    opts: *digital.Options,
+    err: *Io.Writer,
+    json: bool,
+    use_color: bool,
+) !bool {
+    var bag = diag.Bag.init(arena);
+    const map = vera.libmap.load(arena, io, &bag, libmaps) catch |e| switch (e) {
+        error.MapFailed => {
+            try report(&bag, err, json, use_color);
+            return false;
+        },
+        error.OutOfMemory => return error.OutOfMemory,
+    };
+    const libs = try arena.alloc([]const u8, paths.len);
+    for (paths, libs) |p, *lib| {
+        const real = Io.Dir.cwd().realPathFileAlloc(io, p, arena) catch |e| {
+            try err.print("error: cannot read `{s}`: {t}\n", .{ p, e });
+            return false;
+        };
+        lib.* = switch (map.libraryOf(real)) {
+            .lib => |l| l,
+            .ambiguous => |two| {
+                try bag.add(.parse, .E0244, .none, "`{s}` matches file path specifications of libraries `{s}` and `{s}` (IEEE 1364-2005 §13.2.1.1)", .{ p, two[0], two[1] });
+                try report(&bag, err, json, use_color);
+                return false;
+            },
+        };
+    }
+    for (search) |l| if (map.declares(l) == null and !std.mem.eql(u8, l, "work")) {
+        try bag.add(.parse, .E0244, .none, "-L {s}: no library map declares library `{s}` (IEEE 1364-2005 §13.7.1)", .{ l, l });
+        try report(&bag, err, json, use_color);
+        return false;
+    };
+    const more = try arena.alloc(digital.Unit, paths.len - 1);
+    for (paths[1..], libs[1..], more) |p, l, *u| u.* = .{
+        .name = p,
+        .text = Io.Dir.cwd().readFileAlloc(io, p, arena, .limited(64 * 1024 * 1024)) catch |e| {
+            try err.print("error: cannot read `{s}`: {t}\n", .{ p, e });
+            return false;
+        },
+        .lib = l,
+    };
+    opts.lib = libs[0];
+    opts.more = more;
+    opts.search = if (search.len != 0) search else try map.order(arena);
+    try report(&bag, err, json, use_color);
+    return true;
 }
 
 /// Reports a failed compilation's diagnostics and returns exit code 1. The Zig

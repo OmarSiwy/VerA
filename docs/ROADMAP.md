@@ -425,6 +425,10 @@ Settle each before a fixture asserts one side.
   (`conformance-ieee-expression-width-review.md:82-88`.)
 - IEEE 6.1.3: which delay rule a singleton `[0:0]` vector continuous assignment
   takes. (`conformance-vector-delay-fix.md:20-24`.)
+- IEEE 13.2.2 vs A.1.1 and Syntax 13-2: "The syntax of a lib.map file is
+  limited to library specifications, include statements, and standard Verilog
+  comment syntax", while both syntax boxes derive a config_declaration as a
+  library_description. VerA refuses a config in a map (E0244).
 - IEEE 17.2.9: `$readmem` address policy. `@8` into `[0:3]` with no task bounds
   loads nothing and says nothing; x/z/underscore in addresses is undecided.
   (`conformance-readmem-validation-edges.md:66-70`.)
@@ -482,8 +486,10 @@ No fixture pins these. Each is measure B or C work.
 - AMS F.2.1 step 4.a: the continuous domain winning; digital behavioural code
   classifying a net digital. (`annex_f_resolution/COVERAGE.md:90-100`.)
 - AMS G.2 item 12: the retired `real [0:3] x;` spelling (E0208 today). (`annex_g_change_history/COVERAGE.md:161-163`.)
-- AMS A.1: a library map file read as its own input, binding a separate design
-  (A-EVID-001). (`annex_a_syntax/COVERAGE.md:83`.)
+- AMS A.1: a library map binding an analog (`.va`) design. `vera --libmap`
+  binds a `.v` design's cells (IEEE 1364 §13); an analog compile reads no map
+  and its configurations bind nothing (W0253) (A-EVID-001).
+  (`annex_a_syntax/COVERAGE.md:83`.)
 - AMS 11, 12: the VPI obligation backlog (VPI12-* rows).
   (`conformance-ch11-review-draft.md`, `conformance-ch12-review-draft.md`.)
 - IEEE Annex G: declarations absent from `src/vpi/vpi_user.h`: `vpi_control`,

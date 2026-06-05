@@ -37,14 +37,14 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     var paramsets: std.ArrayList(Ast.ParamsetDecl) = .empty;
     var connectrules: std.ArrayList(Ast.ConnectRulesDecl) = .empty;
     var udps: std.ArrayList(Ast.UdpDecl) = .empty;
-    var config_cells: std.ArrayList(Ast.StrId) = .empty;
+    var configs: std.ArrayList(Ast.ConfigDecl) = .empty;
     try modules.appendSlice(self.arena, self.file.modules);
     try disciplines.appendSlice(self.arena, self.file.disciplines);
     try natures.appendSlice(self.arena, self.file.natures);
     try paramsets.appendSlice(self.arena, self.file.paramsets);
     try connectrules.appendSlice(self.arena, self.file.connectrules);
     try udps.appendSlice(self.arena, self.file.udps);
-    try config_cells.appendSlice(self.arena, self.file.config_cells);
+    try configs.appendSlice(self.arena, self.file.configs);
 
     while (true) {
         try self.skipAttributes();
@@ -86,7 +86,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
                     const u = parseUdpDecl(self) catch |e| break :udp e;
                     break :udp udps.append(self.arena, u);
                 } else if (std.mem.eql(u8, w, "config"))
-                    parseConfigDecl(self, &config_cells)
+                    parseConfigDecl(self, &configs)
                 else if (std.mem.eql(u8, w, "library") or std.mem.eql(u8, w, "include"))
                     parseLibraryDecl(self)
                 else
@@ -115,7 +115,7 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     self.file.paramsets = paramsets.items;
     self.file.connectrules = connectrules.items;
     self.file.udps = udps.items;
-    self.file.config_cells = config_cells.items;
+    self.file.configs = configs.items;
     if (self.failed) return error.ParseError;
     return self.file;
 }
@@ -247,7 +247,7 @@ fn parseLibraryDecl(self: *Parser) Error!void {
 }
 
 /// Parses one A.1.5 `config_declaration`, which A.1.2 lists as a
-/// `description`, appending its `design` cells to `cells`:
+/// `description`, and appends it to `configs`:
 ///
 ///     config_declaration ::=
 ///             config config_identifier ;
@@ -255,40 +255,41 @@ fn parseLibraryDecl(self: *Parser) Error!void {
 ///                 {config_rule_statement}
 ///             endconfig
 ///     design_statement ::= design { [library_identifier.]cell_identifier } ;
-///     config_rule_statement ::=
-///             default_clause liblist_clause ;
-///             | inst_clause liblist_clause ; | inst_clause use_clause ;
-///             | cell_clause liblist_clause ; | cell_clause use_clause ;
 ///
-/// A digital run takes the cells as its tops (§13.3.1.1). The rules bind
-/// nothing: VerA has no library map, so every instance resolves by name to a
-/// module in the given source. W0253 says so whenever there are rules, and
-/// always in an analog compile, which reads no cell list.
-fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
-    // ponytail: rules are parsed and not stored; with no library table they
-    // would have no consumer. The upgrade is a map reader, which E0232 also
-    // wants.
+/// A digital run binds through it (`sim/digital`); an analog compile binds
+/// nothing and warns W0253.
+fn parseConfigDecl(self: *Parser, configs: *std.ArrayList(Ast.ConfigDecl)) Error!void {
     const kw = self.pos;
     self.pos += 1;
-    _ = try self.expectIdent();
+    const name = try self.expectIdent();
     _ = try self.expect(.semicolon);
     // `design_statement` is mandatory and comes first.
     if (!self.reservedIs(self.pos, "design")) return self.failAt(self.pos, .E0207, "found {s}: a config_declaration begins with its `design` statement", .{self.found(self.pos)});
     self.pos += 1;
-    while (self.peek() != .semicolon) {
-        const cell = self.file.str(try parse_decl.parseDottedName(self, false));
-        const last = if (std.mem.lastIndexOfScalar(u8, cell, '.')) |dot| cell[dot + 1 ..] else cell;
-        try cells.append(self.arena, try self.file.intern(self.arena, last));
-    }
+    var design: std.ArrayList(Ast.LibCell) = .empty;
+    while (self.peek() != .semicolon) try design.append(self.arena, try parseLibCell(self));
     self.pos += 1;
-    var rules = false;
+    var rules: std.ArrayList(Ast.ConfigRule) = .empty;
     while (!self.reservedIs(self.pos, "endconfig")) {
         if (self.peek() == .eof) return self.failAt(self.pos, .E0207, "found {s}: no `endconfig` closes the configuration", .{self.found(self.pos)});
-        try parseConfigRule(self);
-        rules = true;
+        const rule = try parseConfigRule(self);
+        // IEEE 1364-2005 §13.3.1.2: "there cannot be more than one default
+        // clause that specifies the expansion clause", and liblist is the one
+        // a default takes.
+        if (rule.select == .default) for (rules.items) |r| if (r.select == .default)
+            return self.failAt(rule.main_tok, .E0243, "more than one default clause specifies a liblist (IEEE 1364-2005 §13.3.1.2)", .{});
+        try rules.append(self.arena, rule);
     }
     self.pos += 1;
-    if (!self.digital or rules) try self.bag.add(.parse, .W0253, lexer.tokenSpan(self.src, self.starts, kw), "", .{});
+    if (!self.digital) try self.bag.add(.parse, .W0253, lexer.tokenSpan(self.src, self.starts, kw), "", .{});
+    try configs.append(self.arena, .{ .name = name, .design = design.items, .rules = rules.items, .main_tok = kw });
+}
+
+/// Syntax 13-1 `[library_identifier.]cell_identifier`, without the suffix.
+fn parseLibCell(self: *Parser) Error!Ast.LibCell {
+    const first = try self.expectIdent();
+    if (!self.eat(.dot)) return .{ .cell = first };
+    return .{ .lib = first, .cell = try self.expectIdent() };
 }
 
 /// Parses one A.1.5 `config_rule_statement`. The five alternatives are
@@ -301,27 +302,40 @@ fn parseConfigDecl(self: *Parser, cells: *std.ArrayList(Ast.StrId)) Error!void {
 ///     cell_clause ::= cell [ library_identifier . ] cell_identifier
 ///     liblist_clause ::= liblist { library_identifier }
 ///     use_clause ::= use [ library_identifier . ] cell_identifier [ : config ]
-fn parseConfigRule(self: *Parser) Error!void {
+fn parseConfigRule(self: *Parser) Error!Ast.ConfigRule {
     const tok = self.pos;
     // `default` is the one A.1.5 word with a tag, shared with A.6.7's
     // `case` default.
     const is_default = self.peek() == .kw_default;
-    if (!is_default and !self.reservedIs(tok, "instance") and !self.reservedIs(tok, "cell"))
+    const is_instance = self.reservedIs(tok, "instance");
+    if (!is_default and !is_instance and !self.reservedIs(tok, "cell"))
         return self.failAt(tok, .E0207, "found {s}, which begins no A.1.5 config_rule_statement", .{self.found(tok)});
     self.pos += 1;
-    if (!is_default) _ = try parse_decl.parseDottedName(self, false);
+    var rule: Ast.ConfigRule = .{ .select = .default, .expand = .{ .liblist = &.{} }, .main_tok = tok };
+    if (is_instance) rule.select = .{ .instance = try parse_decl.parseDottedName(self, false) } else if (!is_default) rule.select = .{ .cell = try parseLibCell(self) };
     if (self.reservedIs(self.pos, "liblist")) {
+        // IEEE 1364-2005 §13.3.1.4: "It is an error if a library name is
+        // included in a cell selection clause and the corresponding expansion
+        // clause is a library list expansion clause."
+        if (rule.select == .cell and rule.select.cell.lib != .none)
+            return self.failAt(tok, .E0243, "a cell clause with a library name takes `use`, not `liblist` (IEEE 1364-2005 §13.3.1.4)", .{});
         self.pos += 1;
         // `liblist { library_identifier }`: no commas, and the empty list
         // is legal (it clears an inherited list).
-        while (self.peek() != .semicolon) _ = try self.expectIdent();
+        var libs: std.ArrayList(Ast.StrId) = .empty;
+        while (self.peek() != .semicolon) try libs.append(self.arena, try self.expectIdent());
+        rule.expand = .{ .liblist = libs.items };
     } else if (!is_default and self.reservedIs(self.pos, "use")) {
         self.pos += 1;
-        _ = try parse_decl.parseDottedName(self, false);
+        var target = try parseLibCell(self);
         // `[ : config ]`: the literal keyword, not a name.
-        if (self.eat(.colon) and !self.reservedIs(self.pos, "config"))
-            return self.failAt(self.pos, .E0207, "found {s}: a use_clause's `:` is followed by the word `config`", .{self.found(self.pos)})
-        else if (self.reservedIs(self.pos, "config")) self.pos += 1;
+        if (self.eat(.colon)) {
+            if (!self.reservedIs(self.pos, "config"))
+                return self.failAt(self.pos, .E0207, "found {s}: a use_clause's `:` is followed by the word `config`", .{self.found(self.pos)});
+            self.pos += 1;
+            target.config = true;
+        }
+        rule.expand = .{ .use = target };
     } else return self.failAt(
         self.pos,
         .E0207,
@@ -329,6 +343,7 @@ fn parseConfigRule(self: *Parser) Error!void {
         .{ self.found(self.pos), self.tokenText(tok), if (is_default) "" else " or `use`" },
     );
     _ = try self.expect(.semicolon);
+    return rule;
 }
 
 // -----------------------------------------------------------------------

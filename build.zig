@@ -246,9 +246,14 @@ pub fn build(b: *std.Build) void {
         // Channels a fixture opens (§12.26) land in the cwd, which is the
         // cache and not the source tree.
         r.setCwd(b.path(".zig-cache"));
-        r.expectExitCode(0);
-        r.expectStdOutEqual(f.stdout);
-        if (f.stderr) |e| r.expectStdErrEqual(e);
+        if (f.xfail) |m| {
+            r.expectExitCode(1);
+            r.expectStdErrMatch(m);
+        } else {
+            r.expectExitCode(0);
+            r.expectStdOutEqual(f.stdout);
+            if (f.stderr) |e| r.expectStdErrEqual(e);
+        }
         test_step.dependOn(&r.step);
         test_vpi.dependOn(&r.step);
     }
@@ -288,6 +293,10 @@ const host_tests = [_]struct { host: []const u8, va: []const u8 }{
     .{ .host = "tests/fixtures/ch04_expressions/a04_rollback_rollback_host.zig", .va = "tests/fixtures/ch04_expressions/a04_rollback_a04_rollback_ops.va" },
     .{ .host = "tests/fixtures/ch04_expressions/a04_idt_hold_revert_host.zig", .va = "tests/fixtures/ch04_expressions/a04_idt_hold_revert.va" },
     .{ .host = "tests/revert_host.zig", .va = "tests/revert_ops.va" },
+    .{ .host = "tests/fixtures/ch04_expressions/absdelay_ac_phase_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
+    .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/absdelay_ac_phase.va" },
+    .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/laplace_ac_response.va" },
+    .{ .host = "tests/ac_dyn_host.zig", .va = "tests/fixtures/ch04_expressions/zi_ac_response.va" },
 };
 
 /// The `vera` CLI. It imports the engine as modules; an `@import` by path
@@ -371,8 +380,16 @@ fn vpiApp(
 
 /// One runnable VPI application: its C file, the design it runs against, and
 /// the exact output it must produce. The `checks=N` count catches a run that
-/// returns early and still exits 0.
-const VpiRun = struct { c: []const u8, design: []const u8, stdout: []const u8, stderr: ?[]const u8 = null };
+/// returns early and still exits 0. `xfail` is a known VerA gap instead: the
+/// run exits 1 with this text in its stderr, so the run that stops failing
+/// fails the step until the marker is removed.
+const VpiRun = struct {
+    c: []const u8,
+    design: []const u8,
+    stdout: []const u8 = "",
+    stderr: ?[]const u8 = null,
+    xfail: ?[]const u8 = null,
+};
 
 /// Not here, each for a reason outside the routine it exercises:
 ///   p02_10  a $systf call in digital code: the engine has no user-systf call
@@ -607,6 +624,95 @@ const vpi_runs = [_]VpiRun{
         .c = "tests/fixtures/ch11_vpi/p04_11_instance_scopes.c",
         .design = "tests/fixtures/ch11_vpi/p04_scopes.v",
         .stdout = "p02: p04_11_instance_scopes checks=23\n",
+    },
+    // IEEE 1364-2005 §20, §26, §27 and Annex G (measure B). An `xfail N.N:`
+    // line in `stdout` is a requirement VerA does not meet yet (b_check.h).
+    .{
+        .c = "tests/fixtures/ieee_pli/b_20_4_timing_checks.c",
+        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
+        .stdout = "p02: b_20_4_timing_checks checks=7\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_1_systf.c",
+        .design = "tests/fixtures/ieee_pli/b_26_1_systf.v",
+        .stdout = "xfail 27.31: no user data can be stored on a system function call\nxfail 26.1.1: the $unsigned sizetf is called once per call site, not at most once\nxfail 27.34.1: the sizetf of a vpiSizedSignedFunc is never called\nxfail 26.1.3: the $unsigned calltf does not run: the built-in executes instead\nxfail 20.4: a and b hold the built-in $unsigned results, not the override's\nxfail 20.3: no overriding system function or task is called at run time\np02: b_26_1_systf checks=40\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_structure.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_structure.v",
+        .stdout = "xfail 26.6.1: vpiTimeUnit of a `timescale 1ns module is not -9\nxfail 26.6.1: vpi_get(vpiTimePrecision, NULL) is not the smallest precision, -12\nxfail 26.6.2: instance array -> vpiLeftRange does not read 1\nxfail 26.6.2: instance array -> expr is not a vpiListOp operation\nxfail 26.3.2: vpi_get_str(vpiType, iterator) is not \"vpiIterator\"\nxfail 26.3.2: vpiNetType of a wire is not vpiWire\nxfail 26.3.3: vpiLineNo of a net is not its source line\nxfail 26.3.3: vpiFile of a net is not its source file\nxfail 26.6.43: vpi_handle(vpiUse, iterator) is not its reference handle\nxfail 26.6.43: vpiIteratorType is not the iterated type\nxfail 26.6.1: vpiProtected of an unprotected module is not FALSE\nxfail 26.6.5: vpiHighConn of u.a is not bus\nxfail 26.6.5: vpiConnByName of a named connection is not TRUE\nxfail 26.6.6: net ->> net bit does not yield bus's 8 bits\nxfail 26.6.6: a net array is not a vpiNetArray of vpiSize 2\nxfail 26.6.7: vpiArray of a reg array member is not TRUE\nxfail 26.6.7: vpiSize of a 2x3 reg array is not its 6 regs\nxfail 26.6.8: a time variable is not a vpiTimeVar\nxfail 26.6.8: module ->> variables does not yield i, ia, x, t\nxfail 26.6.10: reg array ->> range yields no range of size 4\nxfail 26.6.11: vpiArray of a scalar named event is not FALSE\nxfail 26.6.12: vpiLeftRange of P [7:0] does not read 7\nxfail 26.6.12: w4 ->> param assign does not yield its #(.W(4))\nxfail 26.6.44: gen[0].gw names no object\nxfail 26.6.44: module ->> gen scope array yields no gen of size 2\np02: b_26_6_structure checks=249\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_behaviour.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_behaviour.v",
+        .stdout = "xfail 26.6.3: module ->> vpiInternalScope omits bump, twice, main\nxfail 26.6.3: main ->> vpiInternalScope omits fk\nxfail 26.6.3: fk's vpiScope is not main\nxfail 26.6.34: forever is not a vpiForever\nxfail 26.6.34: vpi_handle(vpiCondition, forever) is not refused\nxfail 26.6.38: disable -> vpiExpr is not main\nxfail 26.6.26: {2{a[1:0]}}'s second operand is a nested concatenation, not a[1:0]\nxfail 26.6.26: a[i +: 2] is no vpiIndexedPartSelect\nxfail 26.6.26: vpiConstType of 4'd9 is not vpiDecConst\nxfail 26.6.26: vpiDecompile of a + b is not \"a + b\"\nxfail 26.6.25: vpi_iterate(vpiUse, a) yields no use of a\nxfail 26.3.4: vpiDelay of #(2,3) is not a vpiListOp operation\nxfail 26.6.24: the net declaration assignment of nd is no cont assign\nxfail 26.6.24: vpiNetDeclAssign of an assign statement is not FALSE\nxfail 26.6.24: vpi_get_value(cont assign) is refused\nxfail 26.6.4: vpiVector/vpiScalar of an io decl\nxfail 26.6.18: vpiSize of function [7:0] twice is not 8\nxfail 26.6.18: vpiFuncType of function [7:0] is not vpiSizedFunc\nxfail 26.6.18: the function holds no 8-bit reg named twice\nxfail 26.6.19: vpiFuncType of the call twice(d)\nxfail 26.6.19: vpiDecompile of the $display call is refused\nxfail 26.6.39: vpi_iterate(vpiCallback, a) does not yield a's callback\nxfail 26.6.39: vpi_iterate(vpiCallback, NULL) yields no callback\nxfail 26.6.41: vpi_handle(vpiActiveTimeFormat, NULL) after $timeformat is NULL\np02: b_26_6_behaviour checks=275\nd=12 c=1 q=9 p2=0101\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_primitives.c",
+        .design = "tests/fixtures/ch11_vpi/p04_prims.v",
+        .stdout = "xfail 26.6.13: vpi_get_value(prim term) is refused\nxfail 26.6.13: vpiArray of a gate outside an array is not FALSE\nxfail 26.6.14: no table entry decompiles (vpiStringVal) as 1 1 : ? : 1\nxfail 26.6.14: udp defn -> initial is NULL\nxfail 26.6.22: vpi_iterate(vpiDriver, y) omits the and's output\nxfail 26.6.22: vpi_iterate(vpiLoad, y) omits the not's input\nxfail 26.6.23: vpi_iterate(vpiLoad, reg a) omits the and's input\np02: b_26_6_primitives checks=65\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_specify.c",
+        .design = "tests/fixtures/ch11_vpi/p06_specify.v",
+        .stdout = "xfail 26.6.15: path term -> expr is the port, not the net a\nxfail 26.6.15: Annex G's vpiPolarity (34) is refused\nxfail 26.6.15: vpiModPathHasIfNone is refused\nxfail 26.6.15: mod path -> vpiDelay is NULL\nxfail 26.6.15: path 3's vpiModDataPathIn is NULL\nxfail 26.6.17: Annex G's vpiTchkType (38) is refused\nxfail 26.6.17: tchk term -> expr is the port, not the net clk\nxfail 26.6.17: tchk ->> vpiExpr does not yield four arguments, two of them tchk terms\np02: b_26_6_specify checks=58\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_20_frames.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_20_frames.v",
+        .stdout = "xfail 26.6.20: the automatic task at ->> vpiReg does not yield x with vpiAutomatic TRUE\np02: b_26_6_20_frames checks=12\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_11_event_array.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_11_event_array.v",
+        .xfail = "error[E0207]: unexpected token: found `[`",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_31_repeat_control.v",
+        .xfail = "error[E0209]: expected an expression: found `repeat`",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_26_6_42_attributes.c",
+        .design = "tests/fixtures/ieee_pli/b_26_6_42_attributes.v",
+        .xfail = "error[E1100]: digital source execution failed: digital execution currently requires a module with only variables, nets, events, instances and processes",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_objects.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "xfail 27.19: a name searched in scope u finds top's bus\np02: b_27_objects checks=81\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_values.c",
+        .design = "tests/fixtures/ieee_pli/b_27_values.v",
+        .stdout = "xfail 27.14: a time variable as vpiObjTypeVal is not vpiTimeVal 5000000000\nxfail 27.14: vpiStrengthVal of a reg is not logic 1 at strong strength\nxfail 27.32: a put onto a named event is refused\nxfail 27.32: a vpiNoDelay put onto a net is refused\nxfail 27.32: vpiStringVal onto a real variable is not refused\nxfail 27.32: the net does not hold the put value until its driver changes\nxfail 27.32: the named event put did not toggle it\np02: b_27_values checks=140\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_33_callbacks.c",
+        .design = "tests/fixtures/digital/p02_design.v",
+        .stdout = "xfail 27.33.3: cbError and cbPLIError are not defined\nxfail 27.33.1.1: cbStmt on a statement is refused\nxfail 27.33.1.3: cbStmt on a module is refused\nxfail 27.33.2: cbAtStartOfSimTime of delay zero from a later region is not an error\nxfail 27.33.2: cbReadWriteSynch of delay zero from read-only synch is not an error\np02: b_27_33_callbacks checks=73\np02_design: t=20 reached\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_mcd.c",
+        .design = "tests/fixtures/ieee_pli/b_27_mcd.v",
+        .stdout = "b27 printf 7 ok\nxfail 27.25: a file the HDL opened with $fopen does not return the HDL's mcd\nb27 mcd1\nxfail 27.24: the name of an fd from $fopen is not returned\nxfail 27.22: an mcd from the HDL's $fopen is not closed\nxfail 27.26: text for an mcd from the HDL's $fopen goes to the output channel, not the file\np02: b_27_mcd checks=32\n",
+        // The 27.26 xfail: text for the HDL's mcd lands on stderr.
+        .stderr = "hdl\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_delays.c",
+        .design = "tests/fixtures/ch11_vpi/p05_delays.v",
+        .stdout = "p02: b_27_delays checks=25\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_27_unprovided.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "xfail 27.4: vpi_flush is not provided\nxfail 27.23: vpi_mcd_flush is not provided\nxfail 27.37: vpi_vprintf is not provided\nxfail 27.27: vpi_mcd_vprintf is not provided\nxfail 27.18: vpi_handle_by_multi_index is not provided\nxfail 27.31: vpi_put_userdata/vpi_get_userdata are not provided\nxfail 27.29: vpi_put_data/vpi_get_data are not provided\nxfail 27.3: vpi_control is not provided\np02: b_27_unprovided checks=17\n",
+    },
+    .{
+        .c = "tests/fixtures/ieee_pli/b_G_vpi_user.c",
+        .design = "tests/fixtures/ch11_vpi/p04_objects.v",
+        .stdout = "xfail G: vpiPolarity is not Annex G's 34\nxfail G: vpiDataPolarity is not Annex G's 35\nxfail G: vpiTchkType is not Annex G's 38\nxfail G: 175 of Annex G's 441 constant names are not defined\nxfail G: 10 of Annex G's routines are not provided\np02: b_G_vpi_user checks=268\n",
     },
 };
 

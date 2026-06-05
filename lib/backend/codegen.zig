@@ -360,6 +360,12 @@ pub const Gen = struct {
     rows: [2]u64 = .{ 0, 0 },
     /// Which half of `pat` the current `emitStamps` writes.
     pat_react: bool = false,
+    /// Per residual row, either half: the columns whose partial reaches it
+    /// through a frequency-dependent operator (`Analysis.acDynDeps`), the
+    /// source of `ac_dyn_slots`. `patRow` fills it from `cur_dyn`.
+    dpat: []u64 = &.{},
+    /// `acDynDeps` of the contribution `emitStamps` is writing.
+    cur_dyn: u64 = 0,
     /// Unknowns whose derivative lane `eval`/`q` may read: the mask behind the
     /// emitted `deriv_reads`. Syntactic, so a superset: every `x[u]`
     /// `renderValueRef` writes, every `.ddxAt(u)`, and every dispatcher term

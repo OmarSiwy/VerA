@@ -402,10 +402,12 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     try self.print(", {d}, {d});\n", .{ fm.width, args.len - 2 });
                     try self.print("            while (c{d}.next()) |x{d}| switch (x{d}.arg) {{\n", .{ lb, lb, lb });
                     for (args[2..], 0..) |arg, k| {
-                        try self.print("            {d} => switch (x{d}.value) {{\n            .int => |v{d}| {{\n", .{ k, lb, lb });
-                        try emit.assignInt(self, arg, try std.fmt.allocPrint(self.arena, "v{d}", .{lb}));
+                        try self.print("            {d} => switch (x{d}.value) {{\n            .bits => |v{d}| {{\n", .{ k, lb, lb });
+                        try emit.assignPlanes(self, arg, try std.fmt.allocPrint(self.arena, "v{d}", .{lb}));
                         try self.print("            }},\n            .chars => |t{d}| {{\n", .{lb});
                         try emit.assignChars(self, arg, try std.fmt.allocPrint(self.arena, "t{d}", .{lb}));
+                        try self.print("            }},\n            .real => |f{d}| {{\n", .{lb});
+                        try emit.assignReal(self, arg, try std.fmt.allocPrint(self.arena, "f{d}", .{lb}));
                         try self.print("            }},\n            }},\n", .{});
                     }
                     try self.print("            else => unreachable,\n            }};\n", .{});
@@ -434,6 +436,7 @@ pub fn value(self: *Emitter, e: Ast.ExprId, ty: Type) Error!void {
                     const t = try selfDetermined(self, args[0]);
                     try self.print(", {d}), 0), 32, {d}, {})", .{ t.width, w, sg });
                 },
+                .fgets, .fscanf, .fread, .ferror => return self.refuse("a §17.2 read into a string or memory argument"),
                 else => return self.refuse("a VAMS driver or real system function"), // else: driver access stays with the interpreter; a real function is `real`'s
             }
         },

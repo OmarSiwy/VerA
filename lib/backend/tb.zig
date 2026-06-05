@@ -109,6 +109,8 @@ pub const Directives = struct {
     acstim: []const AcWant = &.{},
     /// Whether any `//! acstim` line was written (see `asserts_noise`).
     asserts_acstim: bool = false,
+    /// `//! acdyn` lines, in source order (`AcDynWant`).
+    acdyn: []const AcDynWant = &.{},
     /// `//! qsite <row><sign>... lte|nolte`, one per expected §5.6.1.2 charge
     /// site in slot order; `//! qsite none` asserts none. Each names the rows
     /// the site stamps and their sign (`g+ s-`; another weight prints as
@@ -253,6 +255,23 @@ pub const AcWant = struct {
     pub fn needsPoint(self: AcWant) bool {
         return self.mag != null or self.phase != null;
     }
+};
+
+/// One `//! acdyn` line:
+///
+///     //! acdyn (<row>,<col>) f=<Hz> re=<v> im=<v> [tol=<v>]
+///
+/// `acDyn`'s term at local Jacobian entry (row, col), `U` tag names, at
+/// ω = 2πf and the first operating point (`contract.acDynSlots`). A slot the
+/// device does not list reads 0.
+pub const AcDynWant = struct {
+    row: []const u8,
+    col: []const u8,
+    f: f64,
+    re: f64,
+    im: f64,
+    /// Absolute tolerance on each part.
+    tol: f64 = 1e-12,
 };
 
 /// Most operating points one fixture may expand to (`error.TooManyPoints`).

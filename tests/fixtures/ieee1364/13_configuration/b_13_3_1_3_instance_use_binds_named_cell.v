@@ -13,7 +13,6 @@
 //   t=1  top.u1 bound to work.rtl  -> "rtl top.u1 work.rtl"
 //   t=2  top.u2 bound to work.gate -> "gate top.u2 work.gate"
 //! inherited IEEE 1364-2005 13.3.1.3 13.3.1.6
-//! xfail config rules bind nothing (W0253): top.u2 stays rtl and prints "rtl top.u2 work.rtl"
 `timescale 1ns/1ns
 config cfg;
   design work.top;
