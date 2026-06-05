@@ -543,7 +543,7 @@ pub fn main(init: std.process.Init) !u8 {
         const built = vera.tb.buildExe(gpa, io, device, runner, .{
             .work_dir = wd,
             .contract = contract,
-            .name = try fileStem(tb_arena.allocator(), result.mir.name),
+            .name = result.mir.name,
             .out_path = out_path,
             .zig_exe = zig_exe,
             .mixed = dm.mixed != null,
@@ -595,7 +595,7 @@ pub fn main(init: std.process.Init) !u8 {
         };
         var r = vera.buildArtifact(gpa, io, &result, .{
             .work_dir = wd,
-            .name = try fileStem(tb_arena.allocator(), result.mir.name),
+            .name = try vera.orchestrator.fileStem(tb_arena.allocator(), result.mir.name),
             .optimize = opt,
             .backend = backend,
             .modules = &modules,
@@ -782,20 +782,6 @@ fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e
         else => try err.print("error: {t}\n", .{e}),
     }
     return 1;
-}
-
-/// A module name as a file-name stem: the name itself when it is short and
-/// plain, else its plain prefix and a hash. §2.8 identifiers run to at least
-/// 1024 characters and §2.8.1 escaped ones hold any printable byte, neither of
-/// which a file system takes as a name.
-fn fileStem(a: std.mem.Allocator, name: []const u8) ![]const u8 {
-    const plain = for (name) |c| {
-        if (!std.ascii.isAlphanumeric(c) and c != '_') break false;
-    } else true;
-    if (plain and name.len <= 128) return name;
-    var n: usize = 0;
-    while (n < @min(name.len, 64) and (std.ascii.isAlphanumeric(name[n]) or name[n] == '_')) n += 1;
-    return std.fmt.allocPrint(a, "{s}-{x:0>16}", .{ name[0..n], std.hash.Wyhash.hash(0, name) });
 }
 
 /// The largest source file or `--spice` netlist read (E1013).
