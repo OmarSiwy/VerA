@@ -1,4 +1,4 @@
-// §4.5.7 a lookback DEEPER THAN THE IMPLEMENTATION'S HISTORY RING. The clause
+// §4.5.7 a lookback of 515 accepted timepoints, which a small history ring would
 // states the transport delay as a formula over all of past time,
 //
 //     Output(t) = Input(max(t - td, 0))
@@ -16,27 +16,12 @@
 //   t/ns     0 .. 515   516   517   518   519   520
 //   out      0 ..   0     1     2     3     4     5
 //
-// WHY THIS FAILS TODAY, AND WHERE. `codegen.hist_len` is a fixed 512-sample
-// ring per absdelay site, and `zHistAt`'s last line clamps a query older than
-// the ring to the OLDEST retained sample:
-//
-//     // Query older than the whole ring: clamp to the OLDEST sample.
-//     return vs[head];
-//
-// The operator is evaluated BEFORE the current point is pushed, so at t ns the
-// oldest sample still in the ring is t - 512 ns, which for every t > 512 is
-// NEWER than the queried t - 515. From t = 513ns on the operator therefore
-// answers max(t/1ns - 512, 0) instead of max(t/1ns - 515, 0): it reports a
-// delay of 512ns, three nanoseconds short, and it does so silently — no
-// diagnostic, no $error, no host-visible flag. Measured, the deviation is 1 at
-// t = 513ns and a flat 3 from t = 515ns to the end of the run; at t = 520ns
-// the operator answers 8 where the clause requires 5.
-//
-// This is the row's "record resource failures explicitly" item stated as a
-// value: a capacity an implementation cannot meet may be reported, but it may
-// not be quietly rewritten into a shorter delay. The first 513 points of this
-// fixture pass under both readings, so a failure here localises precisely to
-// the sample at which the ring underruns.
+// WHAT IT PINS. A ring that forgot the queried sample and answered from the
+// oldest one it kept would report a shorter delay, silently. VerA's ring holds
+// 1024 accepted samples per site (`codegen.hist_len`), so this 515-step
+// lookback is answered exactly; a lookback deeper than the ring ends the run
+// with E1012 (absdelay_history_underrun_is_fatal.va). Either way no shortened
+// delay is ever reported as this one.
 //
 //! lrm 4.5.7
 //! bias V(n) = 0
@@ -49,20 +34,13 @@ module a04_absdelay_history_capacity(p, n);
     electrical p, n;
 
     analog begin
-        `CHECK("a delay spanning more accepted steps than the history ring is still the delay",
+        `CHECK("a delay spanning 515 accepted steps is still the delay",
                absdelay($abstime * 1e9, 515n)
                  - max($abstime * 1e9 - 515.0, 0.0), 0.0, 1e-9);
         // Literal and row-invariant: the output is still exactly zero at
-        // t = 515ns, because Input(max(515-515,0)) = Input(0) = 0.
-        //
-        // The wrong answer, derived rather than guessed: the operator is
-        // evaluated BEFORE the current point is pushed, so at t = 515ns the
-        // oldest sample a 512-deep ring still holds is t = 515 - 512 = 3ns.
-        // The query for t - td = 0ns is older than that, so `zHistAt`'s
-        // "clamp to the OLDEST sample" returns Input(3ns) = 3. A ring that has
-        // forgotten everything older than t - 512ns therefore answers 3 here,
-        // not 0. Measured at HEAD: the residual asserted by the CHECK above
-        // reads got=3 at t = 515ns and at every point to the end of the run.
+        // t = 515ns, because Input(max(515-515,0)) = Input(0) = 0. A ring that
+        // had forgotten Input(0) and answered from a newer sample would read
+        // nonzero here.
         `CHECKI("the output is still zero at t = td",
                 absdelay($abstime * 1e9, 515n) == 0.0 || $abstime > 515n, 1);
 

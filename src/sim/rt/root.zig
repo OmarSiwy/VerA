@@ -1352,7 +1352,10 @@ pub const State = struct {
         var arena: std.heap.ArenaAllocator = .init(self.gpa);
         defer arena.deinit();
         const a = arena.allocator();
-        const file = display.sideFile(self.io, a, source, name) catch return self.fail("the memory file cannot be read", .{});
+        const file = display.sideFile(self.io, a, source, name) catch |e| return if (e == error.StreamTooLong)
+            self.fail(display.too_large, .{})
+        else
+            self.fail("the memory file cannot be read", .{});
         var load: display.MemLoad = .init(file, radix, width, low, high, given, first, last);
         const n = (width + 63) / 64;
         const m = try a.alloc(u64, n);

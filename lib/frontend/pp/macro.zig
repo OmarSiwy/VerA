@@ -156,7 +156,7 @@ pub fn expand(pp: *Pp, text: []const u8, at: usize, after_name: usize, name: []c
         // `handleDefine` refuses a user `define of either name (E0143).
         if (std.mem.eql(u8, name, "__LINE__")) {
             // "in the form of a simple decimal number": an integer token.
-            var buf: [16]u8 = undefined;
+            var buf: [20]u8 = undefined;
             try pp.out.appendSlice(pp.arena, std.fmt.bufPrint(&buf, "{d}", .{pp.currentLine(at)}) catch unreachable);
             return after_name;
         }

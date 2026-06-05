@@ -336,8 +336,8 @@ pub fn main(init: std.process.Init) !u8 {
         return 2;
     }
 
-    const source = Io.Dir.cwd().readFileAlloc(io, in_path, gpa, .limited(64 * 1024 * 1024)) catch |e| {
-        try err.print("error: cannot read `{s}`: {t}\n", .{ in_path, e });
+    const source = Io.Dir.cwd().readFileAlloc(io, in_path, gpa, .limited(max_source_bytes)) catch |e| {
+        try readFailed(err, in_path, e);
         return 2;
     };
     defer gpa.free(source);
@@ -425,8 +425,8 @@ pub fn main(init: std.process.Init) !u8 {
     // `spice_cards.synthesize` works on the text and a `+` continuation makes a
     // card longer than a line.
     const netlist: []const u8 = if (spice_path) |p|
-        Io.Dir.cwd().readFileAlloc(io, p, gpa, .limited(64 * 1024 * 1024)) catch |e| {
-            try err.print("error: cannot read `{s}`: {t}\n", .{ p, e });
+        Io.Dir.cwd().readFileAlloc(io, p, gpa, .limited(max_source_bytes)) catch |e| {
+            try readFailed(err, p, e);
             return 2;
         }
     else
@@ -556,7 +556,13 @@ pub fn main(init: std.process.Init) !u8 {
         var dm = directives;
         dm.mixed = vera.tb.mixedPlan(result.lowered, result.mir);
         dm.op_states = try vera.tb.opStates(tb_arena.allocator(), result.lowered);
-        const runner = try vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm);
+        const runner = vera.tb.renderRunner(tb_arena.allocator(), std.fs.path.stem(in_path), dm) catch |e| switch (e) {
+            error.TooManyPoints => {
+                try err.print("error: {s}: `//!` directive: the sweeps expand to more than {d} points\n", .{ in_path, vera.tb.max_points });
+                return 2;
+            },
+            else => |x| return x,
+        };
         const built = vera.tb.buildExe(gpa, io, device, runner, .{
             .work_dir = wd,
             .contract = contract,
@@ -612,7 +618,7 @@ pub fn main(init: std.process.Init) !u8 {
         };
         var r = vera.buildArtifact(gpa, io, &result, .{
             .work_dir = wd,
-            .name = result.mir.name,
+            .name = try vera.orchestrator.fileStem(tb_arena.allocator(), result.mir.name),
             .optimize = opt,
             .backend = backend,
             .modules = &modules,
@@ -943,6 +949,16 @@ fn compileFailed(bag: *diag.Bag, err: *Io.Writer, json: bool, use_color: bool, e
         else => try err.print("error: {t}\n", .{e}),
     }
     return 1;
+}
+
+/// The largest source file or `--spice` netlist read (E1013).
+const max_source_bytes = 64 * 1024 * 1024;
+
+fn readFailed(w: *Io.Writer, path: []const u8, e: anyerror) !void {
+    if (e == error.StreamTooLong)
+        try w.print("error[E1013]: `{s}` is larger than {d} bytes; see `vera --explain E1013`\n", .{ path, max_source_bytes })
+    else
+        try w.print("error: cannot read `{s}`: {t}\n", .{ path, e });
 }
 
 fn missing(w: *Io.Writer, flag: []const u8, what: []const u8) !u8 {
