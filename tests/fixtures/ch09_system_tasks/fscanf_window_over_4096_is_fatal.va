@@ -1,0 +1,42 @@
+// §9.5.4.2: white space in the control string "causes input to be read up to
+// the next nonwhite space character", and "white space leading an input field
+// is ignored". No length bound. VerA scans a file through a 4096-byte window
+// per descriptor (docs/IMPLEMENTATION.md), so a scan that needs to look
+// further ahead cannot be answered. The limit has to fail loudly: the run ends
+// with E1011 and exit status 1, never an EOF or a short field reported as the
+// file's content.
+//
+// THE SHAPE is a01_08_transcendental_domain_runtime_error.va's: the exit
+// status is part of the oracle.
+//
+// HAND DERIVATION. The file holds "5\n", then 5000 spaces, then "7\n".
+//   t = 0:  $fscanf(fd, "%d", v) reads 5 and returns 1. ok=1.
+//   t = 1n: the next %d skips the newline and 5000 spaces before the 7: more
+//           than 4096 bytes. The run ends with E1011 and status 1 before t = 1n
+//           prints. A tool that stopped at the window would return EOF (-1)
+//           there and print ok=0.
+//
+//! lrm 9.5.4.2
+//! exit 1
+//! analysis tran
+//! time 0, 1n
+//! print none
+`include "check.vh"
+module fscanf_window_over_4096_is_fatal(p, n);
+  inout p, n; electrical p, n;
+  integer fd, c, v;
+  analog begin
+    @(initial_step) begin
+      fd = $fopen("fscanf_window_over_4096.dat", "w");
+      $fwrite(fd, "5\n");
+      $fwrite(fd, "%2500s", " ");
+      $fwrite(fd, "%2500s", " ");
+      $fwrite(fd, "7\n");
+      $fclose(fd);
+      fd = $fopen("fscanf_window_over_4096.dat", "r");
+    end
+    c = $fscanf(fd, "%d", v);
+    `CHECKI("printed at the first point only: the second field lies past 4096 bytes of white space", c, 1);
+    I(p, n) <+ V(p, n);
+  end
+endmodule

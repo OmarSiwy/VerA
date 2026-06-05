@@ -1,0 +1,12 @@
+// AN ENGINE CEILING, PINNED FROM THE ENFORCING SIDE. VerA's node table holds
+// 65535 rows (docs/IMPLEMENTATION.md). Each vector below is legal on its own,
+// 40000 elements, but together they need 80001 rows with the port, so the
+// module is refused once with E1015, naming it.
+//
+//! reject E1015
+//! reject `nets_over_65535_rows_rejected` needs more than 65535
+module nets_over_65535_rows_rejected(a);
+  inout a; electrical a;
+  electrical [0:39999] b, c;
+  analog V(b[0]) <+ V(c[1]);
+endmodule

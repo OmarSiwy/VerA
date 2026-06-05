@@ -235,9 +235,14 @@ fn isTableArray(self: *Lower, a: Ast.ExprId) bool {
 /// A parsed data file: row-major values and the column count every row shares.
 pub const TableFile = struct { vals: []const f64, cols: usize };
 
-/// A size cap on a data file; the device re-sorts its block per evaluation, so a
-/// larger table is impractical anyway.
+/// A size cap on a data file (E1013); the device re-sorts its block per
+/// evaluation, so a larger table is impractical anyway.
 const max_table_bytes: usize = 16 << 20;
+
+fn tooLarge(self: *Lower, e: Ast.ExprId, path: []const u8) Oom!?TableFile {
+    try self.err(self.file.exprs.mainTok(e), .E1013, "\"{s}\" is larger than {d} bytes", .{ path, max_table_bytes });
+    return null;
+}
 
 /// Reads a §4.6.4.3 `noise_table` file as `f0, p0, f1, p1, ...`, the layout the
 /// vector form produces. Returns null after reporting E0519 when the file cannot be
@@ -280,12 +285,14 @@ fn readTableFile(
             const full = try std.fs.path.join(self.arena, &.{ base, name });
             const r = dir.readFileAlloc(io, full, self.arena, .limited(max_table_bytes)) catch |e2| {
                 if (e2 == error.OutOfMemory) return error.OutOfMemory;
+                if (e2 == error.StreamTooLong) return tooLarge(self, e, full);
                 continue; // try the next dir, exactly as `readInclude` does
             };
             break :blk r;
         }
         const r = dir.readFileAlloc(io, name, self.arena, .limited(max_table_bytes)) catch |e2| {
             if (e2 == error.OutOfMemory) return error.OutOfMemory;
+            if (e2 == error.StreamTooLong) return tooLarge(self, e, name);
             if (missing) |m| {
                 m.* = true;
                 return null;
