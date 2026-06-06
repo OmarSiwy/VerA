@@ -668,6 +668,12 @@ test "resident child builds, versions and rebuilds a device" {
         .modules = &mods,
     };
 
+    // The compiler crashes `rebuild` recovers from would each dump a
+    // gigabyte-sized core; the children inherit this limit.
+    const core = try std.posix.getrlimit(.CORE);
+    try std.posix.setrlimit(.CORE, .{ .cur = 0, .max = core.max });
+    defer std.posix.setrlimit(.CORE, core) catch {};
+
     var child = ResidentChild.spawn(gpa, io, o) catch |err| switch (err) {
         // No `zig` on PATH in this environment: nothing to assert.
         error.CompilerGone => return error.SkipZigTest,
