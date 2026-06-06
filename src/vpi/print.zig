@@ -18,9 +18,11 @@ fn io() Io {
 // The channels
 // ---------------------------------------------------------------------------
 
-/// Channels 4..32: the 29 an mcd has room for above the three predefined ones.
+/// Channels 4..31: the 28 an mcd has room for above the three predefined ones
+/// and below bit 31, which IEEE 1364-2005 §27.26 reserves to mark "a file
+/// descriptor instead of an mcd".
 const first_user = 3; // index of channel 4
-const channel_count = 32;
+const channel_count = 31;
 
 const Channel = struct {
     file: Io.File,
@@ -51,7 +53,7 @@ pub export fn vpi_mcd_open(file: [*c]const u8) c_uint {
     const free = for (channels[first_user..], first_user..) |c, i| {
         if (c == null) break i;
     } else {
-        root.fail("NOCHANNEL", "vpi_mcd_open: all 29 user channels are open", .{});
+        root.fail("NOCHANNEL", "vpi_mcd_open: all 28 user channels are open", .{});
         return 0;
     };
     const f = Io.Dir.cwd().createFile(io(), want, .{}) catch |e| {
@@ -109,7 +111,7 @@ pub export fn vpi_mcd_name(cd: c_uint) [*c]u8 {
         0 => "stdout",
         1 => "stderr",
         2 => "log",
-        else => if (channels[i]) |ch| ch.name else {
+        else => if (i < channel_count and channels[i] != null) channels[i].?.name else {
             root.fail("BADMCD", "vpi_mcd_name: channel {d} is not open", .{i + 1});
             return null;
         },
@@ -140,9 +142,57 @@ pub export fn vpi_mcd_printf(mcd: c_uint, format: [*c]const u8, ...) callconv(.c
     return emit(mcd, format, &ap);
 }
 
+/// IEEE 1364-2005 §27.37: vpi_printf "except that varargs have already been
+/// started".
+///
+/// ponytail: `va_list` is taken as a pointer, which is how the SysV x86-64
+/// and AAPCS64 ABIs pass one; a target that passes it by value needs its own
+/// entry point.
+pub export fn vpi_vprintf(format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+    root.clearError();
+    return emit(1, format, ap);
+}
+
+/// IEEE 1364-2005 §27.27: vpi_mcd_printf over a started `va_list`.
+pub export fn vpi_mcd_vprintf(mcd: c_uint, format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+    root.clearError();
+    return emit(mcd, format, ap);
+}
+
+/// IEEE 1364-2005 §27.4: "0 if successful; nonzero if unsuccessful". Every
+/// write here is unbuffered, so there is nothing to flush.
+pub export fn vpi_flush() c_int {
+    root.clearError();
+    return 0;
+}
+
+/// IEEE 1364-2005 §27.23: 0 when every channel `mcd` names is open (writes
+/// are unbuffered, so an open channel is already flushed); nonzero and an
+/// error when a user channel it names is not open.
+pub export fn vpi_mcd_flush(mcd: c_uint) c_int {
+    root.clearError();
+    if (mcd & 0x8000_0000 != 0) {
+        root.fail("BADMCD", "vpi_mcd_flush: 0x{x} is a $fopen file descriptor, not an mcd", .{mcd});
+        return 1;
+    }
+    for (first_user..channel_count) |i| {
+        if (mcd & bit(i) != 0 and channels[i] == null) {
+            root.fail("BADMCD", "vpi_mcd_flush: channel {d} is not open", .{i + 1});
+            return 1;
+        }
+    }
+    return 0;
+}
+
 const EOF: c_int = -1;
 
 fn emit(mcd: c_uint, format: [*c]const u8, ap: *std.builtin.VaList) c_int {
+    // IEEE 1364-2005 §27.26: the most significant bit marks "a file descriptor
+    // instead of an mcd", and vpi_mcd_printf "shall not write to" one.
+    if (mcd & 0x8000_0000 != 0) {
+        root.fail("BADMCD", "vpi_mcd_printf: 0x{x} is a $fopen file descriptor, not an mcd", .{mcd});
+        return EOF;
+    }
     if (format == null) {
         root.fail("BADFORMAT", "vpi_printf: the format is NULL", .{});
         return EOF;
