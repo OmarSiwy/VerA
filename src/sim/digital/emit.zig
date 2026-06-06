@@ -1131,10 +1131,11 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         .join_arm => |j| try self.print("            s.joins[{d}] -= 1;\n            if (s.joins[{d}] == 0) try s.run({d}, null);\n            return;\n", .{ j.join, j.join, j.end }),
         // §17.5 an asynchronous array's own process starts now.
         .pla_start => |loop| try self.print("            try s.run({d}, null);\n            continue :sw {d};\n", .{ loop, next }),
-        .override_on => |o| try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
+        .override_on => |o| if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)") else try self.print("            try s.overrideOn({d}, {}, {d}, {d});\n            continue :sw {d};\n", .{ o.slot, o.force, o.start, o.end, next }),
         // An `assign` under a `force` keeps tracking but does not write.
         .override_eval => |o| {
             if (o.slice != null) return self.refuse("a concatenation assigned or forced (§9.3)");
+            if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)");
             try self.print("            if ({} or !s.forced({d})) {{\n            s.overriding = true;\n            defer s.overriding = false;\n            ", .{ o.force, o.slot });
             try self.store(o.slot, .blocking);
             try expr.assigned(self, o.value, try slotType(self, o.slot));
@@ -1142,6 +1143,7 @@ fn instruction(self: *Emitter, pc: u32) Error!void {
         },
         // §9.3.2: a released net is its driver's again, at once.
         .override_off => |o| {
+            if (o.bits != null) return self.refuse("a force of a net select (§9.3.2)");
             if (r.net_of.get(o.slot)) |net| {
                 if (self.net_ix[net]) |k| {
                     try self.print("            if (try s.release({d}, true)) try s.resolve({d});\n            continue :sw {d};\n", .{ o.slot, k, next });

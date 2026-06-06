@@ -2173,7 +2173,11 @@ pub const ModuleTime = struct { scale: Time.Scale, unit_exp: i32 };
 pub const Overrides = struct {
     assign: ?PcRange = null,
     force: ?PcRange = null,
+    /// IEEE 1364-2005 §9.3.2 forces of constant selects of the net, each
+    /// holding its own bits.
+    parts: std.ArrayList(PartForce) = .empty,
 };
+pub const PartForce = struct { bits: compile.Bits, range: PcRange };
 pub const PcRange = struct { start: u32, end: u32 };
 
 /// One activation's storage: a scope, a slot per formal, the result slot of
