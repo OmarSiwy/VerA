@@ -832,9 +832,14 @@ pub fn findPort(b: *parse_module.Body, name: Ast.StrId) ?*Ast.Port {
 /// selects one element of a §6.2.2 instance array on any segment but the
 /// last. The index is folded here and spelled `[{d}]`, the spelling
 /// elaboration gives array elements (`Flatten.walkInstances`); an index that
-/// does not fold is E0231. Net declarations pass `false`, because there a `[`
-/// after the name is A.2.1.3's vector range.
+/// does not fold is E0231, unless `unfolded` takes it: then it is spelled
+/// `[]` and appended there, for elaboration to fold. Net declarations pass
+/// `false`, because there a `[` after the name is A.2.1.3's vector range.
 pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
+    return parseDottedPath(self, allow_index, null);
+}
+
+pub fn parseDottedPath(self: *Parser, allow_index: bool, unfolded: ?*std.ArrayList(Ast.ExprId)) Error!Ast.StrId {
     const first = try self.expectIdent();
     if (self.peek() != .dot and !(allow_index and self.peek() == .lbracket)) return first;
     var joined: std.ArrayList(u8) = .empty;
@@ -845,9 +850,13 @@ pub fn parseDottedName(self: *Parser, allow_index: bool) Error!Ast.StrId {
             self.pos += 1;
             const idx = try parse_expr.parseExpr(self);
             _ = try self.expect(.rbracket);
-            const k = constIndex(self, idx) orelse return self.failAt(tok, .E0231, "", .{});
-            var buf: [24]u8 = undefined;
-            try joined.appendSlice(self.arena, std.fmt.bufPrint(&buf, "[{d}]", .{k}) catch unreachable);
+            if (constIndex(self, idx)) |k| {
+                var buf: [24]u8 = undefined;
+                try joined.appendSlice(self.arena, std.fmt.bufPrint(&buf, "[{d}]", .{k}) catch unreachable);
+            } else if (unfolded) |list| {
+                try list.append(self.arena, idx);
+                try joined.appendSlice(self.arena, "[]");
+            } else return self.failAt(tok, .E0231, "", .{});
             // A.9.3: an indexed segment is always followed by `.`; the final
             // identifier of a path carries no index.
             _ = try self.expect(.dot);

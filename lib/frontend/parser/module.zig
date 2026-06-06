@@ -625,12 +625,14 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
                 // `true`: A.9.3 admits `u[0].g`, the parameter of one
                 // element of an instance array, a flat name elaboration
                 // mints.
-                const path = try parse_decl.parseDottedName(self, true);
+                var indices: std.ArrayList(Ast.ExprId) = .empty;
+                const path = try parse_decl.parseDottedPath(self, true, if (self.digital) &indices else null);
                 _ = try self.expect(.assign_eq);
                 const value = try parse_expr.parseExpr(self);
                 try b.defparams.append(self.arena, .{
                     .path = path,
                     .value = value,
+                    .indices = indices.items,
                     .main_tok = tok,
                 });
                 if (!self.eat(.comma)) break;
