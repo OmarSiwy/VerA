@@ -594,6 +594,7 @@ fn parseNumber(self: *Parser) Error!Ast.ExprId {
             error.OutOfMemory => error.OutOfMemory,
             error.MissingBase => self.failAt(tok, .E0131, "`{s}`", .{text}),
             error.MissingDigits => self.failAt(tok, .E0132, "`{s}`", .{text}),
+            error.Overflow => self.failAt(tok, .E1019, "`{s}`", .{text}),
             else => self.failAt(tok, .E0133, "`{s}`", .{text}),
         };
         if (lit.asInt()) |value| {
