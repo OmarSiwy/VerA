@@ -133,17 +133,7 @@ until v1.0.0, not a pass/fail.
 
 ## 4. Working on the code
 
-**The edit loop is `zig build --watch -fincremental`** (name a step, e.g.
-`test-ir`, to keep its test binary warm as well). The compiler stays resident
-and re-analyses only what the edit touched. A plain `zig build` re-analyses
-all of lib/ after any edit. Measured 2026-09-28 on 32 cores at load average
-60-190: a one-line edit rebuilt `zig-out/bin/vera` in 0.5-3 s (compile step
-0.07-2 s), against 5-25 s for a plain `zig build`. Two traps:
-`-fincremental` without `--watch` keeps no state between runs and recompiles
-everything every time (38 s for a no-op), so never script it; and on a
-tmpfs `.zig-cache` the patched binary keeps its mtime, so the install step
-leaves `zig-out/bin/vera` stale. A watched test step reruns its whole binary
-after every edit, so the loop is bounded below by that binary's run time.
+**The edit loop is `zig build --watch -fincremental`** (only what changed is re-analysed; never `-fincremental` without `--watch`, which rebuilds everything, nor with a tmpfs `.zig-cache`, which leaves `zig-out/bin/vera` stale).
 
 **Where a file goes** is decided by what it must *import*, not by what it is
 about. That rule was learned the expensive way: `ARCHITECTURE.md §8` records a
