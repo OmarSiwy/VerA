@@ -175,7 +175,7 @@ fn selectSlot(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?u32 {
 /// index and an indexed part-select's base are evaluated; a part-select's
 /// bounds and an indexed one's width were folded by `infer`. Null is an x/z
 /// index, which names no bit.
-fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
+pub fn selection(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!?Sel {
     const ex = &self.file.exprs;
     const rg = ex.rhs(e);
     const range = self.vecRange(try self.baseSlot(ex.lhs(e)));
@@ -247,6 +247,37 @@ pub fn assignInt(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, v: i64) E
     const lit = try filled(a, 64, true, .zero);
     lit.values()[0] = @bitCast(v);
     try assign(self, a, target, lit);
+}
+
+/// §9.2 writes `value`, converted for `target` (`targetType`), where the
+/// lvalue lands now, or queues it as a nonblocking update after `delay`. A
+/// concatenation partitions the value among its operands, the last one
+/// taking the low bits.
+pub fn put(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, value: Int.Literal, nba: bool, delay: ?u64) Error!void {
+    const ex = &self.file.exprs;
+    if (ex.tag(target) == .concat) {
+        var lo: u32 = 0;
+        const ops = ex.args(target);
+        var k = ops.len;
+        while (k != 0) {
+            k -= 1;
+            const w = (try targetType(self, ops[k])).width;
+            try put(self, a, ops[k], try bitsOf(a, value, lo, w), nba, delay);
+            lo += w;
+        }
+        return;
+    }
+    const p = (try place(self, a, target)) orelse return;
+    if (nba) {
+        _ = try enqueue(self, .{ .write = .{ .target = p.slot, .value = value, .sel = p.sel } }, delay, true);
+    } else try write(self, a, p, value);
+}
+
+/// Bits [lo, lo + w) of `v`, unsigned.
+fn bitsOf(a: std.mem.Allocator, v: Int.Literal, lo: u32, w: u32) Error!Int.Literal {
+    const out = try filled(a, w, false, .zero);
+    for (0..w) |i| setBit(out, @intCast(i), v.bit(lo + @as(u32, @intCast(i))));
+    return out;
 }
 
 /// Writes `value` (already converted by `evalFor`) where `p` lands. A selection
@@ -385,6 +416,8 @@ pub fn evalReal(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!f64 {
     return switch (ex.tag(e)) {
         .real_literal => ex.realValue(e),
         .ident, .hier_ident, .index => @bitCast((try leaf(self, a, e)).values()[0]),
+        // §10.4.1 a real or realtime function: its result variable's bits.
+        .call => @bitCast((try callSync(self, a, self.sub_base.get(self.instanceOf(self.scope)).? + self.call_subs.get(e).?, ex.args(e))).values()[0]),
         .unary => switch (ex.unOp(e)) {
             .minus => -(try evalReal(self, a, ex.lhs(e))),
             else => try evalReal(self, a, ex.lhs(e)), // else: `+`, the only other real-valued unary
@@ -464,6 +497,12 @@ pub fn truthOf(self: *Run, a: std.mem.Allocator, e: Ast.ExprId) Error!Int.Bit {
 /// else the variable's type, real included.
 pub fn targetType(self: *Run, e: Ast.ExprId) Error!Type {
     const ex = &self.file.exprs;
+    // §9.2 a concatenation: as wide as its operands together, unsigned.
+    if (ex.tag(e) == .concat) {
+        var width: u32 = 0;
+        for (ex.args(e)) |x| width += (try targetType(self, x)).width;
+        return .{ .width = width, .signed = false };
+    }
     if (ex.tag(e) == .index and try self.indexedArray(e) == null) return .{ .width = compile.typeOf(self, e).width, .signed = false };
     const at = try self.baseSlot(e);
     return self.slotType(at);
@@ -482,7 +521,7 @@ fn convertSlot(self: *Run, a: std.mem.Allocator, slot: u32, target: Type) Error!
     return convertValue(a, self.values[slot], self.reals.contains(slot), target);
 }
 
-fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
+pub fn convertValue(a: std.mem.Allocator, v: Int.Literal, from_real: bool, target: Type) Error!Int.Literal {
     if (target.real) return if (from_real) v else realLiteral(a, realOfInt(v));
     const i = if (from_real) try intOfReal(a, @bitCast(v.values()[0])) else v;
     return normalize(a, i, .{ .width = target.width, .signed = i.signed });
@@ -1272,11 +1311,12 @@ fn gateValue(self: *Run, scratch: std.mem.Allocator, g: Gate, width: u32, or_z: 
 /// z as x (§8.1.6). A combinational table is simply consulted; a sequential
 /// one takes each input that changed since the last evaluation as one event,
 /// in terminal order, and its state follows the entries matched (§8.6).
-fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp) Error!Int.Literal {
+fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp, width: u32) Error!Int.Literal {
     const net_mod = @import("net.zig");
     const bits = try scratch.alloc(Int.Bit, u.ins.len);
     for (u.ins, bits) |in, *b| {
-        const v = (try eval(self, scratch, in, 1)).bit(0);
+        const w = try eval(self, scratch, in, 1);
+        const v = w.bit(if (w.width > 1) u.lane orelse 0 else 0);
         b.* = if (v == .z) .x else v;
     }
     const out = if (!u.sequential) net_mod.udpEval(u.rows, false, bits, .x, null, .x) else blk: {
@@ -1288,7 +1328,9 @@ fn udpValue(self: *Run, scratch: std.mem.Allocator, u: *@import("net.zig").Udp) 
         }
         break :blk u.state;
     };
-    return filled(scratch, 1, false, out);
+    const result = try filled(scratch, width, false, .z);
+    setBit(result, u.out_bit orelse 0, out);
+    return result;
 }
 
 /// What a `Bridge` driver contributes: its window, z everywhere else.
@@ -1332,10 +1374,10 @@ fn suspendOn(self: *Run, e: Ast.ExprId, id: u32) Error!void {
         },
         // VAMS §9.22.5: woken by `driver.stored`/`driver.scheduled`.
         .event_driver_update => return watch(self, id, driver.key(try self.slot(ex.lhs(e))), .any),
-        else => .any, // else: a plain name, the one other term checkEvent admits
+        else => .any, // else: a name, or an expression checkEvent gave a slot
     };
     const watched = if (edge == .any) e else ex.lhs(e);
-    try watch(self, id, try self.slot(watched), edge);
+    try watch(self, id, try self.termSlot(watched), edge);
 }
 
 /// Queues `item` in the `.monitor` region of the current time, §17.1.2 and
@@ -1441,6 +1483,10 @@ fn caseMatches(kind: Ast.CaseKind, value: Int.Literal, label: Int.Literal) bool 
 
 // ---- synchronous subroutines (IEEE 1364-2005 §10) ----------------------------
 
+/// The stack `callSync`'s nested activations may use: half of the smallest
+/// main-thread stack VerA runs on (8 MiB on Linux and macOS).
+const max_sync_stack = 4 << 20;
+
 /// Runs subroutine `idx` to completion as one activation (§10.2.2, §10.4) and
 /// returns a function's result, in `a`. The arguments are evaluated in the
 /// caller before anything of the callee's changes (a recursive call's argument
@@ -1453,7 +1499,11 @@ pub fn callSync(self: *Run, a: std.mem.Allocator, idx: u32, args: []const Ast.Ex
     const sub = &self.subs.items[idx];
     const decl = sub.decl;
     const f = sub.frame;
-    if (self.sync_depth == 1024) return self.fail(decl.main_tok, "task and function calls nested deeper than 1024 are not implemented", .{});
+    // An activation's frames are large and the stack is the host thread's,
+    // so the bound is on the stack used as well as the depth.
+    if (self.sync_depth == 0) self.sync_stack = @frameAddress();
+    if (self.sync_depth == 1024 or self.sync_stack -| @frameAddress() > max_sync_stack)
+        return self.fail(decl.main_tok, "task and function calls nested deeper than 1024, or past 4 MiB of stack, are not implemented", .{});
     const inputs = try a.alloc(?Int.Literal, args.len);
     for (decl.ports, args, inputs, f.ports) |p, arg, *in, slot| {
         in.* = null;
@@ -1561,10 +1611,8 @@ fn returnTimed(self: *Run, a: std.mem.Allocator, idx: u32) Error!u32 {
     self.ctx = act.ret_ctx;
     try makeResident(self, self.ctx);
     self.scope = self.code_scope.items[act.ret_pc - 1];
-    for (sub.decl.ports, act.args, f.ports, outs) |p, arg, slot, v| if (p.direction != .input) {
-        const target = (try place(self, a, arg)) orelse continue;
-        try write(self, a, target, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)));
-    };
+    for (sub.decl.ports, act.args, f.ports, outs) |p, arg, slot, v| if (p.direction != .input)
+        try put(self, a, arg, try convertValue(a, v, self.reals.contains(slot), try targetType(self, arg)), false, null);
     return act.ret_pc;
 }
 
@@ -1612,8 +1660,7 @@ fn copyLiteral(a: std.mem.Allocator, v: Int.Literal) Error!Int.Literal {
 /// §10.2.2 copy-out: formal `slot` assigned to the caller's lvalue `target`,
 /// under the assignment rules (§5.5.3) and in the caller's scope.
 fn copyOut(self: *Run, a: std.mem.Allocator, target: Ast.ExprId, slot: u32) Error!void {
-    const p = (try place(self, a, target)) orelse return;
-    try write(self, a, p, try convertSlot(self, a, slot, try targetType(self, target)));
+    try put(self, a, target, try convertSlot(self, a, slot, try targetType(self, target)), false, null);
 }
 
 // ---- the interpreter loop (A.6.5, §6.1, §8.5.3.3) ---------------------------
@@ -1644,10 +1691,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .assign => |s| {
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                if (try place(self, scratch, s.target)) |target| {
-                    const value = try evalFor(self, scratch, s.value, try targetType(self, s.target));
-                    if (s.nonblocking) _ = try enqueue(self, .{ .write = .{ .target = target.slot, .value = value, .sel = target.sel } }, null, true) else try write(self, scratch, target, value);
-                }
+                try put(self, scratch, s.target, try evalFor(self, scratch, s.value, try targetType(self, s.target)), s.nonblocking, null);
                 pc += 1;
                 continue;
             },
@@ -1766,16 +1810,14 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 cell.width = parked.width;
                 cell.signed = parked.signed;
                 cell.sized = parked.sized;
+                if (compile.parksOnly(a)) {
+                    pc += 1;
+                    continue;
+                }
                 if (a.nonblocking) {
                     // §8.5.3.4 the process does not suspend; the write is
                     // one more NBA update, delayed if the control was one.
-                    if (try place(self, scratch, a.target)) |target|
-                        _ = try enqueue(
-                            self,
-                            .{ .write = .{ .target = target.slot, .value = self.holds.items[s.cell], .sel = target.sel } },
-                            if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null,
-                            true,
-                        );
+                    try put(self, scratch, a.target, self.holds.items[s.cell], true, if (a.timing_is_delay) try delayOf(self, scratch, a.timing, tok) else null);
                     pc += 1;
                     continue;
                 }
@@ -1792,8 +1834,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const a = self.file.stmt(s.statement).assign;
                 // §3.9: an out-of-range or X/Z index names no element, so
                 // the write is discarded rather than landing somewhere.
-                if (try place(self, scratch, a.target)) |target|
-                    try write(self, scratch, target, self.holds.items[s.cell]);
+                try put(self, scratch, a.target, self.holds.items[s.cell], a.nonblocking, null);
                 pc += 1;
                 continue;
             },
@@ -1823,7 +1864,7 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const value = switch (d.source) {
                     .bridge => |b| try window(self, scratch, b, d.current.width),
                     .gate => |g| try gateValue(self, scratch, g, d.current.width, &or_z),
-                    .udp => |u| try udpValue(self, scratch, u),
+                    .udp => |u| try udpValue(self, scratch, u, d.current.width),
                     .mos => |mo| try mosValue(self, scratch, at, mo, &or_z),
                     .pull => |b| try filled(scratch, d.current.width, false, b),
                     .expr => |x| blk: {
@@ -1841,7 +1882,9 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 // and the net re-resolves when the delayed value lands.
                 // §8.5: a UDP's initial output is published at time 0; only
                 // later transitions wait for the instance delay.
-                const first_udp = if (d.source == .udp) !d.source.udp.started else false;
+                const first_udp = if (d.source == .udp) d.source.udp.sequential and !d.source.udp.started else false;
+                // A combinational one's output is x until its first delayed value.
+                if (d.source == .udp and !d.source.udp.started and !first_udp and d.delay.present) try resolve(self, d.net);
                 if (d.source == .udp) d.source.udp.started = true;
                 if (d.delay.present and !first_udp) {
                     const st = &self.drivers[at].transition;
@@ -1849,7 +1892,8 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                         const delay = switch (d.source) {
                             .expr => d.delay.continuous(d.current, st.target),
                             .gate => |g| d.delay.to(st.target.bit(g.out_bit orelse 0)),
-                            .bridge, .udp, .mos, .pull => d.delay.to(st.target.bit(0)),
+                            .udp => |u| d.delay.to(st.target.bit(u.out_bit orelse 0)),
+                            .bridge, .mos, .pull => d.delay.to(st.target.bit(0)),
                         };
                         st.in_flight = try enqueue(self, .{ .drive = at }, delay, false);
                     }
@@ -1889,7 +1933,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
                 const layers = self.overrides.get(o.slot) orelse Overrides{};
                 // An assign under a force keeps tracking but does not write.
                 if (o.force or layers.force == null) {
-                    const value = try evalFor(self, scratch, o.value, self.slotType(o.slot));
+                    const value = if (o.slice) |sl|
+                        try bitsOf(scratch, try evalFor(self, scratch, o.value, .{ .width = sl.of, .signed = false }), sl.lo, self.values[o.slot].width)
+                    else
+                        try evalFor(self, scratch, o.value, self.slotType(o.slot));
                     self.overriding = true;
                     defer self.overriding = false;
                     try store(self, o.slot, value.planes);
@@ -1982,8 +2029,10 @@ pub fn execute(self: *Run, scratch_arena: *std.heap.ArenaAllocator, start: u32) 
             .repeat_start => |s| {
                 const value = try eval(self, scratch, s.count, 0);
                 const count = if (value.hasUnknown()) 0 else blk: {
-                    if (value.signed and value.asInt().? < 0)
+                    if (value.signed and value.asInt().? < 0) {
+                        if (s.clamp) break :blk 0;
                         return self.exprFail(s.count, "negative repeat counts are not implemented; IEEE1364-2005 does not define this case explicitly");
+                    }
                     break :blk value.values()[0];
                 };
                 self.repeats.items[s.counter] = count;

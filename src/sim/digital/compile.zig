@@ -43,7 +43,9 @@ pub const Instruction = union(enum(u5)) {
     branch: struct { condition: Ast.ExprId, otherwise: u32 },
     jump: u32,
     case_select: struct { statement: Ast.StmtId, targets: u32, fallback: u32, ty: Type },
-    repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32 },
+    /// `clamp`: §9.7.7's repeat event control, where a count <= 0 is no
+    /// occurrence; the §9.6 statement refuses a negative one.
+    repeat_start: struct { count: Ast.ExprId, counter: u32, end: u32, clamp: bool = false },
     repeat_next: struct { counter: u32, body: u32 },
     /// §5.10.1 suspend until one watched variable takes a matching edge.
     wait_event: Ast.ExprId,
@@ -90,7 +92,8 @@ pub const Instruction = union(enum(u5)) {
     call_timed: struct { sub: u32, args: []const Ast.ExprId },
     /// The end of a `call_timed` activation of task `n`.
     task_return: u32,
-    /// §17.5 start an asynchronous PLA's own process at this pc.
+    /// Start a process of its own at this pc: §17.5 an asynchronous PLA's,
+    /// or §9.7.7 the wait of a nonblocking assignment's event control.
     pla_start: u32,
     /// §9.8.2 `fork`: start every arm as a process of its own; join cell
     /// `join` counts them back, and the parent resumes at `end`.
@@ -101,7 +104,9 @@ pub const Instruction = union(enum(u5)) {
     /// out-of-line process [start, end) keeps the slot equal to its expression.
     override_on: struct { slot: u32, force: bool, start: u32, end: u32 },
     /// That process's one step: write `value` into `slot` past the guard.
-    override_eval: struct { slot: u32, value: Ast.ExprId, force: bool },
+    /// An operand of a §9.3 concatenation target takes bits [lo, lo + its
+    /// width) of the value evaluated `of` bits wide.
+    override_eval: struct { slot: u32, value: Ast.ExprId, force: bool, slice: ?Slice = null },
     /// §9.3 `deassign` / `release`.
     override_off: struct { slot: u32, force: bool },
     /// §7.6 a controlled pass switch: read the control, re-resolve both
@@ -763,6 +768,7 @@ fn infer(self: *Run, e: Ast.ExprId, depth: u16) Error!Type {
             const sub = self.subs.items[idx];
             try checkArgs(self, sub.decl, ex.args(e), ex.mainTok(e));
             try self.call_subs.put(self.arena, e, idx - self.sub_base.get(inst).?);
+            if (self.reals.contains(sub.frame.result)) break :blk real_type;
             const result = self.values[sub.frame.result];
             break :blk .{ .width = result.width, .signed = result.signed };
         },
@@ -853,20 +859,16 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             // of their own, searched before the one around it, so a local
             // shadows a module variable of the same name. The block's name
             // stays in the enclosing scope, where `disable` finds it.
+            // Pass one made the scope (`root.blockScopes`), except in an
+            // automatic activation's copy, which gets one here.
             // ponytail: `%m` inside such a block names the block but not the
             // named blocks around it.
-            if (b.params.len != 0) return self.fail(tok, "block-local parameters are not implemented", .{});
             const outer = self.scope;
             defer self.scope = outer;
-            if (b.vars.len != 0) {
-                const root = @import("root.zig");
-                const inner = try root.newScope(self, tok);
-                try self.scope_info.append(self.arena, .{ .parent = outer, .name = b.name, .def = self.scope_info.items[outer].def, .lexical = true });
+            if (self.block_scopes.get(.{ .scope = outer, .stmt = id })) |inner| {
                 self.scope = inner;
-                for (b.vars) |v| {
-                    if (v.init != .none) return self.fail(tok, "an initialized block-local variable is not implemented", .{});
-                    _ = try root.mintVar(self, v);
-                }
+            } else if (b.vars.len != 0 or b.params.len != 0 or b.events.len != 0) {
+                self.scope = try @import("root.zig").blockScope(self, outer, id);
             }
             const start = position(self);
             if (b.parallel) try compileFork(self, b.body, depth) else for (b.body) |s| try compileStmt(self, s, depth + 1);
@@ -964,6 +966,7 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             if (self.in_function and s.nonblocking) return self.fail(tok, "§10.4.4: a function body cannot contain a nonblocking assignment", .{});
             if (self.in_function and s.timing != .none) return self.fail(tok, "§10.4.4: a function body cannot contain a time control", .{});
             try checkTarget(self, s.target);
+            if (s.nonblocking) try notAutomatic(self, s.target, "a nonblocking assignment");
             try checkExpr(self, s.value);
             if (s.timing == .none) {
                 _ = try append(self, .{ .assign = .{ .target = s.target, .value = s.value, .nonblocking = s.nonblocking } });
@@ -971,27 +974,58 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             }
             // A.6.2's intra-assignment `delay_or_event_control`, §8.5.3.3.
             if (s.timing_is_delay) try checkDelay(self, s.timing) else {
-                // ponytail: no `<= @(e) rhs`. §8.5.3.4's nonblocking form
-                // does not suspend, so the parked value would have to be
-                // held by the waiter, not a per-site cell; give `Waiter` a
-                // payload when something needs it.
-                if (s.nonblocking) return self.fail(tok, "an event control inside a nonblocking assignment is not implemented", .{});
                 try checkEvent(self, s.timing);
+                if (s.timing_repeat != .none) {
+                    try checkExpr(self, s.timing_repeat);
+                    if (typeOf(self, s.timing_repeat).width > 64) return self.exprFail(s.timing_repeat, "repeat counts wider than 64 bits are not implemented");
+                }
             }
             if (self.holds.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many intra-assignment timing controls", .{});
             const cell: u32 = @intCast(self.holds.items.len);
             try self.holds.append(self.arena, try filled(self.arena, 1, false, .x));
             _ = try append(self, .{ .sample = .{ .statement = id, .cell = cell } });
-            // §8.5.3.4: a nonblocking one schedules the update and falls
-            // through, so it has no resumption point and needs no `deposit`.
-            if (!s.nonblocking) _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
+            // §8.5.3.4: a nonblocking one with a delay schedules the update
+            // and falls through, so it has no resumption point and needs no
+            // `deposit`.
+            if (s.nonblocking and s.timing_is_delay) return;
+            if (!parksOnly(s)) {
+                _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
+                return;
+            }
+            // A nonblocking one with an event control falls through too: a
+            // process of its own waits and then queues the update.
+            // ponytail: the value is parked per site, so a second sample
+            // before the first's event replaces it.
+            var skip: ?u32 = null;
+            if (s.nonblocking) {
+                _ = try append(self, .{ .pla_start = position(self) + 2 });
+                skip = try append(self, .{ .jump = 0 });
+            }
+            // §9.7.7 `repeat (n) @(e)`: n occurrences, none when n <= 0.
+            if (s.timing_repeat != .none) {
+                if (self.repeats.items.len == std.math.maxInt(u32)) return self.fail(tok, "too many repeat counters", .{});
+                const counter: u32 = @intCast(self.repeats.items.len);
+                try self.repeats.append(self.arena, 0);
+                const test_pc = try append(self, .{ .repeat_start = .{ .count = s.timing_repeat, .counter = counter, .end = 0, .clamp = true } });
+                const body_pc = position(self);
+                _ = try append(self, .{ .wait_event = s.timing });
+                _ = try append(self, .{ .repeat_next = .{ .counter = counter, .body = body_pc } });
+                self.code.items[test_pc].repeat_start.end = position(self);
+            } else _ = try append(self, .{ .wait_event = s.timing });
+            _ = try append(self, .{ .deposit = .{ .statement = id, .cell = cell } });
+            if (skip) |at| {
+                _ = try append(self, .stop);
+                self.code.items[at].jump = position(self);
+            }
         },
         // A.6.5 `event_trigger`. The slot is resolved here, not at run
         // time, so a trigger cannot fail in the middle of a dispatch.
         .event_trigger => |s| {
+            if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain an event trigger", .{});
             const at = self.lookup(self.scope, s.name) orelse
                 return self.fail(tok, "undeclared named event", .{});
-            if (!self.events.contains(at)) return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
+            const decl = self.events.get(at) orelse return self.fail(tok, "§5.10.4: `->` triggers a named event, not a variable or net", .{});
+            if (tok < decl) return self.fail(tok, "§9.7.3: a named event is declared before it is used", .{});
             _ = try append(self, .{ .trigger = at });
         },
         .event_control => |s| {
@@ -1049,7 +1083,10 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
             switch (task) {
                 // All three format the same surface, so all three are
                 // validated by the same dry run.
-                .show, .strobe, .monitor => |sh| try display.display(self, s.args, null, sh),
+                .show, .strobe, .monitor => |sh| {
+                    if (task == .monitor) for (s.args) |a| if (a != .none) try notAutomatic(self, a, "$monitor");
+                    try display.display(self, s.args, null, sh);
+                },
                 .monitor_enable => if (s.args.len != 0)
                     return self.fail(tok, "$monitoron and $monitoroff take no arguments", .{}),
                 .timeformat => {
@@ -1188,10 +1225,33 @@ pub fn compileStmt(self: *Run, id: Ast.StmtId, depth: u16) Error!void {
 fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcContinuous, tok: u32) Error!void {
     if (self.in_function) return self.fail(tok, "§10.4.4: a function body cannot contain a procedural continuous assignment", .{});
     const ex = &self.file.exprs;
-    // ponytail: a whole variable or net; A.8.5 also admits a concatenation
-    // of them (and, for `force`, net selects), which no fixture writes.
+    // §9.3 "a concatenation of variables" (and for `force`, of nets): one
+    // override per operand, each keeping its own bits of the value.
+    if (ex.tag(target) == .concat) {
+        const ops = ex.args(target);
+        var of: u32 = 0;
+        for (ops) |x| {
+            if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) return self.exprFail(x, "a procedural continuous assignment names whole variables or nets");
+            of += self.values[try self.scalarSlot(x)].width;
+        }
+        var lo = of;
+        for (ops) |x| {
+            lo -= self.values[try self.scalarSlot(x)].width;
+            try override(self, x, value, kind, .{ .lo = lo, .of = of });
+        }
+        return;
+    }
+    // ponytail: a whole variable or net; `force` of a net select is refused.
     if (ex.tag(target) != .ident and ex.tag(target) != .hier_ident) return self.exprFail(target, "a procedural continuous assignment names one whole variable or net");
+    return override(self, target, value, kind, null);
+}
+
+pub const Slice = struct { lo: u32, of: u32 };
+
+/// §9.3 one override of whole variable or net `target`.
+fn override(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind: Ast.ProcContinuous, slice: ?Slice) Error!void {
     const at = try self.scalarSlot(target);
+    try notAutomatic(self, target, "a procedural continuous assignment");
     const force = kind == .force or kind == .release;
     if (!force and self.net_of.contains(at)) return self.exprFail(target, "§9.3.1: assign/deassign take a variable; a net is forced");
     if (kind == .deassign or kind == .release) {
@@ -1203,7 +1263,7 @@ fn compileProcContinuous(self: *Run, target: Ast.ExprId, value: Ast.ExprId, kind
     try sensitivity(self, value, &watched);
     const skip = try append(self, .{ .jump = 0 });
     const start = position(self);
-    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force } });
+    _ = try append(self, .{ .override_eval = .{ .slot = at, .value = value, .force = force, .slice = slice } });
     _ = try append(self, .{ .wait_slots = watched.items });
     _ = try append(self, .{ .jump = start });
     const end = position(self);
@@ -1463,6 +1523,14 @@ fn watch(self: *Run, at: u32, out: *std.ArrayList(u32)) Error!void {
 /// a procedural one; neither accepts the other's form.
 fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     const ex = &self.file.exprs;
+    // §9.2 "a concatenation or nested concatenation of any of the above".
+    if (ex.tag(e) == .concat) {
+        for (ex.args(e)) |x| {
+            try checkTarget(self, x);
+            if ((try exec.targetType(self, x)).real) return self.exprFail(x, "§4.8: a real cannot be a concatenation operand");
+        }
+        return;
+    }
     if (try self.indexedArray(e) != null) {
         var x = e;
         while (ex.tag(x) == .index) : (x = ex.lhs(x)) {
@@ -1478,6 +1546,28 @@ fn checkTarget(self: *Run, e: Ast.ExprId) Error!void {
     if (self.net_of.contains(at))
         return self.exprFail(e, "a net is driven by a continuous assignment; there is no procedural assignment to a net");
     if (self.params.contains(at)) return self.exprFail(e, "§12.2: a parameter is a constant; it cannot be assigned");
+    if (self.events.contains(at)) return self.exprFail(e, "§9.7.3: a named event holds no data; it cannot be assigned");
+}
+
+/// Does intra-assignment control `s` leave its `.sample` only parking the
+/// value, the wait compiled after it: a `repeat` count, or an event control
+/// on a nonblocking assignment (§9.7.7)?
+pub fn parksOnly(s: @FieldType(Ast.Stmt, "assign")) bool {
+    return !s.timing_is_delay and (s.nonblocking or s.timing_repeat != .none);
+}
+
+/// §10.2.3: an automatic task's variables "shall not be assigned values
+/// using nonblocking assignments or procedural continuous assignments" and
+/// "shall not be traced with system tasks such as $monitor". `e` is the
+/// target, or a traced argument.
+fn notAutomatic(self: *Run, e: Ast.ExprId, comptime what: []const u8) Error!void {
+    const ex = &self.file.exprs;
+    switch (ex.tag(e)) {
+        .concat => for (ex.args(e)) |x| try notAutomatic(self, x, what),
+        .ident, .hier_ident, .index => if (self.auto_slots.contains(try self.slot(self.chainBase(e).base)))
+            return self.exprFail(e, "§10.2.3: " ++ what ++ " cannot name a variable of an automatic task or function"),
+        else => {}, // else: an expression names no storage to outlive the activation, its operands are read now
+    }
 }
 
 /// §9.7.1 a delay is a "delay_value", which A.8.3 makes
@@ -1500,16 +1590,48 @@ fn checkEvent(self: *Run, e: Ast.ExprId) Error!void {
         },
         // §4.8.1: real variables are prohibited in "Edge descriptors
         // (posedge, negedge) applied to real variables".
-        .event_posedge, .event_negedge => if (self.reals.contains(try self.scalarSlot(ex.lhs(e))))
-            return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable"),
-        .ident => _ = try self.scalarSlot(e),
+        .event_posedge, .event_negedge => {
+            const x = ex.lhs(e);
+            if (ex.tag(x) != .ident and ex.tag(x) != .hier_ident) try exprTerm(self, x);
+            if (self.reals.contains(try self.termSlot(x)))
+                return self.exprFail(e, "§4.8.1: posedge and negedge do not apply to a real variable");
+        },
+        .hier_ident => _ = try self.scalarSlot(e),
+        .ident => if (self.events.get(try self.scalarSlot(e))) |decl| if (ex.mainTok(e) < decl)
+            return self.exprFail(e, "§9.7.3: a named event is declared before it is used"),
         // VAMS §7.3.5 an analog event in a discrete event control: the
         // mixed-signal kernel monitors it and delivers an A2D event.
         .event_function => try self.registerMonitor(e),
         // VAMS §9.22.5 `driver_update signal`.
         .event_driver_update => try driver.checkUpdate(self, e),
-        else => return self.exprFail(e, "only variable and posedge/negedge event terms are implemented"), // else: every other event term, refused out loud
+        else => try exprTerm(self, e), // else: every other term is an expression (A.6.5 `event_expression ::= expression`)
     }
+}
+
+/// IEEE 1364-2005 §9.7.2: "An implicit event shall be detected on any change
+/// in the value of the expression", and not on an operand change that leaves
+/// it alone. A hidden slot follows `e`, kept equal to it by an out-of-line
+/// process of its own started at time 0, and the term watches that slot.
+fn exprTerm(self: *Run, e: Ast.ExprId) Error!void {
+    try checkExpr(self, e);
+    const entry = try self.term_slots.getOrPut(self.arena, .{ .scope = self.scope, .e = e });
+    if (entry.found_existing) return;
+    const g = self.growing.?;
+    const ty = typeOf(self, e);
+    const at: u32 = @intCast(g.items.len);
+    entry.value_ptr.* = at;
+    try g.append(self.arena, try filled(self.arena, ty.width, ty.signed, if (ty.real) .zero else .x));
+    if (ty.real) try self.reals.put(self.arena, at, {});
+    self.values = g.items;
+    var watched: std.ArrayList(u32) = .empty;
+    try sensitivity(self, e, &watched);
+    const skip = try append(self, .{ .jump = 0 });
+    const start = position(self);
+    _ = try append(self, .{ .init_var = .{ .slot = at, .value = e } });
+    _ = try append(self, .{ .wait_slots = watched.items });
+    _ = try append(self, .{ .jump = start });
+    self.code.items[skip].jump = position(self);
+    _ = try exec.enqueue(self, .{ .run_process = start }, null, false);
 }
 
 // ---- tests ------------------------------------------------------------------
@@ -1570,7 +1692,7 @@ test "unsupported source is rejected before any process side effect" {
     try expectRejected("module m; wire [1:0] a, b; tran(a,b); initial $display(\"before\"); endmodule", "a scalar net or a bit-select of a vector net");
     try expectRejected("module m; initial $display(\"%b\",2147483648); endmodule", "unsized constants");
     try expectRejected("module m; reg c; always begin c = 1; end endmodule", "without suspending");
-    try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "event terms are implemented");
+    try expectRejected("module m; reg c; initial @(c[0]) c = 1; endmodule", "no bits to select");
     // §5.10 "events do not hold any data", so neither direction of the
     // event/variable confusion compiles.
     try expectRejected("module m; event e; initial $display(\"%b\", e); endmodule", "holds no data");

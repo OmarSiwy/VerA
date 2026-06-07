@@ -72,10 +72,10 @@ pub fn terms(self: *Emitter, e: Ast.ExprId, out: *std.ArrayList(Term)) Error!voi
         .event_negedge => .negedge,
         .event_function => return self.refuse("a VAMS analog event in a digital event control"),
         .event_driver_update => return self.refuse("VAMS §9.22.5 driver_update"),
-        else => .any, // else: a plain name, the one other term checkEvent admits
+        else => .any, // else: a name, or an expression checkEvent gave a slot
     };
     const watched = if (edge == .any) e else ex.lhs(e);
-    const at = r.slot(watched) catch return self.refuse("an event term the engine resolves only at run time");
+    const at = r.termSlot(watched) catch return self.refuse("an event term the engine resolves only at run time");
     try out.append(self.arena, .{ .slot = at, .edge = edge });
 }
 
@@ -103,7 +103,7 @@ pub fn build(self: *Emitter, procs: []Proc, schedule: Schedule) Error!Plan {
             },
             .sample => |x| {
                 const st = r.file.stmt(x.statement).assign;
-                if (st.nonblocking or st.timing_is_delay) continue;
+                if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| watched[t.slot] = true;
@@ -323,7 +323,7 @@ fn reachOf(self: *Emitter, procs: []const Proc, mon: []const u32, fan_start: []c
             },
             .sample => |x| {
                 const st = r.file.stmt(x.statement).assign;
-                if (st.nonblocking or st.timing_is_delay) continue;
+                if (st.timing_is_delay or compile.parksOnly(st)) continue;
                 ts.clearRetainingCapacity();
                 try terms(self, st.timing, &ts);
                 for (ts.items) |t| reach[t.slot].terms = true;

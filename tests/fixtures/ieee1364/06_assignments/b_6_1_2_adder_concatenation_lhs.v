@@ -11,7 +11,6 @@
 //   ina = f, inb = 1, carry_in = 1   -> 17 = 1_0001
 //   ina = f, inb = f, carry_in = 1   -> 31 = 1_1111
 //! inherited IEEE 1364-2005 6.1.2
-//! xfail a concatenation as a continuous assignment's left-hand side stops the run (E1100 "only whole-variable lvalues are implemented")
 module adder (sum_out, carry_out, carry_in, ina, inb);
 output [3:0] sum_out;
 output carry_out;

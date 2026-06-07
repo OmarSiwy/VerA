@@ -8,7 +8,6 @@
 //! inherited IEEE 1364-2005 8.6
 //! reject E1100
 //! reject two delays
-//! xfail a UDP instance accepts a three-delay specification
 `timescale 1ns/1ns
 primitive inv(q, a);
   output q;

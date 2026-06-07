@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 12.3.6
 //! reject E1100
 //! reject mixes ordered and named port connections
-//! xfail VerA accepts an instance that connects some ports by name and others by order
 module m(a, y);
   input a;
   output y;

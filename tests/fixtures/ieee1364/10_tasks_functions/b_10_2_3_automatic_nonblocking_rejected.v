@@ -11,7 +11,6 @@
 //! inherited IEEE 1364-2005 10.2.3
 //! reject E1100
 //! reject automatic
-//! xfail accepted: a nonblocking assignment to an automatic task variable compiles and runs
 module b_10_2_3_automatic_nonblocking_rejected;
   task automatic t;
     reg [7:0] v;

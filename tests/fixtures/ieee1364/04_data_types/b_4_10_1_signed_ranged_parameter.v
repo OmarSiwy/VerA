@@ -9,7 +9,6 @@
 // declaration (§4.10.2: "identical to parameters"), likewise.
 // Output: "-1 -1 -1 1 1".
 //! inherited IEEE 1364-2005 4.10.1
-//! xfail a parameter declared signed with a range reads unsigned (sneg, sm1 and ls print 15, sneg < 0 is 0); `parameter signed` with no range is signed
 module b_4_10_1_signed_ranged_parameter;
   parameter signed [3:0] sneg = 4'b1111;
   parameter signed [3:0] sm1 = -1;

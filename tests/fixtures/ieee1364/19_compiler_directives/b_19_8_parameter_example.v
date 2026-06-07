@@ -23,7 +23,6 @@
 // declaration with no type or range specification shall default to the type
 // and range of the final value assigned to the parameter", here real.
 //! inherited IEEE 1364-2005 19.8
-//! xfail an untyped parameter with the real value 1.55 is made integer (2), so the delays land at 20 ns and 40 ns and d prints 2
 `timescale 10 ns / 1 ns
 module b_19_8_parameter_example;
   reg set;
