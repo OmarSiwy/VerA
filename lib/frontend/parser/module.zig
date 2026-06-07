@@ -88,6 +88,7 @@ pub fn parseModule(self: *Parser) Error!Ast.ModuleDecl {
         .defparams = b.defparams.items,
         .genvars = b.genvars.items,
         .events = b.events.items,
+        .event_toks = b.event_toks.items,
         .functions = b.functions.items,
         .analog = b.analog.items,
         .discrete = b.discrete.items,
@@ -364,6 +365,9 @@ fn skipParamsetStatement(self: *Parser) Error!void {
 /// becomes a `ModuleDecl` slice, in source order.
 pub const Body = struct {
     ports: std.ArrayList(Ast.Port) = .empty,
+    /// The header is A.1.3's `list_of_port_declarations`, whose ports "shall
+    /// not be redeclared within the body of the module" (§6.2).
+    ansi: bool = false,
     params: std.ArrayList(Ast.ParamDecl) = .empty,
     aliasparams: std.ArrayList(Ast.AliasParam) = .empty,
     vars: std.ArrayList(Ast.VarDecl) = .empty,
@@ -373,6 +377,7 @@ pub const Body = struct {
     defparams: std.ArrayList(Ast.Defparam) = .empty, // §6.3.1
     genvars: std.ArrayList(Ast.StrId) = .empty,
     events: std.ArrayList(Ast.StrId) = .empty, // §5.10.4
+    event_toks: std.ArrayList(u32) = .empty,
     functions: std.ArrayList(Ast.FuncDecl) = .empty,
     analog: std.ArrayList(Ast.AnalogBlock) = .empty,
     discrete: std.ArrayList(Ast.DiscreteBlock) = .empty, // A.6.2, §7.2.2
@@ -438,6 +443,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         try self.skipAttributes();
         if (portDirection(self.peek())) |d| {
             dir = d;
+            b.ansi = true;
             self.pos += 1;
             var kind: Ast.NetKind = .wire;
             disc = try optPortType(self, &kind, &signed);
@@ -466,6 +472,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
         // [1:0] p` is two terminals). The consecutive entries carry the
         // external port's width and member order.
         const concat = self.eat(.lbrace);
+        const first = b.ports.items.len;
         while (true) {
             const tok = self.pos;
             const name = try self.expectIdent();
@@ -476,6 +483,7 @@ fn parsePortList(self: *Parser, b: *Body) Error!void {
                 .discipline = disc,
                 .range = range,
                 .external_name = external,
+                .concat_rest = b.ports.items.len != first,
                 .is_signed = signed,
                 .main_tok = tok,
             });
@@ -652,6 +660,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
         .kw_event => {
             self.pos += 1;
             while (true) {
+                try b.event_toks.append(self.arena, self.pos);
                 try b.events.append(self.arena, try self.expectIdent());
                 if (!self.eat(.comma)) break;
             }
@@ -735,45 +744,7 @@ pub fn parseModuleItem(self: *Parser, b: *Body) Error!void {
             }
             _ = try self.expect(.semicolon);
         },
-        // An analog parse keeps Table 7-1's integer mapping and its 31-bit
-        // width gate. A digital parse keeps packed width and signedness.
-        .kw_reg => {
-            const tok = self.pos;
-            self.pos += 1;
-            const signed = self.digital and self.eat(.kw_signed);
-            const range: ?Ast.Dim = try parse_decl.optDim(self);
-            if (!self.digital) if (range) |d| if (parse_decl.literalWidth(self, d)) |w| {
-                if (w > 31) try self.report(tok, .E0222, "{d} bits", .{w});
-            };
-            while (true) {
-                const name_tok = self.pos;
-                const name = try self.expectIdent();
-                // A.2.1.3 reg_declaration ends in A.2.3's
-                // list_of_variable_identifiers, whose A.2.2.1 `variable_type`
-                // takes dimensions and an initializer:
-                //
-                //     variable_type ::=
-                //         variable_identifier { dimension } [ = constant_assignment_pattern ]
-                //         | variable_identifier = constant_expression
-                //
-                // `integer`/`time` reach the same production through
-                // `parseVarDecl`, so neither is gated on `digital` here.
-                const dims = try parse_decl.parseDims(self);
-                const value = if (self.eat(.assign_eq)) try parse_expr.parseExpr(self) else Ast.ExprId.none;
-                try b.vars.append(self.arena, .{
-                    .name = name,
-                    .ty = .integer,
-                    .main_tok = name_tok,
-                    .storage = .reg,
-                    .packed_range = range,
-                    .is_signed = signed,
-                    .dims = dims,
-                    .init = value,
-                });
-                if (!self.eat(.comma)) break;
-            }
-            _ = try self.expect(.semicolon);
-        },
+        .kw_reg => try parse_decl.parseRegDecl(self, &b.vars),
         // A.3.1 `gate_instantiation ::= … | pass_switchtype
         // pass_switch_instance { , pass_switch_instance } ;`: the two
         // A.3.4 switch spellings with tags of their own. The other eight

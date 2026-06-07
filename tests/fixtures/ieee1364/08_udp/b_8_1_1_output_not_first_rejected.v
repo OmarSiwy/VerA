@@ -7,7 +7,6 @@
 //! inherited IEEE 1364-2005 8.1.1
 //! reject E1100
 //! reject output port shall be the first
-//! xfail the port list order is not checked: the first port is taken as the output whatever its declaration says
 primitive last_out(a, q);
   input a;
   output q;

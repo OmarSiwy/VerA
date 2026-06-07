@@ -9,7 +9,6 @@
 //! inherited IEEE 1364-2005 12.3.3
 //! reject E1100
 //! reject range differs from its port declaration
-//! xfail VerA accepts a net declaration whose range differs from its port declaration's (input [7:0] a; wire [3:0] a)
 module m(a, y);
   input [7:0] a;
   wire [3:0] a;

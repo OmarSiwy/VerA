@@ -211,25 +211,29 @@ pub fn parseGenerateBlock(self: *Parser, b: *parse_module.Body) Error!Ast.StmtId
     // and the kernel's digital parse is the one that decides the scheme.
     // A hoisted defparam or task would exist whatever the scheme said, so
     // those are refused (E0235), and not hoisted, so an enclosing block does
-    // not report them again. Every Body list is hoisted, kept under `blk`, or
-    // refused; none may be dropped silently.
+    // not report them again; a digital parse keeps a defparam on the block.
+    // Every Body list is hoisted, kept under `blk`, or refused; none may be
+    // dropped silently.
     blk.instances = gb.instances.items;
-    for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
+    if (!self.digital) for (gb.defparams.items) |d| try self.report(d.main_tok, .E0235, "a defparam", .{});
     for (gb.tasks.items) |t| try self.report(t.main_tok, .E0235, "a task or function declaration", .{});
     if (self.digital) {
         const items = try self.arena.create(Ast.GenItems);
         items.* = .{
             .events = gb.events.items,
+            .event_toks = gb.event_toks.items,
             .discrete = gb.discrete.items,
             .assigns = gb.assigns.items,
             .gates = gb.gates.items,
             .pulls = gb.pulls.items,
             .switches = gb.switches.items,
+            .defparams = gb.defparams.items,
         };
         blk.gen = items;
     } else {
         for (gb.discrete.items) |*d| d.generated = true;
         try b.events.appendSlice(self.arena, gb.events.items);
+        try b.event_toks.appendSlice(self.arena, gb.event_toks.items);
         try b.discrete.appendSlice(self.arena, gb.discrete.items);
         try b.assigns.appendSlice(self.arena, gb.assigns.items);
         try b.gates.appendSlice(self.arena, gb.gates.items);

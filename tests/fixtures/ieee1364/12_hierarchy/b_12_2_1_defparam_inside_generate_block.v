@@ -8,7 +8,6 @@
 // Each g[i] holds leaf l and a defparam l.p = i * 10; leaf prints p at
 // t = p + 1: p=0 at 1, p=10 at 11, p=20 at 21.
 //! inherited IEEE 1364-2005 12.2.1
-//! xfail a defparam inside a generate block is refused ("not supported inside a generate block: a defparam")
 `timescale 1ns/1ns
 module leaf;
   parameter p = 99;

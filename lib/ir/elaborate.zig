@@ -314,6 +314,7 @@ const fate: std.enums.EnumFieldStruct(std.meta.FieldEnum(Ast.ModuleDecl), Fate, 
     .defparams = .consumed, // §6.3.1 applied to the parameter each names
     .genvars = .merged,
     .events = .merged,
+    .event_toks = .consumed, // the digital engine's, read from the parsed module
     .functions = .merged,
     .analog = .merged,
     // §7.2.2 the discrete context. Merged: lowering reads what the analog

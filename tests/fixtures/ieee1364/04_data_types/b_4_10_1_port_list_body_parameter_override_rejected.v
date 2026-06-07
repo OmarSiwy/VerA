@@ -12,7 +12,6 @@
 //! inherited IEEE 1364-2005 4.10.1
 //! reject E1100
 //! reject local parameter
-//! xfail VerA lets a defparam override a body parameter that a module_parameter_port_list makes local (Q reads 5)
 module b_4_10_1_leaf2 #(parameter P = 1) ();
   parameter Q = 2;
   initial $display("%0d %0d", P, Q);
