@@ -235,6 +235,9 @@ pub const Run = struct {
     /// progress: every activation returns at once until the outermost one.
     unwind: ?u32 = null,
     sync_depth: u16 = 0,
+    /// The frame address of the outermost synchronous activation, which
+    /// `callSync` measures the stack from.
+    sync_stack: usize = 0,
     /// Compiling a function body, which §10.4.4 restricts.
     in_function: bool = false,
     /// The saved storage of the automatic activations in progress.
@@ -840,8 +843,9 @@ pub const Run = struct {
     fn declaredWidth(self: *Run, range: Ast.Dim, tok: u32) Error!u32 {
         const hi = try self.declaredBound(range.msb, tok);
         const lo = try self.declaredBound(range.lsb, tok);
-        if (@abs(hi - lo) >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
-        return @intCast(@abs(hi - lo) + 1);
+        const span = @abs(@as(i128, hi) - lo);
+        if (span >= std.math.maxInt(u32)) return self.fail(tok, "packed range is outside the supported u32 width", .{});
+        return @intCast(span + 1);
     }
     fn bind(self: *Run, name: Ast.StrId, at: u32, tok: u32) Error!void {
         const entry = try self.names.getOrPut(self.arena, .{ .scope = self.scope, .str = name });
@@ -1796,7 +1800,6 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
     const g = r.growing.?;
     if (v.ty == .string) return r.fail(v.main_tok, "string variables are not implemented", .{});
     const real = v.ty == .real;
-    if (v.dims.len > 16) return r.fail(v.main_tok, "arrays of more than 16 dimensions are not implemented", .{});
     // §4.8: `integer` is 32 signed bits and `time` 64 unsigned ones.
     // §4.8: a real is a double, held as its 64 bits.
     const width: u32 = if (real) 64 else if (v.packed_range) |range| try r.declaredWidth(range, v.main_tok) else switch (v.storage) {
@@ -1831,13 +1834,15 @@ pub fn mintVar(r: *Run, v: Ast.VarDecl) Error!u32 {
 /// with `dims`, and its element count; 1, and no row, for no dimensions.
 fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
     if (dims.len == 0) return 1;
+    // `address` and `netSlot` gather one index per dimension on the stack.
+    if (dims.len > 16) return r.fail(tok, "arrays of more than 16 dimensions are not implemented", .{});
     var count: u32 = 1;
     const spans = try r.arena.alloc(Span, dims.len);
     for (dims, spans) |d, *s| {
         const lo = try r.declaredBound(d.lsb, tok);
         const hi = try r.declaredBound(d.msb, tok);
         s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
-        const size = std.math.cast(u32, s.high - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
+        const size = std.math.cast(u32, @as(i128, s.high) - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
         count = std.math.mul(u32, count, size) catch return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
     }
     try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
@@ -2077,6 +2082,34 @@ pub fn run(arena: std.mem.Allocator, source: []const u8, opts: Options, bag: *di
     // Nothing is `watchAnalog`ed in a digital-only run, so it never stops early.
     _ = try r.runUntil(std.math.maxInt(Tick));
     try @import("evcd.zig").close(&r);
+}
+
+/// A `.v` design as a contract device an analog host loads (`rt.Device`).
+pub const DeviceZig = struct {
+    /// The top module's name.
+    name: []const u8,
+    /// The device's Zig root; it imports the modules `contract` and `sim`.
+    zig: []const u8,
+};
+
+/// `source`'s top module as a contract device (`emit.device`), 4-state and
+/// under `schedule`. A design that cannot be one is E1103 in `bag` and
+/// `error.DigitalFailed`; a 1 s tick (no `timescale) is W1155.
+pub fn emitDevice(arena: std.mem.Allocator, source: []const u8, opts: Options, schedule: emit.Schedule, bag: *diag.Bag) Error!DeviceZig {
+    var sink: std.Io.Writer.Discarding = .init(&.{});
+    var r = try elaborate(arena, source, opts, bag, &sink.writer);
+    const top = r.file.modules[r.scope_info.items[0].def];
+    const at: diag.Span = .{ .start = r.starts[top.main_tok], .end = r.starts[top.main_tok] };
+    switch (try emit.device(arena, &r, opts.file_name, schedule)) {
+        .zig => |text| {
+            if (r.finest == 0) try bag.add(.lower, .W1155, at, "module `{s}`: no `timescale sets a finer precision", .{r.file.str(top.name)});
+            return .{ .name = r.file.str(top.name), .zig = text };
+        },
+        .refused => |why| {
+            try bag.add(.lower, .E1103, at, "module `{s}`: {s}", .{ r.file.str(top.name), why });
+            return error.DigitalFailed;
+        },
+    }
 }
 
 /// Everything `run` does before the first event dispatches: preprocess,
