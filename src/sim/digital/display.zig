@@ -437,6 +437,13 @@ fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
     try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
 }
 
+/// The widest field width or precision a format gives (E1011).
+pub const max_field = 4096;
+/// One real conversion's text: the longest %f of an f64 is a sign, 309
+/// integer digits and the point, then `max_field` fractional digits; a field
+/// width is padded outside it.
+pub const real_buf = 512 + max_field;
+
 fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
     const ex = &self.file.exprs;
     var arg: usize = 0;
@@ -501,6 +508,9 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     precision = precision *| 10 +| (format[i] - '0');
             }
             if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
+            // The analog side's bound (E1011): a field is composed whole.
+            if ((width orelse 0) > max_field or precision > max_field)
+                return self.failWith(.E1011, ex.mainTok(e), "a field width or precision here exceeds {d}", .{max_field});
             const radix: ?Radix = switch (format[i]) {
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
@@ -574,10 +584,8 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                 try compile.checkExpr(self, args[arg]);
                 if (allocator) |a| {
                     const real = try exec.evalReal(self, a, args[arg]);
-                    // 512: the longest %f of an f64 is 309 integer digits
-                    // plus ".000000"; a field width is padded here instead.
-                    var buf: [512]u8 = undefined;
-                    const text = zCReal(&buf, real, format[i], 0, 0, @min(precision, 60));
+                    var buf: [real_buf]u8 = undefined;
+                    const text = zCReal(&buf, real, format[i], 0, 0, precision);
                     if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
                     try self.out.writeAll(text);
                 }
