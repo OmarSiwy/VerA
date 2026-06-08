@@ -152,6 +152,9 @@ pub fn run(comptime A: type, a: *A, dig: *digital.Run, opts: Options) !void {
     try a.finish();
 }
 
+/// Secant cuts `step` tries before it halves the step instead.
+const max_secant = 64;
+
 /// §5.10.3.1 leaves an absent `time_tol` to the tool.
 const default_time_tol = 1e-12;
 
@@ -276,9 +279,12 @@ fn State(comptime A: type) type {
                 m.v0 = try s.monValue(j);
             };
             try s.accept(t_end);
-            // Secant cuts, bounded: a linear crossing is found by the first.
-            var cuts: u8 = 0;
-            while (cuts < 64) : (cuts += 1) {
+            // Secant cuts: a linear crossing is found by the first. A curve the
+            // secant only creeps toward is halved instead after `max_secant`,
+            // which closes on any sign change, so every crossing is cut to
+            // within its time_tol.
+            var cuts: u32 = 0;
+            while (true) : (cuts += 1) {
                 var cut: ?f64 = null;
                 for (s.mons, 0..) |m, j| {
                     const c = switch (m.kind) {
@@ -291,7 +297,8 @@ fn State(comptime A: type) type {
                     const tc = base + m.v0 / (m.v0 - v1) * (s.acc.? - base);
                     if (s.acc.? - tc > c.tol) cut = @min(cut orelse tc + c.tol / 2, tc + c.tol / 2);
                 }
-                try s.solve(cut orelse break);
+                const c = cut orelse break;
+                try s.solve(if (cuts < max_secant) c else base + (s.acc.? - base) / 2);
             }
             const tick: Tick = @intFromFloat(@round(s.acc.? / s.opts.tick));
             for (s.mons, 0..) |*m, j| switch (m.kind) {
@@ -359,6 +366,7 @@ const Fake = struct {
     fired: u64 = 0,
     snap: i64 = -1,
     slope: f64 = 0,
+    power: f64 = 1,
     t: f64 = 0,
     solves: std.ArrayList(Point) = .empty,
     points: std.ArrayList(Point) = .empty,
@@ -376,9 +384,10 @@ const Fake = struct {
         f.t = t;
         try f.solves.append(f.gpa, .{ .t = t, .dt = dt, .v = f.input, .first = first, .last = last, .fired = f.fired, .snap = f.snap });
     }
-    /// The fake analog's one node follows `slope` volts per second.
+    /// The fake analog's one node follows `slope` volts per second, raised
+    /// to `power`.
     pub fn probe(f: *Fake, t: ?f64, _: []const u8, _: ?[]const u8) !f64 {
-        return f.slope * (t orelse f.t);
+        return std.math.pow(f64, f.slope * (t orelse f.t), f.power);
     }
     pub fn finish(f: *Fake) !void {
         try f.points.append(f.gpa, f.solves.items[f.solves.items.len - 1]);
@@ -535,6 +544,33 @@ test "§8.4.3.3 A2D crossings at 5.2 ns and 7.6 ns reach ticks 5 and 8; §7.3.6.
     // not at 5.2 ns where the event was detected.
     const at: f64 = @bitCast(dig.values[dig.slotOf("at").?].values()[0]);
     try testing.expectApproxEqAbs(@as(f64, 0.5), at, 1e-12);
+}
+
+test "§5.10.3.1 a crossing the secant only creeps toward is still cut to within time_tol" {
+    var arena_state = std.heap.ArenaAllocator.init(testing.allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+    var bag = diag.Bag.init(arena);
+    var out = std.Io.Writer.Allocating.init(arena);
+    var dig = try digital.elaborate(arena,
+        \\discipline electrical potential Voltage; flow Current; enddiscipline
+        \\module m(vi);
+        \\  inout vi; electrical vi;
+        \\  integer lo; initial lo = 0;
+        \\  always @(cross(V(vi) - 0.5, +1, 1f)) lo = $time;
+        \\endmodule
+    , .{ .mixed = .{ .top = "m", .timescale = .{ .unit = 1e-9, .precision = 1e-9 } } }, &bag, &out.writer);
+    // V(vi) = (t / 1 s)^(1/8): steep at 0, flat by the crossing, where
+    // (t)^(1/8) = 0.5 puts it at 2^-8 s. From a base at 0 every secant lands
+    // after it and closes in far slower than 64 cuts can.
+    var f: Fake = .{ .slot = dig.slotOf("lo").?, .gpa = arena, .slope = 1, .power = 0.125 };
+    dig.watchAnalog(f.slot);
+    try run(Fake, &f, &dig, .{ .times = &.{ 0, 1e-2 }, .tick = 1e-9 });
+    const at = 1.0 / 256.0;
+    for (f.solves.items) |p| {
+        if (p.t > at and p.t <= at + 1e-15) return;
+    }
+    return error.TestExpectedCut;
 }
 
 test "§7.8.4 an inserted bridge's digital half runs, and the analog reads it by its §6.7 path" {
