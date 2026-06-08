@@ -276,8 +276,8 @@ const Range = struct { start: u32, end: u32 };
 /// declares `vera_overrides`.
 const overrides = @hasDecl(@import("root"), "vera_overrides");
 
-/// `root.max_events_per_tick`.
-const budget: u64 = @import("../digital/root.zig").max_events_per_tick;
+/// `root.max_events_per_tick`, or the executable's `vera --event-budget=`.
+const budget: u64 = if (@hasDecl(@import("root"), "vera_event_budget")) @import("root").vera_event_budget else @import("../digital/root.zig").max_events_per_tick;
 
 /// `get` of planes `v`, `x`; `k` as `poke`'s.
 inline fn peek(comptime k: bool, v: [*]const u64, x: [*]const u64, off: u32) W {
@@ -1434,8 +1434,7 @@ pub const State = struct {
     /// One real conversion (§17.1.1.2 `%e %f %g`, §9.4.7 `%r`): C's text,
     /// padded on the left to `width`.
     pub fn real(self: *State, r: f64, conv: u8, precision: i64, width: ?u32) Error!void {
-        // The longest %f of an f64 is 309 integer digits and ".000000".
-        var buf: [512]u8 = undefined;
+        var buf: [display.real_buf]u8 = undefined;
         const out = zCReal(&buf, r, conv, 0, 0, precision);
         if (width) |w| if (out.len < w) try self.out.splatByteAll(' ', w - out.len);
         try self.out.writeAll(out);

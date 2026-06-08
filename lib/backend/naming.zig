@@ -21,7 +21,7 @@ pub const Unit = struct {
     /// injective ({"a_b","c"} and {"a","b_c"} would collide).
     target: []const u8,
     /// Nonzero only for the later members of a (role, target) collision group.
-    disambig: u16 = 0,
+    disambig: u32 = 0,
     /// The operator `call` a `.analog_op` unit was enumerated from; `.none`
     /// for every other role.
     inst: Mir.Inst = .none,
@@ -239,7 +239,7 @@ pub fn assertCanonicalOrder(units: []const Unit, lowered: *const Lowered, unit_m
 // StringHashMap keyed on role++target if a model ever shows up with thousands.
 fn assignDisambig(units: []Unit) void {
     for (units, 0..) |*u, i| {
-        var n: u16 = 0;
+        var n: u32 = 0;
         for (units[0..i]) |prev| {
             if (prev.role == u.role and std.mem.eql(u8, prev.target, u.target)) n += 1;
         }
