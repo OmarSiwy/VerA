@@ -437,6 +437,13 @@ fn sformatMismatch(self: *Run, e: Ast.ExprId) Error!void {
     try self.bag.add(.lower, .W1153, .{ .start = at, .end = at }, sformat_mismatch, .{});
 }
 
+/// The widest field width or precision a format gives (E1011).
+pub const max_field = 4096;
+/// One real conversion's text: the longest %f of an f64 is a sign, 309
+/// integer digits and the point, then `max_field` fractional digits; a field
+/// width is padded outside it.
+pub const real_buf = 512 + max_field;
+
 fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, show: Show, only_first: bool) Error!void {
     const ex = &self.file.exprs;
     var arg: usize = 0;
@@ -501,6 +508,9 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                     precision = precision *| 10 +| (format[i] - '0');
             }
             if (i == format.len) return if (dynamic) sformatMismatch(self, e) else self.exprFail(e, "unterminated display format");
+            // The analog side's bound (E1011): a field is composed whole.
+            if ((width orelse 0) > max_field or precision > max_field)
+                return self.failWith(.E1011, ex.mainTok(e), "a field width or precision here exceeds {d}", .{max_field});
             const radix: ?Radix = switch (format[i]) {
                 'b', 'B' => .binary,
                 'o', 'O' => .octal,
@@ -574,10 +584,8 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
                 try compile.checkExpr(self, args[arg]);
                 if (allocator) |a| {
                     const real = try exec.evalReal(self, a, args[arg]);
-                    // 512: the longest %f of an f64 is 309 integer digits
-                    // plus ".000000"; a field width is padded here instead.
-                    var buf: [512]u8 = undefined;
-                    const text = zCReal(&buf, real, format[i], 0, 0, @min(precision, 60));
+                    var buf: [real_buf]u8 = undefined;
+                    const text = zCReal(&buf, real, format[i], 0, 0, precision);
                     if (width) |w| if (text.len < w) try self.out.splatByteAll(' ', w - text.len);
                     try self.out.writeAll(text);
                 }
@@ -591,39 +599,35 @@ fn walk(self: *Run, args: []const Ast.ExprId, allocator: ?std.mem.Allocator, sho
 /// the instance path from the root, then every §5.3.2 named block around the
 /// running instruction, outermost first.
 pub fn emitScope(self: *Run) Error!void {
-    var chain: [64]u32 = undefined;
-    var depth: usize = 0;
-    var s = self.scope;
+    try emitPath(self, self.scope);
+    // The named blocks enclosing `pc` in this scope nest, so each is one
+    // statement level deeper than the last: printed shallowest first, with no
+    // bound on how many.
+    var last: i32 = -1;
     while (true) {
-        chain[depth] = s;
-        depth += 1;
-        if (self.scope_info.items[s].parent == s or s == 0 or depth == chain.len) break;
-        s = self.scope_info.items[s].parent;
-    }
-    while (depth != 0) {
-        depth -= 1;
-        const info = self.scope_info.items[chain[depth]];
-        try self.out.writeAll(self.file.str(info.name));
-        // §12.4.1 one iteration of a loop generate is `name[value]`.
-        if (info.index) |i| try self.out.print("[{d}]", .{i});
-        if (depth != 0) try self.out.writeByte('.');
-    }
-    // The named blocks enclosing `pc` in this scope nest, so sorting them by
-    // statement depth is the outermost-first order.
-    var found: [64]struct { depth: u16, name: Ast.StrId } = undefined;
-    var count: usize = 0;
-    var it = self.blocks.iterator();
-    while (it.next()) |b| {
-        if (b.key_ptr.scope != self.scope or self.pc < b.value_ptr.start or self.pc >= b.value_ptr.end or count == found.len) continue;
-        found[count] = .{ .depth = b.value_ptr.depth, .name = b.key_ptr.str };
-        count += 1;
-    }
-    std.mem.sort(@TypeOf(found[0]), found[0..count], {}, struct {
-        fn lt(_: void, a: @TypeOf(found[0]), b: @TypeOf(found[0])) bool {
-            return a.depth < b.depth;
+        var next: ?struct { depth: u16, name: Ast.StrId } = null;
+        var it = self.blocks.iterator();
+        while (it.next()) |b| {
+            if (b.key_ptr.scope != self.scope or self.pc < b.value_ptr.start or self.pc >= b.value_ptr.end) continue;
+            const d = b.value_ptr.depth;
+            if (d > last and (next == null or d < next.?.depth)) next = .{ .depth = d, .name = b.key_ptr.str };
         }
-    }.lt);
-    for (found[0..count]) |b| try self.out.print(".{s}", .{self.file.str(b.name)});
+        const b = next orelse break;
+        try self.out.print(".{s}", .{self.file.str(b.name)});
+        last = b.depth;
+    }
+}
+
+/// Scope `s`'s hierarchical name, root first.
+fn emitPath(self: *Run, s: u32) Error!void {
+    const info = self.scope_info.items[s];
+    if (info.parent != s and s != 0) {
+        try emitPath(self, info.parent);
+        try self.out.writeByte('.');
+    }
+    try self.out.writeAll(self.file.str(info.name));
+    // §12.4.1 one iteration of a loop generate is `name[value]`.
+    if (info.index) |i| try self.out.print("[{d}]", .{i});
 }
 
 /// §17.1.1.5 `%v` of the §7.10 signal `s`: a Table 17-5 mnemonic and the

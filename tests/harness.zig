@@ -1061,7 +1061,7 @@ pub fn digitalNegative(source: []const u8) bool {
 }
 
 /// The `vera` arguments a digital case passes after its own path, one
-/// `// digital-runner:` line each: `--std=SPEC`; `--libmap FILE` and
+/// `// digital-runner:` line each: `--std=SPEC`, `--event-budget=N`; `--libmap FILE` and
 /// `files FILE...` (more sources, after the fixture), both relative to the
 /// fixture's directory `dir`; and `-L LIB`.
 pub fn digitalArgs(arena: std.mem.Allocator, source: []const u8, dir: []const u8) ![]const []const u8 {
@@ -1075,7 +1075,7 @@ pub fn digitalArgs(arena: std.mem.Allocator, source: []const u8, dir: []const u8
         const rest = line[key.len..];
         var words = std.mem.tokenizeAny(u8, rest, " \t");
         const first = words.next() orelse continue;
-        if (std.mem.startsWith(u8, first, "--std=")) {
+        if (std.mem.startsWith(u8, first, "--std=") or std.mem.startsWith(u8, first, "--event-budget=")) {
             try out.append(arena, first);
         } else if (std.mem.eql(u8, first, "--libmap")) {
             try out.appendSlice(arena, &.{ first, try std.fs.path.join(arena, &.{ dir, words.next() orelse return error.BadDirective }) });
