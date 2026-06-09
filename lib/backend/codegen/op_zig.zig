@@ -8,7 +8,7 @@ const std = @import("std");
 const OpKind = @import("ir").op.OpKind;
 
 /// One `f64` `Instance` field an operator owns. The only non-f64 operator
-/// field (`absdelay`'s `__head: u32`) is `.from_args`, so there is no type
+/// field (`absdelay`'s `__head: u64`) is `.from_args`, so there is no type
 /// column.
 pub const Slot = struct {
     /// Field name is `<unit>__<suffix>`.

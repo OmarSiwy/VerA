@@ -67,6 +67,9 @@ pub const Options = struct {
     /// instance no configuration binds. Empty: every library, in the order
     /// the files first name them.
     search: []const []const u8 = &.{},
+    /// Events at one time step before a zero-delay loop is refused
+    /// (`vera --event-budget=`).
+    event_budget: u64 = max_events_per_tick,
 };
 
 /// One more source file and the library it maps into (`vera --libmap`).
@@ -134,7 +137,9 @@ pub const TyState = enum(u8) { untyped, one, many };
 ///
 /// §4.9 a multidimensional array keeps its first dimension in `low`/`high`
 /// and the others in `rest`, addressed row-major.
-pub const Array = struct { count: u32, low: i64, high: i64, rest: []const Span = &.{} };
+/// `left`/`right`: the first dimension's bounds as declared, `[left:right]`
+/// (IEEE 1364-2005 §26.6.10's vpiLeftRange/vpiRightRange).
+pub const Array = struct { count: u32, low: i64, high: i64, left: i64, right: i64, rest: []const Span = &.{} };
 pub const Span = struct { low: i64, high: i64 };
 
 /// A packed vector's declared `[msb:lsb]` (§3.3).
@@ -210,8 +215,9 @@ pub const Run = struct {
     /// function (§12.7), whose unresolved names are searched for in the
     /// parent; an instance is a hierarchy boundary and is searched no further.
     /// `index` marks one iteration of a §12.4.1 loop generate, the `[i]` of
-    /// its block name.
-    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, def: u32, lexical: bool = false, index: ?i64 = null }) = .empty,
+    /// its block name; `implicit`, one whose block is unnamed (§12.4.3's
+    /// `genblk<n>`, IEEE 1364-2005 §26.6.44's vpiImplicitDecl).
+    scope_info: std.ArrayList(struct { parent: u32, name: Ast.StrId, def: u32, lexical: bool = false, index: ?i64 = null, implicit: bool = false }) = .empty,
     /// IEEE 1364-2005 §13.2.3 per `file.modules` row, the library its source
     /// file maps into; per `file.configs` row, the same.
     def_lib: []const Ast.StrId = &.{},
@@ -1819,6 +1825,10 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 .block => |b| b.gen_name,
                 else => .none, // else: a lone item is an unnamed generate block
             };
+            const implicit = switch (r.file.stmt(f.body)) {
+                .block => |b| b.name == .none,
+                else => true, // else: a lone item is an unnamed generate block
+            };
             var seen: std.ArrayList(i64) = .empty;
             while ((try r.constant(f.cond, tok)).truth() == .one) {
                 if (seen.items.len == 65536) return r.fail(tok, "§12.4.1: this loop generate does not terminate within 65536 iterations", .{});
@@ -1826,7 +1836,7 @@ fn generate(r: *Run, e: *Elab, m: *const Ast.ModuleDecl, scope: u32, s: Ast.Stmt
                 if (std.mem.indexOfScalar(i64, seen.items, value) != null) return r.fail(tok, "§12.4.1: a genvar value is repeated", .{});
                 try seen.append(r.arena, value);
                 const iter = try newScope(r, tok);
-                try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value });
+                try r.scope_info.append(r.arena, .{ .parent = scope, .name = name, .def = defOf(r, m), .lexical = true, .index = value, .implicit = implicit });
                 try selectable(r, scope, name, value, iter);
                 r.scope = iter;
                 try setGenvar(r, e, try genvarSlot(r, e, gv, tok), e.values.items[at]);
@@ -2215,14 +2225,20 @@ fn declareArray(r: *Run, base: u32, dims: []const Ast.Dim, tok: u32) Error!u32 {
     if (dims.len > 16) return r.fail(tok, "arrays of more than 16 dimensions are not implemented", .{});
     var count: u32 = 1;
     const spans = try r.arena.alloc(Span, dims.len);
-    for (dims, spans) |d, *s| {
+    var left: i64 = 0;
+    var right: i64 = 0;
+    for (dims, spans, 0..) |d, *s, k| {
         const lo = try r.declaredBound(d.lsb, tok);
         const hi = try r.declaredBound(d.msb, tok);
+        if (k == 0) {
+            left = hi;
+            right = lo;
+        }
         s.* = .{ .low = @min(lo, hi), .high = @max(lo, hi) };
         const size = std.math.cast(u32, @as(i128, s.high) - s.low + 1) orelse return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
         count = std.math.mul(u32, count, size) catch return r.fail(tok, "unpacked array size is outside the supported u32 range", .{});
     }
-    try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .rest = spans[1..] });
+    try r.arrays.put(r.arena, base, .{ .count = count, .low = spans[0].low, .high = spans[0].high, .left = left, .right = right, .rest = spans[1..] });
     return count;
 }
 
@@ -2779,7 +2795,7 @@ pub fn elaborate(arena: std.mem.Allocator, source: []const u8, opts: Options, ba
     };
     try Front.wreal.check(file, tokens.items(.start), bag);
     if (bag.failed()) return error.DigitalFailed;
-    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{} };
+    var r: Run = .{ .arena = arena, .file = file, .text = text, .starts = tokens.items(.start), .bag = bag, .out = out, .values = &.{}, .scheduler = Scheduler.init(arena), .file_name = opts.file_name, .io = opts.io, .drives = drives, .nettypes = pp.directives.nettypes, .mixed = opts.mixed != null, .a2d_reads = if (opts.mixed) |mx| mx.reads else &.{}, .card = if (opts.mixed) |mx| mx.params else &.{}, .budget = opts.event_budget };
     try binding.libraries(&r, file, opts, pp.more_starts);
     var tops: []const u32 = &.{};
     const m = if (opts.mixed) |mx| for (file.modules) |*c| {
