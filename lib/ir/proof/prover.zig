@@ -1310,7 +1310,7 @@ pub fn callAbstract(c: Mir.Callee) Prover.Abstract {
     const positive: proof_lattice.Interval = .{ .lo = 0, .lo_open = true, .nonzero = true };
     const non_negative: proof_lattice.Interval = .{ .lo = 0 };
     // §9.5 the descriptor family is finite: every §9.5 call is integer-valued
-    // (`analysis.callTy`), and in a residual unit, the only kind `proof` rates,
+    // (`callee.ty`), and in a residual unit, the only kind `proof` rates,
     // the emitter renders it as the literal 0 §9.5.1 reserves; the descriptor
     // operation happens only in the display unit (`codegen.Gen.emitting_display`).
     // No interval: §9.5.1's fd has bit 31 set, so there is nothing useful to bound.

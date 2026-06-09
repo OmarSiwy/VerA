@@ -21,13 +21,8 @@ const Preprocessor = @import("frontend").Preprocessor;
 const Oom = Lower.Oom;
 const Ty = Lower.Ty;
 const TypedValue = Lower.TypedValue;
-const tokenSpan = Lower.tokenSpan;
-const err = Lower.err;
-const errWith = Lower.errWith;
 const poison = Lower.poison;
-const emit = Lower.emit;
 const call = Lower.call;
-const toReal = Lower.toReal;
 
 // ---- ch9 system functions ---------------------------------------------------
 
@@ -492,7 +487,7 @@ pub fn simparamHostField(name: []const u8) ?[]const u8 {
 }
 
 /// Returns a system function's result type from `callee.zig`'s `ty` column, the
-/// list `analysis.callTy` reads too. An unlisted name, including a user `$name`, is real.
+/// list `callee.ty` reads too. An unlisted name, including a user `$name`, is real.
 pub fn sysFuncTy(name: []const u8) Ty {
     return switch (Mir.callee.ty(Mir.Callee.fromName(name))) {
         .real => .real,
