@@ -115,10 +115,6 @@ pub const Options = struct {
     /// permission on its CPU instantiation too. Implies `jac_f32`;
     /// `tools/contract.zig` rejects it without the permission.
     jac_f32_host: bool = false,
-    /// Splits the solve-invariant slice into `setup` (codegen/setup.zig).
-    /// `false` computes every value in `eval`: the bit-for-bit oracle the
-    /// split is checked against.
-    setup: bool = true,
     /// Where a codegen-stage diagnostic (E0515) goes. With none, a refusal is
     /// reported through `fatal_out` alone. This is the caller's bag, alive as
     /// long as the `CompileResult`; `lower.bag` is not, because `root.finish`
@@ -164,7 +160,6 @@ pub fn generate(
         .display = opts.display,
         .float = .{ .jac = .of(opts.jac_f32, opts.jac_f32_host) },
         .diags = opts.diags,
-        .su = .{ .on = opts.setup },
         .vpi_contribs = opts.vpi_contribs,
     };
     errdefer g.out.deinit(gpa);
