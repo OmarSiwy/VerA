@@ -153,10 +153,6 @@
 
 #include "b_check.h"
 
-/* Annex G declares these; VerA's header does not (b_27_unprovided.c). */
-extern void *vpi_get_userdata(vpiHandle obj) __attribute__((weak));
-extern PLI_INT32 vpi_put_userdata(vpiHandle obj, void *userdata) __attribute__((weak));
-
 enum { U, S, R, M, N };
 static char cookie[] = "b_26_1";
 static int sizes[N], compiles[N], calls[N], bad_ud = 0;
@@ -190,13 +186,9 @@ static PLI_INT32 u_compile(PLI_BYTE8 *u)
   CHECK(arg != NULL && vpi_scan(itr) == NULL, "each $unsigned call has one argument");
   if (sites < 2) arg_sizes[sites] = vpi_get(vpiSize, arg);
   if (sites == 0) {
-    XFAIL(vpi_put_userdata != NULL && vpi_get_userdata != NULL, "27.31",
-          "no user data can be stored on a system function call");
-    if (vpi_put_userdata && vpi_get_userdata) {
-      CHECK(vpi_get_userdata(call) == NULL, "27.13: nothing stored yet");
-      CHECK(vpi_put_userdata(call, arg_sizes) == 1, "27.31: 1 on success");
-      CHECK(vpi_get_userdata(call) == (void *)arg_sizes, "27.13: the stored value");
-    }
+    CHECK(vpi_get_userdata(call) == NULL, "27.13: nothing stored yet");
+    CHECK(vpi_put_userdata(call, arg_sizes) == 1, "27.31: 1 on success");
+    CHECK(vpi_get_userdata(call) == (void *)arg_sizes, "27.13: the stored value");
   }
   sites++;
   return 0;

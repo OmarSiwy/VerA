@@ -197,6 +197,11 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
                 root.fail("BADHANDLE", "vpi_register_cb: cbValueChange needs an object handle in obj", .{});
                 return null;
             };
+            // IEEE 1364-2005 §26.6.20 Details a.
+            if (o.automatic) {
+                root.fail("AUTOMATIC", "vpi_register_cb: `{s}` is an automatic variable, and a value change callback on one is illegal", .{o.full});
+                return null;
+            }
             if (o.slot == null and (o.members.len == 0 or root.design.?.objects[o.members[0]].slot == null)) {
                 root.fail("NOVALUE", "vpi_register_cb: `{s}` has no simulation value that can change", .{o.full});
                 return null;
@@ -272,6 +277,26 @@ pub export fn vpi_register_cb(cb_data_p: ?*const CbData) vpiHandle {
 fn oom() vpiHandle {
     root.fail("NOMEM", "vpi_register_cb: out of memory", .{});
     return null;
+}
+
+/// IEEE 1364-2005 §27.8 and §27.29: each "can only be called from an
+/// application routine that has been called for reason cbStartOfRestart or
+/// cbEndOfRestart" (cbStartOfSave or cbEndOfSave), and fails with 0
+/// otherwise. VerA has no save or restart (Annex C.8), so those callbacks
+/// never run and every call fails.
+pub export fn vpi_get_data(id: c_int, data_loc: ?[*]u8, num_bytes: c_int) c_int {
+    root.clearError();
+    _ = .{ id, data_loc, num_bytes };
+    root.fail("NOSAVE", "vpi_get_data: only a cbStartOfRestart or cbEndOfRestart callback reads saved data, and VerA has no restart", .{});
+    return 0;
+}
+
+/// See `vpi_get_data`.
+pub export fn vpi_put_data(id: c_int, data_loc: ?[*]u8, num_bytes: c_int) c_int {
+    root.clearError();
+    _ = .{ id, data_loc, num_bytes };
+    root.fail("NOSAVE", "vpi_put_data: only a cbStartOfSave or cbEndOfSave callback saves data, and VerA has no save", .{});
+    return 0;
 }
 
 /// §12.34 "shall return a 1 (TRUE) if successful, and a 0 (FALSE) on a
