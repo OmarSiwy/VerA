@@ -354,7 +354,7 @@ fn compileInArena(
         if (opts.display == .drop) {
             // A §9.5 file task is kept for sequencing, not text; its answer is
             // §9.5.1's zero descriptor rather than a dropped print.
-            if (codegen.isFileCall(.fromName(d.name)))
+            if (Mir.callee.isFileCall(.fromName(d.name)))
                 try bag.add(.lower, .W0850, span, "`{s}` — a device has no host file table, so §9.5.1's zero descriptor is the answer", .{d.name})
             else
                 try bag.add(.lower, .W0850, span, "`{s}`", .{d.name});

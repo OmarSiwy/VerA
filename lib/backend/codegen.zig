@@ -7,9 +7,6 @@
 
 const std = @import("std");
 const Mir = @import("ir").Mir;
-/// §4.5 / §5.10.3 / §9.17 operator facts. Spelled `opdb` and not `op` because
-/// eleven locals in this file are already called `op` (a `Mir.Opcode`).
-const opdb = @import("ir").op;
 const Analysis = @import("ir").Analysis;
 const UnitPlan = @import("codegen/plan/unit.zig");
 const cg_display = @import("cg_display.zig");
@@ -577,12 +574,6 @@ pub fn mathOpByName(name: []const u8) ?Mir.Opcode {
     return null;
 }
 
-/// Whether argument `i` of a call is a runtime value (plan/args.zig).
-pub const callArgIsValue = plan_args.callArgIsValue;
-
-/// Whether a callee is a §9.5 file task (plan/args.zig).
-pub const isFileCall = plan_args.isFileCall;
-
 /// Returns whether `s` is an analysis name `analysis()` recognises (LRM §4.6.1).
 pub fn isAnalysisName(s: []const u8) bool {
     const names = [_][]const u8{ "static", "ic", "nodeset", "dc", "tran", "ac", "noise" };
@@ -616,18 +607,6 @@ pub fn devSafe(op: Mir.Opcode) bool {
     // sqrt.rn.f64 and cvt.rmi/rpi.f64.f64, single instructions.
     return opcode_zig.get(op).dev_safe;
 }
-
-// The operator set and its facts live in `lib/ir/op.zig`; these forward to it.
-
-/// §4.5/§5.10.3 operator kind (ir/op.zig).
-pub const OpKind = opdb.OpKind;
-/// Whether an operator kind owns per-instance state (ir/op.zig).
-pub const opHasState = opdb.hasState;
-
-/// Whether an operator's kernel reads its current input (plan/args.zig).
-pub const opNeedsInput = plan_args.opNeedsInput;
-/// §5.10.3 the argument index of an event operator's `enable` (plan/args.zig).
-pub const enableArgIdx = plan_args.enableArgIdx;
 
 // Fixed emitted text: the runtime kernels every device carries (§4.3 math, §4.5 operators, Clause 9), codegen/kernel_text.zig
 const gen_kernel_text = @import("codegen/kernel_text.zig");
