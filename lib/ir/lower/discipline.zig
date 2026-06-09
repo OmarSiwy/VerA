@@ -17,10 +17,6 @@ const diag = @import("diag");
 const Oom = Lower.Oom;
 const ground = Lower.ground;
 const DisciplineInfo = Lower.DisciplineInfo;
-const tokenSpan = Lower.tokenSpan;
-const err = Lower.err;
-const errWith = Lower.errWith;
-const emit = Lower.emit;
 
 // ---- §3.6 disciplines & natures --------------------------------------------
 

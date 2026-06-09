@@ -15,10 +15,7 @@ const diag = @import("diag");
 const ground = Lower.ground;
 const Access = Lower.Access;
 const Kind = Lower.Kind;
-const init = Lower.init;
-const call = Lower.call;
 const strToInt = Lower.strToInt;
-const lowerFile = Lower.lowerFile;
 
 /// The frontend parser namespace the harness drives.
 pub const Parser = @import("frontend").Parser;

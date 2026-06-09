@@ -6,7 +6,6 @@
 //! The pass reads no target, inserts no clamp or `limexp`, and emits no runtime check.
 
 const std = @import("std");
-const Ast = @import("frontend").Ast;
 const Mir = @import("mir.zig");
 const Lower = @import("lower.zig");
 const Lowered = Lower.Lowered;

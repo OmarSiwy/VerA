@@ -5,7 +5,6 @@
 const std = @import("std");
 const Mir = @import("ir").Mir;
 const Analysis = @import("ir").Analysis;
-const Lower = @import("ir").Lower;
 // Shared with the emitter: `Display` is the §9.4 mode, and the `op*`/`call*`
 // helpers classify a call the same way for the plan and for the text. They
 // live in `args.zig` so this file imports no emitter.

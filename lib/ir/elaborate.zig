@@ -10,9 +10,6 @@ const Ast = @import("frontend").Ast;
 const Lexer = @import("frontend").Lexer;
 const diag = @import("diag");
 const discipline = @import("discipline_rules.zig");
-// `rewriteParamsetDist` folds an in-paramset §9.13 draw with the same kernel a
-// device embeds, so the two cannot disagree on the stream.
-const rng = @import("kernels").rng_kernels;
 
 /// `NoModule`: A.1.2 lets a source_text hold no module_declaration at all
 /// (a file of `discipline`/`nature` declarations is legal), but a device needs

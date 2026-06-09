@@ -5,11 +5,9 @@
 //! §5.6.1.3, §5.10, §9.4.
 
 const std = @import("std");
-const plan_topo = @import("plan/topology.zig");
 const plan_core = @import("plan/core.zig");
 const codegen = @import("../codegen.zig");
 const Gen = codegen.Gen;
-const gen_call = @import("call.zig");
 const gen_dispatch = @import("dispatch.zig");
 const gen_file = @import("file.zig");
 const gen_cfg = @import("cfg.zig");
@@ -20,12 +18,8 @@ const family = @import("family.zig");
 const Mir = @import("ir").Mir;
 const cg_filters = @import("../cg_filters.zig");
 const cg_limit = @import("../cg_limit.zig");
-const Lower = @import("ir").Lower;
-const Lowered = @import("ir").Lowered;
-const proof = @import("ir").proof;
 const diag = @import("diag");
 const naming = @import("../naming.zig");
-const assert = codegen.assert;
 const Error = codegen.Error;
 const none_u32 = codegen.none_u32;
 const VTy = codegen.VTy;
