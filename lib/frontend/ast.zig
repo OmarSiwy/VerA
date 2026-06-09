@@ -708,6 +708,10 @@ pub const Port = struct {
     /// A.1.3 this port_reference continues the previous one's port_expression,
     /// a concatenation: `{c, d}` is two `Port`s, the second one `concat_rest`.
     concat_rest: bool = false,
+    /// IEEE 1364-2005 A.1.3 `port_reference ::= port_identifier [ [
+    /// constant_range_expression ] ]`: the bit-select (`msb == lsb`) or
+    /// part-select of the net this reference names. A digital parse only.
+    select: ?Dim = null,
     /// A.2.1.2 `[ signed ]` on the direction or the net declaration of this
     /// port. §12.3.3: "If either ... is declared as signed, then the other
     /// shall also be considered signed."
@@ -947,6 +951,11 @@ pub const ParamOverride = struct {
 pub const Defparam = struct {
     path: StrId,
     value: ExprId,
+    /// IEEE 1364-2005 §12.2.1 a digital path's instance selects that do not
+    /// fold at parse time (a genvar's, inside a loop generate block), in
+    /// order: each is spelled `[]` in `path` and folded in the scope the
+    /// defparam is elaborated in.
+    indices: []const ExprId = &.{},
     main_tok: u32 = 0,
 };
 

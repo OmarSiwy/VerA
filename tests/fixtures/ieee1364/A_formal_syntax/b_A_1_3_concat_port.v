@@ -8,7 +8,6 @@
 // The top connects 2'b10 to it (hi = 1, lo = 0) and cold drives
 // q = {6'b0, hi, lo} = 8'd2 -> "q=2".
 //! inherited IEEE 1364-2005 A.1.3
-//! xfail VerA sizes a concatenated port_expression wrongly and refuses the matching 2-bit connection (E1100, §6.5.7.1 size mismatch)
 `timescale 1ns/1ns
 module b_A_1_3_cold ({hi, lo}, q);
   input hi, lo;
