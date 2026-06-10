@@ -531,7 +531,7 @@ test "lower: §5.4.3 repeated I(<p>) is one unknown, appended after the ports" {
         // is the SPELLING contract" test.
         try std.testing.expectEqual(pp.port, h.low.out.nodes.items(.kind)[pp.u].port_flow);
     }
-    try std.testing.expectEqualStrings("flow(<a>)", h.low.nodeName(h.low.out.port_probes.items[0].u));
+    try std.testing.expectEqualStrings("flow(<a>)", @import("node.zig").nodeName(&h.low, h.low.out.port_probes.items[0].u));
 }
 
 test "lower: §5.6.1.3 a kind mismatch REPLACES the retained value, and §5.4.2.2 reads it" {

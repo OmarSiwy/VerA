@@ -203,7 +203,7 @@ pub fn lowerSysCall(self: *Lower, e: Ast.ExprId) Oom!TypedValue {
         const args = ex.args(e);
         if (args.len == 1) {
             if (lower_constfold.constEval(self, args[0])) |c| switch (c) {
-                .str => |s| if (simparamValue(self, s) == null and !simparamIsRuntime(s)) {
+                .str => |s| if (simparamValueIn(&self.directives, s) == null and !simparamIsRuntime(s)) {
                     var b = self.errWith(self.file.exprs.mainTok(e), .E0811);
                     b.msg("`\"{s}\"`", .{s});
                     b.note("$simparam(\"{s}\", <expression>) supplies the value to use instead, and §9.15 makes that form legal for any name", .{s});
@@ -448,12 +448,8 @@ pub fn lowerSysArg(self: *Lower, e: Ast.ExprId, net_ok: bool) Oom!TypedValue {
 /// Codegen reads the same table, so a name is never both unknown and answered.
 /// Table 9-27 applies to simulators "if they support the parameter", so rows VerA
 /// cannot answer (`gdev`, `simulatorVersion`) stay unknown; run-time rows are in
-/// `simparamIsRuntime`.
-pub fn simparamValue(self: *const Lower, name: []const u8) ?f64 {
-    return simparamValueIn(&self.directives, name);
-}
-
-/// `simparamValue` over the one input it reads, so `Lowered` can answer after `Lower` is gone.
+/// `simparamIsRuntime`. Takes the directives alone so `Lowered` can answer after
+/// `Lower` is gone.
 pub fn simparamValueIn(directives: *const Preprocessor.Directives, name: []const u8) ?f64 {
     const eq = std.mem.eql;
     // The two rows that come from the source; unknown when no `timescale was given.

@@ -951,7 +951,7 @@ pub fn emitCall(self: *Gen, inst: Mir.Inst) Error!void {
         .@"$hflip", .@"$vflip" => return self.b("S.con(1.0)", .{}), // +1
         // §9.15 $simparam(name [, fallback]): the known value first, the
         // fallback only "if param_name is not known". The known set is
-        // `Lower.simparamValue`, the same one E0811 checks.
+        // `Lowered.simparamValue`, the same one E0811 checks.
         .@"$simparam" => {
             const nm = strArg(self, args, 0) orelse "";
             if (Lower.simparamIsRuntime(nm)) {
