@@ -22,7 +22,7 @@ pub const math = std.math;
 ///     finite.
 ///  2. `exp`, `expm1`, `sinh`, `cosh` and `pow` overflow at device magnitudes, so their result is
 ///     finite only for a bounded argument.
-///  3. `+ - * /` on finite operands do not overflow, unless `Options.arith_overflow` is `.tracked`.
+///  3. `+ - * /` on finite operands do not overflow.
 ///  4. A `call` the prover does not model is not finite.
 pub const FloatMode = enum {
     /// Proven finite: codegen emits `@setFloatMode(.optimized)`.
@@ -69,8 +69,6 @@ pub const Options = struct {
     /// transcendentals provable. `null` means unbounded but still finite (rule 1 on `FloatMode`).
     /// This is the hardware knob: a real solver has a compliance limit no language rule can see.
     unknown_bound: ?f64 = null,
-    /// Rule 3 on `FloatMode`: `.tracked` refuses to assume `+ - * /` stay in range.
-    arith_overflow: enum { assume_absent, tracked } = .assume_absent,
 };
 
 /// Maximum domain errors reported; one bad expression otherwise reports a cascade.
