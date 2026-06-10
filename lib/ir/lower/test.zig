@@ -616,8 +616,8 @@ test "lower: scan destinations are guarded by the single assignment count" {
     var string_counts: usize = 0;
     var file_counts: usize = 0;
     var guarded: usize = 0;
-    var blocks = h.mir.blockIter();
-    while (blocks.next()) |b| {
+    for (0..h.mir.blockCount()) |bi| {
+        const b: Mir.Block = @enumFromInt(bi);
         var it = h.mir.blockInsts(b);
         while (it.next()) |inst| {
             if (h.mir.instOp(inst) == .call) {
@@ -662,8 +662,8 @@ test "lower: §9.17.2 $bound_step accumulates through the CFG, not unconditional
     // Exactly ONE synthetic call, and its argument is a phi: the guarded
     // `$bound_step(1p)` must NOT bound the step on the arm that never ran.
     var found: ?Mir.Value = null;
-    var blocks = h.mir.blockIter();
-    while (blocks.next()) |b| {
+    for (0..h.mir.blockCount()) |bi| {
+        const b: Mir.Block = @enumFromInt(bi);
         var it = h.mir.blockInsts(b);
         while (it.next()) |inst| {
             if (h.mir.instOp(inst) != .call) continue;
