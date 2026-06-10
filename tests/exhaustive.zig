@@ -2,8 +2,7 @@
 //! every `else =>` over a boundary enum whose line lacks `// else: <reason>`.
 //!
 //! It parses the real source with `std.zig.Ast`, because only the prong labels
-//! say which enum a switch is over. `exhaustive.list` holds grandfathered
-//! sites as `<file> <fn> <enum>` keys; it only shrinks and is now empty.
+//! say which enum a switch is over.
 
 const std = @import("std");
 const Io = std.Io;
@@ -37,22 +36,14 @@ const registry = [_]struct { name: []const u8, fields: []const []const u8 }{
     .{ .name = "token.Tag", .fields = std.meta.fieldNames(@import("frontend").token.Tag) },
 };
 
-const listed = @embedFile("exhaustive.list");
-
 fn has(fields: []const []const u8, s: []const u8) bool {
     for (fields) |f| if (std.mem.eql(u8, f, s)) return true;
     return false;
 }
 
-const Site = struct { key: []const u8, where: []const u8 };
-
-fn lessThan(_: void, a: []const u8, b: []const u8) bool {
-    return std.mem.lessThan(u8, a, b);
-}
-
-/// Every unannotated `else` on a boundary enum in one file, outside `test`
-/// blocks, as `path fn enum` keys.
-fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8, out: *std.ArrayList(Site)) !void {
+/// Prints every unannotated `else` on a boundary enum in one file, outside
+/// `test` blocks, and returns how many.
+fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8) !usize {
     var tree = try ZigAst.parse(arena, src, .zig);
     if (tree.errors.len != 0) {
         std.debug.print("{s}: does not parse\n", .{path});
@@ -61,6 +52,7 @@ fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8, out: *std
     // Enclosing scopes as token spans; the innermost fn names the site.
     const Span = struct { first: u32, last: u32, name: ?[]const u8 };
     var spans: std.ArrayList(Span) = .empty;
+    var n_found: usize = 0;
     for (0..tree.nodes.len) |i| {
         const n: ZigAst.Node.Index = @enumFromInt(i);
         switch (tree.nodeTag(n)) {
@@ -103,20 +95,23 @@ fn scan(arena: std.mem.Allocator, path: []const u8, src: [:0]const u8, out: *std
         }
         if (in_test) continue;
         const fn_name = if (best) |b| b.name.? else "-";
-        try out.append(arena, .{
-            .key = try std.fmt.allocPrint(arena, "{s} {s} {s}", .{ path, fn_name, hit }),
-            .where = try std.fmt.allocPrint(arena, "{s}:{d}", .{ path, loc.line + 1 }),
-        });
+        std.debug.print(
+            "{s}:{d}: `else =>` over {s} in {s}\n    fix: write the prongs out so the compiler checks them, " ++
+                "or put `// else: <reason>` on the else line\n",
+            .{ path, loc.line + 1, hit, fn_name },
+        );
+        n_found += 1;
     }
+    return n_found;
 }
 
-test "every `else` over a boundary enum is written out, annotated, or listed" {
+test "every `else` over a boundary enum is written out or annotated" {
     var arena_state: std.heap.ArenaAllocator = .init(std.heap.page_allocator);
     defer arena_state.deinit();
     const arena = arena_state.allocator();
     const io = std.testing.io;
 
-    var found: std.ArrayList(Site) = .empty;
+    var found: usize = 0;
     for ([_][]const u8{ "lib", "src" }) |sub| {
         const abs = try std.fs.path.join(arena, &.{ repo_root, sub });
         var dir = try Io.Dir.cwd().openDir(io, abs, .{ .iterate = true });
@@ -125,54 +120,11 @@ test "every `else` over a boundary enum is written out, annotated, or listed" {
         while (try w.next(io)) |e| {
             if (e.kind != .file or !std.mem.endsWith(u8, e.path, ".zig")) continue;
             const src = try dir.readFileAllocOptions(io, e.path, arena, .limited(1 << 24), .of(u8), 0);
-            try scan(arena, try std.fs.path.join(arena, &.{ sub, e.path }), src, &found);
+            found += try scan(arena, try std.fs.path.join(arena, &.{ sub, e.path }), src);
         }
     }
-    std.mem.sort(Site, found.items, {}, struct {
-        fn lt(_: void, a: Site, b: Site) bool {
-            return std.mem.lessThan(u8, a.key, b.key);
-        }
-    }.lt);
-
-    var want: std.ArrayList([]const u8) = .empty;
-    var lines = std.mem.tokenizeScalar(u8, listed, '\n');
-    while (lines.next()) |l| if (!std.mem.startsWith(u8, l, "//")) try want.append(arena, l);
-    std.mem.sort([]const u8, want.items, {}, lessThan);
-
-    // Multiset difference over two sorted lists.
-    var new: usize = 0;
-    var stale: usize = 0;
-    var i: usize = 0;
-    var j: usize = 0;
-    while (i < found.items.len or j < want.items.len) {
-        const ord: std.math.Order = if (i == found.items.len) .gt else if (j == want.items.len) .lt else std.mem.order(u8, found.items[i].key, want.items[j]);
-        switch (ord) {
-            .eq => {
-                i += 1;
-                j += 1;
-            },
-            .lt => {
-                std.debug.print(
-                    "{s}: NEW `else =>` over {s}\n    key: {s}\n    fix: write the prongs out so the compiler checks them, " ++
-                        "or put `// else: <reason>` on the else line\n",
-                    .{ found.items[i].where, found.items[i].key[std.mem.lastIndexOfScalar(u8, found.items[i].key, ' ').? + 1 ..], found.items[i].key },
-                );
-                new += 1;
-                i += 1;
-            },
-            .gt => {
-                std.debug.print(
-                    "tests/exhaustive.list: STALE entry `{s}`: that site no longer has an unannotated `else`\n" ++
-                        "    fix: delete this line from tests/exhaustive.list (the ratchet only shrinks)\n",
-                    .{want.items[j]},
-                );
-                stale += 1;
-                j += 1;
-            },
-        }
-    }
-    if (new + stale != 0) {
-        std.debug.print("exhaustive guard: {d} new, {d} stale ({d} found, {d} listed)\n", .{ new, stale, found.items.len, want.items.len });
+    if (found != 0) {
+        std.debug.print("exhaustive guard: {d} unannotated `else =>`\n", .{found});
         return error.ExhaustiveGuard;
     }
 }
