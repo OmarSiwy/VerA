@@ -13,6 +13,11 @@ const options = @import("suite_options");
 
 const Io = std.Io;
 
+/// `std.mem.sort` order for strings: bytewise.
+pub fn strLess(_: void, a: []const u8, b: []const u8) bool {
+    return std.mem.lessThan(u8, a, b);
+}
+
 /// Everything one fixture needs, all with the same lifetime.
 pub const Fixture = struct {
     /// `tests/fixtures/ch04_expressions/01_arithmetic.va`
@@ -623,11 +628,7 @@ fn readClassifications(
         if (std.mem.startsWith(u8, e.path, "ieee1364" ++ std.fs.path.sep_str)) continue;
         try files.append(arena, try std.fs.path.join(arena, &.{ root, e.path }));
     }
-    std.mem.sort([]const u8, files.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, files.items, {}, strLess);
     for (files.items) |path| {
         const text = try Io.Dir.cwd().readFileAlloc(io, path, arena, .limited(1 << 20));
         var lines = std.mem.splitScalar(u8, text, '\n');
@@ -800,11 +801,7 @@ fn lrmClauses(
     }
     // `walk` order is explicitly undefined and first-wins below, so a clause
     // number occurring in two files would otherwise be attributed at random.
-    std.mem.sort([]const u8, names.items, {}, struct {
-        fn lt(_: void, a: []const u8, b: []const u8) bool {
-            return std.mem.lessThan(u8, a, b);
-        }
-    }.lt);
+    std.mem.sort([]const u8, names.items, {}, strLess);
 
     for (names.items) |name| {
         const prefix = clausePrefix(std.fs.path.basename(name)) orelse continue;
