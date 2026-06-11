@@ -92,7 +92,7 @@ pub fn isAnalogReason(r: c_int) bool {
 /// §11.6.25's callback object, as `vpi_get(vpiType, cb)` reports it.
 pub const vpiCallback: c_int = 107;
 
-pub const vpiSuppressVal: c_int = 13;
+const vpiSuppressVal = value.vpiSuppressVal;
 
 // ---------------------------------------------------------------------------
 // The registry
