@@ -95,10 +95,16 @@ pub fn liveSets(g: *const Gen) Live {
 /// that is a literal, a parameter or a `setup` root (latched in
 /// `Instance.su`) needs no core.
 pub fn usesCore(g: *const Gen) bool {
+    return anyArg(g, needsCore);
+}
+
+/// True when `pred` holds for any clamp's sign or algorithm argument that is
+/// not `.f_zero` (an absent sign).
+fn anyArg(g: *const Gen, comptime pred: fn (*const Gen, Mir.Value) bool) bool {
     for (g.limits.calls) |lc| {
-        if (needsCore(g, lc.sign)) return true;
+        if (lc.sign != .f_zero and pred(g, lc.sign)) return true;
         for (lc.argv[0..lc.alg.arity()]) |v| {
-            if (needsCore(g, v)) return true;
+            if (v != .f_zero and pred(g, v)) return true;
         }
     }
     return false;
@@ -169,30 +175,9 @@ fn isRoot(g: *const Gen, v0: Mir.Value) bool {
     return g.su.idx.len != 0 and g.su.idx[@intFromEnum(g.an.rv(v0))] != none_u32;
 }
 
-/// True when a clamp argument reads `Model` directly (a parameter leaf).
-fn readsParam(g: *const Gen) bool {
-    for (g.limits.calls) |lc| {
-        if (lc.sign != .f_zero and paramLeaf(g, lc.sign)) return true;
-        for (lc.argv[0..lc.alg.arity()]) |v| {
-            if (v != .f_zero and paramLeaf(g, v)) return true;
-        }
-    }
-    return false;
-}
-
+/// A parameter leaf: a clamp argument that reads `Model` directly.
 fn paramLeaf(g: *const Gen, v: Mir.Value) bool {
     return g.mir.valueDef(g.an.rv(v)) == .param_ref and isLeaf(g, v);
-}
-
-/// True when a clamp argument reads `inst.su`.
-fn readsRoot(g: *const Gen) bool {
-    for (g.limits.calls) |lc| {
-        if (lc.sign != .f_zero and isRoot(g, lc.sign)) return true;
-        for (lc.argv[0..lc.alg.arity()]) |v| {
-            if (v != .f_zero and isRoot(g, v)) return true;
-        }
-    }
-    return false;
 }
 
 /// Emits `limit`, `limit_reads`/`limit_writes` and `seed` for a device with
@@ -200,14 +185,8 @@ fn readsRoot(g: *const Gen) bool {
 /// (W0854) and seeds that read the solution (E0527, sets `any_fatal`).
 /// Emits nothing but diagnostics when no site is honoured.
 pub fn emit(g: *Gen) Error!void {
-    if (g.diags) |bag| for (g.limits.declined) |d| {
-        var b = bag.build(.codegen, .W0853, g.lowered.tokenSpan(d.tok));
-        b.msg("{s}", .{d.msg});
-        if (d.help) |h| b.help("{s}", .{h});
-        try b.emit();
-    };
-    if (g.diags) |bag| for (g.limits.seed_dropped) |d| {
-        var b = bag.build(.codegen, .W0854, g.lowered.tokenSpan(d.tok));
+    if (g.diags) |bag| inline for (.{ .{ .W0853, g.limits.declined }, .{ .W0854, g.limits.seed_dropped } }) |p| for (p[1]) |d| {
+        var b = bag.build(.codegen, p[0], g.lowered.tokenSpan(d.tok));
         b.msg("{s}", .{d.msg});
         if (d.help) |h| b.help("{s}", .{h});
         try b.emit();
@@ -223,7 +202,7 @@ pub fn emit(g: *Gen) Error!void {
     const needs_core = usesCore(g);
     // A setup root is an `inst.su` read, so `inst` stays named even when the
     // core call is gone. `model` goes with the core, or with a parameter leaf.
-    const reads_inst = needs_core or readsRoot(g);
+    const reads_inst = needs_core or anyArg(g, isRoot);
     try g.w(
         \\/// §4.5.15 `$limit`: SPICE voltage limiting, applied by the host between
         \\/// the linear solve and the next `eval`.
@@ -241,7 +220,7 @@ pub fn emit(g: *Gen) Error!void {
     , .{});
     try g.w("pub fn limit(comptime {s}: type, {s}: *const Model, {s}: *const Instance, cur: [n_u]f64, old: [n_u]f64, {s}: contract.SimState) contract.LimitResult(n_u) {{\n", .{
         if (needs_core) "S" else "_",
-        if (needs_core or readsParam(g)) "model" else "_",
+        if (needs_core or anyArg(g, paramLeaf)) "model" else "_",
         if (reads_inst) "inst" else "_",
         if (needs_core) "sim" else "_",
     });
@@ -541,7 +520,7 @@ fn emitSeed(g: *Gen) Error!void {
     }
     if (!any) return;
     const needs_core = seedUsesCore(g);
-    const reads_inst = needs_core or readsRoot(g);
+    const reads_inst = needs_core or anyArg(g, isRoot);
     try g.w(
         \\/// SPICE `MODEINITJCT`: start every pnjlim-limited junction at its own
         \\/// `vcrit` rather than at 0 V, where the junction is invisible to Newton.
@@ -555,7 +534,7 @@ fn emitSeed(g: *Gen) Error!void {
     , .{});
     try g.w("pub fn seed(comptime {s}: type, {s}: *const Model, {s}: *const Instance, {s}: contract.SimState) [n_u]?f64 {{\n", .{
         if (needs_core) "S" else "_",
-        if (needs_core or readsParam(g)) "model" else "_",
+        if (needs_core or anyArg(g, paramLeaf)) "model" else "_",
         if (reads_inst) "inst" else "_",
         if (needs_core) "sim" else "_",
     });
