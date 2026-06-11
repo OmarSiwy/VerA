@@ -67,16 +67,10 @@ pub const Bag = struct {
     /// `Bag.init` is infallible and a compilation that reports nothing must
     /// not allocate, so the first string written pays for the sentinel NUL.
     fn addString(self: *Bag, s: []const u8) Allocator.Error!diag_entry.String {
-        if (self.string_bytes.items.len == 0)
-            try self.string_bytes.append(self.arena, 0);
-        const index: diag_entry.String = @intCast(self.string_bytes.items.len);
-        try self.string_bytes.ensureUnusedCapacity(self.arena, s.len + 1);
-        self.string_bytes.appendSliceAssumeCapacity(s);
-        self.string_bytes.appendAssumeCapacity(0);
-        return index;
+        return self.printString("{s}", .{s});
     }
 
-    /// Formats straight into the pool.
+    /// Formats straight into the pool; see `addString` for the sentinel.
     fn printString(self: *Bag, comptime fmt: []const u8, args: anytype) Allocator.Error!diag_entry.String {
         if (self.string_bytes.items.len == 0)
             try self.string_bytes.append(self.arena, 0);
