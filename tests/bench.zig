@@ -1283,42 +1283,17 @@ test "a flattened .assets reference is a suffix of the committed name" {
 const Captured = struct { stdout: []const u8, stderr: []const u8, exit: u8 };
 
 /// Run a child and take everything it said.
-///
-/// ponytail: stdout is drained to EOF before stderr, so a child that fills the
-/// stderr pipe (64 KiB) while still writing stdout would wedge. Nothing here
-/// writes more than a few hundred bytes to either; the upgrade path is a
-/// two-thread drain, as `external.zig` would also need.
 fn capture(arena: Allocator, io: Io, argv: []const []const u8) !Captured {
     return captureIn(arena, io, argv, null);
 }
 
 /// `capture` with the child's working directory at `cwd`.
 fn captureIn(arena: Allocator, io: Io, argv: []const []const u8, cwd: ?[]const u8) !Captured {
-    var child = try std.process.spawn(io, .{
-        .argv = argv,
-        .cwd = if (cwd) |p| .{ .path = p } else .inherit,
-        .stdin = .ignore,
-        .stdout = .pipe,
-        .stderr = .pipe,
-    });
-    // Heap, not stack: `--native` captures from pool threads, whose stacks
-    // are smaller than these two buffers.
-    const obuf = try arena.alloc(u8, 1 << 16);
-    const ebuf = try arena.alloc(u8, 1 << 16);
-    var out: Io.Writer.Allocating = .init(arena);
-    var err: Io.Writer.Allocating = .init(arena);
-    var or_ = child.stdout.?.readerStreaming(io, obuf);
-    _ = or_.interface.streamRemaining(&out.writer) catch {};
-    var er = child.stderr.?.readerStreaming(io, ebuf);
-    _ = er.interface.streamRemaining(&err.writer) catch {};
-    return .{
-        .stdout = out.written(),
-        .stderr = err.written(),
-        .exit = switch (try child.wait(io)) {
-            .exited => |c| c,
-            else => 255,
-        },
-    };
+    const r = try std.process.run(arena, io, .{ .argv = argv, .cwd = if (cwd) |p| .{ .path = p } else .inherit });
+    return .{ .stdout = r.stdout, .stderr = r.stderr, .exit = switch (r.term) {
+        .exited => |c| c,
+        else => 255,
+    } };
 }
 
 /// A transcript that differs is reported as the whole of both sides: these are
