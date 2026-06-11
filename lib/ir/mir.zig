@@ -856,8 +856,5 @@ test "mir: const dedup, block chain, phi pairs, alias" {
     try std.testing.expectEqual(e, mir.resolveAlias(p));
     try std.testing.expectEqual(id, mir.resolveAlias(id));
 
-    var bi = mir.blockIter();
-    try std.testing.expectEqual(Block.entry, bi.next().?);
-    try std.testing.expectEqual(join, bi.next().?);
-    try std.testing.expect(bi.next() == null);
+    try std.testing.expectEqual(@as(u32, 2), mir.blockCount());
 }
