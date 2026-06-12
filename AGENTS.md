@@ -317,11 +317,15 @@ result and a refusal):
 ```
 //! lrm 12.16          <- a result this clause requires is CHECKed
 //! lrm-reject 12.34   <- the routine refusing invalid input is CHECKed
-//!                       (error return, vpi_chk_error). No other key exists.
+//!                       (error return, vpi_chk_error).
+//! inherited IEEE 1364-2005 27.14         <- the same two polarities, for
+//! inherited-reject IEEE 1364-2005 27.14  <- measure B. No other key exists.
 ```
 
-`--coverage` counts them only for fixtures in `build.zig`'s `vpi_runs` (they
-run in-process under `zig build test`). A compile-only `.c` is listed as `~`
+`--coverage` (both `benchmark` and `test-1364`) counts them only for fixtures
+in `build.zig`'s `vpi_runs` (they run in-process under `zig build test`). A
+`vpi_runs` row with `.xfail = "<stderr text>"` is a known gap: it must exit 1
+saying so. A compile-only `.c` is listed as `~`
 and moves no number. Tag a clause only where an assertion stands behind it.
 
 ### The trap that produces confidently wrong work

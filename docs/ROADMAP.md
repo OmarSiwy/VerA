@@ -424,6 +424,10 @@ Settle each before a fixture asserts one side.
   (`conformance-ieee-expression-width-review.md:82-88`.)
 - IEEE 6.1.3: which delay rule a singleton `[0:0]` vector continuous assignment
   takes. (`conformance-vector-delay-fix.md:20-24`.)
+- IEEE 13.2.2 vs A.1.1 and Syntax 13-2: "The syntax of a lib.map file is
+  limited to library specifications, include statements, and standard Verilog
+  comment syntax", while both syntax boxes derive a config_declaration as a
+  library_description. VerA refuses a config in a map (E0244).
 - IEEE 17.2.9: `$readmem` address policy. `@8` into `[0:3]` with no task bounds
   loads nothing and says nothing; x/z/underscore in addresses is undecided.
   (`conformance-readmem-validation-edges.md:66-70`.)
