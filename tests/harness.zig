@@ -838,19 +838,9 @@ fn clausePrefix(basename: []const u8) ?[]const u8 {
         const letter = std.ascii.toUpper(basename[6]);
         if (letter < 'A' or letter > 'H') return null;
         if (basename[7] != '-') return null;
-        // Uppercased, so the slice cannot be into `basename`. The set is small
-        // and fixed, so it is a table rather than an allocation.
-        return switch (letter) {
-            'A' => "A",
-            'B' => "B",
-            'C' => "C",
-            'D' => "D",
-            'E' => "E",
-            'F' => "F",
-            'G' => "G",
-            'H' => "H",
-            else => unreachable,
-        };
+        // Uppercased, so the slice cannot be into `basename`: it is into a
+        // static table instead of an allocation.
+        return "ABCDEFGH"[letter - 'A' ..][0..1];
     }
     return null;
 }
