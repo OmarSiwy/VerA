@@ -24,9 +24,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
     if (d.mixed) |mx| return renderMixed(arena, title, d, mx);
     var out: std.ArrayList(u8) = .empty;
 
-    try out.appendSlice(arena, tb_runner_text.runner_head);
-    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
-    try out.appendSlice(arena, tb_runner_text.runner_body);
+    try head(&out, arena, title);
 
     // --- main -------------------------------------------------------------
     try out.appendSlice(arena,
@@ -34,19 +32,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    var model: D.Model = .{};
         \\
     );
-    for (d.params) |p| {
-        // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
-        // integer parameter rounds, away from zero on a tie.
-        try out.print(arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
-            std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
-        });
-        // §9.19 `$param_given` reads the companion field when codegen emitted one.
-        try out.print(
-            arena,
-            "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n",
-            .{ std.zig.fmtString(p.name), std.zig.fmtString(p.name) },
-        );
-    }
+    for (d.params) |p| try setCard(&out, arena, "    ", "model", p.name, p.value);
     // §6.3.4: the card is complete only now. Unconditional, so a §3.4.5
     // localparam is derived even with no `//! param` line.
     try out.appendSlice(arena,
@@ -169,16 +155,7 @@ pub fn renderRunner(arena: Allocator, title: []const u8, d: Directives) Error![]
             try out.appendSlice(arena, "        if (comptime contract.fileIo(D)) |f| if (f.new_analysis) |g| g();\n");
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
-            for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
-                try out.print(arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{
-                    std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v),
-                });
-                try out.print(
-                    arena,
-                    "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n",
-                    .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) },
-                );
-            }
+            for (d.psweeps, pt[d.sweeps.len..]) |s, v| try setCard(&out, arena, "        ", "pm", s.name, v);
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
             try out.appendSlice(arena, "        shapeCheck(&pm);\n");
             // §6.3.4: setup also derives from the swept card.
@@ -390,6 +367,38 @@ fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl:
     }
 }
 
+/// The page every runner opens with: the fixed head, `title`, the fixed body.
+fn head(out: *std.ArrayList(u8), arena: Allocator, title: []const u8) Error!void {
+    try out.appendSlice(arena, tb_runner_text.runner_head);
+    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
+    try out.appendSlice(arena, tb_runner_text.runner_body);
+}
+
+/// Writes one card line, `<card>.<name> = value`, at `indent`.
+fn setCard(out: *std.ArrayList(u8), arena: Allocator, indent: []const u8, card: []const u8, name: []const u8, value: f64) Error!void {
+    // §3.4.1/§4.2.1.1 via `cardValue`: a card is written in reals and an
+    // integer parameter rounds, away from zero on a tie.
+    try out.print(arena, "{s}{s}.{f} = cardValue(@TypeOf({s}.{f}), {f});\n", .{
+        indent, card, std.zig.fmtId(name), card, std.zig.fmtId(name), fmtF64(value),
+    });
+    // §9.19 `$param_given` reads the companion field when codegen emitted one.
+    try out.print(arena, "{s}if (comptime @hasField(D.Model, \"{f}__given\")) @field({s}, \"{f}__given\") = true;\n", .{
+        indent, std.zig.fmtString(name), card, std.zig.fmtString(name),
+    });
+}
+
+/// The `//! time` grid as `times`, and each `//! wave` as `wave_<k>`.
+fn timeArrays(out: *std.ArrayList(u8), arena: Allocator, d: Directives) Error!void {
+    try out.appendSlice(arena, "const times = [_]f64{");
+    for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
+    try out.appendSlice(arena, " };\n");
+    for (d.waves, 0..) |wv, k| {
+        try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
+        for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
+        try out.appendSlice(arena, " };\n");
+    }
+}
+
 /// Returns the VAMS §8 mixed-signal runner, allocated in `arena`: the same
 /// device and solver, with operating points from `sim.mixed.run` (declared
 /// `//! time`s plus every implicit D2A time) and discrete inputs from the
@@ -399,9 +408,7 @@ fn emitLimitCheck(arena: Allocator, out: *std.ArrayList(u8), d: Directives, mdl:
 /// error in the emitted runner.
 pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mixed) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(arena, tb_runner_text.runner_head);
-    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
-    try out.appendSlice(arena, tb_runner_text.runner_body);
+    try head(&out, arena, title);
     try out.appendSlice(arena, tb_runner_text.mixed_body);
     if (d.asserts_noise or d.asserts_acstim or d.asserts_qsite or d.asserts_seed or d.limits.len != 0 or d.acdyn.len != 0)
         try out.appendSlice(arena, "comptime { @compileError(title ++ \": //! noise, //! acstim, //! qsite, //! seed, //! limit and //! acdyn are not read by the mixed-signal runner\"); }\n");
@@ -412,14 +419,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         try std.fmt.allocPrint(arena, ".{{ .unit = {f}, .precision = {f} }}", .{ fmtF64(u), fmtF64(mx.precision.?) })
     else
         "null"});
-    try out.appendSlice(arena, "const times = [_]f64{");
-    for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
-    try out.appendSlice(arena, " };\n");
-    for (d.waves, 0..) |wv, k| {
-        try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
-        for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
-        try out.appendSlice(arena, " };\n");
-    }
+    try timeArrays(&out, arena, d);
 
     // The adapter: `sim.mixed.run`'s `A`.
     try out.appendSlice(arena,
@@ -578,14 +578,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
         \\    var model: D.Model = .{};
         \\
     );
-    for (d.params) |p| {
-        try out.print(arena, "    model.{f} = cardValue(@TypeOf(model.{f}), {f});\n", .{
-            std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
-        });
-        try out.print(arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(model, \"{f}__given\") = true;\n", .{
-            std.zig.fmtString(p.name), std.zig.fmtString(p.name),
-        });
-    }
+    for (d.params) |p| try setCard(&out, arena, "    ", "model", p.name, p.value);
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &model);
         \\    shapeCheck(&model);
@@ -612,10 +605,7 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
             try out.appendSlice(arena, "        if (comptime contract.fileIo(D)) |f| if (f.new_analysis) |g| g();\n");
         if (d.psweeps.len != 0) {
             try out.appendSlice(arena, "        var pm = model;\n");
-            for (d.psweeps, pt[d.sweeps.len..]) |s, v| {
-                try out.print(arena, "        pm.{f} = cardValue(@TypeOf(pm.{f}), {f});\n", .{ std.zig.fmtId(s.name), std.zig.fmtId(s.name), fmtF64(v) });
-                try out.print(arena, "        if (comptime @hasField(D.Model, \"{f}__given\")) @field(pm, \"{f}__given\") = true;\n", .{ std.zig.fmtString(s.name), std.zig.fmtString(s.name) });
-            }
+            for (d.psweeps, pt[d.sweeps.len..]) |s, v| try setCard(&out, arena, "        ", "pm", s.name, v);
             try out.appendSlice(arena, "        if (comptime @hasDecl(D, \"derive\")) D.derive(Val, &pm);\n");
             try out.appendSlice(arena, "        shapeCheck(&pm);\n");
         }
@@ -660,17 +650,8 @@ pub fn renderMixed(arena: Allocator, title: []const u8, d: Directives, mx: tb.Mi
 /// `//! bias`/`//! wave` line pins it.
 pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]const u8 {
     var out: std.ArrayList(u8) = .empty;
-    try out.appendSlice(arena, tb_runner_text.runner_head);
-    try out.print(arena, "const title = \"{f}\";\n\n", .{std.zig.fmtString(title)});
-    try out.appendSlice(arena, tb_runner_text.runner_body);
-    try out.appendSlice(arena, "const times = [_]f64{");
-    for (d.times, 0..) |t, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(t) });
-    try out.appendSlice(arena, " };\n");
-    for (d.waves, 0..) |wv, k| {
-        try out.print(arena, "const wave_{d} = [_]f64{{", .{k});
-        for (wv.values, 0..) |v, i| try out.print(arena, "{s}{f}", .{ if (i == 0) " " else ", ", fmtF64(v) });
-        try out.appendSlice(arena, " };\n");
-    }
+    try head(&out, arena, title);
+    try timeArrays(&out, arena, d);
     try out.appendSlice(arena, tb_runner_text.vpi_lib_body);
 
     // --- open: the card, the instance, the unknowns -----------------------
@@ -679,14 +660,7 @@ pub fn renderVpiLib(arena: Allocator, title: []const u8, d: Directives) Error![]
         \\    g_model = .{};
         \\
     );
-    for (d.params) |p| {
-        try out.print(arena, "    g_model.{f} = cardValue(@TypeOf(g_model.{f}), {f});\n", .{
-            std.zig.fmtId(p.name), std.zig.fmtId(p.name), fmtF64(p.value),
-        });
-        try out.print(arena, "    if (comptime @hasField(D.Model, \"{f}__given\")) @field(g_model, \"{f}__given\") = true;\n", .{
-            std.zig.fmtString(p.name), std.zig.fmtString(p.name),
-        });
-    }
+    for (d.params) |p| try setCard(&out, arena, "    ", "g_model", p.name, p.value);
     try out.appendSlice(arena,
         \\    if (comptime @hasDecl(D, "derive")) D.derive(Val, &g_model);
         \\    shapeCheck(&g_model);
