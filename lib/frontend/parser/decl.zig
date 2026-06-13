@@ -225,6 +225,7 @@ pub fn parseSubroutine(self: *Parser, b: *parse_module.Body, is_function: bool) 
         var dir: Ast.Direction = .input;
         var ty: Ast.VarDecl = .{ .name = .none, .ty = .integer, .storage = .reg, .is_signed = false };
         while (self.peek() != .rparen and self.peek() != .eof) {
+            try self.skipAttributes();
             if (parse_module.portDirection(self.peek())) |d| {
                 dir = d;
                 self.pos += 1;
@@ -410,6 +411,7 @@ pub fn parseFuncDecl(self: *Parser, b: *parse_module.Body, main_tok: u32, is_ana
     // stray `input` as one more argument, and the LRM names no diagnostic.
     if (self.eat(.lparen)) {
         while (self.peek() != .rparen and self.peek() != .eof) {
+            try self.skipAttributes();
             const dir = switch (self.peek()) {
                 .kw_input, .kw_output, .kw_inout => blk: {
                     const d = parse_module.portDirection(self.peek()).?;

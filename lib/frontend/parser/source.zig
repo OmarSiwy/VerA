@@ -47,11 +47,16 @@ pub fn parseSourceFile(self: *Parser) Error!Ast.SourceFile {
     try config_cells.appendSlice(self.arena, self.file.config_cells);
 
     while (true) {
+        const attr_at = self.pos;
         try self.skipAttributes();
         const before = self.pos;
         try self.refuseAms();
         switch (self.peek()) {
-            .eof => break,
+            // §3.8: an attribute instance is "a prefix attached to" what follows it.
+            .eof => {
+                if (before != attr_at) try self.report(attr_at, .E0207, "found end of file: an attribute instance prefixes nothing", .{});
+                break;
+            },
             // §10.6: legal only here, "outside of a design element".
             .dir_begin_keywords, .dir_end_keywords => keywordsDirective(self) catch |e| {
                 if (e == error.OutOfMemory) return e;
@@ -361,6 +366,7 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     // `ports[0]` is the output and `ports[1..]` the inputs.
     var ports: std.ArrayList(Ast.StrId) = .empty;
     while (true) {
+        try self.skipAttributes();
         // A.5.2's `udp_output_declaration` / `udp_input_declaration`, which
         // only the second A.5.1 arm puts inside the parentheses.
         if (self.eat(.kw_output) or self.eat(.kw_input)) {
@@ -377,7 +383,9 @@ pub fn parseUdpDecl(self: *Parser) Error!Ast.UdpDecl {
     _ = try self.expect(.semicolon);
     // A.5.2's separate declarations, the first arm's. A.5.1 requires one or
     // more, but the second arm has none, so the count is not checked.
-    while (self.peek() == .kw_output or self.peek() == .kw_input or self.peek() == .kw_reg) {
+    while (true) {
+        try self.skipAttributes();
+        if (self.peek() != .kw_output and self.peek() != .kw_input and self.peek() != .kw_reg) break;
         self.pos += 1;
         _ = try parse_module.optDiscipline(self);
         _ = self.eat(.kw_reg);
